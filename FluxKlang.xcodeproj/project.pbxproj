@@ -1,0 +1,665 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		087F27C9EDEFE26C67E9E774 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
+		140F78BB9E1B53AA55D28F0F /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = DEA9BE5822A9613871C6C436 /* SwiftOSC */; };
+		33BBDAD01C59BF18B5303617 /* OSCProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */; };
+		4353781EE55B9D6E4B2DB0F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
+		435CB11200C3299EE92250C0 /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
+		4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */; };
+		5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */; };
+		5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
+		941CDB18830926387D99EE46 /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = F3FC1E264BE70D86FCBDF599 /* SwiftOSC */; };
+		AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
+		B2B762BD7321F486C6669168 /* OSCProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */; };
+		CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
+		CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
+		E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
+		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
+		ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */; };
+		EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8AA3AF5C05973D2CC373DF02 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 896DFA31F09CDC90A39D56AC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6621E26C78C356F2D938664A;
+			remoteInfo = FluxKlang;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		2804E2C640870C5783512077 /* FluxKlangMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlangMac.entitlements; sourceTree = "<group>"; };
+		437C08E45AF09839441CF3D5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		6168A7E728E3196D6787E965 /* SettingsContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContentView.swift; sourceTree = "<group>"; };
+		62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FluxKlangTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7829A1C698F339C5D662010C /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
+		834B3F839743E70274C9D787 /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
+		B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangMacApp.swift; sourceTree = "<group>"; };
+		E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangTests.swift; sourceTree = "<group>"; };
+		EE24226D4BF4EA8A9918DB62 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangApp.swift; sourceTree = "<group>"; };
+		F06173B51FCABC2577C3360C /* MenuBarMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarMixer.swift; sourceTree = "<group>"; };
+		F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluxKlangMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSCProbe.swift; sourceTree = "<group>"; };
+		FE008189B554CBD9741C6447 /* FluxKlang.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FluxKlang.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		225CA5210B4F086F4DE4B6DF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				941CDB18830926387D99EE46 /* SwiftOSC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		59B1C9DC2C00E168D54DE93C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				140F78BB9E1B53AA55D28F0F /* SwiftOSC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1865800AFF19C88B22774124 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				54198E113463A0233F69309F /* App */,
+				82CE79D6C68E5CC94F5FA720 /* Mac */,
+				A75FC191D2ABF16B464CB984 /* Settings */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		54198E113463A0233F69309F /* App */ = {
+			isa = PBXGroup;
+			children = (
+				7829A1C698F339C5D662010C /* AppRootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		82CE79D6C68E5CC94F5FA720 /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				834B3F839743E70274C9D787 /* MacCommands.swift */,
+				F06173B51FCABC2577C3360C /* MenuBarMixer.swift */,
+			);
+			path = Mac;
+			sourceTree = "<group>";
+		};
+		9789BFF6FD09DE2B30709D8E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				FE008189B554CBD9741C6447 /* FluxKlang.app */,
+				F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */,
+				62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A3022E95D23ECC0D7259352F = {
+			isa = PBXGroup;
+			children = (
+				A80BA078CC003CB37AB8BCDD /* FluxKlang */,
+				B28C528452DB08DE9FE39AFB /* FluxKlangMac */,
+				F6624B8D5BBDF1615714D3EB /* FluxKlangTests */,
+				AE944FB5A90EF0D8678BE47C /* Shared */,
+				9789BFF6FD09DE2B30709D8E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A75FC191D2ABF16B464CB984 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				6168A7E728E3196D6787E965 /* SettingsContentView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		A80BA078CC003CB37AB8BCDD /* FluxKlang */ = {
+			isa = PBXGroup;
+			children = (
+				EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */,
+				EE24226D4BF4EA8A9918DB62 /* Info.plist */,
+			);
+			path = FluxKlang;
+			sourceTree = "<group>";
+		};
+		AE944FB5A90EF0D8678BE47C /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */,
+				1865800AFF19C88B22774124 /* Views */,
+				FE93B129519608FFDD2FFF6B /* WING */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		B28C528452DB08DE9FE39AFB /* FluxKlangMac */ = {
+			isa = PBXGroup;
+			children = (
+				2804E2C640870C5783512077 /* FluxKlangMac.entitlements */,
+				B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */,
+				437C08E45AF09839441CF3D5 /* Info.plist */,
+			);
+			path = FluxKlangMac;
+			sourceTree = "<group>";
+		};
+		F6624B8D5BBDF1615714D3EB /* FluxKlangTests */ = {
+			isa = PBXGroup;
+			children = (
+				E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */,
+			);
+			path = FluxKlangTests;
+			sourceTree = "<group>";
+		};
+		FE93B129519608FFDD2FFF6B /* WING */ = {
+			isa = PBXGroup;
+			children = (
+				F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */,
+			);
+			path = WING;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		49BB944437C0767B9D0A3A05 /* FluxKlangMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3FE49DB501E6F6BF070D2FEF /* Build configuration list for PBXNativeTarget "FluxKlangMac" */;
+			buildPhases = (
+				8F17A3EB44B4A78C114227C0 /* Sources */,
+				1496683E5A577054B1B24FB9 /* Resources */,
+				59B1C9DC2C00E168D54DE93C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FluxKlangMac;
+			packageProductDependencies = (
+				DEA9BE5822A9613871C6C436 /* SwiftOSC */,
+			);
+			productName = FluxKlangMac;
+			productReference = F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		6621E26C78C356F2D938664A /* FluxKlang */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00A44A6D20617F54862F5DA7 /* Build configuration list for PBXNativeTarget "FluxKlang" */;
+			buildPhases = (
+				1500B10713EC53D5C1113EC3 /* Sources */,
+				9BF2CF9D5D937445978EBFDA /* Resources */,
+				225CA5210B4F086F4DE4B6DF /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FluxKlang;
+			packageProductDependencies = (
+				F3FC1E264BE70D86FCBDF599 /* SwiftOSC */,
+			);
+			productName = FluxKlang;
+			productReference = FE008189B554CBD9741C6447 /* FluxKlang.app */;
+			productType = "com.apple.product-type.application";
+		};
+		9EBB5F6520C9812DFFD5FA08 /* FluxKlangTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6B55C279A907855F1A33E841 /* Build configuration list for PBXNativeTarget "FluxKlangTests" */;
+			buildPhases = (
+				F49F8A4D10FC61659A2589CA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				25879E6A1D66659F07D790ED /* PBXTargetDependency */,
+			);
+			name = FluxKlangTests;
+			packageProductDependencies = (
+			);
+			productName = FluxKlangTests;
+			productReference = 62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		896DFA31F09CDC90A39D56AC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					49BB944437C0767B9D0A3A05 = {
+						DevelopmentTeam = 9JALHNGRBQ;
+						ProvisioningStyle = Automatic;
+					};
+					6621E26C78C356F2D938664A = {
+						DevelopmentTeam = 9JALHNGRBQ;
+						ProvisioningStyle = Automatic;
+					};
+					9EBB5F6520C9812DFFD5FA08 = {
+						DevelopmentTeam = 9JALHNGRBQ;
+					};
+				};
+			};
+			buildConfigurationList = 42A9A01BC3100819E12536D9 /* Build configuration list for PBXProject "FluxKlang" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A3022E95D23ECC0D7259352F;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				329D0D53E1D9CDB7C59A75D7 /* XCRemoteSwiftPackageReference "swift-osc" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9789BFF6FD09DE2B30709D8E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6621E26C78C356F2D938664A /* FluxKlang */,
+				49BB944437C0767B9D0A3A05 /* FluxKlangMac */,
+				9EBB5F6520C9812DFFD5FA08 /* FluxKlangTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1496683E5A577054B1B24FB9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9BF2CF9D5D937445978EBFDA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4353781EE55B9D6E4B2DB0F9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1500B10713EC53D5C1113EC3 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */,
+				4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */,
+				CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */,
+				087F27C9EDEFE26C67E9E774 /* MenuBarMixer.swift in Sources */,
+				33BBDAD01C59BF18B5303617 /* OSCProbe.swift in Sources */,
+				435CB11200C3299EE92250C0 /* SettingsContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8F17A3EB44B4A78C114227C0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */,
+				5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */,
+				E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */,
+				5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */,
+				B2B762BD7321F486C6669168 /* OSCProbe.swift in Sources */,
+				AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F49F8A4D10FC61659A2589CA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		25879E6A1D66659F07D790ED /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6621E26C78C356F2D938664A /* FluxKlang */;
+			targetProxy = 8AA3AF5C05973D2CC373DF02 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		43B9A494E7FD5C6539492261 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 9JALHNGRBQ;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.1;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5;
+			};
+			name = Release;
+		};
+		6273F18478D3E362F910DB8C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FluxKlangMac/FluxKlangMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxKlangMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		72BD07538E8917A26A9CB849 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FluxKlangMac/FluxKlangMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxKlangMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		A6E2F4B28080AECFEADD80DE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxKlang.app/FluxKlang";
+			};
+			name = Debug;
+		};
+		A8283A4B23F928C44362599A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 9JALHNGRBQ;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.1;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5;
+			};
+			name = Debug;
+		};
+		CB8CC0CCED865777C155B1D2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxKlang/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F49B32995DEA558DE4E415DC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxKlang.app/FluxKlang";
+			};
+			name = Release;
+		};
+		F79AA30C92BCB33D82C86F01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = FluxKlang/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		00A44A6D20617F54862F5DA7 /* Build configuration list for PBXNativeTarget "FluxKlang" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F79AA30C92BCB33D82C86F01 /* Debug */,
+				CB8CC0CCED865777C155B1D2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3FE49DB501E6F6BF070D2FEF /* Build configuration list for PBXNativeTarget "FluxKlangMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				72BD07538E8917A26A9CB849 /* Debug */,
+				6273F18478D3E362F910DB8C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		42A9A01BC3100819E12536D9 /* Build configuration list for PBXProject "FluxKlang" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A8283A4B23F928C44362599A /* Debug */,
+				43B9A494E7FD5C6539492261 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6B55C279A907855F1A33E841 /* Build configuration list for PBXNativeTarget "FluxKlangTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A6E2F4B28080AECFEADD80DE /* Debug */,
+				F49B32995DEA558DE4E415DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		329D0D53E1D9CDB7C59A75D7 /* XCRemoteSwiftPackageReference "swift-osc" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orchetect/swift-osc";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DEA9BE5822A9613871C6C436 /* SwiftOSC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 329D0D53E1D9CDB7C59A75D7 /* XCRemoteSwiftPackageReference "swift-osc" */;
+			productName = SwiftOSC;
+		};
+		F3FC1E264BE70D86FCBDF599 /* SwiftOSC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 329D0D53E1D9CDB7C59A75D7 /* XCRemoteSwiftPackageReference "swift-osc" */;
+			productName = SwiftOSC;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 896DFA31F09CDC90A39D56AC /* Project object */;
+}
