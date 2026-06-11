@@ -118,4 +118,21 @@ struct ChainTests {
         #expect(settings.contains { $0.address == WingAddress.outputSourceGroup(3) && $0.value == .string("MAIN") })
         #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(3) && $0.value == .int(1) })
     }
+
+    @Test func connectReplacesExistingWireIntoSameOutput() {
+        let store = ChainStore()
+        let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)
+        let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
+        let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
+        store.addNode(main)
+        store.addNode(bus)
+        store.addNode(output)
+        let outputInput = ChainPortRef(nodeID: output.id, side: .input, port: 0)
+        store.connect(from: ChainPortRef(nodeID: main.id, side: .output, port: 0), to: outputInput)
+        store.connect(from: ChainPortRef(nodeID: bus.id, side: .output, port: 0), to: outputInput)
+        // A physical output is a single 1:1 source patch, so the second wire
+        // replaces the first rather than producing an ambiguous fan-in.
+        #expect(store.graph.edges.count == 1)
+        #expect(store.graph.edges.first?.from.nodeID == bus.id)
+    }
 }

@@ -270,6 +270,8 @@ private struct WireDeleteButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Delete this connection")
+        .accessibilityLabel("Delete connection")
+        .accessibilityHint("Removes this wire between the two ports")
     }
 }
 
