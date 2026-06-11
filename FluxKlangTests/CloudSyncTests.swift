@@ -36,7 +36,8 @@ struct CloudSyncTests {
         let name = uniqueName()
 
         await store.save(Model(value: 7), to: name)
-        #expect(cloud.synchronizeCount >= 1)
+        let key = "store." + name.replacingOccurrences(of: ".", with: "_")
+        #expect(cloud.data(forKey: key) != nil)
 
         let loaded = await store.load(Model.self, from: name)
         #expect(loaded == Model(value: 7))

@@ -15,9 +15,9 @@ actor JSONFileStore {
 
     private let directory: URL
     private let fileManager = FileManager.default
-    private let cloud: CloudKeyValueStore?
+    private let cloud: (any CloudKeyValueStore)?
 
-    init(cloud: CloudKeyValueStore? = UbiquitousCloudStore()) {
+    init(cloud: (any CloudKeyValueStore)? = UbiquitousCloudStore()) {
         let base = (try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -35,20 +35,29 @@ actor JSONFileStore {
         // existing local copy so previously saved state isn't lost.
         if cloudData == nil, let localData, let cloud {
             cloud.setData(localData, forKey: cloudKey(for: name))
-            cloud.synchronize()
         }
-        guard let data = cloudData ?? localData else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        let decoder = JSONDecoder()
+        // Prefer the synced value, but fall back to the local cache when the
+        // cloud copy is missing or fails to decode (e.g. schema drift or a
+        // partial/corrupt sync) so the app stays usable offline.
+        if let cloudData, let decoded = try? decoder.decode(T.self, from: cloudData) {
+            return decoded
+        }
+        if let localData, let decoded = try? decoder.decode(T.self, from: localData) {
+            return decoded
+        }
+        return nil
     }
 
     func save(_ value: some Encodable, to name: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: directory.appendingPathComponent(name), options: .atomic)
-        if let cloud {
-            cloud.setData(data, forKey: cloudKey(for: name))
-            cloud.synchronize()
-        }
+        // Mirror to iCloud and let the system flush changes automatically. We
+        // deliberately avoid calling `synchronize()` per write: stores persist on
+        // high-frequency interactions (e.g. dragging a spatial source), and the
+        // app already synchronises on launch / iCloud change notifications.
+        cloud?.setData(data, forKey: cloudKey(for: name))
     }
 
     private func localData(for name: String) -> Data? {
