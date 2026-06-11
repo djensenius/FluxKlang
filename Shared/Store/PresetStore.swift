@@ -25,6 +25,12 @@ final class PresetStore {
         }
     }
 
+    /// Re-reads the persisted presets, picking up changes synced from iCloud.
+    func reload() async {
+        loaded = false
+        await load()
+    }
+
     func add(_ preset: Preset) {
         presets.append(preset)
         persist()

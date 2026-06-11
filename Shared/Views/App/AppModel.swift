@@ -39,6 +39,10 @@ final class AppModel {
 
     private let lastHostKey = "fluxklang.lastHost"
 
+    /// Observes external iCloud key-value-store changes so stores reload when
+    /// another device syncs updated state.
+    private var cloudObserver: NSObjectProtocol?
+
     /// The currently selected sidebar section (also driven by Mac menu commands).
     var section: AppSection = .faders
 
@@ -72,6 +76,31 @@ final class AppModel {
         await chain.load()
         await presets.load()
         await spatial.load()
+        startObservingCloudChanges()
+    }
+
+    /// Begins watching iCloud for changes pushed from the user's other devices,
+    /// reloading every store when they arrive.
+    private func startObservingCloudChanges() {
+        guard cloudObserver == nil else { return }
+        let store = NSUbiquitousKeyValueStore.default
+        cloudObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: store,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.reloadStores() }
+        }
+        store.synchronize()
+    }
+
+    /// Re-reads every persisted store, used when iCloud syncs new state.
+    func reloadStores() async {
+        await faderLayout.reload()
+        await equipment.reload()
+        await chain.reload()
+        await presets.reload()
+        await spatial.reload()
     }
 
     /// Applies the chain graph's implied routing to the WING.

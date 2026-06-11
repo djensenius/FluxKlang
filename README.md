@@ -22,6 +22,9 @@ FluxKlang gives you:
   coexists with Co-Pilot, treating the console as the source of truth.
 - **Shortcuts & Siri** via App Intents — connect, enter demo mode, set a channel
   volume, and recall a preset.
+- **iCloud syncing** — your fader bank, equipment library, signal chain, presets
+  and spatial layout sync across iPhone, iPad and Mac via iCloud key-value
+  storage; a local copy keeps everything working offline.
 
 The Mac build is a **first-class native Mac app** (menu-bar commands, a Settings
 window, source-list sidebar + inspector, native canvas interactions and a
@@ -40,7 +43,7 @@ async/await.
 Shared/
   WING/      OSC transport + WingController, discovery, address book, fader math
   Models/    WING domain + equipment/chain/fader/preset models (Codable)
-  Store/     local persistence (Application Support)
+  Store/     local persistence (Application Support) + iCloud key-value sync
   Views/     App / Connection / Mixer / Routing / Chain / Presets / Mac
   Intents/   App Intents for Shortcuts & Siri
 FluxKlang/      iOS @main
