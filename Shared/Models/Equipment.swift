@@ -53,13 +53,18 @@ extension Equipment {
     static var seededLibrary: [Equipment] {
         [
             Equipment(name: "OP-1 Field", inputs: ["In L", "In R"], outputs: ["Out L", "Out R"], isStereo: true),
-            Equipment(name: "OP-XY", outputs: ["Out L", "Out R"], isStereo: true),
+            Equipment(name: "OP-XY", inputs: ["In L", "In R"], outputs: ["Out L", "Out R"], isStereo: true),
             Equipment(name: "TX-6", inputs: ["In 1", "In 2"], outputs: ["Main L", "Main R"], isStereo: true),
             Equipment(name: "TP-7", inputs: ["In L", "In R"], outputs: ["Out L", "Out R"], isStereo: true),
             Equipment(name: "CM-15", outputs: ["Out L", "Out R"], isStereo: true),
-            Equipment(name: "Torso S-4", inputs: ["Audio In"], outputs: ["Out L", "Out R"], isStereo: true),
-            Equipment(name: "Elta SOLAR 42F", outputs: ["Out L", "Out R"], isStereo: true),
-            Equipment(name: "Endorphin.es EviL Pet", inputs: ["In"], outputs: ["Out L", "Out R"], isStereo: true),
+            Equipment(name: "Torso S-4", inputs: ["In L", "In R"], outputs: ["Out L", "Out R"], isStereo: true),
+            Equipment(name: "Elta SOLAR 42F", inputs: ["In"], outputs: ["Out L", "Out R"], isStereo: true),
+            Equipment(
+                name: "Endorphin.es EviL Pet",
+                inputs: ["In L", "In R"],
+                outputs: ["Out L", "Out R"],
+                isStereo: true
+            ),
             Equipment(name: "SOMA Cosmos", inputs: ["In L", "In R"], outputs: ["Out L", "Out R"], isStereo: true),
             Equipment(name: "SOMA Ether", outputs: ["Out L", "Out R"], isStereo: true),
             Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true),

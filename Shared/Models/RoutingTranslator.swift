@@ -32,6 +32,12 @@ enum RoutingTranslator {
             return [WingSetting(address: WingAddress.mainOn(.channel, channel, toMain: main), value: .int(1))]
         case let (.wingBus(bus), .wingMain(main)):
             return [WingSetting(address: WingAddress.mainOn(.bus, bus, toMain: main), value: .int(1))]
+        case let (.wingMain(main), .wingOutput(output)):
+            return WingOutputSource(group: .main, index: main).settings(forOutput: output)
+        case let (.wingBus(bus), .wingOutput(output)):
+            return WingOutputSource(group: .bus, index: bus).settings(forOutput: output)
+        case let (.wingChannel(channel), .wingOutput(output)):
+            return WingOutputSource(group: .channel, index: channel).settings(forOutput: output)
         default:
             return []
         }

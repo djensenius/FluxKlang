@@ -74,3 +74,50 @@ struct WingSource: Identifiable, Hashable, Sendable {
         ]
     }
 }
+
+/// The internal signal feeding a physical WING output socket — used to terminate
+/// a chain at the speakers. Mirrors `WingSource` but for the *output* side: a
+/// group (main, speaker bus, …) plus a 1-based index. Group tokens and node paths
+/// are best-effort and must be confirmed against the console during the smoke
+/// test (see `WingAddress.outputSource*`).
+enum WingOutputSourceGroup: String, CaseIterable, Codable, Sendable {
+    case off = "OFF"
+    case main = "MAIN"
+    case bus = "BUS"
+    case matrix = "MTX"
+    case channel = "CH"
+
+    /// Human-readable group name.
+    var label: String {
+        switch self {
+        case .off: return "None"
+        case .main: return "Main"
+        case .bus: return "Bus"
+        case .matrix: return "Matrix"
+        case .channel: return "Channel"
+        }
+    }
+}
+
+/// A specific WING output source: a group plus a 1-based index within it.
+struct WingOutputSource: Identifiable, Hashable, Sendable {
+    var group: WingOutputSourceGroup
+    var index: Int
+
+    var id: String { "\(group.rawValue)-\(index)" }
+
+    /// Display label, e.g. "Bus 1" or "None".
+    var label: String {
+        group == .off ? "None" : "\(group.label) \(index)"
+    }
+
+    static let none = WingOutputSource(group: .off, index: 0)
+
+    /// The OSC settings that patch this source onto a physical output socket.
+    func settings(forOutput output: Int) -> [WingSetting] {
+        [
+            WingSetting(address: WingAddress.outputSourceGroup(output), value: .string(group.rawValue)),
+            WingSetting(address: WingAddress.outputSourceIndex(output), value: .int(Int32(index)))
+        ]
+    }
+}

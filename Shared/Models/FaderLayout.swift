@@ -39,7 +39,8 @@ struct FaderLayout: Codable, Sendable {
 
     /// The default layout, derived from the user's gear rig: one strip per
     /// device (stereo devices become a single ganged stereo strip across their
-    /// two channels), followed by the main fader.
+    /// two channels), followed by the Front/Rear speaker-bus masters and the main
+    /// fader.
     static var standard: FaderLayout {
         var strips = Equipment.channelAssignments().map { assignment -> FaderStrip in
             FaderStrip(
@@ -48,6 +49,10 @@ struct FaderLayout: Codable, Sendable {
                 customLabel: assignment.equipment.name
             )
         }
+        // The Front/Rear speaker buses (matching SpeakerArray.standardQuad: buses
+        // 1–4) so the speaker masters are mixable here, then the stereo Main.
+        strips.append(FaderStrip(node: .bus(1), rightNode: .bus(2), customLabel: "Front"))
+        strips.append(FaderStrip(node: .bus(3), rightNode: .bus(4), customLabel: "Rear"))
         strips.append(FaderStrip(node: .main(1)))
         return FaderLayout(strips: strips)
     }

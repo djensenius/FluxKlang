@@ -36,6 +36,30 @@ struct ChainTests {
         #expect(store.graph.edges.first?.from.nodeID == fixture.inputB.id)
     }
 
+    @Test func connectAllowsFanInIntoSummingDestination() {
+        let fixture = makeFixture()
+        let store = fixture.store
+        let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
+        store.addNode(bus)
+        let busInput = ChainPortRef(nodeID: bus.id, side: .input, port: 0)
+        store.connect(from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0), to: busInput)
+        store.connect(from: ChainPortRef(nodeID: fixture.inputB.id, side: .output, port: 0), to: busInput)
+        // A bus sums its sources, so both wires survive (no replacement).
+        #expect(store.graph.edges.count == 2)
+    }
+
+    @Test func connectIgnoresDuplicateWire() {
+        let fixture = makeFixture()
+        let store = fixture.store
+        let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
+        store.addNode(bus)
+        let origin = ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0)
+        let busInput = ChainPortRef(nodeID: bus.id, side: .input, port: 0)
+        store.connect(from: origin, to: busInput)
+        store.connect(from: origin, to: busInput)
+        #expect(store.graph.edges.count == 1)
+    }
+
     @Test func connectRejectsInputToOutput() {
         let fixture = makeFixture()
         let store = fixture.store
@@ -76,5 +100,22 @@ struct ChainTests {
         let addresses = Set(store.wingSettings().map(\.address))
         #expect(addresses.contains(WingAddress.channelSourceGroup(1)))
         #expect(addresses.contains(WingAddress.mainOn(.channel, 1, toMain: 1)))
+    }
+
+    @Test func translatesMainToOutputPatch() {
+        let store = ChainStore()
+        let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)
+        let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
+        store.addNode(main)
+        store.addNode(output)
+        store.connect(
+            from: ChainPortRef(nodeID: main.id, side: .output, port: 0),
+            to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
+        )
+        // Wiring Main → a physical output patches the output's source — i.e. how
+        // the chain "reaches the speakers".
+        let settings = store.wingSettings()
+        #expect(settings.contains { $0.address == WingAddress.outputSourceGroup(3) && $0.value == .string("MAIN") })
+        #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(3) && $0.value == .int(1) })
     }
 }
