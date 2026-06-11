@@ -115,5 +115,5 @@ private struct ComingSoon: View {
 
 #Preview {
     AppRootView()
-        .environment(AppModel())
+        .environment(AppModel.preview())
 }

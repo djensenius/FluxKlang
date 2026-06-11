@@ -45,3 +45,12 @@ final class AppModel {
         wing = WingController()
     }
 }
+
+extension AppModel {
+    /// An app model whose controller is a populated demo, for SwiftUI previews.
+    static func preview() -> AppModel {
+        let model = AppModel()
+        model.wing = .preview()
+        return model
+    }
+}

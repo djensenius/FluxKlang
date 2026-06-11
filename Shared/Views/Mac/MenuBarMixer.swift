@@ -86,4 +86,9 @@ private struct QuickFaderRow: View {
         )
     }
 }
+
+#Preview {
+    MenuBarMixer()
+        .environment(AppModel.preview())
+}
 #endif

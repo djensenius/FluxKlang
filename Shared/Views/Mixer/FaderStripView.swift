@@ -66,3 +66,12 @@ struct FaderStripView: View {
         controller.isMuted(kind, index) ?? false
     }
 }
+
+#Preview {
+    HStack(alignment: .top, spacing: 12) {
+        FaderStripView(controller: .preview(), kind: .channel, index: 1)
+        FaderStripView(controller: .preview(), kind: .channel, index: 9)
+        FaderStripView(controller: .preview(), kind: .main, index: 1)
+    }
+    .padding()
+}

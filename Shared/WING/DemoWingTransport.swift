@@ -95,11 +95,17 @@ actor DemoWingTransport: WingTransporting {
     // MARK: - Seed data
 
     private func seed() {
-        store.removeAll(keepingCapacity: true)
+        store = Self.seededStore()
+    }
+
+    /// The full seeded console state. Shared by the live simulator and by
+    /// SwiftUI previews so both show the same believable WING.
+    static func seededStore() -> [String: WingValue] {
+        var store: [String: WingValue] = [:]
         for kind in [WingNodeKind.channel, .aux, .bus, .main, .matrix, .dca] {
             for index in 1...kind.count {
-                store[WingAddress.name(kind, index)] = .string(Self.seedName(kind, index))
-                store[WingAddress.fader(kind, index)] = .float(Self.seedPosition(kind, index))
+                store[WingAddress.name(kind, index)] = .string(seedName(kind, index))
+                store[WingAddress.fader(kind, index)] = .float(seedPosition(kind, index))
                 store[WingAddress.mute(kind, index)] = .int(0)
             }
         }
@@ -108,6 +114,7 @@ actor DemoWingTransport: WingTransporting {
             store[WingAddress.channelSourceGroup(channel)] = .int(0)
             store[WingAddress.channelSourceIndex(channel)] = .int(Int32(channel))
         }
+        return store
     }
 
     private static func seedName(_ kind: WingNodeKind, _ index: Int) -> String {

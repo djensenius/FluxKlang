@@ -60,5 +60,5 @@ private struct FaderSlot: Identifiable {
 
 #Preview {
     NavigationStack { FadersView() }
-        .environment(AppModel())
+        .environment(AppModel.preview())
 }

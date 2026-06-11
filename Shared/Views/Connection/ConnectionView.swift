@@ -93,5 +93,5 @@ struct ConnectionView: View {
 
 #Preview {
     NavigationStack { ConnectionView() }
-        .environment(AppModel())
+        .environment(AppModel.preview())
 }

@@ -59,3 +59,12 @@ struct VerticalFader: View {
         .frame(minWidth: 40, minHeight: 150)
     }
 }
+
+#Preview {
+    @Previewable @State var position = 0.75
+    @Previewable @State var isEditing = false
+    VerticalFader(position: $position, isEditing: $isEditing)
+        .tint(.blue)
+        .frame(width: 56, height: 240)
+        .padding()
+}

@@ -64,6 +64,15 @@ final class WingController {
         WingController(demoTransport: DemoWingTransport())
     }
 
+    /// A demo controller pre-populated with the seeded console, for SwiftUI
+    /// previews. Synchronous: no transport is started and no tasks run.
+    static func preview() -> WingController {
+        let controller = WingController(demoTransport: DemoWingTransport())
+        controller.connection = .connected(name: "Demo WING Rack")
+        controller.values = DemoWingTransport.seededStore()
+        return controller
+    }
+
     // MARK: - Lifecycle
 
     /// Connects to a WING at `host`, starts listening for updates, and begins
