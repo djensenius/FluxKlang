@@ -165,6 +165,7 @@ final class WingController {
     /// Issues GET queries for a batch of addresses; replies arrive on the
     /// incoming stream and populate `values`.
     private func query(_ addresses: [String]) async {
+        guard !addresses.isEmpty else { return }
         for address in addresses {
             try? await transport.send(address)
         }
