@@ -101,7 +101,9 @@ private struct SectionDetail: View {
             ConnectionView()
         case .routing:
             RoutingView()
-        case .chain, .presets:
+        case .chain:
+            ChainCanvasView()
+        case .presets:
             ComingSoon(section: section)
         }
     }
