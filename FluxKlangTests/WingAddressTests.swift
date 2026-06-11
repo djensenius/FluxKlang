@@ -45,4 +45,24 @@ struct WingAddressTests {
         #expect(WingNodeKind.main.count == 4)
         #expect(WingNodeKind.matrix.count == 8)
     }
+
+    @Test func bulkRefreshAddressesCoverEveryKind() {
+        let addresses = Set(WingAddress.allQueryAddresses())
+        // Per-strip basics across every node kind.
+        for kind in WingNodeKind.allCases {
+            #expect(addresses.contains(WingAddress.fader(kind, 1)))
+            #expect(addresses.contains(WingAddress.mute(kind, 1)))
+            #expect(addresses.contains(WingAddress.name(kind, kind.count)))
+            #expect(addresses.contains(WingAddress.pan(kind, 1)))
+            #expect(addresses.contains(WingAddress.color(kind, 1)))
+        }
+        // Send and main matrices.
+        #expect(addresses.contains(WingAddress.sendOn(.channel, 1, toBus: WingNodeKind.bus.count)))
+        #expect(addresses.contains(WingAddress.sendLevel(.channel, 1, toBus: 1)))
+        #expect(addresses.contains(WingAddress.mainOn(.channel, 1, toMain: WingNodeKind.main.count)))
+        #expect(addresses.contains(WingAddress.mainLevel(.aux, 1, toMain: 1)))
+        // Channel input patches.
+        #expect(addresses.contains(WingAddress.channelSourceGroup(1)))
+        #expect(addresses.contains(WingAddress.channelSourceIndex(WingNodeKind.channel.count)))
+    }
 }
