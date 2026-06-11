@@ -8,8 +8,8 @@
 //  on launch (the Dock override does not persist across launches).
 //
 
+import Foundation
 import Observation
-import SwiftUI
 
 #if os(iOS)
 import UIKit
@@ -47,7 +47,7 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .waveform: return "Waveform"
-        case .wave: return "Brushstroke"
+        case .wave: return "Wave"
         case .fader: return "Fader"
         }
     }
@@ -87,22 +87,28 @@ final class AppIconManager {
         #endif
     }
 
-    /// Selects an icon, persists it, and applies it to the system.
+    /// Selects an icon and applies it to the system, persisting the choice only
+    /// once the change actually takes effect. On iOS the system reports success
+    /// asynchronously, so cancelling or a failure leaves the prior icon intact.
     func select(_ option: AppIconOption) {
         guard option != selected else { return }
-        selected = option
-        UserDefaults.standard.set(option.rawValue, forKey: storageKey)
-        apply(option)
-    }
-
-    private func apply(_ option: AppIconOption) {
         #if os(iOS)
-        guard UIApplication.shared.supportsAlternateIcons,
-              UIApplication.shared.alternateIconName != option.alternateName else { return }
-        UIApplication.shared.setAlternateIconName(option.alternateName)
+        guard UIApplication.shared.supportsAlternateIcons else { return }
+        UIApplication.shared.setAlternateIconName(option.alternateName) { [weak self] error in
+            guard error == nil else { return }
+            Task { @MainActor in self?.commit(option) }
+        }
         #elseif os(macOS)
         applyToDock(option)
+        commit(option)
         #endif
+    }
+
+    /// Records the selection and persists it. Called only after the icon change
+    /// has succeeded.
+    private func commit(_ option: AppIconOption) {
+        selected = option
+        UserDefaults.standard.set(option.rawValue, forKey: storageKey)
     }
 
     #if os(macOS)
