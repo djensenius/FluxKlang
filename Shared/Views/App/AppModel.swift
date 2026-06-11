@@ -94,6 +94,10 @@ final class AppModel {
         for strip in faderLayout.layout.strips {
             addresses.append(WingAddress.fader(strip.node.kind, strip.node.index))
             addresses.append(WingAddress.mute(strip.node.kind, strip.node.index))
+            if let right = strip.rightNode {
+                addresses.append(WingAddress.fader(right.kind, right.index))
+                addresses.append(WingAddress.mute(right.kind, right.index))
+            }
         }
         for channel in 1...WingNodeKind.channel.count {
             addresses.append(WingAddress.channelSourceGroup(channel))
@@ -164,24 +168,16 @@ final class AppModel {
     /// Sets a stereo speaker pair's level (normalised), with an optional balance
     /// offset (`-1...1`) trimming left versus right.
     func setSpeakerPair(_ pair: SpeakerPair, position: Float, balance: Float = 0) async {
-        let leftPosition = min(max(position - balance / 2, 0), 1)
-        let rightPosition = min(max(position + balance / 2, 0), 1)
-        if let left = spatial.array.speaker(pair.left) {
-            await wing.setFader(left.node.kind, left.node.index, position: leftPosition)
-        }
-        if let right = spatial.array.speaker(pair.right) {
-            await wing.setFader(right.node.kind, right.node.index, position: rightPosition)
-        }
+        guard let left = spatial.array.speaker(pair.left)?.node else { return }
+        let right = spatial.array.speaker(pair.right)?.node
+        await wing.setFaderPair(left, right, position: position, balance: balance)
     }
 
     /// Mutes or unmutes both speakers in a pair.
     func setSpeakerPairMuted(_ pair: SpeakerPair, muted: Bool) async {
-        if let left = spatial.array.speaker(pair.left) {
-            await wing.setMute(left.node.kind, left.node.index, muted: muted)
-        }
-        if let right = spatial.array.speaker(pair.right) {
-            await wing.setMute(right.node.kind, right.node.index, muted: muted)
-        }
+        guard let left = spatial.array.speaker(pair.left)?.node else { return }
+        let right = spatial.array.speaker(pair.right)?.node
+        await wing.setMutePair(left, right, muted: muted)
     }
 
     // MARK: - Selection & navigation

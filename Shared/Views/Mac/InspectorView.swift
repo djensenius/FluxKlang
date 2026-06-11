@@ -52,9 +52,9 @@ struct InspectorView: View {
         return Section("Strip") {
             TextField("Label", text: $draftLabel)
                 .onSubmit { appModel.faderLayout.setLabel(draftLabel, for: strip.id) }
-            LabeledContent("Node", value: "\(kind.label) \(index)")
+            LabeledContent("Node", value: nodeLabel(strip))
             LabeledContent("Level", value: FaderMath.label(forPosition: livePosition(kind, index)))
-            Toggle("Mute", isOn: muteBinding(kind, index))
+            Toggle("Mute", isOn: muteBinding(strip))
 
             Button(role: .destructive) {
                 appModel.faderLayout.remove(strip)
@@ -65,14 +65,23 @@ struct InspectorView: View {
         }
     }
 
+    private func nodeLabel(_ strip: FaderStrip) -> String {
+        if let right = strip.rightNode {
+            return "Channels \(strip.node.index) & \(right.index) · Stereo"
+        }
+        return "\(strip.node.kind.label) \(strip.node.index)"
+    }
+
     private func livePosition(_ kind: WingNodeKind, _ index: Int) -> Float {
         controller.faderPosition(kind, index) ?? FaderMath.unityPosition
     }
 
-    private func muteBinding(_ kind: WingNodeKind, _ index: Int) -> Binding<Bool> {
+    private func muteBinding(_ strip: FaderStrip) -> Binding<Bool> {
         Binding(
-            get: { controller.isMuted(kind, index) ?? false },
-            set: { newValue in Task { await controller.setMute(kind, index, muted: newValue) } }
+            get: { controller.isMuted(strip.node.kind, strip.node.index) ?? false },
+            set: { newValue in
+                Task { await controller.setMutePair(strip.node, strip.rightNode, muted: newValue) }
+            }
         )
     }
 

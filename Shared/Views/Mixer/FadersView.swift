@@ -74,6 +74,8 @@ struct FadersView: View {
     private var addStripMenu: some ToolbarContent {
         ToolbarItem {
             Menu {
+                stereoPairMenu
+                Divider()
                 ForEach(WingNodeKind.allCases, id: \.self) { kind in
                     kindMenu(kind)
                 }
@@ -81,6 +83,29 @@ struct FadersView: View {
                 Label("Add Strip", systemImage: "plus")
             }
             .disabled(!controller.connection.isConnected)
+        }
+    }
+
+    private var stereoPairMenu: some View {
+        Menu("Stereo Pair") {
+            ForEach(availableStereoLefts, id: \.self) { left in
+                Button("Channels \(left) & \(left + 1)") {
+                    addStereoPair(left: left)
+                }
+            }
+        }
+    }
+
+    private func addStereoPair(left: Int) {
+        let leftNode = WingNodeRef.channel(left)
+        let rightNode = WingNodeRef.channel(left + 1)
+        appModel.faderLayout.addStereoStrip(left: leftNode, right: rightNode)
+        Task { await controller.hardPanPair(leftNode, rightNode) }
+    }
+
+    private var availableStereoLefts: [Int] {
+        (1..<WingNodeKind.channel.count).filter {
+            !layout.contains(.channel($0)) && !layout.contains(.channel($0 + 1))
         }
     }
 

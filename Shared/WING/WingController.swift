@@ -123,6 +123,13 @@ final class WingController {
         await set(WingAddress.mute(kind, index), .int(muted ? 1 : 0))
     }
 
+    /// Sets a strip's pan: `-1` hard left, `0` centre, `+1` hard right. The WING
+    /// `/pan` value range is modelled as `-1...1`; to be re-verified against a
+    /// real console during the smoke test.
+    func setPan(_ kind: WingNodeKind, _ index: Int, pan: Float) async {
+        await set(WingAddress.pan(kind, index), .float(min(max(pan, -1), 1)))
+    }
+
     /// Re-queries a node so its cached value reflects the console (for example,
     /// after a change was made in the WING Co-Pilot app). The reply arrives on
     /// the incoming stream.
@@ -148,6 +155,40 @@ final class WingController {
     /// Current mute state for a strip, if known.
     func isMuted(_ kind: WingNodeKind, _ index: Int) -> Bool? {
         values[WingAddress.mute(kind, index)]?.intValue.map { $0 != 0 }
+    }
+
+    /// Current pan for a strip (`-1...1`), if known.
+    func pan(_ kind: WingNodeKind, _ index: Int) -> Float? {
+        values[WingAddress.pan(kind, index)]?.floatValue
+    }
+
+    // MARK: - Stereo pairs
+
+    /// Drives a ganged stereo pair from a single fader `position` (`0...1`) plus
+    /// a `balance` trim (`-1` favours left … `0` even … `+1` favours right). The
+    /// right node may be `nil`, in which case only the left node is set, so the
+    /// same call works for mono strips.
+    func setFaderPair(_ left: WingNodeRef, _ right: WingNodeRef?, position: Float, balance: Float = 0) async {
+        await setFader(left.kind, left.index, position: position - balance / 2)
+        if let right {
+            await setFader(right.kind, right.index, position: position + balance / 2)
+        }
+    }
+
+    /// Links the mute of a stereo pair (or just the left node when `right` is nil).
+    func setMutePair(_ left: WingNodeRef, _ right: WingNodeRef?, muted: Bool) async {
+        await setMute(left.kind, left.index, muted: muted)
+        if let right {
+            await setMute(right.kind, right.index, muted: muted)
+        }
+    }
+
+    /// Hard-pans a stereo pair fully left and right so it images correctly.
+    func hardPanPair(_ left: WingNodeRef, _ right: WingNodeRef?) async {
+        await setPan(left.kind, left.index, pan: -1)
+        if let right {
+            await setPan(right.kind, right.index, pan: 1)
+        }
     }
 
     // MARK: - Routing

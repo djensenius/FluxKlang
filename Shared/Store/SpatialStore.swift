@@ -109,21 +109,35 @@ final class SpatialStore {
         Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
     }
 
-    /// First-launch sources, including a stereo instrument made of two
-    /// non-adjacent channels to show arbitrary stereo pairing.
+    /// First-launch sources mapped onto the gear rig's channel layout, including
+    /// stereo instruments (two consecutive channels) and a mono one.
     private static var defaultSources: [SpatialSource] {
         [
-            SpatialSource(name: "OP-1 Field", left: .channel(1), position: CGPoint(x: 0.3, y: 0.3)),
-            SpatialSource(name: "TX-6", left: .channel(3), position: CGPoint(x: 0.72, y: 0.4)),
-            SpatialSource(name: "Torso S-4", left: .channel(6), position: CGPoint(x: 0.5, y: 0.72)),
             SpatialSource(
-                name: "Wide Stereo",
+                name: "OP-1 Field",
                 mode: .stereo,
-                left: .channel(5),
-                right: .channel(11),
-                position: CGPoint(x: 0.5, y: 0.45),
+                left: .channel(1),
+                right: .channel(2),
+                position: CGPoint(x: 0.3, y: 0.3),
+                width: 0.5
+            ),
+            SpatialSource(
+                name: "OP-XY",
+                mode: .stereo,
+                left: .channel(3),
+                right: .channel(4),
+                position: CGPoint(x: 0.7, y: 0.35),
+                width: 0.5
+            ),
+            SpatialSource(
+                name: "Torso S-4",
+                mode: .stereo,
+                left: .channel(11),
+                right: .channel(12),
+                position: CGPoint(x: 0.5, y: 0.72),
                 width: 0.7
-            )
+            ),
+            SpatialSource(name: "MicroFreak", left: .channel(33), position: CGPoint(x: 0.5, y: 0.45))
         ]
     }
 }

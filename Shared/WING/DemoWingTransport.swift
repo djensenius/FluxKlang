@@ -82,14 +82,18 @@ actor DemoWingTransport: WingTransporting {
     }
 
     private func ambientTick() async {
-        // Nudge one of the first few channel faders a little, as if a live mix
-        // (or another controller on the network) were in progress.
-        let channel = Int.random(in: 1...6)
-        let address = WingAddress.fader(.channel, channel)
-        let current = store[address]?.floatValue ?? FaderMath.unityPosition
-        let next = min(max(current + Float.random(in: -0.04...0.04), 0), 1)
-        store[address] = .float(next)
-        emit(address, .float(next))
+        // Nudge a stereo pair's two channels together, as if a live mix (or
+        // another controller on the network) were in progress. Moving both
+        // channels by the same delta keeps the pair's balance stable.
+        let leftChannel = [1, 3, 5].randomElement() ?? 1
+        let delta = Float.random(in: -0.04...0.04)
+        for channel in [leftChannel, leftChannel + 1] {
+            let address = WingAddress.fader(.channel, channel)
+            let current = store[address]?.floatValue ?? FaderMath.unityPosition
+            let next = min(max(current + delta, 0), 1)
+            store[address] = .float(next)
+            emit(address, .float(next))
+        }
     }
 
     // MARK: - Seed data
@@ -132,12 +136,17 @@ actor DemoWingTransport: WingTransporting {
         for (offset, speakerName) in speakerNames.enumerated() {
             store[WingAddress.name(.bus, offset + 1)] = .string(speakerName)
         }
+        // Hard-pan the stereo rig channels (L/R) and centre the mono ones so the
+        // demo images correctly offline.
+        for (channel, pan) in channelPans {
+            store[WingAddress.pan(.channel, channel)] = .float(pan)
+        }
         return store
     }
 
     private static func seedName(_ kind: WingNodeKind, _ index: Int) -> String {
-        if kind == .channel, index <= channelNames.count {
-            return channelNames[index - 1]
+        if kind == .channel, let name = channelNames[index] {
+            return name
         }
         if kind == .main, index == 1 {
             return "Main LR"
@@ -152,13 +161,35 @@ actor DemoWingTransport: WingTransporting {
         }
     }
 
-    /// Channels 1–16 are named after the user's gear so the demo feels real.
-    private static let channelNames = [
-        "OP-1 Field", "OP-XY", "TX-6", "TP-7", "CM-15",
-        "Torso S-4", "SOLAR 42F", "EviL Pet", "Cosmos", "Ether",
-        "Flux", "Pipe", "OXI One", "OXI E16", "Buchla Ziggy",
-        "Microcosm"
-    ]
+    /// Channel scribble names derived from the gear rig: a stereo device gets
+    /// "<name> L" / "<name> R" across its two channels, a mono device a single
+    /// "<name>". This keeps the demo in lock-step with the real channel layout.
+    private static let channelNames: [Int: String] = {
+        var names: [Int: String] = [:]
+        for assignment in Equipment.channelAssignments() {
+            if let right = assignment.rightChannel {
+                names[assignment.leftChannel] = "\(assignment.equipment.name) L"
+                names[right] = "\(assignment.equipment.name) R"
+            } else {
+                names[assignment.leftChannel] = assignment.equipment.name
+            }
+        }
+        return names
+    }()
+
+    /// Pan seeds for the rig channels: stereo pairs hard-panned L/R, mono centred.
+    private static let channelPans: [Int: Float] = {
+        var pans: [Int: Float] = [:]
+        for assignment in Equipment.channelAssignments() {
+            if let right = assignment.rightChannel {
+                pans[assignment.leftChannel] = -1
+                pans[right] = 1
+            } else {
+                pans[assignment.leftChannel] = 0
+            }
+        }
+        return pans
+    }()
 
     private static let seedPositions: [Float] = [0.78, 0.72, 0.75, 0.68, 0.80, 0.74]
 }

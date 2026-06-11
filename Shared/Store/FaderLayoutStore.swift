@@ -32,6 +32,14 @@ final class FaderLayoutStore {
         persist()
     }
 
+    /// Adds a ganged stereo strip across `left` and `right` unless either channel
+    /// already has a strip.
+    func addStereoStrip(left: WingNodeRef, right: WingNodeRef, label: String? = nil) {
+        guard !layout.contains(left), !layout.contains(right) else { return }
+        layout.strips.append(FaderStrip(node: left, rightNode: right, customLabel: label))
+        persist()
+    }
+
     func removeStrips(at offsets: IndexSet) {
         layout.strips.remove(atOffsets: offsets)
         persist()
@@ -54,7 +62,7 @@ final class FaderLayoutStore {
         persist()
     }
 
-    /// Resets the bank to the standard channels 1–16 plus main layout.
+    /// Resets the bank to the standard gear-rig layout plus the main fader.
     func resetToStandard() {
         layout = .standard
         persist()
