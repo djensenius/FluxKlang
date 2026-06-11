@@ -171,7 +171,7 @@ struct FadersView: View {
     private func consoleBaseName(for strip: FaderStrip) -> String {
         let name = controller.name(strip.node.kind, strip.node.index) ?? ""
         if strip.rightNode != nil, name.hasSuffix(" L") {
-            return String(name.dropLast(2))
+            return String(name.dropLast(" L".count))
         }
         return name
     }
