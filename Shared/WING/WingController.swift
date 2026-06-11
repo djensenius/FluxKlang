@@ -153,16 +153,20 @@ final class WingController {
             if Task.isCancelled { return }
             batch.append(address)
             if batch.count >= WingNetwork.bulkRefreshBatchSize {
-                for queued in batch {
-                    try? await transport.send(queued)
-                }
+                await query(batch)
                 batch.removeAll(keepingCapacity: true)
                 try? await Task.sleep(for: WingNetwork.bulkRefreshBatchDelay)
             }
         }
         if Task.isCancelled { return }
-        for queued in batch {
-            try? await transport.send(queued)
+        await query(batch)
+    }
+
+    /// Issues GET queries for a batch of addresses; replies arrive on the
+    /// incoming stream and populate `values`.
+    private func query(_ addresses: [String]) async {
+        for address in addresses {
+            try? await transport.send(address)
         }
     }
 
