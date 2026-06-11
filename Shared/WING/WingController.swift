@@ -167,6 +167,7 @@ final class WingController {
     private func query(_ addresses: [String]) async {
         guard !addresses.isEmpty else { return }
         for address in addresses {
+            if Task.isCancelled { return }
             try? await transport.send(address)
         }
     }
