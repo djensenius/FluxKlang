@@ -14,9 +14,23 @@ import SwiftOSC
 /// An OSC message received from the WING.
 struct WingIncoming: Sendable {
     let address: String
-    let value: WingValue?
+    let values: [WingValue]
     let host: String
     let port: UInt16
+
+    /// The first argument, for the common single-value case.
+    var value: WingValue? { values.first }
+
+    init(address: String, values: [WingValue], host: String, port: UInt16) {
+        self.address = address
+        self.values = values
+        self.host = host
+        self.port = port
+    }
+
+    init(address: String, value: WingValue?, host: String, port: UInt16) {
+        self.init(address: address, values: value.map { [$0] } ?? [], host: host, port: port)
+    }
 }
 
 enum WingTransportError: Error, Sendable {
@@ -60,7 +74,7 @@ actor WingTransport: WingTransporting {
                 continuation.yield(
                     WingIncoming(
                         address: message.addressPattern.stringValue,
-                        value: message.values.first.flatMap(WingValue.init(osc:)),
+                        values: message.values.compactMap(WingValue.init(osc:)),
                         host: host,
                         port: port
                     )

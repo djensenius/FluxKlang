@@ -28,6 +28,18 @@ final class AppModel {
     /// Saved presets / scene snapshots.
     let presets = PresetStore()
 
+    /// Network scanner for finding WING consoles.
+    let discovery = WingDiscovery()
+
+    private let lastHostKey = "fluxklang.lastHost"
+
+    /// The most recently connected WING host, persisted across launches and used
+    /// as a fallback when broadcast discovery finds nothing.
+    var lastHost: String? {
+        get { UserDefaults.standard.string(forKey: lastHostKey) }
+        set { UserDefaults.standard.setValue(newValue, forKey: lastHostKey) }
+    }
+
     init() {
         wing = WingController()
     }
@@ -67,6 +79,9 @@ final class AppModel {
         let live = WingController(port: port)
         wing = live
         await live.connect(host: host)
+        if live.connection.isConnected {
+            lastHost = host
+        }
     }
 
     /// Disconnects and returns to a fresh, idle live controller.
