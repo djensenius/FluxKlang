@@ -222,11 +222,14 @@ final class WingController {
     }
 
     /// Renames a strip on the console. For a stereo pair the two nodes get the
-    /// shared name with ` L`/` R` suffixes; a mono strip gets the name as-is.
+    /// shared name with ` L`/` R` suffixes; a mono strip gets the name as-is. The
+    /// base name is clamped to leave room for the suffix so both nodes stay
+    /// distinct within ``maxNameLength``.
     func setNamePair(_ left: WingNodeRef, _ right: WingNodeRef?, to name: String) async {
         if let right {
-            await setName(left.kind, left.index, to: name + " L")
-            await setName(right.kind, right.index, to: name + " R")
+            let base = String(Self.sanitizeName(name).prefix(Self.maxNameLength - 2))
+            await setName(left.kind, left.index, to: base + " L")
+            await setName(right.kind, right.index, to: base + " R")
         } else {
             await setName(left.kind, left.index, to: name)
         }
