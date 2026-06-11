@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.0.3](https://github.com/djensenius/FluxKlang/compare/v0.0.2...v0.0.3) (2026-06-11)
+
+
+### Features
+
+* pre-populate WingController cache with bulk-refresh on connect ([#10](https://github.com/djensenius/FluxKlang/issues/10)) ([dc033e7](https://github.com/djensenius/FluxKlang/commit/dc033e72aa18435a65b4b1378603e850aba1b625))
+* sync all persisted state via iCloud ([#11](https://github.com/djensenius/FluxKlang/issues/11)) ([3ec275b](https://github.com/djensenius/FluxKlang/commit/3ec275bc3cdac9b973d413d91c4bca73a8012d63))
+* write WING scribble-strip names and colours back to the console ([#8](https://github.com/djensenius/FluxKlang/issues/8)) ([58e845f](https://github.com/djensenius/FluxKlang/commit/58e845f081626ac542073d07c5dbebc1660fb13f))
+
+
+### Bug Fixes
+
+* correct WING /io/out output-patch OSC paths and source-group tokens ([#7](https://github.com/djensenius/FluxKlang/issues/7)) ([20a9091](https://github.com/djensenius/FluxKlang/commit/20a90919a80e74360013f8f1f809a24e5d5d4a98))
+
 ## [0.0.2](https://github.com/djensenius/FluxKlang/compare/v0.0.1...v0.0.2) (2026-06-11)
 
 
