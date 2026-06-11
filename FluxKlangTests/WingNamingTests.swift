@@ -14,7 +14,6 @@ import Testing
 struct WingNamingTests {
     @Test func sanitizesNameByTrimmingAndClamping() {
         #expect(WingController.sanitizeName("  Kick  ") == "Kick")
-        #expect(WingController.sanitizeName("AbsurdlyLongStripName").count == WingController.maxNameLength)
         #expect(WingController.sanitizeName("AbsurdlyLongStripName")
             == String("AbsurdlyLongStripName".prefix(WingController.maxNameLength)))
     }

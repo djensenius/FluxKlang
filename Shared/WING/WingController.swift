@@ -154,10 +154,11 @@ final class WingController {
         values[WingAddress.color(kind, index)]?.intValue.map(Int.init)
     }
 
-    /// Trims whitespace and clamps a scribble-strip name to ``maxNameLength``.
-    static func sanitizeName(_ name: String) -> String {
+    /// Trims whitespace and clamps a scribble-strip name to `maxLength`
+    /// (defaulting to ``maxNameLength``).
+    static func sanitizeName(_ name: String, maxLength: Int = maxNameLength) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(trimmed.prefix(maxNameLength))
+        return String(trimmed.prefix(maxLength))
     }
 
     /// Re-queries a node so its cached value reflects the console (for example,
@@ -230,7 +231,7 @@ final class WingController {
     /// distinct within ``maxNameLength``.
     func setNamePair(_ left: WingNodeRef, _ right: WingNodeRef?, to name: String) async {
         if let right {
-            let base = String(Self.sanitizeName(name).prefix(Self.maxNameLength - Self.stereoSuffixLength))
+            let base = Self.sanitizeName(name, maxLength: Self.maxNameLength - Self.stereoSuffixLength)
             await setName(left.kind, left.index, to: base + " L")
             await setName(right.kind, right.index, to: base + " R")
         } else {
