@@ -21,6 +21,11 @@ struct WingAddressTests {
         #expect(WingAddress.channelSourceIndex(5) == "/ch/5/in/conn/in")
     }
 
+    @Test func buildsOutputPatchNodes() {
+        #expect(WingAddress.outputSourceGroup(1) == "/io/out/1/srcgrp")
+        #expect(WingAddress.outputSourceIndex(1) == "/io/out/1/srcin")
+    }
+
     @Test func buildsSendNodes() {
         #expect(WingAddress.sendOn(.channel, 1, toBus: 3) == "/ch/1/send/3/on")
         #expect(WingAddress.sendLevel(.channel, 1, toBus: 3) == "/ch/1/send/3/lvl")

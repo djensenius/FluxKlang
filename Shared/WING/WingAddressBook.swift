@@ -111,6 +111,22 @@ enum WingAddress {
         node(kind, index) + "/main/\(main)/lvl"
     }
 
+    // MARK: - Output patching
+
+    /// Source group for a physical output socket, e.g. `/io/out/1/srcgrp`. This
+    /// patches which internal signal (a main or speaker bus) feeds the output
+    /// your speakers are plugged into — i.e. how a chain "reaches the speakers".
+    /// Node paths are best-effort and must be verified against a real console
+    /// (see `WingOutputSource`).
+    static func outputSourceGroup(_ output: Int) -> String {
+        "/io/out/\(output)/srcgrp"
+    }
+
+    /// Source index within the group for a physical output, e.g. `/io/out/1/srcin`.
+    static func outputSourceIndex(_ output: Int) -> String {
+        "/io/out/\(output)/srcin"
+    }
+
     // MARK: - Console
 
     /// Subscription / keep-alive command. Send periodically to keep receiving

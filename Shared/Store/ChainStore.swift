@@ -43,13 +43,30 @@ final class ChainStore {
         persist()
     }
 
-    /// Connects an output port to an input port, replacing any existing wire into
-    /// the same destination port. No-op if the connection isn't output → input.
+    /// Connects an output port to an input port. WING channel inputs and physical
+    /// WING outputs are 1:1 source patches, so a new wire replaces any existing one
+    /// into them; all other destinations (gear inputs, summing buses, mains) allow
+    /// fan-in — multiple sources can converge — but never exact-duplicate wires.
+    /// No-op if the connection isn't output → input.
     func connect(from origin: ChainPortRef, to destination: ChainPortRef) {
         guard origin.side == .output, destination.side == .input else { return }
-        graph.edges.removeAll { $0.to == destination }
+        if isSingleSourceDestination(destination) {
+            graph.edges.removeAll { $0.to == destination }
+        } else if graph.edges.contains(where: { $0.from == origin && $0.to == destination }) {
+            return
+        }
         graph.edges.append(ChainEdge(from: origin, to: destination))
         persist()
+    }
+
+    /// Whether a destination port accepts only one incoming wire. A WING channel
+    /// input and a physical WING output are each a single hardware source patch
+    /// (`/io/in` and `/io/out` respectively); everything else allows fan-in.
+    private func isSingleSourceDestination(_ destination: ChainPortRef) -> Bool {
+        switch graph.node(destination.nodeID)?.kind {
+        case .wingChannel, .wingOutput: return true
+        default: return false
+        }
     }
 
     func removeEdge(_ id: UUID) {

@@ -22,15 +22,19 @@ struct ModelsTests {
 
     @Test func standardLayoutDerivesFromGearRig() {
         let layout = FaderLayout.standard
-        // Each gear device (16 stereo + 2 mono) becomes one strip, plus the main.
-        #expect(layout.strips.count == Equipment.seededLibrary.count + 1)
+        // Each gear device (16 stereo + 2 mono) becomes one strip, plus the
+        // Front/Rear speaker-bus masters and the stereo main.
+        #expect(layout.strips.count == Equipment.seededLibrary.count + 3)
         #expect(layout.strips.first?.node == .channel(1))
         #expect(layout.strips.first?.rightNode == .channel(2))
         #expect(layout.strips.first?.isStereo == true)
         #expect(layout.strips.last?.node == .main(1))
         #expect(layout.contains(.channel(8)))   // TP-7 right channel
         #expect(layout.contains(.channel(33)))  // MicroFreak (mono)
-        #expect(!layout.contains(.bus(1)))
+        // The speaker buses (SpeakerArray.standardQuad: Front L/R, Rear L/R) are
+        // mixable alongside the main.
+        #expect(layout.contains(.bus(1)))
+        #expect(layout.contains(.bus(4)))
     }
 
     @Test func faderLayoutCodableRoundTrip() throws {

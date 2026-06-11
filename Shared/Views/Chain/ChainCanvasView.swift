@@ -51,34 +51,46 @@ struct ChainCanvasView: View {
     // MARK: - Canvas
 
     private var canvas: some View {
-        ZStack {
-            Color.gray.opacity(0.06)
-                .contentShape(Rectangle())
-                .gesture(panGesture.simultaneously(with: zoomGesture))
-                .onTapGesture { selection = nil }
-            content
-                .scaleEffect(zoom * liveZoom)
-                .offset(x: pan.width + livePan.width, y: pan.height + livePan.height)
-        }
-        .clipped()
-        .onScrollWheel { info in
-            if info.commandKey {
-                zoom = min(max(zoom * (1 - info.deltaY * 0.005), 0.4), 2.5)
-            } else {
-                pan.width += info.deltaX
-                pan.height += info.deltaY
+        // The content is a large fixed-size virtual canvas. Render it as a
+        // clipped overlay on a flexible base so its size does not propagate to
+        // the layout: otherwise, with `.windowResizability(.contentMinSize)`,
+        // the Mac window's minimum size grows to the canvas size and balloons
+        // past the screen.
+        Color.gray.opacity(0.06)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(panGesture.simultaneously(with: zoomGesture))
+            .onTapGesture { selection = nil }
+            .overlay(alignment: .topLeading) {
+                content
+                    .scaleEffect(zoom * liveZoom, anchor: .topLeading)
+                    .offset(x: pan.width + livePan.width, y: pan.height + livePan.height)
             }
-        }
-        #if os(macOS)
-        .focusable()
-        .focusEffectDisabled()
-        .onDeleteCommand(perform: deleteSelection)
-        #endif
+            .clipped()
+            .onScrollWheel { info in
+                if info.commandKey {
+                    zoom = min(max(zoom * (1 - info.deltaY * 0.005), 0.4), 2.5)
+                } else {
+                    pan.width += info.deltaX
+                    pan.height += info.deltaY
+                }
+            }
+            #if os(macOS)
+            .focusable()
+            .focusEffectDisabled()
+            .onDeleteCommand(perform: deleteSelection)
+            #endif
     }
 
     private var content: some View {
         ZStack(alignment: .topLeading) {
             WireLayer(graph: graph, equipment: equipment, size: Self.contentSize, tempWire: tempWire)
+            ForEach(graph.edges) { edge in
+                if let mid = edgeMidpoint(edge) {
+                    WireDeleteButton { appModel.chain.removeEdge(edge.id) }
+                        .position(mid)
+                }
+            }
             ForEach(graph.nodes) { node in
                 NodeView(
                     node: node,
@@ -216,6 +228,50 @@ struct ChainCanvasView: View {
 
     private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
         hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+
+    // MARK: - Wire geometry
+
+    private func anchor(_ ref: ChainPortRef) -> CGPoint? {
+        guard let node = graph.node(ref.nodeID) else { return nil }
+        let ports = ChainGeometry.ports(for: node, equipment: equipment)
+        return ChainGeometry.anchor(
+            node: node,
+            side: ref.side,
+            port: ref.port,
+            inputs: ports.inputs.count,
+            outputs: ports.outputs.count
+        )
+    }
+
+    /// The midpoint of an edge's bezier wire. The curve is symmetric (its x
+    /// control offsets cancel), so the t = 0.5 point is exactly the average of
+    /// the two endpoints — a stable spot for the delete button.
+    private func edgeMidpoint(_ edge: ChainEdge) -> CGPoint? {
+        guard let start = anchor(edge.from), let end = anchor(edge.to) else { return nil }
+        return CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+    }
+}
+
+/// A small button that sits on a wire's midpoint to delete that connection.
+private struct WireDeleteButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 18))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.red)
+                .background(Circle().fill(.white).padding(3))
+                .opacity(hovering ? 1 : 0.65)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Delete this connection")
+        .accessibilityLabel("Delete connection")
+        .accessibilityHint("Removes this wire between the two ports")
     }
 }
 
