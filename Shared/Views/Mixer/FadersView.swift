@@ -2,9 +2,10 @@
 //  FadersView.swift
 //  FluxKlang
 //
-//  A scrollable bank of mixer strips. Shows the WING channels (named after the
-//  user's gear in Demo Mode) plus the main. When nothing is connected it offers
-//  a one-tap route into Demo Mode.
+//  A configurable, scrollable bank of mixer strips bound to WING nodes. The
+//  layout is user-editable (add/remove/rename strips) and persisted, so the
+//  mixer comes back exactly as left. When nothing is connected it offers a
+//  one-tap route into Demo Mode.
 //
 
 import SwiftUI
@@ -12,28 +13,92 @@ import SwiftUI
 struct FadersView: View {
     @Environment(AppModel.self) private var appModel
 
-    private var controller: WingController { appModel.wing }
+    @State private var renamingStrip: FaderStrip?
+    @State private var draftLabel = ""
 
-    private var slots: [FaderSlot] {
-        (1...16).map { FaderSlot(kind: .channel, index: $0) } + [FaderSlot(kind: .main, index: 1)]
-    }
+    private var controller: WingController { appModel.wing }
+    private var layout: FaderLayout { appModel.faderLayout.layout }
 
     var body: some View {
         Group {
             if controller.connection.isConnected {
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(slots) { slot in
-                            FaderStripView(controller: controller, kind: slot.kind, index: slot.index)
-                        }
-                    }
-                    .padding()
-                }
+                bank
             } else {
                 unavailable
             }
         }
         .navigationTitle("Faders")
+        .toolbar { addStripMenu }
+        .alert("Rename Strip", isPresented: isRenaming) {
+            TextField("Label", text: $draftLabel)
+            Button("Save") { commitRename() }
+            Button("Cancel", role: .cancel) { renamingStrip = nil }
+        }
+    }
+
+    private var bank: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(layout.strips) { strip in
+                    FaderStripView(controller: controller, strip: strip)
+                        .contextMenu {
+                            Button {
+                                draftLabel = strip.customLabel ?? ""
+                                renamingStrip = strip
+                            } label: {
+                                Label("Rename…", systemImage: "pencil")
+                            }
+                            Button(role: .destructive) {
+                                appModel.faderLayout.remove(strip)
+                            } label: {
+                                Label("Remove Strip", systemImage: "trash")
+                            }
+                        }
+                }
+            }
+            .padding()
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var addStripMenu: some ToolbarContent {
+        ToolbarItem {
+            Menu {
+                ForEach(WingNodeKind.allCases, id: \.self) { kind in
+                    kindMenu(kind)
+                }
+            } label: {
+                Label("Add Strip", systemImage: "plus")
+            }
+            .disabled(!controller.connection.isConnected)
+        }
+    }
+
+    private func kindMenu(_ kind: WingNodeKind) -> some View {
+        Menu(kind.label) {
+            ForEach(availableIndices(for: kind), id: \.self) { index in
+                Button("\(kind.label) \(index)") {
+                    appModel.faderLayout.addStrip(WingNodeRef(kind: kind, index: index))
+                }
+            }
+        }
+    }
+
+    private func availableIndices(for kind: WingNodeKind) -> [Int] {
+        (1...kind.count).filter { !layout.contains(WingNodeRef(kind: kind, index: $0)) }
+    }
+
+    private var isRenaming: Binding<Bool> {
+        Binding(
+            get: { renamingStrip != nil },
+            set: { if !$0 { renamingStrip = nil } }
+        )
+    }
+
+    private func commitRename() {
+        guard let strip = renamingStrip else { return }
+        appModel.faderLayout.setLabel(draftLabel, for: strip.id)
+        renamingStrip = nil
     }
 
     private var unavailable: some View {
@@ -50,12 +115,6 @@ struct FadersView: View {
             .buttonStyle(.borderedProminent)
         }
     }
-}
-
-private struct FaderSlot: Identifiable {
-    let kind: WingNodeKind
-    let index: Int
-    var id: String { "\(kind.rawValue)-\(index)" }
 }
 
 #Preview {

@@ -2,20 +2,23 @@
 //  FaderStripView.swift
 //  FluxKlang
 //
-//  A single mixer strip: decibel readout, vertical fader and mute. Driven by the
-//  WingController so it reflects live changes from the console (or the demo
-//  simulator), and pushes the user's moves back via OSC.
+//  A single mixer strip: decibel readout, vertical fader with a level meter, and
+//  mute. Driven by the WingController so it reflects live changes from the
+//  console (or the demo simulator), and pushes the user's moves back via OSC.
 //
 
 import SwiftUI
 
 struct FaderStripView: View {
     let controller: WingController
-    let kind: WingNodeKind
-    let index: Int
+    let strip: FaderStrip
 
     @State private var position = Double(FaderMath.unityPosition)
     @State private var isEditing = false
+
+    private var kind: WingNodeKind { strip.node.kind }
+    private var index: Int { strip.node.index }
+    private var tint: Color { Theme.color(for: kind) }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -24,7 +27,10 @@ struct FaderStripView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            VerticalFader(position: $position, isEditing: $isEditing)
+            HStack(spacing: 6) {
+                VerticalFader(position: $position, isEditing: $isEditing)
+                MeterView(level: isMuted ? 0 : position)
+            }
 
             Button {
                 Task { await controller.setMute(kind, index, muted: !isMuted) }
@@ -37,13 +43,17 @@ struct FaderStripView: View {
             .controlSize(.small)
             .tint(isMuted ? .red : .gray)
 
-            Text(name)
+            Text(label)
                 .font(.caption2)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(width: 64)
+                .frame(width: 70)
         }
-        .frame(width: 72)
+        .frame(width: 78)
+        .padding(.top, 4)
+        .overlay(alignment: .top) {
+            Capsule().fill(tint).frame(width: 36, height: 3)
+        }
         .onAppear { position = livePosition }
         .onChange(of: livePosition) { _, newValue in
             if !isEditing { position = newValue }
@@ -58,8 +68,10 @@ struct FaderStripView: View {
         Double(controller.faderPosition(kind, index) ?? FaderMath.unityPosition)
     }
 
-    private var name: String {
-        controller.name(kind, index) ?? "\(kind.label) \(index)"
+    /// User label if set, else the live scribble-strip name, else a default.
+    private var label: String {
+        if let custom = strip.customLabel, !custom.isEmpty { return custom }
+        return controller.name(kind, index) ?? strip.node.defaultLabel
     }
 
     private var isMuted: Bool {
@@ -69,9 +81,9 @@ struct FaderStripView: View {
 
 #Preview {
     HStack(alignment: .top, spacing: 12) {
-        FaderStripView(controller: .preview(), kind: .channel, index: 1)
-        FaderStripView(controller: .preview(), kind: .channel, index: 9)
-        FaderStripView(controller: .preview(), kind: .main, index: 1)
+        FaderStripView(controller: .preview(), strip: FaderStrip(node: .channel(1)))
+        FaderStripView(controller: .preview(), strip: FaderStrip(node: .channel(9)))
+        FaderStripView(controller: .preview(), strip: FaderStrip(node: .main(1)))
     }
     .padding()
 }
