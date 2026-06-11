@@ -168,6 +168,10 @@ final class AppModel {
 }
 
 extension AppModel {
+    /// The process-wide model used by the app scenes and by App Intents, so a
+    /// Shortcut/Siri action drives the same controller and stores as the UI.
+    static let shared = AppModel()
+
     /// An app model whose controller is a populated demo, for SwiftUI previews.
     static func preview() -> AppModel {
         let model = AppModel()

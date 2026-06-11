@@ -60,6 +60,7 @@
 		747EC8F317F06CD3CDF06DA1 /* PresetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B41203E2877DE096F492901 /* PresetStore.swift */; };
 		7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
 		7BFB9F302ABC82B97CEE00F4 /* DiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415B289F973D0827B92F2CE1 /* DiscoveryView.swift */; };
+		7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
 		7F73B0ADD7DD512A79A8051D /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		81565AFF1FB26784BF0792B5 /* ScrollWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47075D2AAB467EA271F7916 /* ScrollWheel.swift */; };
 		865C36C483E878014AD5BF27 /* WingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AE2617F3BFCE2F475789B1 /* WingTransport.swift */; };
@@ -101,6 +102,7 @@
 		CEAB194B157618CFDCC7987D /* VerticalFader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 910E4B334BFBBDB92877F243 /* VerticalFader.swift */; };
 		D020E5234B51DB78A5F34B63 /* InspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5601B154CDD9A39F8530981 /* InspectorView.swift */; };
 		D2C5692B2CEAF0BE1F63FDB8 /* EquipmentLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DFAAC4B1C68CB6CD1127E2E /* EquipmentLibraryView.swift */; };
+		D3550641BA3BA73AFDF0B461 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
 		D3A0C693E65E84181F96C626 /* WingSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282FD5D129226FE552419869 /* WingSource.swift */; };
 		D4C1BD1F1FD6C7666F6AC890 /* CoPilotHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F4B3FBCD9EF42A550A231C /* CoPilotHandoff.swift */; };
 		D9F9A325D05435A4B20AF5DD /* FaderStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D86EAB14C2477BCE38AF29 /* FaderStripView.swift */; };
@@ -165,6 +167,7 @@
 		6EF3AA2751A71216BF63CD6C /* FadersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FadersView.swift; sourceTree = "<group>"; };
 		70F2C93B849BC7C3AB2B7BE0 /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
 		74D86EAB14C2477BCE38AF29 /* FaderStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderStripView.swift; sourceTree = "<group>"; };
+		75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangIntents.swift; sourceTree = "<group>"; };
 		7829A1C698F339C5D662010C /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
 		7B41203E2877DE096F492901 /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
 		7DA94B70ED6A5B914A576414 /* WireLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireLayer.swift; sourceTree = "<group>"; };
@@ -359,6 +362,7 @@
 			isa = PBXGroup;
 			children = (
 				6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */,
+				D690289EB2D1A067B9A8E5F9 /* Intents */,
 				5F98893314EBE6936551D052 /* Models */,
 				7AC4F1BE9CE2E3ED0D43A2F8 /* Store */,
 				1865800AFF19C88B22774124 /* Views */,
@@ -384,6 +388,14 @@
 				E470C74DDAD45D6C32ABCF5C /* SceneButtonsView.swift */,
 			);
 			path = Presets;
+			sourceTree = "<group>";
+		};
+		D690289EB2D1A067B9A8E5F9 /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */,
+			);
+			path = Intents;
 			sourceTree = "<group>";
 		};
 		D8C2C1CDCBA4F59B3C01C929 /* Mixer */ = {
@@ -580,6 +592,7 @@
 				D9F9A325D05435A4B20AF5DD /* FaderStripView.swift in Sources */,
 				3D6BAB67483E81CBB459D13D /* FadersView.swift in Sources */,
 				4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */,
+				D3550641BA3BA73AFDF0B461 /* FluxKlangIntents.swift in Sources */,
 				EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */,
 				AF5B1B3408D74D6EE4C49FB9 /* InspectorView.swift in Sources */,
 				65E18401AD44AD37D153BEA4 /* JSONFileStore.swift in Sources */,
@@ -635,6 +648,7 @@
 				6C97FEEAFCDB01C257CDDDD1 /* FaderMath.swift in Sources */,
 				8EA8ED4910E83A036925F4E1 /* FaderStripView.swift in Sources */,
 				70DB7AD07FC6A934A2FDE5CE /* FadersView.swift in Sources */,
+				7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */,
 				5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */,
 				FDE7091985D3DC6D13A2EE24 /* InputPatchView.swift in Sources */,
 				D020E5234B51DB78A5F34B63 /* InspectorView.swift in Sources */,

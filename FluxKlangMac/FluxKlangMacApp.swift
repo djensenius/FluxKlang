@@ -11,7 +11,7 @@ import SwiftUI
 
 @main
 struct FluxKlangMacApp: App {
-    @State private var appModel = AppModel()
+    @State private var appModel = AppModel.shared
 
     var body: some Scene {
         WindowGroup {
