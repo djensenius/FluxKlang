@@ -10,12 +10,17 @@
 import SwiftUI
 
 struct AppRootView: View {
+    @Environment(AppModel.self) private var appModel
+
     var body: some View {
-        #if os(macOS)
-        SplitRoot()
-        #else
-        AdaptiveRoot()
-        #endif
+        Group {
+            #if os(macOS)
+            SplitRoot()
+            #else
+            AdaptiveRoot()
+            #endif
+        }
+        .task { await appModel.loadStores() }
     }
 }
 

@@ -11,7 +11,7 @@
 import Foundation
 
 /// The strip types FluxKlang addresses on the WING.
-enum WingNodeKind: String, CaseIterable, Sendable {
+enum WingNodeKind: String, CaseIterable, Sendable, Codable {
     case channel = "ch"
     case aux
     case bus

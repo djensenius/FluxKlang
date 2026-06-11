@@ -10,7 +10,7 @@ import Foundation
 import SwiftOSC
 
 /// A typed OSC argument value used when talking to the WING.
-enum WingValue: Equatable, Sendable {
+enum WingValue: Equatable, Hashable, Sendable, Codable {
     case float(Float)
     case int(Int32)
     case string(String)

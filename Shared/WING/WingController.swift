@@ -150,6 +150,24 @@ final class WingController {
         values[WingAddress.mute(kind, index)]?.intValue.map { $0 != 0 }
     }
 
+    // MARK: - Batch
+
+    /// Applies a batch of settings to the WING. Used by presets and by the chain
+    /// builder's "Apply" action.
+    func apply(_ settings: [WingSetting]) async {
+        for setting in settings {
+            await set(setting.address, setting.value)
+        }
+    }
+
+    /// Captures the current cached values for the given addresses as a snapshot,
+    /// suitable for saving into a preset.
+    func snapshot(of addresses: [String]) -> [WingSetting] {
+        addresses.compactMap { address in
+            values[address].map { WingSetting(address: address, value: $0) }
+        }
+    }
+
     // MARK: - Private
 
     private func set(_ address: String, _ value: WingValue) async {
