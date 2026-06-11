@@ -32,6 +32,9 @@ struct FluxKlangCommands: Commands {
             .keyboardShortcut("d", modifiers: .command)
             .disabled(appModel.isDemo)
 
+            Button("Open in WING Co-Pilot") { CoPilotHandoff.openWithWorkspace() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+
             Divider()
 
             sceneRecallMenu

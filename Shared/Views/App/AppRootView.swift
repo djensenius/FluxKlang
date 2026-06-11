@@ -113,6 +113,16 @@ private struct SectionDetail: View {
     let section: AppSection
 
     var body: some View {
+        content
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    CoPilotButton()
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch section {
         case .faders:
             FadersView()
