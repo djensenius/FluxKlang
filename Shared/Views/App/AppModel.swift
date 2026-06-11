@@ -28,6 +28,9 @@ final class AppModel {
     /// Saved presets / scene snapshots.
     let presets = PresetStore()
 
+    /// Speaker layout and spatially-placed instruments for surround mixing.
+    let spatial = SpatialStore()
+
     /// Network scanner for finding WING consoles.
     let discovery = WingDiscovery()
 
@@ -65,6 +68,7 @@ final class AppModel {
         await equipment.load()
         await chain.load()
         await presets.load()
+        await spatial.load()
     }
 
     /// Applies the chain graph's implied routing to the WING.
@@ -128,6 +132,56 @@ final class AppModel {
     func disconnect() async {
         await wing.disconnect()
         wing = WingController()
+    }
+
+    // MARK: - Spatial
+
+    /// Computes DBAP gains for a source and pushes the resulting bus sends to the
+    /// WING. Stereo sources drive their two channels independently.
+    func applyPlacement(_ source: SpatialSource) async {
+        let speakers = spatial.array.speakers
+        guard !speakers.isEmpty else { return }
+        let positions = speakers.map(\.position)
+        for placement in source.channelPlacements() {
+            let gains = SpatialPanner.gains(source: placement.point, speakers: positions)
+            for (index, speaker) in speakers.enumerated() where speaker.node.kind == .bus {
+                let bus = speaker.node.index
+                let channel = placement.channel.index
+                let decibels = SpatialPanner.decibels(forGain: gains[index])
+                await wing.setSend(.channel, channel, toBus: bus, on: true)
+                await wing.setSendLevel(.channel, channel, toBus: bus, decibels: decibels)
+            }
+        }
+    }
+
+    /// Re-applies every placed source. Used by the "Apply" action.
+    func applyAllPlacements() async {
+        for source in spatial.sources {
+            await applyPlacement(source)
+        }
+    }
+
+    /// Sets a stereo speaker pair's level (normalised), with an optional balance
+    /// offset (`-1...1`) trimming left versus right.
+    func setSpeakerPair(_ pair: SpeakerPair, position: Float, balance: Float = 0) async {
+        let leftPosition = min(max(position - balance / 2, 0), 1)
+        let rightPosition = min(max(position + balance / 2, 0), 1)
+        if let left = spatial.array.speaker(pair.left) {
+            await wing.setFader(left.node.kind, left.node.index, position: leftPosition)
+        }
+        if let right = spatial.array.speaker(pair.right) {
+            await wing.setFader(right.node.kind, right.node.index, position: rightPosition)
+        }
+    }
+
+    /// Mutes or unmutes both speakers in a pair.
+    func setSpeakerPairMuted(_ pair: SpeakerPair, muted: Bool) async {
+        if let left = spatial.array.speaker(pair.left) {
+            await wing.setMute(left.node.kind, left.node.index, muted: muted)
+        }
+        if let right = spatial.array.speaker(pair.right) {
+            await wing.setMute(right.node.kind, right.node.index, muted: muted)
+        }
     }
 
     // MARK: - Selection & navigation

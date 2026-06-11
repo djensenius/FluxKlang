@@ -126,6 +126,12 @@ actor DemoWingTransport: WingTransporting {
                 store[WingAddress.sendLevel(.channel, channel, toBus: bus)] = .float(-12)
             }
         }
+        // Name buses 1–4 as the standard quad speakers so the spatial screens
+        // look live offline.
+        let speakerNames = ["Front L", "Front R", "Rear L", "Rear R"]
+        for (offset, speakerName) in speakerNames.enumerated() {
+            store[WingAddress.name(.bus, offset + 1)] = .string(speakerName)
+        }
         return store
     }
 

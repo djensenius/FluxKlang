@@ -28,6 +28,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case faders = "Faders"
     case routing = "Routing"
     case chain = "Chain"
+    case spatial = "Spatial"
     case presets = "Presets"
     case connection = "Connection"
 
@@ -38,6 +39,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .faders: return "slider.vertical.3"
         case .routing: return "point.topleft.down.to.point.bottomright.curvepath"
         case .chain: return "point.3.connected.trianglepath.dotted"
+        case .spatial: return "hifispeaker.2"
         case .presets: return "square.grid.2x2"
         case .connection: return "antenna.radiowaves.left.and.right"
         }
@@ -132,6 +134,8 @@ private struct SectionDetail: View {
             RoutingView()
         case .chain:
             ChainCanvasView()
+        case .spatial:
+            SpatialView()
         case .presets:
             PresetsView()
         }
