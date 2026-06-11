@@ -22,8 +22,8 @@ struct WingAddressTests {
     }
 
     @Test func buildsOutputPatchNodes() {
-        #expect(WingAddress.outputSourceGroup(1) == "/io/out/1/srcgrp")
-        #expect(WingAddress.outputSourceIndex(1) == "/io/out/1/srcin")
+        #expect(WingAddress.outputSourceGroup(1) == "/io/out/LCL/1/grp")
+        #expect(WingAddress.outputSourceIndex(1) == "/io/out/LCL/1/in")
     }
 
     @Test func buildsSendNodes() {
