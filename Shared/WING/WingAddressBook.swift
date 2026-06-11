@@ -136,6 +136,41 @@ enum WingAddress {
         localOutput(output) + "/in"
     }
 
+    // MARK: - Bulk refresh
+
+    /// Every node address worth querying to pre-populate the value cache after
+    /// connecting, so the UI reflects the console's current state immediately
+    /// instead of filling in node-by-node as broadcasts arrive. Covers the
+    /// per-strip basics (fader, mute, name, pan, colour), the channel input
+    /// patches, and the send/main matrices across all `WingNodeKind` cases.
+    static func allQueryAddresses() -> [String] {
+        var addresses: [String] = []
+        let busCount = WingNodeKind.bus.count
+        let mainCount = WingNodeKind.main.count
+        for kind in WingNodeKind.allCases {
+            for index in 1...kind.count {
+                addresses.append(fader(kind, index))
+                addresses.append(mute(kind, index))
+                addresses.append(name(kind, index))
+                addresses.append(pan(kind, index))
+                addresses.append(color(kind, index))
+                for bus in 1...busCount {
+                    addresses.append(sendOn(kind, index, toBus: bus))
+                    addresses.append(sendLevel(kind, index, toBus: bus))
+                }
+                for main in 1...mainCount {
+                    addresses.append(mainOn(kind, index, toMain: main))
+                    addresses.append(mainLevel(kind, index, toMain: main))
+                }
+            }
+        }
+        for channel in 1...WingNodeKind.channel.count {
+            addresses.append(channelSourceGroup(channel))
+            addresses.append(channelSourceIndex(channel))
+        }
+        return addresses
+    }
+
     // MARK: - Console
 
     /// Subscription / keep-alive command. Send periodically to keep receiving
@@ -153,4 +188,12 @@ enum WingNetwork {
 
     /// How often the subscription must be renewed to keep updates flowing.
     static let subscriptionRenewInterval: Duration = .seconds(9)
+
+    /// Number of GET queries issued per batch during a bulk refresh. Querying
+    /// every node is a lot of OSC traffic, so it is paced in small batches to
+    /// avoid overwhelming the console or dropping UDP replies.
+    static let bulkRefreshBatchSize = 32
+
+    /// Pause between bulk-refresh batches, giving the console time to reply.
+    static let bulkRefreshBatchDelay: Duration = .milliseconds(20)
 }

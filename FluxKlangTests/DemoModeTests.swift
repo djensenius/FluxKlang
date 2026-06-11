@@ -70,4 +70,42 @@ struct DemoModeTests {
 
         await controller.disconnect()
     }
+
+    @Test func bulkRefreshPopulatesCacheAcrossKinds() async throws {
+        let controller = WingController.demo()
+        await controller.connectDemo()
+
+        // The console's seeded state should stream back across every node kind,
+        // including sends and input patches the user never touched.
+        try await waitUntil(timeout: .seconds(5)) {
+            controller.faderPosition(.channel, 1) != nil
+                && controller.faderPosition(.aux, 1) != nil
+                && controller.faderPosition(.bus, 1) != nil
+                && controller.faderPosition(.main, 1) != nil
+                && controller.faderPosition(.dca, 1) != nil
+                && controller.pan(.channel, 1) != nil
+                && controller.isSendOn(.channel, 4, toBus: 1) != nil
+                && controller.channelSource(1) != nil
+        }
+        #expect(controller.faderPosition(.aux, 1) != nil)
+        #expect(controller.faderPosition(.dca, 1) != nil)
+        #expect(controller.isSendOn(.channel, 4, toBus: 1) != nil)
+        #expect(controller.channelSource(1) != nil)
+
+        await controller.disconnect()
+    }
+
+    @Test func manualRefreshAllResyncsFromConsole() async throws {
+        let controller = WingController.demo()
+        await controller.connectDemo()
+        try await waitUntil { controller.name(.channel, 1) != nil }
+
+        // A manual "Resync from console" re-queries every node and the cache
+        // stays populated from the simulator's seeded store.
+        await controller.refreshAll()
+        #expect(controller.name(.channel, 1) != nil)
+        #expect(controller.faderPosition(.bus, 1) != nil)
+
+        await controller.disconnect()
+    }
 }

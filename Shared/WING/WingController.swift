@@ -44,6 +44,7 @@ final class WingController {
     private let transport: any WingTransporting
     private var listenTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
 
     /// Creates a live controller that talks to a real WING over OSC/UDP.
     init(port: UInt16 = WingNetwork.defaultPort) {
@@ -88,6 +89,7 @@ final class WingController {
             connection = .connected(name: isDemo ? "Demo WING Rack" : nil)
             startListening()
             startKeepAlive()
+            startBulkRefresh()
         } catch {
             connection = .failed(reason: error.localizedDescription)
         }
@@ -135,6 +137,39 @@ final class WingController {
     /// the incoming stream.
     func refresh(_ address: String) async {
         try? await transport.send(address)
+    }
+
+    /// Re-queries every relevant node so the cache reflects the console's
+    /// current state — for example after connecting, or as a manual "Resync
+    /// from console" action. Replies arrive on the incoming stream and populate
+    /// `values`. Queries are paced in small batches to avoid flooding the
+    /// console, and the loop honours cancellation so a disconnect mid-refresh
+    /// tears down cleanly.
+    func refreshAll() async {
+        let addresses = WingAddress.allQueryAddresses()
+        var batch: [String] = []
+        batch.reserveCapacity(WingNetwork.bulkRefreshBatchSize)
+        for address in addresses {
+            if Task.isCancelled { return }
+            batch.append(address)
+            if batch.count >= WingNetwork.bulkRefreshBatchSize {
+                await query(batch)
+                batch.removeAll(keepingCapacity: true)
+                try? await Task.sleep(for: WingNetwork.bulkRefreshBatchDelay)
+            }
+        }
+        if Task.isCancelled { return }
+        await query(batch)
+    }
+
+    /// Issues GET queries for a batch of addresses; replies arrive on the
+    /// incoming stream and populate `values`.
+    private func query(_ addresses: [String]) async {
+        guard !addresses.isEmpty else { return }
+        for address in addresses {
+            if Task.isCancelled { return }
+            try? await transport.send(address)
+        }
     }
 
     /// Current fader value for a strip in decibels, if known.
@@ -287,10 +322,19 @@ final class WingController {
         try? await transport.send(WingAddress.subscribe)
     }
 
+    private func startBulkRefresh() {
+        refreshTask = Task { [weak self] in
+            guard let self else { return }
+            await refreshAll()
+        }
+    }
+
     private func cancelTasks() {
         keepAliveTask?.cancel()
         keepAliveTask = nil
         listenTask?.cancel()
         listenTask = nil
+        refreshTask?.cancel()
+        refreshTask = nil
     }
 }
