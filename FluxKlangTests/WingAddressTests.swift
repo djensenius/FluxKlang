@@ -14,6 +14,7 @@ struct WingAddressTests {
         #expect(WingAddress.fader(.matrix, 3) == "/mtx/3/fdr")
         #expect(WingAddress.fader(.aux, 4) == "/aux/4/fdr")
         #expect(WingAddress.pan(.channel, 5) == "/ch/5/pan")
+        #expect(WingAddress.color(.channel, 5) == "/ch/5/col")
     }
 
     @Test func buildsInputPatchNodes() {

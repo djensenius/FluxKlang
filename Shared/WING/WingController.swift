@@ -132,6 +132,39 @@ final class WingController {
         await set(WingAddress.pan(kind, index), .float(min(max(pan, -1), 1)))
     }
 
+    /// Maximum scribble-strip name length sent to the WING. The console caps
+    /// scribble names, so longer strings are clamped before sending.
+    static let maxNameLength = 12
+
+    /// Writes a strip's scribble-strip `/name` back to the console, so the change
+    /// is shared with the WING and every other client (including WING Co-Pilot).
+    /// The name is trimmed and clamped to ``maxNameLength`` before sending.
+    func setName(_ kind: WingNodeKind, _ index: Int, to name: String) async {
+        await set(WingAddress.name(kind, index), .string(Self.sanitizeName(name)))
+    }
+
+    /// Writes a strip's `/col` colour index back to the console.
+    ///
+    /// - Note: The WING colour value type/range (palette index) is still to be
+    ///   verified against real hardware; treat as provisional until confirmed.
+    ///   The index is clamped to a non-negative `Int32` to avoid trapping on
+    ///   out-of-range input.
+    func setColor(_ kind: WingNodeKind, _ index: Int, to colorIndex: Int) async {
+        await set(WingAddress.color(kind, index), .int(Int32(clamping: max(colorIndex, 0))))
+    }
+
+    /// Current colour index for a node, if known.
+    func color(_ kind: WingNodeKind, _ index: Int) -> Int? {
+        values[WingAddress.color(kind, index)]?.intValue.map(Int.init)
+    }
+
+    /// Trims whitespace and clamps a scribble-strip name to `maxLength`
+    /// (defaulting to ``maxNameLength``).
+    static func sanitizeName(_ name: String, maxLength: Int = maxNameLength) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(maxLength))
+    }
+
     /// Re-queries a node so its cached value reflects the console (for example,
     /// after a change was made in the WING Co-Pilot app). The reply arrives on
     /// the incoming stream.
@@ -223,6 +256,23 @@ final class WingController {
         await setPan(left.kind, left.index, pan: -1)
         if let right {
             await setPan(right.kind, right.index, pan: 1)
+        }
+    }
+
+    /// Length of the ` L`/` R` suffix appended to each node of a stereo pair.
+    private static let stereoSuffixLength = 2
+
+    /// Renames a strip on the console. For a stereo pair the two nodes get the
+    /// shared name with ` L`/` R` suffixes; a mono strip gets the name as-is. The
+    /// base name is clamped to leave room for the suffix so both nodes stay
+    /// distinct within ``maxNameLength``.
+    func setNamePair(_ left: WingNodeRef, _ right: WingNodeRef?, to name: String) async {
+        if let right {
+            let base = Self.sanitizeName(name, maxLength: Self.maxNameLength - Self.stereoSuffixLength)
+            await setName(left.kind, left.index, to: base + " L")
+            await setName(right.kind, right.index, to: base + " R")
+        } else {
+            await setName(left.kind, left.index, to: name)
         }
     }
 

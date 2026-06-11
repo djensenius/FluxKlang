@@ -13,7 +13,11 @@ import SwiftUI
 struct FadersView: View {
     @Environment(AppModel.self) private var appModel
 
+    /// Whether a rename edits the shared console name or a local-only label.
+    private enum RenameMode { case console, local }
+
     @State private var renamingStrip: FaderStrip?
+    @State private var renameMode: RenameMode = .console
     @State private var draftLabel = ""
 
     private var controller: WingController { appModel.wing }
@@ -29,10 +33,12 @@ struct FadersView: View {
         }
         .navigationTitle("Faders")
         .toolbar { addStripMenu }
-        .alert("Rename Strip", isPresented: isRenaming) {
-            TextField("Label", text: $draftLabel)
+        .alert(renameTitle, isPresented: isRenaming) {
+            TextField(renameFieldPrompt, text: $draftLabel)
             Button("Save") { commitRename() }
             Button("Cancel", role: .cancel) { renamingStrip = nil }
+        } message: {
+            Text(renameMessage)
         }
     }
 
@@ -53,10 +59,14 @@ struct FadersView: View {
                                 Label("Show in Inspector", systemImage: "sidebar.right")
                             }
                             Button {
-                                draftLabel = strip.customLabel ?? ""
-                                renamingStrip = strip
+                                beginRename(strip, mode: .console)
                             } label: {
-                                Label("Rename…", systemImage: "pencil")
+                                Label("Rename on Console…", systemImage: "pencil")
+                            }
+                            Button {
+                                beginRename(strip, mode: .local)
+                            } label: {
+                                Label("Set Local Label…", systemImage: "tag")
                             }
                             Button(role: .destructive) {
                                 appModel.faderLayout.remove(strip)
@@ -130,9 +140,53 @@ struct FadersView: View {
         )
     }
 
+    private var renameTitle: String {
+        renameMode == .console ? "Rename on Console" : "Set Local Label"
+    }
+
+    private var renameFieldPrompt: String {
+        renameMode == .console ? "Console Name" : "Local Label"
+    }
+
+    private var renameMessage: String {
+        renameMode == .console
+            ? "Renames the strip on the WING, shared with every connected client."
+            : "Sets a FluxKlang-only label that overrides the console name in this layout."
+    }
+
+    private func beginRename(_ strip: FaderStrip, mode: RenameMode) {
+        renameMode = mode
+        switch mode {
+        case .console:
+            draftLabel = consoleBaseName(for: strip)
+        case .local:
+            draftLabel = strip.customLabel ?? ""
+        }
+        renamingStrip = strip
+    }
+
+    /// The editable base name for a console rename. For a stereo strip the left
+    /// node's ` L` suffix (added by ``WingController/setNamePair``) is dropped so
+    /// re-saving doesn't compound into `Name L L`.
+    private func consoleBaseName(for strip: FaderStrip) -> String {
+        let name = controller.name(strip.node.kind, strip.node.index) ?? ""
+        if strip.rightNode != nil, name.hasSuffix(" L") {
+            return String(name.dropLast(" L".count))
+        }
+        return name
+    }
+
     private func commitRename() {
         guard let strip = renamingStrip else { return }
-        appModel.faderLayout.setLabel(draftLabel, for: strip.id)
+        switch renameMode {
+        case .console:
+            // Push to the console (the broadcast echo updates the cache) and drop
+            // any local override so the shared name shows through.
+            appModel.faderLayout.setLabel(nil, for: strip.id)
+            Task { await controller.setNamePair(strip.node, strip.rightNode, to: draftLabel) }
+        case .local:
+            appModel.faderLayout.setLabel(draftLabel, for: strip.id)
+        }
         renamingStrip = nil
     }
 
