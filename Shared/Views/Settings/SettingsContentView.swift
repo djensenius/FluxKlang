@@ -31,6 +31,10 @@ struct SettingsContentView: View {
                     appModel.faderLayout.resetToStandard()
                 }
             }
+
+            Section("App Icon") {
+                AppIconPicker()
+            }
         }
         .formStyle(.grouped)
         #if os(macOS)
