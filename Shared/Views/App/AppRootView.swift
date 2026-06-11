@@ -72,11 +72,16 @@ private struct TabRoot: View {
 #endif
 
 private struct SplitRoot: View {
-    @State private var selection: AppSection? = .faders
+    @Environment(AppModel.self) private var appModel
 
     var body: some View {
+        @Bindable var appModel = appModel
+        let selection = Binding<AppSection?>(
+            get: { appModel.section },
+            set: { appModel.section = $0 ?? .faders }
+        )
         NavigationSplitView {
-            List(AppSection.allCases, selection: $selection) { section in
+            List(AppSection.allCases, selection: selection) { section in
                 Label(section.rawValue, systemImage: section.systemImage)
                     .tag(section)
             }
@@ -85,8 +90,22 @@ private struct SplitRoot: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
             #endif
         } detail: {
-            SectionDetail(section: selection ?? .faders)
+            detail
         }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        @Bindable var appModel = appModel
+        #if os(macOS)
+        SectionDetail(section: appModel.section)
+            .inspector(isPresented: $appModel.isInspectorPresented) {
+                InspectorView()
+                    .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
+            }
+        #else
+        SectionDetail(section: appModel.section)
+        #endif
     }
 }
 

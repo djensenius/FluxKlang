@@ -40,8 +40,18 @@ struct FadersView: View {
         ScrollView(.horizontal) {
             HStack(alignment: .top, spacing: 12) {
                 ForEach(layout.strips) { strip in
-                    FaderStripView(controller: controller, strip: strip)
+                    FaderStripView(
+                        controller: controller,
+                        strip: strip,
+                        isSelected: appModel.selectedFaderID == strip.id,
+                        onSelect: { appModel.selectStrip(strip) }
+                    )
                         .contextMenu {
+                            Button {
+                                appModel.selectStrip(strip)
+                            } label: {
+                                Label("Show in Inspector", systemImage: "sidebar.right")
+                            }
                             Button {
                                 draftLabel = strip.customLabel ?? ""
                                 renamingStrip = strip

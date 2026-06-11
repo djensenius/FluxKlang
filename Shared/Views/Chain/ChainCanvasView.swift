@@ -55,11 +55,25 @@ struct ChainCanvasView: View {
             Color.gray.opacity(0.06)
                 .contentShape(Rectangle())
                 .gesture(panGesture.simultaneously(with: zoomGesture))
+                .onTapGesture { selection = nil }
             content
                 .scaleEffect(zoom * liveZoom)
                 .offset(x: pan.width + livePan.width, y: pan.height + livePan.height)
         }
         .clipped()
+        .onScrollWheel { info in
+            if info.commandKey {
+                zoom = min(max(zoom * (1 - info.deltaY * 0.005), 0.4), 2.5)
+            } else {
+                pan.width += info.deltaX
+                pan.height += info.deltaY
+            }
+        }
+        #if os(macOS)
+        .focusable()
+        .focusEffectDisabled()
+        .onDeleteCommand(perform: deleteSelection)
+        #endif
     }
 
     private var content: some View {
@@ -103,6 +117,7 @@ struct ChainCanvasView: View {
             Button { showLibrary = true } label: {
                 Label("Add Node", systemImage: "plus")
             }
+            .help("Add gear or a WING endpoint to the canvas")
         }
         ToolbarItem {
             Button(action: applyRouting) {
@@ -113,11 +128,13 @@ struct ChainCanvasView: View {
                 }
             }
             .disabled(!appModel.isConnected || appModel.chain.wingSettings().isEmpty || isApplying)
+            .help("Send the WING-touching connections to the console")
         }
         ToolbarItem {
             Button { resetView() } label: {
                 Label("Reset View", systemImage: "arrow.counterclockwise")
             }
+            .help("Reset pan and zoom")
         }
     }
 
@@ -189,6 +206,12 @@ struct ChainCanvasView: View {
             pan = .zero
             zoom = 1
         }
+    }
+
+    private func deleteSelection() {
+        guard let id = selection else { return }
+        appModel.chain.removeNode(id)
+        selection = nil
     }
 
     private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {

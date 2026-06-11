@@ -33,6 +33,18 @@ final class AppModel {
 
     private let lastHostKey = "fluxklang.lastHost"
 
+    /// The currently selected sidebar section (also driven by Mac menu commands).
+    var section: AppSection = .faders
+
+    /// Whether the Mac detail inspector is shown.
+    var isInspectorPresented = false
+
+    /// The fader strip shown in the inspector, if any.
+    var selectedFaderID: FaderStrip.ID?
+
+    /// Bumped by the "New Preset" command so the Presets screen can prompt.
+    private(set) var newPresetRequestID = 0
+
     /// The most recently connected WING host, persisted across launches and used
     /// as a fallback when broadcast discovery finds nothing.
     var lastHost: String? {
@@ -116,6 +128,42 @@ final class AppModel {
     func disconnect() async {
         await wing.disconnect()
         wing = WingController()
+    }
+
+    // MARK: - Selection & navigation
+
+    /// The fader strip currently selected for the inspector, if it still exists.
+    var selectedStrip: FaderStrip? {
+        guard let id = selectedFaderID else { return nil }
+        return faderLayout.layout.strips.first { $0.id == id }
+    }
+
+    /// Selects a strip and reveals it in the inspector.
+    func selectStrip(_ strip: FaderStrip) {
+        section = .faders
+        selectedFaderID = strip.id
+        isInspectorPresented = true
+    }
+
+    /// Switches to the Presets section and asks it to prompt for a new preset.
+    func requestNewPreset() {
+        section = .presets
+        newPresetRequestID += 1
+    }
+
+    /// Menu (⌘R) behaviour: disconnect when connected, otherwise reconnect to the
+    /// last known WING if one is remembered.
+    func toggleConnection() async {
+        if isConnected {
+            await disconnect()
+        } else if let host = lastHost {
+            await connect(host: host)
+        }
+    }
+
+    /// Whether ⌘R can do anything right now.
+    var canToggleConnection: Bool {
+        isConnected || lastHost != nil
     }
 }
 

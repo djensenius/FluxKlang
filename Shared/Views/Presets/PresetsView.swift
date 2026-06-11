@@ -33,6 +33,11 @@ struct PresetsView: View {
         } message: {
             Text("Captures the current fader levels, mutes and routing.")
         }
+        .onChange(of: appModel.newPresetRequestID) { _, _ in
+            guard appModel.isConnected else { return }
+            draftName = defaultName()
+            isNaming = true
+        }
     }
 
     private var list: some View {

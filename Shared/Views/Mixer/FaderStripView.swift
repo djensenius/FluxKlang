@@ -12,6 +12,8 @@ import SwiftUI
 struct FaderStripView: View {
     let controller: WingController
     let strip: FaderStrip
+    var isSelected = false
+    var onSelect: () -> Void = {}
 
     @State private var position = Double(FaderMath.unityPosition)
     @State private var isEditing = false
@@ -28,7 +30,10 @@ struct FaderStripView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 6) {
-                VerticalFader(position: $position, isEditing: $isEditing)
+                VerticalFader(position: $position, isEditing: $isEditing) { newValue in
+                    Task { await controller.setFader(kind, index, position: Float(newValue)) }
+                }
+                .help("Drag to set level · double-click for 0 dB · ⌥-drag for fine · scroll to adjust")
                 MeterView(level: isMuted ? 0 : position)
             }
 
@@ -42,15 +47,23 @@ struct FaderStripView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .tint(isMuted ? .red : .gray)
+            .help(isMuted ? "Unmute \(label)" : "Mute \(label)")
 
             Text(label)
                 .font(.caption2)
+                .fontWeight(isSelected ? .bold : .regular)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(width: 70)
+                .contentShape(Rectangle())
+                .onTapGesture { onSelect() }
         }
         .frame(width: 78)
         .padding(.top, 4)
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? tint.opacity(0.12) : .clear)
+        }
         .overlay(alignment: .top) {
             Capsule().fill(tint).frame(width: 36, height: 3)
         }
