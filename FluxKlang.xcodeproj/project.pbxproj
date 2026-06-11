@@ -54,6 +54,7 @@
 		537ABAA1B3223F68CE0A4910 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
 		54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405DD99B88EED698E298E908 /* DemoModeTests.swift */; };
 		5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */; };
+		557206B0A1FE832EB31D02BC /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
 		576D8572D4B5767128B0D825 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 73FBD79B215783A120727A85 /* AppIcon.icon */; };
 		5CA07F389BC239BD9B5769FC /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11CF5F3C9CDE69281FF4772 /* TestSupport.swift */; };
 		5CD6632F85A05E208E57F56B /* PatchMatrixView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D8913CDF7132D0F55F15534 /* PatchMatrixView.swift */; };
@@ -64,6 +65,7 @@
 		6280FC1F01CD759B5C66349D /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F2C93B849BC7C3AB2B7BE0 /* RoutingView.swift */; };
 		65E18401AD44AD37D153BEA4 /* JSONFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B69ADD8EF543F6332343A49 /* JSONFileStore.swift */; };
 		65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
+		672536435CE9A0A4FBB95AF6 /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
 		6C97FEEAFCDB01C257CDDDD1 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
 		70DB7AD07FC6A934A2FDE5CE /* FadersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EF3AA2751A71216BF63CD6C /* FadersView.swift */; };
 		72FFE8A231860039C6AB759A /* ChainGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B361516C0EA80B04919B6FFA /* ChainGeometry.swift */; };
@@ -74,6 +76,7 @@
 		7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
 		7F73B0ADD7DD512A79A8051D /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		81565AFF1FB26784BF0792B5 /* ScrollWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47075D2AAB467EA271F7916 /* ScrollWheel.swift */; };
+		85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */; };
 		865C36C483E878014AD5BF27 /* WingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AE2617F3BFCE2F475789B1 /* WingTransport.swift */; };
 		86B10A54FBF320D545E63AE3 /* RoutingTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8762531BC7A63F213F735232 /* RoutingTranslator.swift */; };
 		86E3AC34313865A3E3EC10BF /* WingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 456B5650F08A7DE5FF17EC47 /* WingController.swift */; };
@@ -173,6 +176,7 @@
 		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
 		35EFA96D78CE256B049568C5 /* FaderMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMath.swift; sourceTree = "<group>"; };
 		3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
+		3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTests.swift; sourceTree = "<group>"; };
 		3D75FEB93B4868C0DF38EF8B /* SpatialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialStore.swift; sourceTree = "<group>"; };
 		3F391E231A2B634B431325C8 /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
 		405DD99B88EED698E298E908 /* DemoModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoModeTests.swift; sourceTree = "<group>"; };
@@ -218,10 +222,12 @@
 		A5601B154CDD9A39F8530981 /* InspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorView.swift; sourceTree = "<group>"; };
 		AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGraph.swift; sourceTree = "<group>"; };
 		B361516C0EA80B04919B6FFA /* ChainGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGeometry.swift; sourceTree = "<group>"; };
+		B457F24BAF4DFAAFC171EC50 /* FluxKlang.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlang.entitlements; sourceTree = "<group>"; };
 		B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangMacApp.swift; sourceTree = "<group>"; };
 		B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderLayoutStore.swift; sourceTree = "<group>"; };
 		BDEC454C8E9B9862280CC236 /* SpatialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialTests.swift; sourceTree = "<group>"; };
 		C078BB1C1047B19A8F49E221 /* SpatialPanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialPanner.swift; sourceTree = "<group>"; };
+		C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKeyValueStore.swift; sourceTree = "<group>"; };
 		CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingDiscoveryTests.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
 		E11CF5F3C9CDE69281FF4772 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
@@ -333,6 +339,7 @@
 			isa = PBXGroup;
 			children = (
 				5A9BA31535E47C228F5D16D0 /* ChainStore.swift */,
+				C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */,
 				0C78F5B15B50724D01C422C4 /* EquipmentStore.swift */,
 				B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */,
 				5B69ADD8EF543F6332343A49 /* JSONFileStore.swift */,
@@ -410,6 +417,7 @@
 		A80BA078CC003CB37AB8BCDD /* FluxKlang */ = {
 			isa = PBXGroup;
 			children = (
+				B457F24BAF4DFAAFC171EC50 /* FluxKlang.entitlements */,
 				EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */,
 				EE24226D4BF4EA8A9918DB62 /* Info.plist */,
 			);
@@ -479,6 +487,7 @@
 			isa = PBXGroup;
 			children = (
 				9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */,
+				3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */,
 				405DD99B88EED698E298E908 /* DemoModeTests.swift */,
 				06CCF54AD33E1916E650B686 /* FaderMathTests.swift */,
 				E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */,
@@ -651,6 +660,7 @@
 				72FFE8A231860039C6AB759A /* ChainGeometry.swift in Sources */,
 				2D90278C9718E9CD82BEAE26 /* ChainGraph.swift in Sources */,
 				B96FAE77579E187457DFCE76 /* ChainStore.swift in Sources */,
+				672536435CE9A0A4FBB95AF6 /* CloudKeyValueStore.swift in Sources */,
 				D4C1BD1F1FD6C7666F6AC890 /* CoPilotHandoff.swift in Sources */,
 				15CBF0C2B2AE702FADCBF935 /* ConnectionView.swift in Sources */,
 				0AE0A70F86B4C101162E14E5 /* DemoWingTransport.swift in Sources */,
@@ -719,6 +729,7 @@
 				96D4DA35F1EA5A265F1D3CF8 /* ChainGeometry.swift in Sources */,
 				87772F458F20DEB210A03A4F /* ChainGraph.swift in Sources */,
 				A6A36649866B9828DD0F45DB /* ChainStore.swift in Sources */,
+				557206B0A1FE832EB31D02BC /* CloudKeyValueStore.swift in Sources */,
 				E923162ADB8DE69FE2A75EC4 /* CoPilotHandoff.swift in Sources */,
 				0290F8C59F5396A40C7CE565 /* ConnectionView.swift in Sources */,
 				C2A1749288B13BFFE516F895 /* DemoWingTransport.swift in Sources */,
@@ -779,6 +790,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */,
+				85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */,
 				54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */,
 				E10730CD5847DC39C95AB055 /* FaderMathTests.swift in Sources */,
 				ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */,
@@ -1003,6 +1015,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = FluxKlang/FluxKlang.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -1040,6 +1053,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = FluxKlang/FluxKlang.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = NO;

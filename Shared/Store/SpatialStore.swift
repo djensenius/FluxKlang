@@ -39,6 +39,13 @@ final class SpatialStore {
         }
     }
 
+    /// Re-reads the persisted configuration, picking up changes synced from
+    /// iCloud.
+    func reload() async {
+        loaded = false
+        await load()
+    }
+
     // MARK: - Sources
 
     func addSource(_ source: SpatialSource) {

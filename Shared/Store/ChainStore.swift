@@ -26,6 +26,12 @@ final class ChainStore {
         }
     }
 
+    /// Re-reads the persisted graph, picking up changes synced from iCloud.
+    func reload() async {
+        loaded = false
+        await load()
+    }
+
     func addNode(_ node: ChainNode) {
         graph.nodes.append(node)
         persist()

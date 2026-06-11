@@ -25,6 +25,12 @@ final class FaderLayoutStore {
         }
     }
 
+    /// Re-reads the persisted layout, picking up changes synced from iCloud.
+    func reload() async {
+        loaded = false
+        await load()
+    }
+
     /// Adds a strip for `node` unless one already exists.
     func addStrip(_ node: WingNodeRef) {
         guard !layout.contains(node) else { return }

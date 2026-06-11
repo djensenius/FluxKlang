@@ -25,6 +25,12 @@ final class EquipmentStore {
         }
     }
 
+    /// Re-reads the persisted library, picking up changes synced from iCloud.
+    func reload() async {
+        loaded = false
+        await load()
+    }
+
     func item(_ id: Equipment.ID) -> Equipment? {
         items.first { $0.id == id }
     }
