@@ -34,6 +34,9 @@ final class AppModel {
     /// Network scanner for finding WING consoles.
     let discovery = WingDiscovery()
 
+    /// Selectable app-icon manager (re-applies the saved icon on launch).
+    let appIcon = AppIconManager()
+
     private let lastHostKey = "fluxklang.lastHost"
 
     /// The currently selected sidebar section (also driven by Mac menu commands).
