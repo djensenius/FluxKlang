@@ -8,22 +8,39 @@
 
 /* Begin PBXBuildFile section */
 		087F27C9EDEFE26C67E9E774 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
+		0AE0A70F86B4C101162E14E5 /* DemoWingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBD40A7ECFD94E062D995CD /* DemoWingTransport.swift */; };
+		0B4C33D006DB2CBE1EC73893 /* WingValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 201D1AC5DDC73E345FD61126 /* WingValue.swift */; };
+		0CD890319BEFD68B9D3FB577 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
+		0E93A5C70CD0F76CCA84DA1C /* WingConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDC71263C8B839D9CBCD745 /* WingConnection.swift */; };
 		140F78BB9E1B53AA55D28F0F /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = DEA9BE5822A9613871C6C436 /* SwiftOSC */; };
-		33BBDAD01C59BF18B5303617 /* OSCProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */; };
+		188B14F395537257D1207610 /* WingValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 201D1AC5DDC73E345FD61126 /* WingValue.swift */; };
+		3D0D14F63A7F6CCE1632E543 /* WingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 456B5650F08A7DE5FF17EC47 /* WingController.swift */; };
+		3DE7748A654E7A2F5CB52879 /* WingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AE2617F3BFCE2F475789B1 /* WingTransport.swift */; };
 		4353781EE55B9D6E4B2DB0F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		435CB11200C3299EE92250C0 /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
 		4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */; };
 		5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */; };
 		5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
+		627D9F1FE96885365301635A /* WingValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B5161E55C4C246FDD3570A /* WingValueTests.swift */; };
+		65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
+		6C97FEEAFCDB01C257CDDDD1 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
+		7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
+		865C36C483E878014AD5BF27 /* WingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AE2617F3BFCE2F475789B1 /* WingTransport.swift */; };
+		86E3AC34313865A3E3EC10BF /* WingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 456B5650F08A7DE5FF17EC47 /* WingController.swift */; };
+		8BE59968D0AF1DE6D2934624 /* WingConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDC71263C8B839D9CBCD745 /* WingConnection.swift */; };
 		941CDB18830926387D99EE46 /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = F3FC1E264BE70D86FCBDF599 /* SwiftOSC */; };
+		A469C963335F0DCF658DFBA8 /* WingAddressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */; };
 		AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
-		B2B762BD7321F486C6669168 /* OSCProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */; };
+		C2A1749288B13BFFE516F895 /* DemoWingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBD40A7ECFD94E062D995CD /* DemoWingTransport.swift */; };
+		C66D197F4ABDB1050EBD2FA0 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
 		CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
+		E10730CD5847DC39C95AB055 /* FaderMathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CCF54AD33E1916E650B686 /* FaderMathTests.swift */; };
 		E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */; };
 		EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
+		FF4E21BBEE9EC76C24B83B00 /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -37,20 +54,30 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		06CCF54AD33E1916E650B686 /* FaderMathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMathTests.swift; sourceTree = "<group>"; };
+		201D1AC5DDC73E345FD61126 /* WingValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingValue.swift; sourceTree = "<group>"; };
 		2804E2C640870C5783512077 /* FluxKlangMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlangMac.entitlements; sourceTree = "<group>"; };
+		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
+		35EFA96D78CE256B049568C5 /* FaderMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMath.swift; sourceTree = "<group>"; };
 		437C08E45AF09839441CF3D5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		456B5650F08A7DE5FF17EC47 /* WingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingController.swift; sourceTree = "<group>"; };
+		47AE2617F3BFCE2F475789B1 /* WingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingTransport.swift; sourceTree = "<group>"; };
 		6168A7E728E3196D6787E965 /* SettingsContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContentView.swift; sourceTree = "<group>"; };
 		62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FluxKlangTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingAddressTests.swift; sourceTree = "<group>"; };
 		7829A1C698F339C5D662010C /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
 		834B3F839743E70274C9D787 /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
+		89B5161E55C4C246FDD3570A /* WingValueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingValueTests.swift; sourceTree = "<group>"; };
+		9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingTransporting.swift; sourceTree = "<group>"; };
+		9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingAddressBook.swift; sourceTree = "<group>"; };
+		9FBD40A7ECFD94E062D995CD /* DemoWingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoWingTransport.swift; sourceTree = "<group>"; };
 		B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangMacApp.swift; sourceTree = "<group>"; };
 		E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangTests.swift; sourceTree = "<group>"; };
 		EE24226D4BF4EA8A9918DB62 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangApp.swift; sourceTree = "<group>"; };
 		F06173B51FCABC2577C3360C /* MenuBarMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarMixer.swift; sourceTree = "<group>"; };
 		F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluxKlangMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSCProbe.swift; sourceTree = "<group>"; };
 		FE008189B554CBD9741C6447 /* FluxKlang.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FluxKlang.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -162,7 +189,10 @@
 		F6624B8D5BBDF1615714D3EB /* FluxKlangTests */ = {
 			isa = PBXGroup;
 			children = (
+				06CCF54AD33E1916E650B686 /* FaderMathTests.swift */,
 				E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */,
+				6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */,
+				89B5161E55C4C246FDD3570A /* WingValueTests.swift */,
 			);
 			path = FluxKlangTests;
 			sourceTree = "<group>";
@@ -170,7 +200,14 @@
 		FE93B129519608FFDD2FFF6B /* WING */ = {
 			isa = PBXGroup;
 			children = (
-				F7B80FDE1F412F3A66326CA4 /* OSCProbe.swift */,
+				9FBD40A7ECFD94E062D995CD /* DemoWingTransport.swift */,
+				35EFA96D78CE256B049568C5 /* FaderMath.swift */,
+				9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */,
+				2DDC71263C8B839D9CBCD745 /* WingConnection.swift */,
+				456B5650F08A7DE5FF17EC47 /* WingController.swift */,
+				47AE2617F3BFCE2F475789B1 /* WingTransport.swift */,
+				9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */,
+				201D1AC5DDC73E345FD61126 /* WingValue.swift */,
 			);
 			path = WING;
 			sourceTree = "<group>";
@@ -307,11 +344,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */,
+				0AE0A70F86B4C101162E14E5 /* DemoWingTransport.swift in Sources */,
+				0CD890319BEFD68B9D3FB577 /* FaderMath.swift in Sources */,
 				4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */,
 				CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */,
 				087F27C9EDEFE26C67E9E774 /* MenuBarMixer.swift in Sources */,
-				33BBDAD01C59BF18B5303617 /* OSCProbe.swift in Sources */,
 				435CB11200C3299EE92250C0 /* SettingsContentView.swift in Sources */,
+				FF4E21BBEE9EC76C24B83B00 /* WingAddressBook.swift in Sources */,
+				8BE59968D0AF1DE6D2934624 /* WingConnection.swift in Sources */,
+				86E3AC34313865A3E3EC10BF /* WingController.swift in Sources */,
+				3DE7748A654E7A2F5CB52879 /* WingTransport.swift in Sources */,
+				C66D197F4ABDB1050EBD2FA0 /* WingTransporting.swift in Sources */,
+				0B4C33D006DB2CBE1EC73893 /* WingValue.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -320,11 +364,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */,
+				C2A1749288B13BFFE516F895 /* DemoWingTransport.swift in Sources */,
+				6C97FEEAFCDB01C257CDDDD1 /* FaderMath.swift in Sources */,
 				5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */,
 				E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */,
 				5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */,
-				B2B762BD7321F486C6669168 /* OSCProbe.swift in Sources */,
 				AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */,
+				7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */,
+				0E93A5C70CD0F76CCA84DA1C /* WingConnection.swift in Sources */,
+				3D0D14F63A7F6CCE1632E543 /* WingController.swift in Sources */,
+				865C36C483E878014AD5BF27 /* WingTransport.swift in Sources */,
+				65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */,
+				188B14F395537257D1207610 /* WingValue.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -332,7 +383,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10730CD5847DC39C95AB055 /* FaderMathTests.swift in Sources */,
 				ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */,
+				A469C963335F0DCF658DFBA8 /* WingAddressTests.swift in Sources */,
+				627D9F1FE96885365301635A /* WingValueTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -405,7 +459,7 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5;
+				SWIFT_VERSION = 6;
 			};
 			name = Release;
 		};
@@ -419,7 +473,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = FluxKlangMac/Info.plist;
@@ -442,7 +496,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = FluxKlangMac/Info.plist;
@@ -537,7 +591,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5;
+				SWIFT_VERSION = 6;
 			};
 			name = Debug;
 		};
