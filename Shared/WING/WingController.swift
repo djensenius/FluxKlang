@@ -150,6 +150,48 @@ final class WingController {
         values[WingAddress.mute(kind, index)]?.intValue.map { $0 != 0 }
     }
 
+    // MARK: - Routing
+
+    /// Patches a channel's input to the given source.
+    func setChannelSource(_ channel: Int, to source: WingSource) async {
+        await apply(source.settings(forChannel: channel))
+    }
+
+    /// The channel's currently patched input source, if known.
+    func channelSource(_ channel: Int) -> WingSource? {
+        guard let token = values[WingAddress.channelSourceGroup(channel)]?.stringValue,
+              let group = WingSourceGroup(rawValue: token) else { return nil }
+        let index = Int(values[WingAddress.channelSourceIndex(channel)]?.intValue ?? 0)
+        return WingSource(group: group, index: index)
+    }
+
+    /// Assigns or unassigns a strip to a main bus.
+    func setMainAssign(_ kind: WingNodeKind, _ index: Int, toMain main: Int, on enabled: Bool) async {
+        await set(WingAddress.mainOn(kind, index, toMain: main), .int(enabled ? 1 : 0))
+    }
+
+    func isMainAssigned(_ kind: WingNodeKind, _ index: Int, toMain main: Int) -> Bool? {
+        values[WingAddress.mainOn(kind, index, toMain: main)]?.intValue.map { $0 != 0 }
+    }
+
+    /// Turns a bus send on or off for a strip.
+    func setSend(_ kind: WingNodeKind, _ index: Int, toBus bus: Int, on enabled: Bool) async {
+        await set(WingAddress.sendOn(kind, index, toBus: bus), .int(enabled ? 1 : 0))
+    }
+
+    func isSendOn(_ kind: WingNodeKind, _ index: Int, toBus bus: Int) -> Bool? {
+        values[WingAddress.sendOn(kind, index, toBus: bus)]?.intValue.map { $0 != 0 }
+    }
+
+    /// Sets a bus-send level in decibels.
+    func setSendLevel(_ kind: WingNodeKind, _ index: Int, toBus bus: Int, decibels: Float) async {
+        await set(WingAddress.sendLevel(kind, index, toBus: bus), .float(decibels))
+    }
+
+    func sendLevel(_ kind: WingNodeKind, _ index: Int, toBus bus: Int) -> Float? {
+        values[WingAddress.sendLevel(kind, index, toBus: bus)]?.floatValue
+    }
+
     // MARK: - Batch
 
     /// Applies a batch of settings to the WING. Used by presets and by the chain

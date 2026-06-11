@@ -99,7 +99,9 @@ private struct SectionDetail: View {
             FadersView()
         case .connection:
             ConnectionView()
-        case .routing, .chain, .presets:
+        case .routing:
+            RoutingView()
+        case .chain, .presets:
             ComingSoon(section: section)
         }
     }

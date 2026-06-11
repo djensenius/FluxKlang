@@ -24,11 +24,8 @@ enum RoutingTranslator {
 
     private static func translate(from: ChainNodeKind, to destination: ChainNodeKind) -> [WingSetting] {
         switch (from, destination) {
-        case let (.wingInput(source), .wingChannel(channel)):
-            return [
-                WingSetting(address: WingAddress.channelSourceGroup(channel), value: .int(0)),
-                WingSetting(address: WingAddress.channelSourceIndex(channel), value: .int(Int32(source)))
-            ]
+        case let (.wingInput(localInput), .wingChannel(channel)):
+            return WingSource(group: .local, index: localInput).settings(forChannel: channel)
         case let (.wingChannel(channel), .wingBus(bus)):
             return [WingSetting(address: WingAddress.sendOn(.channel, channel, toBus: bus), value: .int(1))]
         case let (.wingChannel(channel), .wingMain(main)):

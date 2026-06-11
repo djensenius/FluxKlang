@@ -111,8 +111,20 @@ actor DemoWingTransport: WingTransporting {
         }
         // Seed channel input patches so the routing screens are populated too.
         for channel in 1...WingNodeKind.channel.count {
-            store[WingAddress.channelSourceGroup(channel)] = .int(0)
-            store[WingAddress.channelSourceIndex(channel)] = .int(Int32(channel))
+            let source = (channel <= WingSourceGroup.local.count)
+                ? WingSource(group: .local, index: channel)
+                : .none
+            store[WingAddress.channelSourceGroup(channel)] = .string(source.group.rawValue)
+            store[WingAddress.channelSourceIndex(channel)] = .int(Int32(source.index))
+        }
+        // Seed main assignments and a few bus sends so output routing looks live.
+        for channel in 1...WingNodeKind.channel.count {
+            store[WingAddress.mainOn(.channel, channel, toMain: 1)] = .int(1)
+            for bus in 1...4 {
+                let isOn = (channel % bus == 0)
+                store[WingAddress.sendOn(.channel, channel, toBus: bus)] = .int(isOn ? 1 : 0)
+                store[WingAddress.sendLevel(.channel, channel, toBus: bus)] = .float(-12)
+            }
         }
         return store
     }

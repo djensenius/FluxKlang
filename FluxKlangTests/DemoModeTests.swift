@@ -18,7 +18,11 @@ struct DemoModeTests {
         await controller.connectDemo()
         #expect(controller.connection.isConnected)
 
-        try await waitUntil { controller.name(.channel, 1) != nil }
+        try await waitUntil {
+            controller.name(.channel, 1) != nil
+                && controller.name(.main, 1) != nil
+                && controller.faderPosition(.channel, 10) != nil
+        }
         #expect(controller.name(.channel, 1) == "OP-1 Field")
         #expect(controller.name(.main, 1) == "Main LR")
         #expect(controller.faderPosition(.channel, 10) != nil)
