@@ -104,21 +104,8 @@ private struct SectionDetail: View {
         case .chain:
             ChainCanvasView()
         case .presets:
-            ComingSoon(section: section)
+            PresetsView()
         }
-    }
-}
-
-private struct ComingSoon: View {
-    let section: AppSection
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(section.rawValue, systemImage: section.systemImage)
-        } description: {
-            Text("Coming soon — FluxKlang controls your Behringer WING Rack here.")
-        }
-        .navigationTitle(section.rawValue)
     }
 }
 

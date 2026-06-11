@@ -45,14 +45,4 @@ struct DemoModeTests {
 
         await controller.disconnect()
     }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(2),
-        _ condition: @MainActor () -> Bool
-    ) async throws {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 }

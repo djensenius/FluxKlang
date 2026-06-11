@@ -65,6 +65,34 @@ final class AppModel {
         await wing.apply(preset.settings)
     }
 
+    /// Captures the current mixer + routing state into a named preset.
+    func savePreset(named name: String) {
+        let settings = wing.snapshot(of: snapshotAddresses())
+        presets.add(Preset(name: name, settings: settings))
+    }
+
+    /// Addresses captured into a preset snapshot: every fader-strip level and
+    /// mute, plus channel input patches, main assignments and bus sends.
+    private func snapshotAddresses() -> [String] {
+        var addresses: [String] = []
+        for strip in faderLayout.layout.strips {
+            addresses.append(WingAddress.fader(strip.node.kind, strip.node.index))
+            addresses.append(WingAddress.mute(strip.node.kind, strip.node.index))
+        }
+        for channel in 1...WingNodeKind.channel.count {
+            addresses.append(WingAddress.channelSourceGroup(channel))
+            addresses.append(WingAddress.channelSourceIndex(channel))
+            for main in 1...WingNodeKind.main.count {
+                addresses.append(WingAddress.mainOn(.channel, channel, toMain: main))
+            }
+            for bus in 1...WingNodeKind.bus.count {
+                addresses.append(WingAddress.sendOn(.channel, channel, toBus: bus))
+                addresses.append(WingAddress.sendLevel(.channel, channel, toBus: bus))
+            }
+        }
+        return addresses
+    }
+
     /// Enters offline Demo Mode with a simulated WING, replacing any live link.
     func enterDemoMode() async {
         await wing.disconnect()
