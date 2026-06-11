@@ -10,15 +10,31 @@
 import SwiftUI
 
 struct SettingsContentView: View {
+    @Environment(AppModel.self) private var appModel
+
     var body: some View {
         Form {
             Section("Connection") {
-                LabeledContent("Status", value: "Not connected")
+                LabeledContent("Status", value: appModel.wing.connection.statusLabel)
+                if let host = appModel.wing.host {
+                    LabeledContent("Host", value: host)
+                }
+                LabeledContent("OSC port", value: String(appModel.wing.port))
+                if let last = appModel.lastHost {
+                    LabeledContent("Last WING", value: last)
+                }
+            }
+
+            Section("Mixer") {
+                LabeledContent("Fader strips", value: String(appModel.faderLayout.layout.strips.count))
+                Button("Reset faders to standard layout") {
+                    appModel.faderLayout.resetToStandard()
+                }
             }
         }
         .formStyle(.grouped)
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 240)
+        .frame(minWidth: 420, minHeight: 280)
         #endif
         .navigationTitle("Settings")
     }
@@ -26,4 +42,5 @@ struct SettingsContentView: View {
 
 #Preview {
     SettingsContentView()
+        .environment(AppModel.preview())
 }

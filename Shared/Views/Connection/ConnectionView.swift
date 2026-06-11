@@ -48,9 +48,14 @@ struct ConnectionView: View {
                     .keyboardType(.decimalPad)
                     .textInputAutocapitalization(.never)
                     #endif
-                    .onSubmit { connect() }
-                Button("Connect") { connect() }
+                    .onSubmit { connect(to: host) }
+                Button("Connect") { connect(to: host) }
                     .disabled(host.isEmpty || isWorking)
+            }
+
+            DiscoveryView { selected in
+                host = selected
+                connect(to: selected)
             }
 
             if appModel.isConnected || appModel.wing.connection == .connecting {
@@ -81,8 +86,8 @@ struct ConnectionView: View {
         }
     }
 
-    private func connect() {
-        let target = host
+    private func connect(to target: String) {
+        guard !target.isEmpty else { return }
         Task {
             isWorking = true
             await appModel.connect(host: target)
