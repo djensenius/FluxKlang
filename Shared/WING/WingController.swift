@@ -126,6 +126,16 @@ final class WingController {
         values[WingAddress.fader(kind, index)]?.floatValue.map(FaderMath.decibels(fromPosition:))
     }
 
+    /// Current normalised fader position (`0.0...1.0`) for a strip, if known.
+    func faderPosition(_ kind: WingNodeKind, _ index: Int) -> Float? {
+        values[WingAddress.fader(kind, index)]?.floatValue
+    }
+
+    /// Current scribble-strip name for a node, if known.
+    func name(_ kind: WingNodeKind, _ index: Int) -> String? {
+        values[WingAddress.name(kind, index)]?.stringValue
+    }
+
     /// Current mute state for a strip, if known.
     func isMuted(_ kind: WingNodeKind, _ index: Int) -> Bool? {
         values[WingAddress.mute(kind, index)]?.intValue.map { $0 != 0 }

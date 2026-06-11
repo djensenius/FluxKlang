@@ -45,11 +45,22 @@ private struct AdaptiveRoot: View {
 
     var body: some View {
         if horizontalSizeClass == .compact {
-            NavigationStack {
-                PlaceholderDetail(section: .faders)
-            }
+            TabRoot()
         } else {
             SplitRoot()
+        }
+    }
+}
+
+private struct TabRoot: View {
+    var body: some View {
+        TabView {
+            ForEach(AppSection.allCases) { section in
+                NavigationStack {
+                    SectionDetail(section: section)
+                }
+                .tabItem { Label(section.rawValue, systemImage: section.systemImage) }
+            }
         }
     }
 }
@@ -69,12 +80,27 @@ private struct SplitRoot: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
             #endif
         } detail: {
-            PlaceholderDetail(section: selection ?? .faders)
+            SectionDetail(section: selection ?? .faders)
         }
     }
 }
 
-private struct PlaceholderDetail: View {
+private struct SectionDetail: View {
+    let section: AppSection
+
+    var body: some View {
+        switch section {
+        case .faders:
+            FadersView()
+        case .connection:
+            ConnectionView()
+        case .routing, .chain, .presets:
+            ComingSoon(section: section)
+        }
+    }
+}
+
+private struct ComingSoon: View {
     let section: AppSection
 
     var body: some View {
@@ -89,4 +115,5 @@ private struct PlaceholderDetail: View {
 
 #Preview {
     AppRootView()
+        .environment(AppModel())
 }

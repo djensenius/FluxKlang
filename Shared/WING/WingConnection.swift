@@ -18,4 +18,14 @@ enum WingConnectionState: Equatable, Sendable {
         if case .connected = self { return true }
         return false
     }
+
+    /// A short, human-readable description for display.
+    var statusLabel: String {
+        switch self {
+        case .disconnected: return "Not connected"
+        case .connecting: return "Connecting…"
+        case .connected(let name): return name.map { "Connected — \($0)" } ?? "Connected"
+        case .failed(let reason): return "Connection failed — \(reason)"
+        }
+    }
 }

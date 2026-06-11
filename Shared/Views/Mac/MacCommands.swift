@@ -11,6 +11,8 @@
 import SwiftUI
 
 struct FluxKlangCommands: Commands {
+    let appModel: AppModel
+
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button("New Preset") {}
@@ -18,8 +20,17 @@ struct FluxKlangCommands: Commands {
         }
 
         CommandMenu("WING") {
-            Button("Connect / Disconnect") {}
-                .keyboardShortcut("r", modifiers: .command)
+            Button("Enter Demo Mode") {
+                Task { await appModel.enterDemoMode() }
+            }
+            .keyboardShortcut("d", modifiers: .command)
+
+            Button("Disconnect") {
+                Task { await appModel.disconnect() }
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(!appModel.isConnected)
+
             Divider()
             Button("Toggle Inspector") {}
                 .keyboardShortcut("i", modifiers: [.option, .command])
