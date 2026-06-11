@@ -36,8 +36,9 @@ enum RoutingTranslator {
             return WingOutputSource(group: .main, index: main).settings(forOutput: output)
         case let (.wingBus(bus), .wingOutput(output)):
             return WingOutputSource(group: .bus, index: bus).settings(forOutput: output)
-        case let (.wingChannel(channel), .wingOutput(output)):
-            return WingOutputSource(group: .channel, index: channel).settings(forOutput: output)
+        // A raw channel is not a valid WING output source group, so a direct
+        // channel → output wire can't be patched on the hardware; reach the
+        // speakers by wiring the channel through a bus or main instead.
         default:
             return []
         }

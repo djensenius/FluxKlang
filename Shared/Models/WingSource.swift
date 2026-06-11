@@ -77,15 +77,16 @@ struct WingSource: Identifiable, Hashable, Sendable {
 
 /// The internal signal feeding a physical WING output socket — used to terminate
 /// a chain at the speakers. Mirrors `WingSource` but for the *output* side: a
-/// group (main, speaker bus, …) plus a 1-based index. Group tokens and node paths
-/// are best-effort and must be confirmed against the console during the smoke
-/// test (see `WingAddress.outputSource*`).
+/// source group (main, bus, matrix) plus a 1-based index. These are the
+/// `/io/out/.../grp` tokens FluxKlang currently models — `MAIN`, `BUS`, `MTX`
+/// and `OFF` — not the full set the WING accepts (it has further groups for
+/// other connector banks). Raw channels are *not* a valid output source group,
+/// so a channel reaches the speakers via a bus or main, not directly.
 enum WingOutputSourceGroup: String, CaseIterable, Codable, Sendable {
     case off = "OFF"
     case main = "MAIN"
     case bus = "BUS"
     case matrix = "MTX"
-    case channel = "CH"
 
     /// Human-readable group name.
     var label: String {
@@ -94,7 +95,6 @@ enum WingOutputSourceGroup: String, CaseIterable, Codable, Sendable {
         case .main: return "Main"
         case .bus: return "Bus"
         case .matrix: return "Matrix"
-        case .channel: return "Channel"
         }
     }
 }

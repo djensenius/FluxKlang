@@ -119,6 +119,39 @@ struct ChainTests {
         #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(3) && $0.value == .int(1) })
     }
 
+    @Test func translatesBusToOutputPatch() {
+        let store = ChainStore()
+        let bus = ChainNode(kind: .wingBus(2), title: "Bus 2", position: .zero)
+        let output = ChainNode(kind: .wingOutput(5), title: "Output 5", position: .zero)
+        store.addNode(bus)
+        store.addNode(output)
+        store.connect(
+            from: ChainPortRef(nodeID: bus.id, side: .output, port: 0),
+            to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
+        )
+        let settings = store.wingSettings()
+        #expect(settings.contains { $0.address == WingAddress.outputSourceGroup(5) && $0.value == .string("BUS") })
+        #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(5) && $0.value == .int(2) })
+    }
+
+    @Test func channelToOutputProducesNoPatch() {
+        // A raw channel is not a valid WING output source group, so wiring a
+        // channel straight to a physical output yields no OSC patch — the chain
+        // must reach the speakers via a bus or main.
+        let store = ChainStore()
+        let channel = ChainNode(kind: .wingChannel(1), title: "Channel 1", position: .zero)
+        let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
+        store.addNode(channel)
+        store.addNode(output)
+        store.connect(
+            from: ChainPortRef(nodeID: channel.id, side: .output, port: 0),
+            to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
+        )
+        let settings = store.wingSettings()
+        #expect(!settings.contains { $0.address == WingAddress.outputSourceGroup(3) })
+        #expect(!settings.contains { $0.address == WingAddress.outputSourceIndex(3) })
+    }
+
     @Test func connectReplacesExistingWireIntoSameOutput() {
         let store = ChainStore()
         let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)

@@ -113,18 +113,27 @@ enum WingAddress {
 
     // MARK: - Output patching
 
-    /// Source group for a physical output socket, e.g. `/io/out/1/srcgrp`. This
-    /// patches which internal signal (a main or speaker bus) feeds the output
-    /// your speakers are plugged into — i.e. how a chain "reaches the speakers".
-    /// Node paths are best-effort and must be verified against a real console
-    /// (see `WingOutputSource`).
-    static func outputSourceGroup(_ output: Int) -> String {
-        "/io/out/\(output)/srcgrp"
+    /// Root node for a physical local output socket, e.g. `/io/out/LCL/1`. On the
+    /// WING the I/O tree groups outputs by connector bank; FluxKlang's "Output N"
+    /// nodes are the local line outputs, which live under the `LCL` bank.
+    private static func localOutput(_ output: Int) -> String {
+        "/io/out/LCL/\(output)"
     }
 
-    /// Source index within the group for a physical output, e.g. `/io/out/1/srcin`.
+    /// Source *group* node for a physical output, e.g. `/io/out/LCL/1/grp`. This
+    /// patches which internal signal (a main, bus or matrix) feeds the output your
+    /// speakers are plugged into — i.e. how a chain "reaches the speakers". The
+    /// value is a source-group token such as `MAIN`, `BUS`, `MTX` or `OFF`
+    /// (see `WingOutputSource`).
+    static func outputSourceGroup(_ output: Int) -> String {
+        localOutput(output) + "/grp"
+    }
+
+    /// Source *index* within the group for a physical output, e.g.
+    /// `/io/out/LCL/1/in`. 1-based, addressing a strip within the group selected
+    /// by the matching `/grp` node.
     static func outputSourceIndex(_ output: Int) -> String {
-        "/io/out/\(output)/srcin"
+        localOutput(output) + "/in"
     }
 
     // MARK: - Console
