@@ -145,8 +145,10 @@ final class WingController {
     ///
     /// - Note: The WING colour value type/range (palette index) is still to be
     ///   verified against real hardware; treat as provisional until confirmed.
+    ///   The index is clamped to a non-negative `Int32` to avoid trapping on
+    ///   out-of-range input.
     func setColor(_ kind: WingNodeKind, _ index: Int, to colorIndex: Int) async {
-        await set(WingAddress.color(kind, index), .int(Int32(colorIndex)))
+        await set(WingAddress.color(kind, index), .int(Int32(clamping: max(colorIndex, 0))))
     }
 
     /// Current colour index for a node, if known.
