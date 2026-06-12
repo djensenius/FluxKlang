@@ -16,6 +16,7 @@
 //  is part of the downstream return.
 //
 
+import CoreGraphics
 import Foundation
 
 /// A positionable element of an environment, derived from its routing graph.
@@ -44,6 +45,56 @@ struct EnvironmentVoice: Identifiable, Hashable, Sendable {
 
     /// A short description of the instruments carried, e.g. "Moog + Juno".
     var sourcesLabel: String { sourceNames.joined(separator: " + ") }
+
+    /// Builds a `SpatialSource` for this voice at `position`/`width`, reusing the
+    /// shared stereo-spread and panning math. Returns nil if the voice has no
+    /// channels (e.g. a capacity-exhausted effect with no return).
+    func spatialSource(position: CGPoint, width: Double) -> SpatialSource? {
+        guard let first = channels.first else { return nil }
+        let stereo = isStereo && channels.count > 1
+        return SpatialSource(
+            name: name,
+            mode: stereo ? .stereo : .mono,
+            left: .channel(first),
+            right: stereo ? .channel(channels[1]) : nil,
+            position: position,
+            width: width
+        )
+    }
+}
+
+extension EnvironmentVoice {
+    /// Prefix tagging a dry-source voice id (followed by the equipment UUID).
+    static let sourcePrefix = "source:"
+    /// Prefix tagging an effect-return voice id (followed by the effect UUID).
+    static let returnPrefix = "return:"
+
+    static func sourceID(_ equipment: Equipment.ID) -> String { sourcePrefix + equipment.uuidString }
+    static func returnID(_ effect: Effect.ID) -> String { returnPrefix + effect.uuidString }
+
+    /// Rewrites a return-voice id onto a new effect id using `remap`; source ids
+    /// (and anything unrecognised) pass through unchanged. Used when an
+    /// environment is duplicated and its effects get fresh identities.
+    static func remap(voiceID: String, effects remap: [Effect.ID: Effect.ID]) -> String {
+        guard voiceID.hasPrefix(returnPrefix),
+              let oldID = UUID(uuidString: String(voiceID.dropFirst(returnPrefix.count))),
+              let newID = remap[oldID] else {
+            return voiceID
+        }
+        return returnID(newID)
+    }
+}
+
+/// A voice paired with its placement in the spatial field. `isPlaced` is false
+/// for voices the user hasn't positioned yet — they sit at the default centre
+/// and contribute no surround sends until moved.
+struct PlacedVoice: Identifiable, Hashable, Sendable {
+    var voice: EnvironmentVoice
+    var position: CGPoint
+    var width: Double
+    var isPlaced: Bool
+
+    var id: String { voice.id }
 }
 
 enum EnvironmentVoices {
@@ -98,7 +149,7 @@ enum EnvironmentVoices {
             var channels = [assignment.leftChannel]
             if let right = assignment.rightChannel { channels.append(right) }
             voices.append(EnvironmentVoice(
-                id: "source:\(assignment.equipment.id.uuidString)",
+                id: EnvironmentVoice.sourceID(assignment.equipment.id),
                 kind: .source,
                 name: assignment.equipment.name,
                 sourceNames: [assignment.equipment.name],
@@ -116,7 +167,7 @@ enum EnvironmentVoices {
         for effect in effects where hasBus(effect.id) && foldTarget(effect) == nil {
             let members = sourcesByRoot[effect.id] ?? Set(effect.sourceInstruments)
             voices.append(EnvironmentVoice(
-                id: "return:\(effect.id.uuidString)",
+                id: EnvironmentVoice.returnID(effect.id),
                 kind: .effectReturn,
                 name: effect.name,
                 sourceNames: names(members),

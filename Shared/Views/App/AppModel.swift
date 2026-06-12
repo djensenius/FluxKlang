@@ -7,6 +7,7 @@
 //  so the rest of the app simply observes `wing`.
 //
 
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -109,13 +110,26 @@ final class AppModel {
         await wing.apply(chain.wingSettings())
     }
 
-    /// The WING settings implied by the active environment's effects, resolved
-    /// against the current channel rig (which instrument lives on which channel).
+    /// The WING settings implied by the active environment: its effects' send/
+    /// return routing (resolved against the current channel rig) plus the surround
+    /// sends for any voices placed in space. Switching environments and pressing
+    /// Apply pushes both, so a setup's spatial placement is recalled too.
     func environmentSettings() -> [WingSetting] {
         EffectRouting.settings(
             for: environments.activeEffects,
             assignments: Equipment.channelAssignments(from: equipment.items)
-        )
+        ) + environmentSpatialSettings()
+    }
+
+    /// The surround bus sends for every placed voice of the active environment.
+    /// Purely additive — it never touches the main, so placement coexists with
+    /// the dry/return mix the effects feed to the main.
+    func environmentSpatialSettings() -> [WingSetting] {
+        let speakers = spatial.array.speakers
+        return placedVoices()
+            .filter(\.isPlaced)
+            .compactMap { $0.voice.spatialSource(position: $0.position, width: $0.width) }
+            .flatMap { SpatialRouting.settings(for: $0, speakers: speakers) }
     }
 
     /// Applies the active environment's implied send/return routing to the WING.
@@ -131,6 +145,22 @@ final class AppModel {
             for: environment,
             assignments: Equipment.channelAssignments(from: equipment.items)
         )
+    }
+
+    /// The active environment's voices paired with their saved spatial placement.
+    /// Unplaced voices sit at the centre and are flagged so they don't yet emit
+    /// surround sends.
+    func placedVoices() -> [PlacedVoice] {
+        guard let environment = environments.active else { return [] }
+        return environmentVoices().map { voice in
+            let placement = environment.placements[voice.id]
+            return PlacedVoice(
+                voice: voice,
+                position: placement?.position ?? CGPoint(x: 0.5, y: 0.5),
+                width: placement?.width ?? 0.5,
+                isPlaced: placement != nil
+            )
+        }
     }
 
     /// Recalls a preset by applying its settings to the WING.
@@ -197,29 +227,17 @@ final class AppModel {
 
     // MARK: - Spatial
 
-    /// Computes DBAP gains for a source and pushes the resulting bus sends to the
-    /// WING. Stereo sources drive their two channels independently.
-    func applyPlacement(_ source: SpatialSource) async {
-        let speakers = spatial.array.speakers
-        guard !speakers.isEmpty else { return }
-        let positions = speakers.map(\.position)
-        for placement in source.channelPlacements() {
-            let gains = SpatialPanner.gains(source: placement.point, speakers: positions)
-            for (index, speaker) in speakers.enumerated() where speaker.node.kind == .bus {
-                let bus = speaker.node.index
-                let channel = placement.channel.index
-                let decibels = SpatialPanner.decibels(forGain: gains[index])
-                await wing.setSend(.channel, channel, toBus: bus, on: true)
-                await wing.setSendLevel(.channel, channel, toBus: bus, decibels: decibels)
-            }
-        }
+    /// Pushes a placed voice's surround bus sends to the WING live, used while
+    /// dragging it around the spatial field.
+    func applyVoicePlacement(_ placed: PlacedVoice) async {
+        guard let source = placed.voice.spatialSource(position: placed.position, width: placed.width) else { return }
+        await wing.apply(SpatialRouting.settings(for: source, speakers: spatial.array.speakers))
     }
 
-    /// Re-applies every placed source. Used by the "Apply" action.
+    /// Re-applies every placed voice of the active environment. Used by the
+    /// spatial screen's "Apply" action.
     func applyAllPlacements() async {
-        for source in spatial.sources {
-            await applyPlacement(source)
-        }
+        await wing.apply(environmentSpatialSettings())
     }
 
     /// Sets a stereo speaker pair's level (normalised), with an optional balance

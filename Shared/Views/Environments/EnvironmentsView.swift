@@ -156,8 +156,8 @@ struct EnvironmentsView: View {
             Text("Spatial voices")
         } footer: {
             Text("""
-            What you'll be able to place in space. A shared effect sums its sources, so its return is \
-            one voice carrying every instrument that feeds it — those can't be moved apart.
+            What you can place in space — open the Spatial tab to position these. A shared effect sums its \
+            sources, so its return is one voice carrying every instrument that feeds it; those move together.
             """)
         }
     }

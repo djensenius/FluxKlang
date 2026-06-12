@@ -8,6 +8,7 @@
 //  any legacy single effects list (`effects.json`) into a "Default" environment.
 //
 
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -138,6 +139,37 @@ final class EnvironmentStore {
         mutateEffects { $0.move(fromOffsets: source, toOffset: destination) }
     }
 
+    // MARK: - Active-environment spatial placement
+
+    /// The saved placement of a voice in the active environment, if positioned.
+    func placement(for voiceID: String) -> VoicePlacement? {
+        active?.placements[voiceID]
+    }
+
+    /// Positions a voice in the active environment, creating its placement on
+    /// first move so it begins contributing surround sends.
+    func setVoicePosition(_ voiceID: String, to position: CGPoint) {
+        mutateEnvironment { environment in
+            var placement = environment.placements[voiceID] ?? VoicePlacement()
+            placement.position = Self.clamp(position)
+            environment.placements[voiceID] = placement
+        }
+    }
+
+    /// Sets a voice's stereo spread in the active environment.
+    func setVoiceWidth(_ voiceID: String, to width: Double) {
+        mutateEnvironment { environment in
+            var placement = environment.placements[voiceID] ?? VoicePlacement()
+            placement.width = min(max(width, 0), 1)
+            environment.placements[voiceID] = placement
+        }
+    }
+
+    /// Removes a voice's placement, so it no longer contributes surround sends.
+    func clearPlacement(_ voiceID: String) {
+        mutateEnvironment { $0.placements[voiceID] = nil }
+    }
+
     // MARK: - Internals
 
     /// Guarantees there is an active environment, creating a "Default" one when
@@ -180,5 +212,9 @@ final class EnvironmentStore {
     private func persist() {
         let snapshot = Persisted(environments: environments, activeID: activeID)
         Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
+    }
+
+    private static func clamp(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: min(max(point.x, 0), 1), y: min(max(point.y, 0), 1))
     }
 }

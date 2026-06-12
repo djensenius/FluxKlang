@@ -2,10 +2,14 @@
 //  SpatialView.swift
 //  FluxKlang
 //
-//  Surround / spatial mixing. A segmented control switches between placing
-//  instruments in the 2D field (which drives per-channel bus sends via DBAP) and
-//  controlling the stereo-pair speaker volumes. Speakers and instruments are
-//  fully configurable for mono or stereo sources across a 4+ speaker array.
+//  Surround / spatial mixing, driven by the active environment. A segmented
+//  control switches between placing the environment's voices in the 2D field
+//  (which drives per-channel speaker-bus sends via DBAP) and controlling the
+//  stereo-pair speaker volumes. The placeable voices are derived from the
+//  environment's routing — dry instruments and shared effect returns — and their
+//  positions are saved per environment, so switching environments recalls the
+//  whole stage. Surround sends are additive: the dry/return mix still feeds the
+//  main, so placement coexists with it.
 //
 
 import SwiftUI
@@ -20,13 +24,12 @@ struct SpatialView: View {
     }
 
     @State private var mode: Mode = .place
-    @State private var selection: SpatialSource.ID?
-    @State private var showingAdd = false
+    @State private var selection: String?
     @State private var showingConfig = false
 
-    private var store: SpatialStore { appModel.spatial }
-    private var selectedSource: SpatialSource? {
-        store.sources.first { $0.id == selection }
+    private var placedVoices: [PlacedVoice] { appModel.placedVoices() }
+    private var selectedVoice: PlacedVoice? {
+        placedVoices.first { $0.id == selection }
     }
 
     var body: some View {
@@ -47,32 +50,55 @@ struct SpatialView: View {
         }
         .navigationTitle("Spatial")
         .toolbar { toolbarContent }
-        .sheet(isPresented: $showingAdd) { AddSpatialSourceView(appModel: appModel) }
         .sheet(isPresented: $showingConfig) { SpeakerConfigView(appModel: appModel) }
     }
 
     @ViewBuilder
     private var placeContent: some View {
-        SpatialPadView(appModel: appModel, selection: $selection)
-        if let source = selectedSource {
-            SelectedSourceBar(appModel: appModel, source: source) { selection = nil }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+        if appModel.environments.active == nil {
+            noEnvironmentState
+        } else if placedVoices.isEmpty {
+            noVoicesState
+        } else {
+            SpatialPadView(appModel: appModel, voices: placedVoices, selection: $selection)
+            if let voice = selectedVoice {
+                SelectedVoiceBar(appModel: appModel, placed: voice) { selection = nil }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var noEnvironmentState: some View {
+        ContentUnavailableView {
+            Label("No Environment", systemImage: "rectangle.3.group")
+        } description: {
+            Text("""
+            Create an environment and add effects in the Environments tab, then come back to place its voices \
+            in space.
+            """)
+        }
+    }
+
+    private var noVoicesState: some View {
+        ContentUnavailableView {
+            Label("Nothing to place yet", systemImage: "dot.radiowaves.left.and.right")
+        } description: {
+            Text("""
+            “\(appModel.environments.active?.name ?? "This environment")” has no voices yet. Add effects and pick \
+            the instruments that feed them in the Environments tab — each instrument and each effect return becomes \
+            a voice you can place here.
+            """)
         }
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Button { showingAdd = true } label: {
-                Label("Add Instrument", systemImage: "plus")
-            }
-            .help("Add an instrument to the field")
-        }
-        ToolbarItem(placement: .primaryAction) {
             Button { Task { await appModel.applyAllPlacements() } } label: {
                 Label("Apply", systemImage: "dot.radiowaves.left.and.right")
             }
-            .help("Re-send all placements to the WING")
+            .disabled(!appModel.isConnected || appModel.environmentSpatialSettings().isEmpty)
+            .help("Re-send every placed voice to the WING")
         }
         ToolbarItem(placement: .primaryAction) {
             Button { showingConfig = true } label: {
@@ -83,37 +109,46 @@ struct SpatialView: View {
     }
 }
 
-/// Controls for the instrument currently selected on the pad.
-private struct SelectedSourceBar: View {
+/// Controls for the voice currently selected on the pad.
+private struct SelectedVoiceBar: View {
     let appModel: AppModel
-    let source: SpatialSource
+    let placed: PlacedVoice
     var onClose: () -> Void
 
-    private var store: SpatialStore { appModel.spatial }
+    private var store: EnvironmentStore { appModel.environments }
+    private var voice: EnvironmentVoice { placed.voice }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                TextField("Name", text: nameBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
-                Spacer()
-                Button(role: .destructive) {
-                    store.removeSource(source.id)
-                    onClose()
-                } label: {
-                    Label("Remove", systemImage: "trash")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(voice.name).font(.headline)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
+                Spacer()
+                if placed.isPlaced {
+                    Button(role: .destructive) {
+                        store.clearPlacement(voice.id)
+                        onClose()
+                    } label: {
+                        Label("Remove", systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Take this voice out of the spatial field")
+                }
             }
-            Text(channelSummary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if source.isStereo {
+            if voice.isShared {
+                Label("Shared effect — its sources move together.", systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if voice.isStereo {
                 HStack {
                     Text("Width").frame(width: 60, alignment: .leading)
                     Slider(value: widthBinding, in: 0...1)
-                    Text(String(format: "%.0f%%", source.width * 100))
+                    Text(String(format: "%.0f%%", placed.width * 100))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
@@ -126,29 +161,27 @@ private struct SelectedSourceBar: View {
         .padding([.horizontal, .bottom])
     }
 
-    private var channelSummary: String {
-        if source.isStereo, let right = source.right {
-            return "Stereo · L \(channelName(source.left)) · R \(channelName(right))"
-        }
-        return "Mono · \(channelName(source.left))"
+    private var detail: String {
+        let kind = voice.kind == .source ? "Instrument" : "Effect return"
+        let channels = voice.channels.map(String.init).joined(separator: "/")
+        let label = voice.isShared ? voice.sourcesLabel : channelDescription(channels)
+        return "\(kind) · \(label)"
     }
 
-    private func channelName(_ node: WingNodeRef) -> String {
-        appModel.wing.name(node.kind, node.index) ?? node.defaultLabel
-    }
-
-    private var nameBinding: Binding<String> {
-        Binding(get: { source.name }, set: { store.rename(source.id, to: $0) })
+    private func channelDescription(_ channels: String) -> String {
+        let noun = voice.isStereo ? "Channels" : "Channel"
+        return "\(noun) \(channels)"
     }
 
     private var widthBinding: Binding<Double> {
         Binding(
-            get: { source.width },
+            get: { placed.width },
             set: { newValue in
-                store.updateWidth(source.id, to: newValue)
-                var moved = source
+                store.setVoiceWidth(voice.id, to: newValue)
+                var moved = placed
                 moved.width = newValue
-                Task { await appModel.applyPlacement(moved) }
+                moved.isPlaced = true
+                Task { await appModel.applyVoicePlacement(moved) }
             }
         )
     }
@@ -158,5 +191,9 @@ private struct SelectedSourceBar: View {
     let model = AppModel.preview()
     return NavigationStack { SpatialView() }
         .environment(model)
-        .task { await model.spatial.load() }
+        .task {
+            await model.equipment.load()
+            await model.environments.load()
+            await model.spatial.load()
+        }
 }
