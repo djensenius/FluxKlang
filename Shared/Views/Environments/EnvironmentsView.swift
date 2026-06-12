@@ -112,15 +112,22 @@ struct EnvironmentsView: View {
                 }
             }
             ForEach(Array(effects.enumerated()), id: \.element.id) { index, effect in
-                Button { editing = effect } label: {
-                    EffectRow(
-                        effect: effect,
-                        allocation: allocations[effect.id],
-                        destinationName: destinationName(for: effect),
-                        equipment: appModel.equipment
-                    )
+                HStack(spacing: 8) {
+                    Button { editing = effect } label: {
+                        EffectRow(
+                            effect: effect,
+                            allocation: allocations[effect.id],
+                            destinationName: destinationName(for: effect),
+                            equipment: appModel.equipment
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    Image(systemName: "line.3.horizontal")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                        .help("Drag to reorder")
                 }
-                .buttonStyle(.plain)
                 .contextMenu {
                     Button { editing = effect } label: { Label("Edit…", systemImage: "pencil") }
                     Divider()
@@ -142,22 +149,26 @@ struct EnvironmentsView: View {
         } footer: {
             Text("""
             Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
-            Drag to reorder, or right-click an effect to move it, edit it, or delete it.
+            Drag the grip handle to reorder, or right-click an effect to move it, edit it, or delete it.
             """)
         }
     }
 
     private var voicesSection: some View {
         Section {
+            Button { appModel.requestSpatialPlacement() } label: {
+                Label("Open Spatial to place", systemImage: "hifispeaker.2")
+            }
             ForEach(voices) { voice in
                 VoiceRow(voice: voice)
             }
         } header: {
-            Text("Spatial voices")
+            Text("Spatial voices preview")
         } footer: {
             Text("""
-            What you can place in space — open the Spatial tab to position these. A shared effect sums its \
-            sources, so its return is one voice carrying every instrument that feeds it; those move together.
+            A preview of what you can place in space — these rows aren't draggable here. \
+            Open the Spatial tab to position them. A shared effect sums its sources, so its return is \
+            one voice carrying every instrument that feeds it; those move together.
             """)
         }
     }

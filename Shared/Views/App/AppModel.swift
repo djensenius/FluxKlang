@@ -276,6 +276,12 @@ final class AppModel {
         newPresetRequestID += 1
     }
 
+    /// Switches to the Spatial section so the active environment's voices can be
+    /// placed in the field. The Environments screen only previews these voices.
+    func requestSpatialPlacement() {
+        section = .spatial
+    }
+
     /// Menu (⌘R) behaviour: disconnect when connected, otherwise reconnect to the
     /// last known WING if one is remembered.
     func toggleConnection() async {
