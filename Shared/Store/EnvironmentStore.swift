@@ -3,9 +3,12 @@
 //  FluxKlang
 //
 //  Owns the user's environments — named, switchable routing setups — and which
-//  one is active. Persisted to disk (and mirrored to iCloud) so a performer's
-//  per-song rigs survive across launches and devices. On first run it migrates
-//  any legacy single effects list (`effects.json`) into a "Default" environment.
+//  one is active. Each environment carries its outboard effects, spatial
+//  placements, and its own drag-and-drop canvas graph. Persisted to disk (and
+//  mirrored to iCloud) so a performer's per-song rigs survive across launches and
+//  devices. On first run it migrates any legacy single effects list
+//  (`effects.json`) into a "Default" environment and folds the old single global
+//  canvas (`chain.json`) into the active environment's graph.
 //
 
 import CoreGraphics
@@ -20,11 +23,16 @@ final class EnvironmentStore {
 
     private let fileName = "environments.json"
     private let legacyFileName = "effects.json"
+    private let legacyChainFileName = "chain.json"
     private var loaded = false
+    /// Whether the one-time fold of the old global `chain.json` into the active
+    /// environment's graph has happened. Persisted so it runs at most once.
+    private var migratedChain = false
 
     private struct Persisted: Codable, Sendable {
         var environments: [RoutingEnvironment]
         var activeID: RoutingEnvironment.ID?
+        var migratedChain: Bool?
     }
 
     // MARK: - Active environment
@@ -49,6 +57,7 @@ final class EnvironmentStore {
         if let saved = await JSONFileStore.shared.load(Persisted.self, from: fileName) {
             environments = saved.environments
             activeID = saved.activeID
+            migratedChain = saved.migratedChain ?? false
         } else if let legacy = await JSONFileStore.shared.load([Effect].self, from: legacyFileName) {
             let migrated = RoutingEnvironment(name: "Default", effects: legacy)
             environments = [migrated]
@@ -56,6 +65,23 @@ final class EnvironmentStore {
             persist()
         }
         normalizeActive()
+        await migrateLegacyChainIfNeeded()
+    }
+
+    /// One-time fold of the old single global `chain.json` into the active
+    /// environment's graph, so the per-environment canvas inherits whatever the
+    /// user had wired before environments owned their own graphs. Runs only when
+    /// the active environment has no graph yet, so it never clobbers newer work.
+    private func migrateLegacyChainIfNeeded() async {
+        guard !migratedChain else { return }
+        if let legacy = await JSONFileStore.shared.load(ChainGraph.self, from: legacyChainFileName),
+           !legacy.nodes.isEmpty,
+           let index = activeIndex(),
+           environments[index].graph.nodes.isEmpty {
+            environments[index].graph = legacy
+        }
+        migratedChain = true
+        persist()
     }
 
     /// Re-reads the persisted environments, picking up changes synced from iCloud.
@@ -170,6 +196,34 @@ final class EnvironmentStore {
         mutateEnvironment { $0.placements[voiceID] = nil }
     }
 
+    // MARK: - Active-environment canvas graph
+
+    /// The active environment's signal-chain graph (empty if there is none yet).
+    var activeGraph: ChainGraph { active?.graph ?? ChainGraph() }
+
+    /// The WING settings implied by the active environment's canvas wiring.
+    func chainWingSettings() -> [WingSetting] { active?.graph.wingSettings() ?? [] }
+
+    func addChainNode(_ node: ChainNode) {
+        mutateGraph { $0.addNode(node) }
+    }
+
+    func moveChainNode(_ id: ChainNode.ID, to position: CGPoint) {
+        mutateGraph { $0.moveNode(id, to: position) }
+    }
+
+    func removeChainNode(_ id: ChainNode.ID) {
+        mutateGraph { $0.removeNode(id) }
+    }
+
+    func connectChain(from origin: ChainPortRef, to destination: ChainPortRef) {
+        mutateGraph { $0.connect(from: origin, to: destination) }
+    }
+
+    func removeChainEdge(_ id: ChainEdge.ID) {
+        mutateGraph { $0.removeEdge(id) }
+    }
+
     // MARK: - Internals
 
     /// Guarantees there is an active environment, creating a "Default" one when
@@ -179,6 +233,15 @@ final class EnvironmentStore {
         ensureEnvironment()
         guard let index = activeIndex() else { return }
         transform(&environments[index].effects)
+        persist()
+    }
+
+    /// Guarantees there is an active environment (so wiring on the canvas always
+    /// has somewhere to live), then runs `transform` on its graph and persists.
+    private func mutateGraph(_ transform: (inout ChainGraph) -> Void) {
+        ensureEnvironment()
+        guard let index = activeIndex() else { return }
+        transform(&environments[index].graph)
         persist()
     }
 
@@ -210,7 +273,7 @@ final class EnvironmentStore {
     }
 
     private func persist() {
-        let snapshot = Persisted(environments: environments, activeID: activeID)
+        let snapshot = Persisted(environments: environments, activeID: activeID, migratedChain: migratedChain)
         Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
     }
 
