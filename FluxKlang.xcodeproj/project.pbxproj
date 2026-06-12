@@ -18,8 +18,10 @@
 		0B4C33D006DB2CBE1EC73893 /* WingValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 201D1AC5DDC73E345FD61126 /* WingValue.swift */; };
 		0C4F37EA48D1BF305A07407E /* SpatialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D75FEB93B4868C0DF38EF8B /* SpatialStore.swift */; };
 		0CD890319BEFD68B9D3FB577 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
+		0E2E23104375F5959A76C2E1 /* EnvironmentChainCanvasTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A421F8ABBA20D12B797FE1E /* EnvironmentChainCanvasTests.swift */; };
 		0E93A5C70CD0F76CCA84DA1C /* WingConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDC71263C8B839D9CBCD745 /* WingConnection.swift */; };
 		0EB682BF4676CABCE149E25B /* FaderLayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */; };
+		11002F5D94501BD3FF3476CD /* EnvironmentChainCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9079265E72AEC139DFAA760 /* EnvironmentChainCanvas.swift */; };
 		133F6DADCC26847A9B0F95C5 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CA2756FAADEE73BA7BA94C /* AppModel.swift */; };
 		140F78BB9E1B53AA55D28F0F /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = DEA9BE5822A9613871C6C436 /* SwiftOSC */; };
 		1487D59C79BD7FA946ADF40B /* SpatialRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0C58809B54E7219DC7642B /* SpatialRouting.swift */; };
@@ -62,6 +64,7 @@
 		4CA3AC68A0D760BC2E50A4F6 /* SpatialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D75FEB93B4868C0DF38EF8B /* SpatialStore.swift */; };
 		4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */; };
 		50398CD52E32A69C431C0128 /* WingIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F663ACE0B1486B2974BCC7D4 /* WingIOTests.swift */; };
+		50406EB40B88569B3C2DDF1E /* EnvironmentChainCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9079265E72AEC139DFAA760 /* EnvironmentChainCanvas.swift */; };
 		505E0F369C9A5D4FCC7AF794 /* AppIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E632BD24E2E34EF89734819 /* AppIcon.swift */; };
 		5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEC454C8E9B9862280CC236 /* SpatialTests.swift */; };
 		537ABAA1B3223F68CE0A4910 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
@@ -194,6 +197,7 @@
 		2804E2C640870C5783512077 /* FluxKlangMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlangMac.entitlements; sourceTree = "<group>"; };
 		282FD5D129226FE552419869 /* WingSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingSource.swift; sourceTree = "<group>"; };
 		29870935C9056DF72B53078F /* OutputRoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputRoutingView.swift; sourceTree = "<group>"; };
+		2A421F8ABBA20D12B797FE1E /* EnvironmentChainCanvasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChainCanvasTests.swift; sourceTree = "<group>"; };
 		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
 		35EFA96D78CE256B049568C5 /* FaderMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMath.swift; sourceTree = "<group>"; };
 		3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
@@ -268,6 +272,7 @@
 		E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangTests.swift; sourceTree = "<group>"; };
 		E6928F6E7E7024740B8C8BD4 /* EffectRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectRoutingTests.swift; sourceTree = "<group>"; };
 		E8CA2756FAADEE73BA7BA94C /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		E9079265E72AEC139DFAA760 /* EnvironmentChainCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentChainCanvas.swift; sourceTree = "<group>"; };
 		EE24226D4BF4EA8A9918DB62 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangApp.swift; sourceTree = "<group>"; };
 		F06173B51FCABC2577C3360C /* MenuBarMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarMixer.swift; sourceTree = "<group>"; };
@@ -345,6 +350,7 @@
 				AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */,
 				BE42B6C9E72F4FE274CEC425 /* Effect.swift */,
 				E2EC6F10CA4CDFF4A2E5F8C2 /* EffectRouting.swift */,
+				E9079265E72AEC139DFAA760 /* EnvironmentChainCanvas.swift */,
 				A54D9E89BD6B53D8AB55F71D /* EnvironmentVoice.swift */,
 				664F41DD22AE785D547A764C /* Equipment.swift */,
 				612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */,
@@ -529,6 +535,7 @@
 				3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */,
 				405DD99B88EED698E298E908 /* DemoModeTests.swift */,
 				E6928F6E7E7024740B8C8BD4 /* EffectRoutingTests.swift */,
+				2A421F8ABBA20D12B797FE1E /* EnvironmentChainCanvasTests.swift */,
 				44AACED6EE9123B7267BC66B /* EnvironmentSpatialTests.swift */,
 				8F6E375AA1BB152010A61F85 /* EnvironmentVoicesTests.swift */,
 				06CCF54AD33E1916E650B686 /* FaderMathTests.swift */,
@@ -721,6 +728,7 @@
 				DC1193550C7DB905D32E372D /* EffectEditor.swift in Sources */,
 				4B4ED9CC12441B0D36200569 /* EffectRouting.swift in Sources */,
 				72D7320FB6F8673568E3CDC6 /* EffectRow.swift in Sources */,
+				11002F5D94501BD3FF3476CD /* EnvironmentChainCanvas.swift in Sources */,
 				D9DD7149749251854FD1ECEF /* EnvironmentStore.swift in Sources */,
 				229BACDF042B3A64CA233615 /* EnvironmentVoice.swift in Sources */,
 				76184C91DFF361DD261322BE /* EnvironmentsView.swift in Sources */,
@@ -797,6 +805,7 @@
 				1F4AC175A300D1C912265BB6 /* EffectEditor.swift in Sources */,
 				49C80D83119D7F49FB16D056 /* EffectRouting.swift in Sources */,
 				40954D68658F4C2F4C455A32 /* EffectRow.swift in Sources */,
+				50406EB40B88569B3C2DDF1E /* EnvironmentChainCanvas.swift in Sources */,
 				306DBFFAE28012245C5A8125 /* EnvironmentStore.swift in Sources */,
 				3A86DA7E07E8B6F6B77EACF2 /* EnvironmentVoice.swift in Sources */,
 				41F900563146815E128FA446 /* EnvironmentsView.swift in Sources */,
@@ -862,6 +871,7 @@
 				85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */,
 				54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */,
 				279D7D1F7F8E5D6F49672840 /* EffectRoutingTests.swift in Sources */,
+				0E2E23104375F5959A76C2E1 /* EnvironmentChainCanvasTests.swift in Sources */,
 				F666426D1CDF456C2A270F64 /* EnvironmentSpatialTests.swift in Sources */,
 				F070CCF590EFED46DB6520BF /* EnvironmentVoicesTests.swift in Sources */,
 				E10730CD5847DC39C95AB055 /* FaderMathTests.swift in Sources */,

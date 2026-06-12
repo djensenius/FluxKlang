@@ -39,6 +39,12 @@ enum ChainGeometry {
             return ChainPorts(inputs: ["In"], outputs: ["Out"])
         case .wingOutput:
             return ChainPorts(inputs: ["In"], outputs: [])
+        case .effect:
+            return ChainPorts(inputs: ["In"], outputs: ["Out"])
+        case .effectSource:
+            return ChainPorts(inputs: [], outputs: ["Out"])
+        case .effectMain:
+            return ChainPorts(inputs: ["In"], outputs: [])
         }
     }
 

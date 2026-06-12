@@ -11,6 +11,12 @@ import CoreGraphics
 import Foundation
 
 /// What a chain node represents.
+///
+/// The first group are free-form patchbay nodes persisted in a `ChainGraph`
+/// (user gear and raw WING endpoints). The `effect*` group are the higher-level
+/// environment nodes shown on the same canvas — an outboard effect, an
+/// instrument feeding effects, and the Main — derived from the environment's
+/// `[Effect]` rather than stored in the graph, so they never get persisted here.
 enum ChainNodeKind: Codable, Hashable, Sendable {
     case equipment(UUID)
     case wingInput(Int)
@@ -18,10 +24,25 @@ enum ChainNodeKind: Codable, Hashable, Sendable {
     case wingBus(Int)
     case wingMain(Int)
     case wingOutput(Int)
+    /// An outboard effect (aux send) in the active environment.
+    case effect(UUID)
+    /// An instrument feeding one or more effects in the active environment.
+    case effectSource(UUID)
+    /// The Main bus, where effect returns land.
+    case effectMain
 
     var isWing: Bool {
         if case .equipment = self { return false }
         return true
+    }
+
+    /// Whether this node belongs to the environment's effect overlay (derived
+    /// from `[Effect]`) rather than the persisted free-form patchbay graph.
+    var isEffectDomain: Bool {
+        switch self {
+        case .effect, .effectSource, .effectMain: return true
+        default: return false
+        }
     }
 }
 

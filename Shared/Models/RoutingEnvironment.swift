@@ -41,28 +41,36 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
     /// WING endpoints) and the wires between them. Each environment owns its own
     /// canvas, so switching environments swaps the whole patch.
     var graph: ChainGraph
+    /// Canvas positions for the environment's effect overlay — the effect,
+    /// instrument-source, and Main nodes that author `effects` visually. Keyed by
+    /// stable node id (see `EnvironmentChainCanvas`). A key's mere presence also
+    /// places an as-yet-unwired source node on the canvas. Pure UI state: it never
+    /// affects the routing the environment pushes to the console.
+    var effectLayout: [String: CGPoint]
 
     init(
         id: UUID = UUID(),
         name: String,
         effects: [Effect] = [],
         placements: [String: VoicePlacement] = [:],
-        graph: ChainGraph = ChainGraph()
+        graph: ChainGraph = ChainGraph(),
+        effectLayout: [String: CGPoint] = [:]
     ) {
         self.id = id
         self.name = name
         self.effects = effects
         self.placements = placements
         self.graph = graph
+        self.effectLayout = effectLayout
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, effects, placements, graph
+        case id, name, effects, placements, graph, effectLayout
     }
 
     // Keeps environments.json files saved before spatial placement (and the
-    // per-environment canvas) existed loadable: a missing `placements` map or
-    // `graph` decodes as empty.
+    // per-environment canvas) existed loadable: a missing `placements` map,
+    // `graph`, or `effectLayout` decodes as empty.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -70,14 +78,16 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
         effects = try container.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         placements = try container.decodeIfPresent([String: VoicePlacement].self, forKey: .placements) ?? [:]
         graph = try container.decodeIfPresent(ChainGraph.self, forKey: .graph) ?? ChainGraph()
+        effectLayout = try container.decodeIfPresent([String: CGPoint].self, forKey: .effectLayout) ?? [:]
     }
 
     /// A deep copy under a new identity, with fresh effect IDs so the duplicate's
     /// internal serial-chain links keep pointing inside the copy rather than at
-    /// the original's effects. Effect-return placements are remapped onto the new
-    /// effect IDs; source placements (keyed by equipment) carry over unchanged.
-    /// The canvas graph is copied verbatim — its nodes reference gear and WING
-    /// endpoints, not effects, so it needs no remapping.
+    /// the original's effects. Effect-return placements and effect-node layout
+    /// entries are remapped onto the new effect IDs; source placements (keyed by
+    /// equipment) carry over unchanged. The canvas graph is copied verbatim — its
+    /// nodes reference gear and WING endpoints, not effects, so it needs no
+    /// remapping.
     func duplicated(named newName: String) -> RoutingEnvironment {
         var remap: [Effect.ID: Effect.ID] = [:]
         for effect in effects {
@@ -95,6 +105,16 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
         for (key, placement) in placements {
             copiedPlacements[EnvironmentVoice.remap(voiceID: key, effects: remap)] = placement
         }
-        return RoutingEnvironment(name: newName, effects: copies, placements: copiedPlacements, graph: graph)
+        var copiedLayout: [String: CGPoint] = [:]
+        for (key, point) in effectLayout {
+            copiedLayout[EnvironmentChainCanvas.remap(nodeKey: key, effects: remap)] = point
+        }
+        return RoutingEnvironment(
+            name: newName,
+            effects: copies,
+            placements: copiedPlacements,
+            graph: graph,
+            effectLayout: copiedLayout
+        )
     }
 }
