@@ -25,9 +25,9 @@ final class AppModel {
     /// The drag-and-drop signal-chain graph.
     let chain = ChainStore()
 
-    /// User-declared effects: outboard gear instruments can be sent to, with
-    /// the bridging buses and returns managed automatically.
-    let effects = EffectStore()
+    /// Named, switchable routing setups. Each environment bundles outboard
+    /// effects and how instruments feed them; switching pushes the whole rig.
+    let environments = EnvironmentStore()
 
     /// Saved presets / scene snapshots.
     let presets = PresetStore()
@@ -79,7 +79,7 @@ final class AppModel {
         await faderLayout.load()
         await equipment.load()
         await chain.load()
-        await effects.load()
+        await environments.load()
         await presets.load()
         await spatial.load()
         startObservingCloudChanges()
@@ -99,7 +99,7 @@ final class AppModel {
         await faderLayout.reload()
         await equipment.reload()
         await chain.reload()
-        await effects.reload()
+        await environments.reload()
         await presets.reload()
         await spatial.reload()
     }
@@ -109,18 +109,18 @@ final class AppModel {
         await wing.apply(chain.wingSettings())
     }
 
-    /// The WING settings implied by the user's effects, resolved against the
-    /// current channel rig (which instrument lives on which channel).
-    func effectSettings() -> [WingSetting] {
+    /// The WING settings implied by the active environment's effects, resolved
+    /// against the current channel rig (which instrument lives on which channel).
+    func environmentSettings() -> [WingSetting] {
         EffectRouting.settings(
-            for: effects.effects,
+            for: environments.activeEffects,
             assignments: Equipment.channelAssignments(from: equipment.items)
         )
     }
 
-    /// Applies the effects' implied aux-send routing to the WING.
-    func applyEffects() async {
-        await wing.apply(effectSettings())
+    /// Applies the active environment's implied send/return routing to the WING.
+    func applyEnvironment() async {
+        await wing.apply(environmentSettings())
     }
 
     /// Recalls a preset by applying its settings to the WING.
