@@ -123,6 +123,16 @@ final class AppModel {
         await wing.apply(environmentSettings())
     }
 
+    /// The placeable voices of the active environment, derived from its routing
+    /// graph (dry sources plus shared effect returns).
+    func environmentVoices() -> [EnvironmentVoice] {
+        guard let environment = environments.active else { return [] }
+        return EnvironmentVoices.voices(
+            for: environment,
+            assignments: Equipment.channelAssignments(from: equipment.items)
+        )
+    }
+
     /// Recalls a preset by applying its settings to the WING.
     func recall(_ preset: Preset) async {
         await wing.apply(preset.settings)

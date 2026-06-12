@@ -162,7 +162,7 @@ enum EffectRouting {
     }
 
     /// The effect this one feeds, if it names a valid, non-self, non-cyclic target.
-    private static func resolvedDestination(for effect: Effect, effectsByID: [Effect.ID: Effect]) -> Effect? {
+    static func resolvedDestination(for effect: Effect, effectsByID: [Effect.ID: Effect]) -> Effect? {
         guard let targetID = effect.destinationEffectID,
               targetID != effect.id,
               let target = effectsByID[targetID],

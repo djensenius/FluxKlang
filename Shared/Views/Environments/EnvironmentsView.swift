@@ -23,6 +23,7 @@ struct EnvironmentsView: View {
     private var store: EnvironmentStore { appModel.environments }
     private var environments: [RoutingEnvironment] { store.environments }
     private var effects: [Effect] { store.activeEffects }
+    private var voices: [EnvironmentVoice] { appModel.environmentVoices() }
     private var allocations: [Effect.ID: EffectRouting.Allocation] {
         EffectRouting.allocations(for: effects)
     }
@@ -77,6 +78,9 @@ struct EnvironmentsView: View {
         List {
             environmentSection
             effectsSection
+            if !voices.isEmpty {
+                voicesSection
+            }
         }
     }
 
@@ -139,6 +143,21 @@ struct EnvironmentsView: View {
             Text("""
             Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
             Drag to reorder, or right-click an effect to move it, edit it, or delete it.
+            """)
+        }
+    }
+
+    private var voicesSection: some View {
+        Section {
+            ForEach(voices) { voice in
+                VoiceRow(voice: voice)
+            }
+        } header: {
+            Text("Spatial voices")
+        } footer: {
+            Text("""
+            What you'll be able to place in space. A shared effect sums its sources, so its return is \
+            one voice carrying every instrument that feeds it — those can't be moved apart.
             """)
         }
     }
@@ -281,6 +300,43 @@ struct EnvironmentsView: View {
             await appModel.applyEnvironment()
             isApplying = false
         }
+    }
+}
+
+// MARK: - Voice row
+
+private struct VoiceRow: View {
+    let voice: EnvironmentVoice
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: voice.kind == .source ? "pianokeys" : "waveform")
+                .foregroundStyle(voice.kind == .source ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(voice.name)
+                    .font(.subheadline)
+                if voice.isShared {
+                    Text(voice.sourcesLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if !voice.channels.isEmpty {
+                Text(channelLabel)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var channelLabel: String {
+        let channels = voice.channels.map(String.init).joined(separator: "/")
+        let prefix = voice.kind == .source ? "Ch" : "Rtn"
+        return "\(prefix) \(channels)"
     }
 }
 
