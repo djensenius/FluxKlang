@@ -136,6 +136,16 @@ actor DemoWingTransport: WingTransporting {
         for (offset, speakerName) in speakerNames.enumerated() {
             store[WingAddress.name(.bus, offset + 1)] = .string(speakerName)
         }
+        // Best-guess physical I/O connector names so the demo "assigns" gear to
+        // its inputs and labels its outputs offline (provisional addresses; see
+        // WingAddress). Each LOCAL input carries the instrument on the matching
+        // channel (the demo patches channel c from local input c).
+        for connector in 1...WingSourceGroup.local.count {
+            store[WingAddress.inputName(connector)] = .string(channelNames[connector] ?? "Input \(connector)")
+        }
+        for connector in 1...WingAddress.localOutputCount {
+            store[WingAddress.outputName(connector)] = .string("Output \(connector)")
+        }
         // Hard-pan the stereo rig channels (L/R) and centre the mono ones so the
         // demo images correctly offline.
         for (channel, pan) in channelPans {
