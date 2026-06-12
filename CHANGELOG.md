@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/djensenius/FluxKlang/compare/v0.0.3...v0.0.4) (2026-06-12)
+
+
+### Features
+
+* switchable Environments — effects routing, spatial placement, WING I/O reading ([#13](https://github.com/djensenius/FluxKlang/issues/13)) ([bf2c167](https://github.com/djensenius/FluxKlang/commit/bf2c167fd0ec3879d8bc62e0f8f8eb4a663c3e72))
+
 ## [0.0.3](https://github.com/djensenius/FluxKlang/compare/v0.0.2...v0.0.3) (2026-06-11)
 
 
