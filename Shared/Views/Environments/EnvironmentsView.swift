@@ -121,12 +121,14 @@ struct EnvironmentsView: View {
                             equipment: appModel.equipment
                         )
                     }
-                    .buttonStyle(.plain)
-                    Image(systemName: "line.3.horizontal")
-                        .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                        .help("Drag to reorder")
+.buttonStyle(.plain)
+#if os(macOS)
+Image(systemName: "line.3.horizontal")
+    .font(.body)
+    .foregroundStyle(.tertiary)
+    .accessibilityHidden(true)
+    .help("Drag to reorder")
+#endif
                 }
                 .contextMenu {
                     Button { editing = effect } label: { Label("Edit…", systemImage: "pencil") }
