@@ -56,18 +56,31 @@ struct EffectsView: View {
     private var list: some View {
         List {
             Section {
-                ForEach(effects) { effect in
+                ForEach(Array(effects.enumerated()), id: \.element.id) { index, effect in
                     Button { editing = effect } label: {
                         EffectRow(effect: effect, allocation: allocations[effect.id], equipment: appModel.equipment)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { editing = effect } label: { Label("Edit…", systemImage: "pencil") }
+                        Divider()
+                        Button { moveUp(index) } label: { Label("Move Up", systemImage: "arrow.up") }
+                            .disabled(index == 0)
+                        Button { moveDown(index) } label: { Label("Move Down", systemImage: "arrow.down") }
+                            .disabled(index == effects.count - 1)
+                        Divider()
+                        Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+                    }
                 }
                 .onDelete { appModel.effects.remove(at: $0) }
                 .onMove { appModel.effects.move(fromOffsets: $0, toOffset: $1) }
             } footer: {
                 Text("""
-                Buses and return channels are assigned automatically, counting down from the top so your \
-                channel rig stays free. Reorder to change which effect claims which bus.
+                Effects claim buses from the top down — the first uses Bus 16, the next Bus 15, and so on. \
+                Drag to reorder, or right-click an effect to move it or delete it.
                 """)
             }
         }
@@ -126,6 +139,20 @@ struct EffectsView: View {
         editing = Effect(name: "Effect \(effects.count + 1)")
     }
 
+    private func moveUp(_ index: Int) {
+        guard index > 0 else { return }
+        appModel.effects.move(fromOffsets: IndexSet(integer: index), toOffset: index - 1)
+    }
+
+    private func moveDown(_ index: Int) {
+        guard index < effects.count - 1 else { return }
+        appModel.effects.move(fromOffsets: IndexSet(integer: index), toOffset: index + 2)
+    }
+
+    private func delete(_ effect: Effect) {
+        appModel.effects.remove(effect)
+    }
+
     private func applyEffects() {
         isApplying = true
         Task {
@@ -152,22 +179,21 @@ private struct EffectRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(detail)
+            Text(instrumentSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Label(routingSummary, systemImage: "arrow.triangle.branch")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
     }
 
-    private var detail: String {
-        var parts: [String] = []
+    private var instrumentSummary: String {
         let count = effect.sourceInstruments.count
-        parts.append(count == 1 ? "1 instrument" : "\(count) instruments")
-        if let names = instrumentNames {
-            parts.append(names)
-        }
-        if let busText { parts.append(busText) }
-        return parts.joined(separator: " · ")
+        let prefix = count == 1 ? "1 instrument" : "\(count) instruments"
+        guard let names = instrumentNames else { return prefix }
+        return "\(prefix): \(names)"
     }
 
     private var instrumentNames: String? {
@@ -177,12 +203,15 @@ private struct EffectRow: View {
         return names.count > 2 ? "\(shown) +\(names.count - 2)" : shown
     }
 
-    private var busText: String? {
-        guard let allocation else { return nil }
-        guard let bus = allocation.buses.first else { return "No free bus" }
-        let buses = effect.isStereo && allocation.buses.count > 1 ? "Bus \(bus)/\(allocation.buses[1])" : "Bus \(bus)"
+    /// A compact left-to-right description of the signal path.
+    private var routingSummary: String {
         let outs = effect.sendOutputs.map(String.init).joined(separator: "/")
-        return "\(buses) → Out \(outs)"
+        let ins = effect.returnInputs.map(String.init).joined(separator: "/")
+        guard let allocation, let bus = allocation.buses.first else {
+            return "No free bus available"
+        }
+        let buses = effect.isStereo && allocation.buses.count > 1 ? "\(bus)/\(allocation.buses[1])" : "\(bus)"
+        return "Bus \(buses) → Out \(outs) → In \(ins) → Main"
     }
 }
 
@@ -215,32 +244,14 @@ private struct EffectEditor: View {
                     Toggle("Stereo", isOn: $draft.isStereo)
                 }
 
-                Section {
-                    jackStepper("Send output (left)", binding: outputBinding(0), range: Self.outputRange)
-                    if draft.isStereo {
-                        jackStepper("Send output (right)", binding: outputBinding(1), range: Self.outputRange)
-                    }
-                } header: {
-                    Text(draft.isStereo ? "WING Outputs → Effect Input" : "WING Output → Effect Input")
-                } footer: {
-                    Text("The physical output jacks your effect's input is plugged into.")
+                Section("Signal flow") {
+                    flowStep(1, "The instruments you pick feed a private bus.")
+                    flowStep(2, "That bus is sent out the WING output(s) into your effect.")
+                    flowStep(3, "Your effect's output comes back on the WING input(s).")
+                    flowStep(4, "The return becomes a channel, mixed into the Main.")
                 }
 
                 Section {
-                    jackStepper("Return input (left)", binding: inputBinding(0), range: Self.inputRange)
-                    if draft.isStereo {
-                        jackStepper("Return input (right)", binding: inputBinding(1), range: Self.inputRange)
-                    }
-                } header: {
-                    Text(draft.isStereo ? "Effect Output → WING Inputs" : "Effect Output → WING Input")
-                } footer: {
-                    Text("""
-                    The physical input jacks your effect returns on. FluxKlang routes them to the main \
-                    automatically.
-                    """)
-                }
-
-                Section("Instruments") {
                     if appModel.equipment.items.isEmpty {
                         Text("No equipment in your library yet.")
                             .foregroundStyle(.secondary)
@@ -249,6 +260,36 @@ private struct EffectEditor: View {
                             Toggle(item.name, isOn: instrumentBinding(item.id))
                         }
                     }
+                } header: {
+                    Text("1 · Instruments")
+                } footer: {
+                    Text("These instruments are sent to the effect in parallel; their dry signal is untouched.")
+                }
+
+                Section {
+                    if draft.isStereo {
+                        jackStepper("Left output", binding: outputBinding(0), range: Self.outputRange)
+                        jackStepper("Right output", binding: outputBinding(1), range: Self.outputRange)
+                    } else {
+                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange)
+                    }
+                } header: {
+                    Text("2 · Out to effect")
+                } footer: {
+                    Text("The physical WING output jack(s) your effect's input is plugged into.")
+                }
+
+                Section {
+                    if draft.isStereo {
+                        jackStepper("Left input", binding: inputBinding(0), range: Self.inputRange)
+                        jackStepper("Right input", binding: inputBinding(1), range: Self.inputRange)
+                    } else {
+                        jackStepper("WING input", binding: inputBinding(0), range: Self.inputRange)
+                    }
+                } header: {
+                    Text("3 · Back from effect")
+                } footer: {
+                    Text("The physical WING input jack(s) your effect returns on, routed to the Main for you.")
                 }
 
                 if let onDelete {
@@ -260,6 +301,7 @@ private struct EffectEditor: View {
                     }
                 }
             }
+            .formStyle(.grouped)
             .navigationTitle(isNew ? "New Effect" : "Edit Effect")
             #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -278,13 +320,26 @@ private struct EffectEditor: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 380, minHeight: 460)
+        .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 600)
         #endif
     }
 
+    private func flowStep(_ number: Int, _ text: String) -> some View {
+        Label {
+            Text(text)
+        } icon: {
+            Image(systemName: "\(number).circle.fill")
+                .foregroundStyle(.tint)
+        }
+        .font(.subheadline)
+    }
+
     private func jackStepper(_ title: String, binding: Binding<Int>, range: ClosedRange<Int>) -> some View {
-        Stepper(value: binding, in: range) {
-            LabeledContent(title, value: "\(binding.wrappedValue)")
+        LabeledContent(title) {
+            Stepper(value: binding, in: range) {
+                Text(binding.wrappedValue.description)
+                    .monospacedDigit()
+            }
         }
     }
 

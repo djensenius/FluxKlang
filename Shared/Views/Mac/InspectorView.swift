@@ -30,7 +30,6 @@ struct InspectorView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Inspector")
         .onChange(of: appModel.selectedFaderID) { _, _ in syncDraft() }
         .onAppear { syncDraft() }
     }
