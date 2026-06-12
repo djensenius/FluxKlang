@@ -35,18 +35,25 @@ enum EffectRouting {
     }
 
     /// Deterministically reserves a bus (pair) and return channel (pair) for each
-    /// effect, in list order, counting down from the top of each pool.
+    /// effect, in list order, counting down from the top of each pool. Allocation
+    /// is all-or-nothing per effect: an effect that can't fit a full set (e.g.
+    /// when there are more effects than free buses) gets an empty allocation and
+    /// is skipped, rather than collapsing a stereo effect onto a single bus.
     static func allocations(for effects: [Effect]) -> [Effect.ID: Allocation] {
         var result: [Effect.ID: Allocation] = [:]
-        var bus = highestBus
-        var channel = highestReturnChannel
+        var nextBus = highestBus
+        var nextChannel = highestReturnChannel
         for effect in effects {
             let width = effect.isStereo ? 2 : 1
+            guard nextBus - width + 1 >= 1, nextChannel - width + 1 >= 1 else {
+                result[effect.id] = Allocation(buses: [], returnChannels: [])
+                continue
+            }
             var buses: [Int] = []
             var channels: [Int] = []
             for _ in 0..<width {
-                if bus >= 1 { buses.append(bus); bus -= 1 }
-                if channel >= 1 { channels.append(channel); channel -= 1 }
+                buses.append(nextBus); nextBus -= 1
+                channels.append(nextChannel); nextChannel -= 1
             }
             result[effect.id] = Allocation(buses: buses, returnChannels: channels)
         }

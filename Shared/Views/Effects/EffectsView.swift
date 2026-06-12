@@ -178,7 +178,8 @@ private struct EffectRow: View {
     }
 
     private var busText: String? {
-        guard let allocation, let bus = allocation.buses.first else { return nil }
+        guard let allocation else { return nil }
+        guard let bus = allocation.buses.first else { return "No free bus" }
         let buses = effect.isStereo && allocation.buses.count > 1 ? "Bus \(bus)/\(allocation.buses[1])" : "Bus \(bus)"
         let outs = effect.sendOutputs.map(String.init).joined(separator: "/")
         return "\(buses) → Out \(outs)"
@@ -269,7 +270,7 @@ private struct EffectEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(draft.normalizingJacks())
+                        onSave(sanitizedDraft())
                         dismiss()
                     }
                     .disabled(draft.name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -295,30 +296,53 @@ private struct EffectEditor: View {
     }
 
     private func outputBinding(_ index: Int) -> Binding<Int> {
-        jackBinding(\.sendOutputs, index)
+        jackBinding(\.sendOutputs, index, range: Self.outputRange)
     }
 
     private func inputBinding(_ index: Int) -> Binding<Int> {
-        jackBinding(\.returnInputs, index)
+        jackBinding(\.returnInputs, index, range: Self.inputRange)
     }
 
-    private func jackBinding(_ keyPath: WritableKeyPath<Effect, [Int]>, _ index: Int) -> Binding<Int> {
+    private func jackBinding(
+        _ keyPath: WritableKeyPath<Effect, [Int]>,
+        _ index: Int,
+        range: ClosedRange<Int>
+    ) -> Binding<Int> {
         Binding(
             get: {
                 let values = draft[keyPath: keyPath]
-                if values.indices.contains(index) { return values[index] }
-                if index == 1, let first = values.first { return first + 1 }
-                return index + 1
+                let raw: Int
+                if values.indices.contains(index) {
+                    raw = values[index]
+                } else if index == 1, let first = values.first {
+                    raw = first + 1
+                } else {
+                    raw = index + 1
+                }
+                return clamp(raw, to: range)
             },
             set: { newValue in
                 var values = draft[keyPath: keyPath]
                 while values.count <= index {
                     values.append((values.last ?? 0) + 1)
                 }
-                values[index] = newValue
+                values[index] = clamp(newValue, to: range)
                 draft[keyPath: keyPath] = values
             }
         )
+    }
+
+    /// The draft with its jack arrays sized to the stereo/mono width and every
+    /// jack clamped to a physically valid socket number.
+    private func sanitizedDraft() -> Effect {
+        var effect = draft.normalizingJacks()
+        effect.sendOutputs = effect.sendOutputs.map { clamp($0, to: Self.outputRange) }
+        effect.returnInputs = effect.returnInputs.map { clamp($0, to: Self.inputRange) }
+        return effect
+    }
+
+    private func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 }
 

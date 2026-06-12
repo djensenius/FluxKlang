@@ -128,4 +128,24 @@ struct EffectRoutingTests {
     @Test func emptyEffectListProducesNoSettings() {
         #expect(EffectRouting.settings(for: [], assignments: assignments).isEmpty)
     }
+
+    @Test func overCapacityStereoEffectIsSkippedRatherThanHalfAllocated() {
+        // Eight stereo effects exhaust all 16 buses; a ninth can't fit a full
+        // pair, so it gets an empty allocation and produces no routing — rather
+        // than collapsing both legs onto a single shared bus.
+        var effects = (0..<8).map { Effect(name: "FX \($0)", isStereo: true) }
+        let overflow = Effect(name: "Overflow", isStereo: true, sourceInstruments: [stereoInstrument.id])
+        effects.append(overflow)
+
+        let allocations = EffectRouting.allocations(for: effects)
+        for effect in effects.prefix(8) {
+            #expect(allocations[effect.id]?.buses.count == 2)
+        }
+        #expect(allocations[overflow.id]?.buses.isEmpty == true)
+
+        // The overflow effect is the only one with a source, so if it were
+        // (incorrectly) routed there would be sends; being skipped, there are none.
+        let settings = EffectRouting.settings(for: effects, assignments: assignments)
+        #expect(!settings.contains { $0.address.contains("/send/") })
+    }
 }
