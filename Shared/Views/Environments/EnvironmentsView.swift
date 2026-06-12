@@ -149,11 +149,22 @@ Image(systemName: "line.3.horizontal")
         } header: {
             Text("Effects")
         } footer: {
-            Text("""
-            Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
-            Drag the grip handle to reorder, or right-click an effect to move it, edit it, or delete it.
-            """)
+            Text(effectsFooterText)
         }
+    }
+
+    private var effectsFooterText: LocalizedStringKey {
+        #if os(macOS)
+        """
+        Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
+        Drag the grip handle to reorder, or right-click an effect to move it, edit it, or delete it.
+        """
+        #else
+        """
+        Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
+        Tap Edit to reorder, or touch and hold an effect to move it, edit it, or delete it.
+        """
+        #endif
     }
 
     private var voicesSection: some View {
