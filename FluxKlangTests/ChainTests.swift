@@ -6,130 +6,123 @@
 import Testing
 @testable import FluxKlang
 
-@MainActor
 struct ChainTests {
     private struct Fixture {
-        let store: ChainStore
+        var graph: ChainGraph
         let inputA: ChainNode
         let inputB: ChainNode
         let channel: ChainNode
     }
 
     private func makeFixture() -> Fixture {
-        let store = ChainStore()
+        var graph = ChainGraph()
         let inputA = ChainNode(kind: .wingInput(1), title: "Local 1", position: .zero)
         let inputB = ChainNode(kind: .wingInput(2), title: "Local 2", position: .zero)
         let channel = ChainNode(kind: .wingChannel(1), title: "Channel 1", position: .zero)
-        store.addNode(inputA)
-        store.addNode(inputB)
-        store.addNode(channel)
-        return Fixture(store: store, inputA: inputA, inputB: inputB, channel: channel)
+        graph.addNode(inputA)
+        graph.addNode(inputB)
+        graph.addNode(channel)
+        return Fixture(graph: graph, inputA: inputA, inputB: inputB, channel: channel)
     }
 
     @Test func connectReplacesExistingWireIntoSameInput() {
-        let fixture = makeFixture()
-        let store = fixture.store
+        var fixture = makeFixture()
         let channelInput = ChainPortRef(nodeID: fixture.channel.id, side: .input, port: 0)
-        store.connect(from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0), to: channelInput)
-        store.connect(from: ChainPortRef(nodeID: fixture.inputB.id, side: .output, port: 0), to: channelInput)
-        #expect(store.graph.edges.count == 1)
-        #expect(store.graph.edges.first?.from.nodeID == fixture.inputB.id)
+        fixture.graph.connect(from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0), to: channelInput)
+        fixture.graph.connect(from: ChainPortRef(nodeID: fixture.inputB.id, side: .output, port: 0), to: channelInput)
+        #expect(fixture.graph.edges.count == 1)
+        #expect(fixture.graph.edges.first?.from.nodeID == fixture.inputB.id)
     }
 
     @Test func connectAllowsFanInIntoSummingDestination() {
-        let fixture = makeFixture()
-        let store = fixture.store
+        var fixture = makeFixture()
         let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
-        store.addNode(bus)
+        fixture.graph.addNode(bus)
         let busInput = ChainPortRef(nodeID: bus.id, side: .input, port: 0)
-        store.connect(from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0), to: busInput)
-        store.connect(from: ChainPortRef(nodeID: fixture.inputB.id, side: .output, port: 0), to: busInput)
+        fixture.graph.connect(from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0), to: busInput)
+        fixture.graph.connect(from: ChainPortRef(nodeID: fixture.inputB.id, side: .output, port: 0), to: busInput)
         // A bus sums its sources, so both wires survive (no replacement).
-        #expect(store.graph.edges.count == 2)
+        #expect(fixture.graph.edges.count == 2)
     }
 
     @Test func connectIgnoresDuplicateWire() {
-        let fixture = makeFixture()
-        let store = fixture.store
+        var fixture = makeFixture()
         let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
-        store.addNode(bus)
+        fixture.graph.addNode(bus)
         let origin = ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0)
         let busInput = ChainPortRef(nodeID: bus.id, side: .input, port: 0)
-        store.connect(from: origin, to: busInput)
-        store.connect(from: origin, to: busInput)
-        #expect(store.graph.edges.count == 1)
+        fixture.graph.connect(from: origin, to: busInput)
+        fixture.graph.connect(from: origin, to: busInput)
+        #expect(fixture.graph.edges.count == 1)
     }
 
     @Test func connectRejectsInputToOutput() {
-        let fixture = makeFixture()
-        let store = fixture.store
+        var fixture = makeFixture()
         // Swapped sides: not a valid output → input connection.
-        store.connect(
+        fixture.graph.connect(
             from: ChainPortRef(nodeID: fixture.channel.id, side: .input, port: 0),
             to: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0)
         )
-        #expect(store.graph.edges.isEmpty)
+        #expect(fixture.graph.edges.isEmpty)
     }
 
     @Test func removeNodeDropsIncidentEdges() {
-        let fixture = makeFixture()
-        let store = fixture.store
-        store.connect(
+        var fixture = makeFixture()
+        fixture.graph.connect(
             from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: fixture.channel.id, side: .input, port: 0)
         )
-        #expect(store.graph.edges.count == 1)
-        store.removeNode(fixture.channel.id)
-        #expect(store.graph.edges.isEmpty)
-        #expect(store.graph.nodes.count == 2)
+        #expect(fixture.graph.edges.count == 1)
+        fixture.graph.removeNode(fixture.channel.id)
+        #expect(fixture.graph.edges.isEmpty)
+        #expect(fixture.graph.nodes.count == 2)
     }
 
     @Test func translatesChannelToMainAssignment() {
-        let fixture = makeFixture()
-        let store = fixture.store
+        var fixture = makeFixture()
         let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)
-        store.addNode(main)
-        store.connect(
+        fixture.graph.addNode(main)
+        fixture.graph.connect(
             from: ChainPortRef(nodeID: fixture.inputA.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: fixture.channel.id, side: .input, port: 0)
         )
-        store.connect(
+        fixture.graph.connect(
             from: ChainPortRef(nodeID: fixture.channel.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: main.id, side: .input, port: 0)
         )
-        let addresses = Set(store.wingSettings().map(\.address))
+        let addresses = Set(fixture.graph.wingSettings().map(\.address))
         #expect(addresses.contains(WingAddress.channelSourceGroup(1)))
         #expect(addresses.contains(WingAddress.mainOn(.channel, 1, toMain: 1)))
     }
 
     @Test func translatesMainToOutputPatch() {
-        let store = ChainStore()
+        var graph = ChainGraph()
         let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)
         let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
-        store.addNode(main)
-        store.addNode(output)
-        store.connect(
+        graph.addNode(main)
+        graph.addNode(output)
+        graph.connect(
             from: ChainPortRef(nodeID: main.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
         )
         // Wiring Main → a physical output patches the output's source — i.e. how
         // the chain "reaches the speakers".
-        let settings = store.wingSettings()
+        let settings = graph.wingSettings()
         #expect(settings.contains { $0.address == WingAddress.outputSourceGroup(3) && $0.value == .string("MAIN") })
         #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(3) && $0.value == .int(1) })
     }
 
     @Test func translatesBusToOutputPatch() {
-        let store = ChainStore()
+        var graph = ChainGraph()
         let bus = ChainNode(kind: .wingBus(2), title: "Bus 2", position: .zero)
         let output = ChainNode(kind: .wingOutput(5), title: "Output 5", position: .zero)
-        store.addNode(bus)
-        store.addNode(output)
-        store.connect(
+        graph.addNode(bus)
+        graph.addNode(output)
+        graph.connect(
             from: ChainPortRef(nodeID: bus.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
         )
-        let settings = store.wingSettings()
+        let settings = graph.wingSettings()
         #expect(settings.contains { $0.address == WingAddress.outputSourceGroup(5) && $0.value == .string("BUS") })
         #expect(settings.contains { $0.address == WingAddress.outputSourceIndex(5) && $0.value == .int(2) })
     }
@@ -138,34 +131,34 @@ struct ChainTests {
         // A raw channel is not a valid WING output source group, so wiring a
         // channel straight to a physical output yields no OSC patch — the chain
         // must reach the speakers via a bus or main.
-        let store = ChainStore()
+        var graph = ChainGraph()
         let channel = ChainNode(kind: .wingChannel(1), title: "Channel 1", position: .zero)
         let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
-        store.addNode(channel)
-        store.addNode(output)
-        store.connect(
+        graph.addNode(channel)
+        graph.addNode(output)
+        graph.connect(
             from: ChainPortRef(nodeID: channel.id, side: .output, port: 0),
             to: ChainPortRef(nodeID: output.id, side: .input, port: 0)
         )
-        let settings = store.wingSettings()
+        let settings = graph.wingSettings()
         #expect(!settings.contains { $0.address == WingAddress.outputSourceGroup(3) })
         #expect(!settings.contains { $0.address == WingAddress.outputSourceIndex(3) })
     }
 
     @Test func connectReplacesExistingWireIntoSameOutput() {
-        let store = ChainStore()
+        var graph = ChainGraph()
         let main = ChainNode(kind: .wingMain(1), title: "Main", position: .zero)
         let bus = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
         let output = ChainNode(kind: .wingOutput(3), title: "Output 3", position: .zero)
-        store.addNode(main)
-        store.addNode(bus)
-        store.addNode(output)
+        graph.addNode(main)
+        graph.addNode(bus)
+        graph.addNode(output)
         let outputInput = ChainPortRef(nodeID: output.id, side: .input, port: 0)
-        store.connect(from: ChainPortRef(nodeID: main.id, side: .output, port: 0), to: outputInput)
-        store.connect(from: ChainPortRef(nodeID: bus.id, side: .output, port: 0), to: outputInput)
+        graph.connect(from: ChainPortRef(nodeID: main.id, side: .output, port: 0), to: outputInput)
+        graph.connect(from: ChainPortRef(nodeID: bus.id, side: .output, port: 0), to: outputInput)
         // A physical output is a single 1:1 source patch, so the second wire
         // replaces the first rather than producing an ambiguous fan-in.
-        #expect(store.graph.edges.count == 1)
-        #expect(store.graph.edges.first?.from.nodeID == bus.id)
+        #expect(graph.edges.count == 1)
+        #expect(graph.edges.first?.from.nodeID == bus.id)
     }
 }

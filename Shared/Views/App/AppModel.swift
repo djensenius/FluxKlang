@@ -23,11 +23,9 @@ final class AppModel {
     /// User-editable equipment library for the chain builder.
     let equipment = EquipmentStore()
 
-    /// The drag-and-drop signal-chain graph.
-    let chain = ChainStore()
-
     /// Named, switchable routing setups. Each environment bundles outboard
-    /// effects and how instruments feed them; switching pushes the whole rig.
+    /// effects, how instruments feed them, and its own drag-and-drop canvas
+    /// graph; switching pushes the whole rig.
     let environments = EnvironmentStore()
 
     /// Saved presets / scene snapshots.
@@ -79,7 +77,6 @@ final class AppModel {
     func loadStores() async {
         await faderLayout.load()
         await equipment.load()
-        await chain.load()
         await environments.load()
         await presets.load()
         await spatial.load()
@@ -99,15 +96,14 @@ final class AppModel {
     func reloadStores() async {
         await faderLayout.reload()
         await equipment.reload()
-        await chain.reload()
         await environments.reload()
         await presets.reload()
         await spatial.reload()
     }
 
-    /// Applies the chain graph's implied routing to the WING.
+    /// Applies the active environment's canvas wiring to the WING.
     func applyChainRouting() async {
-        await wing.apply(chain.wingSettings())
+        await wing.apply(environments.chainWingSettings())
     }
 
     /// The WING settings implied by the active environment: its effects' send/

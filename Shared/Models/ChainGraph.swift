@@ -67,7 +67,7 @@ struct ChainEdge: Identifiable, Codable, Hashable, Sendable {
 }
 
 /// The full chain: nodes plus the wires between them.
-struct ChainGraph: Codable, Sendable {
+struct ChainGraph: Codable, Hashable, Sendable {
     var nodes: [ChainNode]
     var edges: [ChainEdge]
 
@@ -78,5 +78,61 @@ struct ChainGraph: Codable, Sendable {
 
     func node(_ id: UUID) -> ChainNode? {
         nodes.first { $0.id == id }
+    }
+}
+
+// MARK: - Editing
+
+extension ChainGraph {
+    /// Adds a node to the canvas.
+    mutating func addNode(_ node: ChainNode) {
+        nodes.append(node)
+    }
+
+    /// Moves a node to a new canvas position.
+    mutating func moveNode(_ id: UUID, to position: CGPoint) {
+        guard let index = nodes.firstIndex(where: { $0.id == id }) else { return }
+        nodes[index].position = position
+    }
+
+    /// Removes a node and every wire incident to it.
+    mutating func removeNode(_ id: UUID) {
+        nodes.removeAll { $0.id == id }
+        edges.removeAll { $0.from.nodeID == id || $0.to.nodeID == id }
+    }
+
+    /// Connects an output port to an input port. WING channel inputs and physical
+    /// WING outputs are 1:1 source patches, so a new wire replaces any existing one
+    /// into them; all other destinations (gear inputs, summing buses, mains) allow
+    /// fan-in — multiple sources can converge — but never exact-duplicate wires.
+    /// No-op if the connection isn't output → input.
+    mutating func connect(from origin: ChainPortRef, to destination: ChainPortRef) {
+        guard origin.side == .output, destination.side == .input else { return }
+        if isSingleSourceDestination(destination) {
+            edges.removeAll { $0.to == destination }
+        } else if edges.contains(where: { $0.from == origin && $0.to == destination }) {
+            return
+        }
+        edges.append(ChainEdge(from: origin, to: destination))
+    }
+
+    /// Removes a single wire.
+    mutating func removeEdge(_ id: UUID) {
+        edges.removeAll { $0.id == id }
+    }
+
+    /// The WING settings implied by the current graph.
+    func wingSettings() -> [WingSetting] {
+        RoutingTranslator.settings(for: self)
+    }
+
+    /// Whether a destination port accepts only one incoming wire. A WING channel
+    /// input and a physical WING output are each a single hardware source patch
+    /// (`/io/in` and `/io/out` respectively); everything else allows fan-in.
+    private func isSingleSourceDestination(_ destination: ChainPortRef) -> Bool {
+        switch node(destination.nodeID)?.kind {
+        case .wingChannel, .wingOutput: return true
+        default: return false
+        }
     }
 }

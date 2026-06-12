@@ -29,7 +29,7 @@ struct ChainCanvasView: View {
         var current: CGPoint
     }
 
-    private var graph: ChainGraph { appModel.chain.graph }
+    private var graph: ChainGraph { appModel.environments.activeGraph }
     private var equipment: [Equipment] { appModel.equipment.items }
 
     var body: some View {
@@ -40,12 +40,25 @@ struct ChainCanvasView: View {
                 canvas
             }
         }
-        .navigationTitle("Chain")
+        .navigationTitle(title)
+        #if os(macOS)
+        .navigationSubtitle(subtitle)
+        #endif
         .toolbar { toolbar }
         .sheet(isPresented: $showLibrary) {
             EquipmentLibraryView { kind, title in addNode(kind, title) }
                 .environment(appModel)
         }
+    }
+
+    /// The screen title — the active environment's name, so it's clear the canvas
+    /// belongs to (and switches with) the current environment.
+    private var title: String {
+        appModel.environments.active?.name ?? "Chain"
+    }
+
+    private var subtitle: String {
+        appModel.environments.active == nil ? "" : "Signal chain"
     }
 
     // MARK: - Canvas
@@ -87,7 +100,7 @@ struct ChainCanvasView: View {
             WireLayer(graph: graph, equipment: equipment, size: Self.contentSize, tempWire: tempWire)
             ForEach(graph.edges) { edge in
                 if let mid = edgeMidpoint(edge) {
-                    WireDeleteButton { appModel.chain.removeEdge(edge.id) }
+                    WireDeleteButton { appModel.environments.removeChainEdge(edge.id) }
                         .position(mid)
                 }
             }
@@ -96,11 +109,11 @@ struct ChainCanvasView: View {
                     node: node,
                     ports: ChainGeometry.ports(for: node, equipment: equipment),
                     isSelected: selection == node.id,
-                    onDragEnded: { center in appModel.chain.moveNode(node.id, to: center) },
+                    onDragEnded: { center in appModel.environments.moveChainNode(node.id, to: center) },
                     onWireChanged: { ref, point in wireDrag = WireDrag(from: ref, current: point) },
                     onWireEnded: { ref, point in finishWire(ref, point) },
                     onSelect: { selection = node.id },
-                    onDelete: { appModel.chain.removeNode(node.id) }
+                    onDelete: { appModel.environments.removeChainNode(node.id) }
                 )
             }
         }
@@ -139,7 +152,7 @@ struct ChainCanvasView: View {
                     Label("Apply Routing", systemImage: "bolt.horizontal.circle")
                 }
             }
-            .disabled(!appModel.isConnected || appModel.chain.wingSettings().isEmpty || isApplying)
+            .disabled(!appModel.isConnected || appModel.environments.chainWingSettings().isEmpty || isApplying)
             .help("Send the WING-touching connections to the console")
         }
         ToolbarItem {
@@ -163,7 +176,7 @@ struct ChainCanvasView: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .navigationTitle("Chain")
+        .navigationTitle(title)
     }
 
     // MARK: - Gestures
@@ -192,7 +205,7 @@ struct ChainCanvasView: View {
         let anchors = ChainGeometry.inputAnchors(in: graph, equipment: equipment)
         guard let hit = anchors.min(by: { distance($0.point, point) < distance($1.point, point) }),
               distance(hit.point, point) <= ChainGeometry.portHitRadius else { return }
-        appModel.chain.connect(from: ref, to: hit.ref)
+        appModel.environments.connectChain(from: ref, to: hit.ref)
     }
 
     private func addNode(_ kind: ChainNodeKind, _ title: String) {
@@ -201,7 +214,7 @@ struct ChainCanvasView: View {
             x: 220 + CGFloat(count % 4) * 220,
             y: 160 + CGFloat(count / 4) * 170
         )
-        appModel.chain.addNode(ChainNode(kind: kind, title: title, position: position))
+        appModel.environments.addChainNode(ChainNode(kind: kind, title: title, position: position))
         showLibrary = false
     }
 
@@ -222,7 +235,7 @@ struct ChainCanvasView: View {
 
     private func deleteSelection() {
         guard let id = selection else { return }
-        appModel.chain.removeNode(id)
+        appModel.environments.removeChainNode(id)
         selection = nil
     }
 
