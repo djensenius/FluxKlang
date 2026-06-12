@@ -70,10 +70,14 @@ struct EffectEditor: View {
 
                 Section {
                     if draft.isStereo {
-                        jackStepper("Left output", binding: outputBinding(0), range: Self.outputRange)
-                        jackStepper("Right output", binding: outputBinding(1), range: Self.outputRange)
+                        jackStepper(
+                            "Left output", binding: outputBinding(0), range: Self.outputRange, name: outputName
+                        )
+                        jackStepper(
+                            "Right output", binding: outputBinding(1), range: Self.outputRange, name: outputName
+                        )
                     } else {
-                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange)
+                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange, name: outputName)
                     }
                 } header: {
                     Text("2 · Out to effect")
@@ -83,10 +87,14 @@ struct EffectEditor: View {
 
                 Section {
                     if draft.isStereo {
-                        jackStepper("Left input", binding: inputBinding(0), range: Self.inputRange)
-                        jackStepper("Right input", binding: inputBinding(1), range: Self.inputRange)
+                        jackStepper(
+                            "Left input", binding: inputBinding(0), range: Self.inputRange, name: inputName
+                        )
+                        jackStepper(
+                            "Right input", binding: inputBinding(1), range: Self.inputRange, name: inputName
+                        )
                     } else {
-                        jackStepper("WING input", binding: inputBinding(0), range: Self.inputRange)
+                        jackStepper("WING input", binding: inputBinding(0), range: Self.inputRange, name: inputName)
                     }
                 } header: {
                     Text("3 · Back from effect")
@@ -152,13 +160,31 @@ struct EffectEditor: View {
         .font(.subheadline)
     }
 
-    private func jackStepper(_ title: String, binding: Binding<Int>, range: ClosedRange<Int>) -> some View {
-        LabeledContent(title) {
+    private func jackStepper(
+        _ title: String,
+        binding: Binding<Int>,
+        range: ClosedRange<Int>,
+        name: (Int) -> String?
+    ) -> some View {
+        let connector = binding.wrappedValue
+        let label = name(connector).flatMap { $0.isEmpty ? nil : $0 }
+        return LabeledContent(title) {
             Stepper(value: binding, in: range) {
-                Text(binding.wrappedValue.description)
+                Text(label.map { "\(connector) · \($0)" } ?? connector.description)
                     .monospacedDigit()
+                    .lineLimit(1)
             }
         }
+    }
+
+    /// The WING name of an output connector, when the console has reported one.
+    private func outputName(_ connector: Int) -> String? {
+        appModel.wing.outputName(connector)
+    }
+
+    /// The WING name of an input connector, when the console has reported one.
+    private func inputName(_ connector: Int) -> String? {
+        appModel.wing.inputName(connector)
     }
 
     private func instrumentBinding(_ id: Equipment.ID) -> Binding<Bool> {
