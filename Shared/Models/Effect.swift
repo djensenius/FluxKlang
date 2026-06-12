@@ -25,6 +25,10 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
     var returnInputs: [Int]
     /// The instruments (equipment) whose channels feed this effect.
     var sourceInstruments: [UUID]
+    /// Where this effect's processed output goes. `nil` returns it to the main
+    /// (a parallel send); a value feeds it into another effect's input instead,
+    /// forming a serial chain (this effect -> that effect -> ... -> main).
+    var destinationEffectID: Effect.ID?
 
     init(
         id: UUID = UUID(),
@@ -32,7 +36,8 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
         isStereo: Bool = true,
         sendOutputs: [Int] = [1, 2],
         returnInputs: [Int] = [1, 2],
-        sourceInstruments: [UUID] = []
+        sourceInstruments: [UUID] = [],
+        destinationEffectID: Effect.ID? = nil
     ) {
         self.id = id
         self.name = name
@@ -40,6 +45,7 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
         self.sendOutputs = sendOutputs
         self.returnInputs = returnInputs
         self.sourceInstruments = sourceInstruments
+        self.destinationEffectID = destinationEffectID
     }
 
     /// Whether `instrument` currently feeds this effect.

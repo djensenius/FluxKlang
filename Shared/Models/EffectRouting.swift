@@ -70,6 +70,7 @@ enum EffectRouting {
             assignments.map { ($0.equipment.id, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        let effectsByID = Dictionary(effects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result: [WingSetting] = []
         for effect in effects {
             guard let allocation = allocations[effect.id], let busLeft = allocation.buses.first else { continue }
@@ -77,7 +78,10 @@ enum EffectRouting {
 
             result.append(contentsOf: sends(for: effect, busLeft: busLeft, busRight: busRight, channelByInstrument))
             result.append(contentsOf: outputPatches(for: effect, busLeft: busLeft, busRight: busRight))
-            result.append(contentsOf: returns(for: effect, allocation: allocation))
+            result.append(contentsOf: returnPatches(for: effect, allocation: allocation))
+            result.append(contentsOf: destinationRouting(
+                for: effect, allocation: allocation, allocations: allocations, effectsByID: effectsByID
+            ))
         }
         return result
     }
@@ -122,17 +126,96 @@ enum EffectRouting {
         return result
     }
 
-    /// Patches the effect's return input jack(s) to its return channel(s) and
-    /// assigns those channels to the main so the wet signal is audible.
-    private static func returns(for effect: Effect, allocation: Allocation) -> [WingSetting] {
+    /// Patches the effect's return input jack(s) onto its return channel(s).
+    private static func returnPatches(for effect: Effect, allocation: Allocation) -> [WingSetting] {
         var result: [WingSetting] = []
         if let channel = allocation.returnChannels.first, let input = effect.returnInputs.first {
-            result.append(contentsOf: returnLeg(input: input, channel: channel))
+            result.append(contentsOf: returnPatchLeg(input: input, channel: channel))
         }
         if effect.isStereo, allocation.returnChannels.count > 1, effect.returnInputs.count > 1 {
-            result.append(contentsOf: returnLeg(input: effect.returnInputs[1], channel: allocation.returnChannels[1]))
+            result.append(contentsOf: returnPatchLeg(
+                input: effect.returnInputs[1], channel: allocation.returnChannels[1]
+            ))
         }
         return result
+    }
+
+    /// Routes the effect's return channel(s) to their destination: the main (a
+    /// parallel send, when `destinationEffectID` is nil) or, for a serial chain,
+    /// into the downstream effect's bus(es). Falls back to the main when the
+    /// destination is missing, cyclic, or itself has no bus (capacity exhausted),
+    /// so the wet signal is never silently dropped.
+    private static func destinationRouting(
+        for effect: Effect,
+        allocation: Allocation,
+        allocations: [Effect.ID: Allocation],
+        effectsByID: [Effect.ID: Effect]
+    ) -> [WingSetting] {
+        let returnChannels = allocation.returnChannels
+        guard let target = resolvedDestination(for: effect, effectsByID: effectsByID),
+              let targetAllocation = allocations[target.id],
+              let targetBusLeft = targetAllocation.buses.first else {
+            return returnChannels.map(mainAssign)
+        }
+        let targetBusRight = target.isStereo ? (targetAllocation.buses.last ?? targetBusLeft) : targetBusLeft
+        return fanReturns(returnChannels, intoStereo: target.isStereo, busLeft: targetBusLeft, busRight: targetBusRight)
+    }
+
+    /// The effect this one feeds, if it names a valid, non-self, non-cyclic target.
+    private static func resolvedDestination(for effect: Effect, effectsByID: [Effect.ID: Effect]) -> Effect? {
+        guard let targetID = effect.destinationEffectID,
+              targetID != effect.id,
+              let target = effectsByID[targetID],
+              !formsCycle(from: effect.id, following: targetID, effectsByID: effectsByID) else {
+            return nil
+        }
+        return target
+    }
+
+    /// Whether following destinations onward from `next` leads back to `start`.
+    private static func formsCycle(
+        from start: Effect.ID,
+        following next: Effect.ID,
+        effectsByID: [Effect.ID: Effect]
+    ) -> Bool {
+        var current: Effect.ID? = next
+        var steps = 0
+        while let id = current {
+            if id == start { return true }
+            steps += 1
+            if steps > effectsByID.count { return true }
+            current = effectsByID[id]?.destinationEffectID
+        }
+        return false
+    }
+
+    /// Sends a set of return channels into a destination effect's bus(es): summing
+    /// to its single bus when mono, or fanning L/R into its bus pair when stereo.
+    private static func fanReturns(
+        _ returnChannels: [Int],
+        intoStereo stereo: Bool,
+        busLeft: Int,
+        busRight: Int
+    ) -> [WingSetting] {
+        var result: [WingSetting] = []
+        if stereo {
+            if let left = returnChannels.first {
+                result.append(contentsOf: send(channel: left, toBus: busLeft))
+            }
+            if let right = returnChannels.count > 1 ? returnChannels[1] : returnChannels.first {
+                result.append(contentsOf: send(channel: right, toBus: busRight))
+            }
+        } else {
+            for channel in returnChannels {
+                result.append(contentsOf: send(channel: channel, toBus: busLeft))
+            }
+        }
+        return result
+    }
+
+    /// Assigns a return channel to the main so its wet signal is audible.
+    private static func mainAssign(_ channel: Int) -> WingSetting {
+        WingSetting(address: WingAddress.mainOn(.channel, channel, toMain: returnMain), value: .int(1))
     }
 
     /// Patches a single bus onto a physical output jack.
@@ -140,11 +223,9 @@ enum EffectRouting {
         WingOutputSource(group: .bus, index: bus).settings(forOutput: output)
     }
 
-    /// Patches a single return input jack to a channel and assigns it to the main.
-    private static func returnLeg(input: Int, channel: Int) -> [WingSetting] {
-        let mainAddress = WingAddress.mainOn(.channel, channel, toMain: returnMain)
-        return WingSource(group: .local, index: input).settings(forChannel: channel)
-            + [WingSetting(address: mainAddress, value: .int(1))]
+    /// Patches a single return input jack onto a return channel.
+    private static func returnPatchLeg(input: Int, channel: Int) -> [WingSetting] {
+        WingSource(group: .local, index: input).settings(forChannel: channel)
     }
 
     /// Turns a channel's send to a bus on at unity gain.

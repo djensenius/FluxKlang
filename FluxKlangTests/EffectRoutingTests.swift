@@ -4,6 +4,7 @@
 //
 
 import Testing
+import Foundation
 @testable import FluxKlang
 
 @MainActor
@@ -147,5 +148,82 @@ struct EffectRoutingTests {
         // (incorrectly) routed there would be sends; being skipped, there are none.
         let settings = EffectRouting.settings(for: effects, assignments: assignments)
         #expect(!settings.contains { $0.address.contains("/send/") })
+    }
+
+    @Test func serialChainFeedsReturnIntoDownstreamEffectBusNotMain() {
+        let downstream = Effect(name: "Atrium", isStereo: true, sendOutputs: [3, 4], returnInputs: [5, 6])
+        let upstream = Effect(
+            name: "Evil Pet",
+            isStereo: true,
+            sendOutputs: [1, 2],
+            returnInputs: [7, 8],
+            sourceInstruments: [stereoInstrument.id],
+            destinationEffectID: downstream.id
+        )
+        let settings = EffectRouting.settings(for: [upstream, downstream], assignments: assignments)
+        // upstream: buses 16/15, returns 40/39. downstream: buses 14/13, returns 38/37.
+        // The upstream effect's returns feed the downstream effect's buses (serial),
+        // so they must NOT also be assigned to the main.
+        #expect(value(settings, WingAddress.sendOn(.channel, 40, toBus: 14)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 39, toBus: 13)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 40, toMain: 1)) == nil)
+        #expect(value(settings, WingAddress.mainOn(.channel, 39, toMain: 1)) == nil)
+        // Only the terminal (downstream) effect returns to the main.
+        #expect(value(settings, WingAddress.mainOn(.channel, 38, toMain: 1)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 37, toMain: 1)) == .int(1))
+    }
+
+    @Test func parallelEffectsEachReturnToMainIndependently() {
+        let reverb = Effect(name: "Reverb", isStereo: true, sourceInstruments: [stereoInstrument.id])
+        let delay = Effect(
+            name: "Delay",
+            isStereo: false,
+            sendOutputs: [3],
+            returnInputs: [5],
+            sourceInstruments: [stereoInstrument.id]
+        )
+        let settings = EffectRouting.settings(for: [reverb, delay], assignments: assignments)
+        // reverb: buses 16/15, returns 40/39. delay: bus 14, return 38.
+        #expect(value(settings, WingAddress.mainOn(.channel, 40, toMain: 1)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 39, toMain: 1)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 38, toMain: 1)) == .int(1))
+        // The instrument feeds both effects in parallel.
+        #expect(value(settings, WingAddress.sendOn(.channel, 1, toBus: 16)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 1, toBus: 14)) == .int(1))
+    }
+
+    @Test func cyclicDestinationsFallBackToMainWithoutLooping() {
+        let aID = UUID()
+        let bID = UUID()
+        let effectA = Effect(
+            id: aID, name: "A", isStereo: false, sendOutputs: [1], returnInputs: [1], destinationEffectID: bID
+        )
+        let effectB = Effect(
+            id: bID, name: "B", isStereo: false, sendOutputs: [2], returnInputs: [2], destinationEffectID: aID
+        )
+        let settings = EffectRouting.settings(for: [effectA, effectB], assignments: assignments)
+        // A: bus 16, return 40. B: bus 15, return 39. The A->B->A cycle is broken:
+        // both returns fall back to the main and neither is sent into the other's bus.
+        #expect(value(settings, WingAddress.mainOn(.channel, 40, toMain: 1)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 39, toMain: 1)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 40, toBus: 15)) == nil)
+        #expect(value(settings, WingAddress.sendOn(.channel, 39, toBus: 16)) == nil)
+    }
+
+    @Test func sharedEffectSumsEveryFeedingInstrumentIntoItsBus() {
+        let effect = Effect(
+            name: "Reverb",
+            isStereo: true,
+            sendOutputs: [1, 2],
+            returnInputs: [3, 4],
+            sourceInstruments: [stereoInstrument.id, monoInstrument.id]
+        )
+        let settings = EffectRouting.settings(for: [effect], assignments: assignments)
+        // Both instruments feed the one effect: its return is a single shared voice.
+        #expect(value(settings, WingAddress.sendOn(.channel, 1, toBus: 16)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 2, toBus: 15)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 3, toBus: 16)) == .int(1))
+        #expect(value(settings, WingAddress.sendOn(.channel, 3, toBus: 15)) == .int(1))
+        #expect(value(settings, WingAddress.mainOn(.channel, 40, toMain: 1)) == .int(1))
     }
 }

@@ -36,6 +36,7 @@ struct EffectsView: View {
             EffectEditor(
                 effect: effect,
                 isNew: appModel.effects.effect(effect.id) == nil,
+                allEffects: effects,
                 onSave: { saved in
                     if appModel.effects.effect(saved.id) == nil {
                         appModel.effects.add(saved)
@@ -58,7 +59,12 @@ struct EffectsView: View {
             Section {
                 ForEach(Array(effects.enumerated()), id: \.element.id) { index, effect in
                     Button { editing = effect } label: {
-                        EffectRow(effect: effect, allocation: allocations[effect.id], equipment: appModel.equipment)
+                        EffectRow(
+                            effect: effect,
+                            allocation: allocations[effect.id],
+                            destinationName: destinationName(for: effect),
+                            equipment: appModel.equipment
+                        )
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
@@ -153,6 +159,11 @@ struct EffectsView: View {
         appModel.effects.remove(effect)
     }
 
+    private func destinationName(for effect: Effect) -> String? {
+        guard let id = effect.destinationEffectID else { return nil }
+        return effects.first { $0.id == id }?.name
+    }
+
     private func applyEffects() {
         isApplying = true
         Task {
@@ -167,6 +178,7 @@ struct EffectsView: View {
 private struct EffectRow: View {
     let effect: Effect
     let allocation: EffectRouting.Allocation?
+    let destinationName: String?
     let equipment: EquipmentStore
 
     var body: some View {
@@ -207,11 +219,12 @@ private struct EffectRow: View {
     private var routingSummary: String {
         let outs = effect.sendOutputs.map(String.init).joined(separator: "/")
         let ins = effect.returnInputs.map(String.init).joined(separator: "/")
+        let destination = destinationName ?? "Main"
         guard let allocation, let bus = allocation.buses.first else {
             return "No free bus available"
         }
         let buses = effect.isStereo && allocation.buses.count > 1 ? "\(bus)/\(allocation.buses[1])" : "\(bus)"
-        return "Bus \(buses) → Out \(outs) → In \(ins) → Main"
+        return "Bus \(buses) → Out \(outs) → In \(ins) → \(destination)"
     }
 }
 
@@ -223,15 +236,23 @@ private struct EffectEditor: View {
 
     @State private var draft: Effect
     let isNew: Bool
+    let allEffects: [Effect]
     let onSave: (Effect) -> Void
     let onDelete: (() -> Void)?
 
     private static let outputRange = 1...8
     private static let inputRange = 1...WingSourceGroup.local.count
 
-    init(effect: Effect, isNew: Bool, onSave: @escaping (Effect) -> Void, onDelete: (() -> Void)?) {
+    init(
+        effect: Effect,
+        isNew: Bool,
+        allEffects: [Effect],
+        onSave: @escaping (Effect) -> Void,
+        onDelete: (() -> Void)?
+    ) {
         _draft = State(initialValue: effect.normalizingJacks())
         self.isNew = isNew
+        self.allEffects = allEffects
         self.onSave = onSave
         self.onDelete = onDelete
     }
@@ -248,7 +269,7 @@ private struct EffectEditor: View {
                     flowStep(1, "The instruments you pick feed a private bus.")
                     flowStep(2, "That bus is sent out the WING output(s) into your effect.")
                     flowStep(3, "Your effect's output comes back on the WING input(s).")
-                    flowStep(4, "The return becomes a channel, mixed into the Main.")
+                    flowStep(4, "The return goes to the Main — or into another effect, to chain them.")
                 }
 
                 Section {
@@ -289,7 +310,23 @@ private struct EffectEditor: View {
                 } header: {
                     Text("3 · Back from effect")
                 } footer: {
-                    Text("The physical WING input jack(s) your effect returns on, routed to the Main for you.")
+                    Text("The physical WING input jack(s) your effect returns on.")
+                }
+
+                Section {
+                    Picker("Output goes to", selection: destinationBinding) {
+                        Text("Main").tag(Effect.ID?.none)
+                        ForEach(destinationOptions) { option in
+                            Text(option.name).tag(Effect.ID?.some(option.id))
+                        }
+                    }
+                } header: {
+                    Text("4 · Where it goes")
+                } footer: {
+                    Text("""
+                    Send the output to the Main (parallel), or into another effect to chain them in series \
+                    (e.g. Synth → Reverb → Delay → Main). Only the last effect in a chain reaches the Main.
+                    """)
                 }
 
                 if let onDelete {
@@ -350,6 +387,33 @@ private struct EffectEditor: View {
         )
     }
 
+    private var destinationBinding: Binding<Effect.ID?> {
+        Binding(
+            get: { draft.destinationEffectID },
+            set: { draft.destinationEffectID = $0 }
+        )
+    }
+
+    /// Other effects this one may feed without forming a cycle.
+    private var destinationOptions: [Effect] {
+        allEffects.filter { $0.id != draft.id && !wouldCycle(feeding: $0) }
+    }
+
+    /// Whether routing `draft` into `candidate` would close a loop, i.e. the
+    /// candidate already feeds back to `draft` (directly or transitively).
+    private func wouldCycle(feeding candidate: Effect) -> Bool {
+        let byID = Dictionary(allEffects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var current: Effect.ID? = candidate.destinationEffectID
+        var steps = 0
+        while let id = current {
+            if id == draft.id { return true }
+            steps += 1
+            if steps > byID.count { return true }
+            current = byID[id]?.destinationEffectID
+        }
+        return false
+    }
+
     private func outputBinding(_ index: Int) -> Binding<Int> {
         jackBinding(\.sendOutputs, index, range: Self.outputRange)
     }
@@ -388,11 +452,15 @@ private struct EffectEditor: View {
     }
 
     /// The draft with its jack arrays sized to the stereo/mono width and every
-    /// jack clamped to a physically valid socket number.
+    /// jack clamped to a physically valid socket number, and any stale or cyclic
+    /// destination dropped back to the main.
     private func sanitizedDraft() -> Effect {
         var effect = draft.normalizingJacks()
         effect.sendOutputs = effect.sendOutputs.map { clamp($0, to: Self.outputRange) }
         effect.returnInputs = effect.returnInputs.map { clamp($0, to: Self.inputRange) }
+        if let destination = effect.destinationEffectID, !destinationOptions.contains(where: { $0.id == destination }) {
+            effect.destinationEffectID = nil
+        }
         return effect
     }
 
