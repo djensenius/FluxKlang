@@ -62,13 +62,17 @@ private struct AdaptiveRoot: View {
 }
 
 private struct TabRoot: View {
+    @Environment(AppModel.self) private var appModel
+
     var body: some View {
-        TabView {
+        @Bindable var appModel = appModel
+        TabView(selection: $appModel.section) {
             ForEach(AppSection.allCases) { section in
                 NavigationStack {
                     SectionDetail(section: section)
                 }
                 .tabItem { Label(section.rawValue, systemImage: section.systemImage) }
+                .tag(section)
             }
         }
     }
