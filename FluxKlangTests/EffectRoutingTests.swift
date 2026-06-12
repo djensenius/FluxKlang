@@ -226,4 +226,47 @@ struct EffectRoutingTests {
         #expect(value(settings, WingAddress.sendOn(.channel, 3, toBus: 15)) == .int(1))
         #expect(value(settings, WingAddress.mainOn(.channel, 40, toMain: 1)) == .int(1))
     }
+
+    // MARK: - Jack normalization
+
+    @Test func togglingMonoTopJackToStereoKeepsLegsDistinct() {
+        // Mono effect parked on the top output (8), then switched to stereo: the
+        // second leg must not also resolve to 8 (which would patch output 8 twice
+        // and lose a bus leg).
+        var effect = Effect(name: "X", isStereo: false, sendOutputs: [8], returnInputs: [24])
+        effect.isStereo = true
+        let normalized = effect.normalizingJacks()
+        #expect(normalized.sendOutputs.count == 2)
+        #expect(normalized.sendOutputs[0] != normalized.sendOutputs[1])
+        #expect(normalized.returnInputs[0] != normalized.returnInputs[1])
+        #expect(normalized.sendOutputs.allSatisfy { Effect.outputRange.contains($0) })
+        #expect(normalized.returnInputs.allSatisfy { Effect.inputRange.contains($0) })
+    }
+
+    @Test func duplicateStereoJacksAreSeparated() {
+        let effect = Effect(name: "Y", isStereo: true, sendOutputs: [5, 5], returnInputs: [3, 3])
+        let normalized = effect.normalizingJacks()
+        #expect(normalized.sendOutputs[0] != normalized.sendOutputs[1])
+        #expect(normalized.returnInputs[0] != normalized.returnInputs[1])
+    }
+
+    @Test func outOfRangeJacksAreClampedToValidSockets() {
+        let mono = Effect(name: "Z", isStereo: false, sendOutputs: [99], returnInputs: [0]).normalizingJacks()
+        #expect(mono.sendOutputs == [8])    // clamped to the top output
+        #expect(mono.returnInputs == [1])   // clamped to the first input
+    }
+
+    @Test func distinctSendOutputsPatchTwoSeparateOutputs() {
+        // A stereo effect whose legs were both set to 8 still patches two outputs.
+        let effect = Effect(
+            name: "Reverb", isStereo: true, sendOutputs: [8, 8], returnInputs: [3, 4],
+            sourceInstruments: [stereoInstrument.id]
+        ).normalizingJacks()
+        let settings = EffectRouting.settings(for: [effect], assignments: assignments)
+        let patchedOutputs = effect.sendOutputs
+        #expect(Set(patchedOutputs).count == 2)
+        for output in patchedOutputs {
+            #expect(value(settings, WingAddress.outputSourceGroup(output)) == .string("BUS"))
+        }
+    }
 }

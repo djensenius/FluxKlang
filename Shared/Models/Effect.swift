@@ -66,22 +66,34 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
         return copy
     }
 
-    /// Returns a copy whose jack arrays are resized to match `isStereo`, so a
-    /// stereo effect always has two send/return jacks and a mono effect one.
+    /// WING physical output jacks available for an effect's send (1-based).
+    static let outputRange = 1...8
+    /// WING local input jacks available for an effect's return (1-based).
+    static let inputRange = 1...WingSourceGroup.local.count
+
+    /// Returns a copy whose jack arrays match `isStereo` — one jack for a mono
+    /// effect, two for a stereo one — with every jack clamped to a valid socket
+    /// and, for a stereo effect, the two legs forced onto distinct sockets so
+    /// one leg can never silently overwrite the other when patched.
     func normalizingJacks() -> Effect {
         var copy = self
-        let width = isStereo ? 2 : 1
-        copy.sendOutputs = Self.resize(sendOutputs, to: width, default: 1)
-        copy.returnInputs = Self.resize(returnInputs, to: width, default: 1)
+        copy.sendOutputs = Self.normalizedJacks(sendOutputs, stereo: isStereo, in: Self.outputRange)
+        copy.returnInputs = Self.normalizedJacks(returnInputs, stereo: isStereo, in: Self.inputRange)
         return copy
     }
 
-    private static func resize(_ values: [Int], to width: Int, default fallback: Int) -> [Int] {
-        var result = Array(values.prefix(width))
-        while result.count < width {
-            let next = (result.last ?? fallback) + 1
-            result.append(next)
+    private static func normalizedJacks(_ values: [Int], stereo: Bool, in range: ClosedRange<Int>) -> [Int] {
+        let left = clamp(values.first ?? range.lowerBound, to: range)
+        guard stereo else { return [left] }
+        var right = clamp(values.count > 1 ? values[1] : left + 1, to: range)
+        if right == left {
+            right = left < range.upperBound ? left + 1 : left - 1
         }
-        return result
+        return [left, right]
+    }
+
+    /// Clamps `value` into `range`.
+    static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(value, range.lowerBound), range.upperBound)
     }
 }

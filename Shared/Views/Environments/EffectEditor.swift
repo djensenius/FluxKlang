@@ -21,8 +21,8 @@ struct EffectEditor: View {
     let onSave: (Effect) -> Void
     let onDelete: (() -> Void)?
 
-    private static let outputRange = 1...8
-    private static let inputRange = 1...WingSourceGroup.local.count
+    private static let outputRange = Effect.outputRange
+    private static let inputRange = Effect.inputRange
 
     init(
         effect: Effect,
@@ -258,14 +258,13 @@ struct EffectEditor: View {
         )
     }
 
-    /// The draft with its jack arrays sized to the stereo/mono width and every
-    /// jack clamped to a physically valid socket number, and any stale or cyclic
-    /// destination dropped back to the main.
+    /// The draft with its jack arrays normalized to the stereo/mono width, every
+    /// jack clamped to a valid socket (and the stereo legs forced distinct), and
+    /// any stale or cyclic destination dropped back to the main.
     private func sanitizedDraft() -> Effect {
         var effect = draft.normalizingJacks()
-        effect.sendOutputs = effect.sendOutputs.map { clamp($0, to: Self.outputRange) }
-        effect.returnInputs = effect.returnInputs.map { clamp($0, to: Self.inputRange) }
-        if let destination = effect.destinationEffectID, !destinationOptions.contains(where: { $0.id == destination }) {
+        if let destination = effect.destinationEffectID,
+           !destinationOptions.contains(where: { $0.id == destination }) {
             effect.destinationEffectID = nil
         }
         return effect
