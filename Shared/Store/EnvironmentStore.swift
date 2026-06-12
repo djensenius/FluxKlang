@@ -224,6 +224,43 @@ final class EnvironmentStore {
         mutateGraph { $0.removeEdge(id) }
     }
 
+    // MARK: - Active-environment effect overlay
+
+    /// The canvas positions of the active environment's effect-overlay nodes.
+    var activeEffectLayout: [String: CGPoint] { active?.effectLayout ?? [:] }
+
+    /// Replaces the active environment's effects wholesale. Used by the canvas
+    /// reconciler, which computes the new list from a dropped or deleted wire, so
+    /// wiring on the canvas and ticking boxes in the list edit the same effects.
+    func setActiveEffects(_ effects: [Effect]) {
+        mutateEffects { $0 = effects }
+    }
+
+    /// Positions an effect-overlay node (an effect, an instrument source, or the
+    /// Main) on the canvas.
+    func setEffectNodePosition(_ key: String, to position: CGPoint) {
+        mutateEnvironment { $0.effectLayout[key] = position }
+    }
+
+    /// Drops an instrument-source node on the canvas so it can be wired to an
+    /// effect even before it feeds anything, placed below the sources already
+    /// shown.
+    func addEffectSourceNode(_ instrument: Equipment.ID) {
+        let shown = EnvironmentChainCanvas.sourceInstruments(
+            effects: activeEffects, layout: activeEffectLayout
+        ).count
+        setEffectNodePosition(
+            EnvironmentChainCanvas.sourceKey(instrument),
+            to: EnvironmentChainCanvas.defaultSourcePosition(index: shown)
+        )
+    }
+
+    /// Forgets an effect-overlay node's saved position. For an unwired source
+    /// node this also removes it from the canvas (its presence was the entry).
+    func removeEffectLayoutEntry(_ key: String) {
+        mutateEnvironment { $0.effectLayout[key] = nil }
+    }
+
     // MARK: - Internals
 
     /// Guarantees there is an active environment, creating a "Default" one when

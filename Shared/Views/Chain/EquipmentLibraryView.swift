@@ -21,6 +21,30 @@ struct EquipmentLibraryView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button { onAdd(.effect(UUID()), "") } label: {
+                        Label("New Effect", systemImage: "plus.circle.fill")
+                    }
+                } header: {
+                    Text("Effects")
+                } footer: {
+                    Text("An outboard effect (aux send). Wire instruments into it, and its output to Main.")
+                }
+
+                Section {
+                    ForEach(appModel.equipment.items) { item in
+                        Button {
+                            onAdd(.effectSource(item.id), item.name)
+                        } label: {
+                            Label(item.name, systemImage: "pianokeys")
+                        }
+                    }
+                } header: {
+                    Text("Instruments")
+                } footer: {
+                    Text("Drop an instrument, then drag from it to an effect to feed it.")
+                }
+
                 Section("WING Endpoints") {
                     endpointMenu("WING Input", systemImage: "arrow.right.to.line", count: localInputCount) { index in
                         onAdd(.wingInput(index), "Local \(index)")
@@ -39,14 +63,18 @@ struct EquipmentLibraryView: View {
                     }
                 }
 
-                Section("Equipment") {
+                Section {
                     ForEach(appModel.equipment.items) { item in
                         Button {
                             onAdd(.equipment(item.id), item.name)
                         } label: {
-                            Label(item.name, systemImage: "pianokeys")
+                            Label(item.name, systemImage: "cable.connector")
                         }
                     }
+                } header: {
+                    Text("Gear (raw patch)")
+                } footer: {
+                    Text("For hand-patching gear to raw WING endpoints, outside the effect routing.")
                 }
             }
             .navigationTitle("Add Node")

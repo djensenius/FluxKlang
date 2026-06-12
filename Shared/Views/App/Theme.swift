@@ -30,6 +30,9 @@ enum Theme {
         case .wingBus: return .orange
         case .wingMain: return .red
         case .wingOutput: return .green
+        case .effect: return .pink
+        case .effectSource: return .cyan
+        case .effectMain: return .red
         }
     }
 }

@@ -106,6 +106,19 @@ final class AppModel {
         await wing.apply(environments.chainWingSettings())
     }
 
+    /// Everything the active environment implies: the canvas's free-form WING
+    /// wiring plus its effects' send/return routing (against the current channel
+    /// rig) and the surround sends for any placed voices. The unified canvas
+    /// authors all of these, so its Apply pushes them together.
+    func activeEnvironmentSettings() -> [WingSetting] {
+        environments.chainWingSettings() + environmentSettings()
+    }
+
+    /// Applies the whole active environment — canvas wiring, effects, and spatial.
+    func applyActiveEnvironment() async {
+        await wing.apply(activeEnvironmentSettings())
+    }
+
     /// The WING settings implied by the active environment: its effects' send/
     /// return routing (resolved against the current channel rig) plus the surround
     /// sends for any voices placed in space. Switching environments and pressing
