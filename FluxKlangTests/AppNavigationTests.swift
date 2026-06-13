@@ -8,11 +8,16 @@ import Testing
 
 @MainActor
 struct AppNavigationTests {
-    @Test func requestSpatialPlacementSelectsSpatialSection() {
+    @Test func appStartsInStudio() {
         let model = AppModel()
-        model.section = .environments
+        #expect(model.section == .studio)
+    }
+
+    @Test func requestSpatialPlacementReturnsToStudio() {
+        let model = AppModel()
+        model.section = .advanced
         model.requestSpatialPlacement()
-        #expect(model.section == .spatial)
+        #expect(model.section == .studio)
     }
 
     @Test func requestNewPresetSelectsPresetsSection() {

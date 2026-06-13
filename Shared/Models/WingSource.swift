@@ -53,7 +53,7 @@ enum WingSourceGroup: String, CaseIterable, Codable, Sendable {
 }
 
 /// A specific WING input source: a group plus a 1-based index within it.
-struct WingSource: Identifiable, Hashable, Sendable {
+struct WingSource: Identifiable, Codable, Hashable, Sendable {
     var group: WingSourceGroup
     var index: Int
 
@@ -100,7 +100,7 @@ enum WingOutputSourceGroup: String, CaseIterable, Codable, Sendable {
 }
 
 /// A specific WING output source: a group plus a 1-based index within it.
-struct WingOutputSource: Identifiable, Hashable, Sendable {
+struct WingOutputSource: Identifiable, Codable, Hashable, Sendable {
     var group: WingOutputSourceGroup
     var index: Int
 

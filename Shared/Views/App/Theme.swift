@@ -32,4 +32,13 @@ enum Theme {
         case .wingOutput: return .green
         }
     }
+
+    /// Accent colour for semantic studio endpoint destinations.
+    static func color(for destination: StudioEndpointDestination) -> Color {
+        switch destination {
+        case .finalMix: return .red
+        case .space: return .purple
+        case .custom: return .teal
+        }
+    }
 }

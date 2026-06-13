@@ -113,11 +113,32 @@ struct EnvironmentSpatialTests {
         #expect(decoded.placements["source:abc"]?.position == CGPoint(x: 0.2, y: 0.8))
     }
 
+    @Test func graphSurvivesACodableRoundTrip() throws {
+        var environment = RoutingEnvironment(name: "Live")
+        let node = ChainNode(kind: .wingChannel(3), title: "Channel 3", position: CGPoint(x: 10, y: 20))
+        environment.graph.addNode(node)
+        let data = try JSONEncoder().encode(environment)
+        let decoded = try JSONDecoder().decode(RoutingEnvironment.self, from: data)
+        #expect(decoded.graph.nodes.count == 1)
+        #expect(decoded.graph.node(node.id)?.title == "Channel 3")
+        #expect(decoded.graph.node(node.id)?.position == CGPoint(x: 10, y: 20))
+    }
+
     @Test func legacyEnvironmentWithoutPlacementsDecodes() throws {
         let json = "{\"id\":\"\(UUID().uuidString)\",\"name\":\"Old\"}"
         let decoded = try JSONDecoder().decode(RoutingEnvironment.self, from: Data(json.utf8))
         #expect(decoded.placements.isEmpty)
         #expect(decoded.effects.isEmpty)
+        // Environments saved before the per-environment canvas decode with an
+        // empty graph rather than failing.
+        #expect(decoded.graph.nodes.isEmpty)
+        #expect(decoded.graph.edges.isEmpty)
+        // Environments saved before the semantic studio graph decode with empty
+        // endpoint/stem state rather than failing.
+        #expect(decoded.studioGraph.nodes.isEmpty)
+        #expect(decoded.studioGraph.edges.isEmpty)
+        #expect(decoded.studioEndpoints.isEmpty)
+        #expect(decoded.studioSetup.devices.isEmpty)
         #expect(decoded.name == "Old")
     }
 
@@ -139,5 +160,16 @@ struct EnvironmentSpatialTests {
         #expect(copy.placements[EnvironmentVoice.returnID(copy.effects[1].id)]?.width == 0.3)
         // The original effect ids are gone.
         #expect(copy.placements[EnvironmentVoice.returnID(first.id)] == nil)
+    }
+
+    @Test func duplicatingCopiesTheCanvasGraph() {
+        var environment = RoutingEnvironment(name: "Song")
+        environment.graph.addNode(ChainNode(kind: .wingBus(2), title: "Bus 2", position: .zero))
+        environment.graph.addNode(ChainNode(kind: .wingOutput(5), title: "Output 5", position: .zero))
+
+        let copy = environment.duplicated(named: "Song Copy")
+        #expect(copy.graph.nodes.count == 2)
+        #expect(copy.graph.nodes.contains { $0.kind == .wingBus(2) })
+        #expect(copy.graph.nodes.contains { $0.kind == .wingOutput(5) })
     }
 }

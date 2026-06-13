@@ -23,13 +23,19 @@ enum SpatialRouting {
         var result: [WingSetting] = []
         for placement in source.channelPlacements() {
             let gains = SpatialPanner.gains(source: placement.point, speakers: positions)
-            let channel = placement.channel.index
+            let node = placement.channel
             for (index, speaker) in busSpeakers.enumerated() {
                 let bus = speaker.node.index
                 let decibels = SpatialPanner.decibels(forGain: gains[index])
-                result.append(WingSetting(address: WingAddress.sendOn(.channel, channel, toBus: bus), value: .int(1)))
+                result.append(WingSetting(
+                    address: WingAddress.sendOn(node.kind, node.index, toBus: bus),
+                    value: .int(1)
+                ))
                 result.append(
-                    WingSetting(address: WingAddress.sendLevel(.channel, channel, toBus: bus), value: .float(decibels))
+                    WingSetting(
+                        address: WingAddress.sendLevel(node.kind, node.index, toBus: bus),
+                        value: .float(decibels)
+                    )
                 )
             }
         }

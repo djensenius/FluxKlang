@@ -5,13 +5,14 @@ A native SwiftUI app to control a **Behringer WING Rack** over the network — f
 
 FluxKlang gives you:
 
+- A **Studio-first patch workflow** — start with an instrument, branch it to dry,
+  effect and space controls, and let FluxKlang turn that into WING routing.
 - **Configurable volume faders** bound to WING channels/buses/mains with live,
   two-way sync, mute and a level meter. On Mac they feel native — scroll-wheel to
   adjust, double-click to reset to 0 dB and ⌥-drag for fine control.
-- **Routing** — input patching (sources → channels), output/main assignment and a
-  bus send matrix.
-- A **drag-and-drop signal-chain builder** to wire your gear into WING inputs →
-  channels → buses → outputs; the WING-touching wires apply as real routing.
+- **Advanced WING tools** — raw input patching, output/main assignment, bus-send
+  matrix, the legacy chain canvas and legacy environment/spatial editors live
+  under Advanced instead of crowding the main workflow.
 - **Presets / scene recall** — save a snapshot of fader levels, mutes and routing,
   then recall it with one tap (or ⌘1–9 on Mac).
 - **Network discovery** with manual-IP entry and a remembered last-known console.
@@ -44,7 +45,7 @@ Shared/
   WING/      OSC transport + WingController, discovery, address book, fader math
   Models/    WING domain + equipment/chain/fader/preset models (Codable)
   Store/     local persistence (Application Support) + iCloud key-value sync
-  Views/     App / Connection / Mixer / Routing / Chain / Presets / Mac
+  Views/     App / Studio / Connection / Mixer / Routing / Chain / Presets / Mac
   Intents/   App Intents for Shortcuts & Siri
 FluxKlang/      iOS @main
 FluxKlangMac/   macOS @main (WindowGroup + Settings + Commands + MenuBarExtra)

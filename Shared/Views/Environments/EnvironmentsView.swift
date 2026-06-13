@@ -2,12 +2,9 @@
 //  EnvironmentsView.swift
 //  FluxKlang
 //
-//  The Environments screen: named, switchable routing setups. The user picks an
-//  active environment, then keeps a list of outboard effects (each wired into
-//  known WING output/input jacks) and ticks which instruments feed each one.
-//  FluxKlang allocates the bridging bus and return channel automatically (see
-//  `EffectRouting`) and can push the whole setup to the console with one tap.
-//  Switching environments swaps the entire rig.
+//  A simple environment builder. The screen is deliberately not a patchbay:
+//  create the effects in this setup, choose which instruments feed them, then
+//  place the resulting voices in space and apply the whole rig.
 //
 
 import SwiftUI
@@ -23,12 +20,14 @@ struct EnvironmentsView: View {
     private var store: EnvironmentStore { appModel.environments }
     private var environments: [RoutingEnvironment] { store.environments }
     private var effects: [Effect] { store.activeEffects }
+    private var assignments: [Equipment.ChannelAssignment] {
+        Equipment.channelAssignments(from: appModel.equipment.items)
+    }
     private var voices: [EnvironmentVoice] { appModel.environmentVoices() }
     private var allocations: [Effect.ID: EffectRouting.Allocation] {
         EffectRouting.allocations(for: effects)
     }
 
-    /// Whether the name prompt is creating a new environment or renaming one.
     enum NameMode {
         case new, rename
     }
@@ -38,26 +37,18 @@ struct EnvironmentsView: View {
             if environments.isEmpty {
                 noEnvironmentsState
             } else {
-                list
+                builder
             }
         }
-        .navigationTitle(navigationTitle)
+        .navigationTitle(store.active?.name ?? "Environments")
         .toolbar { toolbar }
         .sheet(item: $editing) { effect in
             EffectEditor(
                 effect: effect,
                 isNew: store.effect(effect.id) == nil,
                 allEffects: effects,
-                onSave: { saved in
-                    if store.effect(saved.id) == nil {
-                        store.add(saved)
-                    } else {
-                        store.update(saved)
-                    }
-                },
-                onDelete: store.effect(effect.id) == nil ? nil : {
-                    store.remove(effect)
-                }
+                onSave: save,
+                onDelete: store.effect(effect.id) == nil ? nil : { store.remove(effect) }
             )
             .environment(appModel)
         }
@@ -68,25 +59,20 @@ struct EnvironmentsView: View {
         }
     }
 
-    private var navigationTitle: String {
-        store.active?.name ?? "Environments"
-    }
+    // MARK: - Builder
 
-    // MARK: - List
-
-    private var list: some View {
+    private var builder: some View {
         List {
             environmentSection
             effectsSection
-            if !voices.isEmpty {
-                voicesSection
-            }
+            instrumentsSection
+            spaceSection
         }
     }
 
     private var environmentSection: some View {
         Section {
-            Picker("Active", selection: activeBinding) {
+            Picker("Environment", selection: activeBinding) {
                 ForEach(environments) { environment in
                     Text(environment.name).tag(environment.id)
                 }
@@ -94,95 +80,110 @@ struct EnvironmentsView: View {
             #if os(macOS)
             .pickerStyle(.menu)
             #endif
+
+            EnvironmentSummary(effects: effects, voices: voices)
         } header: {
             Text("Environment")
         } footer: {
-            Text("""
-            Switch setups instantly. Use the menu in the toolbar to add, rename, \
-            duplicate, or delete environments.
-            """)
+            Text("A saved rig: effects, instrument sends, spatial placement, and routing you can recall together.")
         }
     }
 
     private var effectsSection: some View {
         Section {
             if effects.isEmpty {
-                Button { addEffect() } label: {
-                    Label("Add your first effect", systemImage: "plus")
-                }
-            }
-            ForEach(Array(effects.enumerated()), id: \.element.id) { index, effect in
-                HStack(spacing: 8) {
-                    Button { editing = effect } label: {
-                        EffectRow(
-                            effect: effect,
-                            allocation: allocations[effect.id],
-                            destinationName: destinationName(for: effect),
-                            equipment: appModel.equipment
-                        )
+                ContentUnavailableView {
+                    Label("No Effects Yet", systemImage: "waveform.path.ecg")
+                } description: {
+                    Text("Add the outboard boxes you want in this environment.")
+                } actions: {
+                    Button { addEffect() } label: {
+                        Label("Add Effect", systemImage: "plus")
                     }
-.buttonStyle(.plain)
-#if os(macOS)
-Image(systemName: "line.3.horizontal")
-    .font(.body)
-    .foregroundStyle(.tertiary)
-    .accessibilityHidden(true)
-    .help("Drag to reorder")
-#endif
+                    .buttonStyle(.borderedProminent)
                 }
-                .contextMenu {
-                    Button { editing = effect } label: { Label("Edit…", systemImage: "pencil") }
-                    Divider()
-                    Button { moveUp(index) } label: { Label("Move Up", systemImage: "arrow.up") }
-                        .disabled(index == 0)
-                    Button { moveDown(index) } label: { Label("Move Down", systemImage: "arrow.down") }
-                        .disabled(index == effects.count - 1)
-                    Divider()
-                    Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+            } else {
+                ForEach(Array(effects.enumerated()), id: \.element.id) { index, effect in
+                    SimpleEffectCard(
+                        effect: effect,
+                        allocation: allocations[effect.id],
+                        sourceNames: sourceNames(for: effect),
+                        destinationName: destinationName(for: effect),
+                        onEdit: { editing = effect }
+                    )
+                    .contextMenu {
+                        Button { editing = effect } label: { Label("Edit Details", systemImage: "slider.horizontal.3") }
+                        Divider()
+                        Button { moveUp(index) } label: { Label("Move Up", systemImage: "arrow.up") }
+                            .disabled(index == 0)
+                        Button { moveDown(index) } label: { Label("Move Down", systemImage: "arrow.down") }
+                            .disabled(index == effects.count - 1)
+                        Divider()
+                        Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+                    }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+                    }
                 }
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) { delete(effect) } label: { Label("Delete", systemImage: "trash") }
+                .onDelete { store.remove(at: $0) }
+                .onMove { store.move(fromOffsets: $0, toOffset: $1) }
+
+                Button { addEffect() } label: {
+                    Label("Add Effect", systemImage: "plus")
                 }
             }
-            .onDelete { store.remove(at: $0) }
-            .onMove { store.move(fromOffsets: $0, toOffset: $1) }
         } header: {
-            Text("Effects")
+            Text("1 · Effects")
         } footer: {
-            Text(effectsFooterText)
+            Text("Order only decides the automatic bus/return allocation. Tap a card for hardware jacks or chaining.")
         }
     }
 
-    private var effectsFooterText: LocalizedStringKey {
-        #if os(macOS)
-        """
-        Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
-        Drag the grip handle to reorder, or right-click an effect to move it, edit it, or delete it.
-        """
-        #else
-        """
-        Order sets bus allocation — the first effect uses Bus 16, the next Bus 15, and so on. \
-        Tap Edit to reorder, or touch and hold an effect to move it, edit it, or delete it.
-        """
-        #endif
-    }
-
-    private var voicesSection: some View {
+    private var instrumentsSection: some View {
         Section {
-            Button { appModel.requestSpatialPlacement() } label: {
-                Label("Open Spatial to place", systemImage: "hifispeaker.2")
-            }
-            ForEach(voices) { voice in
-                VoiceRow(voice: voice)
+            if assignments.isEmpty {
+                ContentUnavailableView("No Instruments", systemImage: "pianokeys")
+            } else if effects.isEmpty {
+                Label("Add an effect first, then choose which instruments feed it.", systemImage: "arrow.up")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(assignments) { assignment in
+                    InstrumentSendRow(
+                        assignment: assignment,
+                        effects: effects,
+                        isSending: { effect in effect.feeds(assignment.equipment.id) },
+                        toggle: { effect, isOn in
+                            setInstrument(assignment.equipment.id, feeding: effect.id, isOn: isOn)
+                        }
+                    )
+                }
             }
         } header: {
-            Text("Spatial voices preview")
+            Text("2 · Instrument Sends")
         } footer: {
-            Text("""
-            A preview of what you can place in space — these rows aren't draggable here. \
-            Open the Spatial tab to position them. A shared effect sums its sources, so its return is \
-            one voice carrying every instrument that feeds it; those move together.
-            """)
+            Text("Tap an effect name to send that instrument there. Dry sound stays on the main mix.")
+        }
+    }
+
+    private var spaceSection: some View {
+        Section {
+            Button { appModel.requestSpatialPlacement() } label: {
+                Label("Place This Environment in Space", systemImage: "hifispeaker.2")
+            }
+            .disabled(voices.isEmpty)
+
+            if voices.isEmpty {
+                Text("Once instruments feed effects, their dry signals and effect returns become placeable voices.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(voices) { voice in
+                    VoiceRow(voice: voice)
+                }
+            }
+        } header: {
+            Text("3 · Space")
+        } footer: {
+            Text("Spatial placement stays part of this environment, so switching environments recalls the stage.")
         }
     }
 
@@ -192,10 +193,7 @@ Image(systemName: "line.3.horizontal")
         ContentUnavailableView {
             Label("Create an Environment", systemImage: "rectangle.3.group")
         } description: {
-            Text("""
-            An environment is a named, switchable setup — your effects, how instruments feed them, and \
-            where they go. Make one per song or scene and flip between them with a tap.
-            """)
+            Text("Make one simple rig per song, set, or setup.")
         } actions: {
             Button { promptNewEnvironment() } label: {
                 Label("New Environment", systemImage: "plus")
@@ -221,18 +219,17 @@ Image(systemName: "line.3.horizontal")
             Button { addEffect() } label: {
                 Label("Add Effect", systemImage: "plus")
             }
-            .help("Add an outboard effect to this environment")
         }
         ToolbarItem {
             Button(action: applyEnvironment) {
                 if isApplying {
                     ProgressView().controlSize(.small)
                 } else {
-                    Label("Apply", systemImage: "bolt.horizontal.circle")
+                    Label("Apply Environment", systemImage: "bolt.horizontal.circle")
                 }
             }
             .disabled(!appModel.isConnected || appModel.environmentSettings().isEmpty || isApplying)
-            .help("Send this environment's sends and returns to the console")
+            .help("Send this environment to the console")
         }
     }
 
@@ -257,13 +254,25 @@ Image(systemName: "line.3.horizontal")
         } label: {
             Label("Environments", systemImage: "rectangle.3.group")
         }
-        .help("Add, rename, duplicate, or delete environments")
     }
 
     // MARK: - Actions
 
     private func addEffect() {
         editing = Effect(name: "Effect \(effects.count + 1)")
+    }
+
+    private func save(_ effect: Effect) {
+        if store.effect(effect.id) == nil {
+            store.add(effect)
+        } else {
+            store.update(effect)
+        }
+    }
+
+    private func setInstrument(_ instrument: Equipment.ID, feeding effectID: Effect.ID, isOn: Bool) {
+        guard let effect = store.effect(effectID) else { return }
+        store.update(effect.togglingSource(instrument, isOn))
     }
 
     private func moveUp(_ index: Int) {
@@ -278,6 +287,10 @@ Image(systemName: "line.3.horizontal")
 
     private func delete(_ effect: Effect) {
         store.remove(effect)
+    }
+
+    private func sourceNames(for effect: Effect) -> [String] {
+        effect.sourceInstruments.compactMap { appModel.equipment.item($0)?.name }
     }
 
     private func destinationName(for effect: Effect) -> String? {
@@ -324,43 +337,6 @@ Image(systemName: "line.3.horizontal")
             await appModel.applyEnvironment()
             isApplying = false
         }
-    }
-}
-
-// MARK: - Voice row
-
-private struct VoiceRow: View {
-    let voice: EnvironmentVoice
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: voice.kind == .source ? "pianokeys" : "waveform")
-                .foregroundStyle(voice.kind == .source ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(voice.name)
-                    .font(.subheadline)
-                if voice.isShared {
-                    Text(voice.sourcesLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if !voice.channels.isEmpty {
-                Text(channelLabel)
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var channelLabel: String {
-        let channels = voice.channels.map(String.init).joined(separator: "/")
-        let prefix = voice.kind == .source ? "Ch" : "Rtn"
-        return "\(prefix) \(channels)"
     }
 }
 
