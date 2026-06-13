@@ -224,6 +224,73 @@ final class EnvironmentStore {
         mutateGraph { $0.removeEdge(id) }
     }
 
+    // MARK: - Active-environment semantic studio graph
+
+    var activeStudioGraph: StudioGraph { active?.studioGraph ?? StudioGraph() }
+    var activeStudioEndpoints: [StudioEndpoint] { active?.studioEndpoints ?? [] }
+    var activeStudioSetup: StudioSetup { active?.studioSetup ?? StudioSetup() }
+
+    func setStudioSetup(_ setup: StudioSetup) {
+        mutateEnvironment { $0.studioSetup = setup }
+    }
+
+    func replaceStudio(graph: StudioGraph, endpoints: [StudioEndpoint], setup: StudioSetup? = nil) {
+        mutateEnvironment { environment in
+            environment.studioGraph = graph
+            environment.studioEndpoints = endpoints
+            if let setup {
+                environment.studioSetup = setup
+            }
+        }
+    }
+
+    func addStudioEndpoint(_ endpoint: StudioEndpoint) {
+        mutateEnvironment { $0.studioEndpoints.append(endpoint) }
+    }
+
+    func setStudioEndpointPlacement(_ id: StudioEndpoint.ID, to placement: VoicePlacement) {
+        mutateEnvironment { environment in
+            guard let index = environment.studioEndpoints.firstIndex(where: { $0.id == id }) else { return }
+            environment.studioEndpoints[index].placement = placement
+        }
+    }
+
+    func addStudioNode(_ node: StudioNode) {
+        mutateStudioGraph { $0.addNode(node) }
+    }
+
+    func addStudioEndpointNode(_ endpoint: StudioEndpoint, position: CGPoint) {
+        mutateEnvironment { environment in
+            environment.studioEndpoints.append(endpoint)
+            environment.studioGraph.addNode(StudioNode(
+                kind: .endpoint(endpoint.id),
+                title: endpoint.name,
+                position: position
+            ))
+        }
+    }
+
+    func moveStudioNode(_ id: StudioNode.ID, to position: CGPoint) {
+        mutateStudioGraph { $0.moveNode(id, to: position) }
+    }
+
+    func removeStudioNode(_ id: StudioNode.ID) {
+        mutateEnvironment { environment in
+            if case .endpoint(let endpointID) = environment.studioGraph.node(id)?.kind {
+                environment.studioEndpoints.removeAll { $0.id == endpointID }
+            }
+            environment.studioGraph.removeNode(id)
+        }
+    }
+
+    func connectStudio(from origin: StudioPortRef, to destination: StudioPortRef) {
+        mutateStudioGraph { $0.connect(from: origin, to: destination) }
+    }
+
+    func removeStudioEdge(_ id: StudioEdge.ID) {
+        mutateStudioGraph { $0.removeEdge(id) }
+    }
+
     // MARK: - Internals
 
     /// Guarantees there is an active environment, creating a "Default" one when
@@ -242,6 +309,13 @@ final class EnvironmentStore {
         ensureEnvironment()
         guard let index = activeIndex() else { return }
         transform(&environments[index].graph)
+        persist()
+    }
+
+    private func mutateStudioGraph(_ transform: (inout StudioGraph) -> Void) {
+        ensureEnvironment()
+        guard let index = activeIndex() else { return }
+        transform(&environments[index].studioGraph)
         persist()
     }
 

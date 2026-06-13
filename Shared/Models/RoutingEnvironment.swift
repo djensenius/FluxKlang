@@ -41,23 +41,37 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
     /// WING endpoints) and the wires between them. Each environment owns its own
     /// canvas, so switching environments swaps the whole patch.
     var graph: ChainGraph
+    /// The redesigned semantic studio graph: instruments/effects/endpoints rather
+    /// than WING buses/channels. It is parallel to `graph` until the new workflow
+    /// replaces the old WING-oriented chain canvas.
+    var studioGraph: StudioGraph
+    /// Custom controllable endpoints/stems used by `studioGraph`.
+    var studioEndpoints: [StudioEndpoint]
+    /// Semantic device roles and physical plug mappings used by the studio graph.
+    var studioSetup: StudioSetup
 
     init(
         id: UUID = UUID(),
         name: String,
         effects: [Effect] = [],
         placements: [String: VoicePlacement] = [:],
-        graph: ChainGraph = ChainGraph()
+        graph: ChainGraph = ChainGraph(),
+        studioGraph: StudioGraph = StudioGraph(),
+        studioEndpoints: [StudioEndpoint] = [],
+        studioSetup: StudioSetup = StudioSetup()
     ) {
         self.id = id
         self.name = name
         self.effects = effects
         self.placements = placements
         self.graph = graph
+        self.studioGraph = studioGraph
+        self.studioEndpoints = studioEndpoints
+        self.studioSetup = studioSetup
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, effects, placements, graph
+        case id, name, effects, placements, graph, studioGraph, studioEndpoints, studioSetup
     }
 
     // Keeps environments.json files saved before spatial placement (and the
@@ -70,6 +84,9 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
         effects = try container.decodeIfPresent([Effect].self, forKey: .effects) ?? []
         placements = try container.decodeIfPresent([String: VoicePlacement].self, forKey: .placements) ?? [:]
         graph = try container.decodeIfPresent(ChainGraph.self, forKey: .graph) ?? ChainGraph()
+        studioGraph = try container.decodeIfPresent(StudioGraph.self, forKey: .studioGraph) ?? StudioGraph()
+        studioEndpoints = try container.decodeIfPresent([StudioEndpoint].self, forKey: .studioEndpoints) ?? []
+        studioSetup = try container.decodeIfPresent(StudioSetup.self, forKey: .studioSetup) ?? StudioSetup()
     }
 
     /// A deep copy under a new identity, with fresh effect IDs so the duplicate's
@@ -95,6 +112,14 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
         for (key, placement) in placements {
             copiedPlacements[EnvironmentVoice.remap(voiceID: key, effects: remap)] = placement
         }
-        return RoutingEnvironment(name: newName, effects: copies, placements: copiedPlacements, graph: graph)
+        return RoutingEnvironment(
+            name: newName,
+            effects: copies,
+            placements: copiedPlacements,
+            graph: graph,
+            studioGraph: studioGraph,
+            studioEndpoints: studioEndpoints,
+            studioSetup: studioSetup
+        )
     }
 }

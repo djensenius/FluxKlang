@@ -48,7 +48,7 @@ final class AppModel {
     private var cloudObserver: CloudChangeObserver?
 
     /// The currently selected sidebar section (also driven by Mac menu commands).
-    var section: AppSection = .faders
+    var section: AppSection = .studio
 
     /// Whether the Mac detail inspector is shown.
     var isInspectorPresented = false
@@ -131,6 +131,39 @@ final class AppModel {
     /// Applies the active environment's implied send/return routing to the WING.
     func applyEnvironment() async {
         await wing.apply(environmentSettings())
+    }
+
+    /// Semantic studio routing plan for the active environment's new canvas.
+    func studioRoutingPlan() -> StudioRoutingPlan {
+        StudioRoutingPlanner.plan(
+            for: environments.activeStudioGraph,
+            endpoints: environments.activeStudioEndpoints
+        )
+    }
+
+    /// WING resource plan for generated endpoint/stem controls.
+    func studioResourcePlan() -> StudioResourcePlan {
+        StudioResourceAllocator.allocateEndpoints(
+            for: studioRoutingPlan(),
+            effects: environments.activeEffects,
+            speakers: spatial.array.speakers
+        )
+    }
+
+    /// Compiles the active semantic studio canvas into concrete WING settings.
+    func studioCompiledRouting() -> StudioCompiledRouting {
+        StudioSignalCompiler.compile(
+            graph: environments.activeStudioGraph,
+            endpoints: environments.activeStudioEndpoints,
+            effects: environments.activeEffects,
+            assignments: Equipment.channelAssignments(from: equipment.items),
+            speakers: spatial.array.speakers
+        )
+    }
+
+    /// Applies every valid branch of the semantic studio canvas to the WING.
+    func applyStudio() async {
+        await wing.apply(studioCompiledRouting().settings)
     }
 
     /// The placeable voices of the active environment, derived from its routing
@@ -272,10 +305,9 @@ final class AppModel {
         newPresetRequestID += 1
     }
 
-    /// Switches to the Spatial section so the active environment's voices can be
-    /// placed in the field. The Environments screen only previews these voices.
+    /// Switches back to Studio, the simplified home for patching and placement.
     func requestSpatialPlacement() {
-        section = .spatial
+        section = .studio
     }
 
     /// Menu (⌘R) behaviour: disconnect when connected, otherwise reconnect to the

@@ -133,6 +133,12 @@ struct EnvironmentSpatialTests {
         // empty graph rather than failing.
         #expect(decoded.graph.nodes.isEmpty)
         #expect(decoded.graph.edges.isEmpty)
+        // Environments saved before the semantic studio graph decode with empty
+        // endpoint/stem state rather than failing.
+        #expect(decoded.studioGraph.nodes.isEmpty)
+        #expect(decoded.studioGraph.edges.isEmpty)
+        #expect(decoded.studioEndpoints.isEmpty)
+        #expect(decoded.studioSetup.devices.isEmpty)
         #expect(decoded.name == "Old")
     }
 

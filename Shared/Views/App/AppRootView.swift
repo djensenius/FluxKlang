@@ -4,7 +4,7 @@
 //
 //  Platform-adaptive root. iPhone (compact) uses a navigation stack; iPad and
 //  Mac use a NavigationSplitView with a source-list sidebar. The real feature
-//  surfaces (faders, routing, chain builder, presets) arrive in later phases.
+//  surface first, with low-level WING tools grouped under Advanced.
 //
 
 import SwiftUI
@@ -25,25 +25,21 @@ struct AppRootView: View {
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
+    case studio = "Studio"
     case faders = "Faders"
-    case routing = "Routing"
-    case chain = "Chain"
-    case environments = "Environments"
-    case spatial = "Spatial"
     case presets = "Presets"
     case connection = "Connection"
+    case advanced = "Advanced"
 
     var id: String { rawValue }
 
     var systemImage: String {
         switch self {
+        case .studio: return "square.stack.3d.up"
         case .faders: return "slider.vertical.3"
-        case .routing: return "point.topleft.down.to.point.bottomright.curvepath"
-        case .chain: return "point.3.connected.trianglepath.dotted"
-        case .environments: return "rectangle.3.group"
-        case .spatial: return "hifispeaker.2"
         case .presets: return "square.grid.2x2"
         case .connection: return "antenna.radiowaves.left.and.right"
+        case .advanced: return "wrench.and.screwdriver"
         }
     }
 }
@@ -132,20 +128,16 @@ private struct SectionDetail: View {
     @ViewBuilder
     private var content: some View {
         switch section {
+        case .studio:
+            StudioView()
         case .faders:
             FadersView()
         case .connection:
             ConnectionView()
-        case .routing:
-            RoutingView()
-        case .chain:
-            ChainCanvasView()
-        case .environments:
-            EnvironmentsView()
-        case .spatial:
-            SpatialView()
         case .presets:
             PresetsView()
+        case .advanced:
+            AdvancedView()
         }
     }
 }
