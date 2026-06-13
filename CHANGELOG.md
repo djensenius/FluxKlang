@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.5](https://github.com/djensenius/FluxKlang/compare/v0.0.4...v0.0.5) (2026-06-13)
+
+
+### Features
+
+* simplify studio patching workflow ([2608d2b](https://github.com/djensenius/FluxKlang/commit/2608d2bec58e08972d481dd39dc22b4db146a99b))
+
 ## [0.0.4](https://github.com/djensenius/FluxKlang/compare/v0.0.3...v0.0.4) (2026-06-12)
 
 
