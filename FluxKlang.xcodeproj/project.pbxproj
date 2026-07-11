@@ -10,6 +10,7 @@
 		003989ABF30701B9EA7B9B0F /* Equipment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664F41DD22AE785D547A764C /* Equipment.swift */; };
 		00425D1C827A32DD4B0D069E /* Effect.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE42B6C9E72F4FE274CEC425 /* Effect.swift */; };
 		005E40F25AEF4BA0F5527C3C /* WingNodeRef.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0451A9D61B5FEF5E7C4B5C34 /* WingNodeRef.swift */; };
+		008C771DCF5F80FA2CD58EC9 /* RoutingSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC279CF5A8D3D2A98DE68CD /* RoutingSnapshotStore.swift */; };
 		00F1F9CB81D3E73F15D6A1E0 /* EquipmentLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DFAAC4B1C68CB6CD1127E2E /* EquipmentLibraryView.swift */; };
 		0290F8C59F5396A40C7CE565 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F391E231A2B634B431325C8 /* ConnectionView.swift */; };
 		0440007401C6D52B75E7B153 /* StudioCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435B3823839F80D106B8B028 /* StudioCanvasView.swift */; };
@@ -26,6 +27,7 @@
 		133F6DADCC26847A9B0F95C5 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CA2756FAADEE73BA7BA94C /* AppModel.swift */; };
 		140F78BB9E1B53AA55D28F0F /* SwiftOSC in Frameworks */ = {isa = PBXBuildFile; productRef = DEA9BE5822A9613871C6C436 /* SwiftOSC */; };
 		1487D59C79BD7FA946ADF40B /* SpatialRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B0C58809B54E7219DC7642B /* SpatialRouting.swift */; };
+		15C997F48895F59D2C214FF9 /* RoutingSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC279CF5A8D3D2A98DE68CD /* RoutingSnapshotStore.swift */; };
 		15CBF0C2B2AE702FADCBF935 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F391E231A2B634B431325C8 /* ConnectionView.swift */; };
 		160716D7E47B6E17A4330916 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8CA2756FAADEE73BA7BA94C /* AppModel.swift */; };
 		17F5F5EFF70C48F7E3102534 /* StudioSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */; };
@@ -38,12 +40,14 @@
 		1A8859AEC37BF32385DD9F89 /* Equipment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 664F41DD22AE785D547A764C /* Equipment.swift */; };
 		1CD80DBB77B6C51ADE393C9A /* WingDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229036D3A7082A2B82C03FF7 /* WingDiscovery.swift */; };
 		1D4F414874D5C320A451DD5A /* SpeakerArray.swift in Sources */ = {isa = PBXBuildFile; fileRef = F633746B37339595DD5625A6 /* SpeakerArray.swift */; };
+		1E3A3FBEBF25544F8E145DF5 /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		1F4AC175A300D1C912265BB6 /* EffectEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7D45D2618BA7418E7F0F12 /* EffectEditor.swift */; };
 		229BACDF042B3A64CA233615 /* EnvironmentVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A54D9E89BD6B53D8AB55F71D /* EnvironmentVoice.swift */; };
 		279D7D1F7F8E5D6F49672840 /* EffectRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6928F6E7E7024740B8C8BD4 /* EffectRoutingTests.swift */; };
 		2A0313FD5E6FF5C456B84562 /* RoutingEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A200ECD87AC2A275857AD7F /* RoutingEnvironment.swift */; };
 		2B8C14AF5BAEF01C03EFC37E /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F34EC4E1D900872D476CC1DC /* Theme.swift */; };
 		2B9F2E11D88140B2CC830D0C /* NodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F088F9CF2B64FC3E008292D2 /* NodeView.swift */; };
+		2C04035F5F3F58F0E2B02586 /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
 		2D90278C9718E9CD82BEAE26 /* ChainGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */; };
 		2D9EA9043B0EE6766C8B08EE /* DiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415B289F973D0827B92F2CE1 /* DiscoveryView.swift */; };
 		2EEC11A14E2E093188BDF799 /* OutputRoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29870935C9056DF72B53078F /* OutputRoutingView.swift */; };
@@ -73,6 +77,7 @@
 		50398CD52E32A69C431C0128 /* WingIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F663ACE0B1486B2974BCC7D4 /* WingIOTests.swift */; };
 		505E0F369C9A5D4FCC7AF794 /* AppIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E632BD24E2E34EF89734819 /* AppIcon.swift */; };
 		5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEC454C8E9B9862280CC236 /* SpatialTests.swift */; };
+		52B144CCB29DE0AA32B4756B /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
 		537ABAA1B3223F68CE0A4910 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
 		54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405DD99B88EED698E298E908 /* DemoModeTests.swift */; };
 		5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */; };
@@ -91,7 +96,9 @@
 		65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
 		672536435CE9A0A4FBB95AF6 /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
 		6C97FEEAFCDB01C257CDDDD1 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
+		70D4AB885A6256942C3428AB /* PatchbayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 567409B5C0186F971324C844 /* PatchbayView.swift */; };
 		70DB7AD07FC6A934A2FDE5CE /* FadersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EF3AA2751A71216BF63CD6C /* FadersView.swift */; };
+		71AE2B429DF5E28EF491C783 /* RoutingSnapshotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C896442DF134BCA52AA883A7 /* RoutingSnapshotsView.swift */; };
 		72D7320FB6F8673568E3CDC6 /* EffectRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E502F19AA5C1BCD11E888CE2 /* EffectRow.swift */; };
 		72FFE8A231860039C6AB759A /* ChainGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B361516C0EA80B04919B6FFA /* ChainGeometry.swift */; };
 		73DA1236B7BEE2F8A9671179 /* ChainCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 652B04B515FA75D5D61F0851 /* ChainCanvasView.swift */; };
@@ -102,6 +109,7 @@
 		7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
 		7BFB9F302ABC82B97CEE00F4 /* DiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415B289F973D0827B92F2CE1 /* DiscoveryView.swift */; };
 		7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
+		7DD7FC9A1B1561DB4256E9FD /* TutorialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3881C24F96EFD21A4EC22C /* TutorialView.swift */; };
 		7F73B0ADD7DD512A79A8051D /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		81565AFF1FB26784BF0792B5 /* ScrollWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47075D2AAB467EA271F7916 /* ScrollWheel.swift */; };
 		85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */; };
@@ -109,6 +117,7 @@
 		86B10A54FBF320D545E63AE3 /* RoutingTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8762531BC7A63F213F735232 /* RoutingTranslator.swift */; };
 		86E3AC34313865A3E3EC10BF /* WingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 456B5650F08A7DE5FF17EC47 /* WingController.swift */; };
 		87772F458F20DEB210A03A4F /* ChainGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */; };
+		8833C72BFCAEE814414762C4 /* TutorialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3881C24F96EFD21A4EC22C /* TutorialView.swift */; };
 		88E65C8BE2B0C8B565292AF0 /* SpeakerConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94B8CD1C8E2EB68FD8B7E7AC /* SpeakerConfigView.swift */; };
 		89F0D62486982EDA206E8CAD /* MeterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B556AC51B84AE09C97AFDC4 /* MeterView.swift */; };
 		8A49FEB7D29FC9F204D3C496 /* ModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4D85030CA825D9541436A2 /* ModelsTests.swift */; };
@@ -133,7 +142,9 @@
 		A06828AD7B651A480F2E1AEC /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BBDA94BA3DF57C8A6B4C92 /* AdvancedView.swift */; };
 		A06E2D69977F3597D1C7F797 /* RoutingTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8762531BC7A63F213F735232 /* RoutingTranslator.swift */; };
 		A469C963335F0DCF658DFBA8 /* WingAddressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */; };
+		A77A9CF2F38CA0873F86EFCD /* PatchbayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 567409B5C0186F971324C844 /* PatchbayView.swift */; };
 		AB2E0D9E6EA4196511C1D1EB /* WingNamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F8BD24CDA75478B2069054F /* WingNamingTests.swift */; };
+		AD7BF913CE6554272B9210BA /* RoutingSnapshotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C896442DF134BCA52AA883A7 /* RoutingSnapshotsView.swift */; };
 		AE5F90E0F7DFB65EDEEBB7D8 /* SpatialPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDC161FABC40775CD97C8AF7 /* SpatialPadView.swift */; };
 		AECF1DD7AAF632E0FF01BA45 /* PresetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568F07F0F058B49FFCE6D840 /* PresetsView.swift */; };
 		AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
@@ -154,6 +165,7 @@
 		C2A9CA6DC072C91ABA155F7D /* PortView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E70D3009B51EEB9AFA31AF /* PortView.swift */; };
 		C620AF15DC5A739887A30B88 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
 		C66D197F4ABDB1050EBD2FA0 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
+		CB1180B15BD9C1B8D903200E /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		CB19842B27C432A04CFEEE42 /* WingDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */; };
 		CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		CD756007C5BACC97F4255D63 /* EquipmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C78F5B15B50724D01C422C4 /* EquipmentStore.swift */; };
@@ -219,6 +231,7 @@
 		282FD5D129226FE552419869 /* WingSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingSource.swift; sourceTree = "<group>"; };
 		29870935C9056DF72B53078F /* OutputRoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputRoutingView.swift; sourceTree = "<group>"; };
 		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
+		34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputPatchbayGrid.swift; sourceTree = "<group>"; };
 		35EFA96D78CE256B049568C5 /* FaderMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMath.swift; sourceTree = "<group>"; };
 		3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
 		3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncTests.swift; sourceTree = "<group>"; };
@@ -233,6 +246,8 @@
 		456B5650F08A7DE5FF17EC47 /* WingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingController.swift; sourceTree = "<group>"; };
 		47AE2617F3BFCE2F475789B1 /* WingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingTransport.swift; sourceTree = "<group>"; };
 		4E585C6A2C4C4F93C8E722BA /* SpatialSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialSource.swift; sourceTree = "<group>"; };
+		4FC279CF5A8D3D2A98DE68CD /* RoutingSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingSnapshotStore.swift; sourceTree = "<group>"; };
+		567409B5C0186F971324C844 /* PatchbayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchbayView.swift; sourceTree = "<group>"; };
 		568F07F0F058B49FFCE6D840 /* PresetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsView.swift; sourceTree = "<group>"; };
 		581CD8ACF8D35B9779227576 /* InputPatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputPatchView.swift; sourceTree = "<group>"; };
 		5B0C58809B54E7219DC7642B /* SpatialRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialRouting.swift; sourceTree = "<group>"; };
@@ -277,6 +292,7 @@
 		A18982F123B7C1D338F645BE /* PresetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsTests.swift; sourceTree = "<group>"; };
 		A54D9E89BD6B53D8AB55F71D /* EnvironmentVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentVoice.swift; sourceTree = "<group>"; };
 		A5601B154CDD9A39F8530981 /* InspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorView.swift; sourceTree = "<group>"; };
+		AB3881C24F96EFD21A4EC22C /* TutorialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialView.swift; sourceTree = "<group>"; };
 		AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGraph.swift; sourceTree = "<group>"; };
 		B08E59FFF869F286A1BFDFCB /* StudioResourceAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioResourceAllocator.swift; sourceTree = "<group>"; };
 		B2BBDA94BA3DF57C8A6B4C92 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
@@ -289,6 +305,7 @@
 		BE42B6C9E72F4FE274CEC425 /* Effect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Effect.swift; sourceTree = "<group>"; };
 		C078BB1C1047B19A8F49E221 /* SpatialPanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialPanner.swift; sourceTree = "<group>"; };
 		C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKeyValueStore.swift; sourceTree = "<group>"; };
+		C896442DF134BCA52AA883A7 /* RoutingSnapshotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingSnapshotsView.swift; sourceTree = "<group>"; };
 		CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingDiscoveryTests.swift; sourceTree = "<group>"; };
 		D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSetup.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
@@ -308,6 +325,7 @@
 		F633746B37339595DD5625A6 /* SpeakerArray.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerArray.swift; sourceTree = "<group>"; };
 		F663ACE0B1486B2974BCC7D4 /* WingIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingIOTests.swift; sourceTree = "<group>"; };
 		F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluxKlangMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputPatchbayGrid.swift; sourceTree = "<group>"; };
 		FA4D85030CA825D9541436A2 /* ModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsTests.swift; sourceTree = "<group>"; };
 		FDC161FABC40775CD97C8AF7 /* SpatialPadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialPadView.swift; sourceTree = "<group>"; };
 		FE008189B554CBD9741C6447 /* FluxKlang.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FluxKlang.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -354,11 +372,13 @@
 				FCF217D3779B1A06BB4EA587 /* Environments */,
 				82CE79D6C68E5CC94F5FA720 /* Mac */,
 				D8C2C1CDCBA4F59B3C01C929 /* Mixer */,
+				A85CC52E9FB46BD815B9A341 /* Patchbay */,
 				C9785AC88486FD7ECD0DE441 /* Presets */,
 				8748BCE34AD4DF5124ADBB88 /* Routing */,
 				A75FC191D2ABF16B464CB984 /* Settings */,
 				8F55ADAB0544A6EAB2D1608E /* Spatial */,
 				16C2D612B475C82A5B328057 /* Studio */,
+				D206C64E72569CA35518E0C6 /* Tutorial */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -440,6 +460,7 @@
 				B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */,
 				5B69ADD8EF543F6332343A49 /* JSONFileStore.swift */,
 				7B41203E2877DE096F492901 /* PresetStore.swift */,
+				4FC279CF5A8D3D2A98DE68CD /* RoutingSnapshotStore.swift */,
 				3D75FEB93B4868C0DF38EF8B /* SpatialStore.swift */,
 			);
 			path = Store;
@@ -519,6 +540,17 @@
 			path = FluxKlang;
 			sourceTree = "<group>";
 		};
+		A85CC52E9FB46BD815B9A341 /* Patchbay */ = {
+			isa = PBXGroup;
+			children = (
+				F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */,
+				34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */,
+				567409B5C0186F971324C844 /* PatchbayView.swift */,
+				C896442DF134BCA52AA883A7 /* RoutingSnapshotsView.swift */,
+			);
+			path = Patchbay;
+			sourceTree = "<group>";
+		};
 		AE944FB5A90EF0D8678BE47C /* Shared */ = {
 			isa = PBXGroup;
 			children = (
@@ -557,6 +589,14 @@
 				E470C74DDAD45D6C32ABCF5C /* SceneButtonsView.swift */,
 			);
 			path = Presets;
+			sourceTree = "<group>";
+		};
+		D206C64E72569CA35518E0C6 /* Tutorial */ = {
+			isa = PBXGroup;
+			children = (
+				AB3881C24F96EFD21A4EC22C /* TutorialView.swift */,
+			);
+			path = Tutorial;
 			sourceTree = "<group>";
 		};
 		D690289EB2D1A067B9A8E5F9 /* Intents */ = {
@@ -796,19 +836,24 @@
 				4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */,
 				D3550641BA3BA73AFDF0B461 /* FluxKlangIntents.swift in Sources */,
 				EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */,
+				52B144CCB29DE0AA32B4756B /* InputPatchbayGrid.swift in Sources */,
 				AF5B1B3408D74D6EE4C49FB9 /* InspectorView.swift in Sources */,
 				65E18401AD44AD37D153BEA4 /* JSONFileStore.swift in Sources */,
 				CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */,
 				087F27C9EDEFE26C67E9E774 /* MenuBarMixer.swift in Sources */,
 				89F0D62486982EDA206E8CAD /* MeterView.swift in Sources */,
 				9A81D103EF09AF0F020B6D47 /* NodeView.swift in Sources */,
+				CB1180B15BD9C1B8D903200E /* OutputPatchbayGrid.swift in Sources */,
 				BE0094DC245A4F938C33A0E1 /* OutputRoutingView.swift in Sources */,
 				5CD6632F85A05E208E57F56B /* PatchMatrixView.swift in Sources */,
+				A77A9CF2F38CA0873F86EFCD /* PatchbayView.swift in Sources */,
 				C2A9CA6DC072C91ABA155F7D /* PortView.swift in Sources */,
 				FEF78D21F1F541D551F9DA4F /* Preset.swift in Sources */,
 				E57C931A8947E7A42BFCB884 /* PresetStore.swift in Sources */,
 				1891ACCED4485AA166BBA012 /* PresetsView.swift in Sources */,
 				2A0313FD5E6FF5C456B84562 /* RoutingEnvironment.swift in Sources */,
+				008C771DCF5F80FA2CD58EC9 /* RoutingSnapshotStore.swift in Sources */,
+				71AE2B429DF5E28EF491C783 /* RoutingSnapshotsView.swift in Sources */,
 				86B10A54FBF320D545E63AE3 /* RoutingTranslator.swift in Sources */,
 				F7567ED6DC5C3CADD9F69166 /* RoutingView.swift in Sources */,
 				DD04C8403BEA5DCB98DE4D26 /* SceneButtonsView.swift in Sources */,
@@ -832,6 +877,7 @@
 				F2140B7BB6B895C00439C50F /* StudioSignalCompiler.swift in Sources */,
 				40165757D9D23BC0248D9678 /* StudioView.swift in Sources */,
 				8F093B85B1FCA7DCC85A8A2E /* Theme.swift in Sources */,
+				8833C72BFCAEE814414762C4 /* TutorialView.swift in Sources */,
 				CEAB194B157618CFDCC7987D /* VerticalFader.swift in Sources */,
 				FF4E21BBEE9EC76C24B83B00 /* WingAddressBook.swift in Sources */,
 				8BE59968D0AF1DE6D2934624 /* WingConnection.swift in Sources */,
@@ -882,19 +928,24 @@
 				7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */,
 				5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */,
 				FDE7091985D3DC6D13A2EE24 /* InputPatchView.swift in Sources */,
+				2C04035F5F3F58F0E2B02586 /* InputPatchbayGrid.swift in Sources */,
 				D020E5234B51DB78A5F34B63 /* InspectorView.swift in Sources */,
 				19BB93FB60C5DD5FEA30461A /* JSONFileStore.swift in Sources */,
 				E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */,
 				5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */,
 				F2EB47B7D52E839B0040B2D0 /* MeterView.swift in Sources */,
 				2B9F2E11D88140B2CC830D0C /* NodeView.swift in Sources */,
+				1E3A3FBEBF25544F8E145DF5 /* OutputPatchbayGrid.swift in Sources */,
 				2EEC11A14E2E093188BDF799 /* OutputRoutingView.swift in Sources */,
 				96006ECE036640F94DC31640 /* PatchMatrixView.swift in Sources */,
+				70D4AB885A6256942C3428AB /* PatchbayView.swift in Sources */,
 				19F651F5EB4FC01086F9EE58 /* PortView.swift in Sources */,
 				9E4EF35688F6288FE4F44F50 /* Preset.swift in Sources */,
 				747EC8F317F06CD3CDF06DA1 /* PresetStore.swift in Sources */,
 				AECF1DD7AAF632E0FF01BA45 /* PresetsView.swift in Sources */,
 				5B90ACA38BB5637E9DC93888 /* RoutingEnvironment.swift in Sources */,
+				15C997F48895F59D2C214FF9 /* RoutingSnapshotStore.swift in Sources */,
+				AD7BF913CE6554272B9210BA /* RoutingSnapshotsView.swift in Sources */,
 				A06E2D69977F3597D1C7F797 /* RoutingTranslator.swift in Sources */,
 				6280FC1F01CD759B5C66349D /* RoutingView.swift in Sources */,
 				8F0F53A3856F08A3E123F36D /* SceneButtonsView.swift in Sources */,
@@ -918,6 +969,7 @@
 				608BF55953884619BAE7872D /* StudioSignalCompiler.swift in Sources */,
 				EC91702D6E40FED2005888E3 /* StudioView.swift in Sources */,
 				2B8C14AF5BAEF01C03EFC37E /* Theme.swift in Sources */,
+				7DD7FC9A1B1561DB4256E9FD /* TutorialView.swift in Sources */,
 				3C1E9347A412BEED2ED0DBB8 /* VerticalFader.swift in Sources */,
 				7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */,
 				0E93A5C70CD0F76CCA84DA1C /* WingConnection.swift in Sources */,

@@ -189,6 +189,13 @@ enum WingAddress {
             addresses.append(channelSourceGroup(channel))
             addresses.append(channelSourceIndex(channel))
         }
+        // Physical output socket source patches (which internal main/bus/matrix
+        // feeds each local output), so the patchbay and routing snapshots reflect
+        // the console's current output routing.
+        for output in 1...localOutputCount {
+            addresses.append(outputSourceGroup(output))
+            addresses.append(outputSourceIndex(output))
+        }
         // Best-guess physical I/O connector names (LOCAL bank); provisional until
         // verified against hardware.
         for connector in 1...WingSourceGroup.local.count {
