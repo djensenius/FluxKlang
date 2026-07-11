@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.6](https://github.com/djensenius/FluxKlang/compare/v0.0.5...v0.0.6) (2026-07-11)
+
+
+### Features
+
+* add Flock PATCH-style Patchbay and Tutorial sections ([#22](https://github.com/djensenius/FluxKlang/issues/22)) ([686c15a](https://github.com/djensenius/FluxKlang/commit/686c15a566f7dc65ee530849184260689101debf))
+
 ## [0.0.5](https://github.com/djensenius/FluxKlang/compare/v0.0.4...v0.0.5) (2026-06-13)
 
 
