@@ -26,9 +26,11 @@ struct AppRootView: View {
 
 enum AppSection: String, CaseIterable, Identifiable {
     case studio = "Studio"
+    case patchbay = "Patchbay"
     case faders = "Faders"
     case presets = "Presets"
     case connection = "Connection"
+    case tutorial = "Tutorial"
     case advanced = "Advanced"
 
     var id: String { rawValue }
@@ -36,9 +38,11 @@ enum AppSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .studio: return "square.stack.3d.up"
+        case .patchbay: return "point.topleft.down.to.point.bottomright.curvepath"
         case .faders: return "slider.vertical.3"
         case .presets: return "square.grid.2x2"
         case .connection: return "antenna.radiowaves.left.and.right"
+        case .tutorial: return "graduationcap"
         case .advanced: return "wrench.and.screwdriver"
         }
     }
@@ -130,12 +134,16 @@ private struct SectionDetail: View {
         switch section {
         case .studio:
             StudioView()
+        case .patchbay:
+            PatchbayView()
         case .faders:
             FadersView()
         case .connection:
             ConnectionView()
         case .presets:
             PresetsView()
+        case .tutorial:
+            TutorialView()
         case .advanced:
             AdvancedView()
         }

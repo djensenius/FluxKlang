@@ -31,6 +31,10 @@ final class AppModel {
     /// Saved presets / scene snapshots.
     let presets = PresetStore()
 
+    /// Named routing snapshots — the patchbay's Flock PATCH-style capture of the
+    /// whole input/output patch, recalled instantly and independently of levels.
+    let routingSnapshots = RoutingSnapshotStore()
+
     /// Speaker layout and spatially-placed instruments for surround mixing.
     let spatial = SpatialStore()
 
@@ -79,6 +83,7 @@ final class AppModel {
         await equipment.load()
         await environments.load()
         await presets.load()
+        await routingSnapshots.load()
         await spatial.load()
         startObservingCloudChanges()
     }
@@ -98,6 +103,7 @@ final class AppModel {
         await equipment.reload()
         await environments.reload()
         await presets.reload()
+        await routingSnapshots.reload()
         await spatial.reload()
     }
 
@@ -195,6 +201,35 @@ final class AppModel {
     /// Recalls a preset by applying its settings to the WING.
     func recall(_ preset: Preset) async {
         await wing.apply(preset.settings)
+    }
+
+    /// Recalls a routing snapshot, re-patching the whole input/output patchbay.
+    func recallRoutingSnapshot(_ snapshot: Preset) async {
+        await wing.apply(snapshot.settings)
+    }
+
+    /// Captures the current patchbay (channel input patches + physical output
+    /// source patches) into a named routing snapshot for instant recall.
+    func saveRoutingSnapshot(named name: String) {
+        let settings = wing.snapshot(of: routingSnapshotAddresses())
+        routingSnapshots.add(Preset(name: name, settings: settings))
+    }
+
+    /// Addresses captured into a routing snapshot: every channel's input source
+    /// (group + index) and every physical output socket's source (group + index).
+    /// Routing only — deliberately excludes faders, mutes and sends so a snapshot
+    /// recalls the patch without disturbing the mix.
+    private func routingSnapshotAddresses() -> [String] {
+        var addresses: [String] = []
+        for channel in 1...WingNodeKind.channel.count {
+            addresses.append(WingAddress.channelSourceGroup(channel))
+            addresses.append(WingAddress.channelSourceIndex(channel))
+        }
+        for output in 1...WingAddress.localOutputCount {
+            addresses.append(WingAddress.outputSourceGroup(output))
+            addresses.append(WingAddress.outputSourceIndex(output))
+        }
+        return addresses
     }
 
     /// Captures the current mixer + routing state into a named preset.

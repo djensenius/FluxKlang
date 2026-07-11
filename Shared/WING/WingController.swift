@@ -303,6 +303,19 @@ final class WingController {
         return WingSource(group: group, index: index)
     }
 
+    /// Patches a physical output socket's internal source (a main, bus or matrix).
+    func setOutputSource(_ output: Int, to source: WingOutputSource) async {
+        await apply(source.settings(forOutput: output))
+    }
+
+    /// The internal source currently feeding a physical output socket, if known.
+    func outputSource(_ output: Int) -> WingOutputSource? {
+        guard let token = values[WingAddress.outputSourceGroup(output)]?.stringValue,
+              let group = WingOutputSourceGroup(rawValue: token) else { return nil }
+        let index = Int(values[WingAddress.outputSourceIndex(output)]?.intValue ?? 0)
+        return WingOutputSource(group: group, index: index)
+    }
+
     /// Assigns or unassigns a strip to a main bus.
     func setMainAssign(_ kind: WingNodeKind, _ index: Int, toMain main: Int, on enabled: Bool) async {
         await set(WingAddress.mainOn(kind, index, toMain: main), .int(enabled ? 1 : 0))
