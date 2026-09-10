@@ -269,9 +269,12 @@ final class AssistantChatController {
         mutation: (inout AssistantConversation) -> Void
     ) {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
-        mutation(&conversations[index])
-        conversations[index].modifiedAt = Date()
-        let conversation = conversations[index]
+        let original = conversations[index]
+        var conversation = original
+        mutation(&conversation)
+        guard conversation != original else { return }
+        conversation.modifiedAt = Date()
+        conversations[index] = conversation
         conversations.sort { $0.modifiedAt > $1.modifiedAt }
         Task { await store.save(conversation) }
     }

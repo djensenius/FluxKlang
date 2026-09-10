@@ -69,7 +69,11 @@ struct SimpleEffectCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let temporaryMove {
-                    Text(connectorSummary(temporaryMove))
+                    Text(
+                        temporaryMove.connectorSummary(
+                            home: appModel.studioConnections.connections.home
+                        )
+                    )
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -87,26 +91,6 @@ struct SimpleEffectCard: View {
     private var temporaryMove: TemporaryDeviceMove? {
         guard let equipmentID = effect.equipmentID else { return nil }
         return appModel.studioConnections.connections.move(for: equipmentID)
-    }
-
-    private func connectorSummary(_ move: TemporaryDeviceMove) -> String {
-        let home = appModel.studioConnections.connections.home
-        let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentInputs = move.connections.inputs.map(\.connector).sorted()
-        let homeOutputs = home.outputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentOutputs = move.connections.outputs.map(\.connector).sorted()
-        var parts: [String] = []
-        if !homeInputs.isEmpty {
-            parts.append("In \(list(homeInputs)) → \(list(currentInputs))")
-        }
-        if !homeOutputs.isEmpty {
-            parts.append("Out \(list(homeOutputs)) → \(list(currentOutputs))")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func list(_ connectors: [Int]) -> String {
-        connectors.map(String.init).joined(separator: "/")
     }
 
     private var routeSummary: String {

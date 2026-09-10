@@ -17,7 +17,7 @@ struct StudioConnectionsView: View {
         List {
             Section {
                 Label(
-                    "Home stays immutable. Active Temporary Moves overlay it until Return Home is verified.",
+                    "Home stays immutable. Active Temporary Moves overlay it until Return Home is applied.",
                     systemImage: "house"
                 )
                 Button {

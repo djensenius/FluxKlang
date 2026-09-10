@@ -118,6 +118,28 @@ struct InAppAssistantTests {
         #expect(chat.conversations.count == 1)
     }
 
+    @Test func noOpConversationUpdatesDoNotPersistOrReorderHistory() async throws {
+        let backend = MemoryHistoryBackend()
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: backend, cloud: nil),
+            generator: StubGenerator(availability: .ready, text: "Ready")
+        )
+        chat.newConversation()
+        let olderID = try #require(chat.selectedConversationID)
+        try await waitForSaveCount(1, backend: backend)
+        chat.newConversation()
+        try await waitForSaveCount(2, backend: backend)
+        let originalOrder = chat.conversations.map(\.id)
+
+        chat.renameConversation(id: olderID, to: "New Conversation")
+        chat.renameConversation(id: olderID, to: "   ")
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(chat.conversations.map(\.id) == originalOrder)
+        #expect(await backend.saveCount == 2)
+    }
+
     @Test func retryReusesTheExistingUserMessage() async throws {
         let generator = FailingRecordingGenerator()
         let chat = AssistantChatController(
@@ -294,6 +316,17 @@ struct InAppAssistantTests {
             globalConnections: GlobalStudioConnections()
         )
     }
+
+    private func waitForSaveCount(
+        _ expectedCount: Int,
+        backend: MemoryHistoryBackend
+    ) async throws {
+        for _ in 0..<100 {
+            if await backend.saveCount == expectedCount { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw AssistantTestError.persistenceTimedOut
+    }
 }
 
 private struct StubGenerator: AssistantGenerating {
@@ -391,6 +424,7 @@ private final class FailingRecordingGenerator: AssistantGenerating, @unchecked S
 
 private enum AssistantTestError: Error {
     case generationFailed
+    case persistenceTimedOut
 }
 
 private actor MemoryHistoryBackend: AssistantHistoryBackend {

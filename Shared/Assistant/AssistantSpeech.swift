@@ -98,17 +98,24 @@ actor SpeechAnalyzerAssistantTranscriber: AssistantSpeechTranscribing {
         try await speechAnalyzer.prepareToAnalyze(in: format)
 
         let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-        inputContinuation = continuation
-        engine = audioEngine
-        analyzer = speechAnalyzer
-
         let (updates, updatesContinuation) =
             AsyncThrowingStream<AssistantTranscriptUpdate, any Error>.makeStream()
         inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { buffer, _ in
             continuation.yield(AnalyzerInput(buffer: buffer))
         }
         audioEngine.prepare()
-        try audioEngine.start()
+        do {
+            try audioEngine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            continuation.finish()
+            updatesContinuation.finish(throwing: error)
+            throw error
+        }
+
+        inputContinuation = continuation
+        engine = audioEngine
+        analyzer = speechAnalyzer
 
         analysisTask = Task {
             do {

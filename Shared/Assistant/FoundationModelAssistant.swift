@@ -89,6 +89,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    let initialDraft = await coordinator.pendingStudioDraft
                     let tools: [any Tool] = [
                         AssistantHelpFoundationTool(authorizer: authorizer),
                         AssistantContextFoundationTool(
@@ -115,7 +116,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                         try Task.checkCancellation()
                         continuation.yield(.text(snapshot.content))
                     }
-                    if let draft = await coordinator.pendingStudioDraft {
+                    if let draft = await coordinator.pendingStudioDraft, draft != initialDraft {
                         continuation.yield(.cards(Self.cards(for: draft)))
                     }
                     continuation.finish()
