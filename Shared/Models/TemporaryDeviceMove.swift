@@ -118,6 +118,27 @@ struct TemporaryDeviceMove: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+extension TemporaryDeviceMove {
+    func connectorSummary(home: StudioHomeConnections) -> String {
+        let homeInputs = home.inputs.filter { $0.equipmentID == equipmentID }.map(\.connector).sorted()
+        let currentInputs = connections.inputs.map(\.connector).sorted()
+        let homeOutputs = home.outputs.filter { $0.equipmentID == equipmentID }.map(\.connector).sorted()
+        let currentOutputs = connections.outputs.map(\.connector).sorted()
+        var parts: [String] = []
+        if !homeInputs.isEmpty {
+            parts.append("WING inputs \(Self.connectorList(homeInputs)) → \(Self.connectorList(currentInputs))")
+        }
+        if !homeOutputs.isEmpty {
+            parts.append("WING outputs \(Self.connectorList(homeOutputs)) → \(Self.connectorList(currentOutputs))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func connectorList(_ connectors: [Int]) -> String {
+        connectors.map(String.init).joined(separator: "/")
+    }
+}
+
 struct TemporaryMoveSuggestion: Hashable, Sendable {
     var inputConnectors: [Int]
     var outputConnectors: [Int]

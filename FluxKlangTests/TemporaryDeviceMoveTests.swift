@@ -319,6 +319,13 @@ struct TemporaryDeviceMoveTests {
 
         #expect(verification.state == .driftDetected)
         #expect(verification.confirmedCount == 0)
+
+        let repeated = TemporaryMoveVerifier.verify(
+            expected: expected,
+            confirmedValues: ["/expected": .int(8)],
+            previous: verification
+        )
+        #expect(repeated.state == .driftDetected)
     }
 
     @Test func initialMismatchIsFailedVerification() {
