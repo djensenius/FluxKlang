@@ -206,11 +206,11 @@ extension EquipmentEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -220,11 +220,11 @@ extension EffectEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -234,11 +234,11 @@ extension EnvironmentEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -248,19 +248,18 @@ extension DestinationEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await spotlightIndex(for: indexDescription).indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
     }
 }
 
-@available(iOS 27.0, macOS 27.0, *)
-private func spotlightIndex(for description: CSSearchableIndexDescription) -> CSSearchableIndex {
+func fluxKlangSpotlightIndex() -> CSSearchableIndex {
     CSSearchableIndex(
         name: fluxKlangAppEntityIndexName,
-        protectionClass: description.protectionClass
+        protectionClass: nil
     )
 }
 
