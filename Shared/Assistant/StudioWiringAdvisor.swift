@@ -219,7 +219,7 @@ enum StudioWiringAdvisor {
             result.append(node(
                 kind: .instrument(id),
                 title: equipment.name,
-                position: CGPoint(x: 120, y: 100 + index * 110),
+                position: CGPoint(x: 120, y: 100 + CGFloat(index) * 110),
                 currentGraph: currentGraph
             ))
         }
@@ -228,14 +228,14 @@ enum StudioWiringAdvisor {
             result.append(node(
                 kind: .effect(id),
                 title: effect.name,
-                position: CGPoint(x: 360 + index * 190, y: 160),
+                position: CGPoint(x: 360 + CGFloat(index) * 190, y: 160),
                 currentGraph: currentGraph
             ))
         }
         result.append(node(
             kind: .endpoint(endpoint.id),
             title: endpoint.name,
-            position: CGPoint(x: 650 + request.effectChainIDs.count * 190, y: 160),
+            position: CGPoint(x: 650 + CGFloat(request.effectChainIDs.count) * 190, y: 160),
             currentGraph: currentGraph
         ))
         return result
