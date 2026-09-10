@@ -109,19 +109,19 @@ struct StudioEndpointCard: View {
                 setPlacement: setPlacement
             )
             placementSlider("Horizontal", value: Binding(
-                get: { placement.position.x },
+                get: { Double(placement.position.x) },
                 set: {
                     setPlacement(VoicePlacement(
-                        position: CGPoint(x: $0, y: placement.position.y),
+                        position: CGPoint(x: CGFloat($0), y: placement.position.y),
                         width: placement.width
                     ))
                 }
             ))
             placementSlider("Depth", value: Binding(
-                get: { placement.position.y },
+                get: { Double(placement.position.y) },
                 set: {
                     setPlacement(VoicePlacement(
-                        position: CGPoint(x: placement.position.x, y: $0),
+                        position: CGPoint(x: placement.position.x, y: CGFloat($0)),
                         width: placement.width
                     ))
                 }

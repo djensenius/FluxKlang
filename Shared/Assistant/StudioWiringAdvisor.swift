@@ -88,14 +88,12 @@ struct StudioDraftNode: Identifiable, Codable, Hashable, Sendable {
     var reference: String
     var node: StudioNode
     var reusesExistingNode: Bool
-
     var id: String { reference }
 }
 
 struct StudioDraftEdge: Identifiable, Codable, Hashable, Sendable {
     var reference: String
     var edge: StudioEdge
-
     var id: String { reference }
 }
 
@@ -112,7 +110,6 @@ struct StudioCableInstruction: Identifiable, Codable, Hashable, Sendable {
     var instruction: AssistantUntrustedText
     var usesActiveTemporaryMove: Bool
 }
-
 struct StudioDraftValidationIssue: Identifiable, Codable, Hashable, Sendable {
     enum Severity: String, Codable, Hashable, Sendable {
         case warning
@@ -122,10 +119,8 @@ struct StudioDraftValidationIssue: Identifiable, Codable, Hashable, Sendable {
     var code: String
     var severity: Severity
     var message: String
-
     var id: String { code }
 }
-
 struct StudioPatchMergeResult: Hashable, Sendable {
     var graph: StudioGraph
     var endpoints: [StudioEndpoint]
