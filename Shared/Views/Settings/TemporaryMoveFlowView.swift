@@ -80,6 +80,9 @@ struct TemporaryMoveFlowView: View {
             if returningMove == nil {
                 Picker("Equipment", selection: $equipmentID) {
                     Text("Choose equipment").tag(Equipment.ID?.none)
+                    if let equipmentID, !equipment.contains(where: { $0.id == equipmentID }) {
+                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
+                    }
                     ForEach(movableEquipment) { item in
                         Text(item.name).tag(Equipment.ID?.some(item.id))
                     }
@@ -344,8 +347,7 @@ struct TemporaryMoveFlowView: View {
                 equipment: equipment,
                 existingMoves: appModel.studioConnections.connections.temporaryMoves
             )
-            inputConnectors = suggestion.inputConnectors
-            outputConnectors = suggestion.outputConnectors
+            (inputConnectors, outputConnectors) = (suggestion.inputConnectors, suggestion.outputConnectors)
         } catch {
             (inputConnectors, outputConnectors) = ([], [])
             errorMessage = error.localizedDescription

@@ -45,9 +45,10 @@ struct AppRootView: View {
         .onChange(of: assistant.navigationTarget) { _, target in
             switch target {
             case .reviewPendingDraft:
+                appModel.isAssistantPresented = false
                 appModel.section = .studio
             case .help:
-                break
+                appModel.isAssistantPresented = false
             case nil:
                 break
             }

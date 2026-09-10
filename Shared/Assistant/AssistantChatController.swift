@@ -204,6 +204,7 @@ final class AssistantChatController {
                     }
                 }
                 isStreaming = false
+                responseTask = nil
             }
         }
     }

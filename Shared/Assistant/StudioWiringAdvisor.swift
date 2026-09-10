@@ -478,6 +478,10 @@ enum StudioWiringAdvisor {
 
 private extension StudioDraftValidationIssue {
     static func error(_ code: String, _ message: String) -> StudioDraftValidationIssue {
-        StudioDraftValidationIssue(code: code, severity: .error, message: message)
+        StudioDraftValidationIssue(
+            code: code,
+            severity: .error,
+            message: AssistantUntrustedText(message).value
+        )
     }
 }
