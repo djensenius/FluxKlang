@@ -208,7 +208,7 @@ struct TemporaryMoveFlowView: View {
                     .accessibilityIdentifier("temporary-move-verification-result")
                 Text(result.details)
                 if returningMove != nil, result.state != .verified {
-                    Text("The override remains active until Home routing is fully verified.")
+                    Text("Home routing is effective, but console verification is not yet complete.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -414,7 +414,7 @@ struct TemporaryMoveFlowView: View {
         result = nil
         errorMessage = nil
         isApplying = true
-        Task {
+        Task { @MainActor in
             defer { isApplying = false }
             do {
                 if let returningMove {
