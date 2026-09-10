@@ -155,6 +155,30 @@ struct StudioWiringAdvisorTests {
         #expect(draft.validation.contains { $0.message.contains("multiple assignments") })
     }
 
+    @Test func advisorSanitizesValidationMessages() throws {
+        let synth = Equipment(
+            name: "Unsafe\u{0}\(String(repeating: "x", count: 600))",
+            outputs: ["Out"]
+        )
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 4)
+        ]))
+
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id]),
+            equipment: [synth],
+            effects: [],
+            connections: connections,
+            currentGraph: StudioGraph()
+        )
+        let message = try #require(
+            draft.validation.first { $0.code.hasPrefix("connections-") }?.message
+        )
+
+        #expect(!message.contains("\u{0}"))
+        #expect(message.count == 512)
+    }
+
     @Test func mergeAppendsAndDeduplicatesWithoutDeletingExistingRouting() {
         let fixture = Fixture()
         let unrelatedSource = StudioNode(kind: .instrument(UUID()), title: "Existing")
