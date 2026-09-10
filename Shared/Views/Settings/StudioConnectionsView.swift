@@ -10,11 +10,7 @@ struct StudioConnectionsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isMovingEquipment = false
     @State private var returningMove: TemporaryDeviceMove?
-
-    private var home: StudioHomeConnections {
-        appModel.studioConnections.connections.home
-    }
-
+    private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
     private var issues: [StudioConnectionIssue] {
         StudioPhysicalResolver(
             connections: home,
@@ -116,11 +112,9 @@ struct StudioConnectionsView: View {
         }
         .padding(.vertical, 3)
     }
-
     private func equipmentName(_ id: Equipment.ID) -> String {
         appModel.equipment.items.first { $0.id == id }?.name ?? "Missing equipment"
     }
-
     private func moveSummary(_ move: TemporaryDeviceMove) -> String {
         let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
         let currentInputs = move.connections.inputs.map(\.connector).sorted()
@@ -248,10 +242,7 @@ private struct StudioConnectorEditor: View {
 
     private var equipment: [Equipment] { appModel.equipment.items }
     private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
-    private var selectedEquipment: Equipment? {
-        equipment.first { $0.id == equipmentID }
-    }
-
+    private var selectedEquipment: Equipment? { equipment.first { $0.id == equipmentID } }
     var body: some View {
         Form {
             Section("Assignment") {
