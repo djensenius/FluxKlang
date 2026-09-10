@@ -8,10 +8,6 @@ enum AcceptanceLaunchConfiguration {
         arguments.contains("-ui-testing")
     }
 
-    static var forcesAssistantFallback: Bool {
-        arguments.contains("-ui-test-force-fallback")
-    }
-
     static func configure(_ appModel: AppModel) async {
         guard isUITesting else { return }
 

@@ -26,6 +26,9 @@ final class AssistantChatController {
 
     private let synthesizer = AVSpeechSynthesizer()
     private static let spokenRepliesKey = "assistant.spokenReplies"
+    private static var forcesFallbackForUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("-ui-test-force-fallback")
+    }
 
     init(
         coordinator: AssistantCoordinator,
@@ -37,7 +40,7 @@ final class AssistantChatController {
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
         if let generator {
             self.generator = generator
-        } else if AcceptanceLaunchConfiguration.forcesAssistantFallback {
+        } else if Self.forcesFallbackForUITesting {
             self.generator = fallback
         } else {
             self.generator = AssistantGeneratorRouter(
