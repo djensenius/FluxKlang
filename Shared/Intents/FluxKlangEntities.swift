@@ -293,13 +293,13 @@ func fluxKlangSpotlightIndex(
     return fluxKlangSpotlightIndex(protectionClass: protectionClass)
 }
 
-func fluxKlangSpotlightIndexForManualRefresh() -> CSSearchableIndex? {
-    guard let rawValue = UserDefaults.standard.string(
+func fluxKlangSpotlightIndexForManualRefresh() -> CSSearchableIndex {
+    let rawValue = UserDefaults.standard.string(
         forKey: fluxKlangSpotlightProtectionClassKey
-    ) else {
-        return nil
+    )
+    let protectionClass = rawValue.flatMap {
+        $0.isEmpty ? nil : FileProtectionType(rawValue: $0)
     }
-    let protectionClass = rawValue.isEmpty ? nil : FileProtectionType(rawValue: rawValue)
     return fluxKlangSpotlightIndex(protectionClass: protectionClass)
 }
 
