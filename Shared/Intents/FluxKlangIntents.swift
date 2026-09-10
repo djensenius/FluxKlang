@@ -264,6 +264,7 @@ enum SiriEntityIntegration {
 
     @MainActor
     static func indexCurrentEntities(model: AppModel) async {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
         guard CSSearchableIndex.isIndexingAvailable() else { return }
         let equipment = model.equipment.items.map(EquipmentEntity.init)
         let effects = model.environments.activeEffects.map(EffectEntity.init)
