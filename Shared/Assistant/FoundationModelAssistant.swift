@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(FoundationModels)
 import FoundationModels
+#endif
 
 enum AssistantAuthorizedCapability: Hashable, Sendable {
     case help
@@ -53,6 +55,7 @@ struct AssistantGeneratorRouter: AssistantGenerating {
     }
 }
 
+#if canImport(FoundationModels)
 struct FoundationModelAssistantGenerator: AssistantGenerating {
     let coordinator: AssistantCoordinator
     var authorizer = AssistantToolAuthorizer.model
@@ -274,3 +277,19 @@ private struct AssistantDraftFoundationTool: Tool {
         )
     }
 }
+#else
+struct FoundationModelAssistantGenerator: AssistantGenerating {
+    let coordinator: AssistantCoordinator
+    var authorizer = AssistantToolAuthorizer.model
+
+    func availability() async -> AssistantModelAvailability {
+        .unsupportedOS
+    }
+
+    func stream(
+        _ request: AssistantGenerationRequest
+    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        AsyncThrowingStream { $0.finish(throwing: AssistantModelError.unsupportedOS) }
+    }
+}
+#endif
