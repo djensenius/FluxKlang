@@ -11,19 +11,20 @@
 import Foundation
 
 struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
+    var id: UUID
     var connector: Int
     var equipmentID: Equipment.ID
     var outputPort: Int
     var labelOverride: String?
 
-    var id: Int { connector }
-
     init(
+        id: UUID = UUID(),
         connector: Int,
         equipmentID: Equipment.ID,
         outputPort: Int,
         labelOverride: String? = nil
     ) {
+        self.id = id
         self.connector = connector
         self.equipmentID = equipmentID
         self.outputPort = outputPort
@@ -43,19 +44,20 @@ struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
 }
 
 struct StudioOutputConnection: Identifiable, Codable, Hashable, Sendable {
+    var id: UUID
     var connector: Int
     var equipmentID: Equipment.ID
     var inputPort: Int
     var labelOverride: String?
 
-    var id: Int { connector }
-
     init(
+        id: UUID = UUID(),
         connector: Int,
         equipmentID: Equipment.ID,
         inputPort: Int,
         labelOverride: String? = nil
     ) {
+        self.id = id
         self.connector = connector
         self.equipmentID = equipmentID
         self.inputPort = inputPort

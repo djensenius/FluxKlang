@@ -176,6 +176,7 @@
 		C67C9D8FAC654326E6C64836 /* StudioConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */; };
 		CB1180B15BD9C1B8D903200E /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		CB19842B27C432A04CFEEE42 /* WingDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */; };
+		CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
 		CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		CD756007C5BACC97F4255D63 /* EquipmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C78F5B15B50724D01C422C4 /* EquipmentStore.swift */; };
 		CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
@@ -197,6 +198,7 @@
 		E8A1AE8167AF2B076B852DD4 /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		E923162ADB8DE69FE2A75EC4 /* CoPilotHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F4B3FBCD9EF42A550A231C /* CoPilotHandoff.swift */; };
 		EA5CE0DAF0ED241A9B6F3B73 /* StudioCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435B3823839F80D106B8B028 /* StudioCanvasView.swift */; };
+		EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
 		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		EC91702D6E40FED2005888E3 /* StudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 615719763482C95E8DE3B403 /* StudioView.swift */; };
 		ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */; };
@@ -243,6 +245,7 @@
 		2804E2C640870C5783512077 /* FluxKlangMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlangMac.entitlements; sourceTree = "<group>"; };
 		282FD5D129226FE552419869 /* WingSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingSource.swift; sourceTree = "<group>"; };
 		29870935C9056DF72B53078F /* OutputRoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputRoutingView.swift; sourceTree = "<group>"; };
+		2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionCodable.swift; sourceTree = "<group>"; };
 		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
 		34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputPatchbayGrid.swift; sourceTree = "<group>"; };
 		35EFA96D78CE256B049568C5 /* FaderMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMath.swift; sourceTree = "<group>"; };
@@ -447,6 +450,7 @@
 				5B0C58809B54E7219DC7642B /* SpatialRouting.swift */,
 				4E585C6A2C4C4F93C8E722BA /* SpatialSource.swift */,
 				F633746B37339595DD5625A6 /* SpeakerArray.swift */,
+				2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */,
 				0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */,
 				BD5C7284F6CC337CFC97B758 /* StudioGraph.swift */,
 				B08E59FFF869F286A1BFDFCB /* StudioResourceAllocator.swift */,
@@ -895,6 +899,7 @@
 				0972C88CCBE04535F0F7D086 /* SpeakersView.swift in Sources */,
 				1A18BFAB9DF3221C1113E086 /* StudioCanvasNodeCard.swift in Sources */,
 				0440007401C6D52B75E7B153 /* StudioCanvasView.swift in Sources */,
+				CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */,
 				ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */,
 				04E82B67C0F39B29F2ED04C0 /* StudioConnectionsStore.swift in Sources */,
 				C67C9D8FAC654326E6C64836 /* StudioConnectionsView.swift in Sources */,
@@ -992,6 +997,7 @@
 				47C91CDDFE59BCC4B5FAE50C /* SpeakersView.swift in Sources */,
 				9FF6DFBEAAB2BD4C6E6008D3 /* StudioCanvasNodeCard.swift in Sources */,
 				EA5CE0DAF0ED241A9B6F3B73 /* StudioCanvasView.swift in Sources */,
+				EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */,
 				80DEE716550F3AEA0659470D /* StudioConnectionEditing.swift in Sources */,
 				205B90FFAAFBFE95F258B95F /* StudioConnectionsStore.swift in Sources */,
 				A648F4DB140403F83C9A6C79 /* StudioConnectionsView.swift in Sources */,

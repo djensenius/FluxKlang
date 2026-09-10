@@ -45,6 +45,10 @@ struct EffectEditor: View {
                     TextField("Name", text: $draft.name)
                     Picker("Equipment", selection: $draft.equipmentID) {
                         Text("Not linked").tag(Equipment.ID?.none)
+                        if let equipmentID = draft.equipmentID,
+                           !appModel.equipment.items.contains(where: { $0.id == equipmentID }) {
+                            Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
+                        }
                         ForEach(appModel.equipment.items) { item in
                             Text(item.name).tag(Equipment.ID?.some(item.id))
                         }
