@@ -98,7 +98,7 @@ struct StudioConnectionsView: View {
                     .font(.caption)
                     .foregroundStyle(move.verification.state == .verified ? .green : .orange)
             }
-            Text(moveSummary(move))
+            Text(move.connectorSummary(home: home))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("Return Home") { returningMove = move }
@@ -110,25 +110,6 @@ struct StudioConnectionsView: View {
     private func equipmentName(_ id: Equipment.ID) -> String {
         appModel.equipment.items.first { $0.id == id }?.name ?? "Missing equipment"
     }
-    private func moveSummary(_ move: TemporaryDeviceMove) -> String {
-        let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentInputs = move.connections.inputs.map(\.connector).sorted()
-        let homeOutputs = home.outputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentOutputs = move.connections.outputs.map(\.connector).sorted()
-        var parts: [String] = []
-        if !homeInputs.isEmpty {
-            parts.append("Inputs \(connectorList(homeInputs)) → \(connectorList(currentInputs))")
-        }
-        if !homeOutputs.isEmpty {
-            parts.append("Outputs \(connectorList(homeOutputs)) → \(connectorList(currentOutputs))")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func connectorList(_ connectors: [Int]) -> String {
-        connectors.map(String.init).joined(separator: "/")
-    }
-
     private func connectorRow(
         direction: StudioConnectorDirection,
         connector: Int,
