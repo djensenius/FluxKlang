@@ -77,13 +77,15 @@ struct EffectEditor: View {
                 Section {
                     if draft.isStereo {
                         jackStepper(
-                            "Left output", binding: outputBinding(0), range: Self.outputRange
+                            "Left output", binding: outputBinding(0), range: Self.outputRange, name: outputName
                         )
                         jackStepper(
-                            "Right output", binding: outputBinding(1), range: Self.outputRange
+                            "Right output", binding: outputBinding(1), range: Self.outputRange, name: outputName
                         )
                     } else {
-                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange)
+                        jackStepper(
+                            "WING output", binding: outputBinding(0), range: Self.outputRange, name: outputName
+                        )
                     }
                 } header: {
                     Text("2 · Out to effect")
@@ -180,12 +182,25 @@ struct EffectEditor: View {
                     .monospacedDigit()
                     .lineLimit(1)
             }
+            .accessibilityLabel(title)
+            .accessibilityValue(label.map { "WING connector \(connector), \($0)" } ?? "WING connector \(connector)")
         }
+    }
+
+    private func outputName(_ connector: Int) -> String? {
+        appModel.studioConnections.connections.home.outputFriendlyName(
+            connector,
+            equipment: appModel.equipment.items
+        )
     }
 
     /// The WING name of an input connector, when the console has reported one.
     private func inputName(_ connector: Int) -> String? {
-        appModel.wing.inputName(connector)
+        appModel.studioConnections.connections.home.inputFriendlyName(
+            connector,
+            equipment: appModel.equipment.items,
+            liveScribble: appModel.wing.inputName(connector)
+        )
     }
 
     private func instrumentBinding(_ id: Equipment.ID) -> Binding<Bool> {

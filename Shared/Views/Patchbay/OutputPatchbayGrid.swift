@@ -13,6 +13,8 @@ import SwiftUI
 
 struct OutputPatchbayGrid: View {
     let controller: WingController
+    var connections = StudioHomeConnections()
+    var equipment: [Equipment] = []
 
     @State private var group: WingOutputSourceGroup = .main
 
@@ -99,7 +101,7 @@ struct OutputPatchbayGrid: View {
 
     private func rowHeader(_ output: Int) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text("Output \(output)")
+            Text(connections.outputDisplayName(output, equipment: equipment))
                 .font(.caption)
                 .lineLimit(1)
             Text(controller.outputSource(output)?.label ?? "—")
@@ -113,10 +115,11 @@ struct OutputPatchbayGrid: View {
     private func cell(output: Int, index: Int) -> some View {
         let source = controller.outputSource(output)
         let isOn = source?.group == group && source?.index == index
+        let destination = connections.outputDisplayName(output, equipment: equipment)
         return PatchbayGrid.crosspoint(
             isOn: isOn,
             tint: tint,
-            help: "\(group.label) \(index) → Output \(output)"
+            help: "\(group.label) \(index) → \(destination)"
         ) {
             let target: WingOutputSource = isOn ? .none : WingOutputSource(group: group, index: index)
             Task { await controller.setOutputSource(output, to: target) }
