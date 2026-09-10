@@ -64,6 +64,7 @@
 		2D90278C9718E9CD82BEAE26 /* ChainGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */; };
 		2D9EA9043B0EE6766C8B08EE /* DiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415B289F973D0827B92F2CE1 /* DiscoveryView.swift */; };
 		2EEC11A14E2E093188BDF799 /* OutputRoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29870935C9056DF72B53078F /* OutputRoutingView.swift */; };
+		2FE2B5196141BD8381087151 /* AcceptanceAssistantSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 310DCB0992C4136B5DE41B23 /* AcceptanceAssistantSafetyTests.swift */; };
 		306DBFFAE28012245C5A8125 /* EnvironmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13665485049541610241F126 /* EnvironmentStore.swift */; };
 		3338EC3699B9BBC60FDDF4B5 /* AppIconPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */; };
 		34BCCB9E4EAE124FE76FFD92 /* WingNodeRef.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0451A9D61B5FEF5E7C4B5C34 /* WingNodeRef.swift */; };
@@ -310,6 +311,7 @@
 		2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionCodable.swift; sourceTree = "<group>"; };
 		2DDC71263C8B839D9CBCD745 /* WingConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConnection.swift; sourceTree = "<group>"; };
 		2DF3190E29940EE07ED501B6 /* TemporaryDeviceMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryDeviceMoveTests.swift; sourceTree = "<group>"; };
+		310DCB0992C4136B5DE41B23 /* AcceptanceAssistantSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptanceAssistantSafetyTests.swift; sourceTree = "<group>"; };
 		345578080CB2BA19B233E700 /* TemporaryMoveFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryMoveFlowView.swift; sourceTree = "<group>"; };
 		34732F18AA61295C6C5D3A24 /* AssistantCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCoreTests.swift; sourceTree = "<group>"; };
 		34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputPatchbayGrid.swift; sourceTree = "<group>"; };
@@ -783,6 +785,7 @@
 		F6624B8D5BBDF1615714D3EB /* FluxKlangTests */ = {
 			isa = PBXGroup;
 			children = (
+				310DCB0992C4136B5DE41B23 /* AcceptanceAssistantSafetyTests.swift */,
 				A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */,
 				882B7F70F65B33BAD91EF6B8 /* AppNavigationTests.swift */,
 				34732F18AA61295C6C5D3A24 /* AssistantCoreTests.swift */,
@@ -1244,6 +1247,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2FE2B5196141BD8381087151 /* AcceptanceAssistantSafetyTests.swift in Sources */,
 				0DBE91B979FF59D455A5DEB0 /* AcceptanceMigrationTests.swift in Sources */,
 				D533DB5110B0262A64819E43 /* AppNavigationTests.swift in Sources */,
 				2CE62A73DF86129921F23F34 /* AssistantCoreTests.swift in Sources */,
