@@ -10,11 +10,7 @@ struct StudioConnectionsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isMovingEquipment = false
     @State private var returningMove: TemporaryDeviceMove?
-
-    private var home: StudioHomeConnections {
-        appModel.studioConnections.connections.home
-    }
-
+    private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
     private var issues: [StudioConnectionIssue] {
         StudioPhysicalResolver(
             connections: home,
@@ -116,11 +112,9 @@ struct StudioConnectionsView: View {
         }
         .padding(.vertical, 3)
     }
-
     private func equipmentName(_ id: Equipment.ID) -> String {
         appModel.equipment.items.first { $0.id == id }?.name ?? "Missing equipment"
     }
-
     private func moveSummary(_ move: TemporaryDeviceMove) -> String {
         let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
         let currentInputs = move.connections.inputs.map(\.connector).sorted()
@@ -248,15 +242,16 @@ private struct StudioConnectorEditor: View {
 
     private var equipment: [Equipment] { appModel.equipment.items }
     private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
-    private var selectedEquipment: Equipment? {
-        equipment.first { $0.id == equipmentID }
-    }
-
+    private var selectedEquipment: Equipment? { equipment.first { $0.id == equipmentID } }
     var body: some View {
         Form {
             Section("Assignment") {
                 Picker("Equipment", selection: equipmentBinding) {
                     Text("Not assigned").tag(Equipment.ID?.none)
+                    if let equipmentID,
+                       !equipment.contains(where: { $0.id == equipmentID }) {
+                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
+                    }
                     ForEach(equipment) { item in
                         Text(item.name).tag(Equipment.ID?.some(item.id))
                     }
@@ -415,14 +410,19 @@ private struct StudioConnectorEditor: View {
         case .input:
             guard let connection = home.input(connector) else { return }
             equipmentID = connection.equipmentID
-            port = connection.outputPort
+            port = validatedPort(connection.outputPort, equipmentID: connection.equipmentID)
             labelOverride = connection.labelOverride ?? ""
         case .output:
             guard let connection = home.output(connector) else { return }
             equipmentID = connection.equipmentID
-            port = connection.inputPort
+            port = validatedPort(connection.inputPort, equipmentID: connection.equipmentID)
             labelOverride = connection.labelOverride ?? ""
         }
+    }
+
+    private func validatedPort(_ candidate: Int, equipmentID: Equipment.ID) -> Int? {
+        guard let item = equipment.first(where: { $0.id == equipmentID }) else { return nil }
+        return portNames(for: item).indices.contains(candidate) ? candidate : nil
     }
 
     private func save() {

@@ -39,8 +39,12 @@ struct AssistantWiringForm: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create Draft") {
                         appModel.assistantChat.createWiringDraft(
-                            sourceIDs: Array(sourceIDs),
-                            effectIDs: Array(effectIDs),
+                            sourceIDs: appModel.equipment.items
+                                .filter { sourceIDs.contains($0.id) }
+                                .map(\.id),
+                            effectIDs: appModel.environments.activeEffects
+                                .filter { effectIDs.contains($0.id) }
+                                .map(\.id),
                             destination: destination,
                             context: appModel.assistantToolContext()
                         )

@@ -66,6 +66,33 @@ struct TemporaryDeviceMoveTests {
         #expect(move.connections.inputs.map(\.connector) == [4, 5])
     }
 
+    @Test func suggestionFailsWhenThereAreTooFewFreeConnectors() {
+        let stereo = Equipment(name: "Stereo", outputs: ["L", "R"], isStereo: true)
+        let occupied = Equipment(
+            name: "Occupied",
+            outputs: StudioHomeConnections.inputRange.map { "Out \($0)" }
+        )
+        let home = StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 1, equipmentID: stereo.id, outputPort: 0),
+            StudioInputConnection(connector: 2, equipmentID: stereo.id, outputPort: 1)
+        ] + StudioHomeConnections.inputRange.dropFirst(2).enumerated().map { index, connector in
+            StudioInputConnection(connector: connector, equipmentID: occupied.id, outputPort: index)
+        })
+
+        #expect(throws: TemporaryMoveConflict.insufficientFreeConnectors(
+            direction: "input",
+            required: 2,
+            available: 0
+        )) {
+            try TemporaryMoveAllocator.suggestion(
+                for: stereo.id,
+                home: home,
+                equipment: [stereo, occupied],
+                existingMoves: []
+            )
+        }
+    }
+
     @Test func simultaneousMovesShareOneConflictAllocator() throws {
         let first = Equipment(name: "First", outputs: ["Out"])
         let second = Equipment(name: "Second", outputs: ["Out"])
