@@ -180,12 +180,19 @@ struct StudioGraphTests {
     }
 
     @Test func signalCompilerRoutesDryAndWetBranchesToEndpointStems() {
-        let synth = Equipment(name: "OP-XY", isStereo: true)
+        let synth = Equipment(name: "OP-XY", outputs: ["Out L", "Out R"], isStereo: true)
+        let effectEquipment = Equipment(
+            name: "Reverb",
+            inputs: ["In L", "In R"],
+            outputs: ["Out L", "Out R"],
+            isStereo: true
+        )
         let effect = Effect(
             name: "Reverb",
+            equipmentID: effectEquipment.id,
             isStereo: true,
-            sendOutputs: [7, 8],
-            returnInputs: [9, 10],
+            sendOutputs: [1, 2],
+            returnInputs: [1, 2],
             sourceInstruments: []
         )
         let instrumentNode = StudioNode(kind: .instrument(synth.id), title: synth.name)
@@ -202,14 +209,27 @@ struct StudioGraphTests {
         graph.connect(from: output(instrumentNode), to: input(dryNode))
         graph.connect(from: output(instrumentNode), to: input(effectNode))
         graph.connect(from: output(effectNode), to: input(wetNode))
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(
+            inputs: [
+                StudioInputConnection(connector: 11, equipmentID: synth.id, outputPort: 0),
+                StudioInputConnection(connector: 12, equipmentID: synth.id, outputPort: 1),
+                StudioInputConnection(connector: 21, equipmentID: effectEquipment.id, outputPort: 0),
+                StudioInputConnection(connector: 22, equipmentID: effectEquipment.id, outputPort: 1)
+            ],
+            outputs: [
+                StudioOutputConnection(connector: 7, equipmentID: effectEquipment.id, inputPort: 0),
+                StudioOutputConnection(connector: 8, equipmentID: effectEquipment.id, inputPort: 1)
+            ]
+        ))
 
-        let compiled = StudioSignalCompiler.compile(
+        let compiled = StudioSignalCompiler.compile(StudioCompilationInput(
             graph: graph,
             endpoints: [dry, wet],
             effects: [effect],
-            assignments: Equipment.channelAssignments(from: [synth]),
+            connections: connections,
+            equipment: [synth, effectEquipment],
             speakers: SpeakerArray.standardQuad.speakers
-        )
+        ))
         let valueByAddress = Dictionary(
             compiled.settings.map { ($0.address, $0.value) },
             uniquingKeysWith: { _, last in last }
@@ -218,15 +238,17 @@ struct StudioGraphTests {
         #expect(!compiled.hasErrors)
         // Speaker buses 1...4 and effect buses 16/15 are reserved, so endpoint
         // stems allocate buses 5 and 6.
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 1, toBus: 5)] == .int(1))
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 2, toBus: 5)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 11, toBus: 5)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 12, toBus: 5)] == .int(1))
+        #expect(valueByAddress[WingAddress.channelSourceIndex(11)] == .int(11))
+        #expect(valueByAddress[WingAddress.channelSourceIndex(12)] == .int(12))
         #expect(valueByAddress[WingAddress.mainOn(.bus, 5, toMain: 1)] == .int(1))
         // The instrument feeds the effect bus pair.
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 1, toBus: 16)] == .int(1))
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 2, toBus: 15)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 11, toBus: 16)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 12, toBus: 15)] == .int(1))
         // The effect is patched out/back and its return feeds the Space endpoint.
         #expect(valueByAddress[WingAddress.outputSourceIndex(7)] == .int(16))
-        #expect(valueByAddress[WingAddress.channelSourceIndex(40)] == .int(9))
+        #expect(valueByAddress[WingAddress.channelSourceIndex(40)] == .int(21))
         #expect(valueByAddress[WingAddress.sendOn(.channel, 40, toBus: 6)] == .int(1))
         #expect(valueByAddress[WingAddress.sendOn(.channel, 39, toBus: 6)] == .int(1))
         // The placed Space control then sends its generated bus stem to speakers.

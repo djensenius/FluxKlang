@@ -21,6 +21,8 @@ struct StudioCompileIssue: Identifiable, Hashable, Sendable {
         case missingEndpointAllocation(StudioNode.ID)
         case missingEffectAllocation(Effect.ID)
         case unsupportedEdge(StudioEdge.ID)
+        case physicalConnection(StudioConnectionIssue.Kind)
+        case legacyConnectionMigration(StudioConnectionMigrationIssue.ID)
     }
 
     var severity: Severity
@@ -41,37 +43,59 @@ struct StudioCompiledRouting: Hashable, Sendable {
     }
 }
 
+struct StudioCompilationInput {
+    var graph: StudioGraph
+    var endpoints: [StudioEndpoint]
+    var effects: [Effect]
+    var connections: GlobalStudioConnections
+    var equipment: [Equipment]
+    var speakers: [Speaker]
+}
+
 enum StudioSignalCompiler {
-    static func compile(
-        graph: StudioGraph,
-        endpoints: [StudioEndpoint],
-        effects: [Effect],
-        assignments: [Equipment.ChannelAssignment],
-        speakers: [Speaker]
-    ) -> StudioCompiledRouting {
-        let routingPlan = StudioRoutingPlanner.plan(for: graph, endpoints: endpoints)
+    static func compile(_ input: StudioCompilationInput) -> StudioCompiledRouting {
+        let routingPlan = StudioRoutingPlanner.plan(for: input.graph, endpoints: input.endpoints)
         let resourcePlan = StudioResourceAllocator.allocateEndpoints(
             for: routingPlan,
-            effects: effects,
-            speakers: speakers
+            effects: input.effects,
+            speakers: input.speakers
         )
         let context = CompileContext(
-            graph: graph,
-            effects: effects,
-            assignments: assignments,
+            graph: input.graph,
+            effects: input.effects,
+            connections: input.connections.home,
+            equipment: input.equipment,
             routingPlan: routingPlan,
             resourcePlan: resourcePlan
         )
         let compiled = compileValidEdges(context: context)
+        let physicalIssues = context.resolver.structuralIssues().map {
+            StudioCompileIssue.error(.physicalConnection($0.kind), $0.message)
+        }
+        let migrationIssues = input.connections.migrationIssues.map {
+            StudioCompileIssue.warning(.legacyConnectionMigration($0.id), $0.message)
+        }
+        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues)
+        let settings: [WingSetting]
+        let hasPhysicalErrors = issues.contains {
+            guard $0.severity == .error else { return false }
+            if case .physicalConnection = $0.kind { return true }
+            return false
+        }
+        if !hasPhysicalErrors {
+            settings = uniqueSettings(
+                StudioResourceAllocator.settings(for: resourcePlan)
+                    + compiled.settings
+                    + spaceSettings(for: resourcePlan.allocations, speakers: input.speakers)
+            )
+        } else {
+            settings = []
+        }
         return StudioCompiledRouting(
             routingPlan: routingPlan,
             resourcePlan: resourcePlan,
-            issues: compiled.issues,
-            settings: uniqueSettings(
-                StudioResourceAllocator.settings(for: resourcePlan)
-                    + compiled.settings
-                    + spaceSettings(for: resourcePlan.allocations, speakers: speakers)
-            )
+            issues: issues,
+            settings: settings
         )
     }
 
@@ -128,13 +152,20 @@ enum StudioSignalCompiler {
         toEndpointNode endpointNodeID: StudioNode.ID,
         context: CompileContext
     ) -> (settings: [WingSetting], issues: [StudioCompileIssue]) {
-        guard let assignment = context.assignmentByInstrument[instrumentID] else {
-            return ([], [.error(.missingInstrument(endpointNodeID), "Gear in the patch is not plugged in yet.")])
+        let assignment = context.resolver.instrumentChannels(instrumentID)
+        guard assignment.issues.isEmpty else {
+            return ([], assignment.issues.map {
+                .error(.physicalConnection($0.kind), $0.message)
+            })
         }
         guard let endpointBus = context.endpointBus(for: endpointNodeID) else {
             return ([], [.error(.missingEndpointAllocation(endpointNodeID), "A control has no generated mixer path.")])
         }
-        return (assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: endpointBus) }, [])
+        return (
+            assignment.settings
+                + assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: endpointBus) },
+            []
+        )
     }
 
     private static func routeInstrument(
@@ -142,8 +173,11 @@ enum StudioSignalCompiler {
         toEffect effectID: Effect.ID,
         context: CompileContext
     ) -> (settings: [WingSetting], issues: [StudioCompileIssue]) {
-        guard let assignment = context.assignmentByInstrument[instrumentID] else {
-            return ([], [.error(.missingInstrument(effectID), "Gear feeding another gear card is not plugged in yet.")])
+        let assignment = context.resolver.instrumentChannels(instrumentID)
+        guard assignment.issues.isEmpty else {
+            return ([], assignment.issues.map {
+                .error(.physicalConnection($0.kind), $0.message)
+            })
         }
         guard let effect = context.effectByID[effectID],
               let allocation = context.effectAllocations[effectID],
@@ -152,12 +186,17 @@ enum StudioSignalCompiler {
         }
         let busRight = effect.isStereo ? (allocation.buses.last ?? busLeft) : busLeft
         if effect.isStereo {
-            let left = assignment.leftChannel
-            let right = assignment.rightChannel ?? assignment.leftChannel
-            return (send(kind: .channel, index: left, toBus: busLeft)
+            guard let left = assignment.channels.first else { return ([], []) }
+            let right = assignment.channels.count > 1 ? assignment.channels[1] : left
+            return (assignment.settings
+                + send(kind: .channel, index: left, toBus: busLeft)
                 + send(kind: .channel, index: right, toBus: busRight), [])
         }
-        return (assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: busLeft) }, [])
+        return (
+            assignment.settings
+                + assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: busLeft) },
+            []
+        )
     }
 
     private static func routeEffect(
@@ -219,34 +258,58 @@ enum StudioSignalCompiler {
             issues.append(.error(.missingEffectAllocation(effectID), "\(effect.name) has no available mixer path."))
             return []
         }
+        let jacks = context.resolver.effectJacks(effect)
+        if !jacks.issues.isEmpty {
+            issues.append(contentsOf: jacks.issues.map {
+                .error(.physicalConnection($0.kind), $0.message)
+            })
+            return []
+        }
         let busRight = effect.isStereo ? (allocation.buses.last ?? busLeft) : busLeft
-        return effectOutputSettings(effect: effect, busLeft: busLeft, busRight: busRight)
-            + effectReturnSettings(effect: effect, allocation: allocation)
+        return effectOutputSettings(
+            outputs: jacks.inputJacks,
+            stereo: effect.isStereo,
+            busLeft: busLeft,
+            busRight: busRight
+        ) + effectReturnSettings(
+            inputs: jacks.outputJacks,
+            stereo: effect.isStereo,
+            allocation: allocation
+        )
     }
 
-    private static func effectOutputSettings(effect: Effect, busLeft: Int, busRight: Int) -> [WingSetting] {
+    private static func effectOutputSettings(
+        outputs: [Int],
+        stereo: Bool,
+        busLeft: Int,
+        busRight: Int
+    ) -> [WingSetting] {
         var settings: [WingSetting] = []
-        if let output = effect.sendOutputs.first {
+        if let output = outputs.first {
             settings.append(contentsOf: WingOutputSource(group: .bus, index: busLeft).settings(forOutput: output))
         }
-        if effect.isStereo, effect.sendOutputs.count > 1 {
+        if stereo, outputs.count > 1 {
             settings.append(contentsOf: WingOutputSource(
                 group: .bus,
                 index: busRight
-            ).settings(forOutput: effect.sendOutputs[1]))
+            ).settings(forOutput: outputs[1]))
         }
         return settings
     }
 
-    private static func effectReturnSettings(effect: Effect, allocation: EffectRouting.Allocation) -> [WingSetting] {
+    private static func effectReturnSettings(
+        inputs: [Int],
+        stereo: Bool,
+        allocation: EffectRouting.Allocation
+    ) -> [WingSetting] {
         var settings: [WingSetting] = []
-        if let channel = allocation.returnChannels.first, let input = effect.returnInputs.first {
+        if let channel = allocation.returnChannels.first, let input = inputs.first {
             settings.append(contentsOf: WingSource(group: .local, index: input).settings(forChannel: channel))
         }
-        if effect.isStereo, allocation.returnChannels.count > 1, effect.returnInputs.count > 1 {
+        if stereo, allocation.returnChannels.count > 1, inputs.count > 1 {
             settings.append(contentsOf: WingSource(
                 group: .local,
-                index: effect.returnInputs[1]
+                index: inputs[1]
             ).settings(forChannel: allocation.returnChannels[1]))
         }
         return settings
@@ -311,7 +374,7 @@ enum StudioSignalCompiler {
 private struct CompileContext {
     var graph: StudioGraph
     var effectByID: [Effect.ID: Effect]
-    var assignmentByInstrument: [Equipment.ID: Equipment.ChannelAssignment]
+    var resolver: StudioPhysicalResolver
     var effectAllocations: [Effect.ID: EffectRouting.Allocation]
     var endpointAllocationByNode: [StudioNode.ID: StudioEndpointAllocation]
     var appliableEdges: Set<StudioEdge.ID>
@@ -319,16 +382,14 @@ private struct CompileContext {
     init(
         graph: StudioGraph,
         effects: [Effect],
-        assignments: [Equipment.ChannelAssignment],
+        connections: StudioHomeConnections,
+        equipment: [Equipment],
         routingPlan: StudioRoutingPlan,
         resourcePlan: StudioResourcePlan
     ) {
         self.graph = graph
         effectByID = Dictionary(effects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        assignmentByInstrument = Dictionary(
-            assignments.map { ($0.equipment.id, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        resolver = StudioPhysicalResolver(connections: connections, equipment: equipment)
         effectAllocations = EffectRouting.allocations(for: effects)
         endpointAllocationByNode = Dictionary(
             resourcePlan.allocations.map { ($0.endpointNodeID, $0) },
@@ -350,12 +411,6 @@ private struct CompileContext {
 
     func endpointBus(for nodeID: StudioNode.ID) -> Int? {
         endpointAllocationByNode[nodeID]?.controlNode.index
-    }
-}
-
-private extension Equipment.ChannelAssignment {
-    var channels: [Int] {
-        [leftChannel, rightChannel].compactMap { $0 }
     }
 }
 

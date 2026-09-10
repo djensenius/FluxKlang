@@ -35,6 +35,9 @@ final class AppModel {
     /// graph; switching pushes the whole rig.
     let environments = EnvironmentStore()
 
+    /// The single global Home map of equipment ports to WING local connectors.
+    let studioConnections = StudioConnectionsStore()
+
     /// Saved presets / scene snapshots.
     let presets = PresetStore()
 
@@ -92,6 +95,12 @@ final class AppModel {
         await faderLayout.load()
         await equipment.load()
         await environments.load()
+        environments.migrateEffectEquipmentLinks(using: equipment.items)
+        await studioConnections.load(
+            equipment: equipment.items,
+            environments: environments.environments,
+            activeID: environments.activeID
+        )
         await presets.load()
         await routingSnapshots.load()
         await spatial.load()
@@ -112,6 +121,12 @@ final class AppModel {
         await faderLayout.reload()
         await equipment.reload()
         await environments.reload()
+        environments.migrateEffectEquipmentLinks(using: equipment.items)
+        await studioConnections.reload(
+            equipment: equipment.items,
+            environments: environments.environments,
+            activeID: environments.activeID
+        )
         await presets.reload()
         await routingSnapshots.reload()
         await spatial.reload()
@@ -168,13 +183,14 @@ final class AppModel {
 
     /// Compiles the active semantic studio canvas into concrete WING settings.
     func studioCompiledRouting() -> StudioCompiledRouting {
-        StudioSignalCompiler.compile(
+        StudioSignalCompiler.compile(StudioCompilationInput(
             graph: environments.activeStudioGraph,
             endpoints: environments.activeStudioEndpoints,
             effects: environments.activeEffects,
-            assignments: Equipment.channelAssignments(from: equipment.items),
+            connections: studioConnections.connections,
+            equipment: equipment.items,
             speakers: spatial.array.speakers
-        )
+        ))
     }
 
     /// Applies every valid branch of the semantic studio canvas to the WING.
