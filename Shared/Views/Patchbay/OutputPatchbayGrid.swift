@@ -101,17 +101,18 @@ struct OutputPatchbayGrid: View {
     }
 
     private func row(_ output: Int) -> some View {
-        HStack(spacing: PatchbayGrid.spacing) {
-            rowHeader(output)
+        let destination = connections.outputDisplayName(output, equipment: equipment)
+        return HStack(spacing: PatchbayGrid.spacing) {
+            rowHeader(output, destination: destination)
             ForEach(columns, id: \.self) { index in
-                cell(output: output, index: index)
+                cell(output: output, index: index, destination: destination)
             }
         }
     }
 
-    private func rowHeader(_ output: Int) -> some View {
+    private func rowHeader(_ output: Int, destination: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(connections.outputDisplayName(output, equipment: equipment))
+            Text(destination)
                 .font(.caption)
                 .lineLimit(1)
             Text(controller.outputSource(output)?.label ?? "—")
@@ -122,10 +123,9 @@ struct OutputPatchbayGrid: View {
         .frame(width: PatchbayGrid.rowHeader, alignment: .leading)
     }
 
-    private func cell(output: Int, index: Int) -> some View {
+    private func cell(output: Int, index: Int, destination: String) -> some View {
         let source = controller.outputSource(output)
         let isOn = source?.group == group && source?.index == index
-        let destination = connections.outputDisplayName(output, equipment: equipment)
         return PatchbayGrid.crosspoint(
             isOn: isOn,
             tint: tint,

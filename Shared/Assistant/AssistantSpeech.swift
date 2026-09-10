@@ -40,7 +40,7 @@ actor SpeechAnalyzerAssistantTranscriber: AssistantSpeechTranscribing {
     private var analysisTask: Task<Void, Never>?
     private var resultTask: Task<Void, Never>?
 
-    func permissionState() -> AssistantVoicePermissionState {
+    func permissionState() async -> AssistantVoicePermissionState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .notDetermined: .undetermined
         case .denied: .denied

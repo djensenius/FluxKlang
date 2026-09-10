@@ -340,10 +340,11 @@ enum TemporaryMoveAllocator {
         moves: [TemporaryDeviceMove],
         excluding equipmentID: Equipment.ID
     ) -> (inputs: Set<Int>, outputs: Set<Int>) {
-        let movingIDs = Set(moves.map(\.equipmentID)).union([equipmentID])
+        let effectiveMoves = moves.filter { $0.lifecycle.isEffective }
+        let movingIDs = Set(effectiveMoves.map(\.equipmentID)).union([equipmentID])
         var inputs = Set(home.inputs.filter { !movingIDs.contains($0.equipmentID) }.map(\.connector))
         var outputs = Set(home.outputs.filter { !movingIDs.contains($0.equipmentID) }.map(\.connector))
-        for move in moves where move.equipmentID != equipmentID {
+        for move in moves where move.equipmentID != equipmentID && move.lifecycle != .readyToReturn {
             inputs.formUnion(move.connections.inputs.map(\.connector))
             outputs.formUnion(move.connections.outputs.map(\.connector))
         }
