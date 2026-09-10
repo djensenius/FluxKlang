@@ -150,7 +150,7 @@ final class StudioConnectionsStore {
         equipment: [Equipment]
     ) throws {
         guard !candidate.temporaryMoves.isEmpty else { return }
-        for move in candidate.temporaryMoves {
+        for move in candidate.temporaryMoves where move.lifecycle.isEffective {
             let homeInputPorts = Set(candidate.home.inputs.filter {
                 $0.equipmentID == move.equipmentID
             }.map(\.outputPort))
