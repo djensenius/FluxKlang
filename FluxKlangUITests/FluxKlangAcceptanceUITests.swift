@@ -31,7 +31,7 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         app.buttons["settings-studio-connections"].tap()
         XCTAssertTrue(app.navigationBars["Studio Connections"].waitForExistence(timeout: 5))
-        app.buttons["Return OP-1 Field Home"].tap()
+        element("temporary-move-return-DD189819-A2F1-50D4-B567-BCBB79805586").tap()
         XCTAssertTrue(app.navigationBars["Return Home"].waitForExistence(timeout: 5))
         app.swipeUp()
         let confirmation = element("temporary-move-return-cables-confirmed")
@@ -78,7 +78,7 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         wait(for: [failedStatus], timeout: 10)
         status.tap()
         XCTAssertTrue(app.navigationBars["Connection"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Connection Problem"].exists)
+        XCTAssertTrue(app.staticTexts["Connection Problem"].waitForExistence(timeout: 5))
         app.buttons["connection.demo"].tap()
         let demoStatus = app.staticTexts["Demo Mode — values are simulated and drift to feel live."]
         XCTAssertTrue(demoStatus.waitForExistence(timeout: 10))
