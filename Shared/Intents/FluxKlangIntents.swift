@@ -105,7 +105,11 @@ struct DraftStudioPatchIntent: AppIntent {
     var destination: DestinationEntity
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Draft \(\.$sourceGear) through \(\.$effects) to \(\.$destination)")
+        When(\.$effects, .hasAnyValue) {
+            Summary("Draft \(\.$sourceGear) through \(\.$effects) to \(\.$destination)")
+        } otherwise: {
+            Summary("Draft \(\.$sourceGear) to \(\.$destination)")
+        }
     }
 
     init() {}
