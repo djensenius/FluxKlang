@@ -30,14 +30,15 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
     }
 
     func save(_ draft: StudioPatchDraft?) async {
-        if let draft, let data = try? JSONEncoder().encode(draft) {
-            try? FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? data.write(to: fileURL, options: .atomic)
-        } else {
+        guard let draft else {
             try? FileManager.default.removeItem(at: fileURL)
+            return
         }
+        guard let data = try? JSONEncoder().encode(draft) else { return }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: fileURL, options: .atomic)
     }
 }

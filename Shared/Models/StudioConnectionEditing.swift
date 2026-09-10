@@ -26,9 +26,9 @@ enum StudioConnectionAssignmentError: LocalizedError, Equatable {
         case .missingEquipment:
             return "The selected equipment no longer exists."
         case .invalidEquipmentOutput:
-            return "The selected equipment output no longer exists."
+            return "The selected equipment output no longer exists. Reselect an available output."
         case .invalidEquipmentInput:
-            return "The selected equipment input no longer exists."
+            return "The selected equipment input no longer exists. Reselect an available input."
         case .equipmentOutputInUse(let equipment, let port, let connector):
             return "\(equipment) · \(port) is already assigned to WING input \(connector)."
         case .equipmentInputInUse(let equipment, let port, let connector):
