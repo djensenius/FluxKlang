@@ -188,6 +188,18 @@ struct StudioConnectionsView: View {
             case (.output, .duplicateOutputConnector(let value)),
                  (.output, .outputConnectorOutOfRange(let value)):
                 return value == connector
+            case (.input, .missingEquipment(let equipmentID)):
+                return home.input(connector)?.equipmentID == equipmentID
+            case (.output, .missingEquipment(let equipmentID)):
+                return home.output(connector)?.equipmentID == equipmentID
+            case (.input, .invalidOutputPort(let equipmentID, let port)):
+                return home.input(connector).map {
+                    $0.equipmentID == equipmentID && $0.outputPort == port
+                } ?? false
+            case (.output, .invalidInputPort(let equipmentID, let port)):
+                return home.output(connector).map {
+                    $0.equipmentID == equipmentID && $0.inputPort == port
+                } ?? false
             case (.input, .conflictingOutputPort(let equipmentID, let port)):
                 return home.input(connector).map {
                     $0.equipmentID == equipmentID && $0.outputPort == port
@@ -321,7 +333,8 @@ private struct StudioConnectorEditor: View {
             get: { equipmentID },
             set: { newValue in
                 equipmentID = newValue
-                guard let item = equipment.first(where: { $0.id == newValue }) else {
+                guard let newValue,
+                      let item = equipment.first(where: { $0.id == newValue }) else {
                     port = nil
                     return
                 }
