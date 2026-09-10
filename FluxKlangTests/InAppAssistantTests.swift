@@ -342,11 +342,11 @@ private enum AssistantTestError: Error {
 private actor MemoryHistoryBackend: AssistantHistoryBackend {
     private var records: [UUID: AssistantConversationRecord] = [:]
 
-    func loadRecords() -> [AssistantConversationRecord] {
+    func loadRecords() async -> [AssistantConversationRecord] {
         Array(records.values)
     }
 
-    func save(_ record: AssistantConversationRecord) {
+    func save(_ record: AssistantConversationRecord) async {
         records[record.id] = record
     }
 
@@ -358,16 +358,16 @@ private actor MemoryHistoryBackend: AssistantHistoryBackend {
 private actor CountingSpeechTranscriber: AssistantSpeechTranscribing {
     private(set) var startCount = 0
 
-    func permissionState() -> AssistantVoicePermissionState { .granted }
-    func requestPermission() -> AssistantVoicePermissionState { .granted }
+    func permissionState() async -> AssistantVoicePermissionState { .granted }
+    func requestPermission() async -> AssistantVoicePermissionState { .granted }
 
-    func start() -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
+    func start() async -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
         startCount += 1
         return AsyncThrowingStream { _ in }
     }
 
-    func finish() {}
-    func cancel() {}
+    func finish() async {}
+    func cancel() async {}
 }
 
 private actor MemoryDraftStore: PendingStudioPatchPersisting {
@@ -384,16 +384,16 @@ private actor StubSpeechTranscriber: AssistantSpeechTranscribing {
         self.permission = permission
     }
 
-    func permissionState() -> AssistantVoicePermissionState { permission }
-    func requestPermission() -> AssistantVoicePermissionState { permission }
+    func permissionState() async -> AssistantVoicePermissionState { permission }
+    func requestPermission() async -> AssistantVoicePermissionState { permission }
 
-    func start() -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
+    func start() async -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(AssistantTranscriptUpdate(text: "Studio patch", isFinal: true))
             continuation.finish()
         }
     }
 
-    func finish() {}
-    func cancel() {}
+    func finish() async {}
+    func cancel() async {}
 }
