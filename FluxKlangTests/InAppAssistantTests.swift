@@ -26,6 +26,21 @@ struct InAppAssistantTests {
         #expect(text == "fallback")
     }
 
+    @Test func concurrentLoadsShareOneHistoryLoad() async {
+        let backend = MemoryHistoryBackend(loadDelay: .milliseconds(50))
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: backend, cloud: nil),
+            generator: StubGenerator(availability: .ready, text: "Ready")
+        )
+
+        async let first: Void = chat.load()
+        async let second: Void = chat.load()
+        _ = await (first, second)
+
+        #expect(await backend.loadCount == 1)
+    }
+
     @Test func modelToolAuthorizationNeverPermitsWingWrites() throws {
         let authorizer = AssistantToolAuthorizer.model
 
@@ -430,9 +445,19 @@ private enum AssistantTestError: Error {
 private actor MemoryHistoryBackend: AssistantHistoryBackend {
     private var records: [UUID: AssistantConversationRecord] = [:]
     private(set) var saveCount = 0
+    private(set) var loadCount = 0
+    private let loadDelay: Duration?
+
+    init(loadDelay: Duration? = nil) {
+        self.loadDelay = loadDelay
+    }
 
     func loadRecords() async -> [AssistantConversationRecord] {
-        Array(records.values)
+        loadCount += 1
+        if let loadDelay {
+            try? await Task.sleep(for: loadDelay)
+        }
+        return Array(records.values)
     }
 
     func save(_ record: AssistantConversationRecord) async {
