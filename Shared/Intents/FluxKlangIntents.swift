@@ -168,11 +168,11 @@ enum SiriDraftStudioAction {
             )),
             context: context
         )
-        _ = await model.assistant.perform(.openReview, context: context)
-        model.section = .studio
         guard case .pendingDraft(let draft?) = result else {
             return "I couldn't create a Studio draft."
         }
+        _ = await model.assistant.perform(.openReview, context: context)
+        model.section = .studio
         return spokenSummary(for: draft)
     }
 
@@ -302,7 +302,7 @@ enum SiriEntityIntegration {
         guard !sourceEntities.isEmpty else { return }
         let intent = DraftStudioPatchIntent(
             sourceGear: sourceEntities,
-            effects: effectEntities,
+            effects: effectEntities.isEmpty ? nil : effectEntities,
             destination: DestinationEntity.all.first { $0.destination == destination } ?? .finalMix
         )
         intent.donate()

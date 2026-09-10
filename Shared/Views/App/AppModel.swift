@@ -161,6 +161,7 @@ final class AppModel {
             } catch {
                 return
             }
+            guard !Task.isCancelled else { return }
             guard let self else { return }
             await SiriEntityIntegration.indexCurrentEntities(model: self)
         }
