@@ -51,8 +51,8 @@ actor DemoWingTransport: WingTransporting {
             store[address] = value
             emit(address, value)
         } else if let existing = store[address] {
-            // GET: reply with the current value on the incoming stream.
-            emit(address, existing)
+            // GET: use the same multi-value shape as live WING query replies.
+            emit(address, queryValues(address: address, value: existing))
         }
     }
 
@@ -62,6 +62,38 @@ actor DemoWingTransport: WingTransporting {
         continuation.yield(
             WingIncoming(address: address, value: value, host: Self.demoHost, port: WingNetwork.defaultPort)
         )
+    }
+
+    private func emit(_ address: String, _ values: [WingValue]) {
+        continuation.yield(
+            WingIncoming(address: address, values: values, host: Self.demoHost, port: WingNetwork.defaultPort)
+        )
+    }
+
+    private func queryValues(address: String, value: WingValue) -> [WingValue] {
+        switch value {
+        case .float(let number):
+            if address.hasSuffix("/fdr") {
+                return [
+                    .string(FaderMath.label(forPosition: number)),
+                    .float(number),
+                    .float(FaderMath.decibels(fromPosition: number))
+                ]
+            }
+            if address.hasSuffix("/pan") {
+                return [.string(number.formatted()), .float((number + 1) / 2), .float(number)]
+            }
+            return [.string(number.formatted()), .float(0), .float(number)]
+        case .int(let number):
+            if address.hasSuffix("/in/conn/in")
+                || (address.hasPrefix("/io/out/") && address.hasSuffix("/in")) {
+                let rawIndex = number > 0 ? number - 1 : 0
+                return [.string(number.description), .float(0), .int(rawIndex)]
+            }
+            return [.string(number.description), .float(Float(number)), .int(number)]
+        case .string:
+            return [value]
+        }
     }
 
     private func emitAll() {
@@ -136,15 +168,10 @@ actor DemoWingTransport: WingTransporting {
         for (offset, speakerName) in speakerNames.enumerated() {
             store[WingAddress.name(.bus, offset + 1)] = .string(speakerName)
         }
-        // Best-guess physical I/O connector names so the demo "assigns" gear to
-        // its inputs and labels its outputs offline (provisional addresses; see
-        // WingAddress). Each LOCAL input carries the instrument on the matching
-        // channel (the demo patches channel c from local input c).
+        // Each LOCAL input carries the instrument on the matching channel (the
+        // demo patches channel c from local input c).
         for connector in 1...WingSourceGroup.local.count {
             store[WingAddress.inputName(connector)] = .string(channelNames[connector] ?? "Input \(connector)")
-        }
-        for connector in 1...WingAddress.localOutputCount {
-            store[WingAddress.outputName(connector)] = .string("Output \(connector)")
         }
         // Hard-pan the stereo rig channels (L/R) and centre the mono ones so the
         // demo images correctly offline.

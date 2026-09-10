@@ -18,8 +18,13 @@ struct WingIncoming: Sendable {
     let host: String
     let port: UInt16
 
-    /// The first argument, for the common single-value case.
-    var value: WingValue? { values.first }
+    /// The semantic value represented by a WING reply.
+    ///
+    /// Live WING GET replies commonly include a display string, a normalized
+    /// float and an engineering value. Demo and SET echoes use one value.
+    var effectiveValue: WingValue? {
+        WingReplyResolver.resolve(address: address, values: values)
+    }
 
     init(address: String, values: [WingValue], host: String, port: UInt16) {
         self.address = address
@@ -30,6 +35,37 @@ struct WingIncoming: Sendable {
 
     init(address: String, value: WingValue?, host: String, port: UInt16) {
         self.init(address: address, values: value.map { [$0] } ?? [], host: host, port: port)
+    }
+}
+
+enum WingReplyResolver {
+    static func resolve(address: String, values: [WingValue]) -> WingValue? {
+        guard values.count > 1 else { return values.first }
+        guard values.count >= 3,
+              values[0].stringValue != nil,
+              values[1].floatValue != nil else {
+            return values.first
+        }
+
+        if let actual = values[2].floatValue {
+            return address.hasSuffix("/fdr") ? values[1] : .float(actual)
+        }
+
+        if let actual = values[2].intValue {
+            if isOneBasedSourceIndex(address),
+               let display = values[0].stringValue,
+               let oneBased = Int32(display) {
+                return .int(oneBased)
+            }
+            return .int(actual)
+        }
+
+        return values.first
+    }
+
+    private static func isOneBasedSourceIndex(_ address: String) -> Bool {
+        address.hasSuffix("/in/conn/in")
+            || (address.hasPrefix("/io/out/") && address.hasSuffix("/in"))
     }
 }
 

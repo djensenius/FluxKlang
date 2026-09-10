@@ -99,7 +99,7 @@ struct OutputPatchbayGrid: View {
 
     private func rowHeader(_ output: Int) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(controller.outputName(output) ?? "Output \(output)")
+            Text("Output \(output)")
                 .font(.caption)
                 .lineLimit(1)
             Text(controller.outputSource(output)?.label ?? "—")
