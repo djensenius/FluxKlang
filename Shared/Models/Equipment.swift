@@ -50,7 +50,7 @@ extension Equipment {
     /// The user's known gear, used to seed the equipment library. This is also
     /// the canonical channel rig (see `channelAssignments()`): every device is
     /// stereo except the two mono boxes — the Arturia MicroFreak and SOMA Lyra-8.
-    static var seededLibrary: [Equipment] {
+    static let seededLibrary: [Equipment] = {
         [
             Equipment(
                 id: UUID(uuidString: "8E4EB95D-B4E2-5BC0-A3E0-CDB27A4EFB7B")!,
@@ -168,7 +168,7 @@ extension Equipment {
                 isStereo: false
             )
         ]
-    }
+    }()
 
     /// Left/right output port labels for a stereo device, falling back to
     /// synthesised "<base> L/R" labels when explicit ones aren't present.

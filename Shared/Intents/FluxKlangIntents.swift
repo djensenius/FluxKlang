@@ -281,6 +281,8 @@ enum SiriEntityIntegration {
             try await index.indexAppEntities(effects)
             try await index.indexAppEntities(environments)
             try await index.indexAppEntities(DestinationEntity.all)
+        } catch is CancellationError {
+            return
         } catch {
             logger.error("Unable to index App Entities: \(error.localizedDescription, privacy: .public)")
         }
