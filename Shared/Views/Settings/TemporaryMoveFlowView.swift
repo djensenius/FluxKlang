@@ -80,9 +80,8 @@ struct TemporaryMoveFlowView: View {
             if returningMove == nil {
                 Picker("Equipment", selection: $equipmentID) {
                     Text("Choose equipment").tag(Equipment.ID?.none)
-                    if let equipmentID, !equipment.contains(where: { $0.id == equipmentID }) {
-                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
-                    }
+                    if let equipmentID, selectedEquipment == nil {
+                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID)) }
                     ForEach(movableEquipment) { item in
                         Text(item.name).tag(Equipment.ID?.some(item.id))
                     }
