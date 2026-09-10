@@ -8,6 +8,19 @@ import Testing
 @testable import FluxKlang
 
 struct GlobalStudioConnectionsTests {
+    @Test func connectionIssueIdentifiersUseExplicitStableComponents() {
+        let id = UUID(uuidString: "C024A205-2CB4-4D3C-A66A-A6AB87218D32")!
+
+        #expect(
+            StudioConnectionIssue(kind: .duplicateInputConnector(4), message: "Unsafe").id
+                == "duplicate-input-connector-4"
+        )
+        #expect(
+            StudioConnectionIssue(kind: .invalidOutputPort(id, 2), message: "Unsafe").id
+                == "invalid-output-port-c024a205-2cb4-4d3c-a66a-a6ab87218d32-2"
+        )
+    }
+
     private final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {
         private let lock = NSLock()
         private var storage: [String: Data] = [:]

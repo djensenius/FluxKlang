@@ -32,6 +32,21 @@ struct StudioView: View {
         content
             .navigationTitle("Studio")
             .toolbar { toolbar }
+            .sheet(isPresented: reviewPresented) {
+                if let draft = appModel.assistant.pendingStudioDraft {
+                    PendingStudioPatchReviewView(
+                        draft: draft,
+                        accept: acceptPendingDraft,
+                        discard: discardPendingDraft
+                    )
+                    .task {
+                        _ = await appModel.assistant.perform(
+                            .validatePendingStudioDraft,
+                            context: appModel.assistantToolContext()
+                        )
+                    }
+                }
+            }
     }
 
     @ViewBuilder
@@ -47,6 +62,7 @@ struct StudioView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 startSection
+                pendingDraftSection
                 graphSection
                 endpointsSection
                 warningsSection
@@ -77,6 +93,7 @@ struct StudioView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         startSection
+                        pendingDraftSection
                         endpointsSection
                         warningsSection
                         behindTheScenesSection
@@ -404,6 +421,49 @@ struct StudioView: View {
             return "\(endpoints.count) controls · \(connections.inputs.count + connections.outputs.count) connections"
         }
         return "\(issues.count) note\(issues.count == 1 ? "" : "s") before everything can play"
+    }
+}
+
+private extension StudioView {
+    @ViewBuilder
+    var pendingDraftSection: some View {
+        if let draft = appModel.assistant.pendingStudioDraft {
+            StudioSection("Assistant Draft") {
+                PendingStudioPatchCard(
+                    draft: draft,
+                    review: { appModel.assistant.navigationTarget = .reviewPendingDraft },
+                    discard: discardPendingDraft
+                )
+            } footer: {
+                Text("Review is local-only. Accept adds semantic routing; Listen remains a separate action.")
+            }
+        }
+    }
+
+    var reviewPresented: Binding<Bool> {
+        Binding(
+            get: {
+                appModel.assistant.navigationTarget == .reviewPendingDraft
+                    && appModel.assistant.pendingStudioDraft != nil
+            },
+            set: { isPresented in
+                if !isPresented {
+                    appModel.assistant.clearNavigation()
+                }
+            }
+        )
+    }
+
+    func acceptPendingDraft() {
+        Task {
+            _ = await appModel.acceptPendingAssistantDraft()
+        }
+    }
+
+    func discardPendingDraft() {
+        Task {
+            await appModel.assistant.discardPendingStudioDraft()
+        }
     }
 }
 
