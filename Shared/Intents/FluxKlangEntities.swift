@@ -3,6 +3,8 @@ import CoreSpotlight
 import Foundation
 
 let fluxKlangAppEntityIndexName = "FluxKlang.AppEntities"
+private let fluxKlangSpotlightProtectionClassKey =
+    "org.davidjensenius.FluxKlang.spotlightProtectionClass"
 
 struct EquipmentEntity: AppEntity, IndexedEntity, Hashable {
     let id: UUID
@@ -207,13 +209,13 @@ extension EquipmentEntityQuery: IndexedEntityQuery {
         indexDescription: CSSearchableIndexDescription
     ) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await suggestedEntities())
     }
 }
@@ -225,13 +227,13 @@ extension EffectEntityQuery: IndexedEntityQuery {
         indexDescription: CSSearchableIndexDescription
     ) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await suggestedEntities())
     }
 }
@@ -243,13 +245,13 @@ extension EnvironmentEntityQuery: IndexedEntityQuery {
         indexDescription: CSSearchableIndexDescription
     ) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await suggestedEntities())
     }
 }
@@ -261,13 +263,13 @@ extension DestinationEntityQuery: IndexedEntityQuery {
         indexDescription: CSSearchableIndexDescription
     ) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
         try await fluxKlangSpotlightIndex(
-            protectionClass: indexDescription.protectionClass
+            indexDescription: indexDescription
         ).indexAppEntities(try await suggestedEntities())
     }
 }
@@ -277,6 +279,28 @@ func fluxKlangSpotlightIndex(protectionClass: FileProtectionType?) -> CSSearchab
         name: fluxKlangAppEntityIndexName,
         protectionClass: protectionClass
     )
+}
+
+@available(iOS 27.0, macOS 27.0, *)
+func fluxKlangSpotlightIndex(
+    indexDescription: CSSearchableIndexDescription
+) -> CSSearchableIndex {
+    let protectionClass = indexDescription.protectionClass
+    UserDefaults.standard.set(
+        protectionClass?.rawValue ?? "",
+        forKey: fluxKlangSpotlightProtectionClassKey
+    )
+    return fluxKlangSpotlightIndex(protectionClass: protectionClass)
+}
+
+func fluxKlangSpotlightIndexForManualRefresh() -> CSSearchableIndex? {
+    guard let rawValue = UserDefaults.standard.string(
+        forKey: fluxKlangSpotlightProtectionClassKey
+    ) else {
+        return nil
+    }
+    let protectionClass = rawValue.isEmpty ? nil : FileProtectionType(rawValue: rawValue)
+    return fluxKlangSpotlightIndex(protectionClass: protectionClass)
 }
 
 enum SiriEntityMatcher {
