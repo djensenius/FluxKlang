@@ -39,6 +39,15 @@ struct AssistantCoreTests {
         #expect(response.contains("\\\"Synth\\\""))
     }
 
+    @Test func fallbackUsesReadableEmptyListSummaries() throws {
+        let response = try AssistantFallbackResponder.response(
+            to: .live("List empty state", requires: [.equipment, .environments, .presets]),
+            groundedBy: [.equipment([]), .environments([]), .presets([])]
+        )
+
+        #expect(response == "No equipment.\nNo environments.\nNo presets.")
+    }
+
     @Test func pendingDraftPersistsLocallyAndDiscardDeletesIt() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("assistant-test-\(UUID().uuidString)", isDirectory: true)
