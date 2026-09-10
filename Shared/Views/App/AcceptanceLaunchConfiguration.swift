@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 
 @MainActor
@@ -20,7 +19,7 @@ enum AcceptanceLaunchConfiguration {
             do {
                 try await seedAcceptanceState(appModel)
             } catch {
-                preconditionFailure("Unable to seed acceptance state: \(error.localizedDescription)")
+                preconditionFailure("Unable to seed acceptance state: \(String(reflecting: error))")
             }
         }
         if arguments.contains("-ui-test-demo") {

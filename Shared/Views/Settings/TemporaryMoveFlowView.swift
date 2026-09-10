@@ -81,7 +81,8 @@ struct TemporaryMoveFlowView: View {
                 Picker("Equipment", selection: $equipmentID) {
                     Text("Choose equipment").tag(Equipment.ID?.none)
                     if let equipmentID, selectedEquipment == nil {
-                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID)) }
+                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
+                    }
                     ForEach(movableEquipment) { item in
                         Text(item.name).tag(Equipment.ID?.some(item.id))
                     }
@@ -90,8 +91,7 @@ struct TemporaryMoveFlowView: View {
             } else {
                 LabeledContent("Equipment", value: selectedEquipment?.name ?? "Missing equipment")
             }
-            TextField("Optional location", text: $location)
-                .disabled(returningMove != nil)
+            TextField("Optional location", text: $location).disabled(returningMove != nil)
                 .accessibilityIdentifier("temporary-move-location")
             TextField("Optional note", text: $note, axis: .vertical)
                 .disabled(returningMove != nil)
