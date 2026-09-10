@@ -16,6 +16,7 @@ struct EffectEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: Effect
+    @State private var isShowingTemporaryMove = false
     let isNew: Bool
     let allEffects: [Effect]
     let onSave: (Effect) -> Void
@@ -56,11 +57,38 @@ struct EffectEditor: View {
                     Toggle("Stereo", isOn: $draft.isStereo)
                 }
 
+                if let equipmentID = draft.equipmentID {
+                    Section("Physical Equipment") {
+                        if let move = appModel.studioConnections.connections.move(for: equipmentID) {
+                            Label("Moved", systemImage: "shippingbox.and.arrow.backward")
+                                .foregroundStyle(.orange)
+                            Text(connectorSummary(move))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Return Home") { isShowingTemporaryMove = true }
+                                .accessibilityIdentifier("effect-return-equipment-home")
+                        } else {
+                            Button("Move Temporarily") { isShowingTemporaryMove = true }
+                                .accessibilityIdentifier("effect-move-equipment-temporarily")
+                        }
+                    }
+                }
+
                 Section("Signal flow") {
                     flowStep(1, "The instruments you pick feed a private bus.")
                     flowStep(2, "That bus is sent out the WING output(s) into your effect.")
                     flowStep(3, "Your effect's output comes back on the WING input(s).")
                     flowStep(4, "The return goes to the Main — or into another effect, to chain them.")
+                }
+                .sheet(isPresented: $isShowingTemporaryMove) {
+                    if let equipmentID = draft.equipmentID,
+                       let move = appModel.studioConnections.connections.move(for: equipmentID) {
+                        TemporaryMoveFlowView(returning: move)
+                            .environment(appModel)
+                    } else {
+                        TemporaryMoveFlowView(initialEquipmentID: draft.equipmentID)
+                            .environment(appModel)
+                    }
                 }
 
                 Section {
@@ -192,7 +220,7 @@ struct EffectEditor: View {
     }
 
     private func outputName(_ connector: Int) -> String? {
-        appModel.studioConnections.connections.home.outputFriendlyName(
+        appModel.studioConnections.connections.effectiveHome.outputFriendlyName(
             connector,
             equipment: appModel.equipment.items
         )
@@ -200,11 +228,31 @@ struct EffectEditor: View {
 
     /// The WING name of an input connector, when the console has reported one.
     private func inputName(_ connector: Int) -> String? {
-        appModel.studioConnections.connections.home.inputFriendlyName(
+        appModel.studioConnections.connections.effectiveHome.inputFriendlyName(
             connector,
             equipment: appModel.equipment.items,
             liveScribble: appModel.wing.inputName(connector)
         )
+    }
+
+    private func connectorSummary(_ move: TemporaryDeviceMove) -> String {
+        let home = appModel.studioConnections.connections.home
+        let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
+        let currentInputs = move.connections.inputs.map(\.connector).sorted()
+        let homeOutputs = home.outputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
+        let currentOutputs = move.connections.outputs.map(\.connector).sorted()
+        var parts: [String] = []
+        if !homeInputs.isEmpty {
+            parts.append("WING inputs \(list(homeInputs)) → \(list(currentInputs))")
+        }
+        if !homeOutputs.isEmpty {
+            parts.append("WING outputs \(list(homeOutputs)) → \(list(currentOutputs))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func list(_ connectors: [Int]) -> String {
+        connectors.map(String.init).joined(separator: "/")
     }
 
     private func instrumentBinding(_ id: Equipment.ID) -> Binding<Bool> {

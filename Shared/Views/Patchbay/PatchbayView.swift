@@ -43,11 +43,15 @@ struct PatchbayView: View {
 
             switch tab {
             case .inputs:
-                InputPatchbayGrid(controller: appModel.wing)
+                InputPatchbayGrid(
+                    controller: appModel.wing,
+                    connections: appModel.studioConnections.connections.effectiveHome,
+                    equipment: appModel.equipment.items
+                )
             case .outputs:
                 OutputPatchbayGrid(
                     controller: appModel.wing,
-                    connections: appModel.studioConnections.connections.home,
+                    connections: appModel.studioConnections.connections.effectiveHome,
                     equipment: appModel.equipment.items
                 )
             case .snapshots:

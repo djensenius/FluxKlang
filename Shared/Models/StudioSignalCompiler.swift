@@ -63,7 +63,7 @@ enum StudioSignalCompiler {
         let context = CompileContext(
             graph: input.graph,
             effects: input.effects,
-            connections: input.connections.home,
+            connections: input.connections.effectiveHome,
             equipment: input.equipment,
             routingPlan: routingPlan,
             resourcePlan: resourcePlan

@@ -143,9 +143,24 @@ final class AppModel {
     /// Apply pushes both, so a setup's spatial placement is recalled too.
     func environmentSettings() -> [WingSetting] {
         EffectRouting.settings(
-            for: environments.activeEffects,
+            for: effectsWithEffectiveConnections(),
             assignments: Equipment.channelAssignments(from: equipment.items)
         ) + environmentSpatialSettings()
+    }
+
+    private func effectsWithEffectiveConnections() -> [Effect] {
+        let resolver = StudioPhysicalResolver(
+            connections: studioConnections.connections.effectiveHome,
+            equipment: equipment.items
+        )
+        return environments.activeEffects.map { effect in
+            let jacks = resolver.effectJacks(effect)
+            guard jacks.issues.isEmpty else { return effect }
+            var resolved = effect
+            resolved.sendOutputs = jacks.inputJacks
+            resolved.returnInputs = jacks.outputJacks
+            return resolved
+        }
     }
 
     /// The surround bus sends for every placed voice of the active environment.
@@ -183,11 +198,15 @@ final class AppModel {
 
     /// Compiles the active semantic studio canvas into concrete WING settings.
     func studioCompiledRouting() -> StudioCompiledRouting {
+        studioCompiledRouting(connections: studioConnections.connections)
+    }
+
+    func studioCompiledRouting(connections: GlobalStudioConnections) -> StudioCompiledRouting {
         StudioSignalCompiler.compile(StudioCompilationInput(
             graph: environments.activeStudioGraph,
             endpoints: environments.activeStudioEndpoints,
             effects: environments.activeEffects,
-            connections: studioConnections.connections,
+            connections: connections,
             equipment: equipment.items,
             speakers: spatial.array.speakers
         ))
@@ -306,6 +325,7 @@ final class AppModel {
         await live.connect(host: host)
         if live.connection.isConnected {
             lastHost = host
+            await verifyTemporaryMovesAfterReconnect()
         }
     }
 

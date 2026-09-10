@@ -196,7 +196,7 @@ struct GlobalStudioConnectionsTests {
         let home = StudioHomeConnections(inputs: [
             StudioInputConnection(connector: 17, equipmentID: synth.id, outputPort: 0)
         ])
-        await second.replaceHome(home)
+        try await second.replaceHome(home, equipment: [synth])
         let cloudKey = "store." + fileName.replacingOccurrences(of: ".", with: "_")
         #expect(cloud.data(forKey: cloudKey) != nil)
 
