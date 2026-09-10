@@ -94,7 +94,22 @@ struct AssistantCoreTests {
         for tool in tools {
             evidence.insert(await coordinator.perform(tool, context: context).grounding)
         }
-        _ = await coordinator.perform(.openReview, context: context)
+        let emptyReview = await coordinator.perform(.openReview, context: context)
+        if case .pendingDraft(nil) = emptyReview {
+            #expect(coordinator.navigationTarget == nil)
+        } else {
+            Issue.record("Opening review without a draft should return an empty draft result")
+        }
+        _ = await coordinator.perform(
+            .buildStudioDraft(StudioWiringRequest(sourceInstrumentIDs: [synth.id])),
+            context: context
+        )
+        let pendingReview = await coordinator.perform(.openReview, context: context)
+        if case .navigation(.reviewPendingDraft) = pendingReview {
+            #expect(coordinator.navigationTarget == .reviewPendingDraft)
+        } else {
+            Issue.record("Opening review with a draft should navigate to its review")
+        }
         #expect(coordinator.navigationTarget == .reviewPendingDraft)
         _ = await coordinator.perform(.openHelp(.studio), context: context)
         #expect(coordinator.navigationTarget == .help(.studio))

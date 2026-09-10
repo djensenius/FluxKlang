@@ -36,8 +36,8 @@ final class WingController {
     /// this never treats an attempted local SET as proof that hardware applied it.
     private(set) var confirmedValues: [String: WingValue] = [:]
 
-    /// Number of local SET operations sent through the transport. Read by safety
-    /// tests to prove draft-only paths never emit hardware writes.
+    /// Number of local SET operations attempted through the transport. Read by
+    /// safety tests to prove draft-only paths never attempt hardware writes.
     private(set) var transportWriteCount = 0
 
     /// Host the controller is connected (or connecting) to.

@@ -65,6 +65,55 @@ struct InAppAssistantTests {
         #expect(chat.isStreaming == false)
     }
 
+    @Test func generationHistoryExcludesTheCurrentQuestion() async throws {
+        let generator = RecordingGenerator()
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
+            generator: generator
+        )
+        chat.newConversation()
+        chat.composer = "How is this wired?"
+        chat.send(context: emptyContext())
+        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+
+        let request = try #require(generator.latestRequest())
+        #expect(request.question == "How is this wired?")
+        #expect(request.recentMessages.isEmpty)
+    }
+
+    @Test func retryReusesTheExistingUserMessage() async throws {
+        let generator = FailingRecordingGenerator()
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
+            generator: generator
+        )
+        chat.newConversation()
+        chat.composer = "Try this"
+        chat.send(context: emptyContext())
+        try await waitUntil { chat.selectedConversation?.messages.last?.state == .failed }
+        let failedID = try #require(chat.selectedConversation?.messages.last?.id)
+
+        chat.retry(messageID: failedID, context: emptyContext())
+        try await waitUntil { generator.requestCount == 2 }
+
+        #expect(chat.selectedConversation?.messages.filter { $0.role == .user }.count == 1)
+    }
+
+    @Test func voiceStartIgnoresOverlappingRequests() async throws {
+        let transcriber = CountingSpeechTranscriber()
+        let voice = AssistantVoiceController(transcriber: transcriber)
+
+        voice.start()
+        voice.start()
+        try await waitUntil { voice.state == .listening }
+
+        let startCount = await transcriber.startCount
+        #expect(startCount == 1)
+        voice.cancel()
+    }
+
     @Test func historyMigratesSyncsAndPropagatesDeletionTombstones() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("assistant-history-\(UUID().uuidString)", isDirectory: true)
@@ -252,6 +301,59 @@ private struct CancellableGenerator: AssistantGenerating {
     }
 }
 
+private final class RecordingGenerator: AssistantGenerating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [AssistantGenerationRequest] = []
+
+    func availability() async -> AssistantModelAvailability { .ready }
+
+    func stream(
+        _ request: AssistantGenerationRequest
+    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        lock.lock()
+        requests.append(request)
+        lock.unlock()
+        return AsyncThrowingStream { continuation in
+            continuation.yield(.text("Done"))
+            continuation.finish()
+        }
+    }
+
+    func latestRequest() -> AssistantGenerationRequest? {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests.last
+    }
+}
+
+private final class FailingRecordingGenerator: AssistantGenerating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+
+    var requestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
+
+    func availability() async -> AssistantModelAvailability { .ready }
+
+    func stream(
+        _ request: AssistantGenerationRequest
+    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        lock.lock()
+        requests += 1
+        lock.unlock()
+        return AsyncThrowingStream { continuation in
+            continuation.finish(throwing: AssistantTestError.generationFailed)
+        }
+    }
+}
+
+private enum AssistantTestError: Error {
+    case generationFailed
+}
+
 private actor MemoryHistoryBackend: AssistantHistoryBackend {
     private var records: [UUID: AssistantConversationRecord] = [:]
 
@@ -266,6 +368,21 @@ private actor MemoryHistoryBackend: AssistantHistoryBackend {
     func record(id: UUID) -> AssistantConversationRecord? {
         records[id]
     }
+}
+
+private actor CountingSpeechTranscriber: AssistantSpeechTranscribing {
+    private(set) var startCount = 0
+
+    func permissionState() -> AssistantVoicePermissionState { .granted }
+    func requestPermission() -> AssistantVoicePermissionState { .granted }
+
+    func start() -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
+        startCount += 1
+        return AsyncThrowingStream { _ in }
+    }
+
+    func finish() {}
+    func cancel() {}
 }
 
 private actor MemoryDraftStore: PendingStudioPatchPersisting {

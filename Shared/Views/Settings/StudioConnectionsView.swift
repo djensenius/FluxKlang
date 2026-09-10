@@ -2,12 +2,10 @@
 //  StudioConnectionsView.swift
 //  FluxKlang
 //
-//  Edits the global Home wiring map. Temporary moves are intentionally outside
-//  this screen: these assignments describe the studio's normal physical wiring.
+//  Edits the global Home wiring map and manages Temporary Moves that overlay it.
 //
 
 import SwiftUI
-
 struct StudioConnectionsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isMovingEquipment = false
@@ -341,7 +339,11 @@ private struct StudioConnectorEditor: View {
                     return
                 }
                 let names = portNames(for: item)
-                port = names.indices.contains(port ?? -1) ? port : names.indices.first
+                if let port, names.indices.contains(port),
+                   !isPortInUse(equipmentID: newValue, port: port) {
+                    return
+                }
+                port = names.indices.first { !isPortInUse(equipmentID: newValue, port: $0) }
             }
         )
     }

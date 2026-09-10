@@ -262,14 +262,16 @@ private struct SectionDetail: View {
     var body: some View {
         content
             .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        appModel.isAssistantPresented = true
-                    } label: {
-                        Label("Open Assistant", systemImage: "sparkles")
+                if section != .assistant {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            appModel.isAssistantPresented = true
+                        } label: {
+                            Label("Open Assistant", systemImage: "sparkles")
+                        }
+                        .accessibilityLabel("Open Assistant")
+                        .accessibilityIdentifier("assistant.entry")
                     }
-                    .accessibilityLabel("Open Assistant")
-                    .accessibilityIdentifier("assistant.entry")
                 }
             }
     }

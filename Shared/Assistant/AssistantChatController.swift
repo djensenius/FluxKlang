@@ -113,7 +113,7 @@ final class AssistantChatController {
         updateConversation(id: conversation.id) {
             $0.messages.remove(at: failedIndex)
         }
-        send(question: question, context: context)
+        send(question: question, context: context, appendingQuestion: false)
     }
 
     func cancel() {
@@ -155,13 +155,19 @@ final class AssistantChatController {
         }
     }
 
-    private func send(question: String, context: AssistantToolContext) {
+    private func send(
+        question: String,
+        context: AssistantToolContext,
+        appendingQuestion: Bool = true
+    ) {
         ensureConversation()
         guard let conversationID = selectedConversationID else { return }
         let userMessage = AssistantMessage(role: .user, text: question)
         let responseID = UUID()
         updateConversation(id: conversationID) {
-            $0.messages.append(userMessage)
+            if appendingQuestion {
+                $0.messages.append(userMessage)
+            }
             $0.messages.append(AssistantMessage(
                 id: responseID,
                 role: .assistant,
@@ -175,7 +181,7 @@ final class AssistantChatController {
         let conversation = conversations.first { $0.id == conversationID }
         let request = AssistantGenerationRequest(
             question: question,
-            recentMessages: Array(conversation?.messages.dropLast() ?? []),
+            recentMessages: Array(conversation?.messages.dropLast(2) ?? []),
             summary: conversation?.summary ?? "",
             context: context
         )
@@ -184,16 +190,7 @@ final class AssistantChatController {
             do {
                 for try await event in generator.stream(request) {
                     try Task.checkCancellation()
-                    updateConversation(id: conversationID) { conversation in
-                        guard let index = conversation.messages.firstIndex(where: { $0.id == responseID })
-                        else { return }
-                        switch event {
-                        case .text(let text):
-                            conversation.messages[index].text = text
-                        case .cards(let cards):
-                            conversation.messages[index].cards = cards
-                        }
-                    }
+                    apply(event, conversationID: conversationID, responseID: responseID)
                 }
                 finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
             } catch is CancellationError {
@@ -208,6 +205,23 @@ final class AssistantChatController {
                     }
                 }
                 isStreaming = false
+            }
+        }
+    }
+
+    private func apply(
+        _ event: AssistantStreamEvent,
+        conversationID: UUID,
+        responseID: UUID
+    ) {
+        updateStreamingConversation(id: conversationID) { conversation in
+            guard let index = conversation.messages.firstIndex(where: { $0.id == responseID })
+            else { return }
+            switch event {
+            case .text(let text):
+                conversation.messages[index].text = text
+            case .cards(let cards):
+                conversation.messages[index].cards = cards
             }
         }
     }
@@ -248,6 +262,14 @@ final class AssistantChatController {
         let conversation = conversations[index]
         conversations.sort { $0.modifiedAt > $1.modifiedAt }
         Task { await store.save(conversation) }
+    }
+
+    private func updateStreamingConversation(
+        id: UUID,
+        mutation: (inout AssistantConversation) -> Void
+    ) {
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+        mutation(&conversations[index])
     }
 
     private static func summary(for messages: [AssistantMessage]) -> String {
