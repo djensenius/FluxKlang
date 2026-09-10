@@ -4,10 +4,13 @@ import Testing
 
 struct AcceptanceMigrationTests {
     @Test @MainActor func emptyEquipmentAcceptanceSeedUsesKnownSource() throws {
-        let source = try AcceptanceLaunchConfiguration.acceptanceSource(in: [])
+        let emptySource = try AcceptanceLaunchConfiguration.acceptanceSource(in: [])
+        let unrelated = Equipment(name: "Other", outputs: ["Out"])
+        let missingSource = try AcceptanceLaunchConfiguration.acceptanceSource(in: [unrelated])
 
-        #expect(source.name == "OP-1 Field")
-        #expect(source.outputs == ["Out L", "Out R"])
+        #expect(emptySource.name == "OP-1 Field")
+        #expect(emptySource.outputs == ["Out L", "Out R"])
+        #expect(missingSource.id == emptySource.id)
     }
 
     @Test func legacyGlobalConnectionsDefaultMissingMovesAndIssues() throws {

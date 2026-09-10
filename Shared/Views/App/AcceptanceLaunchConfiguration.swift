@@ -86,8 +86,7 @@ enum AcceptanceLaunchConfiguration {
     }
 
     static func acceptanceSource(in equipment: [Equipment]) throws -> Equipment {
-        if let source = equipment.first(where: { $0.name == "OP-1 Field" })
-            ?? equipment.first {
+        if let source = equipment.first(where: { $0.name == "OP-1 Field" }) {
             return source
         }
         guard let source = Equipment.seededLibrary.first(where: { $0.name == "OP-1 Field" }) else {
