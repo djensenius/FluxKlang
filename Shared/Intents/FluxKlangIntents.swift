@@ -293,6 +293,7 @@ enum SiriEntityIntegration {
         destination: StudioEndpointDestination,
         context: AssistantToolContext
     ) {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return }
         let equipmentByID = Dictionary(
             context.equipment.map { ($0.id, $0) },
             uniquingKeysWith: { _, latest in latest }
