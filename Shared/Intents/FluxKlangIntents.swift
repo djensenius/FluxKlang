@@ -244,15 +244,17 @@ struct FluxKlangShortcuts: AppShortcutsProvider {
             shortTitle: "Recall Preset",
             systemImageName: "square.grid.2x2"
         )
-        AppShortcut(
-            intent: DraftStudioPatchIntent(),
-            phrases: [
-                "Draft a patch in \(.applicationName)",
-                "Help me wire gear with \(.applicationName)"
-            ],
-            shortTitle: "Draft Studio Patch",
-            systemImageName: "point.topleft.down.to.point.bottomright.curvepath"
-        )
+        if #available(iOS 27.0, macOS 27.0, *) {
+            AppShortcut(
+                intent: DraftStudioPatchIntent(),
+                phrases: [
+                    "Draft a patch in \(.applicationName)",
+                    "Help me wire gear with \(.applicationName)"
+                ],
+                shortTitle: "Draft Studio Patch",
+                systemImageName: "point.topleft.down.to.point.bottomright.curvepath"
+            )
+        }
     }
 }
 
