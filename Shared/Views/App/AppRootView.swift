@@ -3,7 +3,7 @@
 //  FluxKlang
 //
 //  Platform-adaptive root. Compact iPhone keeps the primary workflow to Studio,
-//  Mix and More; iPad and Mac use a grouped source-list sidebar.
+//  Assistant, Mix and More; iPad and Mac use a grouped source-list sidebar.
 //
 
 import SwiftUI
@@ -25,6 +25,17 @@ struct AppRootView: View {
             if case .help(let topic) = assistant.navigationTarget {
                 AssistantHelpView(entry: FluxKlangHelpCatalog.entry(for: topic))
             }
+        }
+        .sheet(isPresented: assistantPresented) {
+            NavigationStack {
+                AssistantView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { appModel.isAssistantPresented = false }
+                        }
+                    }
+            }
+            .environment(appModel)
         }
         .onChange(of: assistant.navigationTarget) { _, target in
             switch target {
@@ -51,10 +62,18 @@ struct AppRootView: View {
             }
         )
     }
+
+    private var assistantPresented: Binding<Bool> {
+        Binding(
+            get: { appModel.isAssistantPresented },
+            set: { appModel.isAssistantPresented = $0 }
+        )
+    }
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
     case studio = "Studio"
+    case assistant = "Assistant"
     case mix = "Mix"
     case patchbay = "Routing"
     case connection = "Connection"
@@ -66,6 +85,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .studio: return "square.stack.3d.up"
+        case .assistant: return "sparkles"
         case .mix: return "slider.vertical.3"
         case .patchbay: return "point.topleft.down.to.point.bottomright.curvepath"
         case .connection: return "antenna.radiowaves.left.and.right"
@@ -100,6 +120,12 @@ private struct TabRoot: View {
             }
             .tabItem { Label("Studio", systemImage: AppSection.studio.systemImage) }
             .tag(CompactTab.studio)
+
+            NavigationStack {
+                SectionDetail(section: .assistant)
+            }
+            .tabItem { Label("Assistant", systemImage: AppSection.assistant.systemImage) }
+            .tag(CompactTab.assistant)
 
             NavigationStack {
                 MixView()
@@ -137,6 +163,8 @@ private struct TabRoot: View {
             switch tab {
             case .studio:
                 appModel.section = .studio
+            case .assistant:
+                appModel.section = .assistant
             case .mix:
                 appModel.section = .mix
             case .more:
@@ -149,6 +177,8 @@ private struct TabRoot: View {
         switch section {
         case .studio:
             return .studio
+        case .assistant:
+            return .assistant
         case .mix:
             return .mix
         case .patchbay, .connection, .tutorial, .advanced:
@@ -159,6 +189,7 @@ private struct TabRoot: View {
 
 private enum CompactTab: Hashable {
     case studio
+    case assistant
     case mix
     case more
 }
@@ -179,7 +210,7 @@ private struct SplitRoot: View {
                     .padding()
                 Divider()
                 List(selection: selection) {
-                    sidebarSection("Create", sections: [.studio, .mix])
+                    sidebarSection("Create", sections: [.studio, .assistant, .mix])
                     sidebarSection("Console", sections: [.patchbay, .connection])
                     sidebarSection("Help", sections: [.tutorial])
                     sidebarSection("Advanced", sections: [.advanced])
@@ -219,13 +250,20 @@ private struct SplitRoot: View {
 }
 
 private struct SectionDetail: View {
+    @Environment(AppModel.self) private var appModel
     let section: AppSection
 
     var body: some View {
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    CoPilotButton()
+                    Button {
+                        appModel.isAssistantPresented = true
+                    } label: {
+                        Label("Open Assistant", systemImage: "sparkles")
+                    }
+                    .accessibilityLabel("Open Assistant")
+                    .accessibilityIdentifier("assistant.entry")
                 }
             }
     }
@@ -235,6 +273,8 @@ private struct SectionDetail: View {
         switch section {
         case .studio:
             StudioView()
+        case .assistant:
+            AssistantView()
         case .mix:
             MixView()
         case .patchbay:

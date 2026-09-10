@@ -26,6 +26,10 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>FluxKlang uses the microphone only while you hold push-to-talk for on-device transcription.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>FluxKlang transcribes your explicit assistant dictation on device and does not retain audio.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

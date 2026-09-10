@@ -19,6 +19,19 @@ struct FluxKlangCommands: Commands {
                 .keyboardShortcut("n", modifiers: .command)
         }
 
+        CommandMenu("Assistant") {
+            Button("Open Assistant") {
+                appModel.section = .assistant
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+
+            Button("Ask About Studio Patch") {
+                appModel.assistantChat.suggestedPrompt = "Explain this Studio patch and any conflicts."
+                appModel.section = .assistant
+            }
+            .keyboardShortcut("/", modifiers: [.command, .shift])
+        }
+
         CommandMenu("WING") {
             Button(appModel.isConnected ? "Disconnect" : "Connect to Last WING") {
                 Task { await appModel.toggleConnection() }
