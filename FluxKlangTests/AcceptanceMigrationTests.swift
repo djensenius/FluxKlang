@@ -23,7 +23,11 @@ struct AcceptanceMigrationTests {
         #expect(decoded.home.inputs.map(\.connector) == [4])
         #expect(decoded.temporaryMoves.isEmpty)
         #expect(decoded.migrationIssues.isEmpty)
-        #expect(decoded.home.inputs[0].id != UUID())
+        let roundTripped = try JSONDecoder().decode(
+            GlobalStudioConnections.self,
+            from: JSONEncoder().encode(decoded)
+        )
+        #expect(roundTripped.home.inputs[0].id == decoded.home.inputs[0].id)
     }
 
     @Test func legacyTemporaryMoveDefaultsToTrackedSafeState() throws {

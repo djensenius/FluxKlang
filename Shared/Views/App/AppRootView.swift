@@ -21,10 +21,9 @@ struct AppRootView: View {
             #endif
         }
         .task {
+            await appModel.loadStores()
             if AcceptanceLaunchConfiguration.isUITesting {
                 await AcceptanceLaunchConfiguration.configure(appModel)
-            } else {
-                await appModel.loadStores()
             }
         }
         .sheet(isPresented: helpPresented) {
@@ -444,8 +443,8 @@ private struct ConnectionStatusButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(detail)")
-        .accessibilityValue(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(detail)
         .accessibilityHint("Opens connection controls")
         .accessibilityIdentifier("connection.status")
     }

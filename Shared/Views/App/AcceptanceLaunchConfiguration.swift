@@ -17,7 +17,11 @@ enum AcceptanceLaunchConfiguration {
         guard isUITesting else { return }
 
         if arguments.contains("-ui-test-seed-acceptance") {
-            await seedAcceptanceState(appModel)
+            do {
+                try await seedAcceptanceState(appModel)
+            } catch {
+                preconditionFailure("Unable to seed acceptance state: \(error.localizedDescription)")
+            }
         }
         if arguments.contains("-ui-test-demo") {
             await appModel.enterDemoMode()
@@ -26,7 +30,7 @@ enum AcceptanceLaunchConfiguration {
         }
     }
 
-    private static func seedAcceptanceState(_ appModel: AppModel) async {
+    private static func seedAcceptanceState(_ appModel: AppModel) async throws {
         if appModel.environments.active == nil {
             _ = appModel.environments.addEnvironment(named: "Acceptance Studio")
         }
@@ -45,7 +49,7 @@ enum AcceptanceLaunchConfiguration {
             )
         }
         let home = StudioHomeConnections(inputs: homeInputs)
-        try? await appModel.studioConnections.replaceHome(home, equipment: appModel.equipment.items)
+        try await appModel.studioConnections.replaceHome(home, equipment: appModel.equipment.items)
         appModel.environments.replaceStudio(graph: StudioGraph(), endpoints: [])
 
         let draft = StudioWiringRequest(sourceInstrumentIDs: [source.id], destination: .finalMix)
@@ -78,7 +82,7 @@ enum AcceptanceLaunchConfiguration {
             ),
             activatedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
-        try? await appModel.studioConnections.activateTemporaryMove(
+        try await appModel.studioConnections.activateTemporaryMove(
             move,
             equipment: appModel.equipment.items
         )

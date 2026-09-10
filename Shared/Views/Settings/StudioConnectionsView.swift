@@ -17,7 +17,6 @@ struct StudioConnectionsView: View {
             equipment: appModel.equipment.items
         ).structuralIssues()
     }
-
     var body: some View {
         List {
             Section {
@@ -87,7 +86,6 @@ struct StudioConnectionsView: View {
                 .environment(appModel)
         }
     }
-
     private func temporaryMoveRow(_ move: TemporaryDeviceMove) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {

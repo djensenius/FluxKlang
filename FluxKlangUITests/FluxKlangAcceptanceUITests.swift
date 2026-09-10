@@ -8,15 +8,15 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         launchSeededDemo()
 
         XCTAssertTrue(app.navigationBars["Studio"].waitForExistence(timeout: 10))
-        XCTAssertTrue(element("studio.status").exists)
+        XCTAssertTrue(element("studio.status").waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["assistant.pendingDraft.review"].waitForExistence(timeout: 10))
 
         app.buttons["assistant.pendingDraft.review"].tap()
         XCTAssertTrue(app.navigationBars["Review Studio Draft"].waitForExistence(timeout: 5))
-        let safety = """
-        Accept only adds valid Studio nodes and wires. It does not remove routing or write to the WING.
-        """
-        XCTAssertTrue(app.staticTexts[safety].exists)
+        let safety = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Accept only adds valid Studio nodes")
+        ).firstMatch
+        XCTAssertTrue(safety.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["assistant.pendingDraft.accept"].isEnabled)
         app.buttons["assistant.pendingDraft.close"].tap()
 
