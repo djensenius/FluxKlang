@@ -282,7 +282,7 @@ enum SiriEntityIntegration {
         } catch is CancellationError {
             return
         } catch {
-            logger.error("Unable to index App Entities: \(error.localizedDescription, privacy: .public)")
+            logger.error("Unable to index App Entities: \(error.localizedDescription, privacy: .private)")
         }
     }
 
