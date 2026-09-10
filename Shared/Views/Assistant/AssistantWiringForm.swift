@@ -39,9 +39,7 @@ struct AssistantWiringForm: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create Draft") {
                         appModel.assistantChat.createWiringDraft(
-                            sourceIDs: appModel.equipment.items
-                                .filter { sourceIDs.contains($0.id) }
-                                .map(\.id),
+                            sourceIDs: selectedSourceIDs,
                             effectIDs: appModel.environments.activeEffects
                                 .filter { effectIDs.contains($0.id) }
                                 .map(\.id),
@@ -50,10 +48,14 @@ struct AssistantWiringForm: View {
                         )
                         dismiss()
                     }
-                    .disabled(sourceIDs.isEmpty)
+                    .disabled(selectedSourceIDs.isEmpty)
                 }
             }
         }
+    }
+
+    private var selectedSourceIDs: [Equipment.ID] {
+        appModel.equipment.items.filter { sourceIDs.contains($0.id) }.map(\.id)
     }
 
     private func toggle<ID: Hashable>(

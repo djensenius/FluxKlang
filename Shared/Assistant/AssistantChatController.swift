@@ -49,11 +49,11 @@ final class AssistantChatController {
 
     func load() async {
         guard !hasLoaded else { return }
+        hasLoaded = true
         conversations = await store.load()
         selectedConversationID = conversations.first?.id
         persistenceDiagnostics = await store.diagnostics
         modelAvailability = await generator.availability()
-        hasLoaded = true
     }
 
     func newConversation() {
