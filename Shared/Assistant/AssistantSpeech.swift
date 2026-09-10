@@ -208,7 +208,12 @@ final class AssistantVoiceController {
     }
 
     func start() {
-        guard state != .listening else { return }
+        switch state {
+        case .idle, .failed:
+            state = .requestingPermission
+        case .requestingPermission, .preparingModel, .listening, .finalizing:
+            return
+        }
         transcript = ""
         isFinal = false
         transcriptTask = Task {

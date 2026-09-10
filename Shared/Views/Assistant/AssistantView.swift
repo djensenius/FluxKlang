@@ -433,7 +433,7 @@ private struct AssistantCardView: View {
 private struct AssistantInlineCard<Content: View>: View {
     let title: String
     let systemImage: String
-    @ViewBuilder let content: Content
+    let content: Content
 
     init(
         title: String,
