@@ -129,12 +129,12 @@ struct ConnectionView: View {
 
     private func connect(to target: String) {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        host = trimmed
         guard !trimmed.isEmpty else { return }
         Task {
             isWorking = true
-            host = trimmed
+            defer { isWorking = false }
             await appModel.connect(host: trimmed)
-            isWorking = false
         }
     }
 }
