@@ -93,6 +93,32 @@ struct TemporaryDeviceMoveTests {
         }
     }
 
+    @Test func suggestionReservesHomeWiringForMovesReadyToReturn() throws {
+        let target = Equipment(name: "Target", outputs: ["Out"])
+        let returning = Equipment(name: "Returning", outputs: ["Out"])
+        let home = StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 1, equipmentID: target.id, outputPort: 0),
+            StudioInputConnection(connector: 2, equipmentID: returning.id, outputPort: 0)
+        ])
+        let returningMove = try TemporaryMoveAllocator.makeMove(
+            equipmentID: returning.id,
+            inputConnectors: [3],
+            outputConnectors: [],
+            home: home,
+            equipment: [target, returning],
+            existingMoves: []
+        ).activating(with: TemporaryMoveVerification(state: .verified)).preparingReturn()
+
+        let suggestion = try TemporaryMoveAllocator.suggestion(
+            for: target.id,
+            home: home,
+            equipment: [target, returning],
+            existingMoves: [returningMove]
+        )
+
+        #expect(suggestion.inputConnectors == [3])
+    }
+
     @Test func simultaneousMovesShareOneConflictAllocator() throws {
         let first = Equipment(name: "First", outputs: ["Out"])
         let second = Equipment(name: "Second", outputs: ["Out"])
