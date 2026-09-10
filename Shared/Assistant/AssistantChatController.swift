@@ -241,9 +241,15 @@ final class AssistantChatController {
     }
 
     private func ensureConversation() {
-        if selectedConversation == nil {
-            newConversation()
+        if let selectedConversationID,
+           conversations.contains(where: { $0.id == selectedConversationID }) {
+            return
         }
+        guard let conversation = conversations.first else {
+            newConversation()
+            return
+        }
+        selectedConversationID = conversation.id
     }
 
     private func updateConversation(
