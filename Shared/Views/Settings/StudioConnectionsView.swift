@@ -257,6 +257,10 @@ private struct StudioConnectorEditor: View {
             Section("Assignment") {
                 Picker("Equipment", selection: equipmentBinding) {
                     Text("Not assigned").tag(Equipment.ID?.none)
+                    if let equipmentID,
+                       !equipment.contains(where: { $0.id == equipmentID }) {
+                        Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
+                    }
                     ForEach(equipment) { item in
                         Text(item.name).tag(Equipment.ID?.some(item.id))
                     }
@@ -415,14 +419,19 @@ private struct StudioConnectorEditor: View {
         case .input:
             guard let connection = home.input(connector) else { return }
             equipmentID = connection.equipmentID
-            port = connection.outputPort
+            port = validatedPort(connection.outputPort, equipmentID: connection.equipmentID)
             labelOverride = connection.labelOverride ?? ""
         case .output:
             guard let connection = home.output(connector) else { return }
             equipmentID = connection.equipmentID
-            port = connection.inputPort
+            port = validatedPort(connection.inputPort, equipmentID: connection.equipmentID)
             labelOverride = connection.labelOverride ?? ""
         }
+    }
+
+    private func validatedPort(_ candidate: Int, equipmentID: Equipment.ID) -> Int? {
+        guard let item = equipment.first(where: { $0.id == equipmentID }) else { return nil }
+        return portNames(for: item).indices.contains(candidate) ? candidate : nil
     }
 
     private func save() {
