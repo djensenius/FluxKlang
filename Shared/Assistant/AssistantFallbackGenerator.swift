@@ -91,9 +91,9 @@ struct AssistantFallbackGenerator: AssistantGenerating {
                 []
             )
         }
-        let results = await [
-            coordinator.perform(.describeCurrentScreen, context: request.context),
-            coordinator.perform(.inspectConnectionState, context: request.context)
+        let results = [
+            await coordinator.perform(.describeCurrentScreen, context: request.context),
+            await coordinator.perform(.inspectConnectionState, context: request.context)
         ]
         let text = try AssistantFallbackResponder.response(
             to: .live(request.question, requires: [.currentScreen, .connectionState]),
