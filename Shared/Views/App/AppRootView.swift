@@ -27,7 +27,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case studio = "Studio"
     case mix = "Mix"
     case patchbay = "Routing"
-    case connection = "Connect"
+    case connection = "Connection"
     case tutorial = "Learn"
     case advanced = "Compatibility"
 

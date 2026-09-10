@@ -20,7 +20,7 @@ struct AppNavigationTests {
         #expect(model.section == .studio)
     }
 
-    @Test func requestNewPresetSelectsPresetsSection() {
+    @Test func requestNewPresetSelectsMixScenes() {
         let model = AppModel()
         model.section = .studio
         model.requestNewPreset()
