@@ -16,10 +16,7 @@ struct ConnectionView: View {
     var body: some View {
         Form {
             Section("Status") {
-                Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
-                    .foregroundStyle(statusTint)
-                    .accessibilityIdentifier("connection.status.detail")
-                    .accessibilityValue(connectionFailureReason ?? "")
+                connectionStatusLabel
                 if appModel.isDemo {
                     Text("Demo Mode — values are simulated and drift to feel live.")
                         .font(.footnote)
@@ -108,6 +105,21 @@ struct ConnectionView: View {
                 host = appModel.lastHost ?? ""
             }
         }
+    }
+
+    @ViewBuilder
+    private var connectionStatusLabel: some View {
+        if let reason = connectionFailureReason {
+            baseConnectionStatusLabel.accessibilityValue(reason)
+        } else {
+            baseConnectionStatusLabel
+        }
+    }
+
+    private var baseConnectionStatusLabel: some View {
+        Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
+            .foregroundStyle(statusTint)
+            .accessibilityIdentifier("connection.status.detail")
     }
 
     private var statusSymbol: String {
