@@ -2,7 +2,7 @@ import AppIntents
 import CoreSpotlight
 import Foundation
 
-let fluxKlangAppEntityIndexName = "FluxKlang.AppEntities"
+private let fluxKlangAppEntityIndexName = "FluxKlang.AppEntities"
 private let fluxKlangSpotlightProtectionClassKey =
     "org.davidjensenius.FluxKlang.spotlightProtectionClass"
 
