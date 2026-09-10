@@ -140,6 +140,12 @@ final class AssistantChatController {
             updateConversation(id: id) {
                 $0.messages.append(AssistantMessage(role: .assistant, text: text, cards: cards))
             }
+            SiriEntityIntegration.donateDraft(
+                sourceIDs: sourceIDs,
+                effectIDs: effectIDs,
+                destination: destination,
+                context: context
+            )
         }
     }
 

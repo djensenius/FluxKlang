@@ -120,6 +120,7 @@ final class AppModel {
         await spatial.load()
         await assistant.load()
         await assistantChat.load()
+        await SiriEntityIntegration.indexCurrentEntities(model: self)
         startObservingCloudChanges()
     }
 
@@ -146,6 +147,7 @@ final class AppModel {
         await presets.reload()
         await routingSnapshots.reload()
         await spatial.reload()
+        await SiriEntityIntegration.indexCurrentEntities(model: self)
     }
 
     /// Applies the active environment's canvas wiring to the WING.

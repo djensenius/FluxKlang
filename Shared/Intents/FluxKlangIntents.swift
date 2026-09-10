@@ -8,7 +8,9 @@
 //
 
 import AppIntents
+import CoreSpotlight
 import Foundation
+import OSLog
 
 struct EnterDemoModeIntent: AppIntent {
     static let title: LocalizedStringResource = "Enter Demo Mode"
@@ -86,6 +88,103 @@ struct RecallPresetIntent: AppIntent {
     }
 }
 
+struct DraftStudioPatchIntent: AppIntent {
+    static let title: LocalizedStringResource = "Draft Studio Patch"
+    static let description = IntentDescription(
+        "Create a reviewable Studio wiring draft without changing WING settings or routing."
+    )
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Source Gear")
+    var sourceGear: [EquipmentEntity]
+
+    @Parameter(title: "Ordered Effects")
+    var effects: [EffectEntity]?
+
+    @Parameter(title: "Destination", default: .finalMix)
+    var destination: DestinationEntity
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Draft \(\.$sourceGear) through \(\.$effects) to \(\.$destination)")
+    }
+
+    init() {}
+
+    init(
+        sourceGear: [EquipmentEntity],
+        effects: [EffectEntity]? = nil,
+        destination: DestinationEntity = .finalMix
+    ) {
+        self.sourceGear = sourceGear
+        self.effects = effects
+        self.destination = destination
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let summary = await SiriDraftStudioAction.execute(
+            sourceGear: sourceGear,
+            effects: effects ?? [],
+            destination: destination,
+            model: AppModel.shared
+        )
+        return .result(dialog: IntentDialog(stringLiteral: summary))
+    }
+}
+
+@MainActor
+enum SiriDraftStudioAction {
+    static func execute(
+        sourceGear: [EquipmentEntity],
+        effects: [EffectEntity],
+        destination: DestinationEntity,
+        model: AppModel
+    ) async -> String {
+        await model.equipment.load()
+        await model.environments.load()
+        let context = model.assistantToolContext()
+        let validSourceIDs = orderedIDs(
+            sourceGear.map(\.id),
+            available: Set(context.equipment.map(\.id))
+        )
+        let validEffectIDs = orderedIDs(
+            effects.map(\.id),
+            available: Set(context.effects.map(\.id))
+        )
+        let result = await model.assistant.perform(
+            .buildStudioDraft(StudioWiringRequest(
+                sourceInstrumentIDs: validSourceIDs,
+                effectChainIDs: validEffectIDs,
+                destination: destination.destination
+            )),
+            context: context
+        )
+        _ = await model.assistant.perform(.openReview, context: context)
+        model.section = .studio
+        guard case .pendingDraft(let draft?) = result else {
+            return "I couldn't create a Studio draft."
+        }
+        return spokenSummary(for: draft)
+    }
+
+    static func spokenSummary(for draft: StudioPatchDraft) -> String {
+        let path = draft.logicalRoutingSummary.first?.value ?? "Studio draft"
+        if draft.hasErrors {
+            let count = draft.validation.count
+            return "Drafted \(path). Review \(count) issue\(count == 1 ? "" : "s") in FluxKlang."
+        }
+        return "Drafted \(path). Review it in FluxKlang."
+    }
+
+    private static func orderedIDs(_ identifiers: [UUID], available: Set<UUID>) -> [UUID] {
+        var seen: Set<UUID> = []
+        return identifiers.filter { available.contains($0) && seen.insert($0).inserted }
+    }
+}
+
 /// A preset exposed to Shortcuts so the user can pick one as an intent parameter.
 struct PresetEntity: AppEntity {
     let id: UUID
@@ -135,5 +234,62 @@ struct FluxKlangShortcuts: AppShortcutsProvider {
             shortTitle: "Recall Preset",
             systemImageName: "square.grid.2x2"
         )
+        AppShortcut(
+            intent: DraftStudioPatchIntent(),
+            phrases: [
+                "Draft a patch in \(.applicationName)",
+                "Help me wire gear with \(.applicationName)"
+            ],
+            shortTitle: "Draft Studio Patch",
+            systemImageName: "point.topleft.down.to.point.bottomright.curvepath"
+        )
+    }
+}
+
+enum SiriEntityIntegration {
+    private static let logger = Logger(
+        subsystem: "org.davidjensenius.FluxKlang",
+        category: "AppIntents"
+    )
+
+    @MainActor
+    static func indexCurrentEntities(model: AppModel) async {
+        guard CSSearchableIndex.isIndexingAvailable() else { return }
+        let equipment = model.equipment.items.map(EquipmentEntity.init)
+        let effects = model.environments.activeEffects.map(EffectEntity.init)
+        let environments = model.environments.environments.map(EnvironmentEntity.init)
+        do {
+            let index = CSSearchableIndex.default()
+            try await index.deleteAppEntities(ofType: EquipmentEntity.self)
+            try await index.deleteAppEntities(ofType: EffectEntity.self)
+            try await index.deleteAppEntities(ofType: EnvironmentEntity.self)
+            try await index.deleteAppEntities(ofType: DestinationEntity.self)
+            try await index.indexAppEntities(equipment)
+            try await index.indexAppEntities(effects)
+            try await index.indexAppEntities(environments)
+            try await index.indexAppEntities(DestinationEntity.all)
+        } catch {
+            logger.error("Unable to index App Entities: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @MainActor
+    static func donateDraft(
+        sourceIDs: [Equipment.ID],
+        effectIDs: [Effect.ID],
+        destination: StudioEndpointDestination,
+        context: AssistantToolContext
+    ) {
+        let equipmentByID = Dictionary(uniqueKeysWithValues: context.equipment.map { ($0.id, $0) })
+        let effectsByID = Dictionary(uniqueKeysWithValues: context.effects.map { ($0.id, $0) })
+        let sourceEntities = sourceIDs.compactMap { equipmentByID[$0].map(EquipmentEntity.init) }
+        let effectEntities = effectIDs.compactMap { effectsByID[$0].map(EffectEntity.init) }
+        guard !sourceEntities.isEmpty else { return }
+        let intent = DraftStudioPatchIntent(
+            sourceGear: sourceEntities,
+            effects: effectEntities,
+            destination: DestinationEntity.all.first { $0.destination == destination } ?? .finalMix
+        )
+        intent.donate()
     }
 }
