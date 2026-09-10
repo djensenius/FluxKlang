@@ -84,6 +84,48 @@ extension TutorialTopic {
                 """,
                 systemImage: "play.circle",
                 tint: .green
+            ),
+            TutorialConcept(
+                title: "Metadata is not physical wiring",
+                detail: """
+                Live WING names and routing replies describe console state. FluxKlang's Studio Connections \
+                describe the physical equipment cables you configured. A live scribble name can suggest a \
+                friendly label, but it never proves or changes a cable.
+                """,
+                systemImage: "cable.connector",
+                tint: .orange
+            )
+        ]),
+        TutorialTopic(title: "Home, Moves & Review", concepts: [
+            TutorialConcept(
+                title: "Home vs Temporary Moves",
+                detail: """
+                Home is your normal saved cable map. A Temporary Move overlays different connectors without \
+                editing Home. Move and Return Home flows require a cable checklist, routing preview, explicit \
+                apply action and confirmed-reply verification.
+                """,
+                systemImage: "house",
+                tint: .blue
+            ),
+            TutorialConcept(
+                title: "Assistant and Siri create drafts",
+                detail: """
+                The assistant and Siri can create a pending Studio draft, never direct console changes. Review \
+                validation and cable instructions before accepting. Accept adds semantic Studio routing only; \
+                Listen is the separate action that can write compiled routing to a connected WING.
+                """,
+                systemImage: "checkmark.shield",
+                tint: .green
+            ),
+            TutorialConcept(
+                title: "On-device and private",
+                detail: """
+                Generation and push-to-talk transcription run on device when available, with a grounded fallback \
+                when Foundation Models are unavailable. Audio is not retained. Visible conversation text may sync \
+                through your private iCloud database.
+                """,
+                systemImage: "hand.raised.fill",
+                tint: .purple
             )
         ]),
         TutorialTopic(title: "Signal Flow", concepts: [
@@ -138,8 +180,10 @@ extension TutorialTopic {
                 title: "Faders",
                 detail: """
                 Build a bank of faders bound to any channels, buses or mains, with \
-                live two-way sync, mute and metering. On Mac, scroll to adjust, \
-                double-click to reset to 0 dB and ⌥-drag for fine control.
+                live two-way sync and mute. The colored bar currently follows fader \
+                position; it is simulated, not WING audio-level telemetry. On Mac, \
+                scroll or arrow keys adjust, double-click resets to 0 dB and ⌥-drag \
+                provides fine control.
                 """,
                 systemImage: "slider.vertical.3",
                 tint: .indigo

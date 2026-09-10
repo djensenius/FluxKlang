@@ -18,6 +18,7 @@ struct VerticalFader: View {
 
     /// Position the knob returns to on a double-click (0 dB by default).
     var unityPosition: Double = Double(FaderMath.unityPosition)
+    var accessibilityName = "Level"
     /// Called for discrete, non-drag changes (double-click reset, scroll-wheel)
     /// so the owner can push the new value to the WING.
     var onSet: (Double) -> Void = { _ in }
@@ -65,6 +66,25 @@ struct VerticalFader: View {
             )
         }
         .frame(minWidth: 40, minHeight: 150)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityName)
+        .accessibilityValue(FaderMath.label(forPosition: Float(position)))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: adjust(by: 0.02)
+            case .decrement: adjust(by: -0.02)
+            @unknown default: break
+            }
+        }
+        .focusable()
+        .onKeyPress(.upArrow) {
+            adjust(by: 0.02)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            adjust(by: -0.02)
+            return .handled
+        }
         .onScrollWheel { info in
             let step = Double(info.deltaY) * (info.optionKey ? 0.001 : 0.004)
             position = clampUnit(position + step)
@@ -89,6 +109,11 @@ struct VerticalFader: View {
 
     private func clampUnit(_ value: Double) -> Double {
         min(max(value, 0), 1)
+    }
+
+    private func adjust(by amount: Double) {
+        position = clampUnit(position + amount)
+        onSet(position)
     }
 
     /// Whether the Option key is held, enabling fine drag (macOS only).

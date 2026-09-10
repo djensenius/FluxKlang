@@ -80,7 +80,7 @@ struct TemporaryMoveFlowView: View {
             if returningMove == nil {
                 Picker("Equipment", selection: $equipmentID) {
                     Text("Choose equipment").tag(Equipment.ID?.none)
-                    if let equipmentID, !equipment.contains(where: { $0.id == equipmentID }) {
+                    if let equipmentID, selectedEquipment == nil {
                         Text("Missing equipment").tag(Equipment.ID?.some(equipmentID))
                     }
                     ForEach(movableEquipment) { item in
@@ -91,8 +91,7 @@ struct TemporaryMoveFlowView: View {
             } else {
                 LabeledContent("Equipment", value: selectedEquipment?.name ?? "Missing equipment")
             }
-            TextField("Optional location", text: $location)
-                .disabled(returningMove != nil)
+            TextField("Optional location", text: $location).disabled(returningMove != nil)
                 .accessibilityIdentifier("temporary-move-location")
             TextField("Optional note", text: $note, axis: .vertical)
                 .disabled(returningMove != nil)
@@ -206,6 +205,7 @@ struct TemporaryMoveFlowView: View {
                 Label(result.state.label, systemImage: verificationImage(result.state))
                     .foregroundStyle(result.state == .verified ? .green : .orange)
                     .accessibilityIdentifier("temporary-move-verification-result")
+                    .accessibilityLabel("Routing verification").accessibilityValue(result.state.label)
                 Text(result.details)
                 if returningMove != nil, result.state != .verified {
                     Text("Home routing is effective, but console verification is not yet complete.")

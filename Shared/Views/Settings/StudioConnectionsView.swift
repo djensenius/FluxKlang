@@ -82,7 +82,6 @@ struct StudioConnectionsView: View {
                 .environment(appModel)
         }
     }
-
     private func temporaryMoveRow(_ move: TemporaryDeviceMove) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -97,6 +96,8 @@ struct StudioConnectionsView: View {
                 Text(move.verification.state.label)
                     .font(.caption)
                     .foregroundStyle(move.verification.state == .verified ? .green : .orange)
+                    .accessibilityLabel("Routing verification")
+                    .accessibilityValue(move.verification.state.label)
             }
             Text(move.connectorSummary(home: home))
                 .font(.caption)

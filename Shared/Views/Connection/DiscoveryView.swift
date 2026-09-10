@@ -26,6 +26,7 @@ struct DiscoveryView: View {
                 }
             }
             .disabled(appModel.discovery.isScanning)
+            .accessibilityIdentifier("connection.scan")
 
             ForEach(appModel.discovery.responders) { wing in
                 Button { onSelect(wing.host) } label: {

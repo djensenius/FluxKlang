@@ -130,7 +130,9 @@ actor AssistantConversationStore {
     }
 
     static func live() -> AssistantConversationStore {
-        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.arguments.contains("-ui-testing")
+        guard !isTesting else {
             return AssistantConversationStore(initialDiagnostics: [
                 """
                 Private iCloud sync is inactive in the unsigned test host. Conversations remain available in \

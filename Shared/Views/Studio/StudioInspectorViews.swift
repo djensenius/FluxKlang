@@ -108,6 +108,24 @@ struct StudioEndpointCard: View {
                 speakers: speakers,
                 setPlacement: setPlacement
             )
+            placementSlider("Horizontal", value: Binding(
+                get: { Double(placement.position.x) },
+                set: {
+                    setPlacement(VoicePlacement(
+                        position: CGPoint(x: CGFloat($0), y: placement.position.y),
+                        width: placement.width
+                    ))
+                }
+            ))
+            placementSlider("Depth", value: Binding(
+                get: { Double(placement.position.y) },
+                set: {
+                    setPlacement(VoicePlacement(
+                        position: CGPoint(x: placement.position.x, y: CGFloat($0)),
+                        width: placement.width
+                    ))
+                }
+            ))
             placementSlider("Width", value: Binding(
                 get: { placement.width },
                 set: { setPlacement(VoicePlacement(position: placement.position, width: $0)) }
@@ -122,6 +140,8 @@ struct StudioEndpointCard: View {
                 .font(.caption2)
                 .frame(width: 74, alignment: .leading)
             Slider(value: value, in: 0...1)
+                .accessibilityLabel(title)
+                .accessibilityValue(value.wrappedValue.formatted(.percent.precision(.fractionLength(0))))
         }
     }
 }

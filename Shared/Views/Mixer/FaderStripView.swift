@@ -68,7 +68,11 @@ struct FaderStripView: View {
 
     private var faderRow: some View {
         HStack(spacing: 6) {
-            VerticalFader(position: $position, isEditing: $isEditing) { newValue in
+            VerticalFader(
+                position: $position,
+                isEditing: $isEditing,
+                accessibilityName: "\(label) level"
+            ) { newValue in
                 push(position: newValue)
             }
             .help(faderHelp)
@@ -106,6 +110,8 @@ struct FaderStripView: View {
         .controlSize(.small)
         .tint(isMuted ? .red : .gray)
         .help(isMuted ? "Unmute \(label)" : "Mute \(label)")
+        .accessibilityLabel(isMuted ? "Unmute \(label)" : "Mute \(label)")
+        .accessibilityValue(isMuted ? "Muted" : "Unmuted")
     }
 
     private var labelView: some View {
