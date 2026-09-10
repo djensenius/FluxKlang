@@ -303,7 +303,7 @@ struct TemporaryMoveFlowView: View {
                     values.wrappedValue.append(1)
                 }
                 values.wrappedValue[index] = newValue
-                cablesConfirmed = false
+                invalidateVerification()
             }
         )
     }
@@ -331,9 +331,9 @@ struct TemporaryMoveFlowView: View {
     }
 
     private func loadSuggestion() {
+        invalidateVerification()
         guard let equipmentID else {
-            inputConnectors = []
-            outputConnectors = []
+            (inputConnectors, outputConnectors) = ([], [])
             return
         }
         do {
@@ -345,12 +345,14 @@ struct TemporaryMoveFlowView: View {
             )
             inputConnectors = suggestion.inputConnectors
             outputConnectors = suggestion.outputConnectors
-            cablesConfirmed = false
         } catch {
-            inputConnectors = []
-            outputConnectors = []
+            (inputConnectors, outputConnectors) = ([], [])
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func invalidateVerification() {
+        (cablesConfirmed, result, errorMessage) = (false, nil, nil)
     }
 
     private func cableChecklist(_ move: TemporaryDeviceMove) -> [String] {
