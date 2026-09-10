@@ -215,7 +215,10 @@ struct EffectEditor: View {
                     .lineLimit(1)
             }
             .accessibilityLabel(title)
-            .accessibilityValue(label.map { "WING connector \(connector), \($0)" } ?? "WING connector \(connector)")
+            .accessibilityValue(
+                label.map { "\(title), WING connector \(connector), \($0)" }
+                    ?? "\(title), WING connector \(connector)"
+            )
         }
     }
 
