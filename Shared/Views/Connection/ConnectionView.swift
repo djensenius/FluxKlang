@@ -19,7 +19,7 @@ struct ConnectionView: View {
                 Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
                     .foregroundStyle(statusTint)
                     .accessibilityIdentifier("connection.status.detail")
-                    .accessibilityValue(appModel.wing.connection.statusLabel)
+                    .accessibilityValue(connectionFailureReason ?? "")
                 if appModel.isDemo {
                     Text("Demo Mode — values are simulated and drift to feel live.")
                         .font(.footnote)
