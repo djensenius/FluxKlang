@@ -65,6 +65,24 @@ struct InAppAssistantTests {
         #expect(chat.isStreaming == false)
     }
 
+    @Test func deletingStreamingConversationClearsBusyStateImmediately() async throws {
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
+            generator: CancellableGenerator()
+        )
+        chat.newConversation()
+        let conversationID = try #require(chat.selectedConversationID)
+        chat.composer = "Stream"
+        chat.send(context: emptyContext())
+        try await waitUntil { chat.selectedConversation?.messages.last?.text == "partial" }
+
+        chat.deleteConversation(id: conversationID)
+
+        #expect(chat.isStreaming == false)
+        #expect(chat.selectedConversation == nil)
+    }
+
     @Test func generationHistoryExcludesTheCurrentQuestion() async throws {
         let generator = RecordingGenerator()
         let chat = AssistantChatController(

@@ -147,6 +147,7 @@ enum TemporaryMoveConflict: LocalizedError, Equatable {
     case alreadyMoving(String)
     case noHomeConnections(String)
     case connectorCountMismatch
+    case insufficientFreeConnectors(direction: String, required: Int, available: Int)
     case duplicateInputConnector(Int)
     case duplicateOutputConnector(Int)
     case inputConnectorInUse(Int)
@@ -164,6 +165,8 @@ enum TemporaryMoveConflict: LocalizedError, Equatable {
             return "\(name) has no Home connectors to move."
         case .connectorCountMismatch:
             return "Every Home cable needs one temporary connector."
+        case .insufficientFreeConnectors(let direction, let required, let available):
+            return "Only \(available) free WING \(direction) connectors are available for \(required) Home cables."
         case .duplicateInputConnector(let connector):
             return "WING input \(connector) is selected more than once."
         case .duplicateOutputConnector(let connector):
@@ -265,15 +268,17 @@ enum TemporaryMoveAllocator {
         reservations.inputs.formUnion(homeInputs.map(\.connector))
         reservations.outputs.formUnion(homeOutputs.map(\.connector))
         return TemporaryMoveSuggestion(
-            inputConnectors: suggest(
+            inputConnectors: try suggest(
                 count: homeInputs.count,
                 range: StudioHomeConnections.inputRange,
-                reserved: reservations.inputs
+                reserved: reservations.inputs,
+                direction: "input"
             ),
-            outputConnectors: suggest(
+            outputConnectors: try suggest(
                 count: homeOutputs.count,
                 range: StudioHomeConnections.outputRange,
-                reserved: reservations.outputs
+                reserved: reservations.outputs,
+                direction: "output"
             )
         )
     }
@@ -348,10 +353,18 @@ enum TemporaryMoveAllocator {
     private static func suggest(
         count: Int,
         range: ClosedRange<Int>,
-        reserved: Set<Int>
-    ) -> [Int] {
+        reserved: Set<Int>,
+        direction: String
+    ) throws -> [Int] {
         guard count > 0 else { return [] }
         let free = range.filter { !reserved.contains($0) }
+        guard free.count >= count else {
+            throw TemporaryMoveConflict.insufficientFreeConnectors(
+                direction: direction,
+                required: count,
+                available: free.count
+            )
+        }
         if count > 1 {
             for start in range where start + count - 1 <= range.upperBound {
                 let candidate = Array(start..<(start + count))

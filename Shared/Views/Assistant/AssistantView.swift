@@ -402,9 +402,11 @@ private struct AssistantCardView: View {
                 }
             case .wiring(let summary, let cables):
                 AssistantInlineCard(title: "Wiring", systemImage: "cable.connector") {
-                    ForEach(summary, id: \.self, content: Text.init)
-                    ForEach(cables, id: \.self) {
-                        Label($0, systemImage: "arrow.right")
+                    ForEach(Array(summary.enumerated()), id: \.offset) {
+                        Text($0.element)
+                    }
+                    ForEach(Array(cables.enumerated()), id: \.offset) {
+                        Label($0.element, systemImage: "arrow.right")
                     }
                 }
             case .conflicts(let issues):
@@ -412,14 +414,16 @@ private struct AssistantCardView: View {
                     if issues.isEmpty {
                         Text("No current conflicts.")
                     } else {
-                        ForEach(issues, id: \.self) {
-                            Label($0, systemImage: "exclamationmark.circle")
+                        ForEach(Array(issues.enumerated()), id: \.offset) {
+                            Label($0.element, systemImage: "exclamationmark.circle")
                         }
                     }
                 }
             case .moves(let moves):
                 AssistantInlineCard(title: "Temporary Moves", systemImage: "arrow.triangle.swap") {
-                    ForEach(moves, id: \.self, content: Text.init)
+                    ForEach(Array(moves.enumerated()), id: \.offset) {
+                        Text($0.element)
+                    }
                 }
             case .pendingDraft(_, let summary, let hasErrors):
                 AssistantInlineCard(title: "Pending Draft", systemImage: "doc.badge.clock") {

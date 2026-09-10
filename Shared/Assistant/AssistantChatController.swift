@@ -78,14 +78,14 @@ final class AssistantChatController {
     }
 
     func deleteConversation(id: UUID) {
-        responseTask?.cancel()
+        stopStreaming()
         conversations.removeAll { $0.id == id }
         selectedConversationID = conversations.first?.id
         Task { await store.delete(id: id) }
     }
 
     func clearAll() {
-        responseTask?.cancel()
+        stopStreaming()
         let removed = conversations
         conversations = []
         selectedConversationID = nil
@@ -117,8 +117,7 @@ final class AssistantChatController {
     }
 
     func cancel() {
-        responseTask?.cancel()
-        responseTask = nil
+        stopStreaming()
     }
 
     func createWiringDraft(
@@ -244,6 +243,12 @@ final class AssistantChatController {
         if state == .complete, spokenRepliesEnabled, let spokenText, !spokenText.isEmpty {
             synthesizer.speak(AVSpeechUtterance(string: spokenText))
         }
+    }
+
+    private func stopStreaming() {
+        responseTask?.cancel()
+        responseTask = nil
+        isStreaming = false
     }
 
     private func ensureConversation() {
