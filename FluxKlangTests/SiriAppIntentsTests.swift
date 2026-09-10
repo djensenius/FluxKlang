@@ -11,7 +11,12 @@ struct SiriAppIntentsTests {
         )
         let other = Equipment(name: "SOMA Cosmos")
 
-        #expect(EquipmentEntityQuery.entities(for: [synth.id], in: [other, synth]).map(\.id) == [synth.id])
+        #expect(
+            EquipmentEntityQuery.entities(
+                for: [synth.id, other.id, synth.id],
+                in: [other, synth]
+            ).map(\.id) == [synth.id, other.id, synth.id]
+        )
         #expect(EquipmentEntityQuery.entities(matching: "micro freak", in: [other, synth]).map(\.id) == [synth.id])
         let typoMatches = EquipmentEntityQuery.entities(
             matching: "Arturia MicroFrek",
@@ -24,13 +29,31 @@ struct SiriAppIntentsTests {
 
     @Test func effectAndEnvironmentQueriesUseStoreIdentifiers() {
         let effect = Effect(name: "Hologram Microcosm")
+        let otherEffect = Effect(name: "Delay")
         let environment = RoutingEnvironment(name: "Ambient Set", effects: [effect])
+        let otherEnvironment = RoutingEnvironment(name: "Dry Set")
 
-        #expect(EffectEntityQuery.entities(for: [effect.id], in: environment.effects).map(\.id) == [effect.id])
+        #expect(
+            EffectEntityQuery.entities(
+                for: [effect.id, otherEffect.id, effect.id],
+                in: [otherEffect, effect]
+            ).map(\.id) == [effect.id, otherEffect.id, effect.id]
+        )
         #expect(EffectEntityQuery.entities(matching: "micro cosm", in: environment.effects).map(\.id) == [effect.id])
+        #expect(
+            EnvironmentEntityQuery.entities(
+                for: [environment.id, otherEnvironment.id, environment.id],
+                in: [otherEnvironment, environment]
+            ).map(\.id) == [environment.id, otherEnvironment.id, environment.id]
+        )
         #expect(
             EnvironmentEntityQuery.entities(matching: "ambent set", in: [environment]).map(\.id)
                 == [environment.id]
+        )
+        #expect(
+            DestinationEntityQuery.entities(
+                for: [DestinationEntity.space.id, DestinationEntity.finalMix.id, DestinationEntity.space.id]
+            ) == [.space, .finalMix, .space]
         )
     }
 

@@ -98,8 +98,8 @@ struct EquipmentEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in equipment: [Equipment]) -> [EquipmentEntity] {
-        let requested = Set(identifiers)
-        return equipment.filter { requested.contains($0.id) }.map(EquipmentEntity.init)
+        let byID = Dictionary(uniqueKeysWithValues: equipment.map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0].map(EquipmentEntity.init) }
     }
 
     static func entities(matching string: String, in equipment: [Equipment]) -> [EquipmentEntity] {
@@ -127,8 +127,8 @@ struct EffectEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in effects: [Effect]) -> [EffectEntity] {
-        let requested = Set(identifiers)
-        return effects.filter { requested.contains($0.id) }.map(EffectEntity.init)
+        let byID = Dictionary(uniqueKeysWithValues: effects.map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0].map(EffectEntity.init) }
     }
 
     static func entities(matching string: String, in effects: [Effect]) -> [EffectEntity] {
@@ -156,8 +156,8 @@ struct EnvironmentEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in environments: [RoutingEnvironment]) -> [EnvironmentEntity] {
-        let requested = Set(identifiers)
-        return environments.filter { requested.contains($0.id) }.map(EnvironmentEntity.init)
+        let byID = Dictionary(uniqueKeysWithValues: environments.map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0].map(EnvironmentEntity.init) }
     }
 
     static func entities(matching string: String, in environments: [RoutingEnvironment]) -> [EnvironmentEntity] {
@@ -179,8 +179,8 @@ struct DestinationEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID]) -> [DestinationEntity] {
-        let requested = Set(identifiers)
-        return DestinationEntity.all.filter { requested.contains($0.id) }
+        let byID = Dictionary(uniqueKeysWithValues: DestinationEntity.all.map { ($0.id, $0) })
+        return identifiers.compactMap { byID[$0] }
     }
 
     static func entities(matching string: String) -> [DestinationEntity] {
