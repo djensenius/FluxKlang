@@ -206,11 +206,15 @@ extension EquipmentEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -220,11 +224,15 @@ extension EffectEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -234,11 +242,15 @@ extension EnvironmentEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await suggestedEntities())
     }
 }
 
@@ -248,18 +260,22 @@ extension DestinationEntityQuery: IndexedEntityQuery {
         for identifiers: [UUID],
         indexDescription: CSSearchableIndexDescription
     ) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await entities(for: identifiers))
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await entities(for: identifiers))
     }
 
     func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        try await fluxKlangSpotlightIndex().indexAppEntities(try await suggestedEntities())
+        try await fluxKlangSpotlightIndex(
+            protectionClass: indexDescription.protectionClass
+        ).indexAppEntities(try await suggestedEntities())
     }
 }
 
-func fluxKlangSpotlightIndex() -> CSSearchableIndex {
+func fluxKlangSpotlightIndex(protectionClass: FileProtectionType?) -> CSSearchableIndex {
     CSSearchableIndex(
         name: fluxKlangAppEntityIndexName,
-        protectionClass: nil
+        protectionClass: protectionClass
     )
 }
 
@@ -308,7 +324,10 @@ enum SiriEntityMatcher {
     }
 
     private static func normalize(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        value.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
             .unicodeScalars
             .map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " }
             .reduce(into: "") { $0.append($1) }
