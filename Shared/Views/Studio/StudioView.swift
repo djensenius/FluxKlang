@@ -236,6 +236,24 @@ struct StudioView: View {
                         }
                     }
                 }
+                DisclosureGroup("Home connection map") {
+                    let home = appModel.studioConnections.connections.home
+                    if home.isEmpty {
+                        Text("No Home connections configured in Settings.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(home.inputs.sorted(using: KeyPathComparator(\.connector))) { connection in
+                            Text(home.inputDisplayName(
+                                connection.connector,
+                                equipment: appModel.equipment.items,
+                                liveScribble: appModel.wing.inputName(connection.connector)
+                            ))
+                        }
+                        ForEach(home.outputs.sorted(using: KeyPathComparator(\.connector))) { connection in
+                            Text(home.outputDisplayName(connection.connector, equipment: appModel.equipment.items))
+                        }
+                    }
+                }
             }
         }
     }

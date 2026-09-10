@@ -45,7 +45,11 @@ struct PatchbayView: View {
             case .inputs:
                 InputPatchbayGrid(controller: appModel.wing)
             case .outputs:
-                OutputPatchbayGrid(controller: appModel.wing)
+                OutputPatchbayGrid(
+                    controller: appModel.wing,
+                    connections: appModel.studioConnections.connections.home,
+                    equipment: appModel.equipment.items
+                )
             case .snapshots:
                 RoutingSnapshotsView()
             }

@@ -11,6 +11,7 @@ import SwiftUI
 
 struct SettingsContentView: View {
     @Environment(AppModel.self) private var appModel
+    @State private var isShowingStudioConnections = false
 
     var body: some View {
         Form {
@@ -23,6 +24,19 @@ struct SettingsContentView: View {
                 if let last = appModel.lastHost {
                     LabeledContent("Last WING", value: last)
                 }
+            }
+
+            Section("Studio") {
+                Button {
+                    isShowingStudioConnections = true
+                } label: {
+                    LabeledContent {
+                        Text(connectionCount.formatted())
+                    } label: {
+                        Label("Studio Connections", systemImage: "cable.connector")
+                    }
+                }
+                .accessibilityIdentifier("settings-studio-connections")
             }
 
             Section("Mixer") {
@@ -41,6 +55,24 @@ struct SettingsContentView: View {
         .frame(minWidth: 420, minHeight: 280)
         #endif
         .navigationTitle("Settings")
+        .sheet(isPresented: $isShowingStudioConnections) {
+            NavigationStack {
+                StudioConnectionsView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isShowingStudioConnections = false }
+                        }
+                    }
+            }
+            #if os(macOS)
+            .frame(minWidth: 620, idealWidth: 720, minHeight: 560, idealHeight: 720)
+            #endif
+        }
+    }
+
+    private var connectionCount: Int {
+        let home = appModel.studioConnections.connections.home
+        return home.inputs.count + home.outputs.count
     }
 }
 

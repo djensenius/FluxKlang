@@ -240,6 +240,59 @@ struct GlobalStudioConnectionsTests {
         #expect(kinds.contains(.invalidInputPort(synth.id, 3)))
     }
 
+    @Test func homeEditingRejectsExclusivePortConflictsAndSupportsClearing() throws {
+        let synth = Equipment(name: "Synth", inputs: ["In"], outputs: ["Out"])
+        var home = StudioHomeConnections()
+
+        try home.setInput(
+            StudioInputConnection(connector: 99, equipmentID: synth.id, outputPort: 0),
+            connector: 1,
+            equipment: [synth]
+        )
+        #expect(home.inputs.map(\.connector) == [1])
+        #expect(throws: StudioConnectionAssignmentError.equipmentOutputInUse("Synth", "Out", 1)) {
+            try home.setInput(
+                StudioInputConnection(connector: 2, equipmentID: synth.id, outputPort: 0),
+                connector: 2,
+                equipment: [synth]
+            )
+        }
+        try home.setOutput(
+            StudioOutputConnection(connector: 1, equipmentID: synth.id, inputPort: 0),
+            connector: 1,
+            equipment: [synth]
+        )
+        #expect(throws: StudioConnectionAssignmentError.equipmentInputInUse("Synth", "In", 1)) {
+            try home.setOutput(
+                StudioOutputConnection(connector: 2, equipmentID: synth.id, inputPort: 0),
+                connector: 2,
+                equipment: [synth]
+            )
+        }
+
+        try home.setInput(nil, connector: 1, equipment: [synth])
+        try home.setOutput(nil, connector: 1, equipment: [synth])
+        #expect(home.isEmpty)
+    }
+
+    @Test func connectionDisplayNamesAlwaysIncludeConnectorNumbers() {
+        let synth = Equipment(name: "Synth", inputs: ["Return"], outputs: ["Main"])
+        let home = StudioHomeConnections(
+            inputs: [StudioInputConnection(
+                connector: 3,
+                equipmentID: synth.id,
+                outputPort: 0,
+                labelOverride: "  Lead  "
+            )],
+            outputs: [StudioOutputConnection(connector: 4, equipmentID: synth.id, inputPort: 0)]
+        )
+
+        #expect(home.inputDisplayName(3, equipment: [synth]) == "Input 3 · Lead")
+        #expect(home.inputDisplayName(7, equipment: [synth], liveScribble: "Mic") == "Input 7 · Mic")
+        #expect(home.outputDisplayName(4, equipment: [synth]) == "Output 4 · Synth · Return")
+        #expect(home.outputDisplayName(8, equipment: [synth]) == "Output 8")
+    }
+
     @Test func compilerBlocksSettingsForMissingStereoLegAndUnlinkedEffect() {
         let synth = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
         let effect = Effect(name: "Effect", isStereo: true)

@@ -73,6 +73,28 @@ final class StudioConnectionsStore {
         await persist()
     }
 
+    func setInput(
+        _ connection: StudioInputConnection?,
+        connector: Int,
+        equipment: [Equipment]
+    ) async throws {
+        var home = connections.home
+        try home.setInput(connection, connector: connector, equipment: equipment)
+        connections.home = home
+        await persist()
+    }
+
+    func setOutput(
+        _ connection: StudioOutputConnection?,
+        connector: Int,
+        equipment: [Equipment]
+    ) async throws {
+        var home = connections.home
+        try home.setOutput(connection, connector: connector, equipment: equipment)
+        connections.home = home
+        await persist()
+    }
+
     private func persist() async {
         await fileStore.save(Persisted(connections: connections, initialized: true), to: fileName)
     }

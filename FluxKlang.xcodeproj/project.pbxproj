@@ -114,6 +114,7 @@
 		7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
 		7DD7FC9A1B1561DB4256E9FD /* TutorialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3881C24F96EFD21A4EC22C /* TutorialView.swift */; };
 		7F73B0ADD7DD512A79A8051D /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
+		80DEE716550F3AEA0659470D /* StudioConnectionEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */; };
 		81565AFF1FB26784BF0792B5 /* ScrollWheel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E47075D2AAB467EA271F7916 /* ScrollWheel.swift */; };
 		85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */; };
 		865C36C483E878014AD5BF27 /* WingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AE2617F3BFCE2F475789B1 /* WingTransport.swift */; };
@@ -145,6 +146,7 @@
 		A06828AD7B651A480F2E1AEC /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BBDA94BA3DF57C8A6B4C92 /* AdvancedView.swift */; };
 		A06E2D69977F3597D1C7F797 /* RoutingTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8762531BC7A63F213F735232 /* RoutingTranslator.swift */; };
 		A469C963335F0DCF658DFBA8 /* WingAddressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */; };
+		A648F4DB140403F83C9A6C79 /* StudioConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */; };
 		A6B6918FF8BA3184C69F8267 /* ConnectionStatusPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FE3F20E847A6D6C5759AB6 /* ConnectionStatusPresentation.swift */; };
 		A77A9CF2F38CA0873F86EFCD /* PatchbayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 567409B5C0186F971324C844 /* PatchbayView.swift */; };
 		A7A4F1BD3B820B5B4FC04F96 /* GlobalStudioConnectionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDC94EEB6D29CD224EE13C96 /* GlobalStudioConnectionsTests.swift */; };
@@ -171,6 +173,7 @@
 		C2A9CA6DC072C91ABA155F7D /* PortView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E70D3009B51EEB9AFA31AF /* PortView.swift */; };
 		C620AF15DC5A739887A30B88 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
 		C66D197F4ABDB1050EBD2FA0 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
+		C67C9D8FAC654326E6C64836 /* StudioConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */; };
 		CB1180B15BD9C1B8D903200E /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		CB19842B27C432A04CFEEE42 /* WingDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */; };
 		CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
@@ -198,6 +201,7 @@
 		EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
 		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		EC91702D6E40FED2005888E3 /* StudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 615719763482C95E8DE3B403 /* StudioView.swift */; };
+		ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */; };
 		ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */; };
 		ED852CF56A82B33D3F5E5740 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 73FBD79B215783A120727A85 /* AppIcon.icon */; };
 		EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581CD8ACF8D35B9779227576 /* InputPatchView.swift */; };
@@ -232,6 +236,8 @@
 		0B556AC51B84AE09C97AFDC4 /* MeterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeterView.swift; sourceTree = "<group>"; };
 		0C78F5B15B50724D01C422C4 /* EquipmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentStore.swift; sourceTree = "<group>"; };
 		0DDCA518C023224453110217 /* EnvironmentBuilderRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentBuilderRows.swift; sourceTree = "<group>"; };
+		0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionEditing.swift; sourceTree = "<group>"; };
+		128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionsView.swift; sourceTree = "<group>"; };
 		13665485049541610241F126 /* EnvironmentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentStore.swift; sourceTree = "<group>"; };
 		1A9CE21781DB88EDDE90462D /* SpeakersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakersView.swift; sourceTree = "<group>"; };
 		201D1AC5DDC73E345FD61126 /* WingValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingValue.swift; sourceTree = "<group>"; };
@@ -445,6 +451,7 @@
 				4E585C6A2C4C4F93C8E722BA /* SpatialSource.swift */,
 				F633746B37339595DD5625A6 /* SpeakerArray.swift */,
 				2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */,
+				0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */,
 				BD5C7284F6CC337CFC97B758 /* StudioGraph.swift */,
 				B08E59FFF869F286A1BFDFCB /* StudioResourceAllocator.swift */,
 				D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */,
@@ -544,6 +551,7 @@
 			children = (
 				3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */,
 				6168A7E728E3196D6787E965 /* SettingsContentView.swift */,
+				128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -892,7 +900,9 @@
 				1A18BFAB9DF3221C1113E086 /* StudioCanvasNodeCard.swift in Sources */,
 				0440007401C6D52B75E7B153 /* StudioCanvasView.swift in Sources */,
 				CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */,
+				ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */,
 				04E82B67C0F39B29F2ED04C0 /* StudioConnectionsStore.swift in Sources */,
+				C67C9D8FAC654326E6C64836 /* StudioConnectionsView.swift in Sources */,
 				10E6AA1872E56431B9B385FC /* StudioGraph.swift in Sources */,
 				4D91B8BAD6C55366312F573A /* StudioInspectorViews.swift in Sources */,
 				75ED58FB92235BD1D017D59A /* StudioResourceAllocator.swift in Sources */,
@@ -988,7 +998,9 @@
 				9FF6DFBEAAB2BD4C6E6008D3 /* StudioCanvasNodeCard.swift in Sources */,
 				EA5CE0DAF0ED241A9B6F3B73 /* StudioCanvasView.swift in Sources */,
 				EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */,
+				80DEE716550F3AEA0659470D /* StudioConnectionEditing.swift in Sources */,
 				205B90FFAAFBFE95F258B95F /* StudioConnectionsStore.swift in Sources */,
+				A648F4DB140403F83C9A6C79 /* StudioConnectionsView.swift in Sources */,
 				B237144F6450EB9C135C178D /* StudioGraph.swift in Sources */,
 				C177EBA6FB42EC48A1F075A3 /* StudioInspectorViews.swift in Sources */,
 				9456AC148EE2A08F66C4E898 /* StudioResourceAllocator.swift in Sources */,

@@ -9,7 +9,6 @@
 //
 
 import Foundation
-
 struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var connector: Int
@@ -33,7 +32,7 @@ struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
 
     func label(equipment: [Equipment]) -> String {
         if let labelOverride, !labelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return labelOverride
+            return labelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         guard let device = equipment.first(where: { $0.id == equipmentID }) else {
             return "Unknown equipment"
@@ -42,7 +41,6 @@ struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
         return "\(device.name) · \(port)"
     }
 }
-
 struct StudioOutputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var connector: Int
@@ -66,7 +64,7 @@ struct StudioOutputConnection: Identifiable, Codable, Hashable, Sendable {
 
     func label(equipment: [Equipment]) -> String {
         if let labelOverride, !labelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return labelOverride
+            return labelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         guard let device = equipment.first(where: { $0.id == equipmentID }) else {
             return "Unknown equipment"
@@ -303,13 +301,13 @@ struct StudioPhysicalResolver {
         for (connector, values) in inputGroups where values.count > 1 {
             issues.append(.init(
                 kind: .duplicateInputConnector(connector),
-                message: "Local input \(connector) has multiple assignments."
+                message: "WING input \(connector) has multiple assignments."
             ))
         }
         for (connector, values) in outputGroups where values.count > 1 {
             issues.append(.init(
                 kind: .duplicateOutputConnector(connector),
-                message: "Local output \(connector) has multiple assignments."
+                message: "WING output \(connector) has multiple assignments."
             ))
         }
         return issues
@@ -321,7 +319,7 @@ struct StudioPhysicalResolver {
             if !StudioHomeConnections.inputRange.contains(connection.connector) {
                 issues.append(.init(
                     kind: .inputConnectorOutOfRange(connection.connector),
-                    message: "Local input \(connection.connector) is outside 1...24."
+                    message: "WING input \(connection.connector) is outside 1...24."
                 ))
             }
             guard let device = equipmentByID[connection.equipmentID] else {
@@ -347,7 +345,7 @@ struct StudioPhysicalResolver {
             if !StudioHomeConnections.outputRange.contains(connection.connector) {
                 issues.append(.init(
                     kind: .outputConnectorOutOfRange(connection.connector),
-                    message: "Local output \(connection.connector) is outside 1...8."
+                    message: "WING output \(connection.connector) is outside 1...8."
                 ))
             }
             guard let device = equipmentByID[connection.equipmentID] else {
@@ -373,18 +371,28 @@ struct StudioPhysicalResolver {
             grouping: connections.inputs,
             by: { PortKey(equipmentID: $0.equipmentID, port: $0.outputPort) }
         ) where values.count > 1 {
+            let device = equipmentByID[key.equipmentID]
+            let port = device?.outputs.indices.contains(key.port) == true
+                ? device?.outputs[key.port] ?? "Output \(key.port + 1)"
+                : "Output \(key.port + 1)"
+            let connectors = values.map(\.connector).sorted().map(String.init).joined(separator: ", ")
             issues.append(.init(
                 kind: .conflictingOutputPort(key.equipmentID, key.port),
-                message: "One equipment output is assigned to multiple WING inputs."
+                message: "\(device?.name ?? "Equipment") · \(port) is assigned to WING inputs \(connectors)."
             ))
         }
         for (key, values) in Dictionary(
             grouping: connections.outputs,
             by: { PortKey(equipmentID: $0.equipmentID, port: $0.inputPort) }
         ) where values.count > 1 {
+            let device = equipmentByID[key.equipmentID]
+            let port = device?.inputs.indices.contains(key.port) == true
+                ? device?.inputs[key.port] ?? "Input \(key.port + 1)"
+                : "Input \(key.port + 1)"
+            let connectors = values.map(\.connector).sorted().map(String.init).joined(separator: ", ")
             issues.append(.init(
                 kind: .conflictingInputPort(key.equipmentID, key.port),
-                message: "One equipment input is assigned to multiple WING outputs."
+                message: "\(device?.name ?? "Equipment") · \(port) is assigned to WING outputs \(connectors)."
             ))
         }
         return issues

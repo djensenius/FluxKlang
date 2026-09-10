@@ -13,11 +13,23 @@ import SwiftUI
 
 struct OutputPatchbayGrid: View {
     let controller: WingController
+    let connections: StudioHomeConnections
+    let equipment: [Equipment]
 
     @State private var group: WingOutputSourceGroup = .main
 
     private let outputs = Array(1...WingAddress.localOutputCount)
     private var columns: [Int] { columnCount > 0 ? Array(1...columnCount) : [] }
+
+    init(
+        controller: WingController,
+        connections: StudioHomeConnections = StudioHomeConnections(),
+        equipment: [Equipment] = []
+    ) {
+        self.controller = controller
+        self.connections = connections
+        self.equipment = equipment
+    }
 
     private var columnCount: Int {
         switch group {
@@ -89,17 +101,18 @@ struct OutputPatchbayGrid: View {
     }
 
     private func row(_ output: Int) -> some View {
-        HStack(spacing: PatchbayGrid.spacing) {
-            rowHeader(output)
+        let destination = connections.outputDisplayName(output, equipment: equipment)
+        return HStack(spacing: PatchbayGrid.spacing) {
+            rowHeader(output, destination: destination)
             ForEach(columns, id: \.self) { index in
-                cell(output: output, index: index)
+                cell(output: output, index: index, destination: destination)
             }
         }
     }
 
-    private func rowHeader(_ output: Int) -> some View {
+    private func rowHeader(_ output: Int, destination: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text("Output \(output)")
+            Text(destination)
                 .font(.caption)
                 .lineLimit(1)
             Text(controller.outputSource(output)?.label ?? "—")
@@ -110,13 +123,13 @@ struct OutputPatchbayGrid: View {
         .frame(width: PatchbayGrid.rowHeader, alignment: .leading)
     }
 
-    private func cell(output: Int, index: Int) -> some View {
+    private func cell(output: Int, index: Int, destination: String) -> some View {
         let source = controller.outputSource(output)
         let isOn = source?.group == group && source?.index == index
         return PatchbayGrid.crosspoint(
             isOn: isOn,
             tint: tint,
-            help: "\(group.label) \(index) → Output \(output)"
+            help: "\(group.label) \(index) → \(destination)"
         ) {
             let target: WingOutputSource = isOn ? .none : WingOutputSource(group: group, index: index)
             Task { await controller.setOutputSource(output, to: target) }
