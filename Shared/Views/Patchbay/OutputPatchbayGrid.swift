@@ -13,13 +13,23 @@ import SwiftUI
 
 struct OutputPatchbayGrid: View {
     let controller: WingController
-    var connections = StudioHomeConnections()
-    var equipment: [Equipment] = []
+    let connections: StudioHomeConnections
+    let equipment: [Equipment]
 
     @State private var group: WingOutputSourceGroup = .main
 
     private let outputs = Array(1...WingAddress.localOutputCount)
     private var columns: [Int] { columnCount > 0 ? Array(1...columnCount) : [] }
+
+    init(
+        controller: WingController,
+        connections: StudioHomeConnections = StudioHomeConnections(),
+        equipment: [Equipment] = []
+    ) {
+        self.controller = controller
+        self.connections = connections
+        self.equipment = equipment
+    }
 
     private var columnCount: Int {
         switch group {
