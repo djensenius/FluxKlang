@@ -370,11 +370,7 @@ private struct StudioConnectorEditor: View {
     }
 
     private func save() {
-        guard canSave else { return }
-        guard let equipmentID, let port else {
-            clear()
-            return
-        }
+        guard canSave, let equipmentID, let port else { return }
         let override = labelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         isSaving = true
         Task { @MainActor in
