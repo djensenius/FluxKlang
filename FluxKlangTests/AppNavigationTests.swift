@@ -22,8 +22,20 @@ struct AppNavigationTests {
 
     @Test func requestNewPresetSelectsPresetsSection() {
         let model = AppModel()
-        model.section = .faders
+        model.section = .studio
         model.requestNewPreset()
-        #expect(model.section == .presets)
+        #expect(model.section == .mix)
+        #expect(model.mixDestination == .scenes)
+    }
+
+    @Test func selectingStripUsesMixFaders() {
+        let model = AppModel()
+        let strip = FaderStrip(node: .channel(1))
+
+        model.mixDestination = .scenes
+        model.selectStrip(strip)
+
+        #expect(model.section == .mix)
+        #expect(model.mixDestination == .faders)
     }
 }

@@ -54,6 +54,9 @@ final class AppModel {
     /// The currently selected sidebar section (also driven by Mac menu commands).
     var section: AppSection = .studio
 
+    /// The visible surface within the consolidated Mix destination.
+    var mixDestination: MixDestination = .faders
+
     /// Whether the Mac detail inspector is shown.
     var isInspectorPresented = false
 
@@ -329,14 +332,16 @@ final class AppModel {
 
     /// Selects a strip and reveals it in the inspector.
     func selectStrip(_ strip: FaderStrip) {
-        section = .faders
+        section = .mix
+        mixDestination = .faders
         selectedFaderID = strip.id
         isInspectorPresented = true
     }
 
-    /// Switches to the Presets section and asks it to prompt for a new preset.
+    /// Switches to Mix scenes and asks it to prompt for a new preset.
     func requestNewPreset() {
-        section = .presets
+        section = .mix
+        mixDestination = .scenes
         newPresetRequestID += 1
     }
 
