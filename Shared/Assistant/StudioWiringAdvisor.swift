@@ -100,6 +100,27 @@ enum StudioWiringAdvisor {
         currentGraph: StudioGraph,
         environmentID: RoutingEnvironment.ID? = nil
     ) -> StudioPatchDraft {
+        makeDraft(
+            request: request,
+            equipment: equipment,
+            effects: effects,
+            connections: connections,
+            currentGraph: currentGraph,
+            environmentID: environmentID,
+            currentEnvironmentID: environmentID
+        )
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    private static func makeDraft(
+        request: StudioWiringRequest,
+        equipment: [Equipment],
+        effects: [Effect],
+        connections: GlobalStudioConnections,
+        currentGraph: StudioGraph,
+        environmentID: RoutingEnvironment.ID?,
+        currentEnvironmentID: RoutingEnvironment.ID?
+    ) -> StudioPatchDraft {
         let persistedRequest = StudioPatchDraft.PersistedRequest(
             environmentID: environmentID,
             sourceInstrumentIDs: orderedUnique(request.sourceInstrumentIDs),
@@ -134,7 +155,7 @@ enum StudioWiringAdvisor {
             equipmentByID: equipmentByID,
             effectsByID: effectsByID,
             connections: connections,
-            currentEnvironmentID: environmentID
+            currentEnvironmentID: currentEnvironmentID
         )
         return StudioPatchDraft(
             id: stableUUID("draft|\(signature)"),
@@ -166,7 +187,7 @@ enum StudioWiringAdvisor {
         currentGraph: StudioGraph,
         currentEnvironmentID: RoutingEnvironment.ID?
     ) -> StudioPatchDraft {
-        var refreshed = build(
+        var refreshed = makeDraft(
             request: StudioWiringRequest(
                 sourceInstrumentIDs: draft.request.sourceInstrumentIDs,
                 effectChainIDs: draft.request.effectChainIDs,
@@ -176,16 +197,10 @@ enum StudioWiringAdvisor {
             effects: effects,
             connections: connections,
             currentGraph: currentGraph,
-            environmentID: draft.request.environmentID
-        )
-        refreshed.createdAt = draft.createdAt
-        refreshed.validation = validate(
-            request: draft.request,
-            equipmentByID: Dictionary(equipment.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
-            effectsByID: Dictionary(effects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
-            connections: connections,
+            environmentID: draft.request.environmentID,
             currentEnvironmentID: currentEnvironmentID
         )
+        refreshed.createdAt = draft.createdAt
         return refreshed
     }
 
