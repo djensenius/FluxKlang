@@ -48,6 +48,9 @@ final class AppModel {
     /// Speaker layout and spatially-placed instruments for surround mixing.
     let spatial = SpatialStore()
 
+    /// Shared read-only assistant domain plus local pending Studio drafts.
+    let assistant: AssistantCoordinator
+
     /// Network scanner for finding WING consoles.
     let discovery = WingDiscovery()
 
@@ -83,8 +86,12 @@ final class AppModel {
         set { UserDefaults.standard.setValue(newValue, forKey: lastHostKey) }
     }
 
-    init() {
-        wing = WingController()
+    init(
+        assistant: AssistantCoordinator = AssistantCoordinator(),
+        wing: WingController = WingController()
+    ) {
+        self.wing = wing
+        self.assistant = assistant
     }
 
     var isConnected: Bool { wing.connection.isConnected }
@@ -104,6 +111,7 @@ final class AppModel {
         await presets.load()
         await routingSnapshots.load()
         await spatial.load()
+        await assistant.load()
         startObservingCloudChanges()
     }
 

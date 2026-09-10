@@ -12,6 +12,7 @@ struct AppRootView: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
+        @Bindable var assistant = appModel.assistant
         Group {
             #if os(macOS)
             SplitRoot()
@@ -20,6 +21,35 @@ struct AppRootView: View {
             #endif
         }
         .task { await appModel.loadStores() }
+        .sheet(isPresented: helpPresented) {
+            if case .help(let topic) = assistant.navigationTarget {
+                AssistantHelpView(entry: FluxKlangHelpCatalog.entry(for: topic))
+            }
+        }
+        .onChange(of: assistant.navigationTarget) { _, target in
+            switch target {
+            case .reviewPendingDraft:
+                appModel.section = .studio
+            case .help:
+                break
+            case nil:
+                break
+            }
+        }
+    }
+
+    private var helpPresented: Binding<Bool> {
+        Binding(
+            get: {
+                if case .help = appModel.assistant.navigationTarget { return true }
+                return false
+            },
+            set: { isPresented in
+                if !isPresented {
+                    appModel.assistant.clearNavigation()
+                }
+            }
+        )
     }
 }
 
