@@ -49,6 +49,17 @@ struct WingDiscoveryTests {
         #expect(wing?.model == nil)
     }
 
+    @Test func nonWingCommaPayloadFallsBackToLegacyParsing() {
+        let wing = WingDiscoveryParser.wing(
+            fromReplyAt: "/info",
+            arguments: [.string("Legacy Console, Studio A")],
+            host: "10.0.0.6"
+        )
+
+        #expect(wing?.host == "10.0.0.6")
+        #expect(wing?.name == "Legacy Console, Studio A")
+    }
+
     @Test func ignoresNonInfoReplies() {
         let wing = WingDiscoveryParser.wing(
             fromReplyAt: "/ch/1/fdr",

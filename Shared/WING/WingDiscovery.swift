@@ -39,8 +39,10 @@ enum WingDiscoveryParser {
     static func wing(fromReplyAt address: String, arguments: [WingValue], host: String) -> DiscoveredWing? {
         guard isInfoReply(address) else { return nil }
         let strings = arguments.compactMap(\.stringValue)
-        if strings.count == 1, strings[0].contains(",") {
-            return wing(fromCSV: strings[0], fallbackHost: host)
+        if strings.count == 1,
+           strings[0].contains(","),
+           let csvWing = wing(fromCSV: strings[0], fallbackHost: host) {
+            return csvWing
         }
         let rawName = strings.count > 1 ? strings[1] : (strings.first ?? host)
         let name = rawName.isEmpty ? host : rawName
