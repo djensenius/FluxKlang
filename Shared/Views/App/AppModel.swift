@@ -66,6 +66,7 @@ final class AppModel {
     /// another device syncs updated state. Held so the observer is removed when
     /// this model is deallocated.
     private var cloudObserver: CloudChangeObserver?
+    private var siriIndexingTask: Task<Void, Never>?
 
     /// The currently selected sidebar section (also driven by Mac menu commands).
     var section: AppSection = .studio
@@ -120,6 +121,7 @@ final class AppModel {
         await spatial.load()
         await assistant.load()
         await assistantChat.load()
+        scheduleSiriEntityIndexing()
         startObservingCloudChanges()
     }
 
@@ -146,6 +148,23 @@ final class AppModel {
         await presets.reload()
         await routingSnapshots.reload()
         await spatial.reload()
+        scheduleSiriEntityIndexing()
+    }
+
+    private func scheduleSiriEntityIndexing() {
+        let previousTask = siriIndexingTask
+        previousTask?.cancel()
+        siriIndexingTask = Task { @MainActor [weak self] in
+            await previousTask?.value
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            guard let self else { return }
+            await SiriEntityIntegration.indexCurrentEntities(model: self)
+        }
     }
 
     /// Applies the active environment's canvas wiring to the WING.
