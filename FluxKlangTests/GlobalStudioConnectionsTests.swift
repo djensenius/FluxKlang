@@ -68,6 +68,22 @@ struct GlobalStudioConnectionsTests {
         #expect(decoded.home.inputs[0].label(equipment: [equipment]) == "Desk Left")
     }
 
+    @Test func duplicateConnectorsKeepDistinctStableIdentities() throws {
+        let equipment = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
+        let connections = [
+            StudioInputConnection(connector: 1, equipmentID: equipment.id, outputPort: 0),
+            StudioInputConnection(connector: 1, equipmentID: equipment.id, outputPort: 1)
+        ]
+
+        #expect(Set(connections.map(\.id)).count == 2)
+
+        let decoded = try JSONDecoder().decode(
+            [StudioInputConnection].self,
+            from: JSONEncoder().encode(connections)
+        )
+        #expect(decoded.map(\.id) == connections.map(\.id))
+    }
+
     @Test func migrationPrefersMeaningfulActiveSetupAndKeepsUnresolvedEntries() {
         let synth = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
         let inactive = RoutingEnvironment(
