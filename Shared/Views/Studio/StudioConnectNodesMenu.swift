@@ -19,7 +19,7 @@ struct StudioConnectNodesMenu: View {
         } label: {
             Label("Connect Nodes", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
         }
-        .disabled(graph.nodes.count < 2)
+        .disabled(sourceNodes.isEmpty)
         .accessibilityIdentifier("studio.connectNodes")
         .accessibilityHint("Provides a non-drag way to connect Studio nodes")
     }
