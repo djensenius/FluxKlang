@@ -128,7 +128,9 @@ enum TemporaryMoveVerifier {
         let state: TemporaryMoveVerificationState
         let details: String
         if !mismatched.isEmpty {
-            let wasHealthy = previous?.state == .verified || previous?.state == .partiallyVerified
+            let wasHealthy = previous?.state == .verified
+                || previous?.state == .partiallyVerified
+                || previous?.state == .driftDetected
             state = wasHealthy ? .driftDetected : .failed
             details = "\(mismatched.count) confirmed value(s) differ from the expected routing."
         } else if missingCount > 0 {

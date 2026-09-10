@@ -345,13 +345,14 @@ enum StudioWiringAdvisor {
         connections: GlobalStudioConnections
     ) -> [StudioCableInstruction] {
         let effective = connections.effectiveHome
+        let equipment = Array(equipmentByID.values)
         let activeMoveIDs = Set(connections.temporaryMoves.filter(\.lifecycle.isEffective).map(\.equipmentID))
         var instructions: [StudioCableInstruction] = []
         let relevantEquipment = Set(request.sourceInstrumentIDs + request.effectChainIDs.compactMap {
             effectsByID[$0]?.equipmentID
         })
         for connection in effective.inputs where relevantEquipment.contains(connection.equipmentID) {
-            let label = connection.label(equipment: Array(equipmentByID.values))
+            let label = connection.label(equipment: equipment)
             let moved = activeMoveIDs.contains(connection.equipmentID)
             instructions.append(StudioCableInstruction(
                 id: "input-\(connection.connector)-\(connection.equipmentID)-\(connection.outputPort)",
@@ -365,7 +366,7 @@ enum StudioWiringAdvisor {
             ))
         }
         for connection in effective.outputs where relevantEquipment.contains(connection.equipmentID) {
-            let label = connection.label(equipment: Array(equipmentByID.values))
+            let label = connection.label(equipment: equipment)
             let moved = activeMoveIDs.contains(connection.equipmentID)
             instructions.append(StudioCableInstruction(
                 id: "output-\(connection.connector)-\(connection.equipmentID)-\(connection.inputPort)",

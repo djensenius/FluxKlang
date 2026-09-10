@@ -11,14 +11,9 @@ struct StudioConnectionsView: View {
     @State private var isMovingEquipment = false
     @State private var returningMove: TemporaryDeviceMove?
     private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
-    private var issues: [StudioConnectionIssue] {
-        StudioPhysicalResolver(
-            connections: home,
-            equipment: appModel.equipment.items
-        ).structuralIssues()
-    }
 
     var body: some View {
+        let issues = StudioPhysicalResolver(connections: home, equipment: appModel.equipment.items).structuralIssues()
         List {
             Section {
                 Label(
@@ -46,7 +41,7 @@ struct StudioConnectionsView: View {
                     NavigationLink {
                         StudioConnectorEditor(direction: .input, connector: connector)
                     } label: {
-                        connectorRow(direction: .input, connector: connector)
+                        connectorRow(direction: .input, connector: connector, issues: issues)
                     }
                     .accessibilityIdentifier("studio-connection-input-\(connector)")
                     .accessibilityHint("Opens the Home assignment editor for WING input \(connector)")
@@ -58,7 +53,7 @@ struct StudioConnectionsView: View {
                     NavigationLink {
                         StudioConnectorEditor(direction: .output, connector: connector)
                     } label: {
-                        connectorRow(direction: .output, connector: connector)
+                        connectorRow(direction: .output, connector: connector, issues: issues)
                     }
                     .accessibilityIdentifier("studio-connection-output-\(connector)")
                     .accessibilityHint("Opens the Home assignment editor for WING output \(connector)")
@@ -103,7 +98,7 @@ struct StudioConnectionsView: View {
                     .font(.caption)
                     .foregroundStyle(move.verification.state == .verified ? .green : .orange)
             }
-            Text(moveSummary(move))
+            Text(move.connectorSummary(home: home))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("Return Home") { returningMove = move }
@@ -115,26 +110,11 @@ struct StudioConnectionsView: View {
     private func equipmentName(_ id: Equipment.ID) -> String {
         appModel.equipment.items.first { $0.id == id }?.name ?? "Missing equipment"
     }
-    private func moveSummary(_ move: TemporaryDeviceMove) -> String {
-        let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentInputs = move.connections.inputs.map(\.connector).sorted()
-        let homeOutputs = home.outputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentOutputs = move.connections.outputs.map(\.connector).sorted()
-        var parts: [String] = []
-        if !homeInputs.isEmpty {
-            parts.append("Inputs \(connectorList(homeInputs)) → \(connectorList(currentInputs))")
-        }
-        if !homeOutputs.isEmpty {
-            parts.append("Outputs \(connectorList(homeOutputs)) → \(connectorList(currentOutputs))")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func connectorList(_ connectors: [Int]) -> String {
-        connectors.map(String.init).joined(separator: "/")
-    }
-
-    private func connectorRow(direction: StudioConnectorDirection, connector: Int) -> some View {
+    private func connectorRow(
+        direction: StudioConnectorDirection,
+        connector: Int,
+        issues: [StudioConnectionIssue]
+    ) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(direction: direction, connector: connector))
@@ -143,7 +123,7 @@ struct StudioConnectionsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if hasIssue(direction: direction, connector: connector) {
+            if hasIssue(direction: direction, connector: connector, issues: issues) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
                     .accessibilityLabel("Connection problem")
@@ -171,7 +151,11 @@ struct StudioConnectionsView: View {
         }
     }
 
-    private func hasIssue(direction: StudioConnectorDirection, connector: Int) -> Bool {
+    private func hasIssue(
+        direction: StudioConnectorDirection,
+        connector: Int,
+        issues: [StudioConnectionIssue]
+    ) -> Bool {
         issues.contains { issue in
             switch (direction, issue.kind) {
             case (.input, .duplicateInputConnector(let value)),
@@ -433,7 +417,7 @@ private struct StudioConnectorEditor: View {
         }
         let override = labelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         isSaving = true
-        Task {
+        Task { @MainActor in
             do {
                 switch direction {
                 case .input:
@@ -469,7 +453,7 @@ private struct StudioConnectorEditor: View {
 
     private func clear() {
         isSaving = true
-        Task {
+        Task { @MainActor in
             do {
                 switch direction {
                 case .input:
