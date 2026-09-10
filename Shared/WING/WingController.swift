@@ -221,15 +221,9 @@ final class WingController {
     }
 
     /// Physical *input* connector name, if known (e.g. what instrument is plugged
-    /// into a WING input). Provisional address — see ``WingAddress/inputName(_:)``.
+    /// into a WING input).
     func inputName(_ connector: Int) -> String? {
         values[WingAddress.inputName(connector)]?.stringValue
-    }
-
-    /// Physical *output* connector name, if known (e.g. what an output feeds).
-    /// Provisional address — see ``WingAddress/outputName(_:)``.
-    func outputName(_ connector: Int) -> String? {
-        values[WingAddress.outputName(connector)]?.stringValue
     }
 
     /// Current mute state for a strip, if known.
@@ -379,7 +373,7 @@ final class WingController {
     }
 
     private func ingest(_ message: WingIncoming) {
-        guard let value = message.value else { return }
+        guard let value = message.effectiveValue else { return }
         values[message.address] = value
     }
 

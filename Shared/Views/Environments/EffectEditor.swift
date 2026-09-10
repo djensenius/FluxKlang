@@ -71,13 +71,13 @@ struct EffectEditor: View {
                 Section {
                     if draft.isStereo {
                         jackStepper(
-                            "Left output", binding: outputBinding(0), range: Self.outputRange, name: outputName
+                            "Left output", binding: outputBinding(0), range: Self.outputRange
                         )
                         jackStepper(
-                            "Right output", binding: outputBinding(1), range: Self.outputRange, name: outputName
+                            "Right output", binding: outputBinding(1), range: Self.outputRange
                         )
                     } else {
-                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange, name: outputName)
+                        jackStepper("WING output", binding: outputBinding(0), range: Self.outputRange)
                     }
                 } header: {
                     Text("2 · Out to effect")
@@ -164,7 +164,7 @@ struct EffectEditor: View {
         _ title: String,
         binding: Binding<Int>,
         range: ClosedRange<Int>,
-        name: (Int) -> String?
+        name: (Int) -> String? = { _ in nil }
     ) -> some View {
         let connector = binding.wrappedValue
         let label = name(connector).flatMap { $0.isEmpty ? nil : $0 }
@@ -175,11 +175,6 @@ struct EffectEditor: View {
                     .lineLimit(1)
             }
         }
-    }
-
-    /// The WING name of an output connector, when the console has reported one.
-    private func outputName(_ connector: Int) -> String? {
-        appModel.wing.outputName(connector)
     }
 
     /// The WING name of an input connector, when the console has reported one.

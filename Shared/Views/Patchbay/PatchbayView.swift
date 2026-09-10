@@ -75,6 +75,7 @@ enum PatchbayGrid {
     static let spacing: CGFloat = 3
 
     /// A lit / unlit crosspoint button.
+    @MainActor
     static func crosspoint(isOn: Bool, tint: Color, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             RoundedRectangle(cornerRadius: 6)
