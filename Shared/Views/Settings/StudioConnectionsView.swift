@@ -10,11 +10,9 @@ struct StudioConnectionsView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isMovingEquipment = false
     @State private var returningMove: TemporaryDeviceMove?
-
     private var home: StudioHomeConnections {
         appModel.studioConnections.connections.home
     }
-
     private var issues: [StudioConnectionIssue] {
         StudioPhysicalResolver(
             connections: home,

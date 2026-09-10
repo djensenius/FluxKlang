@@ -352,9 +352,7 @@ struct TemporaryMoveFlowView: View {
         }
     }
 
-    private func invalidateVerification() {
-        (cablesConfirmed, result, errorMessage) = (false, nil, nil)
-    }
+    private func invalidateVerification() { (cablesConfirmed, result, errorMessage) = (false, nil, nil) }
 
     private func cableChecklist(_ move: TemporaryDeviceMove) -> [String] {
         if returningMove != nil {
