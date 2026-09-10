@@ -23,7 +23,7 @@ actor LocalAssistantHistoryBackend: AssistantHistoryBackend {
         self.legacyFileURL = legacyFileURL
     }
 
-    func loadRecords() throws -> [AssistantConversationRecord] {
+    func loadRecords() async throws -> [AssistantConversationRecord] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let files = try FileManager.default.contentsOfDirectory(
             at: directory,
@@ -39,14 +39,14 @@ actor LocalAssistantHistoryBackend: AssistantHistoryBackend {
            let conversations = try? JSONDecoder().decode([AssistantConversation].self, from: data) {
             records = conversations.map(AssistantConversationRecord.init)
             for record in records {
-                try save(record)
+                try await save(record)
             }
             try? FileManager.default.removeItem(at: legacyFileURL)
         }
         return records
     }
 
-    func save(_ record: AssistantConversationRecord) throws {
+    func save(_ record: AssistantConversationRecord) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(record)
         try data.write(to: fileURL(for: record.id), options: .atomic)
