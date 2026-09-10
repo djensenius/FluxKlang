@@ -203,6 +203,33 @@ struct AssistantCoreTests {
         #expect(model.wing.values == before)
     }
 
+    @Test func acceptancePersistsRevalidationErrors() async throws {
+        let store = MemoryDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let model = AppModel(assistant: coordinator, wing: .preview())
+        let synth = model.equipment.items[0]
+        _ = model.environments.addEnvironment(named: "Original")
+        try await model.studioConnections.replaceHome(
+            StudioHomeConnections(inputs: [
+                StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0)
+            ]),
+            equipment: model.equipment.items
+        )
+        _ = await coordinator.perform(
+            .buildStudioDraft(StudioWiringRequest(sourceInstrumentIDs: [synth.id])),
+            context: model.assistantToolContext()
+        )
+        _ = model.environments.addEnvironment(named: "Changed")
+
+        let result = await model.acceptPendingAssistantDraft()
+        let refreshed = try #require(coordinator.pendingStudioDraft)
+        let persisted = await store.load()
+
+        #expect(result == nil)
+        #expect(refreshed.validation.contains { $0.code == "environment-changed" })
+        #expect(persisted == refreshed)
+    }
+
     private func makeContext(
         equipment: [Equipment],
         connections: GlobalStudioConnections,
@@ -226,4 +253,11 @@ struct AssistantCoreTests {
             globalConnections: connections
         )
     }
+}
+
+private actor MemoryDraftStore: PendingStudioPatchPersisting {
+    private var draft: StudioPatchDraft?
+
+    func load() -> StudioPatchDraft? { draft }
+    func save(_ draft: StudioPatchDraft?) { self.draft = draft }
 }

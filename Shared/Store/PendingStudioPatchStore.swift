@@ -24,12 +24,12 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
             .appendingPathComponent("assistant-pending-studio-draft.json")
     }
 
-    func load() -> StudioPatchDraft? {
+    func load() async -> StudioPatchDraft? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(StudioPatchDraft.self, from: data)
     }
 
-    func save(_ draft: StudioPatchDraft?) {
+    func save(_ draft: StudioPatchDraft?) async {
         if let draft, let data = try? JSONEncoder().encode(draft) {
             try? FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),

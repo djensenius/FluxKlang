@@ -40,16 +40,12 @@ extension AppModel {
     /// hardware-write action.
     @discardableResult
     func acceptPendingAssistantDraft() async -> StudioPatchMergeResult? {
-        guard let draft = assistant.pendingStudioDraft else { return nil }
-        let refreshed = StudioWiringAdvisor.revalidate(
-            draft,
-            equipment: equipment.items,
-            effects: environments.activeEffects,
-            connections: studioConnections.connections,
-            currentGraph: environments.activeStudioGraph,
-            currentEnvironmentID: environments.activeID
+        let validation = await assistant.perform(
+            .validatePendingStudioDraft,
+            context: assistantToolContext()
         )
-        guard !refreshed.hasErrors else { return nil }
+        guard case .pendingDraft(let refreshed?) = validation,
+              !refreshed.hasErrors else { return nil }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
             into: environments.activeStudioGraph,
