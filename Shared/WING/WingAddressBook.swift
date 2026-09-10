@@ -136,25 +136,16 @@ enum WingAddress {
         localOutput(output) + "/in"
     }
 
-    // MARK: - I/O connector names (provisional)
+    // MARK: - I/O connector names
 
     /// Number of LOCAL line-output connectors FluxKlang reads/labels. Matches the
     /// output range the effect editor offers.
     static let localOutputCount = 8
 
-    /// Physical *input* connector scribble name, e.g. `/io/in/LCL/1/name`. This
-    /// is a best guess at the WING I/O name node and is provisional until
-    /// verified against hardware. Covers the LOCAL preamp bank that channel
-    /// inputs patch from, so the app can show what's plugged into each input.
+    /// Physical *input* connector scribble name, e.g. `/io/in/LCL/1/name`.
+    /// Hardware-confirmed for the 24 LOCAL inputs on WING Rack firmware 3.1.
     static func inputName(_ connector: Int) -> String {
         "/io/in/LCL/\(connector)/name"
-    }
-
-    /// Physical *output* connector scribble name, e.g. `/io/out/LCL/1/name`.
-    /// Best guess, provisional until verified against hardware. Covers the LOCAL
-    /// line-output bank effects are sent out of.
-    static func outputName(_ connector: Int) -> String {
-        localOutput(connector) + "/name"
     }
 
     // MARK: - Bulk refresh
@@ -196,13 +187,10 @@ enum WingAddress {
             addresses.append(outputSourceGroup(output))
             addresses.append(outputSourceIndex(output))
         }
-        // Best-guess physical I/O connector names (LOCAL bank); provisional until
-        // verified against hardware.
+        // Hardware-confirmed physical input names for the LOCAL bank. The WING
+        // output nodes expose only `grp` and `in`, so output labels are app data.
         for connector in 1...WingSourceGroup.local.count {
             addresses.append(inputName(connector))
-        }
-        for connector in 1...localOutputCount {
-            addresses.append(outputName(connector))
         }
         return addresses
     }

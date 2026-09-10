@@ -15,6 +15,8 @@ struct DiscoveredWing: Identifiable, Hashable, Sendable {
     var host: String
     var name: String
     var model: String?
+    var identifier: String?
+    var firmware: String?
 
     var id: String { host }
 }
@@ -24,7 +26,7 @@ struct DiscoveredWing: Identifiable, Hashable, Sendable {
 enum WingDiscoveryParser {
     /// Whether an OSC address is a reply to an info request.
     static func isInfoReply(_ address: String) -> Bool {
-        if address == WingAddress.info { return true }
+        if address == WingAddress.info || address == "/*" { return true }
         let lowered = address.lowercased()
         return lowered.hasPrefix("/?") || lowered.contains("info")
     }
@@ -37,10 +39,53 @@ enum WingDiscoveryParser {
     static func wing(fromReplyAt address: String, arguments: [WingValue], host: String) -> DiscoveredWing? {
         guard isInfoReply(address) else { return nil }
         let strings = arguments.compactMap(\.stringValue)
+        if strings.count == 1, strings[0].contains(",") {
+            return wing(fromCSV: strings[0], fallbackHost: host)
+        }
         let rawName = strings.count > 1 ? strings[1] : (strings.first ?? host)
         let name = rawName.isEmpty ? host : rawName
         let model = strings.count > 2 ? strings[2] : nil
-        return DiscoveredWing(host: host, name: name, model: (model?.isEmpty == true) ? nil : model)
+        let firmware = strings.count > 3 ? strings[3] : nil
+        return DiscoveredWing(
+            host: host,
+            name: name,
+            model: nonEmpty(model),
+            identifier: nil,
+            firmware: nonEmpty(firmware)
+        )
+    }
+
+    private static func wing(fromCSV payload: String, fallbackHost: String) -> DiscoveredWing? {
+        let fields = payload.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard fields.first?.uppercased() == "WING" else { return nil }
+        let reportedHost = fields.indices.contains(1) ? fields[1] : ""
+        let name = fields.indices.contains(2) ? fields[2] : ""
+        let model = fields.indices.contains(3) ? displayModel(fields[3]) : nil
+        let identifier = fields.indices.contains(4) ? fields[4] : nil
+        let firmware = fields.indices.contains(5) ? fields[5] : nil
+        return DiscoveredWing(
+            host: fallbackHost.isEmpty ? reportedHost : fallbackHost,
+            name: name.isEmpty ? (reportedHost.isEmpty ? fallbackHost : reportedHost) : name,
+            model: nonEmpty(model),
+            identifier: nonEmpty(identifier),
+            firmware: nonEmpty(firmware)
+        )
+    }
+
+    private static func displayModel(_ token: String) -> String {
+        token
+            .split(separator: "-")
+            .map { part in
+                part.caseInsensitiveCompare("wing") == .orderedSame
+                    ? "WING"
+                    : part.prefix(1).uppercased() + part.dropFirst()
+            }
+            .joined(separator: " ")
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }
 

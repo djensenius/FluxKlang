@@ -31,7 +31,7 @@ struct DiscoveryView: View {
                 Button { onSelect(wing.host) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(wing.name)
-                        Text(wing.model.map { "\($0) · \(wing.host)" } ?? wing.host)
+                        Text(wingDetail(wing))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -55,6 +55,10 @@ struct DiscoveryView: View {
 
     private func scan() {
         Task { await appModel.discovery.scan() }
+    }
+
+    private func wingDetail(_ wing: DiscoveredWing) -> String {
+        [wing.model, wing.firmware, wing.host].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
