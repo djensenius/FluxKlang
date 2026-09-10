@@ -288,7 +288,7 @@ struct TemporaryMoveFlowView: View {
         } label: {
             VStack(alignment: .leading) {
                 Text(label)
-                Text(returningMove == nil ? "Home \(homeConnector)" : "Current temporary connection")
+                Text(returningMove == nil ? "Home \(homeConnector)" : "Home connection")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -409,8 +409,11 @@ struct TemporaryMoveFlowView: View {
 
     private func applyRouting() {
         guard let move = resolvedMove else { return }
+        result = nil
+        errorMessage = nil
         isApplying = true
         Task {
+            defer { isApplying = false }
             do {
                 if let returningMove {
                     result = try await appModel.returnTemporaryMoveHome(returningMove.id)
@@ -420,7 +423,6 @@ struct TemporaryMoveFlowView: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
-            isApplying = false
         }
     }
 
