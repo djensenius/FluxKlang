@@ -273,7 +273,7 @@ struct StudioConnectionIssue: Identifiable, Hashable, Sendable {
 
     var kind: Kind
     var message: String
-    var id: String { "\(kind)-\(message)" }
+    var id: String { String(describing: kind) }
 }
 
 struct StudioPhysicalResolver {
