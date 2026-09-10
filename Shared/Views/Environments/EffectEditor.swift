@@ -229,7 +229,7 @@ struct EffectEditor: View {
         )
     }
 
-    /// The WING name of an input connector, when the console has reported one.
+    /// The configured friendly input label, falling back to the live WING scribble name.
     private func inputName(_ connector: Int) -> String? {
         appModel.studioConnections.connections.effectiveHome.inputFriendlyName(
             connector,

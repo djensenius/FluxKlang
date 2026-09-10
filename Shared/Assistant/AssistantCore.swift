@@ -292,7 +292,13 @@ final class AssistantCoordinator {
     private let draftStore: any PendingStudioPatchPersisting
 
     private(set) var pendingStudioDraft: StudioPatchDraft?
-    var navigationTarget: AssistantNavigationTarget?
+    var navigationTarget: AssistantNavigationTarget? {
+        didSet {
+            if navigationTarget == .reviewPendingDraft, pendingStudioDraft == nil {
+                navigationTarget = nil
+            }
+        }
+    }
 
     init(draftStore: any PendingStudioPatchPersisting = PendingStudioPatchStore()) {
         self.draftStore = draftStore
@@ -355,6 +361,10 @@ final class AssistantCoordinator {
             await draftStore.save(refreshed)
             return .pendingDraft(refreshed)
         case .openReview:
+            guard pendingStudioDraft != nil else {
+                navigationTarget = nil
+                return .pendingDraft(nil)
+            }
             navigationTarget = .reviewPendingDraft
             return .navigation(.reviewPendingDraft)
         case .openHelp(let topic):
