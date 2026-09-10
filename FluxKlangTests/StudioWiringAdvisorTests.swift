@@ -153,6 +153,7 @@ struct StudioWiringAdvisorTests {
         #expect(draft.validation.contains { $0.code.hasPrefix("missing-source") })
         #expect(draft.validation.contains { $0.code.hasPrefix("missing-effect") })
         #expect(draft.validation.contains { $0.message.contains("multiple assignments") })
+        #expect(draft.validation.map(\.code) == draft.validation.map(\.code).sorted())
     }
 
     @Test func advisorSanitizesValidationMessages() throws {
@@ -177,6 +178,7 @@ struct StudioWiringAdvisorTests {
 
         #expect(!message.contains("\u{0}"))
         #expect(message.count == 512)
+        #expect(!draft.validation.contains { $0.code.contains("Unsafe") || $0.code.contains("\u{0}") })
     }
 
     @Test func mergeAppendsAndDeduplicatesWithoutDeletingExistingRouting() {
