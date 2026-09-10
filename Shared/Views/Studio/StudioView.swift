@@ -236,10 +236,10 @@ struct StudioView: View {
                         }
                     }
                 }
-                DisclosureGroup("Home connection map") {
+                DisclosureGroup("Current connection map") {
                     let effective = appModel.studioConnections.connections.effectiveHome
                     if effective.isEmpty {
-                        Text("No Home connections configured in Settings.")
+                        Text("No Home or Temporary Move connections configured in Settings.")
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(effective.inputs.sorted(using: KeyPathComparator(\.connector))) { connection in

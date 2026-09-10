@@ -12,8 +12,8 @@ import SwiftUI
 
 struct InputPatchbayGrid: View {
     let controller: WingController
-    var connections = StudioHomeConnections()
-    var equipment: [Equipment] = []
+    let connections: StudioHomeConnections
+    let equipment: [Equipment]
 
     @State private var group: WingSourceGroup = .local
 
@@ -118,5 +118,11 @@ struct InputPatchbayGrid: View {
 }
 
 #Preview {
-    NavigationStack { InputPatchbayGrid(controller: .preview()) }
+    NavigationStack {
+        InputPatchbayGrid(
+            controller: .preview(),
+            connections: StudioHomeConnections(),
+            equipment: []
+        )
+    }
 }
