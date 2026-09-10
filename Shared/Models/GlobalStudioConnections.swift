@@ -9,7 +9,6 @@
 //
 
 import Foundation
-
 struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var connector: Int
@@ -42,7 +41,6 @@ struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
         return "\(device.name) · \(port)"
     }
 }
-
 struct StudioOutputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var connector: Int
