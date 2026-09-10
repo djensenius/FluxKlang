@@ -442,7 +442,10 @@ private extension StudioView {
 
     var reviewPresented: Binding<Bool> {
         Binding(
-            get: { appModel.assistant.navigationTarget == .reviewPendingDraft },
+            get: {
+                appModel.assistant.navigationTarget == .reviewPendingDraft
+                    && appModel.assistant.pendingStudioDraft != nil
+            },
             set: { isPresented in
                 if !isPresented {
                     appModel.assistant.clearNavigation()
