@@ -34,6 +34,48 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
         var effectChainIDs: [Effect.ID]
         var destination: StudioEndpointDestination
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        request = try container.decode(PersistedRequest.self, forKey: .request)
+        fragment = try container.decode(StudioGraphFragment.self, forKey: .fragment)
+        cableInstructions = try container.decodeIfPresent(
+            [StudioCableInstruction].self,
+            forKey: .cableInstructions
+        ) ?? []
+        logicalRoutingSummary = try container.decodeIfPresent(
+            [AssistantUntrustedText].self,
+            forKey: .logicalRoutingSummary
+        ) ?? []
+        validation = try container.decodeIfPresent(
+            [StudioDraftValidationIssue].self,
+            forKey: .validation
+        ) ?? []
+    }
+
+    init(
+        id: UUID,
+        createdAt: Date,
+        request: PersistedRequest,
+        fragment: StudioGraphFragment,
+        cableInstructions: [StudioCableInstruction],
+        logicalRoutingSummary: [AssistantUntrustedText],
+        validation: [StudioDraftValidationIssue]
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.request = request
+        self.fragment = fragment
+        self.cableInstructions = cableInstructions
+        self.logicalRoutingSummary = logicalRoutingSummary
+        self.validation = validation
+    }
 }
 
 struct StudioGraphFragment: Codable, Hashable, Sendable {

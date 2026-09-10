@@ -22,6 +22,7 @@
 		0B4C33D006DB2CBE1EC73893 /* WingValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 201D1AC5DDC73E345FD61126 /* WingValue.swift */; };
 		0C4F37EA48D1BF305A07407E /* SpatialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D75FEB93B4868C0DF38EF8B /* SpatialStore.swift */; };
 		0CD890319BEFD68B9D3FB577 /* FaderMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35EFA96D78CE256B049568C5 /* FaderMath.swift */; };
+		0DBE91B979FF59D455A5DEB0 /* AcceptanceMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */; };
 		0DDF495324967CAAF39F6A79 /* StudioWiringAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB768C5EFED482B9915578A5 /* StudioWiringAdvisor.swift */; };
 		0E93A5C70CD0F76CCA84DA1C /* WingConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDC71263C8B839D9CBCD745 /* WingConnection.swift */; };
 		0EB682BF4676CABCE149E25B /* FaderLayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */; };
@@ -84,6 +85,7 @@
 		4353781EE55B9D6E4B2DB0F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		435CB11200C3299EE92250C0 /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
 		47C91CDDFE59BCC4B5FAE50C /* SpeakersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9CE21781DB88EDDE90462D /* SpeakersView.swift */; };
+		491F93E1E91E6F8E42287B11 /* StudioConnectNodesMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */; };
 		49C80D83119D7F49FB16D056 /* EffectRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2EC6F10CA4CDFF4A2E5F8C2 /* EffectRouting.swift */; };
 		4A39040F28E58813C57C657D /* PendingStudioPatchReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE97FB9ACA7E7CF83A859DA9 /* PendingStudioPatchReviewView.swift */; };
 		4A69ECB35E8FC7F5617B79DF /* TemporaryMoveFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345578080CB2BA19B233E700 /* TemporaryMoveFlowView.swift */; };
@@ -95,7 +97,9 @@
 		4F842A49B8073EE526D4A066 /* FluxKlangApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB8EB4F23DBB8C9939C3B35 /* FluxKlangApp.swift */; };
 		50398CD52E32A69C431C0128 /* WingIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F663ACE0B1486B2974BCC7D4 /* WingIOTests.swift */; };
 		505E0F369C9A5D4FCC7AF794 /* AppIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E632BD24E2E34EF89734819 /* AppIcon.swift */; };
+		5149040F9FD6A11AF32D74CF /* StudioConnectNodesMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */; };
 		5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEC454C8E9B9862280CC236 /* SpatialTests.swift */; };
+		5220D2BDE2A9014301AE6ACA /* AcceptanceLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */; };
 		52B144CCB29DE0AA32B4756B /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
 		537ABAA1B3223F68CE0A4910 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
 		54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405DD99B88EED698E298E908 /* DemoModeTests.swift */; };
@@ -109,6 +113,7 @@
 		5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */; };
 		5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
 		608BF55953884619BAE7872D /* StudioSignalCompiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 443BC949EB9A1CCE391A5D33 /* StudioSignalCompiler.swift */; };
+		62682354F810813803A3A63B /* FluxKlangAcceptanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05C6AEF40F50FC4754CE964B /* FluxKlangAcceptanceUITests.swift */; };
 		627D9F1FE96885365301635A /* WingValueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B5161E55C4C246FDD3570A /* WingValueTests.swift */; };
 		6280FC1F01CD759B5C66349D /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F2C93B849BC7C3AB2B7BE0 /* RoutingView.swift */; };
 		62CF2211E6EEFA92A9757C32 /* StudioWiringAdvisorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA59354F097D5E2225BC283 /* StudioWiringAdvisorTests.swift */; };
@@ -249,6 +254,7 @@
 		EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581CD8ACF8D35B9779227576 /* InputPatchView.swift */; };
 		EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
 		F070CCF590EFED46DB6520BF /* EnvironmentVoicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F6E375AA1BB152010A61F85 /* EnvironmentVoicesTests.swift */; };
+		F117DDE65264C3CC40A03EE8 /* AcceptanceLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */; };
 		F2140B7BB6B895C00439C50F /* StudioSignalCompiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 443BC949EB9A1CCE391A5D33 /* StudioSignalCompiler.swift */; };
 		F2EB47B7D52E839B0040B2D0 /* MeterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B556AC51B84AE09C97AFDC4 /* MeterView.swift */; };
 		F39B3DF5E145B31B1F34D2FE /* TemporaryMoveAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE5EA91AF1D2BE000168AC4C /* TemporaryMoveAppModel.swift */; };
@@ -263,6 +269,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		82C97D600A27ED8B806A2B97 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 896DFA31F09CDC90A39D56AC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6621E26C78C356F2D938664A;
+			remoteInfo = FluxKlang;
+		};
 		8AA3AF5C05973D2CC373DF02 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 896DFA31F09CDC90A39D56AC /* Project object */;
@@ -276,6 +289,7 @@
 		00B197D31B1C77FB7FB99BBC /* StudioCanvasNodeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioCanvasNodeCard.swift; sourceTree = "<group>"; };
 		0325249A945B2C6126F18AFD /* StudioGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioGraphTests.swift; sourceTree = "<group>"; };
 		0451A9D61B5FEF5E7C4B5C34 /* WingNodeRef.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingNodeRef.swift; sourceTree = "<group>"; };
+		05C6AEF40F50FC4754CE964B /* FluxKlangAcceptanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangAcceptanceUITests.swift; sourceTree = "<group>"; };
 		05E70D3009B51EEB9AFA31AF /* PortView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortView.swift; sourceTree = "<group>"; };
 		06CCF54AD33E1916E650B686 /* FaderMathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderMathTests.swift; sourceTree = "<group>"; };
 		0B556AC51B84AE09C97AFDC4 /* MeterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeterView.swift; sourceTree = "<group>"; };
@@ -330,6 +344,7 @@
 		615719763482C95E8DE3B403 /* StudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioView.swift; sourceTree = "<group>"; };
 		6168A7E728E3196D6787E965 /* SettingsContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContentView.swift; sourceTree = "<group>"; };
 		62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FluxKlangTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		64F9C059141C94DBA062BECD /* FluxKlangUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FluxKlangUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		652B04B515FA75D5D61F0851 /* ChainCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainCanvasView.swift; sourceTree = "<group>"; };
 		664F41DD22AE785D547A764C /* Equipment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Equipment.swift; sourceTree = "<group>"; };
 		68F4B3FBCD9EF42A550A231C /* CoPilotHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoPilotHandoff.swift; sourceTree = "<group>"; };
@@ -350,6 +365,8 @@
 		7B41203E2877DE096F492901 /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
 		7C7D45D2618BA7418E7F0F12 /* EffectEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectEditor.swift; sourceTree = "<group>"; };
 		7DA94B70ED6A5B914A576414 /* WireLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireLayer.swift; sourceTree = "<group>"; };
+		800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptanceLaunchConfiguration.swift; sourceTree = "<group>"; };
+		80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectNodesMenu.swift; sourceTree = "<group>"; };
 		834B3F839743E70274C9D787 /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
 		83DCB12052D27CCC4E859DC3 /* TemporaryMoveVerification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryMoveVerification.swift; sourceTree = "<group>"; };
 		8762531BC7A63F213F735232 /* RoutingTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingTranslator.swift; sourceTree = "<group>"; };
@@ -373,6 +390,7 @@
 		A496F8403A330675A590FE5B /* AppModel+Assistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+Assistant.swift"; sourceTree = "<group>"; };
 		A54D9E89BD6B53D8AB55F71D /* EnvironmentVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentVoice.swift; sourceTree = "<group>"; };
 		A5601B154CDD9A39F8530981 /* InspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorView.swift; sourceTree = "<group>"; };
+		A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptanceMigrationTests.swift; sourceTree = "<group>"; };
 		AB3881C24F96EFD21A4EC22C /* TutorialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialView.swift; sourceTree = "<group>"; };
 		AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGraph.swift; sourceTree = "<group>"; };
 		B08E59FFF869F286A1BFDFCB /* StudioResourceAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioResourceAllocator.swift; sourceTree = "<group>"; };
@@ -447,6 +465,7 @@
 				EE97FB9ACA7E7CF83A859DA9 /* PendingStudioPatchReviewView.swift */,
 				00B197D31B1C77FB7FB99BBC /* StudioCanvasNodeCard.swift */,
 				435B3823839F80D106B8B028 /* StudioCanvasView.swift */,
+				80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */,
 				5E4884FF1B2AD16A0B920CAA /* StudioInspectorViews.swift */,
 				615719763482C95E8DE3B403 /* StudioView.swift */,
 			);
@@ -475,6 +494,14 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		25E746857563BA9FA7B5B237 /* FluxKlangUITests */ = {
+			isa = PBXGroup;
+			children = (
+				05C6AEF40F50FC4754CE964B /* FluxKlangAcceptanceUITests.swift */,
+			);
+			path = FluxKlangUITests;
+			sourceTree = "<group>";
+		};
 		2FEBD83AD2058B876AF2252D /* Advanced */ = {
 			isa = PBXGroup;
 			children = (
@@ -497,6 +524,7 @@
 		54198E113463A0233F69309F /* App */ = {
 			isa = PBXGroup;
 			children = (
+				800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */,
 				E8CA2756FAADEE73BA7BA94C /* AppModel.swift */,
 				A496F8403A330675A590FE5B /* AppModel+Assistant.swift */,
 				7829A1C698F339C5D662010C /* AppRootView.swift */,
@@ -623,6 +651,7 @@
 				FE008189B554CBD9741C6447 /* FluxKlang.app */,
 				F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */,
 				62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */,
+				64F9C059141C94DBA062BECD /* FluxKlangUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -643,6 +672,7 @@
 				A80BA078CC003CB37AB8BCDD /* FluxKlang */,
 				B28C528452DB08DE9FE39AFB /* FluxKlangMac */,
 				F6624B8D5BBDF1615714D3EB /* FluxKlangTests */,
+				25E746857563BA9FA7B5B237 /* FluxKlangUITests */,
 				BB51CA0863B317EDE8D76FD6 /* Icons */,
 				AE944FB5A90EF0D8678BE47C /* Shared */,
 				9789BFF6FD09DE2B30709D8E /* Products */,
@@ -753,6 +783,7 @@
 		F6624B8D5BBDF1615714D3EB /* FluxKlangTests */ = {
 			isa = PBXGroup;
 			children = (
+				A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */,
 				882B7F70F65B33BAD91EF6B8 /* AppNavigationTests.swift */,
 				34732F18AA61295C6C5D3A24 /* AssistantCoreTests.swift */,
 				9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */,
@@ -852,6 +883,24 @@
 			productReference = FE008189B554CBD9741C6447 /* FluxKlang.app */;
 			productType = "com.apple.product-type.application";
 		};
+		685F749B6184D449C86793DC /* FluxKlangUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D067B8652BE3F22A2B07F0C1 /* Build configuration list for PBXNativeTarget "FluxKlangUITests" */;
+			buildPhases = (
+				4B62793C6ABEB04F8BD70045 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FF767C30E345CFF21CC45C6F /* PBXTargetDependency */,
+			);
+			name = FluxKlangUITests;
+			packageProductDependencies = (
+			);
+			productName = FluxKlangUITests;
+			productReference = 64F9C059141C94DBA062BECD /* FluxKlangUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		9EBB5F6520C9812DFFD5FA08 /* FluxKlangTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 6B55C279A907855F1A33E841 /* Build configuration list for PBXNativeTarget "FluxKlangTests" */;
@@ -887,6 +936,10 @@
 						DevelopmentTeam = 9JALHNGRBQ;
 						ProvisioningStyle = Automatic;
 					};
+					685F749B6184D449C86793DC = {
+						DevelopmentTeam = 9JALHNGRBQ;
+						TestTargetID = 6621E26C78C356F2D938664A;
+					};
 					9EBB5F6520C9812DFFD5FA08 = {
 						DevelopmentTeam = 9JALHNGRBQ;
 					};
@@ -912,6 +965,7 @@
 				6621E26C78C356F2D938664A /* FluxKlang */,
 				49BB944437C0767B9D0A3A05 /* FluxKlangMac */,
 				9EBB5F6520C9812DFFD5FA08 /* FluxKlangTests */,
+				685F749B6184D449C86793DC /* FluxKlangUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -942,6 +996,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5220D2BDE2A9014301AE6ACA /* AcceptanceLaunchConfiguration.swift in Sources */,
 				78445F611FF0874CD672B05D /* AdvancedView.swift in Sources */,
 				505E0F369C9A5D4FCC7AF794 /* AppIcon.swift in Sources */,
 				B3DD2228953D9230648F7F6E /* AppIconPicker.swift in Sources */,
@@ -1024,6 +1079,7 @@
 				0972C88CCBE04535F0F7D086 /* SpeakersView.swift in Sources */,
 				1A18BFAB9DF3221C1113E086 /* StudioCanvasNodeCard.swift in Sources */,
 				0440007401C6D52B75E7B153 /* StudioCanvasView.swift in Sources */,
+				491F93E1E91E6F8E42287B11 /* StudioConnectNodesMenu.swift in Sources */,
 				CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */,
 				ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */,
 				04E82B67C0F39B29F2ED04C0 /* StudioConnectionsStore.swift in Sources */,
@@ -1056,10 +1112,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4B62793C6ABEB04F8BD70045 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				62682354F810813803A3A63B /* FluxKlangAcceptanceUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8F17A3EB44B4A78C114227C0 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F117DDE65264C3CC40A03EE8 /* AcceptanceLaunchConfiguration.swift in Sources */,
 				A06828AD7B651A480F2E1AEC /* AdvancedView.swift in Sources */,
 				98A194A0842C20CBCD5AC80E /* AppIcon.swift in Sources */,
 				3338EC3699B9BBC60FDDF4B5 /* AppIconPicker.swift in Sources */,
@@ -1142,6 +1207,7 @@
 				47C91CDDFE59BCC4B5FAE50C /* SpeakersView.swift in Sources */,
 				9FF6DFBEAAB2BD4C6E6008D3 /* StudioCanvasNodeCard.swift in Sources */,
 				EA5CE0DAF0ED241A9B6F3B73 /* StudioCanvasView.swift in Sources */,
+				5149040F9FD6A11AF32D74CF /* StudioConnectNodesMenu.swift in Sources */,
 				EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */,
 				80DEE716550F3AEA0659470D /* StudioConnectionEditing.swift in Sources */,
 				205B90FFAAFBFE95F258B95F /* StudioConnectionsStore.swift in Sources */,
@@ -1178,6 +1244,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0DBE91B979FF59D455A5DEB0 /* AcceptanceMigrationTests.swift in Sources */,
 				D533DB5110B0262A64819E43 /* AppNavigationTests.swift in Sources */,
 				2CE62A73DF86129921F23F34 /* AssistantCoreTests.swift in Sources */,
 				5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */,
@@ -1213,6 +1280,11 @@
 			isa = PBXTargetDependency;
 			target = 6621E26C78C356F2D938664A /* FluxKlang */;
 			targetProxy = 8AA3AF5C05973D2CC373DF02 /* PBXContainerItemProxy */;
+		};
+		FF767C30E345CFF21CC45C6F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6621E26C78C356F2D938664A /* FluxKlang */;
+			targetProxy = 82C97D600A27ED8B806A2B97 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1411,6 +1483,23 @@
 			};
 			name = Debug;
 		};
+		C4875A761E1BD9227CE7DCD7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = FluxKlang;
+			};
+			name = Release;
+		};
 		CB8CC0CCED865777C155B1D2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1431,6 +1520,23 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		EC6EF494BA3F15695BC27631 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = FluxKlang;
+			};
+			name = Debug;
 		};
 		F49B32995DEA558DE4E415DC /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -1505,6 +1611,15 @@
 			buildConfigurations = (
 				A6E2F4B28080AECFEADD80DE /* Debug */,
 				F49B32995DEA558DE4E415DC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D067B8652BE3F22A2B07F0C1 /* Build configuration list for PBXNativeTarget "FluxKlangUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EC6EF494BA3F15695BC27631 /* Debug */,
+				C4875A761E1BD9227CE7DCD7 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

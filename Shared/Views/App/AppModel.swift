@@ -353,6 +353,11 @@ final class AppModel {
         wing = WingController()
     }
 
+    func showAcceptanceConnectionFailure() async {
+        await wing.disconnect()
+        wing = .acceptanceFailure(reason: "Acceptance test: WING unavailable")
+    }
+
     // MARK: - Spatial
 
     /// Pushes a placed voice's surround bus sends to the WING live, used while

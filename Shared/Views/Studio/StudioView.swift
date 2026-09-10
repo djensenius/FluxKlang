@@ -115,6 +115,7 @@ struct StudioView: View {
                 systemImage: issues.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                 tint: issues.isEmpty ? .green : .orange
             )
+            .accessibilityIdentifier("studio.status")
         } footer: {
             Text("""
             FluxKlang keeps the mixer details out of the way. You describe the sound path; it handles the mixer.
@@ -171,6 +172,7 @@ struct StudioView: View {
             addGearMenu
             newGearButton
             addControlMenu
+            StudioConnectNodesMenu(graph: graph, title: nodeTitle, connect: connect)
         }
         .buttonStyle(.bordered)
     }
@@ -305,6 +307,7 @@ struct StudioView: View {
                 }
             }
             .disabled(!appModel.isConnected || compiled.settings.isEmpty || compiled.hasErrors || isApplying)
+            .accessibilityIdentifier("studio.listen")
         }
     }
 
@@ -405,6 +408,17 @@ struct StudioView: View {
 
     private func input(_ node: StudioNode) -> StudioPortRef {
         StudioPortRef(nodeID: node.id, side: .input, port: 0)
+    }
+
+    private func nodeTitle(_ node: StudioNode) -> String {
+        switch node.kind {
+        case .instrument(let id):
+            return appModel.equipment.items.first { $0.id == id }?.name ?? node.title
+        case .effect(let id):
+            return effects.first { $0.id == id }?.name ?? node.title
+        case .endpoint(let id):
+            return endpoints.first { $0.id == id }?.name ?? node.title
+        }
     }
 
     private func applyStudioPatch() {

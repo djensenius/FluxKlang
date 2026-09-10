@@ -23,6 +23,20 @@ struct AssistantConversation: Identifiable, Codable, Hashable, Sendable {
         self.summary = summary
         self.messages = messages
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, createdAt, modifiedAt, summary, messages
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? createdAt
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        messages = try container.decodeIfPresent([AssistantMessage].self, forKey: .messages) ?? []
+    }
 }
 
 struct AssistantMessage: Identifiable, Codable, Hashable, Sendable {
@@ -59,6 +73,20 @@ struct AssistantMessage: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.state = state
         self.cards = cards
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, role, text, createdAt, state, cards
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        role = try container.decode(Role.self, forKey: .role)
+        text = try container.decode(String.self, forKey: .text)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        state = try container.decodeIfPresent(State.self, forKey: .state) ?? .complete
+        cards = try container.decodeIfPresent([AssistantCard].self, forKey: .cards) ?? []
     }
 }
 

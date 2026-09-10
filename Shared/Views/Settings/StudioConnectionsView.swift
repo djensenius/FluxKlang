@@ -108,6 +108,8 @@ struct StudioConnectionsView: View {
                 Text(move.verification.state.label)
                     .font(.caption)
                     .foregroundStyle(move.verification.state == .verified ? .green : .orange)
+                    .accessibilityLabel("Routing verification")
+                    .accessibilityValue(move.verification.state.label)
             }
             Text(moveSummary(move))
                 .font(.caption)

@@ -333,6 +333,14 @@ private struct AssistantAvailabilityBanner: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Assistant availability")
+        .accessibilityValue(
+            availability.usesFallback
+                ? "\(availability.title). Using grounded fallback."
+                : availability.title
+        )
+        .accessibilityIdentifier("assistant.availability")
     }
 }
 

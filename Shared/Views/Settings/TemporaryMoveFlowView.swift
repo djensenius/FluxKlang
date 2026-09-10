@@ -203,6 +203,7 @@ struct TemporaryMoveFlowView: View {
                 Label(result.state.label, systemImage: verificationImage(result.state))
                     .foregroundStyle(result.state == .verified ? .green : .orange)
                     .accessibilityIdentifier("temporary-move-verification-result")
+                    .accessibilityLabel("Routing verification").accessibilityValue(result.state.label)
                 Text(result.details)
                 if returningMove != nil, result.state != .verified {
                     Text("The override remains active until Home routing is fully verified.")

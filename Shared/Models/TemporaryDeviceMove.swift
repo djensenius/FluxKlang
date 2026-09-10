@@ -92,6 +92,25 @@ struct TemporaryDeviceMove: Identifiable, Codable, Hashable, Sendable {
         self.activatedAt = activatedAt
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, equipmentID, location, note, connections, lifecycle, verification, activatedAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        equipmentID = try container.decode(Equipment.ID.self, forKey: .equipmentID)
+        location = Self.trimmed(try container.decodeIfPresent(String.self, forKey: .location))
+        note = Self.trimmed(try container.decodeIfPresent(String.self, forKey: .note))
+        connections = try container.decode(StudioHomeConnections.self, forKey: .connections)
+        lifecycle = try container.decodeIfPresent(TemporaryMoveLifecycle.self, forKey: .lifecycle) ?? .active
+        verification = try container.decodeIfPresent(
+            TemporaryMoveVerification.self,
+            forKey: .verification
+        ) ?? TemporaryMoveVerification()
+        activatedAt = try container.decodeIfPresent(Date.self, forKey: .activatedAt)
+    }
+
     func activating(with verification: TemporaryMoveVerification, at date: Date = Date()) -> Self {
         var copy = self
         copy.lifecycle = .active

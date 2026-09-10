@@ -20,7 +20,13 @@ struct AppRootView: View {
             AdaptiveRoot()
             #endif
         }
-        .task { await appModel.loadStores() }
+        .task {
+            if AcceptanceLaunchConfiguration.isUITesting {
+                await AcceptanceLaunchConfiguration.configure(appModel)
+            } else {
+                await appModel.loadStores()
+            }
+        }
         .sheet(isPresented: helpPresented) {
             if case .help(let topic) = assistant.navigationTarget {
                 AssistantHelpView(entry: FluxKlangHelpCatalog.entry(for: topic))
@@ -323,14 +329,16 @@ private struct MoreView: View {
                 destination(
                     "Routing",
                     "Patch inputs, outputs and routing snapshots",
-                    AppSection.patchbay.systemImage
+                    AppSection.patchbay.systemImage,
+                    identifier: "more.routing"
                 ) {
                     PatchbayView()
                 }
                 destination(
                     "Connection",
                     "Find a WING, reconnect or enter Demo Mode",
-                    AppSection.connection.systemImage
+                    AppSection.connection.systemImage,
+                    identifier: "more.connection"
                 ) {
                     ConnectionView()
                 }
@@ -340,11 +348,17 @@ private struct MoreView: View {
                 destination(
                     "Learn FluxKlang",
                     "Understand signal flow, scenes and patching",
-                    AppSection.tutorial.systemImage
+                    AppSection.tutorial.systemImage,
+                    identifier: "more.learn"
                 ) {
                     TutorialView()
                 }
-                destination("Settings", "Mixer layout, connection details and appearance", "gearshape") {
+                destination(
+                    "Settings",
+                    "Mixer layout, connection details and appearance",
+                    "gearshape",
+                    identifier: "more.settings"
+                ) {
                     SettingsContentView()
                 }
                 Button {
@@ -367,7 +381,8 @@ private struct MoreView: View {
                 destination(
                     "Advanced Tools",
                     "Raw routing and legacy editors",
-                    AppSection.advanced.systemImage
+                    AppSection.advanced.systemImage,
+                    identifier: "more.advanced"
                 ) {
                     AdvancedView()
                 }
@@ -380,6 +395,7 @@ private struct MoreView: View {
         _ title: String,
         _ detail: String,
         _ systemImage: String,
+        identifier: String,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         NavigationLink {
@@ -396,6 +412,7 @@ private struct MoreView: View {
                 Image(systemName: systemImage)
             }
         }
+        .accessibilityIdentifier(identifier)
     }
 }
 #endif
@@ -415,7 +432,7 @@ private struct ConnectionStatusButton: View {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -426,7 +443,9 @@ private struct ConnectionStatusButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(detail)")
+        .accessibilityValue(title)
         .accessibilityHint("Opens connection controls")
+        .accessibilityIdentifier("connection.status")
     }
 
     private var title: String {

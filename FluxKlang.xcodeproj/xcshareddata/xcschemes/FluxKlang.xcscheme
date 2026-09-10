@@ -50,6 +50,17 @@
                ReferencedContainer = "container:FluxKlang.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "685F749B6184D449C86793DC"
+               BuildableName = "FluxKlangUITests.xctest"
+               BlueprintName = "FluxKlangUITests"
+               ReferencedContainer = "container:FluxKlang.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

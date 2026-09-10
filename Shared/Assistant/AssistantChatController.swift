@@ -35,10 +35,16 @@ final class AssistantChatController {
         self.coordinator = coordinator
         self.store = store
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
-        self.generator = generator ?? AssistantGeneratorRouter(
-            model: FoundationModelAssistantGenerator(coordinator: coordinator),
-            fallback: fallback
-        )
+        if let generator {
+            self.generator = generator
+        } else if AcceptanceLaunchConfiguration.forcesAssistantFallback {
+            self.generator = fallback
+        } else {
+            self.generator = AssistantGeneratorRouter(
+                model: FoundationModelAssistantGenerator(coordinator: coordinator),
+                fallback: fallback
+            )
+        }
         spokenRepliesEnabled = UserDefaults.standard.bool(forKey: Self.spokenRepliesKey)
     }
 

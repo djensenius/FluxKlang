@@ -18,6 +18,8 @@ struct ConnectionView: View {
             Section("Status") {
                 Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
                     .foregroundStyle(statusTint)
+                    .accessibilityIdentifier("connection.status.detail")
+                    .accessibilityValue(appModel.wing.connection.statusLabel)
                 if appModel.isDemo {
                     Text("Demo Mode — values are simulated and drift to feel live.")
                         .font(.footnote)
@@ -36,6 +38,7 @@ struct ConnectionView: View {
                             Label("Retry \(lastHost)", systemImage: "arrow.clockwise")
                         }
                         .disabled(isWorking)
+                        .accessibilityIdentifier("connection.retry")
                     }
                     Text("""
                     Check that this device and the WING are on the same network. \
@@ -57,6 +60,7 @@ struct ConnectionView: View {
                     Label("Enter Demo Mode", systemImage: "play.circle.fill")
                 }
                 .disabled(isWorking)
+                .accessibilityIdentifier("connection.demo")
                 Text("Explore FluxKlang without a WING on the network — great for trying things offline.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -70,8 +74,10 @@ struct ConnectionView: View {
                     .textInputAutocapitalization(.never)
                     #endif
                     .onSubmit { connect(to: host) }
+                    .accessibilityIdentifier("connection.host")
                 Button("Connect") { connect(to: host) }
                     .disabled(host.isEmpty || isWorking)
+                    .accessibilityIdentifier("connection.connect")
             }
 
             DiscoveryView { selected in
@@ -91,6 +97,7 @@ struct ConnectionView: View {
                         Label("Disconnect", systemImage: "xmark.circle")
                     }
                     .disabled(isWorking)
+                    .accessibilityIdentifier("connection.disconnect")
                 }
             }
         }

@@ -83,6 +83,12 @@ final class WingController {
         return controller
     }
 
+    static func acceptanceFailure(reason: String) -> WingController {
+        let controller = WingController()
+        controller.connection = .failed(reason: reason)
+        return controller
+    }
+
     // MARK: - Lifecycle
 
     /// Connects to a WING at `host`, starts listening for updates, and begins
