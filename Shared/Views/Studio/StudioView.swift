@@ -236,21 +236,24 @@ struct StudioView: View {
                         }
                     }
                 }
-                DisclosureGroup("Home connection map") {
-                    let home = appModel.studioConnections.connections.home
-                    if home.isEmpty {
-                        Text("No Home connections configured in Settings.")
+                DisclosureGroup("Current connection map") {
+                    let effective = appModel.studioConnections.connections.effectiveHome
+                    if effective.isEmpty {
+                        Text("No Home or Temporary Move connections configured in Settings.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(home.inputs.sorted(using: KeyPathComparator(\.connector))) { connection in
-                            Text(home.inputDisplayName(
+                        ForEach(effective.inputs.sorted(using: KeyPathComparator(\.connector))) { connection in
+                            Text(effective.inputDisplayName(
                                 connection.connector,
                                 equipment: appModel.equipment.items,
                                 liveScribble: appModel.wing.inputName(connection.connector)
                             ))
                         }
-                        ForEach(home.outputs.sorted(using: KeyPathComparator(\.connector))) { connection in
-                            Text(home.outputDisplayName(connection.connector, equipment: appModel.equipment.items))
+                        ForEach(effective.outputs.sorted(using: KeyPathComparator(\.connector))) { connection in
+                            Text(effective.outputDisplayName(
+                                connection.connector,
+                                equipment: appModel.equipment.items
+                            ))
                         }
                     }
                 }
@@ -397,7 +400,7 @@ struct StudioView: View {
             return "Pick a sound, give it a dry control, give it a space control, then explore."
         }
         if issues.isEmpty {
-            let connections = appModel.studioConnections.connections.home
+            let connections = appModel.studioConnections.connections.effectiveHome
             return "\(endpoints.count) controls · \(connections.inputs.count + connections.outputs.count) connections"
         }
         return "\(issues.count) note\(issues.count == 1 ? "" : "s") before everything can play"

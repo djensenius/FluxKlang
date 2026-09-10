@@ -2,27 +2,38 @@
 //  StudioConnectionsView.swift
 //  FluxKlang
 //
-//  Edits the global Home wiring map. Temporary moves are intentionally outside
-//  this screen: these assignments describe the studio's normal physical wiring.
+//  Edits the global Home wiring map and manages Temporary Moves that overlay it.
 //
 
 import SwiftUI
-
 struct StudioConnectionsView: View {
     @Environment(AppModel.self) private var appModel
-
-    private var home: StudioHomeConnections {
-        appModel.studioConnections.connections.home
-    }
+    @State private var isMovingEquipment = false
+    @State private var returningMove: TemporaryDeviceMove?
+    private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
 
     var body: some View {
         let issues = StudioPhysicalResolver(connections: home, equipment: appModel.equipment.items).structuralIssues()
         List {
             Section {
                 Label(
-                    "Home is your normal physical wiring. Temporary Moves will be handled separately.",
+                    "Home stays immutable. Active Temporary Moves overlay it until Return Home is applied.",
                     systemImage: "house"
                 )
+                Button {
+                    isMovingEquipment = true
+                } label: {
+                    Label("Move Equipment Temporarily", systemImage: "arrow.right.arrow.left")
+                }
+                .accessibilityIdentifier("studio-connections-move-temporarily")
+            }
+
+            if !appModel.studioConnections.connections.temporaryMoves.isEmpty {
+                Section("Temporary Moves") {
+                    ForEach(appModel.studioConnections.connections.temporaryMoves) { move in
+                        temporaryMoveRow(move)
+                    }
+                }
             }
 
             Section("WING Inputs") {
@@ -62,8 +73,43 @@ struct StudioConnectionsView: View {
         #if !os(macOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .sheet(isPresented: $isMovingEquipment) {
+            TemporaryMoveFlowView()
+                .environment(appModel)
+        }
+        .sheet(item: $returningMove) { move in
+            TemporaryMoveFlowView(returning: move)
+                .environment(appModel)
+        }
     }
 
+    private func temporaryMoveRow(_ move: TemporaryDeviceMove) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(equipmentName(move.equipmentID), systemImage: "shippingbox.and.arrow.backward")
+                    .font(.headline)
+                Text("Moved")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.orange.opacity(0.18), in: Capsule())
+                Spacer()
+                Text(move.verification.state.label)
+                    .font(.caption)
+                    .foregroundStyle(move.verification.state == .verified ? .green : .orange)
+            }
+            Text(move.connectorSummary(home: home))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Return Home") { returningMove = move }
+                .accessibilityIdentifier("temporary-move-return-\(move.id.uuidString)")
+                .accessibilityLabel("Return \(equipmentName(move.equipmentID)) Home")
+        }
+        .padding(.vertical, 3)
+    }
+    private func equipmentName(_ id: Equipment.ID) -> String {
+        appModel.equipment.items.first { $0.id == id }?.name ?? "Missing equipment"
+    }
     private func connectorRow(
         direction: StudioConnectorDirection,
         connector: Int,
@@ -180,10 +226,7 @@ private struct StudioConnectorEditor: View {
 
     private var equipment: [Equipment] { appModel.equipment.items }
     private var home: StudioHomeConnections { appModel.studioConnections.connections.home }
-    private var selectedEquipment: Equipment? {
-        equipment.first { $0.id == equipmentID }
-    }
-
+    private var selectedEquipment: Equipment? { equipment.first { $0.id == equipmentID } }
     var body: some View {
         Form {
             Section("Assignment") {
@@ -273,14 +316,11 @@ private struct StudioConnectorEditor: View {
                     return
                 }
                 let names = portNames(for: item)
-                if let port,
-                   names.indices.contains(port),
+                if let port, names.indices.contains(port),
                    !isPortInUse(equipmentID: newValue, port: port) {
                     return
                 }
-                port = names.indices.first {
-                    !isPortInUse(equipmentID: newValue, port: $0)
-                }
+                port = names.indices.first { !isPortInUse(equipmentID: newValue, port: $0) }
             }
         )
     }

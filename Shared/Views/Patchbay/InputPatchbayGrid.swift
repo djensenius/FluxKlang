@@ -12,6 +12,8 @@ import SwiftUI
 
 struct InputPatchbayGrid: View {
     let controller: WingController
+    let connections: StudioHomeConnections
+    let equipment: [Equipment]
 
     @State private var group: WingSourceGroup = .local
 
@@ -98,14 +100,29 @@ struct InputPatchbayGrid: View {
         return PatchbayGrid.crosspoint(
             isOn: isOn,
             tint: tint,
-            help: "\(group.label) \(index) → Channel \(channel)"
+            help: "\(sourceName(index)) → Channel \(channel)"
         ) {
             let target: WingSource = isOn ? .none : WingSource(group: group, index: index)
             Task { await controller.setChannelSource(channel, to: target) }
         }
     }
+
+    private func sourceName(_ index: Int) -> String {
+        guard group == .local else { return "\(group.label) \(index)" }
+        return connections.inputDisplayName(
+            index,
+            equipment: equipment,
+            liveScribble: controller.inputName(index)
+        )
+    }
 }
 
 #Preview {
-    NavigationStack { InputPatchbayGrid(controller: .preview()) }
+    NavigationStack {
+        InputPatchbayGrid(
+            controller: .preview(),
+            connections: StudioHomeConnections(),
+            equipment: []
+        )
+    }
 }

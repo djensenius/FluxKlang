@@ -36,6 +36,8 @@ struct EnvironmentSummary: View {
 }
 
 struct SimpleEffectCard: View {
+    @Environment(AppModel.self) private var appModel
+
     let effect: Effect
     let allocation: EffectRouting.Allocation?
     let sourceNames: [String]
@@ -52,6 +54,13 @@ struct SimpleEffectCard: View {
                     Text(effect.isStereo ? "Stereo" : "Mono")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if temporaryMove != nil {
+                        Text("Moved")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(.orange.opacity(0.18), in: Capsule())
+                    }
                 }
                 Text(sourceSummary)
                     .font(.subheadline)
@@ -59,6 +68,15 @@ struct SimpleEffectCard: View {
                 Label(routeSummary, systemImage: "cable.connector")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let temporaryMove {
+                    Text(
+                        temporaryMove.connectorSummary(
+                            home: appModel.studioConnections.connections.home
+                        )
+                    )
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
             .padding(.vertical, 6)
         }
@@ -68,6 +86,11 @@ struct SimpleEffectCard: View {
     private var sourceSummary: String {
         if sourceNames.isEmpty { return "No instruments feeding this yet" }
         return sourceNames.joined(separator: ", ")
+    }
+
+    private var temporaryMove: TemporaryDeviceMove? {
+        guard let equipmentID = effect.equipmentID else { return nil }
+        return appModel.studioConnections.connections.move(for: equipmentID)
     }
 
     private var routeSummary: String {

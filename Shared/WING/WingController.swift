@@ -32,6 +32,10 @@ final class WingController {
     /// controller on the network, including the WING Co-Pilot app.
     private(set) var values: [String: WingValue] = [:]
 
+    /// Values received from the console or demo transport. Unlike `values`,
+    /// this never treats an attempted local SET as proof that hardware applied it.
+    private(set) var confirmedValues: [String: WingValue] = [:]
+
     /// Host the controller is connected (or connecting) to.
     private(set) var host: String?
 
@@ -71,6 +75,7 @@ final class WingController {
         let controller = WingController(demoTransport: DemoWingTransport())
         controller.connection = .connected(name: "Demo WING Rack")
         controller.values = DemoWingTransport.seededStore()
+        controller.confirmedValues = controller.values
         return controller
     }
 
@@ -170,6 +175,15 @@ final class WingController {
     /// the incoming stream.
     func refresh(_ address: String) async {
         try? await transport.send(address)
+    }
+
+    /// Invalidates prior confirmations and re-queries only the supplied nodes.
+    /// Callers can then distinguish fresh transport replies from optimistic SETs.
+    func refreshForVerification(_ addresses: [String]) async {
+        for address in addresses {
+            confirmedValues[address] = nil
+        }
+        await query(addresses)
     }
 
     /// Re-queries every relevant node so the cache reflects the console's
@@ -375,6 +389,7 @@ final class WingController {
     private func ingest(_ message: WingIncoming) {
         guard let value = message.effectiveValue else { return }
         values[message.address] = value
+        confirmedValues[message.address] = value
     }
 
     private func startKeepAlive() {

@@ -1,11 +1,4 @@
-//
-//  GlobalStudioConnections.swift
-//  FluxKlang
-//
-//  The canonical Home wiring between equipment and the WING's local sockets.
-//  This state is global: environments describe semantic routing, not physical
-//  cable moves. `home` is deliberately nested so future temporary overlays can
-//  produce effective connections without mutating the saved Home assignments.
+//  Canonical Home wiring plus non-destructive temporary overlays.
 //
 
 import Foundation
@@ -110,25 +103,32 @@ struct StudioConnectionMigrationIssue: Identifiable, Codable, Hashable, Sendable
 
 struct GlobalStudioConnections: Codable, Hashable, Sendable {
     var home: StudioHomeConnections
+    var temporaryMoves: [TemporaryDeviceMove]
     var migrationIssues: [StudioConnectionMigrationIssue]
 
     init(
         home: StudioHomeConnections = StudioHomeConnections(),
+        temporaryMoves: [TemporaryDeviceMove] = [],
         migrationIssues: [StudioConnectionMigrationIssue] = []
     ) {
         self.home = home
+        self.temporaryMoves = temporaryMoves
         self.migrationIssues = migrationIssues
     }
 
-    var isEmpty: Bool { home.isEmpty }
+    var isEmpty: Bool { home.isEmpty && temporaryMoves.isEmpty }
 
     private enum CodingKeys: String, CodingKey {
-        case home, migrationIssues
+        case home, temporaryMoves, migrationIssues
     }
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         home = try container.decodeIfPresent(StudioHomeConnections.self, forKey: .home) ?? StudioHomeConnections()
+        temporaryMoves = try container.decodeIfPresent(
+            [TemporaryDeviceMove].self,
+            forKey: .temporaryMoves
+        ) ?? []
         migrationIssues = try container.decodeIfPresent(
             [StudioConnectionMigrationIssue].self,
             forKey: .migrationIssues

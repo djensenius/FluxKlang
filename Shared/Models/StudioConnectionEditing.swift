@@ -15,6 +15,7 @@ enum StudioConnectionAssignmentError: LocalizedError, Equatable {
     case invalidEquipmentInput
     case equipmentOutputInUse(String, String, Int)
     case equipmentInputInUse(String, String, Int)
+    case temporaryMoveConflict(String)
 
     var errorDescription: String? {
         switch self {
@@ -32,6 +33,8 @@ enum StudioConnectionAssignmentError: LocalizedError, Equatable {
             return "\(equipment) · \(port) is already assigned to WING input \(connector)."
         case .equipmentInputInUse(let equipment, let port, let connector):
             return "\(equipment) · \(port) is already assigned to WING output \(connector)."
+        case .temporaryMoveConflict(let message):
+            return "Return affected equipment Home before changing this assignment. \(message)"
         }
     }
 }
