@@ -44,7 +44,7 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
-        NSMicrophoneUsageDescription: FluxKlang uses the microphone only while you hold push-to-talk for on-device transcription.
+        NSMicrophoneUsageDescription: FluxKlang uses the microphone between Start dictation and Finish dictation for on-device transcription.
         NSSpeechRecognitionUsageDescription: FluxKlang transcribes your explicit assistant dictation on device and does not retain audio.
     settings:
       base:
@@ -87,7 +87,7 @@ targets:
         CFBundleIconName: AppIcon
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
-        NSMicrophoneUsageDescription: FluxKlang uses the microphone only while you hold push-to-talk for on-device transcription.
+        NSMicrophoneUsageDescription: FluxKlang uses the microphone between Start dictation and Finish dictation for on-device transcription.
         NSSpeechRecognitionUsageDescription: FluxKlang transcribes your explicit assistant dictation on device and does not retain audio.
     settings:
       base:
