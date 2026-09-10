@@ -28,11 +28,15 @@ final class EnvironmentStore {
     /// Whether the one-time fold of the old global `chain.json` into the active
     /// environment's graph has happened. Persisted so it runs at most once.
     private var migratedChain = false
+    /// Whether legacy effects have had their one conservative Equipment-link
+    /// migration. Persisted so a deliberately cleared link is not re-inferred.
+    private var migratedEffectEquipmentLinks = false
 
     private struct Persisted: Codable, Sendable {
         var environments: [RoutingEnvironment]
         var activeID: RoutingEnvironment.ID?
         var migratedChain: Bool?
+        var migratedEffectEquipmentLinks: Bool?
     }
 
     // MARK: - Active environment
@@ -58,6 +62,7 @@ final class EnvironmentStore {
             environments = saved.environments
             activeID = saved.activeID
             migratedChain = saved.migratedChain ?? false
+            migratedEffectEquipmentLinks = saved.migratedEffectEquipmentLinks ?? false
         } else if let legacy = await JSONFileStore.shared.load([Effect].self, from: legacyFileName) {
             let migrated = RoutingEnvironment(name: "Default", effects: legacy)
             environments = [migrated]
@@ -88,6 +93,23 @@ final class EnvironmentStore {
     func reload() async {
         loaded = false
         await load()
+    }
+
+    /// Adds stable Equipment links to legacy effects where an exact ID or unique
+    /// name match exists. Unresolved and ambiguous effects are left untouched.
+    func migrateEffectEquipmentLinks(using equipment: [Equipment]) {
+        guard !migratedEffectEquipmentLinks else { return }
+        for environmentIndex in environments.indices {
+            for effectIndex in environments[environmentIndex].effects.indices {
+                let current = environments[environmentIndex].effects[effectIndex]
+                let migrated = current.migratingEquipmentLink(in: equipment)
+                if migrated != current {
+                    environments[environmentIndex].effects[effectIndex] = migrated
+                }
+            }
+        }
+        migratedEffectEquipmentLinks = true
+        persist()
     }
 
     // MARK: - RoutingEnvironment CRUD
@@ -228,19 +250,11 @@ final class EnvironmentStore {
 
     var activeStudioGraph: StudioGraph { active?.studioGraph ?? StudioGraph() }
     var activeStudioEndpoints: [StudioEndpoint] { active?.studioEndpoints ?? [] }
-    var activeStudioSetup: StudioSetup { active?.studioSetup ?? StudioSetup() }
 
-    func setStudioSetup(_ setup: StudioSetup) {
-        mutateEnvironment { $0.studioSetup = setup }
-    }
-
-    func replaceStudio(graph: StudioGraph, endpoints: [StudioEndpoint], setup: StudioSetup? = nil) {
+    func replaceStudio(graph: StudioGraph, endpoints: [StudioEndpoint]) {
         mutateEnvironment { environment in
             environment.studioGraph = graph
             environment.studioEndpoints = endpoints
-            if let setup {
-                environment.studioSetup = setup
-            }
         }
     }
 
@@ -347,7 +361,12 @@ final class EnvironmentStore {
     }
 
     private func persist() {
-        let snapshot = Persisted(environments: environments, activeID: activeID, migratedChain: migratedChain)
+        let snapshot = Persisted(
+            environments: environments,
+            activeID: activeID,
+            migratedChain: migratedChain,
+            migratedEffectEquipmentLinks: migratedEffectEquipmentLinks
+        )
         Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
     }
 

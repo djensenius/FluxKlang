@@ -15,13 +15,16 @@ import Foundation
 struct Effect: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var name: String
+    /// Stable link to the physical Equipment whose ports are connected in the
+    /// global Home wiring map. Older effects may remain unlinked until resolved.
+    var equipmentID: Equipment.ID?
     /// Whether the effect is stereo: it uses a bus pair and two send/return jacks.
     var isStereo: Bool
-    /// The WING physical output jack(s) the effect's input is plugged into. One
-    /// entry for a mono effect, two (L, R) for a stereo effect.
+    /// Legacy per-environment WING output jacks, retained for Codable and the
+    /// existing environment-routing workflow. Studio compilation uses Home.
     var sendOutputs: [Int]
-    /// The WING physical input jack(s) the effect's processed output returns on.
-    /// One entry for a mono effect, two (L, R) for a stereo effect.
+    /// Legacy per-environment WING return jacks. Studio compilation resolves the
+    /// linked Equipment's output ports through the global Home wiring map.
     var returnInputs: [Int]
     /// The instruments (equipment) whose channels feed this effect.
     var sourceInstruments: [UUID]
@@ -33,6 +36,7 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
     init(
         id: UUID = UUID(),
         name: String,
+        equipmentID: Equipment.ID? = nil,
         isStereo: Bool = true,
         sendOutputs: [Int] = [1, 2],
         returnInputs: [Int] = [1, 2],
@@ -41,11 +45,28 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
     ) {
         self.id = id
         self.name = name
+        self.equipmentID = equipmentID
         self.isStereo = isStereo
         self.sendOutputs = sendOutputs
         self.returnInputs = returnInputs
         self.sourceInstruments = sourceInstruments
         self.destinationEffectID = destinationEffectID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, equipmentID, isStereo, sendOutputs, returnInputs, sourceInstruments, destinationEffectID
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        equipmentID = try container.decodeIfPresent(Equipment.ID.self, forKey: .equipmentID)
+        isStereo = try container.decodeIfPresent(Bool.self, forKey: .isStereo) ?? true
+        sendOutputs = try container.decodeIfPresent([Int].self, forKey: .sendOutputs) ?? [1, 2]
+        returnInputs = try container.decodeIfPresent([Int].self, forKey: .returnInputs) ?? [1, 2]
+        sourceInstruments = try container.decodeIfPresent([UUID].self, forKey: .sourceInstruments) ?? []
+        destinationEffectID = try container.decodeIfPresent(Effect.ID.self, forKey: .destinationEffectID)
     }
 
     /// Whether `instrument` currently feeds this effect.
@@ -95,5 +116,26 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
     /// Clamps `value` into `range`.
     static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
         min(max(value, range.lowerBound), range.upperBound)
+    }
+}
+
+extension Effect {
+    /// Conservatively links a legacy effect to Equipment by exact ID first, then
+    /// by a unique case-insensitive name. Ambiguous or absent matches stay nil.
+    func migratingEquipmentLink(in equipment: [Equipment]) -> Effect {
+        guard equipmentID == nil else { return self }
+        var copy = self
+        if equipment.contains(where: { $0.id == id }) {
+            copy.equipmentID = id
+            return copy
+        }
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matches = equipment.filter {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName
+        }
+        if matches.count == 1 {
+            copy.equipmentID = matches[0].id
+        }
+        return copy
     }
 }

@@ -2,10 +2,8 @@
 //  StudioSetup.swift
 //  FluxKlang
 //
-//  Semantic studio setup models: what role each piece of gear plays and where
-//  its physical ports are plugged into the WING. This is the source material for
-//  the future setup wizard and for compiling a user-drawn studio graph without
-//  exposing channels, buses or connector groups in the primary workflow.
+//  Legacy per-environment physical setup models. They remain Codable so older
+//  environments can migrate once into the canonical global Home wiring map.
 //
 
 import Foundation
@@ -85,10 +83,7 @@ struct StudioSetup: Codable, Hashable, Sendable {
         devices.first { $0.device == device }
     }
 
-    /// Seed a setup from the current equipment library and its canonical channel
-    /// order. This is intentionally conservative: it records instrument outputs
-    /// plugged into local WING inputs, leaving effect input/output jacks for the
-    /// setup wizard or WING-name inference to confirm.
+    /// Builds legacy setup data for compatibility tests and old saved workflows.
     static func inferredFromEquipment(_ equipment: [Equipment]) -> StudioSetup {
         var profiles: [StudioDeviceProfile] = []
         for assignment in Equipment.channelAssignments(from: equipment) {

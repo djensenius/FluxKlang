@@ -19,7 +19,6 @@ struct StudioView: View {
     private var graph: StudioGraph { store.activeStudioGraph }
     private var endpoints: [StudioEndpoint] { store.activeStudioEndpoints }
     private var effects: [Effect] { store.activeEffects }
-    private var setup: StudioSetup { store.activeStudioSetup }
     private var compiled: StudioCompiledRouting { appModel.studioCompiledRouting() }
     private var routingPlan: StudioRoutingPlan { compiled.routingPlan }
     private var resourcePlan: StudioResourcePlan { compiled.resourcePlan }
@@ -99,14 +98,6 @@ struct StudioView: View {
                 systemImage: issues.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
                 tint: issues.isEmpty ? .green : .orange
             )
-            Button {
-                store.setStudioSetup(StudioSetup.inferredFromEquipment(appModel.equipment.items))
-            } label: {
-                Label(
-                    setup.devices.isEmpty ? "Learn what is plugged in" : "Refresh plug map",
-                    systemImage: "cable.connector"
-                )
-            }
         } footer: {
             Text("""
             FluxKlang keeps the mixer details out of the way. You describe the sound path; it handles the mixer.
@@ -256,11 +247,6 @@ struct StudioView: View {
             addGearMenu
             newGearButton
             addControlMenu
-            Button {
-                store.setStudioSetup(StudioSetup.inferredFromEquipment(appModel.equipment.items))
-            } label: {
-                Label("Learn Plug Map", systemImage: "cable.connector")
-            }
         }
         #endif
         ToolbarItem {
@@ -298,11 +284,7 @@ struct StudioView: View {
         var sketch = StudioGraph(nodes: [instrument, dryNode, spaceNode])
         sketch.connect(from: output(instrument), to: input(dryNode))
         sketch.connect(from: output(instrument), to: input(spaceNode))
-        store.replaceStudio(
-            graph: sketch,
-            endpoints: [dry, space],
-            setup: setup.devices.isEmpty ? StudioSetup.inferredFromEquipment(appModel.equipment.items) : nil
-        )
+        store.replaceStudio(graph: sketch, endpoints: [dry, space])
     }
 
     private func addEndpoint(_ destination: StudioEndpointDestination) {
@@ -397,7 +379,8 @@ struct StudioView: View {
             return "Pick a sound, give it a dry control, give it a space control, then explore."
         }
         if issues.isEmpty {
-            return "\(endpoints.count) controls · \(setup.devices.count) mapped devices"
+            let connections = appModel.studioConnections.connections.home
+            return "\(endpoints.count) controls · \(connections.inputs.count + connections.outputs.count) connections"
         }
         return "\(issues.count) note\(issues.count == 1 ? "" : "s") before everything can play"
     }

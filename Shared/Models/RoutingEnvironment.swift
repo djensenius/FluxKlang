@@ -47,7 +47,8 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
     var studioGraph: StudioGraph
     /// Custom controllable endpoints/stems used by `studioGraph`.
     var studioEndpoints: [StudioEndpoint]
-    /// Semantic device roles and physical plug mappings used by the studio graph.
+    /// Legacy per-environment plug mappings, retained only for decoding and the
+    /// one-time migration into `GlobalStudioConnections`.
     var studioSetup: StudioSetup
 
     init(

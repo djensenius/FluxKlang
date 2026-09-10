@@ -43,6 +43,12 @@ struct EffectEditor: View {
             Form {
                 Section("Effect") {
                     TextField("Name", text: $draft.name)
+                    Picker("Equipment", selection: $draft.equipmentID) {
+                        Text("Not linked").tag(Equipment.ID?.none)
+                        ForEach(appModel.equipment.items) { item in
+                            Text(item.name).tag(Equipment.ID?.some(item.id))
+                        }
+                    }
                     Toggle("Stereo", isOn: $draft.isStereo)
                 }
 
