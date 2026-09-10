@@ -11,6 +11,13 @@ import CoreGraphics
 import Foundation
 import Observation
 
+enum MixDestination: String, CaseIterable, Identifiable {
+    case faders = "Faders"
+    case scenes = "Scenes"
+
+    var id: String { rawValue }
+}
+
 @MainActor
 @Observable
 final class AppModel {

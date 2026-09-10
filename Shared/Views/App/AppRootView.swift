@@ -45,13 +45,6 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
 }
 
-enum MixDestination: String, CaseIterable, Identifiable {
-    case faders = "Faders"
-    case scenes = "Scenes"
-
-    var id: String { rawValue }
-}
-
 #if !os(macOS)
 private struct AdaptiveRoot: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -406,16 +399,7 @@ private struct ConnectionStatusButton: View {
     }
 
     private var tint: Color {
-        switch appModel.wing.connection {
-        case .connected:
-            return appModel.isDemo ? .orange : .green
-        case .connecting:
-            return .blue
-        case .failed:
-            return .red
-        case .disconnected:
-            return .secondary
-        }
+        appModel.wing.connection.statusTint(isDemo: appModel.isDemo)
     }
 }
 

@@ -16,7 +16,7 @@ struct ConnectionView: View {
     var body: some View {
         Form {
             Section("Status") {
-                Label(appModel.wing.connection.statusLabel, systemImage: statusSymbol)
+                Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
                     .foregroundStyle(statusTint)
                 if appModel.isDemo {
                     Text("Demo Mode — values are simulated and drift to feel live.")
@@ -113,12 +113,7 @@ struct ConnectionView: View {
     }
 
     private var statusTint: Color {
-        switch appModel.wing.connection {
-        case .connected: return appModel.isDemo ? .orange : .green
-        case .connecting: return .blue
-        case .failed: return .red
-        case .disconnected: return .secondary
-        }
+        appModel.wing.connection.statusTint(isDemo: appModel.isDemo)
     }
 
     private var connectionFailureReason: String? {
