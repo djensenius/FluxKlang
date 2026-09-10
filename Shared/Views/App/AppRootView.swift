@@ -319,7 +319,9 @@ private struct MoreView: View {
         _ systemImage: String,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
-        NavigationLink(destination: destination()) {
+        NavigationLink {
+            destination()
+        } label: {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)

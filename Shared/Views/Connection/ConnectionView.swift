@@ -31,7 +31,6 @@ struct ConnectionView: View {
                         .foregroundStyle(.red)
                     if let lastHost = appModel.lastHost {
                         Button {
-                            host = lastHost
                             connect(to: lastHost)
                         } label: {
                             Label("Retry \(lastHost)", systemImage: "arrow.clockwise")
