@@ -145,6 +145,12 @@ enum SiriDraftStudioAction {
     ) async -> String {
         await model.equipment.load()
         await model.environments.load()
+        model.environments.migrateEffectEquipmentLinks(using: model.equipment.items)
+        await model.studioConnections.load(
+            equipment: model.equipment.items,
+            environments: model.environments.environments,
+            activeID: model.environments.activeID
+        )
         let context = model.assistantToolContext()
         let validSourceIDs = orderedIDs(
             sourceGear.map(\.id),
@@ -259,7 +265,10 @@ enum SiriEntityIntegration {
         let effects = model.environments.activeEffects.map(EffectEntity.init)
         let environments = model.environments.environments.map(EnvironmentEntity.init)
         do {
-            let index = CSSearchableIndex.default()
+            let index = CSSearchableIndex(
+                name: fluxKlangAppEntityIndexName,
+                protectionClass: nil
+            )
             try await index.deleteAppEntities(ofType: EquipmentEntity.self)
             try await index.deleteAppEntities(ofType: EffectEntity.self)
             try await index.deleteAppEntities(ofType: EnvironmentEntity.self)

@@ -2,6 +2,8 @@ import AppIntents
 import CoreSpotlight
 import Foundation
 
+let fluxKlangAppEntityIndexName = "FluxKlang.AppEntities"
+
 struct EquipmentEntity: AppEntity, IndexedEntity, Hashable {
     let id: UUID
     let name: String
@@ -257,7 +259,7 @@ extension DestinationEntityQuery: IndexedEntityQuery {
 @available(iOS 27.0, macOS 27.0, *)
 private func spotlightIndex(for description: CSSearchableIndexDescription) -> CSSearchableIndex {
     CSSearchableIndex(
-        name: "FluxKlang.AppEntities",
+        name: fluxKlangAppEntityIndexName,
         protectionClass: description.protectionClass
     )
 }
