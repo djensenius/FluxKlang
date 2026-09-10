@@ -29,7 +29,7 @@ struct FluxKlangCommands: Commands {
                 appModel.assistantChat.suggestedPrompt = "Explain this Studio patch and any conflicts."
                 appModel.section = .assistant
             }
-            .keyboardShortcut("/", modifiers: [.command, .shift])
+            .keyboardShortcut("a", modifiers: [.command, .option])
         }
 
         CommandMenu("WING") {

@@ -463,8 +463,8 @@ private actor CountingSpeechTranscriber: AssistantSpeechTranscribing {
 private actor MemoryDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) { self.draft = draft }
+    func load() async -> StudioPatchDraft? { draft }
+    func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
 }
 
 private actor StubSpeechTranscriber: AssistantSpeechTranscribing {
