@@ -33,8 +33,10 @@ enum AcceptanceLaunchConfiguration {
         if appModel.environments.active == nil {
             _ = appModel.environments.addEnvironment(named: "Acceptance Studio")
         }
-        guard let source = appModel.equipment.items.first(where: { $0.name == "OP-1 Field" })
-            ?? appModel.equipment.items.first else { return }
+        let source = try acceptanceSource(in: appModel.equipment.items)
+        if appModel.equipment.items.isEmpty {
+            appModel.equipment.add(source)
+        }
 
         for move in appModel.studioConnections.connections.temporaryMoves {
             await appModel.studioConnections.removeTemporaryMove(move.id)
@@ -86,4 +88,19 @@ enum AcceptanceLaunchConfiguration {
             equipment: appModel.equipment.items
         )
     }
+
+    static func acceptanceSource(in equipment: [Equipment]) throws -> Equipment {
+        if let source = equipment.first(where: { $0.name == "OP-1 Field" })
+            ?? equipment.first {
+            return source
+        }
+        guard let source = Equipment.seededLibrary.first(where: { $0.name == "OP-1 Field" }) else {
+            throw AcceptanceLaunchConfigurationError.missingSeedEquipment
+        }
+        return source
+    }
+}
+
+private enum AcceptanceLaunchConfigurationError: Error {
+    case missingSeedEquipment
 }

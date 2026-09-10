@@ -3,6 +3,13 @@ import Testing
 @testable import FluxKlang
 
 struct AcceptanceMigrationTests {
+    @Test @MainActor func emptyEquipmentAcceptanceSeedUsesKnownSource() throws {
+        let source = try AcceptanceLaunchConfiguration.acceptanceSource(in: [])
+
+        #expect(source.name == "OP-1 Field")
+        #expect(source.outputs == ["Out L", "Out R"])
+    }
+
     @Test func legacyGlobalConnectionsDefaultMissingMovesAndIssues() throws {
         let equipmentID = UUID()
         let json = """
