@@ -10,12 +10,13 @@ struct SiriAppIntentsTests {
             name: "Arturia MicroFreak"
         )
         let other = Equipment(name: "SOMA Cosmos")
+        let duplicate = Equipment(id: synth.id, name: "Duplicate")
 
         #expect(
             EquipmentEntityQuery.entities(
                 for: [synth.id, other.id, synth.id],
-                in: [other, synth]
-            ).map(\.id) == [synth.id, other.id, synth.id]
+                in: [other, synth, duplicate]
+            ).map(\.name) == [synth.name, other.name, synth.name]
         )
         #expect(EquipmentEntityQuery.entities(matching: "micro freak", in: [other, synth]).map(\.id) == [synth.id])
         let typoMatches = EquipmentEntityQuery.entities(
@@ -32,19 +33,21 @@ struct SiriAppIntentsTests {
         let otherEffect = Effect(name: "Delay")
         let environment = RoutingEnvironment(name: "Ambient Set", effects: [effect])
         let otherEnvironment = RoutingEnvironment(name: "Dry Set")
+        let duplicateEffect = Effect(id: effect.id, name: "Duplicate Effect")
+        let duplicateEnvironment = RoutingEnvironment(id: environment.id, name: "Duplicate Environment")
 
         #expect(
             EffectEntityQuery.entities(
                 for: [effect.id, otherEffect.id, effect.id],
-                in: [otherEffect, effect]
-            ).map(\.id) == [effect.id, otherEffect.id, effect.id]
+                in: [otherEffect, effect, duplicateEffect]
+            ).map(\.name) == [effect.name, otherEffect.name, effect.name]
         )
         #expect(EffectEntityQuery.entities(matching: "micro cosm", in: environment.effects).map(\.id) == [effect.id])
         #expect(
             EnvironmentEntityQuery.entities(
                 for: [environment.id, otherEnvironment.id, environment.id],
-                in: [otherEnvironment, environment]
-            ).map(\.id) == [environment.id, otherEnvironment.id, environment.id]
+                in: [otherEnvironment, environment, duplicateEnvironment]
+            ).map(\.name) == [environment.name, otherEnvironment.name, environment.name]
         )
         #expect(
             EnvironmentEntityQuery.entities(matching: "ambent set", in: [environment]).map(\.id)

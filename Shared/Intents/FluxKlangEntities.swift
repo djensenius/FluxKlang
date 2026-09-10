@@ -98,7 +98,7 @@ struct EquipmentEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in equipment: [Equipment]) -> [EquipmentEntity] {
-        let byID = Dictionary(uniqueKeysWithValues: equipment.map { ($0.id, $0) })
+        let byID = Dictionary(equipment.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return identifiers.compactMap { byID[$0].map(EquipmentEntity.init) }
     }
 
@@ -127,7 +127,7 @@ struct EffectEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in effects: [Effect]) -> [EffectEntity] {
-        let byID = Dictionary(uniqueKeysWithValues: effects.map { ($0.id, $0) })
+        let byID = Dictionary(effects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return identifiers.compactMap { byID[$0].map(EffectEntity.init) }
     }
 
@@ -156,7 +156,7 @@ struct EnvironmentEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID], in environments: [RoutingEnvironment]) -> [EnvironmentEntity] {
-        let byID = Dictionary(uniqueKeysWithValues: environments.map { ($0.id, $0) })
+        let byID = Dictionary(environments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return identifiers.compactMap { byID[$0].map(EnvironmentEntity.init) }
     }
 
@@ -179,7 +179,7 @@ struct DestinationEntityQuery: EntityStringQuery {
     }
 
     static func entities(for identifiers: [UUID]) -> [DestinationEntity] {
-        let byID = Dictionary(uniqueKeysWithValues: DestinationEntity.all.map { ($0.id, $0) })
+        let byID = Dictionary(DestinationEntity.all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return identifiers.compactMap { byID[$0] }
     }
 

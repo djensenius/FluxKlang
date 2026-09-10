@@ -100,6 +100,24 @@ struct InAppAssistantTests {
         #expect(request.recentMessages.isEmpty)
     }
 
+    @Test func sendingWithNilSelectionReusesExistingConversation() async throws {
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
+            generator: StubGenerator(availability: .ready, text: "Ready")
+        )
+        chat.newConversation()
+        let conversationID = try #require(chat.selectedConversationID)
+        chat.selectedConversationID = nil
+        chat.composer = "Continue"
+
+        chat.send(context: emptyContext())
+        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+
+        #expect(chat.selectedConversationID == conversationID)
+        #expect(chat.conversations.count == 1)
+    }
+
     @Test func retryReusesTheExistingUserMessage() async throws {
         let generator = FailingRecordingGenerator()
         let chat = AssistantChatController(

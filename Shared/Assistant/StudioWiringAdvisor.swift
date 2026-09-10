@@ -454,7 +454,9 @@ enum StudioWiringAdvisor {
 
     private static func uniqueIssues(_ issues: [StudioDraftValidationIssue]) -> [StudioDraftValidationIssue] {
         var seen: Set<String> = []
-        return issues.filter { seen.insert($0.code).inserted }
+        return issues
+            .filter { seen.insert($0.code).inserted }
+            .sorted { $0.code < $1.code }
     }
 
     private static func stableUUID(_ value: String) -> UUID {
