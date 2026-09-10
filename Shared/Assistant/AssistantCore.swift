@@ -252,7 +252,7 @@ enum AssistantFallbackResponder {
         case .connectionState(let state):
             "Connection: \(state.status.rawValue)\(state.isDemo ? " (Demo Mode)" : "")."
         case .equipment(let equipment):
-            "Equipment: \(equipment.map { quoted($0.name) }.joined(separator: ", "))."
+            namedList("Equipment", names: equipment.map(\.name))
         case .homeConnections(let connections):
             "Home connections: \(connections.inputs.count) inputs and \(connections.outputs.count) outputs."
         case .effectiveConnections(let connections):
@@ -260,9 +260,9 @@ enum AssistantFallbackResponder {
         case .activeMoves(let moves):
             "Active Temporary Moves: \(moves.filter(\.lifecycle.isEffective).count)."
         case .environments(let environments):
-            "Environments: \(environments.map { quoted($0.name) }.joined(separator: ", "))."
+            namedList("Environments", names: environments.map(\.name))
         case .presets(let presets):
-            "Presets: \(presets.map { quoted($0.name) }.joined(separator: ", "))."
+            namedList("Presets", names: presets.map(\.name))
         case .resources(let resources):
             "Allocated Studio resources: \(resources.count)."
         case .validationIssues(let issues):
@@ -279,6 +279,11 @@ enum AssistantFallbackResponder {
         case .navigation:
             nil
         }
+    }
+
+    private static func namedList(_ label: String, names: [String]) -> String {
+        guard !names.isEmpty else { return "No \(label.lowercased())." }
+        return "\(label): \(names.map(quoted).joined(separator: ", "))."
     }
 
     private static func quoted(_ value: String) -> String {
