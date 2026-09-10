@@ -62,7 +62,7 @@ struct EffectEditor: View {
                         if let move = appModel.studioConnections.connections.move(for: equipmentID) {
                             Label("Moved", systemImage: "shippingbox.and.arrow.backward")
                                 .foregroundStyle(.orange)
-                            Text(connectorSummary(move))
+                            Text(move.connectorSummary(home: appModel.studioConnections.connections.home))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button("Return Home") { isShowingTemporaryMove = true }
@@ -236,26 +236,6 @@ struct EffectEditor: View {
             equipment: appModel.equipment.items,
             liveScribble: appModel.wing.inputName(connector)
         )
-    }
-
-    private func connectorSummary(_ move: TemporaryDeviceMove) -> String {
-        let home = appModel.studioConnections.connections.home
-        let homeInputs = home.inputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentInputs = move.connections.inputs.map(\.connector).sorted()
-        let homeOutputs = home.outputs.filter { $0.equipmentID == move.equipmentID }.map(\.connector).sorted()
-        let currentOutputs = move.connections.outputs.map(\.connector).sorted()
-        var parts: [String] = []
-        if !homeInputs.isEmpty {
-            parts.append("WING inputs \(list(homeInputs)) → \(list(currentInputs))")
-        }
-        if !homeOutputs.isEmpty {
-            parts.append("WING outputs \(list(homeOutputs)) → \(list(currentOutputs))")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func list(_ connectors: [Int]) -> String {
-        connectors.map(String.init).joined(separator: "/")
     }
 
     private func instrumentBinding(_ id: Equipment.ID) -> Binding<Bool> {

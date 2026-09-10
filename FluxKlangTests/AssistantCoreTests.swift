@@ -55,6 +55,9 @@ struct AssistantCoreTests {
             context: context
         )
         let expectedID = try #require(first.pendingStudioDraft?.id)
+        var unencodable = try #require(first.pendingStudioDraft)
+        unencodable.fragment.nodes[0].node.position.x = .infinity
+        await PendingStudioPatchStore(fileURL: fileURL).save(unencodable)
         let reloaded = AssistantCoordinator(draftStore: PendingStudioPatchStore(fileURL: fileURL))
         await reloaded.load()
 

@@ -150,7 +150,7 @@ actor AssistantConversationStore {
         }
         let remoteRecords = await cloudRecords?.value ?? []
         let merged = merge(localRecords + remoteRecords)
-        await persistMerged(merged)
+        await persistMerged(merged, localRecords: localRecords, remoteRecords: remoteRecords)
         return merged.compactMap(\.conversation).sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
@@ -195,14 +195,20 @@ actor AssistantConversationStore {
         return Array(byID.values)
     }
 
-    private func persistMerged(_ records: [AssistantConversationRecord]) async {
-        for record in records {
+    private func persistMerged(
+        _ records: [AssistantConversationRecord],
+        localRecords: [AssistantConversationRecord],
+        remoteRecords: [AssistantConversationRecord]
+    ) async {
+        for record in recordsToSave(records, comparedTo: localRecords) {
             do {
                 try await local.save(record)
             } catch {
                 diagnostics.append("Local assistant history: \(error.localizedDescription)")
             }
-            if let cloud {
+        }
+        if let cloud {
+            for record in recordsToSave(records, comparedTo: remoteRecords) {
                 do {
                     try await cloud.save(record)
                 } catch {
@@ -210,6 +216,14 @@ actor AssistantConversationStore {
                 }
             }
         }
+    }
+
+    private func recordsToSave(
+        _ records: [AssistantConversationRecord],
+        comparedTo existing: [AssistantConversationRecord]
+    ) -> [AssistantConversationRecord] {
+        let byID = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return records.filter { byID[$0.id] != $0 }
     }
 
     private func saveRecord(_ record: AssistantConversationRecord) async {

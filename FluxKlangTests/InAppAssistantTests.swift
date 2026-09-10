@@ -168,6 +168,9 @@ struct InAppAssistantTests {
         let loaded = await store.load()
         #expect(loaded.map(\.id) == [legacy.id])
         #expect(await cloud.record(id: legacy.id)?.conversation?.title == "Legacy")
+        let initialCloudSaves = await cloud.saveCount
+        _ = await store.load()
+        #expect(await cloud.saveCount == initialCloudSaves)
 
         await store.delete(id: legacy.id, at: Date(timeIntervalSince1970: 500))
         let afterDelete = await store.load()
@@ -392,6 +395,7 @@ private enum AssistantTestError: Error {
 
 private actor MemoryHistoryBackend: AssistantHistoryBackend {
     private var records: [UUID: AssistantConversationRecord] = [:]
+    private(set) var saveCount = 0
 
     func loadRecords() async -> [AssistantConversationRecord] {
         Array(records.values)
@@ -399,6 +403,7 @@ private actor MemoryHistoryBackend: AssistantHistoryBackend {
 
     func save(_ record: AssistantConversationRecord) async {
         records[record.id] = record
+        saveCount += 1
     }
 
     func record(id: UUID) -> AssistantConversationRecord? {
