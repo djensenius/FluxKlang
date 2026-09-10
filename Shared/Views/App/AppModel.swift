@@ -153,8 +153,8 @@ final class AppModel {
 
     private func scheduleSiriEntityIndexing() {
         let previousTask = siriIndexingTask
+        previousTask?.cancel()
         siriIndexingTask = Task { @MainActor [weak self] in
-            previousTask?.cancel()
             await previousTask?.value
             do {
                 try await Task.sleep(for: .milliseconds(200))
