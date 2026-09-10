@@ -270,9 +270,9 @@ enum SiriEntityIntegration {
         let effects = model.environments.activeEffects.map(EffectEntity.init)
         let environments = model.environments.environments.map(EnvironmentEntity.init)
         do {
-            let index = fluxKlangSpotlightIndex(
-                protectionClass: CSSearchableIndex.default().protectionClass
-            )
+            guard let index = fluxKlangSpotlightIndexForManualRefresh() else {
+                return
+            }
             try await index.deleteAppEntities(ofType: EquipmentEntity.self)
             try await index.deleteAppEntities(ofType: EffectEntity.self)
             try await index.deleteAppEntities(ofType: EnvironmentEntity.self)
