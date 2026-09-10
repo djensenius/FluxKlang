@@ -16,10 +16,31 @@ struct ConnectionView: View {
     var body: some View {
         Form {
             Section("Status") {
-                Label(appModel.wing.connection.statusLabel, systemImage: statusSymbol)
-                    .foregroundStyle(appModel.isConnected ? .primary : .secondary)
+                Label(appModel.wing.connection.statusTitle, systemImage: statusSymbol)
+                    .foregroundStyle(statusTint)
                 if appModel.isDemo {
                     Text("Demo Mode — values are simulated and drift to feel live.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let reason = connectionFailureReason {
+                Section("Connection Problem") {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    if let lastHost = appModel.lastHost {
+                        Button {
+                            connect(to: lastHost)
+                        } label: {
+                            Label("Retry \(lastHost)", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(isWorking)
+                    }
+                    Text("""
+                    Check that this device and the WING are on the same network. \
+                    Scan again or verify the IP address.
+                    """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -75,6 +96,11 @@ struct ConnectionView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Connection")
+        .onAppear {
+            if host.isEmpty {
+                host = appModel.lastHost ?? ""
+            }
+        }
     }
 
     private var statusSymbol: String {
@@ -86,12 +112,23 @@ struct ConnectionView: View {
         }
     }
 
+    private var statusTint: Color {
+        appModel.wing.connection.statusTint(isDemo: appModel.isDemo)
+    }
+
+    private var connectionFailureReason: String? {
+        guard case .failed(let reason) = appModel.wing.connection else { return nil }
+        return reason
+    }
+
     private func connect(to target: String) {
-        guard !target.isEmpty else { return }
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        host = trimmed
+        guard !trimmed.isEmpty else { return }
         Task {
             isWorking = true
-            await appModel.connect(host: target)
-            isWorking = false
+            defer { isWorking = false }
+            await appModel.connect(host: trimmed)
         }
     }
 }

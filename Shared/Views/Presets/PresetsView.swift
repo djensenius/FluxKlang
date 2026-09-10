@@ -24,7 +24,7 @@ struct PresetsView: View {
                 list
             }
         }
-        .navigationTitle("Presets")
+        .navigationTitle("Scenes")
         .toolbar { toolbar }
         .alert("Save Preset", isPresented: $isNaming) {
             TextField("Name", text: $draftName)
