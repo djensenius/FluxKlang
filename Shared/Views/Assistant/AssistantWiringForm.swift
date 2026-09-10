@@ -61,7 +61,8 @@ struct AssistantWiringForm: View {
         id: ID,
         selection: Binding<Set<ID>>
     ) -> some View {
-        Button {
+        let isSelected = selection.wrappedValue.contains(id)
+        return Button {
             if selection.wrappedValue.contains(id) {
                 selection.wrappedValue.remove(id)
             } else {
@@ -71,11 +72,13 @@ struct AssistantWiringForm: View {
             HStack {
                 Text(title)
                 Spacer()
-                if selection.wrappedValue.contains(id) {
+                if isSelected {
                     Image(systemName: "checkmark")
                 }
             }
         }
         .buttonStyle(.plain)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
