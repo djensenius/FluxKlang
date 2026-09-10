@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.0.7](https://github.com/djensenius/FluxKlang/compare/v0.0.6...v0.0.7) (2026-09-10)
+
+
+### Features
+
+* add assistant core and wiring advisor ([524b69f](https://github.com/djensenius/FluxKlang/commit/524b69f3a2bb164765649b07b87d301edaf39d2b))
+* add focused in-app assistant ([e4e139a](https://github.com/djensenius/FluxKlang/commit/e4e139a150d080c17f91f9d801ed8f83a4dd58f3))
+* add global studio connections ([5bb7ef6](https://github.com/djensenius/FluxKlang/commit/5bb7ef638e8764c3b9aa686cf8e980a611ebbb15))
+* add Siri studio patch drafting ([9dd9dff](https://github.com/djensenius/FluxKlang/commit/9dd9dffda43d3caab65301a23e703b9c81840094))
+* add studio connections UI ([ed7c87e](https://github.com/djensenius/FluxKlang/commit/ed7c87e57663c4b1508018d16f66c21980a93925))
+* add temporary device moves ([0892f6d](https://github.com/djensenius/FluxKlang/commit/0892f6d9dd69e15099e1e8a0506619ad13ccce89))
+* simplify navigation and connection status ([6ef9298](https://github.com/djensenius/FluxKlang/commit/6ef9298c635e3fd0219c16d26bcc4e0a95ccf0fa))
+
+
+### Bug Fixes
+
+* align navigation terminology ([bb9e1a9](https://github.com/djensenius/FluxKlang/commit/bb9e1a9b29d0407a0dcb020132e7a4ad3702ff13))
+* clarify connection accessibility ([f33bda2](https://github.com/djensenius/FluxKlang/commit/f33bda2d0da404fa9b6f2b3ed389c174147e895e))
+* decode live WING replies correctly ([a65407c](https://github.com/djensenius/FluxKlang/commit/a65407ca30018f49535aa4aabc7bc8fb8ee6ee6f))
+* decode live WING replies correctly ([88d5526](https://github.com/djensenius/FluxKlang/commit/88d5526978be0a84fc6b79577fe242f101e84871))
+* localize studio connection issues ([966c109](https://github.com/djensenius/FluxKlang/commit/966c109dce0c8c5ea573ed204ecf348dc962a29b))
+* normalize connection host input ([d42500f](https://github.com/djensenius/FluxKlang/commit/d42500f561b1d2c059fced0e37e6102d40a9a54e))
+* preserve invalid connection identities ([754a963](https://github.com/djensenius/FluxKlang/commit/754a963097207b849b9f2cb176efcf7600dfceb6))
+* preserve legacy discovery fallback ([3906d1c](https://github.com/djensenius/FluxKlang/commit/3906d1c20ec4e5a20d52ec5a9348cc281d635711))
+* reset temporary move verification state ([b63c182](https://github.com/djensenius/FluxKlang/commit/b63c182392ac8de22db1d959d8976887a6a51d03))
+
 ## [0.0.6](https://github.com/djensenius/FluxKlang/compare/v0.0.5...v0.0.6) (2026-07-11)
 
 
