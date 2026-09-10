@@ -14,7 +14,7 @@ struct AssistantUntrustedText: Codable, Hashable, Sendable, CustomStringConverti
 }
 
 enum AssistantScreen: String, Codable, CaseIterable, Hashable, Sendable {
-    case studio, mix, routing, connection, learn, compatibility
+    case studio, assistant, mix, routing, connection, learn, compatibility
 }
 
 struct AssistantConnectionState: Hashable, Sendable {

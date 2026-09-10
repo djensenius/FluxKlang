@@ -288,6 +288,15 @@ struct StudioView: View {
         }
         #endif
         ToolbarItem {
+            Button {
+                appModel.assistantChat.suggestedPrompt = "Explain this Studio patch and any conflicts."
+                appModel.section = .assistant
+            } label: {
+                Label("Ask about this patch", systemImage: "sparkles")
+            }
+            .accessibilityIdentifier("assistant.askAboutPatch")
+        }
+        ToolbarItem {
             Button(action: applyStudioPatch) {
                 if isApplying {
                     ProgressView().controlSize(.small)

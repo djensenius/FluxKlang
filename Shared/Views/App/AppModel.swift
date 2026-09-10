@@ -51,6 +51,9 @@ final class AppModel {
     /// Shared read-only assistant domain plus local pending Studio drafts.
     let assistant: AssistantCoordinator
 
+    /// User-visible assistant conversations, generation, history and speech.
+    let assistantChat: AssistantChatController
+
     /// Network scanner for finding WING consoles.
     let discovery = WingDiscovery()
 
@@ -73,6 +76,9 @@ final class AppModel {
     /// Whether the Mac detail inspector is shown.
     var isInspectorPresented = false
 
+    /// Global toolbar presentation for the assistant without changing context.
+    var isAssistantPresented = false
+
     /// The fader strip shown in the inspector, if any.
     var selectedFaderID: FaderStrip.ID?
 
@@ -92,6 +98,7 @@ final class AppModel {
     ) {
         self.wing = wing
         self.assistant = assistant
+        self.assistantChat = AssistantChatController(coordinator: assistant)
     }
 
     var isConnected: Bool { wing.connection.isConnected }
@@ -112,6 +119,7 @@ final class AppModel {
         await routingSnapshots.load()
         await spatial.load()
         await assistant.load()
+        await assistantChat.load()
         startObservingCloudChanges()
     }
 

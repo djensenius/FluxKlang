@@ -44,6 +44,8 @@ targets:
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
+        NSMicrophoneUsageDescription: FluxKlang uses the microphone between Start dictation and Finish dictation for on-device transcription.
+        NSSpeechRecognitionUsageDescription: FluxKlang transcribes your explicit assistant dictation on device and does not retain audio.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang
@@ -57,6 +59,10 @@ targets:
       path: FluxKlang/FluxKlang.entitlements
       properties:
         com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.org.davidjensenius.FluxKlang
+        com.apple.developer.icloud-services:
+          - CloudKit
     dependencies:
       - package: swift-osc
         product: SwiftOSC
@@ -81,6 +87,8 @@ targets:
         CFBundleIconName: AppIcon
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
+        NSMicrophoneUsageDescription: FluxKlang uses the microphone between Start dictation and Finish dictation for on-device transcription.
+        NSSpeechRecognitionUsageDescription: FluxKlang transcribes your explicit assistant dictation on device and does not retain audio.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang
@@ -99,7 +107,12 @@ targets:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.network.server: true
+        com.apple.security.device.audio-input: true
         com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.org.davidjensenius.FluxKlang
+        com.apple.developer.icloud-services:
+          - CloudKit
     dependencies:
       - package: swift-osc
         product: SwiftOSC

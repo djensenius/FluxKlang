@@ -38,4 +38,10 @@ struct AppNavigationTests {
         #expect(model.section == .mix)
         #expect(model.mixDestination == .faders)
     }
+
+    @Test func assistantIsAFirstClassSection() {
+        let model = AppModel()
+        model.section = .assistant
+        #expect(model.assistantToolContext().currentScreen == .assistant)
+    }
 }
