@@ -160,8 +160,10 @@ final class StudioConnectionsStore {
             }.map(\.inputPort))
             let moveOutputPorts = Set(move.connections.outputs.map(\.inputPort))
             guard homeInputPorts == moveInputPorts, homeOutputPorts == moveOutputPorts else {
+                let equipmentName = equipment.first { $0.id == move.equipmentID }?.name
+                    ?? "Moved equipment"
                 throw StudioConnectionAssignmentError.temporaryMoveConflict(
-                    "The moved equipment's Home cable set changed."
+                    "\(equipmentName)'s Home cable set changed."
                 )
             }
             do {
