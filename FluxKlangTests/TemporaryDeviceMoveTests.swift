@@ -307,6 +307,41 @@ struct TemporaryDeviceMoveTests {
         #expect(store.connections.home == home)
     }
 
+    @MainActor
+    @Test func readyToReturnMoveDoesNotReserveTemporaryConnectorForHomeEdits() async throws {
+        let first = Equipment(name: "First", outputs: ["Out"])
+        let second = Equipment(name: "Second", outputs: ["Out"])
+        let store = StudioConnectionsStore(
+            fileStore: JSONFileStore(cloud: MemoryCloudStore()),
+            fileName: "temporary-return-home-edit-\(UUID().uuidString).json"
+        )
+        let home = StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 1, equipmentID: first.id, outputPort: 0),
+            StudioInputConnection(connector: 2, equipmentID: second.id, outputPort: 0)
+        ])
+        await store.load(equipment: [first, second], environments: [], activeID: nil)
+        try await store.replaceHome(home, equipment: [first, second])
+        let move = try TemporaryMoveAllocator.makeMove(
+            equipmentID: first.id,
+            inputConnectors: [3],
+            outputConnectors: [],
+            home: home,
+            equipment: [first, second],
+            existingMoves: []
+        ).activating(with: TemporaryMoveVerification(state: .verified))
+        try await store.activateTemporaryMove(move, equipment: [first, second])
+        await store.updateTemporaryMove(move.preparingReturn())
+
+        let updatedHome = StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 1, equipmentID: first.id, outputPort: 0),
+            StudioInputConnection(connector: 3, equipmentID: second.id, outputPort: 0)
+        ])
+        try await store.replaceHome(updatedHome, equipment: [first, second])
+
+        #expect(store.connections.home == updatedHome)
+        #expect(store.connections.move(for: first.id)?.lifecycle == .readyToReturn)
+    }
+
     @Test func reconnectMismatchBecomesDrift() {
         let expected = [WingSetting(address: "/expected", value: .int(4))]
         let prior = TemporaryMoveVerification(state: .verified, expectedCount: 1, confirmedCount: 1)
