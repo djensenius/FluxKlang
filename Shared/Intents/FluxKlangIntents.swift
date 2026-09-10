@@ -289,8 +289,14 @@ enum SiriEntityIntegration {
         destination: StudioEndpointDestination,
         context: AssistantToolContext
     ) {
-        let equipmentByID = Dictionary(uniqueKeysWithValues: context.equipment.map { ($0.id, $0) })
-        let effectsByID = Dictionary(uniqueKeysWithValues: context.effects.map { ($0.id, $0) })
+        let equipmentByID = Dictionary(
+            context.equipment.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        let effectsByID = Dictionary(
+            context.effects.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
         let sourceEntities = sourceIDs.compactMap { equipmentByID[$0].map(EquipmentEntity.init) }
         let effectEntities = effectIDs.compactMap { effectsByID[$0].map(EffectEntity.init) }
         guard !sourceEntities.isEmpty else { return }

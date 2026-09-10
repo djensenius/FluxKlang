@@ -66,6 +66,7 @@ final class AppModel {
     /// another device syncs updated state. Held so the observer is removed when
     /// this model is deallocated.
     private var cloudObserver: CloudChangeObserver?
+    private var siriIndexingTask: Task<Void, Never>?
 
     /// The currently selected sidebar section (also driven by Mac menu commands).
     var section: AppSection = .studio
@@ -151,7 +152,15 @@ final class AppModel {
     }
 
     private func scheduleSiriEntityIndexing() {
-        Task { @MainActor [weak self] in
+        let previousTask = siriIndexingTask
+        siriIndexingTask = Task { @MainActor [weak self] in
+            previousTask?.cancel()
+            await previousTask?.value
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
             guard let self else { return }
             await SiriEntityIntegration.indexCurrentEntities(model: self)
         }
