@@ -30,7 +30,7 @@ enum AcceptanceLaunchConfiguration {
             _ = appModel.environments.addEnvironment(named: "Acceptance Studio")
         }
         let source = try acceptanceSource(in: appModel.equipment.items)
-        if appModel.equipment.items.isEmpty {
+        if appModel.equipment.item(source.id) == nil {
             appModel.equipment.add(source)
         }
 
