@@ -62,4 +62,19 @@ struct FaderLayout: Codable, Sendable {
     func contains(_ node: WingNodeRef) -> Bool {
         strips.contains { $0.node == node || $0.rightNode == node }
     }
+
+    func includingStudioAllocations(_ allocations: [StudioEndpointAllocation]) -> FaderLayout {
+        var combined = strips
+        for allocation in allocations where !combined.contains(where: {
+            $0.node == allocation.controlNode || $0.rightNode == allocation.controlNode
+        }) {
+            combined.append(FaderStrip(
+                id: allocation.endpoint.id,
+                node: allocation.controlNode,
+                rightNode: allocation.rightControlNode,
+                customLabel: allocation.endpoint.name
+            ))
+        }
+        return FaderLayout(strips: combined)
+    }
 }

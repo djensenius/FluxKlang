@@ -51,4 +51,14 @@ enum WingValue: Equatable, Hashable, Sendable, Codable {
         if case .string(let value) = self { return value }
         return nil
     }
+
+    func encodedForWing(address: String) -> WingValue {
+        guard address.hasSuffix("/fdr"), case .float(let position) = self else { return self }
+        return .float(position <= 0 ? -144 : FaderMath.decibels(fromPosition: position))
+    }
+
+    func decodedFromWingSet(address: String) -> WingValue {
+        guard address.hasSuffix("/fdr"), case .float(let decibels) = self else { return self }
+        return .float(FaderMath.position(fromDecibels: decibels))
+    }
 }

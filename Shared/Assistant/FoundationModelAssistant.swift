@@ -39,15 +39,36 @@ struct AssistantGeneratorRouter: AssistantGenerating {
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                let generator = await model.availability() == .ready ? model : fallback
+                let usesModel = await model.availability() == .ready
+                let generator = usesModel ? model : fallback
                 do {
+                    var emittedEvent = false
                     for try await event in generator.stream(request) {
                         try Task.checkCancellation()
+                        emittedEvent = true
                         continuation.yield(event)
+                    }
+                    if usesModel, !emittedEvent {
+                        for try await event in fallback.stream(request) {
+                            try Task.checkCancellation()
+                            continuation.yield(event)
+                        }
                     }
                     continuation.finish()
                 } catch {
-                    continuation.finish(throwing: error)
+                    guard usesModel, !(error is CancellationError) else {
+                        continuation.finish(throwing: error)
+                        return
+                    }
+                    do {
+                        for try await event in fallback.stream(request) {
+                            try Task.checkCancellation()
+                            continuation.yield(event)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -100,6 +121,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                             authorizer: authorizer
                         ),
                         AssistantDraftFoundationTool(
+                            question: request.question,
                             context: request.context,
                             coordinator: coordinator,
                             authorizer: authorizer
@@ -112,6 +134,8 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                         You are FluxKlang's focused, on-device assistant. Answer only about this app and the \
                         supplied Studio state. Use tools for app facts. Never claim to change a WING console. \
                         The only change-capable tool may create a pending Studio draft that the user must review. \
+                        A draft may append a path or replace the current graph after explicit review. Never treat \
+                        equipment mentioned in an exclusion, such as "don't use X," as a requested source. \
                         Be concise, describe uncertainty, and never invent equipment, connections, or validation.
                         """
                     )
@@ -120,6 +144,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                         continuation.yield(.text(snapshot.content))
                     }
                     if let draft = await coordinator.pendingStudioDraft, draft != initialDraft {
+                        continuation.yield(.text(AssistantDraftReply.text(for: draft)))
                         continuation.yield(.cards(Self.cards(for: draft)))
                     }
                     continuation.finish()
@@ -240,6 +265,7 @@ private struct AssistantDraftArguments {
 
 @available(iOS 27, macOS 27, *)
 private struct AssistantDraftFoundationTool: Tool {
+    let question: String
     let context: AssistantToolContext
     let coordinator: AssistantCoordinator
     let authorizer: AssistantToolAuthorizer
@@ -251,23 +277,23 @@ private struct AssistantDraftFoundationTool: Tool {
 
     func call(arguments: AssistantDraftArguments) async throws -> String {
         try authorizer.authorize(.buildPendingDraft)
-        let sources = context.equipment.filter { equipment in
-            arguments.sourceNames.contains {
-                $0.caseInsensitiveCompare(equipment.name) == .orderedSame
-            }
-        }.map(\.id)
-        let effects = context.effects.filter { effect in
-            arguments.effectNames.contains {
-                $0.caseInsensitiveCompare(effect.name) == .orderedSame
-            }
-        }.map(\.id)
+        let effectEquipmentIDs = Set(context.effects.compactMap(\.equipmentID))
+        let sources = AssistantDraftIntent.mentionedEquipmentIDs(
+            in: question,
+            equipment: context.equipment,
+            excluding: effectEquipmentIDs
+        )
+        guard !sources.isEmpty else { return AssistantDraftIntent.missingSource }
+        let effects = AssistantDraftIntent.mentionedEffectIDs(in: question, effects: context.effects)
         let destination: StudioEndpointDestination =
             arguments.destination.lowercased().contains("space") ? .space : .finalMix
         let result = await coordinator.perform(
             .buildStudioDraft(StudioWiringRequest(
                 sourceInstrumentIDs: sources,
                 effectChainIDs: effects,
-                destination: destination
+                destination: destination,
+                includesDrySignal: AssistantDraftIntent.includesDrySignal(question),
+                applicationMode: AssistantDraftIntent.requestsReplacement(question) ? .replace : .append
             )),
             context: context
         )

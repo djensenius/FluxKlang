@@ -10,13 +10,24 @@ enum StudioPatchDraftMerger {
     ) -> StudioPatchMergeResult {
         let equipmentIDs = Set(equipment.map(\.id))
         let effectIDs = Set(effects.map(\.id))
-        var graph = currentGraph
-        var endpoints = currentEndpoints
+        let normalized = StudioEndpointNormalizer.normalize(graph: currentGraph, endpoints: currentEndpoints)
+        var graph = draft.applicationMode == .replace ? StudioGraph() : normalized.graph
+        var endpoints = draft.applicationMode == .replace ? [] : normalized.endpoints
         var nodeIDMap: [StudioNode.ID: StudioNode.ID] = [:]
         var addedNodes = 0
 
         for draftNode in draft.fragment.nodes {
             guard isValid(draftNode.node.kind, equipmentIDs: equipmentIDs, effectIDs: effectIDs, draft: draft) else {
+                continue
+            }
+            if case .endpoint(let endpointID) = draftNode.node.kind,
+               let endpoint = draft.fragment.endpoints.first(where: { $0.id == endpointID }),
+               let existing = StudioEndpointNormalizer.matchingNode(
+                   for: endpoint,
+                   graph: graph,
+                   endpoints: endpoints
+               ) {
+                nodeIDMap[draftNode.node.id] = existing.id
                 continue
             }
             if let existing = graph.nodes.first(where: { $0.kind == draftNode.node.kind }) {
@@ -40,12 +51,13 @@ enum StudioPatchDraftMerger {
             let from = StudioPortRef(nodeID: fromID, side: .output, port: draftEdge.edge.from.port)
             let to = StudioPortRef(nodeID: toID, side: .input, port: draftEdge.edge.to.port)
             guard !graph.edges.contains(where: { $0.from == from && $0.to == to }) else { continue }
-            graph.connect(from: from, to: to)
+            graph.edges.append(StudioEdge(id: draftEdge.edge.id, from: from, to: to))
             addedEdges += 1
         }
+        let result = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
         return StudioPatchMergeResult(
-            graph: graph,
-            endpoints: endpoints,
+            graph: result.graph,
+            endpoints: result.endpoints,
             addedNodeCount: addedNodes,
             addedEdgeCount: addedEdges
         )

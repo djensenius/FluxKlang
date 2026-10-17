@@ -9,6 +9,26 @@ import Testing
 @testable import FluxKlang
 
 struct ModelsTests {
+    @Test func faderLayoutIncludesGeneratedStudioControlsWithoutDuplicates() {
+        let endpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)
+        let allocation = StudioEndpointAllocation(
+            endpoint: endpoint,
+            endpointNodeID: UUID(),
+            controlNode: .bus(5),
+            rightControlNode: .bus(6)
+        )
+        let existing = FaderLayout(strips: [FaderStrip(node: .channel(1))])
+
+        let generated = existing.includingStudioAllocations([allocation])
+        let repeated = generated.includingStudioAllocations([allocation])
+
+        #expect(generated.strips.last?.id == endpoint.id)
+        #expect(generated.strips.last?.node == .bus(5))
+        #expect(generated.strips.last?.rightNode == .bus(6))
+        #expect(generated.strips.last?.customLabel == "Main Speakers")
+        #expect(repeated.strips.count == generated.strips.count)
+    }
+
     private func roundTrip<T: Codable>(_ value: T) throws -> T {
         let data = try JSONEncoder().encode(value)
         return try JSONDecoder().decode(T.self, from: data)
@@ -22,7 +42,7 @@ struct ModelsTests {
 
     @Test func standardLayoutDerivesFromGearRig() {
         let layout = FaderLayout.standard
-        // Each gear device (16 stereo + 2 mono) becomes one strip, plus the
+        // Each gear device (19 stereo + 2 mono) becomes one strip, plus the
         // Front/Rear speaker-bus masters and the stereo main.
         #expect(layout.strips.count == Equipment.seededLibrary.count + 3)
         #expect(layout.strips.first?.node == .channel(1))
@@ -119,6 +139,12 @@ struct ModelsTests {
         #expect(library.first { $0.name == "Hologram Microcosm" }?.isStereo == true)
     }
 
+    @Test func confirmedLiveEquipmentIncludesAstroLabOsmoseAndStudioDisplay() {
+        let names = Set(Equipment.confirmedLiveAdditions.map(\.name))
+
+        #expect(names == ["Arturia AstroLab 88", "Expressive E Osmose", "Studio Display 2"])
+    }
+
     @Test func channelAssignmentsLayOutStereoAsConsecutivePairs() {
         let assignments = Equipment.channelAssignments()
         #expect(assignments.count == Equipment.seededLibrary.count)
@@ -126,16 +152,16 @@ struct ModelsTests {
         #expect(assignments.first?.leftChannel == 1)
         #expect(assignments.first?.rightChannel == 2)
         #expect(assignments.first?.isStereo == true)
-        // 16 stereo devices (32 channels) then 2 mono → channels 33 and 34.
-        #expect(assignments.last?.leftChannel == 34)
-        #expect(assignments.last?.isStereo == false)
+        // The confirmed additions fill the remaining channels through 40.
+        #expect(assignments.last?.leftChannel == 39)
+        #expect(assignments.last?.rightChannel == 40)
         // Channels are contiguous with no gaps or overlaps.
         var expected = 1
         for assignment in assignments {
             #expect(assignment.leftChannel == expected)
             expected += assignment.isStereo ? 2 : 1
         }
-        #expect(expected == 35)
+        #expect(expected == 41)
     }
 
     @Test func equipmentDecodesLegacyJSONWithoutStereoFlag() throws {

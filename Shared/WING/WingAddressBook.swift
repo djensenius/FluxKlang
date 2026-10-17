@@ -120,6 +120,10 @@ enum WingAddress {
         "/io/out/LCL/\(output)"
     }
 
+    private static func output(_ connector: WingOutputConnector) -> String {
+        "/io/out/\(connector.bank.rawValue)/\(connector.index)"
+    }
+
     /// Source *group* node for a physical output, e.g. `/io/out/LCL/1/grp`. This
     /// patches which internal signal (a main, bus or matrix) feeds the output your
     /// speakers are plugged into — i.e. how a chain "reaches the speakers". The
@@ -129,11 +133,19 @@ enum WingAddress {
         localOutput(output) + "/grp"
     }
 
+    static func outputSourceGroup(_ output: WingOutputConnector) -> String {
+        self.output(output) + "/grp"
+    }
+
     /// Source *index* within the group for a physical output, e.g.
     /// `/io/out/LCL/1/in`. 1-based, addressing a strip within the group selected
     /// by the matching `/grp` node.
     static func outputSourceIndex(_ output: Int) -> String {
         localOutput(output) + "/in"
+    }
+
+    static func outputSourceIndex(_ output: WingOutputConnector) -> String {
+        self.output(output) + "/in"
     }
 
     // MARK: - I/O connector names
@@ -220,4 +232,10 @@ enum WingNetwork {
 
     /// Pause between bulk-refresh batches, giving the console time to reply.
     static let bulkRefreshBatchDelay: Duration = .milliseconds(20)
+
+    /// Pause between writes so UDP bursts do not overwhelm the console.
+    static let applyWriteDelay: Duration = .milliseconds(10)
+
+    /// Time allowed for verification query replies to reach the controller.
+    static let applyVerificationDelay: Duration = .milliseconds(300)
 }

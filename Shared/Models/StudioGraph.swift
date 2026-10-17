@@ -34,6 +34,8 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
     var name: String
     var destination: StudioEndpointDestination
     var controls: Set<StudioEndpointControl>
+    /// Explicit physical outputs for custom destinations such as Desk Speakers.
+    var outputConnectors: [WingOutputConnector]?
     /// Stable, UI-level color token. The actual SwiftUI color is resolved by the view layer.
     var colorName: String?
     /// Space endpoints can be positioned independently.
@@ -44,6 +46,7 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
         name: String,
         destination: StudioEndpointDestination,
         controls: Set<StudioEndpointControl> = StudioEndpoint.defaultControls,
+        outputConnectors: [WingOutputConnector]? = nil,
         colorName: String? = nil,
         placement: VoicePlacement? = nil
     ) {
@@ -51,6 +54,7 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
         self.name = name
         self.destination = destination
         self.controls = controls
+        self.outputConnectors = outputConnectors
         self.colorName = colorName
         self.placement = placement
     }
@@ -190,9 +194,13 @@ enum StudioRoutingPlanner {
     static func plan(for graph: StudioGraph, endpoints: [StudioEndpoint]) -> StudioRoutingPlan {
         let endpointByID = Dictionary(endpoints.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let nodeByID = Dictionary(graph.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let validEdges = graph.edges.filter { edge in
+        let structurallyValidEdges = graph.edges.filter { edge in
             edge.from.side == .output && edge.to.side == .input &&
                 nodeByID[edge.from.nodeID] != nil && nodeByID[edge.to.nodeID] != nil
+        }
+        let cyclicNodeIDs = cyclicNodes(in: graph.nodes, edges: structurallyValidEdges)
+        let validEdges = structurallyValidEdges.filter {
+            !cyclicNodeIDs.contains($0.from.nodeID) && !cyclicNodeIDs.contains($0.to.nodeID)
         }
         let outgoing = Dictionary(grouping: validEdges, by: \.from.nodeID)
         let incoming = Dictionary(grouping: validEdges, by: \.to.nodeID)
@@ -204,6 +212,11 @@ enum StudioRoutingPlanner {
         )
 
         var issues = structuralIssues(for: graph, endpointByID: endpointByID, nodeByID: nodeByID)
+        issues.append(contentsOf: cyclicNodeIDs.compactMap { nodeID in
+            nodeByID[nodeID].map {
+                .error(.cycle(nodeID: nodeID), "\($0.title) is part of an unsupported feedback cycle.")
+            }
+        })
         var endpointPlans: [StudioEndpointPlan] = []
 
         for node in graph.nodes {
@@ -275,6 +288,43 @@ enum StudioRoutingPlanner {
         return issues
     }
 
+    private static func cyclicNodes(
+        in nodes: [StudioNode],
+        edges: [StudioEdge]
+    ) -> Set<StudioNode.ID> {
+        let outgoing = Dictionary(grouping: edges, by: \.from.nodeID)
+        return Set(nodes.compactMap { node in
+            reaches(
+                node.id,
+                from: node.id,
+                outgoing: outgoing,
+                visited: [],
+                requiresEdge: true
+            ) ? node.id : nil
+        })
+    }
+
+    private static func reaches(
+        _ target: StudioNode.ID,
+        from current: StudioNode.ID,
+        outgoing: [StudioNode.ID: [StudioEdge]],
+        visited: Set<StudioNode.ID>,
+        requiresEdge: Bool
+    ) -> Bool {
+        if !requiresEdge, current == target { return true }
+        guard !visited.contains(current) else { return false }
+        let nextVisited = visited.union([current])
+        return (outgoing[current] ?? []).contains {
+            reaches(
+                target,
+                from: $0.to.nodeID,
+                outgoing: outgoing,
+                visited: nextVisited,
+                requiresEdge: false
+            )
+        }
+    }
+
     private static func sourceNodes(
         reaching nodeID: StudioNode.ID,
         context: PlannerGraphContext,
@@ -284,7 +334,7 @@ enum StudioRoutingPlanner {
     ) -> Set<StudioNode.ID> {
         guard let node = context.nodeByID[nodeID] else { return [] }
         guard !visited.contains(nodeID) else {
-            issues.append(.warning(.cycle(nodeID: nodeID), "\(node.title) is part of a cycle."))
+            issues.append(.error(.cycle(nodeID: nodeID), "\(node.title) is part of an unsupported feedback cycle."))
             return []
         }
         let edges = context.incoming[nodeID] ?? []
@@ -322,7 +372,7 @@ enum StudioRoutingPlanner {
             return valid
         }
         guard !visiting.contains(nodeID) else {
-            issues.append(.warning(.cycle(nodeID: nodeID), "\(node.title) is part of a cycle."))
+            issues.append(.error(.cycle(nodeID: nodeID), "\(node.title) is part of an unsupported feedback cycle."))
             return false
         }
         visiting.insert(nodeID)

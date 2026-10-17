@@ -14,6 +14,7 @@ struct StudioView: View {
     @Environment(AppModel.self) private var appModel
 
     @State private var isApplying = false
+    @State private var applyVerification: WingApplyVerification?
 
     private var store: EnvironmentStore { appModel.environments }
     private var graph: StudioGraph { store.activeStudioGraph }
@@ -109,13 +110,18 @@ struct StudioView: View {
 
     private var startSection: some View {
         StudioSection("Start") {
-            StudioStatusCard(
-                title: statusTitle,
-                detail: statusDetail,
-                systemImage: issues.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
-                tint: issues.isEmpty ? .green : .orange
+            let connections = appModel.studioConnectionsForCurrentWing().effectiveHome
+            StudioApplyStatusView(
+                graphIsEmpty: graph.nodes.isEmpty,
+                hasIssues: !issues.isEmpty,
+                isConnected: appModel.isConnected,
+                isApplying: isApplying,
+                settings: compiled.settings,
+                verification: applyVerification,
+                endpointCount: endpoints.count,
+                connectionCount: connections.inputs.count + connections.outputs.count,
+                apply: applyStudioPatch
             )
-            .accessibilityIdentifier("studio.status")
         } footer: {
             Text("""
             FluxKlang keeps the mixer details out of the way. You describe the sound path; it handles the mixer.
@@ -218,6 +224,7 @@ struct StudioView: View {
                     StudioEndpointCard(
                         endpoint: endpoint,
                         allocation: allocation(for: endpoint),
+                        controller: appModel.wing,
                         speakers: appModel.spatial.array.speakers,
                         setPlacement: { store.setStudioEndpointPlacement(endpoint.id, to: $0) }
                     )
@@ -249,7 +256,10 @@ struct StudioView: View {
                 } else {
                     ForEach(resourcePlan.allocations) { allocation in
                         LabeledContent(allocation.endpoint.name) {
-                            Text(allocation.controlNode.defaultLabel)
+                            Text([
+                                allocation.controlNode.defaultLabel,
+                                allocation.rightControlNode?.defaultLabel
+                            ].compactMap { $0 }.joined(separator: "/"))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
@@ -308,6 +318,7 @@ struct StudioView: View {
             }
             .disabled(!appModel.isConnected || compiled.settings.isEmpty || compiled.hasErrors || isApplying)
             .accessibilityIdentifier("studio.listen")
+            .help("Send this Studio routing to the connected WING")
         }
     }
 
@@ -424,27 +435,11 @@ struct StudioView: View {
     private func applyStudioPatch() {
         isApplying = true
         Task {
-            await appModel.applyStudio()
+            applyVerification = await appModel.applyStudio()
             isApplying = false
         }
     }
 
-    private var statusTitle: String {
-        if graph.nodes.isEmpty { return "Ready to make a patch" }
-        if issues.isEmpty { return "Ready to listen" }
-        return "Some parts need attention"
-    }
-
-    private var statusDetail: String {
-        if graph.nodes.isEmpty {
-            return "Pick a sound, give it a dry control, give it a space control, then explore."
-        }
-        if issues.isEmpty {
-            let connections = appModel.studioConnections.connections.effectiveHome
-            return "\(endpoints.count) controls · \(connections.inputs.count + connections.outputs.count) connections"
-        }
-        return "\(issues.count) note\(issues.count == 1 ? "" : "s") before everything can play"
-    }
 }
 
 private extension StudioView {
@@ -458,7 +453,9 @@ private extension StudioView {
                     discard: discardPendingDraft
                 )
             } footer: {
-                Text("Review is local-only. Accept adds semantic routing; Listen remains a separate action.")
+                Text(draft.applicationMode == .replace
+                    ? "Review is local-only. Replace Studio removes the current graph; Listen remains separate."
+                    : "Review is local-only. Accept adds semantic routing; Listen remains separate.")
             }
         }
     }

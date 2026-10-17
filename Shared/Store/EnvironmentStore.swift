@@ -70,6 +70,7 @@ final class EnvironmentStore {
             persist()
         }
         normalizeActive()
+        normalizeStudioEndpoints()
         await migrateLegacyChainIfNeeded()
     }
 
@@ -248,13 +249,26 @@ final class EnvironmentStore {
 
     // MARK: - Active-environment semantic studio graph
 
-    var activeStudioGraph: StudioGraph { active?.studioGraph ?? StudioGraph() }
-    var activeStudioEndpoints: [StudioEndpoint] { active?.studioEndpoints ?? [] }
+    var activeStudioGraph: StudioGraph {
+        guard let environment = active else { return StudioGraph() }
+        return StudioEndpointNormalizer.normalize(
+            graph: environment.studioGraph,
+            endpoints: environment.studioEndpoints
+        ).graph
+    }
+    var activeStudioEndpoints: [StudioEndpoint] {
+        guard let environment = active else { return [] }
+        return StudioEndpointNormalizer.normalize(
+            graph: environment.studioGraph,
+            endpoints: environment.studioEndpoints
+        ).endpoints
+    }
 
     func replaceStudio(graph: StudioGraph, endpoints: [StudioEndpoint]) {
         mutateEnvironment { environment in
-            environment.studioGraph = graph
-            environment.studioEndpoints = endpoints
+            let normalized = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
+            environment.studioGraph = normalized.graph
+            environment.studioEndpoints = normalized.endpoints
         }
     }
 
@@ -306,6 +320,23 @@ final class EnvironmentStore {
     }
 
     // MARK: - Internals
+
+    private func normalizeStudioEndpoints() {
+        var changed = false
+        for index in environments.indices {
+            let normalized = StudioEndpointNormalizer.normalize(
+                graph: environments[index].studioGraph,
+                endpoints: environments[index].studioEndpoints
+            )
+            if normalized.graph != environments[index].studioGraph
+                || normalized.endpoints != environments[index].studioEndpoints {
+                environments[index].studioGraph = normalized.graph
+                environments[index].studioEndpoints = normalized.endpoints
+                changed = true
+            }
+        }
+        if changed { persist() }
+    }
 
     /// Guarantees there is an active environment, creating a "Default" one when
     /// the store is empty, then runs `transform` on the active environment's

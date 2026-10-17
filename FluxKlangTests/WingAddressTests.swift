@@ -7,6 +7,16 @@ import Testing
 @testable import FluxKlang
 
 struct WingAddressTests {
+    @Test func faderPositionsEncodeAsDecibelsForHardware() {
+        let address = WingAddress.fader(.bus, 5)
+        let position = WingValue.float(FaderMath.position(fromDecibels: -30))
+
+        #expect(position.encodedForWing(address: address) == .float(-30))
+        #expect(WingValue.float(-30).decodedFromWingSet(address: address) == position)
+        #expect(WingValue.float(0).encodedForWing(address: address) == .float(-144))
+        #expect(WingValue.float(0.25).encodedForWing(address: WingAddress.pan(.bus, 5)) == .float(0.25))
+    }
+
     @Test func buildsStripNodes() {
         #expect(WingAddress.fader(.channel, 1) == "/ch/1/fdr")
         #expect(WingAddress.mute(.bus, 2) == "/bus/2/mute")

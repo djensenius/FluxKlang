@@ -50,7 +50,9 @@ actor JSONFileStore {
     }
 
     func save(_ value: some Encodable, to name: String) {
-        guard let data = try? JSONEncoder().encode(value) else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(value) else { return }
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: directory.appendingPathComponent(name), options: .atomic)
         // Mirror to iCloud and let the system flush changes automatically. We

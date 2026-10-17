@@ -7,6 +7,7 @@
 //  (see AppModel) act as fallbacks when broadcast discovery is unavailable.
 //
 
+import Darwin
 import Foundation
 import Observation
 
@@ -104,9 +105,6 @@ final class WingDiscovery {
 
     private let port: UInt16
 
-    /// The limited-broadcast address; reaches every host on the local segment.
-    private let broadcastHost = "255.255.255.255"
-
     init(port: UInt16 = WingNetwork.defaultPort) {
         self.port = port
     }
@@ -117,9 +115,14 @@ final class WingDiscovery {
         isScanning = true
         responders = []
 
+        let broadcastHosts = Self.activeIPv4BroadcastHosts()
+        guard let firstBroadcastHost = broadcastHosts.first else {
+            isScanning = false
+            return
+        }
         let transport = WingTransport(remotePort: port)
         do {
-            try await transport.start(remoteHost: broadcastHost, localPort: port, broadcast: true)
+            try await transport.start(remoteHost: firstBroadcastHost, localPort: port, broadcast: true)
         } catch {
             isScanning = false
             return
@@ -139,12 +142,51 @@ final class WingDiscovery {
             }
         }
 
-        try? await transport.send(WingAddress.info, nil, to: broadcastHost, port: port)
+        for host in broadcastHosts {
+            try? await transport.send(WingAddress.info, nil, to: host, port: port)
+        }
         try? await Task.sleep(for: duration)
 
         listen.cancel()
         await transport.stop()
         isScanning = false
+    }
+
+    private static func activeIPv4BroadcastHosts() -> [String] {
+        var interfaceList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaceList) == 0, let firstInterface = interfaceList else {
+            return []
+        }
+        defer { freeifaddrs(firstInterface) }
+
+        var hosts: Set<String> = []
+        var interface: UnsafeMutablePointer<ifaddrs>? = firstInterface
+        while let current = interface {
+            defer { interface = current.pointee.ifa_next }
+            let flags = current.pointee.ifa_flags
+            guard flags & UInt32(IFF_UP) != 0,
+                  flags & UInt32(IFF_BROADCAST) != 0,
+                  let address = current.pointee.ifa_dstaddr,
+                  address.pointee.sa_family == UInt8(AF_INET) else {
+                continue
+            }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(
+                address,
+                socklen_t(address.pointee.sa_len),
+                &host,
+                socklen_t(host.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 else {
+                continue
+            }
+            let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            guard let host = String(bytes: bytes, encoding: .utf8) else { continue }
+            hosts.insert(host)
+        }
+        return hosts.sorted()
     }
 
     private func add(_ wing: DiscoveredWing) {

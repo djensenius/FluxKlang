@@ -37,9 +37,7 @@ struct TemporaryMoveFlowView: View {
     private var homeInputs: [StudioInputConnection] {
         home.inputs.filter { $0.equipmentID == equipmentID }.sorted { $0.outputPort < $1.outputPort }
     }
-    private var homeOutputs: [StudioOutputConnection] {
-        home.outputs.filter { $0.equipmentID == equipmentID }.sorted { $0.inputPort < $1.inputPort }
-    }
+    private var homeOutputs: [StudioOutputConnection] { equipmentOutputs(for: equipmentID, in: home) }
 
     var body: some View {
         NavigationStack {
@@ -119,9 +117,9 @@ struct TemporaryMoveFlowView: View {
                 }
                 ForEach(Array(homeOutputs.enumerated()), id: \.element.id) { index, connection in
                     connectorRow(
-                        label: equipmentInputName(connection.inputPort),
+                        label: equipmentInputName(connection.inputPort ?? 0),
                         homeConnector: connection.connector,
-                        direction: "WING output",
+                        direction: connection.outputConnector.label,
                         range: StudioHomeConnections.outputRange,
                         binding: connectorBinding(index, values: $outputConnectors),
                         identifier: "temporary-move-output-\(index)"
@@ -369,7 +367,8 @@ struct TemporaryMoveFlowView: View {
                     $0.inputPort == homeConnection.inputPort
                 })?.connector else { return nil }
                 return """
-                \(equipmentInputName(homeConnection.inputPort)): WING output \(current) → \(homeConnection.connector)
+                \(equipmentInputName(homeConnection.inputPort ?? 0)): WING output \(current) → \
+                \(homeConnection.outputConnector.label)
                 """
             }
         }
@@ -377,7 +376,7 @@ struct TemporaryMoveFlowView: View {
             "\(equipmentOutputName(homeConnection.outputPort)): WING input \(homeConnection.connector) → "
                 + "\(move.connections.inputs[index].connector)"
         } + homeOutputs.enumerated().map { index, homeConnection in
-            "\(equipmentInputName(homeConnection.inputPort)): WING output \(homeConnection.connector) → "
+            "\(equipmentInputName(homeConnection.inputPort ?? 0)): \(homeConnection.outputConnector.label) → "
                 + "\(move.connections.outputs[index].connector)"
         }
     }
@@ -436,5 +435,16 @@ struct TemporaryMoveFlowView: View {
         case .driftDetected: "arrow.trianglehead.2.clockwise.rotate.90"
         case .notVerified: "questionmark.circle"
         }
+    }
+}
+
+private func equipmentOutputs(
+    for equipmentID: Equipment.ID?,
+    in home: StudioHomeConnections
+) -> [StudioOutputConnection] {
+    home.outputs.filter {
+        $0.equipmentID == equipmentID && $0.inputPort != nil
+    }.sorted {
+        ($0.inputPort ?? 0) < ($1.inputPort ?? 0)
     }
 }

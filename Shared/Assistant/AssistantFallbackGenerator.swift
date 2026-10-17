@@ -72,12 +72,20 @@ struct AssistantFallbackGenerator: AssistantGenerating {
             return (text, cards(for: coordinator.pendingStudioDraft))
         }
         if normalized.contains("wire") || normalized.contains("connect") || normalized.contains("patch") {
-            let sourceIDs = request.context.equipment.filter {
-                normalized.contains($0.name.lowercased())
-            }.map(\.id)
+            let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
+            let sourceIDs = AssistantDraftIntent.mentionedEquipmentIDs(
+                in: request.question,
+                equipment: request.context.equipment,
+                excluding: effectEquipmentIDs
+            )
             if !sourceIDs.isEmpty {
                 let result = await coordinator.perform(
-                    .buildStudioDraft(StudioWiringRequest(sourceInstrumentIDs: sourceIDs)),
+                    .buildStudioDraft(StudioWiringRequest(
+                        sourceInstrumentIDs: sourceIDs,
+                        applicationMode: AssistantDraftIntent.requestsReplacement(request.question)
+                            ? .replace
+                            : .append
+                    )),
                     context: request.context
                 )
                 let text = try AssistantFallbackResponder.response(

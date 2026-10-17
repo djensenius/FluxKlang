@@ -115,6 +115,10 @@ struct WingOutputSource: Identifiable, Codable, Hashable, Sendable {
 
     /// The OSC settings that patch this source onto a physical output socket.
     func settings(forOutput output: Int) -> [WingSetting] {
+        settings(forOutput: WingOutputConnector(index: output))
+    }
+
+    func settings(forOutput output: WingOutputConnector) -> [WingSetting] {
         [
             WingSetting(address: WingAddress.outputSourceGroup(output), value: .string(group.rawValue)),
             WingSetting(address: WingAddress.outputSourceIndex(output), value: .int(Int32(index)))

@@ -198,7 +198,8 @@ enum AssistantSpeechError: LocalizedError {
 @MainActor
 @Observable
 final class AssistantVoiceController {
-    private let transcriber: any AssistantSpeechTranscribing
+    private var transcriber: (any AssistantSpeechTranscribing)?
+    private let transcriberFactory: () -> any AssistantSpeechTranscribing
     private var transcriptTask: Task<Void, Never>?
 
     private(set) var permission: AssistantVoicePermissionState = .undetermined
@@ -206,11 +207,18 @@ final class AssistantVoiceController {
     private(set) var transcript = ""
     private(set) var isFinal = false
 
-    init(transcriber: any AssistantSpeechTranscribing = SpeechAnalyzerAssistantTranscriber()) {
+    init(
+        transcriber: (any AssistantSpeechTranscribing)? = nil,
+        transcriberFactory: @escaping () -> any AssistantSpeechTranscribing = {
+            SpeechAnalyzerAssistantTranscriber()
+        }
+    ) {
         self.transcriber = transcriber
+        self.transcriberFactory = transcriberFactory
     }
 
     func refreshPermission() async {
+        let transcriber = resolvedTranscriber()
         permission = await transcriber.permissionState()
     }
 
@@ -224,6 +232,7 @@ final class AssistantVoiceController {
         transcript = ""
         isFinal = false
         transcriptTask = Task {
+            let transcriber = resolvedTranscriber()
             permission = await transcriber.permissionState()
             if permission == .undetermined {
                 state = .requestingPermission
@@ -254,7 +263,7 @@ final class AssistantVoiceController {
     }
 
     func finish() {
-        guard state == .listening else { return }
+        guard state == .listening, let transcriber else { return }
         state = .finalizing
         Task {
             await transcriber.finish()
@@ -266,9 +275,18 @@ final class AssistantVoiceController {
     func cancel() {
         transcriptTask?.cancel()
         transcriptTask = nil
-        Task { await transcriber.cancel() }
+        if let transcriber {
+            Task { await transcriber.cancel() }
+        }
         transcript = ""
         isFinal = false
         state = .idle
+    }
+
+    private func resolvedTranscriber() -> any AssistantSpeechTranscribing {
+        if let transcriber { return transcriber }
+        let transcriber = transcriberFactory()
+        self.transcriber = transcriber
+        return transcriber
     }
 }

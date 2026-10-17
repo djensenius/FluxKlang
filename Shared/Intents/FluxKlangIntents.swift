@@ -3,8 +3,9 @@
 //  FluxKlang
 //
 //  App Intents exposing FluxKlang to Shortcuts and Siri: connect, enter demo
-//  mode, set a channel volume and recall a preset. They drive the shared
-//  AppModel, so they act on the same controller and stores as the UI.
+//  mode, set a channel volume, recall a preset and draft Studio wiring from
+//  natural speech. They drive the shared AppModel, so they act on the same
+//  controller and stores as the UI.
 //
 
 import AppIntents
@@ -88,6 +89,39 @@ struct RecallPresetIntent: AppIntent {
     }
 }
 
+struct WireStudioRequestIntent: AppIntent {
+    static let title: LocalizedStringResource = "Wire Studio Gear"
+    static let description = IntentDescription(
+        "Create a reviewable Studio wiring draft from a natural-language request without changing WING settings."
+    )
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Request")
+    var request: String
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Wire \(\.$request)")
+    }
+
+    init() {}
+
+    init(request: String) {
+        self.request = request
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let summary = await SiriDraftStudioAction.execute(
+            request: request,
+            model: AppModel.shared
+        )
+        return .result(dialog: IntentDialog(stringLiteral: summary))
+    }
+}
+
 struct DraftStudioPatchIntent: AppIntent {
     static let title: LocalizedStringResource = "Draft Studio Patch"
     static let description = IntentDescription(
@@ -142,20 +176,39 @@ struct DraftStudioPatchIntent: AppIntent {
 @MainActor
 enum SiriDraftStudioAction {
     static func execute(
+        request: String,
+        model: AppModel
+    ) async -> String {
+        let context = await prepareContext(model: model)
+        let normalizedRequest = removeSiriInvocationPrefix(from: request)
+        let generationRequest = AssistantGenerationRequest(
+            question: normalizedRequest,
+            recentMessages: [],
+            summary: "",
+            context: context
+        )
+        guard let wiringRequest = AssistantDraftIntent.wiringRequest(from: generationRequest) else {
+            if let clarification = AssistantDraftIntent.clarification(from: generationRequest) {
+                return clarification
+            }
+            return AssistantDraftIntent.missingSource
+        }
+        let result = await model.assistant.perform(.buildStudioDraft(wiringRequest), context: context)
+        guard case .pendingDraft(let draft?) = result else {
+            return "I couldn't create a Studio draft."
+        }
+        _ = await model.assistant.perform(.openReview, context: context)
+        model.section = .studio
+        return spokenSummary(for: draft)
+    }
+
+    static func execute(
         sourceGear: [EquipmentEntity],
         effects: [EffectEntity],
         destination: DestinationEntity,
         model: AppModel
     ) async -> String {
-        await model.equipment.load()
-        await model.environments.load()
-        model.environments.migrateEffectEquipmentLinks(using: model.equipment.items)
-        await model.studioConnections.load(
-            equipment: model.equipment.items,
-            environments: model.environments.environments,
-            activeID: model.environments.activeID
-        )
-        let context = model.assistantToolContext()
+        let context = await prepareContext(model: model)
         let validSourceIDs = orderedIDs(
             sourceGear.map(\.id),
             available: Set(context.equipment.map(\.id))
@@ -178,6 +231,36 @@ enum SiriDraftStudioAction {
         _ = await model.assistant.perform(.openReview, context: context)
         model.section = .studio
         return spokenSummary(for: draft)
+    }
+
+    private static func prepareContext(model: AppModel) async -> AssistantToolContext {
+        await model.equipment.load()
+        await model.environments.load()
+        model.environments.migrateEffectEquipmentLinks(using: model.equipment.items)
+        await model.studioConnections.load(
+            equipment: model.equipment.items,
+            environments: model.environments.environments,
+            activeID: model.environments.activeID
+        )
+        return model.assistantToolContext()
+    }
+
+    private static func removeSiriInvocationPrefix(from request: String) -> String {
+        let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.lowercased()
+        let prefixes = [
+            "tell flux klang to ",
+            "tell fluxklang to ",
+            "ask flux klang to ",
+            "ask fluxklang to ",
+            "flux klang ",
+            "fluxklang "
+        ]
+        guard let prefix = prefixes.first(where: { normalized.hasPrefix($0) }) else {
+            return trimmed
+        }
+        return String(trimmed.dropFirst(prefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func spokenSummary(for draft: StudioPatchDraft) -> String {
@@ -245,6 +328,16 @@ struct FluxKlangShortcuts: AppShortcutsProvider {
             systemImageName: "square.grid.2x2"
         )
         if #available(iOS 27.0, macOS 27.0, *) {
+            AppShortcut(
+                intent: WireStudioRequestIntent(),
+                phrases: [
+                    "Tell \(.applicationName) to wire studio gear",
+                    "Ask \(.applicationName) to wire gear",
+                    "Wire studio gear with \(.applicationName)"
+                ],
+                shortTitle: "Wire Studio Gear",
+                systemImageName: "cable.connector"
+            )
             AppShortcut(
                 intent: DraftStudioPatchIntent(),
                 phrases: [

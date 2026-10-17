@@ -62,6 +62,7 @@ struct StudioSection<Content: View, Footer: View>: View {
 struct StudioEndpointCard: View {
     let endpoint: StudioEndpoint
     let allocation: StudioEndpointAllocation?
+    let controller: WingController
     var speakers: [Speaker] = []
     var setPlacement: (VoicePlacement) -> Void = { _ in }
 
@@ -87,6 +88,14 @@ struct StudioEndpointCard: View {
             Text(allocation == nil ? "Nothing is feeding this yet" : "Ready for volume, mute, label and meter")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let allocation {
+                StudioEndpointLevelControl(
+                    name: endpoint.name,
+                    node: allocation.controlNode,
+                    rightNode: allocation.rightControlNode,
+                    controller: controller
+                )
+            }
             if endpoint.destination == .space {
                 spaceControls
             }
@@ -143,6 +152,66 @@ struct StudioEndpointCard: View {
                 .accessibilityLabel(title)
                 .accessibilityValue(value.wrappedValue.formatted(.percent.precision(.fractionLength(0))))
         }
+    }
+}
+
+private struct StudioEndpointLevelControl: View {
+    let name: String
+    let node: WingNodeRef
+    let rightNode: WingNodeRef?
+    let controller: WingController
+
+    @State private var position = Double(FaderMath.position(
+        fromDecibels: StudioResourceAllocator.initialLevelDecibels
+    ))
+    @State private var isEditing = false
+
+    private var livePosition: Double {
+        let left = Double(controller.faderPosition(node.kind, node.index) ?? Float(position))
+        guard let rightNode else { return left }
+        let right = Double(controller.faderPosition(rightNode.kind, rightNode.index) ?? Float(position))
+        return (left + right) / 2
+    }
+
+    private var isMuted: Bool {
+        let left = controller.isMuted(node.kind, node.index) ?? false
+        guard let rightNode else { return left }
+        return left || (controller.isMuted(rightNode.kind, rightNode.index) ?? false)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Slider(value: $position, in: 0...1, onEditingChanged: editingChanged)
+                    .accessibilityLabel("\(name) volume")
+                    .accessibilityValue(FaderMath.label(forPosition: Float(position)))
+                Text(FaderMath.label(forPosition: Float(position)))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 62, alignment: .trailing)
+            }
+            Button {
+                Task { await controller.setMutePair(node, rightNode, muted: !isMuted) }
+            } label: {
+                Label(isMuted ? "Unmute" : "Mute", systemImage: isMuted ? "speaker.wave.2" : "speaker.slash")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(isMuted ? .red : .gray)
+        }
+        .onAppear { position = livePosition }
+        .onChange(of: livePosition) { _, newValue in
+            if !isEditing { position = newValue }
+        }
+        .onChange(of: position) { _, newValue in
+            guard isEditing else { return }
+            Task { await controller.setFaderPair(node, rightNode, position: Float(newValue)) }
+        }
+    }
+
+    private func editingChanged(_ editing: Bool) {
+        isEditing = editing
+        guard !editing else { return }
+        Task { await controller.setFaderPair(node, rightNode, position: Float(position)) }
     }
 }
 

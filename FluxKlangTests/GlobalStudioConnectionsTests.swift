@@ -97,6 +97,29 @@ struct GlobalStudioConnectionsTests {
         #expect(decoded.map(\.id) == connections.map(\.id))
     }
 
+    @Test func assistantProjectionMatchesUniqueLiveLabelsToExistingEquipment() {
+        let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
+        let astrolab = Equipment(name: "AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
+        let other = Equipment(name: "Other", outputs: ["Out"])
+        let original = GlobalStudioConnections(home: StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 21, equipmentID: flux.id, outputPort: 0),
+            StudioInputConnection(connector: 22, equipmentID: flux.id, outputPort: 1),
+            StudioInputConnection(connector: 23, equipmentID: astrolab.id, outputPort: 0),
+            StudioInputConnection(connector: 24, equipmentID: astrolab.id, outputPort: 1),
+            StudioInputConnection(connector: 5, equipmentID: other.id, outputPort: 0)
+        ]))
+
+        let reconciled = original.reconcilingLiveInputNames(
+            [19: "Flux", 20: "Flux", 21: "AstroLab 88", 22: "AstroLab 88"],
+            equipment: [flux, astrolab, other]
+        )
+
+        #expect(reconciled.home.inputs.filter { $0.equipmentID == flux.id }.map(\.connector) == [19, 20])
+        #expect(reconciled.home.inputs.filter { $0.equipmentID == astrolab.id }.map(\.connector) == [21, 22])
+        #expect(reconciled.home.inputs.contains { $0.equipmentID == other.id && $0.connector == 5 })
+        #expect(original.home.inputs.filter { $0.equipmentID == flux.id }.map(\.connector) == [21, 22])
+    }
+
     @Test func migrationPrefersMeaningfulActiveSetupAndKeepsUnresolvedEntries() {
         let synth = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
         let inactive = RoutingEnvironment(
@@ -200,11 +223,14 @@ struct GlobalStudioConnectionsTests {
         )
         let first = StudioConnectionsStore(fileStore: fileStore, fileName: fileName)
         await first.load(equipment: [synth], environments: [], activeID: nil)
-        #expect(first.connections.isEmpty)
+        #expect(first.connections.home.inputs.isEmpty)
+        #expect(first.connections.home.outputs.count == 4)
+        try await first.setOutput(nil, connector: 1, equipment: [synth])
 
         let second = StudioConnectionsStore(fileStore: fileStore, fileName: fileName)
         await second.load(equipment: [synth], environments: [legacy], activeID: legacy.id)
-        #expect(second.connections.isEmpty)
+        #expect(second.connections.home.inputs.isEmpty)
+        #expect(second.connections.home.outputs.count == 3)
 
         let home = StudioHomeConnections(inputs: [
             StudioInputConnection(connector: 17, equipmentID: synth.id, outputPort: 0)
@@ -219,7 +245,8 @@ struct GlobalStudioConnectionsTests {
         cloud.setData(
             try JSONEncoder().encode(StudioConnectionsStore.Persisted(
                 connections: GlobalStudioConnections(home: cloudHome),
-                initialized: true
+                initialized: true,
+                confirmedOutputDefaultsVersion: 1
             )),
             forKey: cloudKey
         )
@@ -275,16 +302,31 @@ struct GlobalStudioConnectionsTests {
             connector: 1,
             equipment: [synth]
         )
-        #expect(throws: StudioConnectionAssignmentError.equipmentInputInUse("Synth", "In", 1)) {
+        #expect(throws: StudioConnectionAssignmentError.equipmentInputInUse(
+            "Synth",
+            "In",
+            WingOutputConnector(index: 1)
+        )) {
             try home.setOutput(
                 StudioOutputConnection(connector: 2, equipmentID: synth.id, inputPort: 0),
                 connector: 2,
                 equipment: [synth]
             )
         }
+        try home.setOutput(
+            StudioOutputConnection(bank: .aes50A, connector: 3, destinationName: "Vocal Corner"),
+            connector: 3,
+            bank: .aes50A,
+            equipment: [synth]
+        )
+        #expect(
+            home.outputDisplayName(3, bank: .aes50A, equipment: [synth])
+                == "AES50-A 3 · Vocal Corner"
+        )
 
         try home.setInput(nil, connector: 1, equipment: [synth])
         try home.setOutput(nil, connector: 1, equipment: [synth])
+        try home.setOutput(nil, connector: 3, bank: .aes50A, equipment: [synth])
         #expect(home.isEmpty)
     }
 
@@ -302,8 +344,60 @@ struct GlobalStudioConnectionsTests {
 
         #expect(home.inputDisplayName(3, equipment: [synth]) == "Input 3 · Lead")
         #expect(home.inputDisplayName(7, equipment: [synth], liveScribble: "Mic") == "Input 7 · Mic")
-        #expect(home.outputDisplayName(4, equipment: [synth]) == "Output 4 · Synth · Return")
-        #expect(home.outputDisplayName(8, equipment: [synth]) == "Output 8")
+        #expect(home.outputDisplayName(4, equipment: [synth]) == "LCL 4 · Synth · Return")
+        #expect(home.outputDisplayName(8, equipment: [synth]) == "LCL 8")
+    }
+
+    @Test func outputConnectionsDecodeLegacyLocalBankAndPreserveAES50Bank() throws {
+        let equipmentID = UUID()
+        let legacy = """
+        {
+          "id":"\(UUID().uuidString)",
+          "connector":3,
+          "equipmentID":"\(equipmentID.uuidString)",
+          "inputPort":0
+        }
+        """
+        let decodedLegacy = try JSONDecoder().decode(
+            StudioOutputConnection.self,
+            from: Data(legacy.utf8)
+        )
+        #expect(decodedLegacy.bank == .local)
+        #expect(decodedLegacy.outputConnector == WingOutputConnector(index: 3))
+
+        let aes = StudioOutputConnection(
+            bank: .aes50A,
+            connector: 7,
+            equipmentID: equipmentID,
+            inputPort: 1
+        )
+        let decodedAES = try JSONDecoder().decode(
+            StudioOutputConnection.self,
+            from: JSONEncoder().encode(aes)
+        )
+        #expect(decodedAES == aes)
+        #expect(WingOutputSource(group: .bus, index: 4).settings(forOutput: aes.outputConnector).map(\.address) == [
+            "/io/out/A/7/grp",
+            "/io/out/A/7/in"
+        ])
+    }
+
+    @Test func confirmedOutputDefaultsMatchTheRecordedStudioMap() throws {
+        let defaults = try #require(StudioOutputDefaults.bundled())
+        var home = StudioHomeConnections()
+        home.applyConfirmedOutputDefaults(defaults, equipment: Equipment.seededLibrary)
+
+        #expect(home.outputs.count == 16)
+        #expect(home.outputDisplayName(1, equipment: Equipment.seededLibrary) == "LCL 1 · Desk Speakers L")
+        #expect(home.outputDisplayName(8, equipment: Equipment.seededLibrary) == "LCL 8 · Main Speakers R")
+        #expect(
+            home.outputDisplayName(1, bank: .aes50A, equipment: Equipment.seededLibrary)
+                == "AES50-A 1 · Torso S-4 · In L"
+        )
+        #expect(
+            home.outputDisplayName(8, bank: .aes50A, equipment: Equipment.seededLibrary)
+                == "AES50-A 8 · OP-XY · In R"
+        )
     }
 
     @Test func compilerBlocksSettingsForMissingStereoLegAndUnlinkedEffect() {
