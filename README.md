@@ -1,7 +1,7 @@
 # FluxKlang
 
 A native SwiftUI app to control a **Behringer WING Rack** over the network — for
-**iPhone, iPad, and Mac** (deployment target **iOS/macOS 26+**).
+**iPhone, iPad, and Mac** (deployment target **iOS/macOS 27+**).
 
 FluxKlang gives you:
 
@@ -23,7 +23,8 @@ FluxKlang gives you:
   the deep 1% (full EQ/dynamics/FX); FluxKlang covers the everyday 99% and
   coexists with Co-Pilot, treating the console as the source of truth.
 - **Shortcuts & Siri** via App Intents — connect, enter demo mode, set a channel
-  volume, recall a preset, and create Studio drafts for explicit in-app review.
+  volume, recall a preset, and say requests like “Tell FluxKlang to wire synth
+  through delay to speakers” to create Studio drafts for explicit in-app review.
 - **iCloud syncing** — your fader bank, equipment library, signal chain, presets
   and spatial layout sync across iPhone, iPad and Mac via iCloud key-value
   storage; a local copy keeps everything working offline.
@@ -62,9 +63,14 @@ previews.
 - **Live WING metadata** is console state read over OSC, such as connection
   status, scribble-strip names, fader values, mutes, and routing replies.
 - **FluxKlang physical wiring** is the user-configured map of which equipment
-  ports are actually cabled to WING Local inputs and outputs. A console scribble
-  name may be offered as a friendly-label suggestion, but it never proves or
-  changes a physical cable connection.
+  ports are actually cabled to WING Local inputs/outputs and AES50 stagebox
+  outputs. A console scribble name may be offered as a friendly-label
+  suggestion, but it never proves or changes a physical cable connection.
+- Studio Connections are stored as readable, sorted JSON in
+  `Application Support/FluxKlang/studio-connections.json` and remain editable
+  through Settings. The one-time starting output map is the editable bundled
+  file `Shared/Configuration/studio-connections.defaults.json`; later user
+  edits and cleared assignments are never re-seeded by that version.
 - **Home** is the saved normal physical wiring map. A **Temporary Move** overlays
   selected connectors without mutating Home. Returning Home requires a cable
   checklist, an explicit routing preview/apply action, and verification before
@@ -74,12 +80,29 @@ previews.
   the review, resolve validation errors, and explicitly accept before semantic
   Studio nodes are added. Accepting still does not write to a WING; **Listen** is
   the separate hardware-write action.
-- Assistant generation and explicit push-to-talk transcription run on device
-  when the system capabilities are available. A deterministic grounded fallback
-  remains available when Foundation Models are unavailable. Microphone audio is
-  not retained. Visible conversation text and card references may sync through
-  the user's private iCloud database; other app configuration uses iCloud
-  key-value storage plus an offline local copy.
+- Assistant generation uses Apple Intelligence by default when Foundation
+  Models are available. Settings can instead opt into GitHub Copilot using its
+  OpenAI-compatible API, matching FluxHaus Server, with a configurable model
+  (default `gpt-4o`). The GitHub token is stored only in this device's Keychain;
+  prompts and required FluxKlang tool results are sent to GitHub when selected.
+  Both providers expose only authoritative help, read-only state inspection,
+  and review-only Studio draft tools—never WING writes.
+- A deterministic grounded fallback remains available when the selected model
+  is unavailable or fails. Explicit push-to-talk transcription runs on device
+  when supported, and microphone audio is not retained. Visible conversation
+  text and card references may sync through the user's private iCloud database;
+  other app configuration uses iCloud key-value storage plus an offline copy.
+- **Launch Control XL 3:** FluxKlang listens to the main USB MIDI endpoint in
+  the controller's fixed Default Mode 16. The eight faders control the current
+  FluxKlang fader bank, the first encoder row controls mono pan or stereo
+  balance, the two button rows select and mute strips, and Track Left/Right
+  changes banks. Settings defaults to **Monitor (WING handles MIDI)** for rigs
+  where the controller's DIN output is also connected directly to the WING.
+  **Control through FluxKlang (USB only)** must be used only after disabling
+  direct WING MIDI control to prevent duplicate actions.
+- The Launch Control mapping is stored in readable, editable
+  `Application Support/FluxKlang/launch-control-xl.json`, initially copied from
+  `Shared/Configuration/launch-control-xl.json`.
 
 > **Meter disclosure:** the slim colored bars beside faders are currently
 > simulated from fader position, not WING audio-level telemetry. Demo Mode also
@@ -115,8 +138,7 @@ make test        # unit tests
 - [x] 3 focused UI tests in Demo Mode on iPhone 17 Pro, iOS 26.5 simulator:
   Studio/Assistant/Mix/More, synthetic failure-to-Demo recovery, draft review,
   Temporary Move/Return Home gating, and forced grounded fallback.
-- [x] iOS simulator build, unsigned generic iOS archive, and native Mac build
-  with Xcode beta.
+- [x] iOS simulator build, unsigned generic iOS archive, and native Mac build.
 - [ ] Manual Mac interaction pass: keyboard navigation through the sidebar,
   Assistant, Studio menus, fader arrow-key adjustment, Settings/Studio
   Connections, and Temporary Move review with VoiceOver and large Dynamic Type.

@@ -9,6 +9,30 @@ import Testing
 @testable import FluxKlang
 
 struct StudioGraphTests {
+    @Test func feedbackCycleIsAnErrorAndProducesNoSettings() {
+        let firstEffect = StudioNode(kind: .effect(UUID()), title: "Delay")
+        let secondEffect = StudioNode(kind: .effect(UUID()), title: "Reverb")
+        let endpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)
+        let endpointNode = StudioNode(kind: .endpoint(endpoint.id), title: endpoint.name)
+        var graph = StudioGraph(nodes: [firstEffect, secondEffect, endpointNode])
+        graph.connect(from: output(firstEffect), to: input(secondEffect))
+        graph.connect(from: output(secondEffect), to: input(firstEffect))
+        graph.connect(from: output(secondEffect), to: input(endpointNode))
+
+        let compiled = StudioSignalCompiler.compile(StudioCompilationInput(
+            graph: graph,
+            endpoints: [endpoint],
+            effects: [],
+            connections: GlobalStudioConnections(),
+            equipment: [],
+            speakers: []
+        ))
+
+        #expect(compiled.hasErrors)
+        #expect(compiled.routingPlan.appliableEdgeIDs.isEmpty)
+        #expect(compiled.settings.isEmpty)
+    }
+
     private func output(_ node: StudioNode) -> StudioPortRef {
         StudioPortRef(nodeID: node.id, side: .output, port: 0)
     }
@@ -159,7 +183,8 @@ struct StudioGraphTests {
         )
 
         #expect(!resourcePlan.hasErrors)
-        #expect(resourcePlan.allocations.map(\.controlNode) == [.bus(5), .bus(6)])
+        #expect(resourcePlan.allocations.map(\.controlNode) == [.bus(5), .bus(7)])
+        #expect(resourcePlan.allocations.map(\.rightControlNode) == [.bus(6), .bus(8)])
         #expect(!resourcePlan.allocations.map(\.controlNode.index).contains(1))
         #expect(!resourcePlan.allocations.map(\.controlNode.index).contains(16))
         #expect(!resourcePlan.allocations.map(\.controlNode.index).contains(15))
@@ -167,7 +192,12 @@ struct StudioGraphTests {
 
     @Test func endpointAllocatorNamesAndRoutesFinalMixStems() {
         let endpoint = StudioEndpoint(name: "Very Long Endpoint Name", destination: .finalMix)
-        let allocation = StudioEndpointAllocation(endpoint: endpoint, endpointNodeID: UUID(), controlNode: .bus(5))
+        let allocation = StudioEndpointAllocation(
+            endpoint: endpoint,
+            endpointNodeID: UUID(),
+            controlNode: .bus(5),
+            rightControlNode: .bus(6)
+        )
 
         let settings = StudioResourceAllocator.settings(for: allocation)
 
@@ -175,7 +205,22 @@ struct StudioGraphTests {
             $0.address == WingAddress.name(.bus, 5) && $0.value == .string("Very Long En")
         })
         #expect(settings.contains {
-            $0.address == WingAddress.mainOn(.bus, 5, toMain: 1) && $0.value == .int(1)
+            $0.address == WingAddress.fader(.bus, 5)
+                && $0.value == .float(FaderMath.position(
+                    fromDecibels: StudioResourceAllocator.initialLevelDecibels
+                ))
+        })
+        #expect(settings.contains {
+            $0.address == WingAddress.mute(.bus, 5) && $0.value == .int(1)
+        })
+        #expect(settings.contains {
+            $0.address == WingAddress.mute(.bus, 6) && $0.value == .int(1)
+        })
+        #expect(settings.contains {
+            $0.address == WingAddress.fader(.bus, 6)
+                && $0.value == .float(FaderMath.position(
+                    fromDecibels: StudioResourceAllocator.initialLevelDecibels
+                ))
         })
     }
 
@@ -237,22 +282,101 @@ struct StudioGraphTests {
 
         #expect(!compiled.hasErrors)
         // Speaker buses 1...4 and effect buses 16/15 are reserved, so endpoint
-        // stems allocate buses 5 and 6.
+        // stems allocate stereo pairs 5/6 and 7/8.
         #expect(valueByAddress[WingAddress.sendOn(.channel, 11, toBus: 5)] == .int(1))
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 12, toBus: 5)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 12, toBus: 6)] == .int(1))
+        #expect(valueByAddress[WingAddress.fader(.channel, 11)] == nil)
+        #expect(valueByAddress[WingAddress.mute(.channel, 11)] == nil)
+        #expect(valueByAddress[WingAddress.mainOn(.channel, 11, toMain: 1)] == .int(0))
+        #expect(valueByAddress[WingAddress.mainOn(.channel, 12, toMain: 1)] == .int(0))
         #expect(valueByAddress[WingAddress.channelSourceIndex(11)] == .int(11))
         #expect(valueByAddress[WingAddress.channelSourceIndex(12)] == .int(12))
         #expect(valueByAddress[WingAddress.mainOn(.bus, 5, toMain: 1)] == .int(1))
+        #expect(valueByAddress[WingAddress.mainOn(.bus, 6, toMain: 2)] == .int(1))
         // The instrument feeds the effect bus pair.
         #expect(valueByAddress[WingAddress.sendOn(.channel, 11, toBus: 16)] == .int(1))
         #expect(valueByAddress[WingAddress.sendOn(.channel, 12, toBus: 15)] == .int(1))
         // The effect is patched out/back and its return feeds the Space endpoint.
         #expect(valueByAddress[WingAddress.outputSourceIndex(7)] == .int(16))
         #expect(valueByAddress[WingAddress.channelSourceIndex(40)] == .int(21))
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 40, toBus: 6)] == .int(1))
-        #expect(valueByAddress[WingAddress.sendOn(.channel, 39, toBus: 6)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 40, toBus: 7)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.channel, 39, toBus: 8)] == .int(1))
         // The placed Space control then sends its generated bus stem to speakers.
-        #expect(valueByAddress[WingAddress.sendOn(.bus, 6, toBus: 1)] == .int(1))
-        #expect(valueByAddress[WingAddress.sendOn(.bus, 6, toBus: 4)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.bus, 7, toBus: 1)] == .int(1))
+        #expect(valueByAddress[WingAddress.sendOn(.bus, 8, toBus: 4)] == .int(1))
+    }
+
+    @Test func finalMixUsesConfiguredMainSpeakerOutputs() {
+        let synth = Equipment(name: "Synth", outputs: ["Out L", "Out R"], isStereo: true)
+        let instrumentNode = StudioNode(kind: .instrument(synth.id), title: synth.name)
+        let endpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)
+        let endpointNode = StudioNode(kind: .endpoint(endpoint.id), title: endpoint.name)
+        var graph = StudioGraph(nodes: [instrumentNode, endpointNode])
+        graph.connect(from: output(instrumentNode), to: input(endpointNode))
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(
+            inputs: [
+                StudioInputConnection(connector: 19, equipmentID: synth.id, outputPort: 0),
+                StudioInputConnection(connector: 20, equipmentID: synth.id, outputPort: 1)
+            ],
+            outputs: [
+                StudioOutputConnection(connector: 7, destinationName: "Main Speakers L"),
+                StudioOutputConnection(connector: 8, destinationName: "Main Speakers R")
+            ]
+        ))
+
+        let compiled = StudioSignalCompiler.compile(StudioCompilationInput(
+            graph: graph,
+            endpoints: [endpoint],
+            effects: [],
+            connections: connections,
+            equipment: [synth],
+            speakers: SpeakerArray.standardQuad.speakers
+        ))
+        let values = Dictionary(compiled.settings.map { ($0.address, $0.value) }) { _, last in last }
+
+        #expect(values[WingAddress.outputSourceGroup(7)] == .string("MAIN"))
+        #expect(values[WingAddress.outputSourceIndex(7)] == .int(1))
+        #expect(values[WingAddress.outputSourceGroup(8)] == .string("MAIN"))
+        #expect(values[WingAddress.outputSourceIndex(8)] == .int(2))
+        #expect(values[WingAddress.mainOn(.bus, 5, toMain: 1)] == .int(1))
+        #expect(values[WingAddress.mainOn(.bus, 6, toMain: 2)] == .int(1))
+        #expect(values[WingAddress.mainLevel(.bus, 5, toMain: 1)] == .float(0))
+        #expect(values[WingAddress.mainLevel(.bus, 6, toMain: 2)] == .float(0))
+    }
+
+    @Test func customDestinationPatchesStereoEndpointPairDirectlyToOutputs() {
+        let synth = Equipment(name: "Synth", outputs: ["Out L", "Out R"], isStereo: true)
+        let source = StudioNode(kind: .instrument(synth.id), title: synth.name)
+        let endpoint = StudioEndpoint(
+            name: "Desk Speakers",
+            destination: .custom,
+            outputConnectors: [
+                WingOutputConnector(bank: .local, index: 1),
+                WingOutputConnector(bank: .local, index: 2)
+            ]
+        )
+        let destination = StudioNode(kind: .endpoint(endpoint.id), title: endpoint.name)
+        var graph = StudioGraph(nodes: [source, destination])
+        graph.connect(from: output(source), to: input(destination))
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(inputs: [
+            StudioInputConnection(connector: 19, equipmentID: synth.id, outputPort: 0),
+            StudioInputConnection(connector: 20, equipmentID: synth.id, outputPort: 1)
+        ]))
+
+        let compiled = StudioSignalCompiler.compile(StudioCompilationInput(
+            graph: graph,
+            endpoints: [endpoint],
+            effects: [],
+            connections: connections,
+            equipment: [synth],
+            speakers: SpeakerArray.standardQuad.speakers
+        ))
+        let values = Dictionary(compiled.settings.map { ($0.address, $0.value) }) { _, last in last }
+
+        #expect(!compiled.hasErrors)
+        #expect(values[WingAddress.outputSourceGroup(1)] == .string("BUS"))
+        #expect(values[WingAddress.outputSourceIndex(1)] == .int(5))
+        #expect(values[WingAddress.outputSourceGroup(2)] == .string("BUS"))
+        #expect(values[WingAddress.outputSourceIndex(2)] == .int(6))
     }
 }

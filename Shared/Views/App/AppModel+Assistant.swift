@@ -5,7 +5,8 @@ extension AppModel {
     /// cannot access `WingController`; only this value projection crosses the
     /// boundary.
     func assistantToolContext() -> AssistantToolContext {
-        let compiled = studioCompiledRouting()
+        let currentConnections = studioConnectionsForCurrentWing()
+        let compiled = studioCompiledRouting(connections: currentConnections)
         let routingIssues = studioRoutingPlan().issues.map { AssistantUntrustedText($0.message) }
         let resourcePlan = studioResourcePlan()
         let resourceIssues = resourcePlan.issues.map { AssistantUntrustedText($0.message) }
@@ -14,9 +15,9 @@ extension AppModel {
             currentScreen: AssistantScreen(section),
             connection: AssistantConnectionState(wing.connection, isDemo: isDemo),
             equipment: equipment.items,
-            homeConnections: studioConnections.connections.home,
-            effectiveConnections: studioConnections.connections.effectiveHome,
-            activeMoves: studioConnections.connections.temporaryMoves.filter(\.lifecycle.isEffective),
+            homeConnections: currentConnections.home,
+            effectiveConnections: currentConnections.effectiveHome,
+            activeMoves: currentConnections.temporaryMoves.filter(\.lifecycle.isEffective),
             environments: environments.environments,
             activeEnvironmentID: environments.activeID,
             presets: presets.presets,
@@ -31,7 +32,17 @@ extension AppModel {
             graph: environments.activeStudioGraph,
             endpoints: environments.activeStudioEndpoints,
             effects: environments.activeEffects,
-            globalConnections: studioConnections.connections
+            globalConnections: currentConnections
+        )
+    }
+
+    func studioConnectionsForCurrentWing() -> GlobalStudioConnections {
+        let liveInputNames = Dictionary(uniqueKeysWithValues: StudioHomeConnections.inputRange.compactMap { connector in
+            wing.inputName(connector).map { (connector, $0) }
+        })
+        return studioConnections.connections.reconcilingLiveInputNames(
+            liveInputNames,
+            equipment: equipment.items
         )
     }
 

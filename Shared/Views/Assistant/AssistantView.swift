@@ -321,7 +321,7 @@ private struct AssistantAvailabilityBanner: View {
     var body: some View {
         let availability = appModel.assistantChat.modelAvailability
         HStack {
-            Image(systemName: availability == .ready ? "apple.intelligence" : "info.circle")
+            Image(systemName: availability.usesFallback ? "info.circle" : "sparkles")
             Text(availability.title)
             Spacer()
             if availability.usesFallback {

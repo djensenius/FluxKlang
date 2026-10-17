@@ -1,0 +1,97 @@
+{
+  "outputs": [
+    {
+      "bank": "LCL",
+      "connector": 1,
+      "destinationName": "Desk Speakers L"
+    },
+    {
+      "bank": "LCL",
+      "connector": 2,
+      "destinationName": "Desk Speakers R"
+    },
+    {
+      "bank": "LCL",
+      "connector": 3,
+      "equipmentName": "Endorphin.es EviL Pet",
+      "inputPort": 0
+    },
+    {
+      "bank": "LCL",
+      "connector": 4,
+      "equipmentName": "Endorphin.es EviL Pet",
+      "inputPort": 1
+    },
+    {
+      "bank": "LCL",
+      "connector": 5,
+      "equipmentName": "Hologram Microcosm",
+      "inputPort": 0
+    },
+    {
+      "bank": "LCL",
+      "connector": 6,
+      "equipmentName": "Hologram Microcosm",
+      "inputPort": 1
+    },
+    {
+      "bank": "LCL",
+      "connector": 7,
+      "destinationName": "Main Speakers L"
+    },
+    {
+      "bank": "LCL",
+      "connector": 8,
+      "destinationName": "Main Speakers R"
+    },
+    {
+      "bank": "A",
+      "connector": 1,
+      "equipmentName": "Torso S-4",
+      "inputPort": 0
+    },
+    {
+      "bank": "A",
+      "connector": 2,
+      "equipmentName": "Torso S-4",
+      "inputPort": 1
+    },
+    {
+      "bank": "A",
+      "connector": 3,
+      "equipmentName": "SOMA Cosmos",
+      "inputPort": 0
+    },
+    {
+      "bank": "A",
+      "connector": 4,
+      "equipmentName": "SOMA Cosmos",
+      "inputPort": 1
+    },
+    {
+      "bank": "A",
+      "connector": 5,
+      "equipmentName": "OP-1 Field",
+      "inputPort": 0
+    },
+    {
+      "bank": "A",
+      "connector": 6,
+      "equipmentName": "OP-1 Field",
+      "inputPort": 1
+    },
+    {
+      "bank": "A",
+      "connector": 7,
+      "equipmentName": "OP-XY",
+      "inputPort": 0
+    },
+    {
+      "bank": "A",
+      "connector": 8,
+      "equipmentName": "OP-XY",
+      "inputPort": 1
+    }
+  ],
+  "version": 1
+}

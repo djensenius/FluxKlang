@@ -103,6 +103,34 @@ struct SiriAppIntentsTests {
         #expect(model.wing.transportWriteCount == writesBefore)
     }
 
+    @Test func naturalLanguageSiriRequestParsesSpokenWiringToSpeakers() async throws {
+        let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
+        let model = AppModel(assistant: coordinator, wing: .preview())
+        let source = model.equipment.items[0]
+        _ = model.environments.addEnvironment(named: "Siri Natural Language")
+        let effect = Effect(name: "Tape Delay")
+        model.environments.add(effect)
+        let beforeGraph = model.environments.activeStudioGraph
+        let beforeValues = model.wing.values
+        let writesBefore = model.wing.transportWriteCount
+
+        let spoken = await SiriDraftStudioAction.execute(
+            request: "Tell Flux Klang to wire \(source.name) through Tape Delay to speakers",
+            model: model
+        )
+
+        let draft = try #require(coordinator.pendingStudioDraft)
+        #expect(draft.request.sourceInstrumentIDs == [source.id])
+        #expect(draft.request.effectChainIDs == [effect.id])
+        #expect(draft.request.destination == .finalMix)
+        #expect(spoken.contains("Drafted \(source.name)"))
+        #expect(model.section == .studio)
+        #expect(coordinator.navigationTarget == .reviewPendingDraft)
+        #expect(model.environments.activeStudioGraph == beforeGraph)
+        #expect(model.wing.values == beforeValues)
+        #expect(model.wing.transportWriteCount == writesBefore)
+    }
+
     @Test func draftIntentDropsMissingAndDuplicateParametersWithoutApplyingRouting() async throws {
         let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
         let model = AppModel(assistant: coordinator, wing: .preview())

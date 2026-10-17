@@ -24,7 +24,7 @@ final class AssistantChatController {
         }
     }
 
-    private let synthesizer = AVSpeechSynthesizer()
+    @ObservationIgnored private lazy var synthesizer = AVSpeechSynthesizer()
     private static let spokenRepliesKey = "assistant.spokenReplies"
     private static var forcesFallbackForUITesting: Bool {
         ProcessInfo.processInfo.arguments.contains("-ui-test-force-fallback")
@@ -38,14 +38,23 @@ final class AssistantChatController {
         self.coordinator = coordinator
         self.store = store
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
-        if let generator {
-            self.generator = generator
-        } else if Self.forcesFallbackForUITesting {
-            self.generator = fallback
+        if Self.forcesFallbackForUITesting {
+            self.generator = AssistantDraftPreflightGenerator(
+                coordinator: coordinator,
+                downstream: fallback
+            )
+        } else if let generator {
+            self.generator = AssistantDraftPreflightGenerator(
+                coordinator: coordinator,
+                downstream: generator
+            )
         } else {
-            self.generator = AssistantGeneratorRouter(
-                model: FoundationModelAssistantGenerator(coordinator: coordinator),
-                fallback: fallback
+            self.generator = AssistantDraftPreflightGenerator(
+                coordinator: coordinator,
+                downstream: AssistantGeneratorRouter(
+                    model: FoundationModelAssistantGenerator(coordinator: coordinator),
+                    fallback: fallback
+                )
             )
         }
         spokenRepliesEnabled = UserDefaults.standard.bool(forKey: Self.spokenRepliesKey)
@@ -62,6 +71,10 @@ final class AssistantChatController {
         conversations = await store.load()
         selectedConversationID = conversations.first?.id
         persistenceDiagnostics = await store.diagnostics
+        await refreshAvailability()
+    }
+
+    func refreshAvailability() async {
         modelAvailability = await generator.availability()
     }
 

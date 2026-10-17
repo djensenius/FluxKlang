@@ -27,6 +27,9 @@ final class AppModel {
     /// Persisted configurable fader bank.
     let faderLayout = FaderLayoutStore()
 
+    /// USB MIDI integration for the Novation Launch Control XL 3.
+    let launchControlXL = LaunchControlXLController()
+
     /// User-editable equipment library for the chain builder.
     let equipment = EquipmentStore()
 
@@ -50,6 +53,9 @@ final class AppModel {
 
     /// Shared read-only assistant domain plus local pending Studio drafts.
     let assistant: AssistantCoordinator
+
+    /// Local provider choice plus Keychain-backed GitHub Copilot credentials.
+    let assistantProviderSettings: AssistantProviderSettings
 
     /// User-visible assistant conversations, generation, history and speech.
     let assistantChat: AssistantChatController
@@ -95,11 +101,22 @@ final class AppModel {
 
     init(
         assistant: AssistantCoordinator = AssistantCoordinator(),
+        assistantProviderSettings: AssistantProviderSettings = AssistantProviderSettings(),
         wing: WingController = WingController()
     ) {
         self.wing = wing
         self.assistant = assistant
-        self.assistantChat = AssistantChatController(coordinator: assistant)
+        self.assistantProviderSettings = assistantProviderSettings
+        let fallback = AssistantFallbackGenerator(coordinator: assistant)
+        self.assistantChat = AssistantChatController(
+            coordinator: assistant,
+            generator: ConfigurableAssistantGenerator(
+                settings: assistantProviderSettings,
+                coordinator: assistant,
+                appleGenerator: FoundationModelAssistantGenerator(coordinator: assistant),
+                fallback: fallback
+            )
+        )
     }
 
     var isConnected: Bool { wing.connection.isConnected }
@@ -108,6 +125,10 @@ final class AppModel {
     /// Loads all persisted stores. Call once when the app launches.
     func loadStores() async {
         await faderLayout.load()
+        launchControlXL.setActionHandler { [weak self] action in
+            await self?.handleLaunchControlXL(action)
+        }
+        await launchControlXL.load()
         await equipment.load()
         await environments.load()
         environments.migrateEffectEquipmentLinks(using: equipment.items)
@@ -123,6 +144,9 @@ final class AppModel {
         await assistantChat.load()
         scheduleSiriEntityIndexing()
         startObservingCloudChanges()
+        if shouldReconnectOnStartup, let lastHost {
+            await connect(host: lastHost)
+        }
     }
 
     /// Begins watching iCloud for changes pushed from the user's other devices,
@@ -132,6 +156,12 @@ final class AppModel {
         cloudObserver = CloudChangeObserver { [weak self] in
             Task { @MainActor in await self?.reloadStores() }
         }
+    }
+
+    private var shouldReconnectOnStartup: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+            && !AcceptanceLaunchConfiguration.isUITesting
+            && !isConnected
     }
 
     /// Re-reads every persisted store, used when iCloud syncs new state.
@@ -185,7 +215,7 @@ final class AppModel {
 
     private func effectsWithEffectiveConnections() -> [Effect] {
         let resolver = StudioPhysicalResolver(
-            connections: studioConnections.connections.effectiveHome,
+            connections: studioConnectionsForCurrentWing().effectiveHome,
             equipment: equipment.items
         )
         return environments.activeEffects.map { effect in
@@ -193,6 +223,8 @@ final class AppModel {
             guard jacks.issues.isEmpty else { return effect }
             var resolved = effect
             resolved.sendOutputs = jacks.inputJacks
+                .filter { $0.bank == .local }
+                .map(\.index)
             resolved.returnInputs = jacks.outputJacks
             return resolved
         }
@@ -233,7 +265,7 @@ final class AppModel {
 
     /// Compiles the active semantic studio canvas into concrete WING settings.
     func studioCompiledRouting() -> StudioCompiledRouting {
-        studioCompiledRouting(connections: studioConnections.connections)
+        studioCompiledRouting(connections: studioConnectionsForCurrentWing())
     }
 
     func studioCompiledRouting(connections: GlobalStudioConnections) -> StudioCompiledRouting {
@@ -245,11 +277,6 @@ final class AppModel {
             equipment: equipment.items,
             speakers: spatial.array.speakers
         ))
-    }
-
-    /// Applies every valid branch of the semantic studio canvas to the WING.
-    func applyStudio() async {
-        await wing.apply(studioCompiledRouting().settings)
     }
 
     /// The placeable voices of the active environment, derived from its routing
@@ -459,29 +486,5 @@ extension AppModel {
         let model = AppModel()
         model.wing = .preview()
         return model
-    }
-}
-
-/// Owns an `NSUbiquitousKeyValueStore` change observer and removes it on
-/// deallocation, so the notification center doesn't retain the handler after the
-/// owning model goes away (e.g. SwiftUI previews). Kept as a separate, non-
-/// isolated class so its `deinit` can clean up without crossing actor isolation.
-private final class CloudChangeObserver {
-    private var token: (any NSObjectProtocol)?
-
-    init(onChange: @escaping @Sendable () -> Void) {
-        let store = NSUbiquitousKeyValueStore.default
-        token = NotificationCenter.default.addObserver(
-            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
-            object: store,
-            queue: .main
-        ) { _ in onChange() }
-        store.synchronize()
-    }
-
-    deinit {
-        if let token {
-            NotificationCenter.default.removeObserver(token)
-        }
     }
 }

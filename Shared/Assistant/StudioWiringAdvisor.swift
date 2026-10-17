@@ -1,133 +1,8 @@
 import CoreGraphics
 import Foundation
 
-struct StudioWiringRequest: Hashable, Sendable {
-    var sourceInstrumentIDs: [Equipment.ID]
-    var effectChainIDs: [Effect.ID]
-    var destination: StudioEndpointDestination
-
-    init(
-        sourceInstrumentIDs: [Equipment.ID],
-        effectChainIDs: [Effect.ID] = [],
-        destination: StudioEndpointDestination = .finalMix
-    ) {
-        self.sourceInstrumentIDs = sourceInstrumentIDs
-        self.effectChainIDs = effectChainIDs
-        self.destination = destination
-    }
-}
-
-struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var createdAt: Date
-    var request: PersistedRequest
-    var fragment: StudioGraphFragment
-    var cableInstructions: [StudioCableInstruction]
-    var logicalRoutingSummary: [AssistantUntrustedText]
-    var validation: [StudioDraftValidationIssue]
-
-    var hasErrors: Bool { validation.contains { $0.severity == .error } }
-
-    struct PersistedRequest: Codable, Hashable, Sendable {
-        var environmentID: RoutingEnvironment.ID?
-        var sourceInstrumentIDs: [Equipment.ID]
-        var effectChainIDs: [Effect.ID]
-        var destination: StudioEndpointDestination
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        request = try container.decode(PersistedRequest.self, forKey: .request)
-        fragment = try container.decode(StudioGraphFragment.self, forKey: .fragment)
-        cableInstructions = try container.decodeIfPresent(
-            [StudioCableInstruction].self,
-            forKey: .cableInstructions
-        ) ?? []
-        logicalRoutingSummary = try container.decodeIfPresent(
-            [AssistantUntrustedText].self,
-            forKey: .logicalRoutingSummary
-        ) ?? []
-        validation = try container.decodeIfPresent(
-            [StudioDraftValidationIssue].self,
-            forKey: .validation
-        ) ?? []
-    }
-
-    init(
-        id: UUID,
-        createdAt: Date,
-        request: PersistedRequest,
-        fragment: StudioGraphFragment,
-        cableInstructions: [StudioCableInstruction],
-        logicalRoutingSummary: [AssistantUntrustedText],
-        validation: [StudioDraftValidationIssue]
-    ) {
-        self.id = id
-        self.createdAt = createdAt
-        self.request = request
-        self.fragment = fragment
-        self.cableInstructions = cableInstructions
-        self.logicalRoutingSummary = logicalRoutingSummary
-        self.validation = validation
-    }
-}
-
-struct StudioGraphFragment: Codable, Hashable, Sendable {
-    var nodes: [StudioDraftNode]
-    var edges: [StudioDraftEdge]
-    var endpoints: [StudioEndpoint]
-}
-
-struct StudioDraftNode: Identifiable, Codable, Hashable, Sendable {
-    var reference: String
-    var node: StudioNode
-    var reusesExistingNode: Bool
-    var id: String { reference }
-}
-
-struct StudioDraftEdge: Identifiable, Codable, Hashable, Sendable {
-    var reference: String
-    var edge: StudioEdge
-    var id: String { reference }
-}
-
-struct StudioCableInstruction: Identifiable, Codable, Hashable, Sendable {
-    enum ConnectorKind: String, Codable, Hashable, Sendable {
-        case wingInput
-        case wingOutput
-    }
-
-    var id: String
-    var connectorKind: ConnectorKind
-    var connector: Int
-    var configuredLabel: AssistantUntrustedText
-    var instruction: AssistantUntrustedText
-    var usesActiveTemporaryMove: Bool
-}
-struct StudioDraftValidationIssue: Identifiable, Codable, Hashable, Sendable {
-    enum Severity: String, Codable, Hashable, Sendable {
-        case warning
-        case error
-    }
-
-    var code: String
-    var severity: Severity
-    var message: String
-    var id: String { code }
-}
-struct StudioPatchMergeResult: Hashable, Sendable {
-    var graph: StudioGraph
-    var endpoints: [StudioEndpoint]
-    var addedNodeCount: Int
-    var addedEdgeCount: Int
-}
-
+// swiftlint:disable file_length
+// swiftlint:disable:next type_body_length
 enum StudioWiringAdvisor {
     static func build(
         request: StudioWiringRequest,
@@ -137,14 +12,49 @@ enum StudioWiringAdvisor {
         currentGraph: StudioGraph,
         environmentID: RoutingEnvironment.ID? = nil
     ) -> StudioPatchDraft {
-        makeDraft(
+        let primary = StudioWiringRoute(
+            sourceInstrumentIDs: request.sourceInstrumentIDs,
+            effectChainIDs: request.effectChainIDs,
+            destination: request.destination,
+            includesDrySignal: request.includesDrySignal,
+            outputConnectors: request.outputConnectors
+        )
+        let routes = [primary] + request.additionalRoutes
+        guard routes.count > 1 else {
+            return makeDraft(
+                request: request,
+                equipment: equipment,
+                effects: effects,
+                connections: connections,
+                currentGraph: currentGraph,
+                environmentID: environmentID,
+                currentEnvironmentID: environmentID
+            )
+        }
+        let drafts = routes.map { route in
+            makeDraft(
+                request: StudioWiringRequest(
+                    sourceInstrumentIDs: route.sourceInstrumentIDs,
+                    effectChainIDs: route.effectChainIDs,
+                    destination: route.destination,
+                    includesDrySignal: route.includesDrySignal,
+                    outputConnectors: route.outputConnectors
+                ),
+                equipment: equipment,
+                effects: effects,
+                connections: connections,
+                currentGraph: currentGraph,
+                environmentID: environmentID,
+                currentEnvironmentID: environmentID
+            )
+        }
+        return StudioMultiRouteDraftBuilder.combine(
+            drafts,
             request: request,
             equipment: equipment,
             effects: effects,
-            connections: connections,
             currentGraph: currentGraph,
-            environmentID: environmentID,
-            currentEnvironmentID: environmentID
+            environmentID: environmentID
         )
     }
 
@@ -162,28 +72,40 @@ enum StudioWiringAdvisor {
             environmentID: environmentID,
             sourceInstrumentIDs: orderedUnique(request.sourceInstrumentIDs),
             effectChainIDs: orderedUnique(request.effectChainIDs),
-            destination: request.destination
+            destination: request.destination,
+            includesDrySignal: request.includesDrySignal,
+            outputConnectors: request.outputConnectors,
+            additionalRoutes: request.additionalRoutes
         )
         let signature = [
             environmentID?.uuidString ?? "no-environment",
             persistedRequest.sourceInstrumentIDs.map(\.uuidString).joined(separator: ","),
             persistedRequest.effectChainIDs.map(\.uuidString).joined(separator: ","),
-            persistedRequest.destination.rawValue
+            persistedRequest.destination.rawValue,
+            persistedRequest.includesDrySignal.description,
+            persistedRequest.outputConnectors?.map(\.label).joined(separator: ",") ?? "",
+            request.applicationMode.rawValue
         ].joined(separator: "|")
         let equipmentByID = Dictionary(equipment.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let effectsByID = Dictionary(effects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let endpoint = makeEndpoint(signature: signature, request: persistedRequest, equipmentByID: equipmentByID)
+        let endpoint = makeEndpoint(
+            signature: signature,
+            request: persistedRequest,
+            equipmentByID: equipmentByID,
+            connections: connections
+        )
         let nodeSpecs = makeNodes(
             request: persistedRequest,
             endpoint: endpoint,
             equipmentByID: equipmentByID,
             effectsByID: effectsByID,
-            currentGraph: currentGraph
+            currentGraph: request.applicationMode == .replace ? StudioGraph() : currentGraph
         )
         let edges = makeEdges(
             signature: signature,
             sourceIDs: persistedRequest.sourceInstrumentIDs,
             effectIDs: persistedRequest.effectChainIDs,
+            includesDrySignal: persistedRequest.includesDrySignal,
             endpointID: endpoint.id,
             nodes: nodeSpecs
         )
@@ -211,7 +133,8 @@ enum StudioWiringAdvisor {
                 effectsByID: effectsByID,
                 endpoint: endpoint
             ),
-            validation: validation
+            validation: validation,
+            applicationMode: request.applicationMode
         )
     }
 
@@ -228,7 +151,11 @@ enum StudioWiringAdvisor {
             request: StudioWiringRequest(
                 sourceInstrumentIDs: draft.request.sourceInstrumentIDs,
                 effectChainIDs: draft.request.effectChainIDs,
-                destination: draft.request.destination
+                destination: draft.request.destination,
+                includesDrySignal: draft.request.includesDrySignal,
+                outputConnectors: draft.request.outputConnectors,
+                additionalRoutes: draft.request.additionalRoutes,
+                applicationMode: draft.applicationMode
             ),
             equipment: equipment,
             effects: effects,
@@ -244,15 +171,29 @@ enum StudioWiringAdvisor {
     private static func makeEndpoint(
         signature: String,
         request: StudioPatchDraft.PersistedRequest,
-        equipmentByID: [Equipment.ID: Equipment]
+        equipmentByID: [Equipment.ID: Equipment],
+        connections: GlobalStudioConnections
     ) -> StudioEndpoint {
         let sourceNames = request.sourceInstrumentIDs.compactMap { equipmentByID[$0]?.name }
         let prefix = sourceNames.isEmpty ? "Studio" : sourceNames.joined(separator: " + ")
-        let suffix = request.destination == .space ? "Space" : "Mix"
+        let name: String
+        if request.destination == .finalMix, let speakers = mainSpeakerName(in: connections.effectiveHome) {
+            name = speakers
+        } else if request.destination == .custom,
+                  let outputName = customOutputName(
+                    connectors: request.outputConnectors ?? [],
+                    connections: connections.effectiveHome
+                  ) {
+            name = outputName
+        } else {
+            let suffix = request.destination == .space ? "Space" : "Mix"
+            name = "\(prefix) \(suffix)"
+        }
         return StudioEndpoint(
             id: stableUUID("endpoint|\(signature)"),
-            name: "\(prefix) \(suffix)",
+            name: name,
             destination: request.destination,
+            outputConnectors: request.outputConnectors,
             colorName: request.destination == .space ? "purple" : "blue",
             placement: request.destination == .space ? VoicePlacement() : nil
         )
@@ -314,10 +255,12 @@ enum StudioWiringAdvisor {
         )
     }
 
+    // swiftlint:disable:next function_parameter_count
     private static func makeEdges(
         signature: String,
         sourceIDs: [Equipment.ID],
         effectIDs: [Effect.ID],
+        includesDrySignal: Bool,
         endpointID: StudioEndpoint.ID,
         nodes: [StudioDraftNode]
     ) -> [StudioDraftEdge] {
@@ -325,6 +268,11 @@ enum StudioWiringAdvisor {
         let destinationKind = effectIDs.first.map(StudioNodeKind.effect) ?? .endpoint(endpointID)
         var pairs: [(StudioNodeKind, StudioNodeKind)] = sourceIDs.map {
             (.instrument($0), destinationKind)
+        }
+        if includesDrySignal, !effectIDs.isEmpty {
+            pairs.append(contentsOf: sourceIDs.map {
+                (.instrument($0), .endpoint(endpointID))
+            })
         }
         for (index, effectID) in effectIDs.enumerated() {
             let next = effectIDs.indices.contains(index + 1)
@@ -400,10 +348,9 @@ enum StudioWiringAdvisor {
         let equipment = Array(equipmentByID.values)
         let activeMoveIDs = Set(connections.temporaryMoves.filter(\.lifecycle.isEffective).map(\.equipmentID))
         var instructions: [StudioCableInstruction] = []
-        let relevantEquipment = Set(request.sourceInstrumentIDs + request.effectChainIDs.compactMap {
-            effectsByID[$0]?.equipmentID
-        })
-        for connection in effective.inputs where relevantEquipment.contains(connection.equipmentID) {
+        let effectEquipment = Set(request.effectChainIDs.compactMap { effectsByID[$0]?.equipmentID })
+        let inputEquipment = Set(request.sourceInstrumentIDs).union(effectEquipment)
+        for connection in effective.inputs where inputEquipment.contains(connection.equipmentID) {
             let label = connection.label(equipment: equipment)
             let moved = activeMoveIDs.contains(connection.equipmentID)
             instructions.append(StudioCableInstruction(
@@ -417,19 +364,38 @@ enum StudioWiringAdvisor {
                 usesActiveTemporaryMove: moved
             ))
         }
-        for connection in effective.outputs where relevantEquipment.contains(connection.equipmentID) {
+        for connection in effective.outputs {
+            guard let equipmentID = connection.equipmentID,
+                  effectEquipment.contains(equipmentID) else { continue }
             let label = connection.label(equipment: equipment)
-            let moved = activeMoveIDs.contains(connection.equipmentID)
+            let moved = activeMoveIDs.contains(equipmentID)
             instructions.append(StudioCableInstruction(
-                id: "output-\(connection.connector)-\(connection.equipmentID)-\(connection.inputPort)",
+                id: "output-\(connection.bank.rawValue)-\(connection.connector)-\(equipmentID)-"
+                    + "\(connection.inputPort ?? -1)",
                 connectorKind: .wingOutput,
                 connector: connection.connector,
                 configuredLabel: AssistantUntrustedText(label),
                 instruction: AssistantUntrustedText(
-                    "\(moved ? "Active Temporary Move: " : "")connect WING output \(connection.connector) to \(label)."
+                    "\(moved ? "Active Temporary Move: " : "")connect "
+                        + "\(connection.outputConnector.label) to \(label)."
                 ),
                 usesActiveTemporaryMove: moved
             ))
+        }
+        if request.destination == .finalMix {
+            for connection in mainSpeakerOutputs(in: effective) {
+                let label = connection.label(equipment: equipment)
+                instructions.append(StudioCableInstruction(
+                    id: "destination-\(connection.bank.rawValue)-\(connection.connector)",
+                    connectorKind: .wingOutput,
+                    connector: connection.connector,
+                    configuredLabel: AssistantUntrustedText(label),
+                    instruction: AssistantUntrustedText(
+                        "\(connection.outputConnector.label) feeds \(label)."
+                    ),
+                    usesActiveTemporaryMove: false
+                ))
+            }
         }
         return instructions.sorted {
             ($0.connectorKind.rawValue, $0.connector, $0.id) < ($1.connectorKind.rawValue, $1.connector, $1.id)
@@ -444,9 +410,16 @@ enum StudioWiringAdvisor {
     ) -> [AssistantUntrustedText] {
         let sources = request.sourceInstrumentIDs.compactMap { equipmentByID[$0]?.name }
         let effects = request.effectChainIDs.compactMap { effectsByID[$0]?.name }
-        let path = (sources.isEmpty ? ["Missing source"] : [sources.joined(separator: " + ")])
+        let source = sources.isEmpty ? "Missing source" : sources.joined(separator: " + ")
+        let path = [source]
             + effects
             + [endpoint.name]
+        if request.includesDrySignal, !effects.isEmpty {
+            return [
+                AssistantUntrustedText("\(source) → \(endpoint.name)"),
+                AssistantUntrustedText(path.joined(separator: " → "))
+            ]
+        }
         return [AssistantUntrustedText(path.joined(separator: " → "))]
     }
 
@@ -468,6 +441,41 @@ enum StudioWiringAdvisor {
         return issues
             .filter { seen.insert($0.code).inserted }
             .sorted { $0.code < $1.code }
+    }
+
+    private static func mainSpeakerName(in connections: StudioHomeConnections) -> String? {
+        mainSpeakerOutputs(in: connections).compactMap(\.destinationName).first.map {
+            $0.replacingOccurrences(of: " L", with: "")
+                .replacingOccurrences(of: " R", with: "")
+        }
+    }
+
+    private static func customOutputName(
+        connectors: [WingOutputConnector],
+        connections: StudioHomeConnections
+    ) -> String? {
+        let connectorSet = Set(connectors)
+        let names = connections.outputs.compactMap { output -> String? in
+            guard connectorSet.contains(output.outputConnector),
+                  let name = output.destinationName else { return nil }
+            let suffixes = [" left", " right", " l", " r"]
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            for suffix in suffixes where trimmed.lowercased().hasSuffix(suffix) {
+                return String(trimmed.dropLast(suffix.count))
+            }
+            return trimmed
+        }
+        return names.first
+    }
+
+    private static func mainSpeakerOutputs(
+        in connections: StudioHomeConnections
+    ) -> [StudioOutputConnection] {
+        connections.outputs.filter {
+            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
+        }.sorted {
+            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+        }
     }
 
     private static func stableUUID(_ value: String) -> UUID {

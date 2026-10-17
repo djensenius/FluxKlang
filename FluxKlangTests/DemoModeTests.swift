@@ -108,4 +108,26 @@ struct DemoModeTests {
 
         await controller.disconnect()
     }
+
+    @Test func pacedApplyConfirmsSafetyBeforeRouting() async {
+        let controller = WingController.demo()
+        await controller.connectDemo()
+        let safety = [
+            WingSetting(address: WingAddress.fader(.bus, 15), value: .float(
+                FaderMath.position(fromDecibels: StudioResourceAllocator.initialLevelDecibels)
+            )),
+            WingSetting(address: WingAddress.mute(.bus, 15), value: .int(1))
+        ]
+        let routing = WingSetting(
+            address: WingAddress.mainOn(.bus, 15, toMain: 1),
+            value: .int(1)
+        )
+
+        let result = await controller.applyAndVerify(safety + [routing], safetySettings: safety)
+
+        #expect(result.state == .verified)
+        #expect(result.confirmedCount == 3)
+        #expect(controller.confirmedValues[routing.address] == routing.value)
+        await controller.disconnect()
+    }
 }

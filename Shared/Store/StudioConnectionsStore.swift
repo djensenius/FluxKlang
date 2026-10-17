@@ -17,18 +17,23 @@ final class StudioConnectionsStore {
     struct Persisted: Codable, Sendable {
         var connections: GlobalStudioConnections
         var initialized: Bool?
+        var confirmedOutputDefaultsVersion: Int?
     }
 
     private let fileStore: JSONFileStore
     private let fileName: String
+    private let outputDefaults: StudioOutputDefaults?
     private var loaded = false
+    private var confirmedOutputDefaultsVersion = 0
 
     init(
         fileStore: JSONFileStore = .shared,
-        fileName: String = "studio-connections.json"
+        fileName: String = "studio-connections.json",
+        outputDefaults: StudioOutputDefaults? = .bundled()
     ) {
         self.fileStore = fileStore
         self.fileName = fileName
+        self.outputDefaults = outputDefaults
     }
 
     func load(
@@ -40,6 +45,7 @@ final class StudioConnectionsStore {
         loaded = true
         if let saved = await fileStore.load(Persisted.self, from: fileName) {
             connections = saved.connections
+            confirmedOutputDefaultsVersion = saved.confirmedOutputDefaultsVersion ?? 0
             let initialized = saved.initialized ?? !saved.connections.isEmpty
             if !initialized, saved.connections.isEmpty {
                 connections = .migratingLegacy(
@@ -47,7 +53,6 @@ final class StudioConnectionsStore {
                     activeID: activeID,
                     equipment: equipment
                 )
-                await persist()
             }
         } else {
             connections = .migratingLegacy(
@@ -55,8 +60,14 @@ final class StudioConnectionsStore {
                 activeID: activeID,
                 equipment: equipment
             )
-            await persist()
         }
+        connections.home.removeOutOfRangeLegacyInputs()
+        if let outputDefaults,
+           confirmedOutputDefaultsVersion < outputDefaults.version {
+            connections.home.applyConfirmedOutputDefaults(outputDefaults, equipment: equipment)
+            confirmedOutputDefaultsVersion = outputDefaults.version
+        }
+        await persist()
     }
 
     func reload(
@@ -93,10 +104,11 @@ final class StudioConnectionsStore {
     func setOutput(
         _ connection: StudioOutputConnection?,
         connector: Int,
+        bank: WingOutputConnectorBank = .local,
         equipment: [Equipment]
     ) async throws {
         var home = connections.home
-        try home.setOutput(connection, connector: connector, equipment: equipment)
+        try home.setOutput(connection, connector: connector, bank: bank, equipment: equipment)
         var candidate = connections
         candidate.home = home
         try validateTemporaryMoves(in: candidate, equipment: equipment)
@@ -157,8 +169,8 @@ final class StudioConnectionsStore {
             let moveInputPorts = Set(move.connections.inputs.map(\.outputPort))
             let homeOutputPorts = Set(candidate.home.outputs.filter {
                 $0.equipmentID == move.equipmentID
-            }.map(\.inputPort))
-            let moveOutputPorts = Set(move.connections.outputs.map(\.inputPort))
+            }.compactMap(\.inputPort))
+            let moveOutputPorts = Set(move.connections.outputs.compactMap(\.inputPort))
             guard homeInputPorts == moveInputPorts, homeOutputPorts == moveOutputPorts else {
                 let equipmentName = equipment.first { $0.id == move.equipmentID }?.name
                     ?? "Moved equipment"
@@ -186,6 +198,13 @@ final class StudioConnectionsStore {
     }
 
     private func persist() async {
-        await fileStore.save(Persisted(connections: connections, initialized: true), to: fileName)
+        await fileStore.save(
+            Persisted(
+                connections: connections,
+                initialized: true,
+                confirmedOutputDefaultsVersion: confirmedOutputDefaultsVersion
+            ),
+            to: fileName
+        )
     }
 }

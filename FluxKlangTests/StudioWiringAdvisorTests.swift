@@ -3,6 +3,45 @@ import Testing
 @testable import FluxKlang
 
 struct StudioWiringAdvisorTests {
+    @Test func advisorBuildsParallelDryAndEffectBranchesToMainSpeakers() {
+        let fixture = Fixture()
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(
+                sourceInstrumentIDs: [fixture.synth.id],
+                effectChainIDs: [fixture.effect.id],
+                includesDrySignal: true,
+                applicationMode: .replace
+            ),
+            equipment: [fixture.synth, fixture.effectEquipment],
+            effects: [fixture.effect],
+            connections: fixture.connections,
+            currentGraph: StudioGraph()
+        )
+        let instrumentNode = draft.fragment.nodes.first {
+            $0.node.kind == .instrument(fixture.synth.id)
+        }?.node
+        let effectNode = draft.fragment.nodes.first {
+            $0.node.kind == .effect(fixture.effect.id)
+        }?.node
+        let endpointNode = draft.fragment.nodes.first {
+            if case .endpoint = $0.node.kind { return true }
+            return false
+        }?.node
+
+        #expect(draft.request.includesDrySignal)
+        #expect(draft.fragment.edges.count == 3)
+        #expect(draft.fragment.edges.contains {
+            $0.edge.from.nodeID == instrumentNode?.id && $0.edge.to.nodeID == endpointNode?.id
+        })
+        #expect(draft.fragment.edges.contains {
+            $0.edge.from.nodeID == instrumentNode?.id && $0.edge.to.nodeID == effectNode?.id
+        })
+        #expect(draft.fragment.edges.contains {
+            $0.edge.from.nodeID == effectNode?.id && $0.edge.to.nodeID == endpointNode?.id
+        })
+        #expect(draft.logicalRoutingSummary.count == 2)
+    }
+
     private struct Fixture {
         let synth: Equipment
         let effectEquipment: Equipment
@@ -130,6 +169,61 @@ struct StudioWiringAdvisorTests {
         #expect(!draft.cableInstructions.contains { $0.connector == 1 || $0.connector == 2 })
     }
 
+    @Test func sourceOnlyDraftDoesNotTellUserToFeedWingOutputsBackIntoInstrument() {
+        let synth = Equipment(
+            name: "Synth",
+            inputs: ["Input L", "Input R"],
+            outputs: ["Output L", "Output R"],
+            isStereo: true
+        )
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(
+            inputs: [
+                StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0),
+                StudioInputConnection(connector: 2, equipmentID: synth.id, outputPort: 1)
+            ],
+            outputs: [
+                StudioOutputConnection(connector: 1, equipmentID: synth.id, inputPort: 0),
+                StudioOutputConnection(connector: 2, equipmentID: synth.id, inputPort: 1)
+            ]
+        ))
+
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id]),
+            equipment: [synth],
+            effects: [],
+            connections: connections,
+            currentGraph: StudioGraph()
+        )
+
+        #expect(draft.cableInstructions.map(\.connectorKind) == [.wingInput, .wingInput])
+    }
+
+    @Test func finalMixDraftNamesAndShowsConfiguredMainSpeakerOutputs() {
+        let synth = Equipment(name: "Synth", outputs: ["Output L", "Output R"], isStereo: true)
+        let connections = GlobalStudioConnections(home: StudioHomeConnections(
+            inputs: [
+                StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0),
+                StudioInputConnection(connector: 2, equipmentID: synth.id, outputPort: 1)
+            ],
+            outputs: [
+                StudioOutputConnection(connector: 7, destinationName: "Main Speakers L"),
+                StudioOutputConnection(connector: 8, destinationName: "Main Speakers R")
+            ]
+        ))
+
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id]),
+            equipment: [synth],
+            effects: [],
+            connections: connections,
+            currentGraph: StudioGraph()
+        )
+
+        #expect(draft.fragment.endpoints.first?.name == "Main Speakers")
+        #expect(draft.logicalRoutingSummary.first?.value == "Synth → Main Speakers")
+        #expect(draft.cableInstructions.filter { $0.connectorKind == .wingOutput }.map(\.connector) == [7, 8])
+    }
+
     @Test func advisorReportsMissingGearAndConnectionConflicts() {
         let synth = Equipment(name: "Mono", outputs: ["Out"])
         let other = Equipment(name: "Other", outputs: ["Out"])
@@ -225,5 +319,84 @@ struct StudioWiringAdvisorTests {
         #expect(second.addedEdgeCount == 0)
         #expect(second.graph == first.graph)
         #expect(second.endpoints == first.endpoints)
+    }
+
+    @Test func replacementMergeRemovesExistingGraphAfterReview() {
+        let fixture = Fixture()
+        let oldSource = StudioNode(kind: .instrument(UUID()), title: "Old")
+        let oldEndpoint = StudioEndpoint(name: "Old Mix", destination: .finalMix)
+        let oldDestination = StudioNode(kind: .endpoint(oldEndpoint.id), title: oldEndpoint.name)
+        var current = StudioGraph(nodes: [oldSource, oldDestination])
+        current.connect(
+            from: StudioPortRef(nodeID: oldSource.id, side: .output, port: 0),
+            to: StudioPortRef(nodeID: oldDestination.id, side: .input, port: 0)
+        )
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(
+                sourceInstrumentIDs: [fixture.synth.id],
+                applicationMode: .replace
+            ),
+            equipment: [fixture.synth, fixture.effectEquipment],
+            effects: [fixture.effect],
+            connections: fixture.connections,
+            currentGraph: current
+        )
+
+        let result = StudioPatchDraftMerger.merge(
+            draft,
+            into: current,
+            endpoints: [oldEndpoint],
+            equipment: [fixture.synth, fixture.effectEquipment],
+            effects: [fixture.effect]
+        )
+
+        #expect(!result.graph.nodes.contains { $0.id == oldSource.id || $0.id == oldDestination.id })
+        #expect(!result.endpoints.contains(oldEndpoint))
+        #expect(result.graph.nodes.contains { $0.kind == .instrument(fixture.synth.id) })
+    }
+
+    @Test func appendMergeDropsEndpointsWithoutGraphNodes() {
+        let fixture = Fixture()
+        let orphan = StudioEndpoint(name: "Old Main Speakers", destination: .finalMix)
+        let draft = StudioWiringAdvisor.build(
+            request: StudioWiringRequest(sourceInstrumentIDs: [fixture.synth.id]),
+            equipment: [fixture.synth, fixture.effectEquipment],
+            effects: [fixture.effect],
+            connections: fixture.connections,
+            currentGraph: StudioGraph()
+        )
+
+        let result = StudioPatchDraftMerger.merge(
+            draft,
+            into: StudioGraph(),
+            endpoints: [orphan],
+            equipment: [fixture.synth, fixture.effectEquipment],
+            effects: [fixture.effect]
+        )
+
+        #expect(!result.endpoints.contains(orphan))
+        #expect(result.endpoints.count == 1)
+    }
+
+    @Test func normalizerMergesStackedFinalMixEndpointsAndRedirectsWires() {
+        let source = StudioNode(kind: .instrument(UUID()), title: "AstroLab")
+        let firstEndpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)
+        let secondEndpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)
+        let firstNode = StudioNode(kind: .endpoint(firstEndpoint.id), title: firstEndpoint.name)
+        let secondNode = StudioNode(kind: .endpoint(secondEndpoint.id), title: secondEndpoint.name)
+        var graph = StudioGraph(nodes: [source, firstNode, secondNode])
+        graph.connect(
+            from: StudioPortRef(nodeID: source.id, side: .output, port: 0),
+            to: StudioPortRef(nodeID: secondNode.id, side: .input, port: 0)
+        )
+
+        let normalized = StudioEndpointNormalizer.normalize(
+            graph: graph,
+            endpoints: [firstEndpoint, secondEndpoint]
+        )
+
+        #expect(normalized.endpoints == [firstEndpoint])
+        #expect(normalized.graph.nodes.count == 2)
+        #expect(normalized.graph.edges.first?.to.nodeID == firstNode.id)
     }
 }

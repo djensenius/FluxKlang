@@ -9,6 +9,7 @@
 
 import Foundation
 
+// swiftlint:disable file_length
 struct StudioCompileIssue: Identifiable, Hashable, Sendable {
     enum Severity: String, Hashable, Sendable {
         case warning
@@ -87,6 +88,11 @@ enum StudioSignalCompiler {
                 StudioResourceAllocator.settings(for: resourcePlan)
                     + compiled.settings
                     + spaceSettings(for: resourcePlan.allocations, speakers: input.speakers)
+                    + finalMixOutputSettings(
+                        for: resourcePlan.allocations,
+                        connections: input.connections.effectiveHome
+                    )
+                    + customOutputSettings(for: resourcePlan.allocations)
             )
         } else {
             settings = []
@@ -158,12 +164,13 @@ enum StudioSignalCompiler {
                 .error(.physicalConnection($0.kind), $0.message)
             })
         }
-        guard let endpointBus = context.endpointBus(for: endpointNodeID) else {
+        guard let endpointBuses = context.endpointBuses(for: endpointNodeID) else {
             return ([], [.error(.missingEndpointAllocation(endpointNodeID), "A control has no generated mixer path.")])
         }
         return (
             assignment.settings
-                + assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: endpointBus) },
+                + disableDirectMains(for: assignment.channels)
+                + stereoSend(kind: .channel, indices: assignment.channels, to: endpointBuses),
             []
         )
     }
@@ -189,11 +196,13 @@ enum StudioSignalCompiler {
             guard let left = assignment.channels.first else { return ([], []) }
             let right = assignment.channels.count > 1 ? assignment.channels[1] : left
             return (assignment.settings
+                + disableDirectMains(for: assignment.channels)
                 + send(kind: .channel, index: left, toBus: busLeft)
                 + send(kind: .channel, index: right, toBus: busRight), [])
         }
         return (
             assignment.settings
+                + disableDirectMains(for: assignment.channels)
                 + assignment.channels.flatMap { send(kind: .channel, index: $0, toBus: busLeft) },
             []
         )
@@ -210,10 +219,14 @@ enum StudioSignalCompiler {
                 "A processed gear branch has no available mixer return."
             )])
         }
-        guard let endpointBus = context.endpointBus(for: endpointNodeID) else {
+        guard let endpointBuses = context.endpointBuses(for: endpointNodeID) else {
             return ([], [.error(.missingEndpointAllocation(endpointNodeID), "A control has no generated mixer path.")])
         }
-        return (allocation.returnChannels.flatMap { send(kind: .channel, index: $0, toBus: endpointBus) }, [])
+        return (
+            disableDirectMains(for: allocation.returnChannels)
+                + stereoSend(kind: .channel, indices: allocation.returnChannels, to: endpointBuses),
+            []
+        )
     }
 
     private static func routeEffect(
@@ -234,14 +247,19 @@ enum StudioSignalCompiler {
             let right = sourceAllocation.returnChannels.count > 1
                 ? sourceAllocation.returnChannels[1]
                 : sourceAllocation.returnChannels.first
-            return ([left, right].enumerated().flatMap { index, channel -> [WingSetting] in
+            return (disableDirectMains(for: sourceAllocation.returnChannels)
+                + [left, right].enumerated().flatMap { index, channel -> [WingSetting] in
                 guard let channel else { return [] }
                 return send(kind: .channel, index: channel, toBus: index == 0 ? targetBusLeft : targetBusRight)
             }, [])
         }
-        return (sourceAllocation.returnChannels.flatMap {
-            send(kind: .channel, index: $0, toBus: targetBusLeft)
-        }, [])
+        return (
+            disableDirectMains(for: sourceAllocation.returnChannels)
+                + sourceAllocation.returnChannels.flatMap {
+                    send(kind: .channel, index: $0, toBus: targetBusLeft)
+                },
+            []
+        )
     }
 
     private static func effectPatchSettings(
@@ -279,7 +297,7 @@ enum StudioSignalCompiler {
     }
 
     private static func effectOutputSettings(
-        outputs: [Int],
+        outputs: [WingOutputConnector],
         stereo: Bool,
         busLeft: Int,
         busRight: Int
@@ -325,12 +343,58 @@ enum StudioSignalCompiler {
                 guard let placement = allocation.endpoint.placement else { return nil }
                 return SpatialSource(
                     name: allocation.endpoint.name,
+                    mode: allocation.rightControlNode == nil ? .mono : .stereo,
                     left: allocation.controlNode,
+                    right: allocation.rightControlNode,
                     position: placement.position,
                     width: placement.width
                 )
             }
             .flatMap { SpatialRouting.settings(for: $0, speakers: speakers) }
+    }
+
+    private static func finalMixOutputSettings(
+        for allocations: [StudioEndpointAllocation],
+        connections: StudioHomeConnections
+    ) -> [WingSetting] {
+        let outputs = connections.outputs.filter {
+            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
+        }.sorted {
+            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+        }
+        let maxMainCount = min(2, WingNodeKind.main.count)
+        let mains = Array(1...maxMainCount)
+        let outputSettings = zip(outputs, mains).flatMap { output, main in
+            WingOutputSource(group: .main, index: main).settings(forOutput: output.outputConnector)
+        }
+        let sendSettings = allocations.filter { $0.endpoint.destination == .finalMix }.flatMap { allocation in
+            let buses = [allocation.controlNode, allocation.rightControlNode].compactMap { $0 }
+            return zip(buses, mains).flatMap { bus, main in
+                [
+                    WingSetting(
+                        address: WingAddress.mainOn(.bus, bus.index, toMain: main),
+                        value: .int(1)
+                    ),
+                    WingSetting(
+                        address: WingAddress.mainLevel(.bus, bus.index, toMain: main),
+                        value: .float(EffectRouting.unitySendDecibels)
+                    )
+                ]
+            }
+        }
+        return outputSettings + sendSettings
+    }
+
+    private static func customOutputSettings(
+        for allocations: [StudioEndpointAllocation]
+    ) -> [WingSetting] {
+        allocations.filter { $0.endpoint.destination == .custom }.flatMap { allocation in
+            let buses = [allocation.controlNode, allocation.rightControlNode].compactMap { $0 }
+            let outputs = allocation.endpoint.outputConnectors ?? []
+            return zip(buses, outputs).flatMap { bus, output in
+                WingOutputSource(group: .bus, index: bus.index).settings(forOutput: output)
+            }
+        }
     }
 
     private static func send(kind: WingNodeKind, index: Int, toBus bus: Int) -> [WingSetting] {
@@ -341,6 +405,43 @@ enum StudioSignalCompiler {
                 value: .float(EffectRouting.unitySendDecibels)
             )
         ]
+    }
+
+    private static func stereoSend(
+        kind: WingNodeKind,
+        indices: [Int],
+        to buses: (left: Int, right: Int)
+    ) -> [WingSetting] {
+        guard let left = indices.first else { return [] }
+        if indices.count > 1 {
+            return send(kind: kind, index: left, toBus: buses.left)
+                + send(kind: kind, index: indices[1], toBus: buses.right)
+        }
+        return send(kind: kind, index: left, toBus: buses.left, level: -3)
+            + send(kind: kind, index: left, toBus: buses.right, level: -3)
+    }
+
+    private static func send(
+        kind: WingNodeKind,
+        index: Int,
+        toBus bus: Int,
+        level: Float
+    ) -> [WingSetting] {
+        [
+            WingSetting(address: WingAddress.sendOn(kind, index, toBus: bus), value: .int(1)),
+            WingSetting(address: WingAddress.sendLevel(kind, index, toBus: bus), value: .float(level))
+        ]
+    }
+
+    private static func disableDirectMains(for channels: [Int]) -> [WingSetting] {
+        channels.flatMap { channel in
+            (1...WingNodeKind.main.count).map { main in
+                WingSetting(
+                    address: WingAddress.mainOn(.channel, channel, toMain: main),
+                    value: .int(0)
+                )
+            }
+        }
     }
 
     private static func effectID(_ kind: StudioNodeKind) -> Effect.ID? {
@@ -409,8 +510,12 @@ private struct CompileContext {
         appliableEdges.contains(edge.id)
     }
 
-    func endpointBus(for nodeID: StudioNode.ID) -> Int? {
-        endpointAllocationByNode[nodeID]?.controlNode.index
+    func endpointBuses(for nodeID: StudioNode.ID) -> (left: Int, right: Int)? {
+        guard let allocation = endpointAllocationByNode[nodeID] else { return nil }
+        return (
+            allocation.controlNode.index,
+            allocation.rightControlNode?.index ?? allocation.controlNode.index
+        )
     }
 }
 

@@ -365,10 +365,13 @@ final class WingController {
 
     /// Applies a batch of settings to the WING. Used by presets and by the chain
     /// builder's "Apply" action.
-    func apply(_ settings: [WingSetting]) async {
+    @discardableResult
+    func apply(_ settings: [WingSetting]) async -> Bool {
+        var succeeded = true
         for setting in settings {
-            await set(setting.address, setting.value)
+            succeeded = await set(setting.address, setting.value) && succeeded
         }
+        return succeeded
     }
 
     /// Captures the current cached values for the given addresses as a snapshot,
@@ -381,10 +384,16 @@ final class WingController {
 
     // MARK: - Private
 
-    private func set(_ address: String, _ value: WingValue) async {
+    @discardableResult
+    private func set(_ address: String, _ value: WingValue) async -> Bool {
         transportWriteCount += 1
-        try? await transport.send(address, value)
-        values[address] = value
+        do {
+            try await transport.send(address, value.encodedForWing(address: address))
+            values[address] = value
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func startListening() {

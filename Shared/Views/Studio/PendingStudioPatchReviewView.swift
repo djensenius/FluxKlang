@@ -7,7 +7,12 @@ struct PendingStudioPatchCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Pending Assistant Draft", systemImage: "sparkles.rectangle.stack")
+            Label(
+                draft.applicationMode == .replace
+                    ? "Pending Studio Replacement"
+                    : "Pending Assistant Draft",
+                systemImage: "sparkles.rectangle.stack"
+            )
                 .font(.headline)
             Text(draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"))
                 .foregroundStyle(.secondary)
@@ -36,13 +41,24 @@ struct PendingStudioPatchReviewView: View {
         NavigationStack {
             List {
                 Section("Safety") {
-                    Label(
-                        """
-                        Accept only adds valid Studio nodes and wires. \
-                        It does not remove routing or write to the WING.
-                        """,
-                        systemImage: "checkmark.shield"
-                    )
+                    if draft.applicationMode == .replace {
+                        Label(
+                            """
+                            Replace Studio removes the current Studio graph and installs this reviewed graph. \
+                            It does not write to the WING; Listen remains a separate action.
+                            """,
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                        .foregroundStyle(.orange)
+                    } else {
+                        Label(
+                            """
+                            Accept only adds valid Studio nodes and wires. \
+                            It does not remove routing or write to the WING.
+                            """,
+                            systemImage: "checkmark.shield"
+                        )
+                    }
                 }
 
                 Section("Logical Routing") {
@@ -92,9 +108,15 @@ struct PendingStudioPatchReviewView: View {
                         .accessibilityIdentifier("assistant.pendingDraft.discardReview")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Accept", action: accept)
-                        .disabled(draft.hasErrors)
-                        .accessibilityIdentifier("assistant.pendingDraft.accept")
+                    if draft.applicationMode == .replace {
+                        Button("Replace Studio", role: .destructive, action: accept)
+                            .disabled(draft.hasErrors)
+                            .accessibilityIdentifier("assistant.pendingDraft.accept")
+                    } else {
+                        Button("Accept", action: accept)
+                            .disabled(draft.hasErrors)
+                            .accessibilityIdentifier("assistant.pendingDraft.accept")
+                    }
                 }
             }
         }

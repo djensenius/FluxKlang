@@ -23,6 +23,7 @@ final class EquipmentStore {
         if let saved = await JSONFileStore.shared.load([Equipment].self, from: fileName) {
             items = saved
         }
+        mergeConfirmedLiveEquipment()
     }
 
     /// Re-reads the persisted library, picking up changes synced from iCloud.
@@ -59,5 +60,18 @@ final class EquipmentStore {
     private func persist() {
         let snapshot = items
         Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
+    }
+
+    private func mergeConfirmedLiveEquipment() {
+        let existingNames = Set(items.map {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+        let additions = Equipment.confirmedLiveAdditions.filter { addition in
+            !items.contains(where: { $0.id == addition.id })
+                && !existingNames.contains(addition.name.lowercased())
+        }
+        guard !additions.isEmpty else { return }
+        items.append(contentsOf: additions)
+        persist()
     }
 }

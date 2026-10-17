@@ -121,6 +121,8 @@ struct AssistantConversationRecord: Identifiable, Codable, Hashable, Sendable {
 
 enum AssistantModelAvailability: Equatable, Sendable {
     case ready
+    case externalProviderReady(String)
+    case deterministic
     case deviceNotEligible
     case intelligenceDisabled
     case modelNotReady
@@ -130,15 +132,23 @@ enum AssistantModelAvailability: Equatable, Sendable {
     var title: String {
         switch self {
         case .ready: "On-device model ready"
+        case .externalProviderReady(let provider): "\(provider) ready"
+        case .deterministic: "Deterministic local assistant"
         case .deviceNotEligible: "This device is not eligible"
         case .intelligenceDisabled: "Apple Intelligence is turned off"
         case .modelNotReady: "The on-device model is not ready"
         case .unsupportedOS: "On-device generation requires OS 27"
-        case .failed: "On-device model unavailable"
+        case .failed(let message): message
         }
     }
 
-    var usesFallback: Bool { self != .ready }
+    var usesFallback: Bool {
+        switch self {
+        case .ready, .externalProviderReady: false
+        case .deterministic, .deviceNotEligible, .intelligenceDisabled,
+             .modelNotReady, .unsupportedOS, .failed: true
+        }
+    }
 }
 
 struct AssistantGenerationRequest: Sendable {

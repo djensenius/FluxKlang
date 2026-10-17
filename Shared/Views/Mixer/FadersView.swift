@@ -21,7 +21,10 @@ struct FadersView: View {
     @State private var draftLabel = ""
 
     private var controller: WingController { appModel.wing }
-    private var layout: FaderLayout { appModel.faderLayout.layout }
+    private var savedLayout: FaderLayout { appModel.faderLayout.layout }
+    private var layout: FaderLayout {
+        savedLayout.includingStudioAllocations(appModel.studioResourcePlan().allocations)
+    }
 
     var body: some View {
         Group {
@@ -50,28 +53,34 @@ struct FadersView: View {
                         controller: controller,
                         strip: strip,
                         isSelected: appModel.selectedFaderID == strip.id,
-                        onSelect: { appModel.selectStrip(strip) }
+                        onSelect: {
+                            if isSaved(strip) { appModel.selectStrip(strip) }
+                        }
                     )
                         .contextMenu {
-                            Button {
-                                appModel.selectStrip(strip)
-                            } label: {
-                                Label("Show in Inspector", systemImage: "sidebar.right")
-                            }
-                            Button {
-                                beginRename(strip, mode: .console)
-                            } label: {
-                                Label("Rename on Console…", systemImage: "pencil")
-                            }
-                            Button {
-                                beginRename(strip, mode: .local)
-                            } label: {
-                                Label("Set Local Label…", systemImage: "tag")
-                            }
-                            Button(role: .destructive) {
-                                appModel.faderLayout.remove(strip)
-                            } label: {
-                                Label("Remove Strip", systemImage: "trash")
+                            if isSaved(strip) {
+                                Button {
+                                    appModel.selectStrip(strip)
+                                } label: {
+                                    Label("Show in Inspector", systemImage: "sidebar.right")
+                                }
+                                Button {
+                                    beginRename(strip, mode: .console)
+                                } label: {
+                                    Label("Rename on Console…", systemImage: "pencil")
+                                }
+                                Button {
+                                    beginRename(strip, mode: .local)
+                                } label: {
+                                    Label("Set Local Label…", systemImage: "tag")
+                                }
+                                Button(role: .destructive) {
+                                    appModel.faderLayout.remove(strip)
+                                } label: {
+                                    Label("Remove Strip", systemImage: "trash")
+                                }
+                            } else {
+                                Label("Managed by Studio", systemImage: "square.stack.3d.up")
                             }
                         }
                 }
@@ -131,6 +140,10 @@ struct FadersView: View {
 
     private func availableIndices(for kind: WingNodeKind) -> [Int] {
         (1...kind.count).filter { !layout.contains(WingNodeRef(kind: kind, index: $0)) }
+    }
+
+    private func isSaved(_ strip: FaderStrip) -> Bool {
+        savedLayout.strips.contains { $0.id == strip.id }
     }
 
     private var isRenaming: Binding<Bool> {

@@ -141,20 +141,26 @@ extension TemporaryDeviceMove {
     func connectorSummary(home: StudioHomeConnections) -> String {
         let homeInputs = home.inputs.filter { $0.equipmentID == equipmentID }.map(\.connector).sorted()
         let currentInputs = connections.inputs.map(\.connector).sorted()
-        let homeOutputs = home.outputs.filter { $0.equipmentID == equipmentID }.map(\.connector).sorted()
-        let currentOutputs = connections.outputs.map(\.connector).sorted()
+        let homeOutputs = home.outputs.filter { $0.equipmentID == equipmentID }.map(\.outputConnector)
+        let currentOutputs = connections.outputs.map(\.outputConnector)
         var parts: [String] = []
         if !homeInputs.isEmpty {
             parts.append("WING inputs \(Self.connectorList(homeInputs)) → \(Self.connectorList(currentInputs))")
         }
         if !homeOutputs.isEmpty {
-            parts.append("WING outputs \(Self.connectorList(homeOutputs)) → \(Self.connectorList(currentOutputs))")
+            parts.append(
+                "WING outputs \(Self.connectorList(homeOutputs)) → \(Self.connectorList(currentOutputs))"
+            )
         }
         return parts.joined(separator: " · ")
     }
 
     private static func connectorList(_ connectors: [Int]) -> String {
         connectors.map(String.init).joined(separator: "/")
+    }
+
+    private static func connectorList(_ connectors: [WingOutputConnector]) -> String {
+        connectors.map(\.label).joined(separator: "/")
     }
 }
 
@@ -260,7 +266,7 @@ enum TemporaryMoveAllocator {
                     StudioOutputConnection(
                         connector: connector,
                         equipmentID: equipmentID,
-                        inputPort: homeConnection.inputPort,
+                        inputPort: homeConnection.inputPort ?? 0,
                         labelOverride: homeConnection.labelOverride
                     )
                 }
@@ -287,7 +293,9 @@ enum TemporaryMoveAllocator {
         }
         var reservations = reservations(home: home, moves: existingMoves, excluding: equipmentID)
         reservations.inputs.formUnion(homeInputs.map(\.connector))
-        reservations.outputs.formUnion(homeOutputs.map(\.connector))
+        reservations.outputs.formUnion(
+            homeOutputs.filter { $0.bank == .local }.map(\.connector)
+        )
         return TemporaryMoveSuggestion(
             inputConnectors: try suggest(
                 count: homeInputs.count,
@@ -353,7 +361,11 @@ enum TemporaryMoveAllocator {
         for equipmentID: Equipment.ID,
         in home: StudioHomeConnections
     ) -> [StudioOutputConnection] {
-        home.outputs.filter { $0.equipmentID == equipmentID }.sorted { $0.inputPort < $1.inputPort }
+        home.outputs.filter {
+            $0.equipmentID == equipmentID && $0.inputPort != nil
+        }.sorted {
+            ($0.inputPort ?? 0) < ($1.inputPort ?? 0)
+        }
     }
 
     private static func reservations(
@@ -364,7 +376,9 @@ enum TemporaryMoveAllocator {
         let effectiveMoves = moves.filter { $0.lifecycle.isEffective }
         let movingIDs = Set(effectiveMoves.map(\.equipmentID)).union([equipmentID])
         var inputs = Set(home.inputs.filter { !movingIDs.contains($0.equipmentID) }.map(\.connector))
-        var outputs = Set(home.outputs.filter { !movingIDs.contains($0.equipmentID) }.map(\.connector))
+        var outputs = Set(home.outputs.filter {
+            $0.bank == .local && !($0.equipmentID.map(movingIDs.contains) ?? false)
+        }.map(\.connector))
         for move in moves where move.equipmentID != equipmentID && move.lifecycle != .readyToReturn {
             inputs.formUnion(move.connections.inputs.map(\.connector))
             outputs.formUnion(move.connections.outputs.map(\.connector))
@@ -446,7 +460,9 @@ extension GlobalStudioConnections {
             result.outputs.append(contentsOf: move.connections.outputs)
         }
         result.inputs.sort { $0.connector < $1.connector }
-        result.outputs.sort { $0.connector < $1.connector }
+        result.outputs.sort {
+            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+        }
         return result
     }
 }

@@ -59,46 +59,45 @@ actor LocalAssistantHistoryBackend: AssistantHistoryBackend {
 
 actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
     private static let recordType = "AssistantConversation"
+    private static let zoneID = CKRecordZone.ID(
+        zoneName: "FluxKlangAssistantHistory",
+        ownerName: CKCurrentUserDefaultName
+    )
     private let database: CKDatabase
+    private var hasEnsuredZone = false
 
     init(containerIdentifier: String = "iCloud.org.davidjensenius.FluxKlang") {
         database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
     }
 
     func loadRecords() async throws -> [AssistantConversationRecord] {
+        try await ensureZone()
         var records: [AssistantConversationRecord] = []
-        var cursor: CKQueryOperation.Cursor?
-        repeat {
-            let result: (
-                matchResults: [(CKRecord.ID, Result<CKRecord, any Error>)],
-                queryCursor: CKQueryOperation.Cursor?
+        var changeToken: CKServerChangeToken?
+        var moreComing = true
+        while moreComing {
+            let changes = try await database.recordZoneChanges(
+                inZoneWith: Self.zoneID,
+                since: changeToken,
+                desiredKeys: ["payload"]
             )
-            if let cursor {
-                result = try await database.records(
-                    continuingMatchFrom: cursor,
-                    desiredKeys: ["payload"]
-                )
-            } else {
-                result = try await database.records(
-                    matching: CKQuery(
-                        recordType: Self.recordType,
-                        predicate: NSPredicate(value: true)
-                    ),
-                    desiredKeys: ["payload"]
-                )
-            }
-            records += result.matchResults.compactMap { _, result in
-                guard case .success(let record) = result,
-                      let data = record["payload"] as? Data else { return nil }
+            records += changes.modificationResultsByID.values.compactMap { result in
+                guard case .success(let modification) = result,
+                      modification.record.recordType == Self.recordType,
+                      let data = modification.record["payload"] as? Data else {
+                    return nil
+                }
                 return try? JSONDecoder().decode(AssistantConversationRecord.self, from: data)
             }
-            cursor = result.queryCursor
-        } while cursor != nil
+            changeToken = changes.changeToken
+            moreComing = changes.moreComing
+        }
         return records
     }
 
     func save(_ value: AssistantConversationRecord) async throws {
-        let recordID = CKRecord.ID(recordName: value.id.uuidString)
+        try await ensureZone()
+        let recordID = CKRecord.ID(recordName: value.id.uuidString, zoneID: Self.zoneID)
         let record = try await existingRecord(id: recordID)
             ?? CKRecord(recordType: Self.recordType, recordID: recordID)
         record["payload"] = try JSONEncoder().encode(value) as CKRecordValue
@@ -112,6 +111,27 @@ actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
             return nil
         }
     }
+
+    private func ensureZone() async throws {
+        guard !hasEnsuredZone else { return }
+        do {
+            _ = try await database.recordZone(for: Self.zoneID)
+        } catch let error as CKError where error.code == .zoneNotFound || error.code == .unknownItem {
+            let result = try await database.modifyRecordZones(
+                saving: [CKRecordZone(zoneID: Self.zoneID)],
+                deleting: []
+            )
+            guard let saveResult = result.saveResults[Self.zoneID] else {
+                throw CloudKitAssistantHistoryError.zoneCreationFailed
+            }
+            _ = try saveResult.get()
+        }
+        hasEnsuredZone = true
+    }
+}
+
+enum CloudKitAssistantHistoryError: Error {
+    case zoneCreationFailed
 }
 
 actor AssistantConversationStore {

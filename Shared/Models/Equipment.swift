@@ -47,6 +47,27 @@ struct Equipment: Identifiable, Codable, Hashable, Sendable {
 }
 
 extension Equipment {
+    static let confirmedLiveAdditions: [Equipment] = [
+        Equipment(
+            id: UUID(uuidString: "A71AB088-7C27-4E2D-A2A9-F9770E7F73FA")!,
+            name: "Arturia AstroLab 88",
+            outputs: ["Out L", "Out R"],
+            isStereo: true
+        ),
+        Equipment(
+            id: UUID(uuidString: "F5D24E30-8452-4FBA-89E6-805A91E19556")!,
+            name: "Expressive E Osmose",
+            outputs: ["Out L", "Out R"],
+            isStereo: true
+        ),
+        Equipment(
+            id: UUID(uuidString: "83ED1D83-E10A-4FE7-962C-E55A7DFE2905")!,
+            name: "Studio Display 2",
+            outputs: ["Out L", "Out R"],
+            isStereo: true
+        )
+    ]
+
     /// The user's known gear, used to seed the equipment library. This is also
     /// the canonical channel rig (see `channelAssignments()`): every device is
     /// stereo except the two mono boxes — the Arturia MicroFreak and SOMA Lyra-8.
@@ -167,7 +188,7 @@ extension Equipment {
                 outputs: ["Out"],
                 isStereo: false
             )
-        ]
+        ] + confirmedLiveAdditions
     }()
 
     /// Left/right output port labels for a stereo device, falling back to

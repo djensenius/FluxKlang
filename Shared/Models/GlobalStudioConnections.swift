@@ -2,6 +2,7 @@
 //
 
 import Foundation
+
 struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var connector: Int
@@ -36,30 +37,61 @@ struct StudioInputConnection: Identifiable, Codable, Hashable, Sendable {
 }
 struct StudioOutputConnection: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
+    var bank: WingOutputConnectorBank
     var connector: Int
-    var equipmentID: Equipment.ID
-    var inputPort: Int
+    var equipmentID: Equipment.ID?
+    var inputPort: Int?
+    var destinationName: String?
     var labelOverride: String?
 
     init(
         id: UUID = UUID(),
+        bank: WingOutputConnectorBank = .local,
         connector: Int,
         equipmentID: Equipment.ID,
         inputPort: Int,
         labelOverride: String? = nil
     ) {
         self.id = id
+        self.bank = bank
         self.connector = connector
         self.equipmentID = equipmentID
         self.inputPort = inputPort
+        destinationName = nil
         self.labelOverride = labelOverride
+    }
+
+    init(
+        id: UUID = UUID(),
+        bank: WingOutputConnectorBank = .local,
+        connector: Int,
+        destinationName: String,
+        labelOverride: String? = nil
+    ) {
+        self.id = id
+        self.bank = bank
+        self.connector = connector
+        equipmentID = nil
+        inputPort = nil
+        self.destinationName = destinationName
+        self.labelOverride = labelOverride
+    }
+
+    var outputConnector: WingOutputConnector {
+        WingOutputConnector(bank: bank, index: connector)
     }
 
     func label(equipment: [Equipment]) -> String {
         if let labelOverride, !labelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return labelOverride.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let device = equipment.first(where: { $0.id == equipmentID }) else {
+        if let destinationName,
+           !destinationName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return destinationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let equipmentID,
+              let inputPort,
+              let device = equipment.first(where: { $0.id == equipmentID }) else {
             return "Unknown equipment"
         }
         let port = device.inputs.indices.contains(inputPort) ? device.inputs[inputPort] : "Input \(inputPort + 1)"
@@ -80,25 +112,7 @@ struct StudioHomeConnections: Codable, Hashable, Sendable {
     }
 
     var isEmpty: Bool { inputs.isEmpty && outputs.isEmpty }
-}
 
-struct StudioConnectionMigrationIssue: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var environmentID: RoutingEnvironment.ID
-    var deviceName: String
-    var message: String
-
-    init(
-        id: UUID = UUID(),
-        environmentID: RoutingEnvironment.ID,
-        deviceName: String,
-        message: String
-    ) {
-        self.id = id
-        self.environmentID = environmentID
-        self.deviceName = deviceName
-        self.message = message
-    }
 }
 
 struct GlobalStudioConnections: Codable, Hashable, Sendable {
@@ -231,6 +245,14 @@ struct GlobalStudioConnections: Codable, Hashable, Sendable {
         ) {
             switch (patch.side, patch.connector) {
             case (.output, .wingInput(let sourceInput)) where sourceInput.group == .local:
+                guard StudioHomeConnections.inputRange.contains(sourceInput.index) else {
+                    issues.append(StudioConnectionMigrationIssue(
+                        environmentID: source.id,
+                        deviceName: profile.name,
+                        message: "Legacy Local input \(sourceInput.index) is outside the physical 1...24 range."
+                    ))
+                    return
+                }
                 inputs.append(StudioInputConnection(
                     connector: sourceInput.index,
                     equipmentID: equipmentID,
@@ -251,29 +273,6 @@ struct GlobalStudioConnections: Codable, Hashable, Sendable {
             }
         }
     }
-}
-
-struct StudioConnectionIssue: Identifiable, Hashable, Sendable {
-    enum Kind: Hashable, Sendable {
-        case duplicateInputConnector(Int)
-        case duplicateOutputConnector(Int)
-        case inputConnectorOutOfRange(Int)
-        case outputConnectorOutOfRange(Int)
-        case missingEquipment(Equipment.ID)
-        case invalidOutputPort(Equipment.ID, Int)
-        case invalidInputPort(Equipment.ID, Int)
-        case conflictingOutputPort(Equipment.ID, Int)
-        case conflictingInputPort(Equipment.ID, Int)
-        case unconfiguredInstrument(Equipment.ID)
-        case missingStereoInputLeg(Equipment.ID)
-        case unlinkedEffect(Effect.ID)
-        case unconfiguredEffectInput(Effect.ID)
-        case unconfiguredEffectOutput(Effect.ID)
-    }
-
-    var kind: Kind
-    var message: String
-    var id: String { kind.stableID }
 }
 
 struct StudioPhysicalResolver {
@@ -297,7 +296,7 @@ struct StudioPhysicalResolver {
     private func connectorIssues() -> [StudioConnectionIssue] {
         var issues: [StudioConnectionIssue] = []
         let inputGroups = Dictionary(grouping: connections.inputs, by: \.connector)
-        let outputGroups = Dictionary(grouping: connections.outputs, by: \.connector)
+        let outputGroups = Dictionary(grouping: connections.outputs, by: \.outputConnector)
         for (connector, values) in inputGroups where values.count > 1 {
             issues.append(.init(
                 kind: .duplicateInputConnector(connector),
@@ -306,8 +305,10 @@ struct StudioPhysicalResolver {
         }
         for (connector, values) in outputGroups where values.count > 1 {
             issues.append(.init(
-                kind: .duplicateOutputConnector(connector),
-                message: "WING output \(connector) has multiple assignments."
+                kind: connector.bank == .local
+                    ? .duplicateOutputConnector(connector.index)
+                    : .duplicateBankOutputConnector(connector.bank, connector.index),
+                message: "\(connector.label) has multiple assignments."
             ))
         }
         return issues
@@ -342,23 +343,37 @@ struct StudioPhysicalResolver {
     private func outputIssues() -> [StudioConnectionIssue] {
         var issues: [StudioConnectionIssue] = []
         for connection in connections.outputs {
-            if !StudioHomeConnections.outputRange.contains(connection.connector) {
+            if !connection.bank.connectorRange.contains(connection.connector) {
                 issues.append(.init(
-                    kind: .outputConnectorOutOfRange(connection.connector),
-                    message: "WING output \(connection.connector) is outside 1...8."
+                    kind: connection.bank == .local
+                        ? .outputConnectorOutOfRange(connection.connector)
+                        : .bankOutputConnectorOutOfRange(connection.bank, connection.connector),
+                    message: "\(connection.bank.label) output \(connection.connector) is outside "
+                        + "\(connection.bank.connectorRange.lowerBound)...\(connection.bank.connectorRange.upperBound)."
                 ))
             }
-            guard let device = equipmentByID[connection.equipmentID] else {
+            if connection.destinationName != nil {
+                continue
+            }
+            guard let equipmentID = connection.equipmentID,
+                  let inputPort = connection.inputPort else {
                 issues.append(.init(
-                    kind: .missingEquipment(connection.equipmentID),
+                    kind: .invalidOutputDestination(connection.bank, connection.connector),
+                    message: "\(connection.outputConnector.label) has no destination."
+                ))
+                continue
+            }
+            guard let device = equipmentByID[equipmentID] else {
+                issues.append(.init(
+                    kind: .missingEquipment(equipmentID),
                     message: "An output assignment points at missing Equipment."
                 ))
                 continue
             }
-            if !device.inputs.indices.contains(connection.inputPort) {
+            if !device.inputs.indices.contains(inputPort) {
                 issues.append(.init(
-                    kind: .invalidInputPort(device.id, connection.inputPort),
-                    message: "\(device.name) input \(connection.inputPort + 1) does not exist."
+                    kind: .invalidInputPort(device.id, inputPort),
+                    message: "\(device.name) input \(inputPort + 1) does not exist."
                 ))
             }
         }
@@ -381,15 +396,19 @@ struct StudioPhysicalResolver {
                 message: "\(device?.name ?? "Equipment") · \(port) is assigned to WING inputs \(connectors)."
             ))
         }
+        let equipmentOutputs = connections.outputs.compactMap { connection -> (StudioOutputConnection, PortKey)? in
+            guard let equipmentID = connection.equipmentID, let inputPort = connection.inputPort else { return nil }
+            return (connection, PortKey(equipmentID: equipmentID, port: inputPort))
+        }
         for (key, values) in Dictionary(
-            grouping: connections.outputs,
-            by: { PortKey(equipmentID: $0.equipmentID, port: $0.inputPort) }
+            grouping: equipmentOutputs,
+            by: \.1
         ) where values.count > 1 {
             let device = equipmentByID[key.equipmentID]
             let port = device?.inputs.indices.contains(key.port) == true
                 ? device?.inputs[key.port] ?? "Input \(key.port + 1)"
                 : "Input \(key.port + 1)"
-            let connectors = values.map(\.connector).sorted().map(String.init).joined(separator: ", ")
+            let connectors = values.map(\.0.outputConnector.label).sorted().joined(separator: ", ")
             issues.append(.init(
                 kind: .conflictingInputPort(key.equipmentID, key.port),
                 message: "\(device?.name ?? "Equipment") · \(port) is assigned to WING outputs \(connectors)."
@@ -436,7 +455,7 @@ struct StudioPhysicalResolver {
         }
         let neededPorts = effect.isStereo ? [0, 1] : [0]
         let sends = connections.outputs.filter {
-            $0.equipmentID == equipmentID && neededPorts.contains($0.inputPort)
+            $0.equipmentID == equipmentID && $0.inputPort.map(neededPorts.contains) == true
         }
         let returns = connections.inputs.filter {
             $0.equipmentID == equipmentID && neededPorts.contains($0.outputPort)
@@ -454,7 +473,9 @@ struct StudioPhysicalResolver {
                 message: "\(device.name) does not have every required output connected to a local input."
             ))
         }
-        let inputJacks = neededPorts.compactMap { port in sends.first { $0.inputPort == port }?.connector }
+        let inputJacks = neededPorts.compactMap { port in
+            sends.first { $0.inputPort == port }?.outputConnector
+        }
         let outputJacks = neededPorts.compactMap { port in returns.first { $0.outputPort == port }?.connector }
         return StudioEffectPhysicalJacks(inputJacks: inputJacks, outputJacks: outputJacks, issues: issues)
     }
@@ -462,39 +483,5 @@ struct StudioPhysicalResolver {
     private func unique(_ issues: [StudioConnectionIssue]) -> [StudioConnectionIssue] {
         var seen: Set<StudioConnectionIssue.Kind> = []
         return issues.filter { seen.insert($0.kind).inserted }
-    }
-}
-
-struct StudioInstrumentPhysicalRouting {
-    var channels: [Int]
-    var settings: [WingSetting]
-    var issues: [StudioConnectionIssue]
-
-    init(
-        channels: [Int] = [],
-        settings: [WingSetting] = [],
-        issues: [StudioConnectionIssue] = []
-    ) {
-        self.channels = channels
-        self.settings = settings
-        self.issues = issues
-    }
-}
-
-struct StudioEffectPhysicalJacks {
-    /// WING local outputs feeding the effect inputs.
-    var inputJacks: [Int]
-    /// WING local inputs receiving the effect outputs.
-    var outputJacks: [Int]
-    var issues: [StudioConnectionIssue]
-
-    init(
-        inputJacks: [Int] = [],
-        outputJacks: [Int] = [],
-        issues: [StudioConnectionIssue] = []
-    ) {
-        self.inputJacks = inputJacks
-        self.outputJacks = outputJacks
-        self.issues = issues
     }
 }

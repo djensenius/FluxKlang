@@ -13,8 +13,9 @@ import Foundation
 struct StudioEndpointAllocation: Identifiable, Hashable, Sendable {
     var endpoint: StudioEndpoint
     var endpointNodeID: StudioNode.ID
-    /// The WING strip used as this endpoint's generated controllable stem.
+    /// The WING strips used as this endpoint's generated stereo controllable stem.
     var controlNode: WingNodeRef
+    var rightControlNode: WingNodeRef?
 
     var id: StudioEndpoint.ID { endpoint.id }
 }
@@ -46,6 +47,7 @@ struct StudioResourcePlan: Hashable, Sendable {
 
 enum StudioResourceAllocator {
     private static let maxNameLength = 12
+    static let initialLevelDecibels: Float = -30
 
     /// Allocates one bus-master stem per non-empty endpoint, excluding speaker
     /// buses and buses already reserved for outboard effects.
@@ -66,18 +68,23 @@ enum StudioResourceAllocator {
                 ))
                 continue
             }
-            guard !availableBuses.isEmpty else {
+            guard let pairIndex = availableBuses.indices.dropLast().first(where: {
+                availableBuses[$0 + 1] == availableBuses[$0] + 1
+            }) else {
                 issues.append(.error(
                     .noAvailableBus(endpointID: endpointPlan.endpoint.id),
-                    "No free WING bus is available for \(endpointPlan.endpoint.name)."
+                    "No free stereo WING bus pair is available for \(endpointPlan.endpoint.name)."
                 ))
                 continue
             }
-            let bus = availableBuses.removeFirst()
+            let leftBus = availableBuses[pairIndex]
+            let rightBus = availableBuses[pairIndex + 1]
+            availableBuses.removeSubrange(pairIndex...(pairIndex + 1))
             allocations.append(StudioEndpointAllocation(
                 endpoint: endpointPlan.endpoint,
                 endpointNodeID: endpointPlan.nodeID,
-                controlNode: .bus(bus)
+                controlNode: .bus(leftBus),
+                rightControlNode: .bus(rightBus)
             ))
         }
 
@@ -88,19 +95,20 @@ enum StudioResourceAllocator {
     /// controls use the allocated bus strip directly; these settings only name the
     /// strip and route Final Mix endpoints to Main 1.
     static func settings(for allocation: StudioEndpointAllocation) -> [WingSetting] {
-        var settings = [
-            WingSetting(
-                address: WingAddress.name(allocation.controlNode.kind, allocation.controlNode.index),
-                value: .string(sanitizeName(allocation.endpoint.name))
-            )
-        ]
-        if allocation.endpoint.destination == .finalMix {
-            settings.append(WingSetting(
-                address: WingAddress.mainOn(.bus, allocation.controlNode.index, toMain: EffectRouting.returnMain),
-                value: .int(1)
-            ))
+        let nodes = [allocation.controlNode, allocation.rightControlNode].compactMap { $0 }
+        return nodes.enumerated().flatMap { index, node in
+            [
+                WingSetting(
+                    address: WingAddress.name(node.kind, node.index),
+                    value: .string(sanitizeName("\(allocation.endpoint.name) \(index == 0 ? "L" : "R")"))
+                ),
+                WingSetting(
+                    address: WingAddress.fader(node.kind, node.index),
+                    value: .float(FaderMath.position(fromDecibels: initialLevelDecibels))
+                ),
+                WingSetting(address: WingAddress.mute(node.kind, node.index), value: .int(1))
+            ]
         }
-        return settings
     }
 
     static func settings(for plan: StudioResourcePlan) -> [WingSetting] {

@@ -48,8 +48,9 @@ actor DemoWingTransport: WingTransporting {
         if let value {
             // SET: update the store and echo it back, as the console broadcasts
             // changes to every connected client.
-            store[address] = value
-            emit(address, value)
+            let decoded = value.decodedFromWingSet(address: address)
+            store[address] = decoded
+            emit(address, decoded)
         } else if let existing = store[address] {
             // GET: use the same multi-value shape as live WING query replies.
             emit(address, queryValues(address: address, value: existing))
