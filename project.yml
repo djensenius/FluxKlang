@@ -42,6 +42,16 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.music
         NSMicrophoneUsageDescription: FluxKlang uses the microphone between Start dictation and Finish dictation for on-device transcription.
