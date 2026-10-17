@@ -123,7 +123,6 @@
 		54B187DC3941F87B559A1AAC /* DemoModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 405DD99B88EED698E298E908 /* DemoModeTests.swift */; };
 		5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */; };
 		557206B0A1FE832EB31D02BC /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
-		576D8572D4B5767128B0D825 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 73FBD79B215783A120727A85 /* AppIcon.icon */; };
 		57BB9084921C2277A1411380 /* StudioOutputDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9E0DB2C4F255BF966212BA9 /* StudioOutputDefaults.swift */; };
 		58DB701F7718CF3FE86AC07D /* StudioEndpointNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FE4751394DA7635FB282A3 /* StudioEndpointNormalizer.swift */; };
 		5B2242AFCF52BFDF3A3F5189 /* LaunchControlXLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A399B42F80EAC357C07DC4 /* LaunchControlXLTests.swift */; };
@@ -294,7 +293,6 @@
 		ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */; };
 		ED04F8DC337892B8BDFD5865 /* StudioConnectionMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B17E516E1112364021E312C2 /* StudioConnectionMigrationTests.swift */; };
 		ED0630465C110B8E4192410A /* FluxKlangTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51350F733C5438E4B9DE689 /* FluxKlangTests.swift */; };
-		ED852CF56A82B33D3F5E5740 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 73FBD79B215783A120727A85 /* AppIcon.icon */; };
 		EDD59054D1845BC7FE78A0AC /* launch-control-xl.json in Resources */ = {isa = PBXBuildFile; fileRef = 5932A8319C2B122F05FFC3C1 /* launch-control-xl.json */; };
 		EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581CD8ACF8D35B9779227576 /* InputPatchView.swift */; };
 		EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
@@ -410,7 +408,6 @@
 		6EF3AA2751A71216BF63CD6C /* FadersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FadersView.swift; sourceTree = "<group>"; };
 		70F2C93B849BC7C3AB2B7BE0 /* RoutingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingView.swift; sourceTree = "<group>"; };
 		7294340E57AE5853033DDEDC /* InAppAssistantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InAppAssistantTests.swift; sourceTree = "<group>"; };
-		73FBD79B215783A120727A85 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		74D86EAB14C2477BCE38AF29 /* FaderStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderStripView.swift; sourceTree = "<group>"; };
 		759860AEA22209D1049CD83E /* WingApplyVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingApplyVerificationTests.swift; sourceTree = "<group>"; };
 		75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangIntents.swift; sourceTree = "<group>"; };
@@ -767,7 +764,6 @@
 				B28C528452DB08DE9FE39AFB /* FluxKlangMac */,
 				F6624B8D5BBDF1615714D3EB /* FluxKlangTests */,
 				25E746857563BA9FA7B5B237 /* FluxKlangUITests */,
-				BB51CA0863B317EDE8D76FD6 /* Icons */,
 				AE944FB5A90EF0D8678BE47C /* Shared */,
 				9789BFF6FD09DE2B30709D8E /* Products */,
 			);
@@ -839,14 +835,6 @@
 				437C08E45AF09839441CF3D5 /* Info.plist */,
 			);
 			path = FluxKlangMac;
-			sourceTree = "<group>";
-		};
-		BB51CA0863B317EDE8D76FD6 /* Icons */ = {
-			isa = PBXGroup;
-			children = (
-				73FBD79B215783A120727A85 /* AppIcon.icon */,
-			);
-			path = Icons;
 			sourceTree = "<group>";
 		};
 		C9785AC88486FD7ECD0DE441 /* Presets */ = {
@@ -1089,7 +1077,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				576D8572D4B5767128B0D825 /* AppIcon.icon in Resources */,
 				EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */,
 				EDD59054D1845BC7FE78A0AC /* launch-control-xl.json in Resources */,
 				AD7C4674FBBD83BE05974FE6 /* studio-connections.defaults.json in Resources */,
@@ -1100,7 +1087,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				ED852CF56A82B33D3F5E5740 /* AppIcon.icon in Resources */,
 				4353781EE55B9D6E4B2DB0F9 /* Assets.xcassets in Resources */,
 				C463612521DD78327AE1ED82 /* launch-control-xl.json in Resources */,
 				BBCF571D280C247E6CB913D1 /* studio-connections.defaults.json in Resources */,
@@ -1483,7 +1469,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 9JALHNGRBQ;
@@ -1608,7 +1594,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 9JALHNGRBQ;
