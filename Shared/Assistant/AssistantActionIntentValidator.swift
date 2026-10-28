@@ -69,10 +69,7 @@ enum AssistantActionIntentValidator {
                 return "Absolute fader levels must be -90...+10 dB."
             }
         case .setFaderPercent:
-            guard (0...100).contains(amount),
-                amountEvidence.contains("%")
-                    || hasWord(["percent"], in: amountEvidence)
-            else {
+            guard (0...100).contains(amount), hasAmountUnit(#"(?:%|percent)"#, in: amountEvidence) else {
                 return "Specify 0...100% of fader travel (not loudness)."
             }
         case .mute, .unmute: break
@@ -102,7 +99,12 @@ enum AssistantActionIntentValidator {
         }
     }
 
-    private static func hasDBUnit(in text: String) -> Bool { hasWord(["db", "decibels", "decibel"], in: text) }
+    private static func hasDBUnit(in text: String) -> Bool { hasAmountUnit(#"(?:db|decibels?)"#, in: text) }
+
+    private static func hasAmountUnit(_ unit: String, in text: String) -> Bool {
+        let pattern = #"^\s*[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*"# + unit + #"\s*$"#
+        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     private static func number(in text: String) -> Double? {
         guard let regex = try? NSRegularExpression(pattern: #"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"#) else { return nil }

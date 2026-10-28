@@ -78,6 +78,43 @@ struct AssistantActionPlanningTests {
         await state.wing.disconnect()
     }
 
+    @Test func explicitMainAndIndividualStereoMemberUseFreshReviewedNumericIdentity() async throws {
+        for (target, node) in [("main 1", WingNodeRef.main(1)), ("channel 7", .channel(7))] {
+            let (state, transport, service) = await fixture()
+            state.layout = FaderLayout(strips: [.init(node: .channel(7), rightNode: .channel(8),
+                                                     customLabel: "Astrolab")])
+            let intent = AssistantActionIntent(targetMention: target, action: .setDB, amount: -12,
+                addToStudio: false, evidence: .init(target: target, action: "set", amount: "-12dB", add: nil))
+            let preview = try review(await service.prepare(request("set \(target) to -12dB", state: state),
+                                                            interpretation: .proposal(intent)))
+            #expect(preview.stage == .ready)
+            #expect(preview.target?.members.map { $0.identity.node } == [node])
+            #expect(preview.target?.pairStripID == nil)
+            #expect(await transport.writes.isEmpty)
+            let result = await service.confirm(reviewID: preview.id)
+            #expect(result.members.map(\.status) == [.confirmed])
+            #expect(await transport.writes == [.init(address: WingAddress.fader(node.kind, node.index),
+                                                      value: .float(-12))])
+            await state.wing.disconnect()
+        }
+    }
+
+    @Test func mainCannotBeAddedAsChannelShortcutAndUnqualifiedVolumeHasNoDefaultTarget() async {
+        for (target, text, add) in [("main 1", "add main 1 and set it to -12dB", true),
+                                    ("volume", "set volume to -12dB", false)] {
+            let (state, transport, service) = await fixture()
+            let intent = AssistantActionIntent(targetMention: target, action: .setDB, amount: -12,
+                addToStudio: add, evidence: .init(target: target, action: "set", amount: "-12dB",
+                                                  add: add ? "add" : nil))
+            let outcome = await service.prepare(request(text, state: state), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Expected unsupported-target clarification") }
+            #expect(service.pendingReview == nil)
+            #expect(await transport.writes.isEmpty)
+            #expect(state.scope.graph.nodes.isEmpty)
+            await state.wing.disconnect()
+        }
+    }
+
     @Test func omittedAmountIsVisiblySuggestedAndOneConfirmationConsumesOnce() async throws {
         let (state, transport, service) = await fixture()
         let preview = try review(

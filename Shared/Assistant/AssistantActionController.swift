@@ -126,7 +126,8 @@ final class AssistantActionController: AssistantActionPlanning {
             isCurrent(version, wing: wing, session: session, originalScope: originalScope, strips: strips)
         }
         guard
-            let discovery = await wing.readFreshConfirmed(Self.discoveryAddresses, session: session, timeout: timeout),
+            let discovery = await wing.readFreshConfirmed(
+                Self.discoveryAddresses, session: session, timeout: timeout, preservingCache: true),
             current(), Self.channelNames(discovery) != nil
         else {
             return .clarification("No changes: could not freshly confirm all channel names and sources.")
@@ -141,7 +142,8 @@ final class AssistantActionController: AssistantActionPlanning {
                 return .clarification("Only existing input channels can be added as live shortcuts.")
             }
             let address = WingAddress.name(.main, main.index)
-            guard let fresh = await wing.readFreshConfirmed([address], session: session, timeout: timeout), current(),
+            guard let fresh = await wing.readFreshConfirmed(
+                [address], session: session, timeout: timeout, preservingCache: true), current(),
                 let label = fresh[address]?.stringValue
             else { return .clarification("Could not confirm the main identity.") }
             candidates = [
@@ -174,7 +176,8 @@ final class AssistantActionController: AssistantActionPlanning {
         var changes: [AssistantActionFaderChange] = []
         if let selected {
             let addresses = Self.memberAddresses(selected.members)
-            guard let fresh = await wing.readFreshConfirmed(addresses, session: session, timeout: timeout), current(),
+            guard let fresh = await wing.readFreshConfirmed(
+                addresses, session: session, timeout: timeout, preservingCache: true), current(),
                 Self.discoveryUnchanged(discovery, snapshot: wing.confirmedSnapshot()),
                 let target = Self.targetEvidence(selected, session: session, fresh: fresh)
             else {

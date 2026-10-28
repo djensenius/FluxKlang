@@ -29,6 +29,15 @@ struct AssistantActionIntentValidatorTests {
                 == nil)
     }
 
+    @Test func compactDBEvidencePreservesExplicitMainCommandCompatibility() {
+        let intent = AssistantActionIntent(targetMention: "main 1", action: .setDB, amount: -12,
+            addToStudio: false, evidence: .init(target: "main 1", action: "set", amount: "-12dB", add: nil))
+        #expect(AssistantActionIntentValidator.clarification(for: intent, text: "set main 1 to -12dB") == nil)
+        let mixedUnits = AssistantActionIntent(targetMention: "main 1", action: .setDB, amount: -12,
+            addToStudio: false, evidence: .init(target: "main 1", action: "set", amount: "-12%dB", add: nil))
+        #expect(AssistantActionIntentValidator.clarification(for: mixedUnits, text: "set main 1 to -12%dB") != nil)
+    }
+
     @Test func rejectsInventedTargetAmountWrongUnitAndInconsistentAbsoluteMissingAmount() {
         let text = "add my mother-32 and turn the volume to 50%"
         for malformed in [
