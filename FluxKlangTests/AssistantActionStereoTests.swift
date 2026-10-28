@@ -52,6 +52,18 @@ struct AssistantActionStereoTests {
                 target: evidence(0.75, 0.75)) == nil)
     }
 
+    @Test func equivalentOrderedUnitsAreDeduplicatedBeforeAmbiguity() {
+        let observation = AssistantLiveWingContext.Observation(kind: .channel, index: 7,
+            label: AssistantUntrustedText("Astrolab"), receivedAt: Date(), sourceGroup: "LCL", sourceIndex: 7)
+        let live = AssistantLiveWingContext(status: .observed, sessionID: UUID(), capturedAt: Date(),
+                                            observations: [observation, observation])
+        let candidates = AssistantActionTargetResolver.candidates(mention: "Astrolab", live: live,
+            names: [7: "Astrolab"], layout: .init(), equipment: [])
+        #expect(candidates.map(\.id) == [WingNodeRef.channel(7).id])
+        #expect(candidates.first?.members.map(\.node) == [.channel(7)])
+        #expect(candidates.first?.match == .exact)
+    }
+
     @Test func overlappingOrSelfPairsCannotAuthorizeUnits() {
         let first = FaderStrip(node: .channel(7), rightNode: .channel(8), customLabel: "Astrolab")
         #expect(AssistantActionTargetResolver.validPairs(in: .init(strips: [first])).count == 1)
@@ -65,8 +77,10 @@ struct AssistantActionStereoTests {
             ).isEmpty)
     }
 
-    @Test func reviewedPairConfirmsBothOrStopsBeforeSecondSETWithExplicitPartial() async throws {
-        for cancelSecond in [false, true] {
+    @Test func reviewedPairAllowsFirstEchoButStopsBeforeSecondSETOnCancellationOrRelevantABA() async throws {
+        for scenario in 0...4 {
+            let cancelSecond = scenario == 1
+            let expectedWrites = scenario == 0 || scenario == 2 ? 2 : 1
             let transport = AssistantRecordingWingTransport()
             for (index, label, position) in [(7, "Astrolab L", Float(0.75)), (8, "Astrolab R", Float(0.65))] {
                 await transport.put("/ch/\(index)/name", .string(label))
@@ -99,21 +113,37 @@ struct AssistantActionStereoTests {
             #expect(preview.target?.members.count == 2)
             #expect(preview.warnings.contains { $0.contains("two independent SETs") })
             #expect(await transport.writes.isEmpty)
-            if cancelSecond { await transport.pauseMixerSend(afterWrites: 1) }
+            if scenario > 0 { await transport.pauseMixerSend(afterWrites: 1) }
             let task = Task { await service.confirm(reviewID: preview.id) }
-            if cancelSecond {
+            if scenario > 0 {
                 try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
                 #expect(await transport.writes.count == 1)
-                service.cancel()
+                if cancelSecond {
+                    service.cancel()
+                } else if scenario == 2 {
+                    let change = try #require(preview.faderChanges.first)
+                    await transport.emit(WingAddress.fader(.channel, 7), .float(change.afterPosition))
+                    try await AssistantBackendFixture.wait {
+                        wing.confirmedValues[WingAddress.fader(.channel, 7)] == .float(change.afterPosition)
+                    }
+                } else {
+                    let address = scenario == 3 ? WingAddress.channelSourceIndex(7) : WingAddress.fader(.channel, 8)
+                    let original: WingValue = scenario == 3 ? .int(7) : .float(0.65)
+                    let changed: WingValue = scenario == 3 ? .int(8) : .float(0.6)
+                    let revision = wing.assistantActionEvidence.revision
+                    await transport.emit(address, changed)
+                    await transport.emit(address, original)
+                    try await AssistantBackendFixture.wait { wing.assistantActionEvidence.revision >= revision + 2 }
+                }
                 await transport.releaseMixerSend()
             }
             let result = await task.value
-            #expect(await transport.writes.count == (cancelSecond ? 1 : 2))
-            #expect(
-                result.members.map(\.status)
-                    == (cancelSecond ? [.sentUnconfirmed, .notSent] : [.confirmed, .confirmed]))
+            #expect(await transport.writes.count == expectedWrites)
+            let expected: [AssistantActionResult.MemberStatus] = cancelSecond ? [.sentUnconfirmed, .notSent]
+                : (expectedWrites == 2 ? [.confirmed, .confirmed] : [.confirmed, .notSent])
+            #expect(result.members.map(\.status) == expected)
             _ = await service.confirm(reviewID: preview.id)
-            #expect(await transport.writes.count == (cancelSecond ? 1 : 2))
+            #expect(await transport.writes.count == expectedWrites)
             await wing.disconnect()
         }
     }
@@ -125,7 +155,7 @@ struct AssistantActionStereoTests {
             let changed: WingValue = address.hasSuffix("/fdr") ? .float(0.6) : .int(8)
             evidence.record(address, value: original)
             let authorization = WingMixerWriteAuthorization(deadline: .now.advanced(by: .seconds(1)))
-            withObservationTracking { _ = evidence.revision } onChange: { authorization.invalidate() }
+            withObservationTracking { evidence.observeChanges(at: [address]) } onChange: { authorization.invalidate() }
             evidence.record(address, value: original)
             #expect(evidence.revision == 0)
             evidence.record(address, value: changed)
@@ -134,6 +164,24 @@ struct AssistantActionStereoTests {
             #expect(throws: WingTransportError.notAuthorized) { try authorization.consume {} }
             #expect(!authorization.wasConsumed)
         }
+    }
+
+    @Test func scopedEvidenceIgnoresCompletedBaselineButResetAlwaysRevokes() throws {
+        let evidence = WingAssistantActionEvidence()
+        let completed = WingAddress.fader(.channel, 7)
+        let remaining = WingAddress.fader(.channel, 8)
+        evidence.record(completed, value: .float(0.75))
+        evidence.record(remaining, value: .float(0.65))
+        let allowed = WingMixerWriteAuthorization(deadline: .now.advanced(by: .seconds(1)))
+        withObservationTracking { evidence.observeChanges(at: [remaining]) } onChange: { allowed.invalidate() }
+        evidence.record(completed, value: .float(0.55))
+        try allowed.consume {}
+        #expect(allowed.wasConsumed)
+        let revoked = WingMixerWriteAuthorization(deadline: .now.advanced(by: .seconds(1)))
+        withObservationTracking { evidence.observeChanges(at: [remaining]) } onChange: { revoked.invalidate() }
+        evidence.reset()
+        #expect(throws: WingTransportError.notAuthorized) { try revoked.consume {} }
+        #expect(!revoked.wasConsumed)
     }
 
     @Test func finalSendAllowlistRejectsWrongValueWrongNodeAndUnboundConsume() throws {

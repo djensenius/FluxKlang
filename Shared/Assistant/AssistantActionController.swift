@@ -107,6 +107,9 @@ final class AssistantActionController: AssistantActionPlanning {
     )
         async -> AssistantActionPreparation {
         let version = operationID
+        if case .invalidIdentity = AssistantActionTargetResolver.target(intent.targetMention) {
+            return .clarification("No changes: channels are 1...40 and mains are 1...4.")
+        }
         guard !Task.isCancelled, let wing = controller(), !wing.isDemo, wing.connection.isConnected,
             let session = wing.sessionID, request.liveContext.sessionID == session
         else {
@@ -135,9 +138,7 @@ final class AssistantActionController: AssistantActionPlanning {
         var candidates = Self.candidates(
             intent: intent, wing: wing, discovery: discovery,
             scope: originalScope, strips: strips)
-        if let main = AssistantActionTargetResolver.explicitNode(
-            AssistantLiveWingContext.normalize(intent.targetMention)),
-            main.kind == .main {
+        if case .node(let main) = AssistantActionTargetResolver.target(intent.targetMention), main.kind == .main {
             guard !intent.addToStudio else {
                 return .clarification("Only existing input channels can be added as live shortcuts.")
             }
@@ -163,8 +164,8 @@ final class AssistantActionController: AssistantActionPlanning {
             }
             selected = fresh
         } else {
-            let exact = candidates.filter { $0.match == .exact || $0.match == .explicitIdentity }
-            selected = exact.count == 1 ? exact.first : nil
+            let only = candidates.count == 1 ? candidates.first : nil
+            selected = only?.match == .exact || only?.match == .explicitIdentity ? only : nil
         }
         guard !candidates.isEmpty else {
             return .clarification(

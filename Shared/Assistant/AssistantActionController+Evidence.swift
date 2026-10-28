@@ -27,9 +27,11 @@ extension AssistantActionController {
         var live = AssistantLiveWingContext.project(
             wing.confirmedSnapshot(), equipment: scope.equipment,
             connections: scope.connections)
-        // Empty scribbles are addressable only via an explicit numeric channel identity.
+        // Blank scribbles never enter named alias/pair resolution, including LOCAL aliases.
         let names = channelNames(discovery) ?? [:]
-        for (index, label) in names where label.isEmpty {
+        if case .node(let node) = AssistantActionTargetResolver.target(intent.targetMention), node.kind == .channel,
+            let label = names[node.index], label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let index = node.index
             live.observations.append(
                 .init(
                     kind: .channel, index: index, label: AssistantUntrustedText(label),

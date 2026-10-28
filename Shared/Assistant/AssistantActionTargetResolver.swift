@@ -1,8 +1,13 @@
 import Foundation
 
-/// Ranking is a convenience, never permission. Only one exact live mono label or an explicit
-/// numeric identity can advance without a candidate-selection step (still requiring final review).
+/// Ranking is a convenience, never permission. Competing units always need selection;
+/// explicit numeric identities exclude named alternatives (still requiring final review).
 enum AssistantActionTargetResolver {
+    enum Target {
+        case node(WingNodeRef)
+        case invalidIdentity
+        case name
+    }
     // Ranking and all ambiguity exits remain together; none of these matches is authorization.
     // swiftlint:disable:next cyclomatic_complexity
     static func candidates(
@@ -11,11 +16,18 @@ enum AssistantActionTargetResolver {
         equipment: [Equipment]
     ) -> [AssistantActionCandidate] {
         let requested = AssistantLiveWingContext.normalize(mention)
-        let explicit = explicitNode(requested)
+        let explicit: WingNodeRef?
+        switch target(mention) {
+        case .node(let node): explicit = node
+        case .invalidIdentity: return []
+        case .name: explicit = nil
+        }
         var result: [AssistantActionCandidate] = []
         let pairs = validPairs(in: layout)
         for observation in live.observations where observation.kind == .channel {
-            guard !observation.isStale, !observation.conflict else { continue }
+            guard !observation.isStale, !observation.conflict,
+                explicit != nil || !observation.label.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { continue }
             let node = WingNodeRef.channel(observation.index)
             let identity = identity(for: observation)
             let paired = layout.strips.contains { $0.rightNode != nil && ($0.node == node || $0.rightNode == node) }
@@ -68,7 +80,9 @@ enum AssistantActionTargetResolver {
                         $0.kind == .channel && $0.index == right.index
                     }),
                     !leftObservation.isStale, !rightObservation.isStale,
-                    !leftObservation.conflict, !rightObservation.conflict
+                    !leftObservation.conflict, !rightObservation.conflict,
+                    !leftObservation.label.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    !rightObservation.label.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 else { continue }
                 let aliases = [leftObservation.label.value, rightObservation.label.value, strip.customLabel ?? ""]
                 guard aliases.contains(where: { similar(mention, $0) }) else { continue }
@@ -82,7 +96,9 @@ enum AssistantActionTargetResolver {
                         pairStripID: strip.id, match: .similar))
             }
         }
-        return result.sorted { $0.id < $1.id }
+        // Multiple aliases for the same ordered channel unit are not competing targets.
+        var units: Set<[WingNodeRef]> = []
+        return result.sorted { $0.id < $1.id }.filter { units.insert($0.members.map(\.node)).inserted }
     }
 
     static func validPairs(in layout: FaderLayout) -> [FaderStrip] {
@@ -96,13 +112,17 @@ enum AssistantActionTargetResolver {
         }
     }
 
-    static func explicitNode(_ text: String) -> WingNodeRef? {
-        let words = text.split(separator: " ")
-        if text == "main" { return .main(1) }
-        guard words.count == 2, let index = Int(words[1]) else { return nil }
-        if words[0] == "channel", (1...40).contains(index) { return .channel(index) }
-        if words[0] == "main", (1...4).contains(index) { return .main(index) }
-        return nil
+    static func target(_ mention: String) -> Target {
+        let text = AssistantLiveWingContext.normalize(mention)
+        if text == "main" { return .node(.main(1)) }
+        guard let range = text.range(of: #"^(channel|main)\s*\d+$"#, options: .regularExpression) else {
+            return .name
+        }
+        let kind: WingNodeKind = text.hasPrefix("channel") ? .channel : .main
+        let digits = text[range].dropFirst(kind == .channel ? "channel".count : "main".count)
+            .trimmingCharacters(in: .whitespaces)
+        guard let index = Int(digits), (1...kind.count).contains(index) else { return .invalidIdentity }
+        return .node(.init(kind: kind, index: index))
     }
 
     private static func identity(for observation: AssistantLiveWingContext.Observation)

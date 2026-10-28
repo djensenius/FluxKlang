@@ -109,8 +109,10 @@ extension AssistantActionController {
                 deadline: evidenceDeadline, node: change.node,
                 value: value, muted: change.changesMute)
             activeAuthorization = authorization
+            let remainingIdentities = target.members.dropFirst(index).map(\.identity)
             let allowed = withObservationTracking {
-                _ = plan.wing.assistantActionEvidence.revision
+                plan.wing.assistantActionEvidence.observeChanges(
+                    at: Self.discoveryAddresses + Self.memberAddresses(remainingIdentities))
                 return current()
             } onChange: {
                 authorization.invalidate()

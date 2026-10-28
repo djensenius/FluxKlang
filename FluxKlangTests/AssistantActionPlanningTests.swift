@@ -79,14 +79,21 @@ struct AssistantActionPlanningTests {
     }
 
     @Test func explicitMainAndIndividualStereoMemberUseFreshReviewedNumericIdentity() async throws {
-        for (target, node) in [("main 1", WingNodeRef.main(1)), ("channel 7", .channel(7))] {
+        for (target, node) in [("main 1", WingNodeRef.main(1)), ("main2", .main(2)), ("main 2", .main(2)),
+                               ("channel7", .channel(7)), ("channel 7", .channel(7))] {
             let (state, transport, service) = await fixture()
             state.layout = FaderLayout(strips: [.init(node: .channel(7), rightNode: .channel(8),
                                                      customLabel: "Astrolab")])
-            let intent = AssistantActionIntent(targetMention: target, action: .setDB, amount: -12,
-                addToStudio: false, evidence: .init(target: target, action: "set", amount: "-12dB", add: nil))
-            let preview = try review(await service.prepare(request("set \(target) to -12dB", state: state),
-                                                            interpretation: .proposal(intent)))
+            // A colliding live label must not steal an explicit numeric target.
+            await transport.put(WingAddress.name(.channel, 8), .string(target))
+            if node.kind == .main {
+                await transport.put(WingAddress.name(.main, node.index), .string("Main"))
+                await transport.put(WingAddress.fader(.main, node.index), .float(0.75))
+                await transport.put(WingAddress.mute(.main, node.index), .int(0))
+            }
+            let submission = request("set \(target) to -12dB", state: state)
+            let preview = try review(await service.prepare(submission,
+                interpretation: AssistantActionInterpretationAdapter.fallback(submission, reason: "Test")))
             #expect(preview.stage == .ready)
             #expect(preview.target?.members.map { $0.identity.node } == [node])
             #expect(preview.target?.pairStripID == nil)
@@ -181,7 +188,9 @@ struct AssistantActionPlanningTests {
             #expect(choice.target == nil)
             _ = await service.confirm(reviewID: choice.id)
             #expect(await transport.writes.isEmpty)
-            let preview = try review(await service.selectCandidate(reviewID: choice.id, candidateID: "channel-7"))
+            #expect(service.pendingReview?.id == choice.id)
+            let preview = try review(await service.selectCandidate(reviewID: choice.id,
+                                                                   candidateID: WingNodeRef.channel(7).id))
             #expect(preview.stage == .ready)
             #expect(preview.id != choice.id)
             #expect(preview.target?.members.first?.identity.node == .channel(7))
@@ -201,7 +210,7 @@ struct AssistantActionPlanningTests {
         let choice = try review(
             await service.prepare(request("turn down my Astrolab", state: state), interpretation: lower()))
         #expect(choice.stage == .chooseCandidate)
-        #expect(choice.candidates.map(\.id) == ["channel-7"])
+        #expect(choice.candidates.map(\.id) == [WingNodeRef.channel(7).id])
         #expect(await transport.writes.isEmpty)
         await state.wing.disconnect()
     }
@@ -293,4 +302,114 @@ final class AssistantActionTestState {
         environmentID: UUID(), graph: StudioGraph(), endpoints: [],
         equipment: [], connections: StudioHomeConnections())
     init(wing: WingController) { self.wing = wing }
+}
+
+extension AssistantActionPlanningTests {
+    @Test func omittedCompoundAddCannotBecomeFaderOnlyReview() async {
+        let (state, transport, service) = await fixture(label: "Mother-32")
+        let intent = AssistantActionIntent(targetMention: "mother-32", action: .setFaderPercent, amount: 50,
+            addToStudio: false, evidence: .init(target: "mother-32", action: "turn", amount: "50%", add: nil))
+        let outcome = await service.prepare(
+            request("Could you add my mother-32 and turn the volume to 50%?", state: state),
+            interpretation: .proposal(intent))
+        if case .clarification = outcome {} else { Issue.record("Compound request silently dropped its shortcut") }
+        #expect(service.pendingReview == nil)
+        #expect(state.scope.graph.nodes.isEmpty)
+        #expect(await transport.writes.isEmpty)
+        await state.wing.disconnect()
+    }
+
+    @Test func invalidNumericIdentitiesNeverFallThroughToCollidingLiveLabels() async throws {
+        for target in ["main5", "main 5", "channel0", "channel 0", "channel41", "channel 41",
+                       "main999999999999999999999999999999"] {
+            let (state, transport, service) = await fixture(label: target)
+            let submission = request("set \(target) to -12dB", state: state)
+            let intent = AssistantActionIntent(targetMention: target, action: .setDB, amount: -12,
+                addToStudio: false, evidence: .init(target: target, action: "set", amount: "-12dB", add: nil))
+            // Exercise untrusted generated intent as well as the exact fallback's range check.
+            for interpretation in [AssistantActionInterpretation.proposal(intent),
+                                   AssistantActionInterpretationAdapter.fallback(submission, reason: "Test")] {
+                let outcome = await service.prepare(submission, interpretation: interpretation)
+                if case .clarification = outcome {} else { Issue.record("Numeric identity fell through to a label") }
+                #expect(service.pendingReview == nil)
+                #expect(await transport.writes.isEmpty)
+            }
+            await state.wing.disconnect()
+        }
+    }
+
+    @Test func exactPlusSimilarSavedLinkOrPairRequiresSelectionBeforeConfirmation() async throws {
+        for scenario in 0...2 {
+            let (state, transport, service) = await fixture()
+            await transport.put(WingAddress.name(.channel, 8), .string(scenario == 0 ? "Astro-lab" : "Lead"))
+            if scenario == 1 {
+                let gear = Equipment(name: "Astrolab")
+                state.scope.equipment = [gear]
+                state.scope.connections.inputs = [.init(connector: 8, equipmentID: gear.id, outputPort: 0)]
+            } else if scenario == 2 {
+                await transport.put(WingAddress.name(.channel, 9), .string("Keys R"))
+                state.layout = .init(strips: [.init(node: .channel(8), rightNode: .channel(9),
+                                                   customLabel: "Astrolab")])
+            }
+            let choice = try review(await service.prepare(request("turn down my Astrolab", state: state),
+                                                           interpretation: lower()))
+            #expect(choice.stage == .chooseCandidate)
+            #expect(choice.candidates.count == 2)
+            #expect(choice.selectedCandidateID == nil)
+            #expect(choice.target == nil)
+            #expect(choice.faderChanges.isEmpty)
+            _ = await service.confirm(reviewID: choice.id)
+            #expect(await transport.writes.isEmpty)
+            let preview = try review(await service.selectCandidate(reviewID: choice.id,
+                                                                   candidateID: WingNodeRef.channel(7).id))
+            #expect(preview.stage == .ready)
+            #expect(preview.target?.members.map { $0.identity.node } == [.channel(7)])
+            #expect(await transport.writes.isEmpty)
+            #expect(await service.confirm(reviewID: preview.id).members.map(\.status) == [.confirmed])
+            #expect(await transport.writes.map(\.address) == [WingAddress.fader(.channel, 7)])
+            await state.wing.disconnect()
+        }
+    }
+
+    @Test func blankOrWhitespaceChannelsHaveNoNamedLOCALAliasOrCustomPairButAllowNumericIdentity() async throws {
+        for label in ["", " \t "] {
+            for pair in [false, true] {
+                let (state, transport, service) = await fixture(label: label)
+                await transport.put(WingAddress.inputName(7), .string("Astrolab"))
+                if pair {
+                    await transport.put(WingAddress.name(.channel, 8), .string(label))
+                    state.layout = .init(strips: [.init(node: .channel(7), rightNode: .channel(8),
+                                                       customLabel: "Astrolab")])
+                }
+                let named = await service.prepare(request("turn down my Astrolab", state: state),
+                                                  interpretation: lower())
+                if case .clarification = named {} else { Issue.record("Blank scribbles authorized a named target") }
+                #expect(service.pendingReview == nil)
+                #expect(await transport.writes.isEmpty)
+                let preview = try review(await service.prepare(request("turn down channel7", state: state),
+                                                                 interpretation: lower("channel7")))
+                #expect(preview.stage == .ready)
+                #expect(preview.target?.members.map { $0.identity.node } == [.channel(7)])
+                #expect(preview.target?.members.first?.identity.label == label)
+                #expect(preview.target?.pairStripID == nil)
+                #expect(await transport.writes.isEmpty)
+                await state.wing.disconnect()
+            }
+        }
+    }
+
+    @Test func exactTurnFallbackPreservesDirectionThroughPlannerPreparation() async throws {
+        for (text, afterDB) in [("turn main 1 down by 3 dB", Float(-3)), ("turn down main 1 by 3 dB", -3),
+                                ("turn main 1 up by 3 dB", 3), ("turn up main 1 by 3 dB", 3)] {
+            let (state, transport, service) = await fixture()
+            let submission = request(text, state: state)
+            let preview = try review(await service.prepare(submission,
+                interpretation: AssistantActionInterpretationAdapter.fallback(submission, reason: "Test")))
+            #expect(preview.stage == .ready)
+            #expect(preview.target?.members.map { $0.identity.node } == [.main(1)])
+            #expect(preview.faderChanges.first?.afterPosition == FaderMath.position(fromDecibels: afterDB))
+            #expect(await transport.writes.isEmpty)
+            await state.wing.disconnect()
+        }
+    }
 }

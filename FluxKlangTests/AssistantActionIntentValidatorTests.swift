@@ -29,6 +29,22 @@ struct AssistantActionIntentValidatorTests {
                 == nil)
     }
 
+    @Test func compoundCannotDropExplicitAddAndTargetLabelWordsAreNotActionEvidence() {
+        for text in ["add my mother-32 and turn the volume to 50%",
+                     "Could you add my mother-32 and turn the volume to 50%?"] {
+            #expect(AssistantActionIntentValidator.clarification(for: intent(add: false), text: text) != nil)
+            #expect(AssistantActionIntentValidator.clarification(for: intent(), text: text) == nil)
+        }
+        #expect(AssistantActionIntentValidator.clarification(for: intent(target: "Add Synth", add: false),
+            text: "turn Add Synth to 50%") == nil)
+        #expect(AssistantActionIntentValidator.clarification(for: intent(target: "Add Synth"),
+            text: "turn Add Synth to 50%") != nil)
+        #expect(AssistantActionIntentValidator.clarification(for: intent(target: "Turn Synth", add: false),
+            text: "turn Turn Synth to 50%") == nil)
+        #expect(AssistantActionIntentValidator.clarification(for: intent(target: "Turn Synth", add: false),
+            text: "Turn Synth to 50%") != nil)
+    }
+
     @Test func compactDBEvidencePreservesExplicitMainCommandCompatibility() {
         let intent = AssistantActionIntent(targetMention: "main 1", action: .setDB, amount: -12,
             addToStudio: false, evidence: .init(target: "main 1", action: "set", amount: "-12dB", add: nil))

@@ -113,7 +113,7 @@ struct AssistantActionCoordinationTests {
         let firstDiscovery = try #require(AssistantActionController.discoveryAddresses.sorted().first)
         await fixture.transport.pauseQueries(at: firstDiscovery)
         let selection = Task {
-            await fixture.service.selectCandidate(reviewID: choice.id, candidateID: "channel-7")
+            await fixture.service.selectCandidate(reviewID: choice.id, candidateID: WingNodeRef.channel(7).id)
         }
         try await AssistantBackendFixture.waitAsync { await fixture.transport.queryWaiting }
         fixture.service.cancel()

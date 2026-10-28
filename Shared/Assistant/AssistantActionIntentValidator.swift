@@ -8,8 +8,7 @@ enum AssistantActionIntentValidator {
         guard !text.contains(where: { "\"“”`\n\r".contains($0) }),
             text.range(
                 of: #"\b(do not|don't|never|not|if|hypothetical|pretend|imagine|how|why|explain)\b"#,
-                options: [.regularExpression, .caseInsensitive]) == nil,
-            mixerVerbCount(in: text) <= 1
+                options: [.regularExpression, .caseInsensitive]) == nil
         else {
             return "No changes: quoted, negated, hypothetical or multiple mixer actions need a new direct request."
         }
@@ -20,9 +19,17 @@ enum AssistantActionIntentValidator {
         else {
             return "No changes: the target must be stated in the current request."
         }
+        let actionText = text.replacingOccurrences(
+            of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
+        guard mixerVerbCount(in: actionText) <= 1 else {
+            return "No changes: multiple mixer actions need a new direct request."
+        }
         guard intent.action != nil || intent.addToStudio else { return "Which action should I review?" }
+        if !intent.addToStudio, hasWord(["add", "include"], in: actionText) {
+            return "No changes: the requested live shortcut was omitted. Review both parts of a new request."
+        }
         if intent.addToStudio {
-            guard let evidence = intent.evidence.add, copied(evidence, from: text),
+            guard let evidence = intent.evidence.add, copied(evidence, from: actionText),
                 hasWord(["add", "include", "shortcut"], in: evidence)
             else {
                 return "No changes: adding a live shortcut needs explicit current-request evidence."
@@ -34,7 +41,7 @@ enum AssistantActionIntentValidator {
             return intent.amount == nil && intent.evidence.action == nil && intent.evidence.amount == nil
                 ? nil : "No changes: an amount without an action cannot be reviewed."
         }
-        guard let evidence = intent.evidence.action, copied(evidence, from: text) else {
+        guard let evidence = intent.evidence.action, copied(evidence, from: actionText) else {
             return "No changes: the action must be stated in the current request."
         }
         let verbs: [String]
@@ -86,9 +93,11 @@ enum AssistantActionIntentValidator {
 
     private static func copied(_ evidence: String, from text: String) -> Bool {
         guard !evidence.isEmpty, evidence.count <= 300 else { return false }
-        let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: evidence)
-            + "(?![\\p{L}\\p{N}])"
-        return text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        return text.range(of: evidencePattern(evidence), options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func evidencePattern(_ evidence: String) -> String {
+        "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: evidence) + "(?![\\p{L}\\p{N}])"
     }
 
     private static func hasWord(_ words: [String], in text: String) -> Bool {
