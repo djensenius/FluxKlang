@@ -112,8 +112,9 @@ extension TutorialTopic {
                 detail: """
                 Assistant and Siri routing requests create a pending Studio draft. Review validation and cable \
                 instructions before accepting. Accept adds semantic routing only; Listen applies it to the WING. \
-                Explicit chat mixer commands are separate: specify a channel or main and a dB amount, or mute \
-                a target. They use fresh console readings and report whether the result was confirmed.
+                Apple Intelligence can interpret instrument-level requests into a separate action review. \
+                Choose the exact live channel or saved pair, then confirm the shown fader or mute change. \
+                Adding a live shortcut creates no cables or routing; percentages mean fader travel, not loudness.
                 """,
                 systemImage: "checkmark.shield",
                 tint: .green
