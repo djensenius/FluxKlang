@@ -138,6 +138,7 @@
 		5CD6632F85A05E208E57F56B /* PatchMatrixView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D8913CDF7132D0F55F15534 /* PatchMatrixView.swift */; };
 		5D1F039DC1DCA6BC4EFF00F3 /* PresetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A18982F123B7C1D338F645BE /* PresetsTests.swift */; };
 		5DA95724CA307B4ACD26F827 /* StudioPatchDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50261467F21BE7920041F0B /* StudioPatchDraft.swift */; };
+		5E3ECCC2D3A1743B47ED8ADC /* StudioWiringAdvisorLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFBE52D3E7977263DF5A2624 /* StudioWiringAdvisorLayoutTests.swift */; };
 		5E90D7577BBBF371C676D7AF /* WingApplyVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 759860AEA22209D1049CD83E /* WingApplyVerificationTests.swift */; };
 		5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */; };
 		5F34070492CFD066EC0845F7 /* MenuBarMixer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06173B51FCABC2577C3360C /* MenuBarMixer.swift */; };
@@ -505,6 +506,7 @@
 		CCA1868D810536899CF258BC /* WingConfirmedSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingConfirmedSnapshot.swift; sourceTree = "<group>"; };
 		CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingDiscoveryTests.swift; sourceTree = "<group>"; };
 		CF51B8A26B704629FF9267B0 /* CopilotAssistantGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotAssistantGenerator.swift; sourceTree = "<group>"; };
+		CFBE52D3E7977263DF5A2624 /* StudioWiringAdvisorLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioWiringAdvisorLayoutTests.swift; sourceTree = "<group>"; };
 		D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSetup.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
 		D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchControlXLController.swift; sourceTree = "<group>"; };
@@ -950,6 +952,7 @@
 				2604E5BCB8AB121B3246373C /* StudioCanvasGeometryTests.swift */,
 				B17E516E1112364021E312C2 /* StudioConnectionMigrationTests.swift */,
 				0325249A945B2C6126F18AFD /* StudioGraphTests.swift */,
+				CFBE52D3E7977263DF5A2624 /* StudioWiringAdvisorLayoutTests.swift */,
 				8AA59354F097D5E2225BC283 /* StudioWiringAdvisorTests.swift */,
 				2DF3190E29940EE07ED501B6 /* TemporaryDeviceMoveTests.swift */,
 				E11CF5F3C9CDE69281FF4772 /* TestSupport.swift */,
@@ -1481,6 +1484,7 @@
 				2094D1996080FF6E4B610A39 /* StudioCanvasGeometryTests.swift in Sources */,
 				ED04F8DC337892B8BDFD5865 /* StudioConnectionMigrationTests.swift in Sources */,
 				09E0C360BA79813CDB0DD2CA /* StudioGraphTests.swift in Sources */,
+				5E3ECCC2D3A1743B47ED8ADC /* StudioWiringAdvisorLayoutTests.swift in Sources */,
 				62CF2211E6EEFA92A9757C32 /* StudioWiringAdvisorTests.swift in Sources */,
 				8726E6E28E7ACB69E0D7A9AC /* TemporaryDeviceMoveTests.swift in Sources */,
 				5CA07F389BC239BD9B5769FC /* TestSupport.swift in Sources */,
