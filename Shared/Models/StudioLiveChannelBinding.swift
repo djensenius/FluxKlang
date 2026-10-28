@@ -27,4 +27,11 @@ struct StudioLiveChannelBinding: Identifiable, Codable, Hashable, Sendable {
         self.pairStripID = pairStripID
         self.observedAt = observedAt
     }
+
+    var isWellFormed: Bool {
+        (members.count == 1 || members.count == 2)
+            && Set(members.map(\.channel)).count == members.count
+            && members.allSatisfy { (1...40).contains($0.channel) }
+            && (members.count == 2 ? pairStripID != nil : pairStripID == nil)
+    }
 }

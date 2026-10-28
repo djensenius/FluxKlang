@@ -7,8 +7,32 @@ final class WingMixerWriteAuthorization: @unchecked Sendable {
     private let lock = NSLock()
     private let deadline: ContinuousClock.Instant
     private var valid = true
+    private var consumed = false
+    private let allowed: WingSetting?
+    private let allowedNode: WingNodeRef?
+    private let allowedMute: Bool?
 
-    init(deadline: ContinuousClock.Instant) { self.deadline = deadline }
+    init(deadline: ContinuousClock.Instant) {
+        self.deadline = deadline
+        allowed = nil
+        allowedNode = nil
+        allowedMute = nil
+    }
+
+    /// Reviewed actions bind the single-use token to exactly one address/value.
+    init(deadline: ContinuousClock.Instant, node: WingNodeRef, value: WingValue, muted: Bool) {
+        self.deadline = deadline
+        allowedNode = node
+        allowedMute = muted
+        allowed = WingSetting(address: muted ? WingAddress.mute(node.kind, node.index)
+                                           : WingAddress.fader(node.kind, node.index), value: value)
+    }
+
+    var wasConsumed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return consumed
+    }
 
     func invalidate() {
         lock.lock()
@@ -17,13 +41,19 @@ final class WingMixerWriteAuthorization: @unchecked Sendable {
     }
 
     func consume(_ send: () throws -> Void) throws {
+        try consume(node: nil, value: nil, muted: nil, send)
+    }
+
+    func consume(node: WingNodeRef?, value: WingValue?, muted: Bool?, _ send: () throws -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
-        guard valid, !Task.isCancelled, ContinuousClock.now < deadline else {
+        guard valid, !Task.isCancelled, ContinuousClock.now < deadline,
+              allowed == nil || (node == allowedNode && value == allowed?.value && muted == allowedMute) else {
             valid = false
             throw WingTransportError.notAuthorized
         }
         valid = false
+        consumed = true
         try send()
     }
 }

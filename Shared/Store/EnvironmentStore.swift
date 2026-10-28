@@ -287,6 +287,41 @@ final class EnvironmentStore {
         mutateStudioGraph { $0.addNode(node) }
     }
 
+    /// Adds/reuses only a local display shortcut. No Equipment, Home, endpoints or routing are changed.
+    func addLiveChannelShortcut(_ binding: StudioLiveChannelBinding, title: String,
+                                environmentID: UUID, expectedGraph: StudioGraph) -> (nodeID: UUID, added: Bool)? {
+        guard active?.id == environmentID, activeStudioGraph == expectedGraph,
+              binding.isWellFormed, let index = activeIndex() else { return nil }
+        if let existing = expectedGraph.nodes.first(where: { node in
+            guard case .liveChannel(let saved) = node.kind else { return false }
+            return saved.observedSessionID == binding.observedSessionID
+                && saved.members.map(\.channel) == binding.members.map(\.channel)
+        }) {
+            // Explicitly reviewed current evidence can rebind the same session/unit,
+            // without multiplying cards after a rename or source change.
+            if let nodeIndex = environments[index].studioGraph.nodes.firstIndex(where: { $0.id == existing.id }) {
+                environments[index].studioGraph.nodes[nodeIndex].kind = .liveChannel(binding)
+                environments[index].studioGraph.nodes[nodeIndex].title = title
+                persist()
+                return (existing.id, false)
+            }
+            return nil
+        }
+        let placements = expectedGraph.nodes.map { node in
+            let lane: StudioCanvasGeometry.Lane
+            switch node.kind {
+            case .instrument, .effect: lane = .gear
+            case .endpoint, .liveChannel: lane = .controls
+            }
+            return StudioCanvasGeometry.Placement(position: node.position, lane: lane)
+        }
+        let node = StudioNode(kind: .liveChannel(binding), title: title,
+            position: StudioCanvasGeometry.firstFreePosition(in: .controls, avoiding: placements))
+        environments[index].studioGraph.addNode(node)
+        persist()
+        return (node.id, true)
+    }
+
     func addStudioEndpointNode(_ endpoint: StudioEndpoint, position: CGPoint) {
         mutateEnvironment { environment in
             environment.studioEndpoints.append(endpoint)

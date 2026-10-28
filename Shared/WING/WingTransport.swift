@@ -161,7 +161,7 @@ actor WingTransport: WingTransporting {
 
     func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
                         authorization: WingMixerWriteAuthorization) throws {
-        try authorization.consume {
+        try authorization.consume(node: node, value: value, muted: muted) {
             // No suspension between authorization/session checks and the socket write.
             guard self.sessionID == sessionID,
                   WingController.isValidMixerValue(node, value: value, muted: muted) else {

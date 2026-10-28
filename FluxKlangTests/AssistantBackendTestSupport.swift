@@ -71,6 +71,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var mismatchesWrites = false
     private var queryDelay: Duration = .zero
     private var gateMixerSend = false
+    private var mixerGateAfterWrites = 0
     private(set) var mixerSendWaiting = false
     private var mixerSendGate: CheckedContinuation<Void, Never>?
     private var gateBaselineAfterNames = false
@@ -110,7 +111,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
         mismatchesWrites = mismatch
         queryDelay = delay
     }
-    func pauseMixerSend() { gateMixerSend = true }
+    func pauseMixerSend(afterWrites: Int = 0) {
+        mixerSendWaiting = false
+        mixerGateAfterWrites = afterWrites
+        gateMixerSend = true
+    }
     func releaseMixerSend() {
         gateMixerSend = false
         mixerSendGate?.resume()
@@ -147,11 +152,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
     }
     func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
                         authorization: WingMixerWriteAuthorization) async throws {
-        if gateMixerSend {
+        if gateMixerSend && writes.count >= mixerGateAfterWrites {
             mixerSendWaiting = true
             await withCheckedContinuation { mixerSendGate = $0 }
         }
-        try authorization.consume {
+        try authorization.consume(node: node, value: value, muted: muted) {
             guard self.sessionID == sessionID else { throw BackendTestError.send }
             let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
             try recordWrite(address, value.encodedForWing(address: address))

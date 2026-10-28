@@ -73,6 +73,7 @@ enum StudioPatchDraftMerger {
         case .instrument(let id): equipmentIDs.contains(id)
         case .effect(let id): effectIDs.contains(id)
         case .endpoint(let id): draft.fragment.endpoints.contains { $0.id == id }
+        case .liveChannel: false
         }
     }
 }

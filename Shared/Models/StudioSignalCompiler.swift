@@ -56,6 +56,11 @@ struct StudioCompilationInput {
 enum StudioSignalCompiler {
     static func compile(_ input: StudioCompilationInput) -> StudioCompiledRouting {
         let routingPlan = StudioRoutingPlanner.plan(for: input.graph, endpoints: input.endpoints)
+        // Imported/malformed edges must not turn a display shortcut into a compiler
+        // source, nor initialize any endpoint buses before rejecting that graph.
+        if routingPlan.rejectsLiveChannelEdges {
+            return routingPlan.rejectedLiveChannelCompilation
+        }
         let resourcePlan = StudioResourceAllocator.allocateEndpoints(
             for: routingPlan,
             effects: input.effects,
@@ -526,5 +531,19 @@ private extension StudioCompileIssue {
 
     static func error(_ kind: Kind, _ message: String) -> StudioCompileIssue {
         StudioCompileIssue(severity: .error, kind: kind, message: message)
+    }
+}
+
+private extension StudioRoutingPlan {
+    var rejectedLiveChannelCompilation: StudioCompiledRouting {
+        StudioCompiledRouting(routingPlan: self, resourcePlan: .init(allocations: [], issues: []),
+                              issues: [], settings: [])
+    }
+
+    var rejectsLiveChannelEdges: Bool {
+        issues.contains {
+            if case .nonroutableLiveChannel = $0.kind { return true }
+            return false
+        }
     }
 }
