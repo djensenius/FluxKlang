@@ -80,6 +80,7 @@ enum WingReplyResolver {
 enum WingTransportError: Error, Sendable {
     case notStarted
     case notAuthorized
+    case unresolvedPeer
 }
 
 /// Actor that owns the UDP socket and serialises all access to it.
@@ -111,6 +112,7 @@ actor WingTransport: WingTransporting {
         let continuation = continuation
         let sessionID = UUID()
         let peers = WingPeerIdentity.ipv4Addresses(for: remoteHost)
+        guard broadcast || !peers.isEmpty else { throw WingTransportError.unresolvedPeer }
         let expectedPort = remotePort
         let socket = OSCUDPSocket(
             localPort: localPort,
@@ -182,6 +184,9 @@ actor WingTransport: WingTransporting {
 /// never accept the first arbitrary sender as the console's identity.
 enum WingPeerIdentity {
     static func ipv4Addresses(for host: String) -> Set<String> {
+        guard !host.isEmpty, !host.unicodeScalars.contains(where: {
+            CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0)
+        }) else { return [] }
         var hints = addrinfo()
         hints.ai_family = AF_INET
         var result: UnsafeMutablePointer<addrinfo>?

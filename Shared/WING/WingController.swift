@@ -21,7 +21,6 @@ final class WingController {
     /// Whether this controller is live or running in offline Demo Mode.
     let mode: WingMode
 
-    /// Current connection state.
     private(set) var connection: WingConnectionState = .disconnected
 
     /// Last-known values keyed by OSC address. Reflects changes from any
@@ -31,6 +30,7 @@ final class WingController {
     /// Values received from the console or demo transport. Unlike `values`,
     /// this never treats an attempted local SET as proof that hardware applied it.
     private(set) var confirmedValues: [String: WingValue] = [:]
+    let liveObservations = WingLiveObservations()
     private(set) var confirmedNameRevision = 0
     private(set) var confirmedReceivedAt: [String: Date] = [:]
     private(set) var sessionID: UUID?
@@ -42,10 +42,8 @@ final class WingController {
     /// safety tests to prove draft-only paths never attempt hardware writes.
     private(set) var transportWriteCount = 0
 
-    /// Host the controller is connected (or connecting) to.
     private(set) var host: String?
 
-    /// The WING OSC port in use.
     let port: UInt16
 
     /// Whether this controller is running in offline Demo Mode.
@@ -122,6 +120,7 @@ final class WingController {
             startListening()
             startKeepAlive()
             startBulkRefresh()
+            liveObservations.start(controller: self)
         } catch {
             guard sessionID == attempt else { return }
             invalidateConfirmations()
@@ -401,8 +400,6 @@ final class WingController {
         }
     }
 
-    // MARK: - Private
-
     @discardableResult
     private func set(_ address: String, _ value: WingValue) async -> Bool {
         transportWriteCount += 1
@@ -451,10 +448,11 @@ final class WingController {
               isDemo || (transportSessionID != nil && message.transportSessionID == transportSessionID
                   && peerHosts.contains(message.host) && message.port == port),
               let value = message.effectiveValue else { return }
-        if message.address.hasSuffix("/name"), confirmedValues[message.address] != value {
+        if message.address.hasSuffix("/name"), liveObservations.values[message.address] != value {
             confirmedNameRevision += 1
         }
         values[message.address] = value
+        liveObservations.record(message, value: value)
         confirmedValues[message.address] = value
         confirmedReceivedAt[message.address] = message.receivedAt
     }
@@ -465,6 +463,7 @@ final class WingController {
         peerHosts = []
         confirmedValues = [:]
         confirmedReceivedAt = [:]
+        liveObservations.reset()
     }
 
     private func startKeepAlive() {
@@ -489,6 +488,7 @@ final class WingController {
     }
 
     private func cancelTasks() {
+        liveObservations.stop()
         keepAliveTask?.cancel()
         keepAliveTask = nil
         listenTask?.cancel()

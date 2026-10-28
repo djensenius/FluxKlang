@@ -45,16 +45,24 @@ extension AppModel {
     }
 
     /// Appends a reviewed draft to the active semantic graph. This method never
-    /// calls `wing` or compiles/applies settings; Listen remains the only Studio
-    /// hardware-write action.
+    /// applies settings; it only refreshes referenced metadata with bounded GETs.
+    /// Listen remains the only Studio routing hardware-write action.
     @discardableResult
     func acceptPendingAssistantDraft() async -> StudioPatchMergeResult? {
+        guard let original = assistant.pendingStudioDraft else { return nil }
+        let controller = wing
+        let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
+        guard refreshedReferences, !Task.isCancelled, wing === controller,
+              assistant.pendingStudioDraft?.id == original.id else { return nil }
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
             context: assistantToolContext()
         )
         guard case .pendingDraft(let refreshed?) = validation,
-              !refreshed.hasErrors else { return nil }
+              !refreshed.hasErrors, !Task.isCancelled, wing === controller,
+              assistant.pendingStudioDraft?.id == refreshed.id,
+              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: assistantToolContext().liveWing) })
+        else { return nil }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
             into: environments.activeStudioGraph,

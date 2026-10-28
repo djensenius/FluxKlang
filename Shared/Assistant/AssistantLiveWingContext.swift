@@ -11,6 +11,7 @@ struct AssistantLiveWingContext: Sendable {
         var sourceIndex: Int?
         var equipmentID: Equipment.ID?
         var conflict: Bool = false
+        var isStale: Bool = false
         var identity: String { kind == .channel ? "channel \(index)" : "LOCAL input \(index)" }
     }
     var status: WingConfirmedSnapshot.Status
@@ -40,23 +41,33 @@ struct AssistantLiveWingContext: Sendable {
             return device.id
         }
         func append(_ kind: Kind, _ index: Int, _ address: String) {
-            guard let label = snapshot.freshValue(address)?.stringValue,
+            guard snapshot.status == .observed || snapshot.status == .stale,
+                let label = snapshot.values[address]?.stringValue,
                 !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 let received = snapshot.receivedAt[address]
             else { return }
-            let group = kind == .channel ? snapshot.freshValue(WingAddress.channelSourceGroup(index))?.stringValue : nil
+            let group = kind == .channel ? snapshot.values[WingAddress.channelSourceGroup(index)]?.stringValue : nil
             let sourceIndex =
                 kind == .channel
-                ? snapshot.freshValue(WingAddress.channelSourceIndex(index))?.intValue.map(Int.init) : nil
+                ? snapshot.values[WingAddress.channelSourceIndex(index)]?.intValue.map(Int.init) : nil
             let connector = kind == .localInput ? index : (group == WingSourceGroup.local.rawValue ? sourceIndex : nil)
-            let linked = linkedEquipment(connector)
+            let staleSource = kind == .channel && group != nil
+                && (snapshot.freshValue(WingAddress.channelSourceGroup(index)) == nil
+                    || snapshot.freshValue(WingAddress.channelSourceIndex(index)) == nil)
+            let isStale = snapshot.freshValue(address) == nil || staleSource
+            let linked = isStale ? nil : linkedEquipment(connector)
             let exact = equipment.filter { normalize($0.name) == normalize(label) }
-            let conflict = linked.map { id in !exact.isEmpty && !exact.contains(where: { $0.id == id }) } ?? false
+            let inputConflict = kind == .channel && observations.contains {
+                $0.kind == .localInput && $0.index == connector && $0.conflict
+            }
+            let conflict = inputConflict || (linked.map { id in
+                !exact.isEmpty && !exact.contains(where: { $0.id == id })
+            } ?? false)
             observations.append(
                 Observation(
                     kind: kind, index: index, label: AssistantUntrustedText(label),
                     receivedAt: received, sourceGroup: group, sourceIndex: sourceIndex,
-                    equipmentID: conflict ? nil : linked, conflict: conflict))
+                    equipmentID: conflict ? nil : linked, conflict: conflict, isStale: isStale))
         }
         for index in StudioHomeConnections.inputRange { append(.localInput, index, WingAddress.inputName(index)) }
         for index in 1...WingNodeKind.channel.count { append(.channel, index, WingAddress.name(.channel, index)) }
@@ -82,7 +93,9 @@ struct AssistantLiveWingContext: Sendable {
                     : "; linked via saved effective input map (including Temporary Moves)")
             return
                 "\(observation.identity): \(String(reflecting: observation.label.value))\(mapping)\(link); "
-                + "received \(observation.receivedAt.ISO8601Format())"
+                + "received \(observation.receivedAt.ISO8601Format()); "
+                + (observation.isStale ? "STALE (not aliasable); " : "current-session observation; ")
+                + "age \(max(0, Int(capturedAt.timeIntervalSince(observation.receivedAt)))) s"
         }
         return
             ([header] + rows + [
@@ -109,7 +122,7 @@ struct AssistantLiveReference: Codable, Hashable, Sendable {
     func isValid(in live: AssistantLiveWingContext, now: Date = Date()) -> Bool {
         live.status == .observed && live.sessionID == sessionID
             && live.observations.contains {
-                $0.kind == kind && $0.index == index && $0.label == label && !$0.conflict
+                $0.kind == kind && $0.index == index && $0.label == label && !$0.conflict && !$0.isStale
                     && $0.equipmentID == equipmentID && $0.sourceGroup == sourceGroup && $0.sourceIndex == sourceIndex
                     && (0...WingConfirmedSnapshot.maximumAge).contains(now.timeIntervalSince($0.receivedAt))
             }
@@ -127,15 +140,19 @@ enum AssistantSourceResolver {
         _ question: String, context: AssistantToolContext,
         excluding: Set<Equipment.ID> = []
     ) -> Resolution {
+        guard AssistantDraftIntent.requestsSourceDraft(question) else {
+            return Resolution(equipmentIDs: [], references: [], clarification: nil)
+        }
+        let sourceText = AssistantDraftIntent.sourceMentionText(question)
         var ids = AssistantDraftIntent.mentionedEquipmentIDs(
-            in: question, equipment: context.equipment, excluding: excluding)
+            in: sourceText, equipment: context.equipment, excluding: excluding)
         var references: [AssistantLiveReference] = []
         let live = context.liveWing
-        guard live.status == .observed, let session = live.sessionID else {
+        guard live.status == .observed || live.status == .stale, let session = live.sessionID else {
             return Resolution(equipmentIDs: ids, references: [], clarification: nil)
         }
         let mentions = live.observations.filter {
-            contains($0.label.value, in: question) || contains($0.identity, in: question)
+            contains($0.label.value, in: sourceText) || contains($0.identity, in: sourceText)
         }
         let excluded = mentions.filter { observation in
             ["without", "don't use", "do not use", "don't want to use", "do not want to use", "remove", "get rid"]
@@ -148,12 +165,29 @@ enum AssistantSourceResolver {
         }
         let excludedIDs = Set(excluded.compactMap(\.equipmentID)).union(excluding)
         ids.removeAll { excludedIDs.contains($0) }
-        let mentioned = mentions.filter { !excluded.contains($0) }
+        let identities = mentions.filter { contains($0.identity, in: sourceText) }
+        if !identities.isEmpty { ids = [] }
+        let mentioned = (identities.isEmpty ? mentions : identities).filter { !excluded.contains($0) }
         for observation in mentioned {
-            let matches = live.observations.filter { normalize($0.label.value) == normalize(observation.label.value) }
+            if identities.isEmpty, context.equipment.contains(where: {
+                ids.contains($0.id) && normalize($0.name) == normalize(observation.label.value)
+                    && contains("saved equipment " + $0.name, in: sourceText)
+            }) { continue }
+            if observation.isStale {
+                return Resolution(equipmentIDs: [], references: [], clarification:
+                    "WING \(observation.identity) was labelled \(String(reflecting: observation.label.value)), "
+                    + "but that observation is stale. Refresh/reconnect before using it as a live source alias, "
+                    + "or specify saved equipment explicitly for an offline draft.")
+            }
+            let matches = identities.isEmpty ? live.observations.filter {
+                normalize($0.label.value) == normalize(observation.label.value)
+            } : [observation]
             let linkedIDs = Set(matches.compactMap(\.equipmentID))
-            guard let id = observation.equipmentID, !observation.conflict,
-                linkedIDs.count == 1, !matches.contains(where: { $0.equipmentID == nil }),
+            let savedMatches = identities.isEmpty ? AssistantDraftIntent.mentionedEquipmentIDs(
+                in: observation.label.value, equipment: context.equipment) : []
+            guard let id = observation.equipmentID, !observation.conflict, !observation.isStale,
+                linkedIDs.count == 1, savedMatches.allSatisfy({ $0 == id }),
+                !matches.contains(where: { $0.equipmentID == nil }),
                 (0...WingConfirmedSnapshot.maximumAge).contains(Date().timeIntervalSince(observation.receivedAt))
             else {
                 return Resolution(
@@ -162,6 +196,7 @@ enum AssistantSourceResolver {
                         "WING \(observation.identity) is labelled \(String(reflecting: observation.label.value)), "
                         + "but it is not uniquely linked to saved Equipment (or conflicts with the saved map). "
                         + "Link it to existing Equipment or add the instrument and its ports first. "
+                        + "Or specify a channel/LOCAL input identity or saved equipment name to disambiguate. "
                         + "No cables or gear were created."
                 )
             }

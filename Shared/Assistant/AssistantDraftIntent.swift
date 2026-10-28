@@ -75,7 +75,7 @@ enum AssistantDraftIntent {
     static func wiringRequest(from request: AssistantGenerationRequest) -> StudioWiringRequest? {
         let current = request.question.lowercased()
         let isRetry = current.contains("try again") || current.contains("connected now")
-        guard hasRoutingIntent(current) || isRetry else { return nil }
+        guard requestsSourceDraft(request.question) || isRetry else { return nil }
         let recentUserText = request.recentMessages.suffix(8)
             .filter { $0.role == .user }
             .map(\.text)
@@ -122,7 +122,8 @@ enum AssistantDraftIntent {
     static func clarification(from request: AssistantGenerationRequest) -> String? {
         let question = request.question
         let normalized = question.lowercased()
-        guard hasRoutingIntent(normalized), !isInformationalQuestion(normalized) else { return nil }
+        guard requestsSourceDraft(question), hasRoutingIntent(normalized),
+              !isInformationalQuestion(normalized) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
         let resolution = AssistantSourceResolver.resolve(
             question, context: request.context, excluding: effectEquipmentIDs
@@ -180,6 +181,36 @@ enum AssistantDraftIntent {
         return ["raw", "dry", "unprocessed", "clean signal"].contains {
             normalized.contains($0)
         }
+    }
+
+    static func requestsSourceDraft(_ question: String) -> Bool {
+        let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if requestsDraftAmendment(question) { return true }
+        guard !["what ", "why ", "how ", "help ", "explain ", "tell me ", "list ", "show "].contains(where: {
+            normalized.hasPrefix($0)
+        }) else { return false }
+        return hasRoutingIntent(normalized) || requestsDraftAmendment(question)
+    }
+
+    /// Only source positions participate in gear/alias lookup. Effect and
+    /// destination scribbles are metadata, not extra source instruments.
+    static func sourceMentionText(_ question: String) -> String {
+        let normalized = question.lowercased()
+        let clauses = normalized.replacingOccurrences(of: #"\b(?:and|then)\b|[,;\n]"#,
+            with: "\n", options: .regularExpression).components(separatedBy: "\n")
+        var continuesSources = true
+        return clauses.compactMap { clause -> String? in
+            let from = clause.range(of: " from ")
+            let hasNewSource = continuesSources || from != nil || clause.contains(" through ")
+                || clause.range(of: #"^\s*(?:route|connect|wire|patch|add|include)\b"#,
+                                options: .regularExpression) != nil
+            let source = from.map { String(clause[$0.upperBound...]) } ?? clause
+            let boundary = source.range(of: #"\s+(?:through|via|to|into|towards)\s+"#,
+                                        options: .regularExpression)
+            continuesSources = hasNewSource && boundary == nil
+            guard hasNewSource else { return nil }
+            return boundary.map { String(source[..<$0.lowerBound]) } ?? source
+        }.joined(separator: " and ")
     }
 
     private static func hasRoutingIntent(_ normalized: String) -> Bool {

@@ -14,6 +14,8 @@ extension StudioHomeConnections {
 }
 
 extension GlobalStudioConnections {
+    /// Legacy name-driven preview retained for migration/regression callers only.
+    /// Runtime Home, Studio compilation and assistant grounding must not use it.
     func reconcilingLiveInputNames(
         _ liveNames: [Int: String],
         equipment: [Equipment]

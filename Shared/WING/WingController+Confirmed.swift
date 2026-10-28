@@ -7,9 +7,9 @@ extension WingController {
             status = .demo
         } else if !connection.isConnected || sessionID == nil {
             status = .disconnected
-        } else if confirmedReceivedAt.isEmpty {
+        } else if liveObservations.receivedAt.isEmpty {
             status = .refreshing
-        } else if confirmedReceivedAt.values.contains(where: {
+        } else if liveObservations.receivedAt.values.contains(where: {
             (0...WingConfirmedSnapshot.maximumAge).contains(now.timeIntervalSince($0))
         }) {
             status = .observed
@@ -18,7 +18,9 @@ extension WingController {
         }
         return WingConfirmedSnapshot(
             status: status, sessionID: sessionID, capturedAt: now,
-            values: confirmedValues, receivedAt: confirmedReceivedAt)
+            values: liveObservations.values.merging(confirmedValues, uniquingKeysWith: { _, fresh in fresh }),
+            receivedAt: liveObservations.receivedAt.merging(
+                confirmedReceivedAt, uniquingKeysWith: { _, fresh in fresh }))
     }
 
     /// Address replies have no OSC transaction ID. This is a bounded,
@@ -54,6 +56,23 @@ extension WingController {
             do { try await Task.sleep(for: .milliseconds(10)) } catch { return nil }
         }
         return nil
+    }
+
+    func refreshLiveReferences(_ references: [AssistantLiveReference]) async -> Bool {
+        guard !references.isEmpty else { return true }
+        guard let session = sessionID, references.allSatisfy({ $0.sessionID == session }) else { return false }
+        let addresses = references.flatMap { reference -> [String] in
+            if reference.kind == .localInput { return [WingAddress.inputName(reference.index)] }
+            var addresses = [
+                WingAddress.name(.channel, reference.index), WingAddress.channelSourceGroup(reference.index),
+                WingAddress.channelSourceIndex(reference.index)
+            ]
+            if reference.sourceGroup == WingSourceGroup.local.rawValue, let index = reference.sourceIndex {
+                addresses.append(WingAddress.inputName(index))
+            }
+            return addresses
+        }
+        return await readFreshConfirmed(addresses, session: session) != nil
     }
 
     nonisolated static func isValidMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool) -> Bool {

@@ -63,6 +63,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private(set) var sessionID: UUID?
     let peerHosts: Set<String> = ["192.0.2.10"]
     private(set) var writes: [WingSetting] = []
+    private(set) var queries: [String] = []
     private var values: [String: WingValue]
     private var answersQueries = true
     private var answersAfterWrite = true
@@ -84,6 +85,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
             uniqueKeysWithValues: (1...40).map {
                 (WingAddress.name(.channel, $0), WingValue.string($0 == 7 ? "Lead" : ""))
             })
+        for index in 1...24 { values[WingAddress.inputName(index)] = .string("") }
+        for index in 1...40 {
+            values[WingAddress.channelSourceGroup(index)] = .string(index <= 24 ? "LCL" : "OFF")
+            values[WingAddress.channelSourceIndex(index)] = .int(Int32(index <= 24 ? index : 0))
+        }
         for node in [WingNodeRef.channel(7), .main(1)] {
             values[WingAddress.name(node.kind, node.index)] = .string(node.kind == .main ? "Main" : "Lead")
             values[WingAddress.fader(node.kind, node.index)] = .float(0.75)
@@ -123,6 +129,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
         if let value {
             try recordWrite(address, value)
         } else {
+            queries.append(address)
             guard answersQueries, writes.isEmpty || answersAfterWrite else { return }
             if address.hasPrefix("/ch/"), address.hasSuffix("/name") { namesRead.insert(address) }
             if (gateBaselineAfterNames && namesRead.count == 40 && ["/ch/7/fdr", "/ch/7/mute"].contains(address))
@@ -158,6 +165,10 @@ actor AssistantRecordingWingTransport: WingTransporting {
                      .float(FaderMath.decibels(fromPosition: position))]
         } else if address.hasSuffix("/mute"), let muted = value.intValue {
             reply = [.string(muted == 1 ? "ON" : "OFF"), .float(Float(muted)), .int(muted)]
+        } else if address.hasSuffix("/in/conn/in"), let index = value.intValue {
+            reply = [.string(String(index)), .float(0), .int(max(0, index - 1))]
+        } else if address.hasSuffix("/in/conn/grp"), let group = value.stringValue {
+            reply = [.string(group), .float(0), .string(group)]
         } else { reply = [value] }
         continuation.yield(WingIncoming(address: address, values: reply, host: "192.0.2.10",
             port: WingNetwork.defaultPort, transportSessionID: sessionID))
