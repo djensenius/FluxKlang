@@ -146,24 +146,6 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
-    @Test func voiceTranscriberIsCreatedOnlyWhenDictationStarts() async throws {
-        let transcriber = ReadyTranscriber()
-        var creationCount = 0
-        let voice = AssistantVoiceController {
-            creationCount += 1
-            return transcriber
-        }
-
-        #expect(creationCount == 0)
-        voice.start()
-        for _ in 0..<100 where voice.state != .listening {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(voice.state == .listening)
-        #expect(creationCount == 1)
-        voice.cancel()
-    }
-
     @Test func completeWiringRequestBypassesModelConfirmation() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
         let astrolab = Equipment(name: "AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
@@ -412,18 +394,6 @@ private struct EmptyGenerator: AssistantGenerating {
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
         AsyncThrowingStream { $0.finish() }
     }
-}
-
-private actor ReadyTranscriber: AssistantSpeechTranscribing {
-    func permissionState() -> AssistantVoicePermissionState { .granted }
-    func requestPermission() -> AssistantVoicePermissionState { .granted }
-
-    func start() -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
-        AsyncThrowingStream { _ in }
-    }
-
-    func finish() {}
-    func cancel() {}
 }
 
 private enum ReliabilityTestError: Error {

@@ -155,7 +155,6 @@
 		62CF2211E6EEFA92A9757C32 /* StudioWiringAdvisorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA59354F097D5E2225BC283 /* StudioWiringAdvisorTests.swift */; };
 		65E18401AD44AD37D153BEA4 /* JSONFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B69ADD8EF543F6332343A49 /* JSONFileStore.swift */; };
 		65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
-		66351D4A2216CF2ADE4E1911 /* AssistantSpeech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C8EDF5F4EB15184E9C4440C /* AssistantSpeech.swift */; };
 		66A3152ED63D348EB5D6C74F /* WingController+VerifiedApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = F477A8BA9B7BAC8829F14535 /* WingController+VerifiedApply.swift */; };
 		672536435CE9A0A4FBB95AF6 /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
 		6BE591F3E2A677318792ACA1 /* StudioCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C5F66ACB71B33EED04BC87 /* StudioCanvasUITests.swift */; };
@@ -284,7 +283,6 @@
 		CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7829A1C698F339C5D662010C /* AppRootView.swift */; };
 		CEAB194B157618CFDCC7987D /* VerticalFader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 910E4B334BFBBDB92877F243 /* VerticalFader.swift */; };
 		D020E5234B51DB78A5F34B63 /* InspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5601B154CDD9A39F8530981 /* InspectorView.swift */; };
-		D11D6D2953C7F26FE41BAB52 /* AssistantSpeech.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C8EDF5F4EB15184E9C4440C /* AssistantSpeech.swift */; };
 		D17452CD06A62238D52B7E26 /* AssistantHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110CE5E446EFE259C137ABA2 /* AssistantHelpView.swift */; };
 		D2C5692B2CEAF0BE1F63FDB8 /* EquipmentLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DFAAC4B1C68CB6CD1127E2E /* EquipmentLibraryView.swift */; };
 		D3550641BA3BA73AFDF0B461 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
@@ -424,7 +422,6 @@
 		5B0C58809B54E7219DC7642B /* SpatialRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialRouting.swift; sourceTree = "<group>"; };
 		5B1446B9522076E60C8EF64B /* TemporaryDeviceMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryDeviceMove.swift; sourceTree = "<group>"; };
 		5B69ADD8EF543F6332343A49 /* JSONFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONFileStore.swift; sourceTree = "<group>"; };
-		5C8EDF5F4EB15184E9C4440C /* AssistantSpeech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantSpeech.swift; sourceTree = "<group>"; };
 		5E4884FF1B2AD16A0B920CAA /* StudioInspectorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioInspectorViews.swift; sourceTree = "<group>"; };
 		5F8BD24CDA75478B2069054F /* WingNamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingNamingTests.swift; sourceTree = "<group>"; };
 		612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderLayout.swift; sourceTree = "<group>"; };
@@ -739,7 +736,6 @@
 				C7B40CF9621D53E9EA088E10 /* AssistantLiveWingContext.swift */,
 				7B2E29600A374AC43BA18F92 /* AssistantMixerIntent.swift */,
 				F10826D11DB5EF1A80BD6006 /* AssistantProviderSettings.swift */,
-				5C8EDF5F4EB15184E9C4440C /* AssistantSpeech.swift */,
 				CF51B8A26B704629FF9267B0 /* CopilotAssistantGenerator.swift */,
 				905DC0B0497348E0583D17FD /* FoundationModelAssistant.swift */,
 				995E76F18557845417F1567A /* StudioMultiRouteDraftBuilder.swift */,
@@ -1188,7 +1184,6 @@
 				9D6C95F8F1224DCBAD7613B6 /* AssistantLiveWingContext.swift in Sources */,
 				A1B6D921177F8CDAC1F59CBC /* AssistantMixerIntent.swift in Sources */,
 				45674C5B6F3DAEE7861370EF /* AssistantProviderSettings.swift in Sources */,
-				66351D4A2216CF2ADE4E1911 /* AssistantSpeech.swift in Sources */,
 				3C63FC7BC3EE9DD4B020D14B /* AssistantView.swift in Sources */,
 				B4F947A59E54CFE463523D8F /* AssistantWiringForm.swift in Sources */,
 				73DA1236B7BEE2F8A9671179 /* ChainCanvasView.swift in Sources */,
@@ -1345,7 +1340,6 @@
 				0DC86B25BB923F3428318A87 /* AssistantLiveWingContext.swift in Sources */,
 				6047204A88D9BB6DC471D992 /* AssistantMixerIntent.swift in Sources */,
 				37D3B634659B53A2CDD650FD /* AssistantProviderSettings.swift in Sources */,
-				D11D6D2953C7F26FE41BAB52 /* AssistantSpeech.swift in Sources */,
 				B263FCB1BE3C611F0B30D67D /* AssistantView.swift in Sources */,
 				DFA75C03BF4FED3AD28AB63B /* AssistantWiringForm.swift in Sources */,
 				AFEA7242BDC418B9C04991A5 /* ChainCanvasView.swift in Sources */,
