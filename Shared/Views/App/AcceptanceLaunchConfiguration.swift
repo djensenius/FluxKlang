@@ -8,8 +8,30 @@ enum AcceptanceLaunchConfiguration {
         arguments.contains("-ui-testing")
     }
 
+    static var isMultiRouteUITesting: Bool {
+        #if DEBUG
+        isUITesting && arguments.contains("-ui-test-multi-route")
+        #else
+        false
+        #endif
+    }
+
     static func configure(_ appModel: AppModel) async {
         guard isUITesting else { return }
+
+        #if DEBUG
+        if isMultiRouteUITesting {
+            // This lane never connects the default UDP transport, even if a
+            // test forgets -ui-test-demo or also supplies a legacy seed flag.
+            await appModel.enterDemoMode()
+            do {
+                try await MultiRouteAcceptanceFixture.seed(appModel, arguments: arguments)
+            } catch {
+                preconditionFailure("Unable to seed multi-route UI fixture: \(String(reflecting: error))")
+            }
+            return
+        }
+        #endif
 
         if arguments.contains("-ui-test-seed-acceptance") {
             do {
