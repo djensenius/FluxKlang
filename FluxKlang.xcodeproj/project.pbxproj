@@ -258,6 +258,7 @@
 		BAAF85DEB4763BC23B0607BF /* LaunchControlXLConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A6F2C9FA55A873D80A0C5F /* LaunchControlXLConfiguration.swift */; };
 		BAC73F53FBC5CAABD4F0F209 /* AssistantDraftIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CBFF232577ADAD65C0E69A /* AssistantDraftIntent.swift */; };
 		BAFFC0E0785B347D8F607C3A /* EnvironmentBuilderRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDCA518C023224453110217 /* EnvironmentBuilderRows.swift */; };
+		BB032211941952FAABDA335F /* AssistantSourceResolutionRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B510AB07485CBA8378B4C578 /* AssistantSourceResolutionRegressionTests.swift */; };
 		BB754E9541B6D4B5C90F2A7E /* CloudChangeObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8921F279F702C0BAA1564282 /* CloudChangeObserver.swift */; };
 		BBCF571D280C247E6CB913D1 /* studio-connections.defaults.json in Resources */ = {isa = PBXBuildFile; fileRef = E106E3AEA76FD7B958335256 /* studio-connections.defaults.json */; };
 		BDF228B6A49C100DD9636236 /* SpatialPanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C078BB1C1047B19A8F49E221 /* SpatialPanner.swift */; };
@@ -498,6 +499,7 @@
 		B361516C0EA80B04919B6FFA /* ChainGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGeometry.swift; sourceTree = "<group>"; };
 		B457F24BAF4DFAAFC171EC50 /* FluxKlang.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlang.entitlements; sourceTree = "<group>"; };
 		B50261467F21BE7920041F0B /* StudioPatchDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioPatchDraft.swift; sourceTree = "<group>"; };
+		B510AB07485CBA8378B4C578 /* AssistantSourceResolutionRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantSourceResolutionRegressionTests.swift; sourceTree = "<group>"; };
 		B5947EC550C2981952F35FB5 /* CopilotAssistantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotAssistantTests.swift; sourceTree = "<group>"; };
 		B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluxKlangMacApp.swift; sourceTree = "<group>"; };
 		B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaderLayoutStore.swift; sourceTree = "<group>"; };
@@ -942,6 +944,7 @@
 				650DFA4AC57F28D2293AE3D3 /* AssistantMixerExecutionTests.swift */,
 				2A5804CBF18A194B2EDCD6C3 /* AssistantMixerIntentTests.swift */,
 				8B2759BB8651D4FEE01749FE /* AssistantReliabilityTests.swift */,
+				B510AB07485CBA8378B4C578 /* AssistantSourceResolutionRegressionTests.swift */,
 				9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */,
 				3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */,
 				B5947EC550C2981952F35FB5 /* CopilotAssistantTests.swift */,
@@ -1481,6 +1484,7 @@
 				EEB3C01920894B9C66059772 /* AssistantMixerExecutionTests.swift in Sources */,
 				3C8773ED2C5F5CD62AE0173D /* AssistantMixerIntentTests.swift in Sources */,
 				E3AEFE14C5AADF69612EB3A9 /* AssistantReliabilityTests.swift in Sources */,
+				BB032211941952FAABDA335F /* AssistantSourceResolutionRegressionTests.swift in Sources */,
 				5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */,
 				85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */,
 				6182535B40903BABD4975B7C /* CopilotAssistantTests.swift in Sources */,
