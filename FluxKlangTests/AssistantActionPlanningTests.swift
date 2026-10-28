@@ -321,6 +321,7 @@ extension AssistantActionPlanningTests {
 
     @Test func invalidNumericIdentitiesNeverFallThroughToCollidingLiveLabels() async throws {
         for target in ["main5", "main 5", "channel0", "channel 0", "channel41", "channel 41",
+                       "main -1", "main-1", "channel -1", "channel-1", "main+1", "channel 1.5",
                        "main999999999999999999999999999999"] {
             let (state, transport, service) = await fixture(label: target)
             let submission = request("set \(target) to -12dB", state: state)
@@ -334,6 +335,28 @@ extension AssistantActionPlanningTests {
                 #expect(service.pendingReview == nil)
                 #expect(await transport.writes.isEmpty)
             }
+            await state.wing.disconnect()
+        }
+    }
+
+    @Test func targetLabelWordsDoNotInventOrHideAnAddRequestThroughAdapterAndPlanner() async throws {
+        for name in ["Add Synth", "Include Synth"] {
+            let (state, transport, service) = await fixture(label: name)
+            let submission = request("turn \(name) to 50%", state: state)
+            let output = AssistantActionModelOutput(disposition: .proposal, target: name,
+                action: .setFaderPercent, amount: 50, targetEvidence: name,
+                actionEvidence: "turn", amountEvidence: "50%")
+            let interpreted = AssistantActionInterpretationAdapter.validate(output, request: submission)
+            let preview = try review(await service.prepare(submission, interpretation: interpreted))
+            #expect(preview.stage == .ready)
+            #expect(!preview.addsLiveShortcut)
+            #expect(preview.target?.members.map { $0.identity.node } == [.channel(7)])
+            #expect(await transport.writes.isEmpty)
+
+            let compound = request("add \(name) and turn its volume to 50%", state: state)
+            let omitted = AssistantActionInterpretationAdapter.validate(output, request: compound)
+            if case .clarification = omitted {} else { Issue.record("Actual add clause was silently omitted") }
+            #expect(await transport.writes.isEmpty)
             await state.wing.disconnect()
         }
     }

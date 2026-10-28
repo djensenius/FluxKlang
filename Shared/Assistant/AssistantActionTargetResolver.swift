@@ -115,13 +115,16 @@ enum AssistantActionTargetResolver {
     static func target(_ mention: String) -> Target {
         let text = AssistantLiveWingContext.normalize(mention)
         if text == "main" { return .node(.main(1)) }
-        guard let range = text.range(of: #"^(channel|main)\s*\d+$"#, options: .regularExpression) else {
+        guard let range = text.range(of: #"^(channel|main)\s*[+-]?\d+(?:\.\d+)?$"#,
+                                     options: .regularExpression) else {
             return .name
         }
         let kind: WingNodeKind = text.hasPrefix("channel") ? .channel : .main
         let digits = text[range].dropFirst(kind == .channel ? "channel".count : "main".count)
             .trimmingCharacters(in: .whitespaces)
-        guard let index = Int(digits), (1...kind.count).contains(index) else { return .invalidIdentity }
+        // Signed or fractional indices are numeric-shaped errors, never live-name aliases.
+        guard digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let index = Int(digits), (1...kind.count).contains(index) else { return .invalidIdentity }
         return .node(.init(kind: kind, index: index))
     }
 

@@ -43,7 +43,8 @@ enum AssistantActionInterpretationAdapter {
         case .proposal:
             guard !output.target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !isNonActionSubmission(request.text), output.target == output.targetEvidence,
-                  !word("add|include", in: request.text) || output.addToStudio,
+                  !word("add|include", in: outsideTarget(request.text, target: output.targetEvidence))
+                    || output.addToStudio,
                   copied(output.targetEvidence, from: request.text), output.clarification.isEmpty,
                   output.action != nil || output.addToStudio,
                   output.action != nil
@@ -64,6 +65,13 @@ enum AssistantActionInterpretationAdapter {
                 evidence: .init(target: output.targetEvidence, action: output.actionEvidence,
                                 amount: output.amountEvidence, add: output.addEvidence)))
         }
+    }
+
+    private static func outsideTarget(_ text: String, target: String) -> String {
+        guard !target.isEmpty, let range = text.range(of: target) else { return text }
+        var remaining = text
+        remaining.replaceSubrange(range, with: " ")
+        return remaining
     }
 
     private static func validUnit(_ evidence: String, action: AssistantActionIntent.Action?) -> Bool {
