@@ -117,6 +117,7 @@ final class AppModel {
                 fallback: fallback
             )
         )
+        configureAssistantMixer()
     }
 
     var isConnected: Bool { wing.connection.isConnected }

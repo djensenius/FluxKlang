@@ -271,7 +271,7 @@ struct AssistantReliabilityTests {
             context: context
         )
 
-        #expect(inventory.contains("Available equipment:"))
+        #expect(inventory.contains("Saved equipment (not connected-equipment detection):"))
         #expect(inventory.contains("Arturia AstroLab 88 (WING inputs 21/22)"))
         #expect(amended.contains("SOMA Flux + Arturia AstroLab 88 → Main Speakers"))
         #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [flux.id, astrolab.id])

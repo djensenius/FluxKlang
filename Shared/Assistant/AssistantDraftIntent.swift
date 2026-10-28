@@ -82,16 +82,15 @@ enum AssistantDraftIntent {
             .joined(separator: "\n")
         let groundingText = isRetry ? recentUserText + "\n" + request.question : request.question
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
-        let sourceIDs = mentionedEquipmentIDs(
-            in: groundingText,
-            equipment: request.context.equipment,
-            excluding: effectEquipmentIDs
+        let resolution = AssistantSourceResolver.resolve(
+            groundingText, context: request.context, excluding: effectEquipmentIDs
         )
-        guard !sourceIDs.isEmpty else { return nil }
+        let sourceIDs = resolution.equipmentIDs
+        guard resolution.clarification == nil, !sourceIDs.isEmpty else { return nil }
         let effectIDs = mentionedEffectIDs(in: groundingText, effects: request.context.effects)
         let scopedRoutes = sourceScopedRoutes(
             in: groundingText,
-            equipment: request.context.equipment,
+            context: request.context,
             effects: request.context.effects,
             outputs: request.context.effectiveConnections.outputs
         )
@@ -107,7 +106,7 @@ enum AssistantDraftIntent {
             outputs: request.context.effectiveConnections.outputs
         )
         guard let primary = routes.first else { return nil }
-        return StudioWiringRequest(
+        var result = StudioWiringRequest(
             sourceInstrumentIDs: primary.sourceInstrumentIDs,
             effectChainIDs: primary.effectChainIDs,
             destination: primary.destination,
@@ -116,6 +115,8 @@ enum AssistantDraftIntent {
             additionalRoutes: Array(routes.dropFirst()),
             applicationMode: requestsReplacement(groundingText) ? .replace : .append
         )
+        result.liveReferences = resolution.references
+        return result
     }
 
     static func clarification(from request: AssistantGenerationRequest) -> String? {
@@ -123,11 +124,11 @@ enum AssistantDraftIntent {
         let normalized = question.lowercased()
         guard hasRoutingIntent(normalized), !isInformationalQuestion(normalized) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
-        let sources = mentionedEquipmentIDs(
-            in: question,
-            equipment: request.context.equipment,
-            excluding: effectEquipmentIDs
+        let resolution = AssistantSourceResolver.resolve(
+            question, context: request.context, excluding: effectEquipmentIDs
         )
+        if let clarification = resolution.clarification { return clarification }
+        let sources = resolution.equipmentIDs
         if sources.isEmpty {
             return "Which source instrument should I route?"
         }
@@ -160,6 +161,8 @@ enum AssistantDraftIntent {
     static func requestsInventory(_ question: String) -> Bool {
         let normalized = question.lowercased()
         return [
+            "what is connected", "what equipment is connected", "which instruments are connected",
+            "live labels", "wing labels", "channel labels", "input labels",
             "list gear",
             "list equipment",
             "list instruments",
@@ -247,7 +250,7 @@ enum AssistantDraftIntent {
 
     private static func sourceScopedRoutes(
         in question: String,
-        equipment: [Equipment],
+        context: AssistantToolContext,
         effects: [Effect],
         outputs: [StudioOutputConnection]
     ) -> [StudioWiringRoute]? {
@@ -258,11 +261,9 @@ enum AssistantDraftIntent {
             .replacingOccurrences(of: ",", with: " and ")
             .components(separatedBy: " and ")
         let routes = clauses.compactMap { clause -> StudioWiringRoute? in
-            let sources = mentionedEquipmentIDs(
-                in: clause,
-                equipment: equipment,
-                excluding: effectEquipmentIDs
-            )
+            let sources = AssistantSourceResolver.resolve(
+                clause, context: context, excluding: effectEquipmentIDs
+            ).equipmentIDs
             let clauseEffects = mentionedEffectIDs(in: clause, effects: effects)
             guard !sources.isEmpty, !clauseEffects.isEmpty else { return nil }
             return StudioWiringRoute(
@@ -368,9 +369,11 @@ enum AssistantDraftIntent {
         }
         return candidates.indices.compactMap { index -> (ID, Int)? in
             let nameTokens = candidateTokens[index]
-            let fullNameIndex = firstSubsequenceIndex(of: nameTokens, in: questionTokens)
+            let fullNameIndex = candidateTokens.filter { $0 == nameTokens }.count == 1
+                ? firstSubsequenceIndex(of: nameTokens, in: questionTokens) : nil
             let prefix = Array(nameTokens.prefix(2))
-            let prefixIndex = firstSubsequenceIndex(of: prefix, in: questionTokens)
+            let prefixIndex = candidateTokens.filter { Array($0.prefix(2)) == prefix }.count == 1
+                ? firstSubsequenceIndex(of: prefix, in: questionTokens) : nil
             let uniqueTokenIndex = nameTokens.compactMap { token -> Int? in
                 guard token.count >= 3, tokenCounts[token] == 1 else { return nil }
                 return questionTokens.firstIndex(of: token)
@@ -426,19 +429,19 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
-            return draftStream(wiringRequest, context: request.context)
-        }
-        if let clarification = AssistantDraftIntent.clarification(from: request) {
-            return textStream(clarification)
-        }
         if AssistantDraftIntent.requestsInventory(request.question) {
             return inventoryStream(context: request.context)
         }
-        let mentionedSources = AssistantDraftIntent.mentionedEquipmentIDs(
-            in: request.question,
-            equipment: request.context.equipment
-        )
+        let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
+        if let clarification = resolution.clarification { return textStream(clarification) }
+        if let clarification = AssistantDraftIntent.clarification(from: request) {
+            return textStream(clarification)
+        }
+        if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
+            return draftStream(wiringRequest, context: request.context)
+        }
+
+        let mentionedSources = resolution.equipmentIDs
         guard AssistantDraftIntent.requestsDraftAmendment(request.question),
               !mentionedSources.isEmpty else {
             return downstream.stream(request)
@@ -459,7 +462,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
                 let updatedSources = orderedUnique(
                     pending.request.sourceInstrumentIDs + mentionedSources
                 )
-                let wiringRequest = StudioWiringRequest(
+                var wiringRequest = StudioWiringRequest(
                     sourceInstrumentIDs: updatedSources,
                     effectChainIDs: pending.request.effectChainIDs,
                     destination: pending.request.destination,
@@ -467,6 +470,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
                     additionalRoutes: pending.request.additionalRoutes,
                     applicationMode: pending.applicationMode
                 )
+                wiringRequest.liveReferences = (pending.liveReferences ?? []) + resolution.references
                 let result = await coordinator.perform(
                     .buildStudioDraft(wiringRequest),
                     context: request.context
@@ -530,8 +534,9 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         let outputText = outputs.isEmpty ? "No configured outputs." : outputs.joined(separator: "\n")
         return AsyncThrowingStream { continuation in
             continuation.yield(.text(
-                "Available equipment:\n\(available)\n\nConfigured source instruments:\n\(sourceText)"
-                    + "\n\nConfigured outputs:\n\(outputText)"
+                "Saved equipment (not connected-equipment detection):\n\(available)"
+                    + "\n\nSaved configured source instruments (effective Home + Temporary Moves):\n\(sourceText)"
+                    + "\n\nSaved configured outputs:\n\(outputText)\n\n\(context.liveWing.summary)"
             ))
             continuation.finish()
         }

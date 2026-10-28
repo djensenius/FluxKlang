@@ -45,7 +45,7 @@ struct AssistantCoreTests {
             groundedBy: [.equipment([]), .environments([]), .presets([])]
         )
 
-        #expect(response == "No equipment.\nNo environments.\nNo presets.")
+        #expect(response == "No saved equipment (not live discovery).\nNo environments.\nNo presets.")
     }
 
     @Test func pendingDraftPersistsLocallyAndDiscardDeletesIt() async throws {
@@ -93,6 +93,7 @@ struct AssistantCoreTests {
             .describeCurrentScreen,
             .inspectConnectionState,
             .listEquipment,
+            .inspectLiveWing,
             .listHomeConnections,
             .listEffectiveConnections,
             .listActiveMoves,
@@ -126,7 +127,7 @@ struct AssistantCoreTests {
         _ = await coordinator.perform(.openHelp(.studio), context: context)
         #expect(coordinator.navigationTarget == .help(.studio))
         #expect(evidence == [
-            .currentScreen, .connectionState, .equipment, .homeConnections,
+            .currentScreen, .connectionState, .equipment, .liveWing, .homeConnections,
             .effectiveConnections, .activeMoves, .environments, .presets,
             .resources, .validation, .studioGraph
         ])

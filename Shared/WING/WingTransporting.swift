@@ -12,12 +12,17 @@ import Foundation
 
 /// A transport capable of exchanging OSC messages with a WING, real or simulated.
 protocol WingTransporting: Sendable {
+    var sessionID: UUID? { get async }
+    var peerHosts: Set<String> { get async }
     /// Stream of messages received from the WING (value changes, query replies).
     nonisolated var incoming: AsyncStream<WingIncoming> { get }
 
     /// Opens the transport and begins receiving. `broadcast` enables IPv4
     /// broadcast on the local port for discovery.
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async throws
+
+    /// Atomically checks the transport generation before a conversational SET.
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) async throws
 
     /// Closes the transport and stops receiving.
     func stop() async
@@ -28,6 +33,12 @@ protocol WingTransporting: Sendable {
 }
 
 extension WingTransporting {
+    var sessionID: UUID? { get async { nil } }
+    var peerHosts: Set<String> { get async { [] } }
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) async throws {
+        throw WingTransportError.notStarted
+    }
+
     /// Convenience send to the default destination.
     func send(_ address: String, _ value: WingValue? = nil) async throws {
         try await send(address, value, to: nil, port: nil)

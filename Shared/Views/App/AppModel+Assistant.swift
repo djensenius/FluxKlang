@@ -32,18 +32,16 @@ extension AppModel {
             graph: environments.activeStudioGraph,
             endpoints: environments.activeStudioEndpoints,
             effects: environments.activeEffects,
-            globalConnections: currentConnections
+            globalConnections: currentConnections,
+            liveWing: AssistantLiveWingContext.project(wing.confirmedSnapshot(), equipment: equipment.items,
+                                                       connections: currentConnections.effectiveHome)
         )
     }
 
     func studioConnectionsForCurrentWing() -> GlobalStudioConnections {
-        let liveInputNames = Dictionary(uniqueKeysWithValues: StudioHomeConnections.inputRange.compactMap { connector in
-            wing.inputName(connector).map { (connector, $0) }
-        })
-        return studioConnections.connections.reconcilingLiveInputNames(
-            liveInputNames,
-            equipment: equipment.items
-        )
+        // A console scribble is observation metadata, not authorization to move
+        // cables or replace saved Home. Aliases use the effective saved port map.
+        studioConnections.connections
     }
 
     /// Appends a reviewed draft to the active semantic graph. This method never
