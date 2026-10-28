@@ -126,7 +126,7 @@ struct StudioCanvasView: View {
             StudioCanvasGeometry.Placement(position: $0.position, lane: isControl($0) ? .controls : .gear)
         }
         let positions = StudioCanvasGeometry.layoutPositions(for: placements, cardSize: nodeSize)
-        return Dictionary(uniqueKeysWithValues: zip(graph.nodes.map(\.id), positions))
+        return Dictionary(zip(graph.nodes.map(\.id), positions), uniquingKeysWith: { first, _ in first })
     }
 
     private func laneBackgrounds(geometry: StudioCanvasGeometry) -> some View {
