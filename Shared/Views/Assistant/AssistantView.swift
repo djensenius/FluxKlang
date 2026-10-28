@@ -152,6 +152,7 @@ private struct AssistantConversationDetail: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.isPresented) private var isPresented
     @FocusState private var composerIsFocused: Bool
     @State private var showsWiringForm = false
 
@@ -191,27 +192,23 @@ private struct AssistantConversationDetail: View {
             } else {
                 emptyState
             }
-            Divider()
-            if !usesCompactEditor {
-                suggestedPrompts
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                if !usesCompactEditor { suggestedPrompts }
+                composer
+                #if os(iOS)
+                if composerIsFocused {
+                    AssistantKeyboardControls { composerIsFocused = false }
+                }
+                #endif
             }
-            composer
         }
         #if os(iOS)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                if composerIsFocused {
-                    Spacer()
-                    Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down") {
-                        composerIsFocused = false
-                    }
-                    .accessibilityIdentifier("assistant.hideKeyboard")
-                }
-            }
-        }
+        .preference(key: AssistantComposerFocusKey.self, value: composerIsFocused)
         .toolbar(
-            composerIsFocused && horizontalSizeClass == .compact && verticalSizeClass == .compact
-                ? .hidden : .automatic,
+            usesCompactEditor && verticalSizeClass == .compact && !isPresented ? .hidden : .automatic,
             for: .navigationBar
         )
         #endif
@@ -287,6 +284,7 @@ private struct AssistantConversationDetail: View {
                 TextField("Ask about FluxKlang", text: $chat.composer, axis: .vertical)
                     .lineLimit(1...(verticalSizeClass == .compact ? 2 : 5))
                     .textFieldStyle(.roundedBorder)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(minHeight: 44)
                     .focused($composerIsFocused)
                     .accessibilityLabel("Assistant message")
@@ -294,6 +292,8 @@ private struct AssistantConversationDetail: View {
                 if chat.isStreaming {
                     Button(role: .cancel) { chat.cancel() } label: {
                         Image(systemName: "stop.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tint)
                             .frame(minWidth: 44, minHeight: 44)
                             .contentShape(Rectangle())
                     }
@@ -304,6 +304,8 @@ private struct AssistantConversationDetail: View {
                         chat.send(context: appModel.assistantToolContext())
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tint)
                             .frame(minWidth: 44, minHeight: 44)
                             .contentShape(Rectangle())
                     }
