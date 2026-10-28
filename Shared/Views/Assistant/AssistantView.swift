@@ -150,13 +150,25 @@ private struct AssistantHistoryMenu: View {
 
 private struct AssistantConversationDetail: View {
     @Environment(AppModel.self) private var appModel
-    @State private var voice = AssistantVoiceController()
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @FocusState private var composerIsFocused: Bool
     @State private var showsWiringForm = false
+
+    private var usesCompactEditor: Bool {
+        #if os(iOS)
+        composerIsFocused && (horizontalSizeClass == .compact || verticalSizeClass == .compact)
+        #else
+        false
+        #endif
+    }
 
     var body: some View {
         @Bindable var chat = appModel.assistantChat
         VStack(spacing: 0) {
-            AssistantAvailabilityBanner()
+            if !usesCompactEditor || verticalSizeClass != .compact {
+                AssistantAvailabilityBanner()
+            }
             if let conversation = chat.selectedConversation {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -169,6 +181,7 @@ private struct AssistantConversationDetail: View {
                         }
                         .padding()
                     }
+                    .scrollDismissesKeyboard(.interactively)
                     .onChange(of: conversation.messages.count) {
                         if let id = conversation.messages.last?.id {
                             withAnimation { proxy.scrollTo(id, anchor: .bottom) }
@@ -179,16 +192,32 @@ private struct AssistantConversationDetail: View {
                 emptyState
             }
             Divider()
-            suggestedPrompts
+            if !usesCompactEditor {
+                suggestedPrompts
+            }
             composer
         }
+        #if os(iOS)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                if composerIsFocused {
+                    Spacer()
+                    Button("Hide Keyboard", systemImage: "keyboard.chevron.compact.down") {
+                        composerIsFocused = false
+                    }
+                    .accessibilityIdentifier("assistant.hideKeyboard")
+                }
+            }
+        }
+        .toolbar(
+            composerIsFocused && horizontalSizeClass == .compact && verticalSizeClass == .compact
+                ? .hidden : .automatic,
+            for: .navigationBar
+        )
+        #endif
+        .onDisappear { composerIsFocused = false }
         .sheet(isPresented: $showsWiringForm) {
             AssistantWiringForm()
-        }
-        .onChange(of: voice.transcript) { _, transcript in
-            if !transcript.isEmpty {
-                chat.composer = transcript
-            }
         }
         .onChange(of: chat.suggestedPrompt) { _, prompt in
             if let prompt {
@@ -212,8 +241,9 @@ private struct AssistantConversationDetail: View {
         VStack(alignment: .leading, spacing: 8) {
             Label {
                 Text("""
-                Generation and transcription run on device. Visible conversation text and card references can sync \
-                through your private iCloud database. Microphone audio is never retained.
+                Generation runs on device. Visible conversation text and card references can sync through your \
+                private iCloud database. To dictate, use your keyboard's dictation feature when available. \
+                Dictation processing depends on your keyboard and system settings.
                 """)
             } icon: {
                 Image(systemName: "hand.raised.fill")
@@ -253,37 +283,19 @@ private struct AssistantConversationDetail: View {
     private var composer: some View {
         @Bindable var chat = appModel.assistantChat
         return VStack(spacing: 8) {
-            if case .failed(let message) = voice.state {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Ask about FluxKlang", text: $chat.composer, axis: .vertical)
-                    .lineLimit(1...5)
+                    .lineLimit(1...(verticalSizeClass == .compact ? 2 : 5))
                     .textFieldStyle(.roundedBorder)
+                    .frame(minHeight: 44)
+                    .focused($composerIsFocused)
                     .accessibilityLabel("Assistant message")
                     .accessibilityIdentifier("assistant.composer")
-                    .onSubmit {
-                        chat.send(context: appModel.assistantToolContext())
-                    }
-                Button {
-                    toggleVoice()
-                } label: {
-                    Image(systemName: voice.state == .listening ? "stop.circle.fill" : "mic.circle")
-                }
-                .accessibilityLabel(voice.state == .listening ? "Finish dictation" : "Start dictation")
-                .accessibilityIdentifier("assistant.mic")
-                if voice.state == .listening || voice.state == .preparingModel {
-                    Button(role: .cancel) { voice.cancel() } label: {
-                        Image(systemName: "xmark.circle")
-                    }
-                    .accessibilityLabel("Cancel dictation")
-                }
                 if chat.isStreaming {
                     Button(role: .cancel) { chat.cancel() } label: {
                         Image(systemName: "stop.fill")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Cancel response")
                     .accessibilityIdentifier("assistant.cancel")
@@ -292,26 +304,23 @@ private struct AssistantConversationDetail: View {
                         chat.send(context: appModel.assistantToolContext())
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .disabled(chat.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("Send message")
                     .accessibilityIdentifier("assistant.send")
                 }
             }
-            Toggle("Speak replies", isOn: $chat.spokenRepliesEnabled)
-                .font(.caption)
-                .accessibilityIdentifier("assistant.spokenReplies")
+            .buttonStyle(.plain)
+            if !usesCompactEditor {
+                Toggle("Speak replies", isOn: $chat.spokenRepliesEnabled)
+                    .font(.caption)
+                    .accessibilityIdentifier("assistant.spokenReplies")
+            }
         }
-        .padding()
+        .padding(usesCompactEditor ? 8 : 16)
         .background(.bar)
-    }
-
-    private func toggleVoice() {
-        if voice.state == .listening {
-            voice.finish()
-        } else {
-            voice.start()
-        }
     }
 }
 

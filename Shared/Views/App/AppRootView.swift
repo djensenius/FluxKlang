@@ -107,97 +107,11 @@ private struct AdaptiveRoot: View {
 
     var body: some View {
         if horizontalSizeClass == .compact {
-            TabRoot()
+            CompactTabRoot()
         } else {
             SplitRoot()
         }
     }
-}
-
-private struct TabRoot: View {
-    @Environment(AppModel.self) private var appModel
-    @State private var selectedTab = CompactTab.studio
-    @State private var isShowingConnection = false
-
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                SectionDetail(section: .studio)
-            }
-            .tabItem { Label("Studio", systemImage: AppSection.studio.systemImage) }
-            .tag(CompactTab.studio)
-
-            NavigationStack {
-                SectionDetail(section: .assistant)
-            }
-            .tabItem { Label("Assistant", systemImage: AppSection.assistant.systemImage) }
-            .tag(CompactTab.assistant)
-
-            NavigationStack {
-                MixView()
-            }
-            .tabItem { Label("Mix", systemImage: AppSection.mix.systemImage) }
-            .tag(CompactTab.mix)
-
-            NavigationStack {
-                MoreView()
-            }
-            .tabItem { Label("More", systemImage: "ellipsis.circle") }
-            .tag(CompactTab.more)
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            ConnectionStatusButton { isShowingConnection = true }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(.bar)
-        }
-        .sheet(isPresented: $isShowingConnection) {
-            NavigationStack {
-                ConnectionView()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { isShowingConnection = false }
-                        }
-                    }
-            }
-        }
-        .onAppear { selectedTab = compactTab(for: appModel.section) }
-        .onChange(of: appModel.section) { _, section in
-            selectedTab = compactTab(for: section)
-        }
-        .onChange(of: selectedTab) { _, tab in
-            switch tab {
-            case .studio:
-                appModel.section = .studio
-            case .assistant:
-                appModel.section = .assistant
-            case .mix:
-                appModel.section = .mix
-            case .more:
-                break
-            }
-        }
-    }
-
-    private func compactTab(for section: AppSection) -> CompactTab {
-        switch section {
-        case .studio:
-            return .studio
-        case .assistant:
-            return .assistant
-        case .mix:
-            return .mix
-        case .patchbay, .connection, .tutorial, .advanced:
-            return .more
-        }
-    }
-}
-
-private enum CompactTab: Hashable {
-    case studio
-    case assistant
-    case mix
-    case more
 }
 #endif
 
@@ -255,7 +169,7 @@ private struct SplitRoot: View {
     }
 }
 
-private struct SectionDetail: View {
+struct SectionDetail: View {
     @Environment(AppModel.self) private var appModel
     let section: AppSection
 
@@ -297,7 +211,7 @@ private struct SectionDetail: View {
     }
 }
 
-private struct MixView: View {
+struct MixView: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
@@ -322,7 +236,7 @@ private struct MixView: View {
 }
 
 #if !os(macOS)
-private struct MoreView: View {
+struct MoreView: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -419,7 +333,7 @@ private struct MoreView: View {
 }
 #endif
 
-private struct ConnectionStatusButton: View {
+struct ConnectionStatusButton: View {
     @Environment(AppModel.self) private var appModel
     let action: () -> Void
 
