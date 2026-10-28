@@ -14,7 +14,7 @@ final class AssistantChatController {
     private var hasLoaded = false
     private var lastSiriRequest: String?
 
-    /// Explicit submission-only capability, never passed to a model/provider.
+    /// Legacy integration reference only. Chat never calls this executor; every action requires reviewed planning.
     var mixerExecutor: (any AssistantMixerExecuting)?
     /// Production uses reviewed planning only; the legacy executor is never reached when this is installed.
     var actionPlanner: (any AssistantActionPlanning)?
@@ -25,7 +25,11 @@ final class AssistantChatController {
             if selectedConversationID != oldValue { stopStreaming() }
         }
     }
-    var composer = ""
+    var composer = "" {
+        didSet {
+            if composer != lastSiriRequest { lastSiriRequest = nil }
+        }
+    }
     private(set) var isStreaming = false
     private(set) var modelAvailability: AssistantModelAvailability = .unsupportedOS
     private(set) var persistenceDiagnostics: [String] = []
@@ -50,7 +54,8 @@ final class AssistantChatController {
     ) {
         self.coordinator = coordinator
         self.store = store
-        self.actionInterpreter = actionInterpreter ?? FoundationModelActionInterpreter()
+        self.actionInterpreter = actionInterpreter
+            ?? Self.defaultActionInterpreter(forcesFallback: Self.forcesFallbackForUITesting)
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
         if Self.forcesFallbackForUITesting {
             self.generator = AssistantDraftPreflightGenerator(
@@ -162,7 +167,8 @@ final class AssistantChatController {
             return false
         }) else { return }
         let question = conversation.messages[..<failedIndex].last { $0.role == .user }?.text
-        guard let question, !isStreaming else { return }
+        guard let question, !isStreaming,
+              !AssistantActionInterpretationAdapter.isPlausibleAction(question) else { return }
         // Classify again rather than relying on ephemeral message state: this
         // also prevents replay from restored or cancelled command history.
         guard case .notMixerIntent = AssistantMixerIntent.parse(question) else { return }
@@ -257,23 +263,15 @@ final class AssistantChatController {
                     return
                 }
             } else {
-                // Compatibility for isolated legacy tests/callers without a planning service.
+                // Missing planning fails closed, even if an old integration still installs an executor.
                 switch AssistantMixerIntent.parse(question) {
                 case .clarification(let text):
                     apply(.text(text), conversationID: conversationID, responseID: responseID)
                     finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
                     return
-                case .command(let command):
-                    let text: String
-                    if Task.isCancelled {
-                        text = "No mixer command was started: submission was cancelled."
-                    } else if let mixerExecutor {
-                        text = await mixerExecutor.execute(command, sessionID: context.liveWing.sessionID)
-                    } else {
-                        text = "No changes: live mixer execution is not configured."
-                    }
-                    apply(.text(text), conversationID: conversationID, responseID: responseID)
-                    // Always retain the truthful outcome even if cancelled after SET.
+                case .command:
+                    apply(.text("No changes: reviewed action planning is not configured."),
+                          conversationID: conversationID, responseID: responseID)
                     finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
                     return
                 case .notMixerIntent: break
@@ -303,58 +301,6 @@ final class AssistantChatController {
                 }
             }
         }
-    }
-
-    private func handleReviewedSubmission(
-        question: String, context: AssistantToolContext, planner: any AssistantActionPlanning,
-        conversationID: UUID, responseID: UUID
-    ) async throws -> Bool {
-        let request = AssistantActionInterpretationRequest(text: question, liveContext: context.liveWing)
-        let (interpretation, notice) = try await interpretAction(request)
-        try Task.checkCancellation()
-        guard activeResponseID == responseID else { throw CancellationError() }
-        let preparation: AssistantActionPreparation
-        switch interpretation {
-        case .answer: return false
-        case .clarification(let text): preparation = .clarification(text)
-        case .proposal:
-            preparation = await planner.prepare(request, interpretation: interpretation)
-        }
-        try Task.checkCancellation()
-        guard activeResponseID == responseID else { throw CancellationError() }
-        switch preparation {
-        case .answer: return false
-        case .clarification(let text):
-            apply(.text(text), conversationID: conversationID, responseID: responseID)
-        case .review(let review):
-            let text = [notice, review.summary].compactMap { $0 }.joined(separator: "\n\n")
-            apply(.text(text), conversationID: conversationID, responseID: responseID)
-            apply(.cards([.actionReview(id: review.id, summary: review.summary)]),
-                  conversationID: conversationID, responseID: responseID)
-        }
-        finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
-        return true
-    }
-
-    private func interpretAction(
-        _ request: AssistantActionInterpretationRequest
-    ) async throws -> (AssistantActionInterpretation, String?) {
-        let reason: String
-        switch await actionInterpreter.availability() {
-        case .available:
-            do {
-                return (try await actionInterpreter.interpret(request), nil)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                reason = "on-device interpretation failed (\(String(error.localizedDescription.prefix(160))))"
-            }
-        case .unavailable(let message): reason = message
-        }
-        try Task.checkCancellation()
-        return (AssistantActionInterpretationAdapter.fallback(request, reason: reason),
-                "Apple command understanding is unavailable: \(String(reason.prefix(240))). "
-                    + "This preview used the local exact-command grammar. No changes were made.")
     }
 
     private func apply(
@@ -441,6 +387,73 @@ final class AssistantChatController {
 }
 
 extension AssistantChatController {
+    static func defaultActionInterpreter(forcesFallback: Bool) -> any AssistantActionInterpreting {
+        if forcesFallback { return AssistantUnavailableActionInterpreter(reason: "deterministic UI-test mode") }
+        return FoundationModelActionInterpreter()
+    }
+
+    private func handleReviewedSubmission(
+        question: String, context: AssistantToolContext, planner: any AssistantActionPlanning,
+        conversationID: UUID, responseID: UUID
+    ) async throws -> Bool {
+        let request = AssistantActionInterpretationRequest(text: question, liveContext: context.liveWing)
+        let (interpretation, notice) = try await interpretAction(request)
+        try Task.checkCancellation()
+        guard activeResponseID == responseID else { throw CancellationError() }
+        let preparation: AssistantActionPreparation
+        switch interpretation {
+        case .answer: return false
+        case .clarification(let text): preparation = .clarification(text)
+        case .proposal:
+            preparation = await planner.prepare(request, interpretation: interpretation)
+        }
+        if Task.isCancelled || activeResponseID != responseID {
+            // A non-cooperative old prepare may finish after cancel. Never cancel a newer submission's review.
+            if planner.pendingReview?.submissionID == request.submissionID { planner.cancel() }
+            throw CancellationError()
+        }
+        switch preparation {
+        case .answer: return false
+        case .clarification(let text):
+            apply(.text(text), conversationID: conversationID, responseID: responseID)
+        case .review(let review):
+            let text = [notice, review.summary].compactMap { $0 }.joined(separator: "\n\n")
+            apply(.text(text), conversationID: conversationID, responseID: responseID)
+            apply(.cards([.actionReview(id: review.id, summary: review.summary)]),
+                  conversationID: conversationID, responseID: responseID)
+        }
+        finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
+        return true
+    }
+
+    private func interpretAction(
+        _ request: AssistantActionInterpretationRequest
+    ) async throws -> (AssistantActionInterpretation, String?) {
+        let reason: String
+        switch await actionInterpreter.availability() {
+        case .available:
+            do {
+                let interpretation = try await actionInterpreter.interpret(request)
+                if interpretation == .clarification(AssistantActionInterpretationAdapter.invalidOutput),
+                   case .proposal(let intent) = AssistantActionInterpretationAdapter.fallback(
+                    request, reason: "the generated interpretation could not be validated") {
+                    return (.proposal(intent), "Apple interpretation could not be validated. "
+                        + "This preview used the local exact-command grammar. No changes were made.")
+                }
+                return (interpretation, nil)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                reason = "on-device interpretation failed (\(String(error.localizedDescription.prefix(160))))"
+            }
+        case .unavailable(let message): reason = message
+        }
+        try Task.checkCancellation()
+        return (AssistantActionInterpretationAdapter.fallback(request, reason: reason),
+                "Apple command understanding is unavailable: \(String(reason.prefix(240))). "
+                    + "This preview used the local exact-command grammar. No changes were made.")
+    }
+
     private static func summary(for messages: [AssistantMessage]) -> String {
         messages.suffix(12).map {
             "\($0.role.rawValue): \(String($0.text.prefix(240)))"

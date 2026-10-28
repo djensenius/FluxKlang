@@ -9,7 +9,7 @@ struct AskFluxKlangIntent: AppIntent {
     )
     static let openAppWhenRun = true
 
-    @Parameter(title: "Request")
+    @Parameter(title: "Request", requestValueDialog: "What would you like to review in FluxKlang?")
     var request: String
 
     static var parameterSummary: some ParameterSummary {

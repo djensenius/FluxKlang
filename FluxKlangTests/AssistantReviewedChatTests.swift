@@ -89,13 +89,16 @@ struct AssistantReviewedChatTests {
             #expect(planner.intents.first?.amount == 3)
             #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
             #expect(chat.selectedConversation?.messages.last?.cards.count == 1)
-            chat.composer = "add my mother-32 and turn the volume to 50%"
-            chat.send(context: AssistantBackendFixture.context())
-            try await AssistantBackendFixture.wait { !chat.isStreaming }
-            #expect(planner.intents.count == 1)
-            #expect(planner.pendingReview == nil)
-            #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true)
-            #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+            for text in ["add my mother-32 and turn the volume to 50%", "make my Astrolab softer",
+                         "silence Astrolab", "bring Astrolab down", "Astrolab -6"] {
+                chat.composer = text
+                chat.send(context: AssistantBackendFixture.context())
+                try await AssistantBackendFixture.wait { !chat.isStreaming }
+                #expect(planner.intents.count == 1)
+                #expect(planner.pendingReview == nil)
+                #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true)
+                #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+            }
             #expect(apple.calls == 0)
             #expect(fallback.calls == 0)
             #expect(await http.calls == 0)
@@ -123,6 +126,57 @@ struct AssistantReviewedChatTests {
         #expect(planner.confirmations == 0)
         #expect(provider.calls == 1)
         #expect(chat.selectedConversation?.messages.last?.text == "provider reply")
+    }
+
+    @Test func latePrepareAfterCancellationIsCleanedUpWithoutCancellingANewerReview() async throws {
+        for newerReview in [false, true] {
+            let planner = ReviewedChatPlanner()
+            planner.suspendNextPrepare = true
+            planner.preserveNewerReviewOnResume = newerReview
+            let chat = makeChat(interpreter: ReviewedChatInterpreter(result: .proposal(Self.intent)),
+                                planner: planner, provider: AssistantBackendGenerator())
+            chat.composer = "turn down the volume of my Astrolab"
+            chat.send(context: AssistantBackendFixture.context())
+            try await AssistantBackendFixture.wait { planner.isPreparingSuspended }
+            let oldResponse = try #require(chat.selectedConversation?.messages.last?.id)
+            chat.cancel()
+            if newerReview {
+                chat.composer = "lower Astrolab by 3 dB"
+                chat.send(context: AssistantBackendFixture.context())
+                try await AssistantBackendFixture.wait { !chat.isStreaming }
+            }
+            let expectedNewReview = planner.pendingReview?.id
+            planner.resumePreparation()
+            try await AssistantBackendFixture.wait {
+                chat.selectedConversation?.messages.first { $0.id == oldResponse }?.state == .cancelled
+            }
+            #expect(planner.pendingReview?.id == expectedNewReview)
+            let prepareCount = planner.intents.count
+            chat.retry(messageID: oldResponse, context: AssistantBackendFixture.context())
+            #expect(planner.intents.count == prepareCount)
+            #expect(planner.confirmations == 0)
+        }
+    }
+
+    @Test func invalidGeneratedExactCommandGetsClearlyLabelledLocalReview() async throws {
+        let planner = ReviewedChatPlanner()
+        let provider = AssistantBackendGenerator()
+        let chat = makeChat(interpreter: ReviewedChatInterpreter(
+            result: .clarification(AssistantActionInterpretationAdapter.invalidOutput)),
+            planner: planner, provider: provider)
+        chat.composer = "lower channel 7 by 3 dB"
+        chat.send(context: AssistantBackendFixture.context())
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        #expect(planner.intents.count == 1)
+        #expect(chat.selectedConversation?.messages.last?.text.contains("could not be validated") == true)
+        #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
+        #expect(provider.calls == 0)
+        #expect(planner.confirmations == 0)
+    }
+
+    @Test func uiTestFallbackInterpreterIsUnavailableWithoutCallingApple() async {
+        let interpreter = AssistantChatController.defaultActionInterpreter(forcesFallback: true)
+        #expect(await interpreter.availability() == .unavailable("deterministic UI-test mode"))
     }
 
     @Test func cancelClearAndDeleteInvalidateAnExistingReview() async throws {
@@ -244,15 +298,28 @@ final class ReviewedChatPlanner: AssistantActionPlanning {
     var intents: [AssistantActionIntent] = []
     var confirmations = 0
     var cancellations = 0
+    var suspendNextPrepare = false
+    var preserveNewerReviewOnResume = false
+    private var preparationContinuation: CheckedContinuation<Void, Never>?
+    var isPreparingSuspended: Bool { preparationContinuation != nil }
+    func resumePreparation() {
+        preparationContinuation?.resume()
+        preparationContinuation = nil
+    }
     func prepare(_ request: AssistantActionInterpretationRequest,
                  interpretation: AssistantActionInterpretation) async -> AssistantActionPreparation {
         guard case .proposal(let intent) = interpretation else { return .answer }
         intents.append(intent)
+        let suspended = suspendNextPrepare
+        if suspended {
+            suspendNextPrepare = false
+            await withCheckedContinuation { preparationContinuation = $0 }
+        }
         let review = AssistantActionReview(id: UUID(), submissionID: request.submissionID, stage: .ready,
             targetMention: intent.targetMention, candidates: [], selectedCandidateID: nil, target: nil,
             faderChanges: [], addsLiveShortcut: intent.addToStudio, suggestedAmountDB: nil,
             expiresAt: Date().addingTimeInterval(60), summary: "Review only; no changes", warnings: [])
-        pendingReview = review
+        if !suspended || !preserveNewerReviewOnResume || pendingReview == nil { pendingReview = review }
         return .review(review)
     }
     func selectCandidate(reviewID: UUID, candidateID: String) async -> AssistantActionPreparation { .answer }

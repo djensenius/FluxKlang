@@ -25,16 +25,15 @@ enum AssistantActionInterpretationAdapter {
     static func validate(
         _ output: AssistantActionModelOutput, request: AssistantActionInterpretationRequest
     ) -> AssistantActionInterpretation {
+        guard request.text.count <= maximumTextLength else { return .clarification(invalidOutput) }
+        // Read-only classification grants no authority; discard any stray generated action fields.
+        if output.disposition == .answer { return .answer }
         let fields = [output.target, output.targetEvidence, output.actionEvidence ?? "",
                       output.amountEvidence ?? "", output.addEvidence ?? ""]
-        guard request.text.count <= maximumTextLength, fields.allSatisfy({ $0.count <= 160 }),
+        guard fields.allSatisfy({ $0.count <= 160 }),
               output.clarification.count <= 400 else { return .clarification(invalidOutput) }
         switch output.disposition {
-        case .answer:
-            guard output.target.isEmpty, output.action == nil, output.amount == nil, !output.addToStudio,
-                  fields.allSatisfy(\.isEmpty), output.clarification.isEmpty
-            else { return .clarification(invalidOutput) }
-            return .answer
+        case .answer: return .answer
         case .clarification:
             guard !output.clarification.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   output.target.isEmpty, output.action == nil, output.amount == nil, !output.addToStudio,
@@ -43,17 +42,21 @@ enum AssistantActionInterpretationAdapter {
             return .clarification("No changes were made. " + output.clarification)
         case .proposal:
             guard !output.target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  output.target == output.targetEvidence,
+                  !isNonActionSubmission(request.text), output.target == output.targetEvidence,
+                  !word("add|include", in: request.text) || output.addToStudio,
                   copied(output.targetEvidence, from: request.text), output.clarification.isEmpty,
                   output.action != nil || output.addToStudio,
                   output.action != nil
                     ? copied(output.actionEvidence, from: request.text) : output.actionEvidence == nil,
                   output.addToStudio ? copied(output.addEvidence, from: request.text) : output.addEvidence == nil
             else { return .clarification(invalidOutput) }
-            guard validAmount(output) else { return .clarification(invalidOutput) }
+            guard validAmount(output), validActionEvidence(output, text: request.text),
+                  !output.addToStudio || word("add|include", in: output.addEvidence ?? "")
+            else { return .clarification(invalidOutput) }
             if let amount = output.amount {
                 guard let evidence = output.amountEvidence, copied(evidence, from: request.text),
-                      numericValue(evidence) == amount else { return .clarification(invalidOutput) }
+                      numericValue(evidence) == amount, validUnit(evidence, action: output.action)
+                else { return .clarification(invalidOutput) }
             } else if output.amountEvidence != nil { return .clarification(invalidOutput) }
             return .proposal(AssistantActionIntent(
                 targetMention: output.target, action: output.action, amount: output.amount,
@@ -61,6 +64,41 @@ enum AssistantActionInterpretationAdapter {
                 evidence: .init(target: output.targetEvidence, action: output.actionEvidence,
                                 amount: output.amountEvidence, add: output.addEvidence)))
         }
+    }
+
+    private static func validUnit(_ evidence: String, action: AssistantActionIntent.Action?) -> Bool {
+        let suffix = evidence.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch action {
+        case .setFaderPercent: return suffix.hasSuffix("%") || suffix.hasSuffix("percent")
+        case .lower, .raise, .setDB: return suffix.hasSuffix("db")
+        case .mute, .unmute, .none: return false
+        }
+    }
+
+    private static func validActionEvidence(_ output: AssistantActionModelOutput, text: String) -> Bool {
+        guard let action = output.action else { return output.actionEvidence == nil }
+        let evidence = output.actionEvidence ?? ""
+        guard containsWholePhrase(evidence, in: text) else { return false }
+        let lower = "lower|down|quieter|softer|reduce|decrease|attenuate|cut"
+        let raise = "raise|up|louder|boost|increase"
+        switch action {
+        case .lower: return word(lower, in: evidence) && !word(raise, in: text)
+        case .raise: return word(raise, in: evidence) && !word(lower, in: text)
+        case .mute: return word("mute|silence", in: evidence) && !word("unmute|unsilence", in: text)
+        case .unmute: return word("unmute|unsilence", in: evidence) && !word("mute|silence", in: text)
+        case .setDB, .setFaderPercent:
+            return word("set|turn|put|bring|adjust|change|volume|level|fader|gain|make", in: evidence)
+        }
+    }
+
+    private static func word(_ alternatives: String, in text: String) -> Bool {
+        text.range(of: "(?<![\\p{L}\\p{N}_])(?:" + alternatives + ")(?![\\p{L}\\p{N}_])",
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func containsWholePhrase(_ phrase: String, in text: String) -> Bool {
+        guard !phrase.isEmpty else { return false }
+        return word(NSRegularExpression.escapedPattern(for: phrase), in: text)
     }
 
     private static func validAmount(_ output: AssistantActionModelOutput) -> Bool {
@@ -73,7 +111,7 @@ enum AssistantActionInterpretationAdapter {
         }
     }
 
-    private static func numericValue(_ evidence: String) -> Double? {
+    static func numericValue(_ evidence: String) -> Double? {
         let pattern = #"^\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent|dB)?\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.firstMatch(in: evidence, range: NSRange(evidence.startIndex..., in: evidence)),
@@ -90,17 +128,13 @@ enum AssistantActionInterpretationAdapter {
     static func fallback(
         _ request: AssistantActionInterpretationRequest, reason: String
     ) -> AssistantActionInterpretation {
-        if isReadOnlyQuestion(request.text) { return .answer }
+        if isNonActionSubmission(request.text) { return .answer }
         switch AssistantMixerIntent.parse(request.text) {
         case .command(let command): return exactProposal(command, request: request)
         case .clarification:
             return .clarification(guidance(reason))
         case .notMixerIntent:
-            let text = request.text.lowercased()
-            if text.range(of: #"\b(volume|fader|quieter|louder|mute|unmute|turn down|turn up)\b"#,
-                          options: .regularExpression) != nil {
-                return .clarification(guidance(reason))
-            }
+            if isPlausibleAction(request.text) { return .clarification(guidance(reason)) }
             // Preserve read-only help/inventory and existing reviewed wiring-draft preflight.
             return .answer
         }
@@ -114,8 +148,32 @@ enum AssistantActionInterpretationAdapter {
 
     static func isReadOnlyQuestion(_ text: String) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).range(
-            of: #"^(?:how|what|why|where|which|who|explain|help|list|show|is|are|does|can i)\b"#,
+            of: #"^(?:how|what|why|where|which|who|explain|describe|help|list|show|is|are|does|can i|"#
+                + #"tell me (?:about|how)|(?:can|could|would) you (?:explain|describe|tell me|list|show me))\b"#,
             options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Conservative exclusions only; positive conversational actions still require Apple interpretation.
+    static func isNonActionSubmission(_ text: String) -> Bool {
+        if isReadOnlyQuestion(text) { return true }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).range(
+            of: #"^(?:hello|hi|hey|thanks|thank you|good morning|good evening)[.!?\s]*$"#,
+            options: [.regularExpression, .caseInsensitive]) != nil { return true }
+        let normalized = text.replacingOccurrences(of: "’", with: "'")
+        if word("don't|do not|not|never|without|suppose|imagine|hypothetically|if|when", in: normalized) {
+            return true
+        }
+        return text.contains(where: { "\"“”`".contains($0) })
+            || text.range(of: #"(?:^|\s)'[^']+'"#, options: .regularExpression) != nil
+    }
+
+    /// This does not interpret actions; it prevents unknown action-looking input reaching cloud Q&A.
+    static func isPlausibleAction(_ text: String) -> Bool {
+        if isNonActionSubmission(text) { return false }
+        return word("volume|fader|quieter|louder|softer|mute|unmute|silence|down|up|level|gain|db|percent|"
+                    + "boost|cut|reduce|increase|decrease|bring|lower|raise|set|turn|make", in: text)
+            || text.contains("%")
+            || text.range(of: #"(?:^|\s)[+-]\d+(?:\.\d+)?\s*$"#, options: .regularExpression) != nil
     }
 
     private static func exactProposal(
@@ -133,8 +191,13 @@ enum AssistantActionInterpretationAdapter {
         guard let target = firstMatch(targetPattern, in: request.text),
               let actionWord = firstMatch(#"^\s*(set|lower|raise|turn|mute|unmute)\b"#, in: request.text)
         else { return .clarification(invalidOutput) }
+        var actionEvidence = actionWord
+        if case .adjustDB = command.operation, actionWord.lowercased() == "turn",
+           let direction = firstMatch(#"\b(down|up)\b"#, in: request.text) {
+            actionEvidence = direction
+        }
         var output = AssistantActionModelOutput(disposition: .proposal, target: target,
-                                               targetEvidence: target, actionEvidence: actionWord)
+                                               targetEvidence: target, actionEvidence: actionEvidence)
         switch command.operation {
         case .setDB(let amount): output.action = .setDB; output.amount = Double(amount)
         case .adjustDB(let amount):

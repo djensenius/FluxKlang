@@ -25,10 +25,12 @@ struct AskFluxKlangIntentTests {
         #expect(model.environments.activeStudioGraph == beforeGraph)
         #expect(model.wing.values == beforeValues)
         #expect(model.wing.transportWriteCount == writesBefore)
-        model.assistantChat.composer = ""
         let repeated = SiriAssistantRequestAction.stage(request: request, model: model)
         #expect(repeated.contains("already delivered"))
-        #expect(model.assistantChat.composer.isEmpty)
+        #expect(model.assistantChat.composer == request)
+        model.assistantChat.composer = ""
+        #expect(SiriAssistantRequestAction.stage(request: request, model: model).contains("tap Send"))
+        #expect(model.assistantChat.composer == request)
         #expect(model.wing.transportWriteCount == writesBefore)
         #expect(planner.confirmations == 0)
         let intent = AskFluxKlangIntent(request: request)
@@ -49,6 +51,25 @@ struct AskFluxKlangIntentTests {
         #expect(SiriAssistantRequestAction.stage(request: " \n ", model: model).contains("No request was staged"))
         #expect(model.assistantChat.composer.isEmpty)
         #expect(model.wing.transportWriteCount == 0)
+    }
+
+    @Test func sameSiriRequestCanBeStagedAgainAfterSendWithoutAutomaticReplay() async throws {
+        let planner = ReviewedChatPlanner()
+        let chat = AssistantChatController(coordinator: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil),
+            generator: AssistantBackendGenerator(), actionInterpreter: ReviewedChatInterpreter(result: .proposal(.init(
+                targetMention: "Astrolab", action: .mute, amount: nil, addToStudio: false,
+                evidence: .init(target: "Astrolab", action: "mute", amount: nil, add: nil)))))
+        chat.spokenRepliesEnabled = false
+        chat.actionPlanner = planner
+        #expect(chat.stageSiriRequest("mute Astrolab").contains("tap Send"))
+        chat.send(context: AssistantBackendFixture.context())
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        #expect(planner.intents.count == 1)
+        #expect(chat.stageSiriRequest("mute Astrolab").contains("tap Send"))
+        #expect(planner.intents.count == 1)
+        #expect(planner.confirmations == 0)
+        #expect(planner.pendingReview == nil)
     }
 
     @Test func busySiriHandoffDoesNotCancelOrReplaceActiveSubmission() async throws {
