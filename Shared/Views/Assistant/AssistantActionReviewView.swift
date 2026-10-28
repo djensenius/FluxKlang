@@ -154,12 +154,15 @@ struct AssistantActionReviewView: View {
                     ? "Confirm adds only the local shortcut. No hardware writes."
                     : "Confirm writes the reviewed existing WING fader / mute values to hardware.")
                     .font(.caption)
-                Button(snapshot.faderChanges.isEmpty
-                    ? "Confirm — Add Local Shortcut" : "Confirm — Write to WING Hardware") {
+                Button {
                     confirm()
+                } label: {
+                    Text(snapshot.faderChanges.isEmpty
+                        ? "Confirm — Add Local Shortcut" : "Confirm — Write to WING Hardware")
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity, minHeight: 44)
                 .disabled(activeReview?.stage != .ready || now >= snapshot.expiresAt
                     || isConfirming || isSelecting || cancellationRequested)
                 .accessibilityIdentifier("assistant.action.confirm")

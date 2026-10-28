@@ -33,8 +33,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         XCTAssertTrue(confirm.label.contains("Write to WING Hardware"))
         XCTAssertGreaterThanOrEqual(confirm.frame.height, 44)
-        let left = element("assistant.action.change.channel-7")
-        let right = element("assistant.action.change.channel-8")
+        let left = element("assistant.action.change.ch-7")
+        let right = element("assistant.action.change.ch-8")
         reveal(left)
         XCTAssertTrue(left.label.contains("Left"))
         XCTAssertTrue(left.label.contains("Channel 7"))
@@ -77,8 +77,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         launchReview("partial")
         XCTAssertTrue(app.staticTexts["Partial outcome"].waitForExistence(timeout: 5))
         XCTAssertEqual(element("assistant.action.localResult").label, "Shortcut: added locally")
-        XCTAssertTrue(element("assistant.action.memberResult.channel-7").label.contains("Confirmed by readback"))
-        XCTAssertTrue(element("assistant.action.memberResult.channel-8").label.contains("Not sent"))
+        XCTAssertTrue(element("assistant.action.memberResult.ch-7").label.contains("Confirmed by readback"))
+        XCTAssertTrue(element("assistant.action.memberResult.ch-8").label.contains("Not sent"))
         XCTAssertFalse(app.buttons["assistant.action.confirm"].exists)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS %@", "No automatic rollback or retry"
@@ -88,6 +88,10 @@ final class AssistantActionReviewUITests: XCTestCase {
 
     func testConsumedReviewRemainsVisibleAndCancelRevokesQueuedFixtureChanges() {
         launchReview("confirming")
+        assertConfirmCalls(0)
+        let showReview = app.buttons["assistant.action.showReview"]
+        XCTAssertTrue(showReview.waitForExistence(timeout: 5))
+        showReview.tap()
         let confirm = app.buttons["assistant.action.confirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
@@ -95,16 +99,18 @@ final class AssistantActionReviewUITests: XCTestCase {
         confirm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(element("assistant.action.review").exists, "Consuming pendingReview must not dismiss the sheet")
         XCTAssertFalse(confirm.isEnabled)
-        assertConfirmCalls(1)
         let cancel = app.buttons["assistant.action.cancel"]
         XCTAssertEqual(cancel.label, "Stop Remaining Changes")
         cancel.tap()
         XCTAssertTrue(element("assistant.action.result").waitForExistence(timeout: 8))
-        XCTAssertTrue(element("assistant.action.memberResult.channel-7").label.contains("Not sent"))
-        XCTAssertTrue(element("assistant.action.memberResult.channel-8").label.contains("Not sent"))
+        XCTAssertTrue(element("assistant.action.memberResult.ch-7").label.contains("Not sent"))
+        XCTAssertTrue(element("assistant.action.memberResult.ch-8").label.contains("Not sent"))
         XCTAssertEqual(element("assistant.action.localResult").label, "Shortcut: not attempted")
-        assertConfirmCalls(1)
         XCTAssertFalse(confirm.exists)
+        // The fixture counter belongs to the underlying card host, outside its production review sheet.
+        XCTAssertEqual(cancel.label, "Done")
+        cancel.tap()
+        assertConfirmCalls(1)
     }
 
     private func launchReview(_ mode: String) {

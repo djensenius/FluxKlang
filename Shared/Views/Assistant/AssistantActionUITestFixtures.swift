@@ -41,7 +41,7 @@ private struct AssistantActionUITestFixtureHost: View {
 
     var body: some View {
         Group {
-            if mode == "restored" {
+            if mode == "restored" || mode == "confirming" {
                 NavigationStack {
                     ScrollView {
                         AssistantActionReviewCard(
@@ -51,7 +51,7 @@ private struct AssistantActionUITestFixtureHost: View {
                         )
                         .padding()
                     }
-                    .navigationTitle("Restored Action Card")
+                    .navigationTitle(mode == "restored" ? "Restored Action Card" : "WING Action Card")
                 }
             } else {
                 AssistantActionReviewView(review: planner.fixtureReview, planner: planner)
