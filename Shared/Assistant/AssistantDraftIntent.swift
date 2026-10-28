@@ -75,7 +75,7 @@ enum AssistantDraftIntent {
     static func wiringRequest(from request: AssistantGenerationRequest) -> StudioWiringRequest? {
         let current = request.question.lowercased()
         let isRetry = current.contains("try again") || current.contains("connected now")
-        guard requestsSourceDraft(request.question) || isRetry else { return nil }
+        guard hasRoutingIntent(current) || isRetry else { return nil }
         let recentUserText = request.recentMessages.suffix(8)
             .filter { $0.role == .user }
             .map(\.text)
@@ -122,8 +122,7 @@ enum AssistantDraftIntent {
     static func clarification(from request: AssistantGenerationRequest) -> String? {
         let question = request.question
         let normalized = question.lowercased()
-        guard requestsSourceDraft(question), hasRoutingIntent(normalized),
-              !isInformationalQuestion(normalized) else { return nil }
+        guard hasRoutingIntent(normalized), !isInformationalQuestion(normalized) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
         let resolution = AssistantSourceResolver.resolve(
             question, context: request.context, excluding: effectEquipmentIDs
@@ -186,6 +185,8 @@ enum AssistantDraftIntent {
     static func requestsSourceDraft(_ question: String) -> Bool {
         let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if requestsDraftAmendment(question) { return true }
+        if normalized.range(of: #"^(?:help me (?:to )?|how (?:do i|can i|should i|to) )"#
+            + #"(?:route|connect|wire|patch)\b"#, options: .regularExpression) != nil { return true }
         guard !["what ", "why ", "how ", "help ", "explain ", "tell me ", "list ", "show "].contains(where: {
             normalized.hasPrefix($0)
         }) else { return false }

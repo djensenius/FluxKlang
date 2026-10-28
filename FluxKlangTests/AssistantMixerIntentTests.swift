@@ -69,6 +69,9 @@ enum AssistantMixerRejectionCases {
         "how do I mute main?", "explain mute main", "if mute main", "what is set main to -10 dB",
         "\"mute main\"", "‘mute main’", "mute main; unmute channel 1", "mute main and channel 7",
         "mute main then route synth to speakers", "route synth to speakers and lower main by 3 dB",
+        "route Synth to speakers. mute main", "route Synth to speakers: mute main",
+        "route Synth to speakers & mute main", "route Synth to speakers! mute main",
+        "route Synth to speakers? mute main", "route Synth to speakers — mute main",
         "set main to -10 dB\nmute channel 1", "mute /ch/1", "mute volume", "set main to 1e5 dB"
     ]
 }

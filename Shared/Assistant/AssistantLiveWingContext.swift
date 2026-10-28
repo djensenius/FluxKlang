@@ -136,17 +136,22 @@ enum AssistantSourceResolver {
         var clarification: String?
     }
 
+    // Keep fail-closed ambiguity/staleness exits together; never return a partial source list.
+    // swiftlint:disable:next cyclomatic_complexity
     static func resolve(
         _ question: String, context: AssistantToolContext,
-        excluding: Set<Equipment.ID> = []
+        excluding: Set<Equipment.ID> = [],
+        requiresSourceIntent: Bool = true
     ) -> Resolution {
-        guard AssistantDraftIntent.requestsSourceDraft(question) else {
-            return Resolution(equipmentIDs: [], references: [], clarification: nil)
-        }
         let sourceText = AssistantDraftIntent.sourceMentionText(question)
         var ids = AssistantDraftIntent.mentionedEquipmentIDs(
             in: sourceText, equipment: context.equipment, excluding: excluding)
         var references: [AssistantLiveReference] = []
+        // Intent gating applies only to live aliases and their clarifications;
+        // saved source names remain available to help/how requests and tools.
+        guard !requiresSourceIntent || AssistantDraftIntent.requestsSourceDraft(question) else {
+            return Resolution(equipmentIDs: ids, references: [], clarification: nil)
+        }
         let live = context.liveWing
         guard live.status == .observed || live.status == .stale, let session = live.sessionID else {
             return Resolution(equipmentIDs: ids, references: [], clarification: nil)
@@ -165,8 +170,27 @@ enum AssistantSourceResolver {
         }
         let excludedIDs = Set(excluded.compactMap(\.equipmentID)).union(excluding)
         ids.removeAll { excludedIDs.contains($0) }
-        let identities = mentions.filter { contains($0.identity, in: sourceText) }
-        if !identities.isEmpty { ids = [] }
+        let identities = mentions.filter { !excluded.contains($0) && contains($0.identity, in: sourceText) }
+        if !identities.isEmpty {
+            var otherSourceText = sourceText
+            for observation in identities {
+                otherSourceText = otherSourceText.replacingOccurrences(of: observation.identity.lowercased(), with: " ")
+            }
+            otherSourceText = otherSourceText.replacingOccurrences(
+                of: #"^\s*(?:route|connect|wire|patch|add|include|use)\b\s*"#,
+                with: "", options: .regularExpression)
+            let otherSaved = AssistantDraftIntent.mentionedEquipmentIDs(
+                in: otherSourceText, equipment: context.equipment, excluding: excludedIDs)
+            let otherLive = mentions.contains {
+                !excluded.contains($0) && !identities.contains($0) && contains($0.label.value, in: otherSourceText)
+            }
+            guard otherSaved.isEmpty, !otherLive else {
+                return Resolution(equipmentIDs: [], references: [], clarification:
+                    "No draft was created: mixed named sources and channel/input identities need clarification. "
+                    + "Specify every source with an explicit channel/LOCAL input identity, or use only saved names.")
+            }
+            ids = []
+        }
         let mentioned = (identities.isEmpty ? mentions : identities).filter { !excluded.contains($0) }
         for observation in mentioned {
             if identities.isEmpty, context.equipment.contains(where: {

@@ -76,7 +76,7 @@ enum AssistantMixerIntent {
         let quote = #"[\"'“”‘’`]*"#
         let prefix = #"(?:please |don't |do not |never |not |if |when |how (?:do i |to |can i )?|"#
             + #"what is |why |explain |can you |could you )?"#
-        let clause = #"(?:^|[,;\n]\s*|\b(?:and|then|also|but)\s+)"#
+        let clause = #"(?:^|[.,;:&?!—–\n]\s*|\b(?:and|then|also|but)\s+)"#
         return text.range(of: clause + quote + prefix + quote + verb, options: .regularExpression) != nil
     }
 

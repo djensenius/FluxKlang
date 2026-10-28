@@ -197,7 +197,8 @@ struct CopilotAssistantGenerator: AssistantGenerating {
             try authorizer.authorize(.buildPendingDraft)
             let arguments = try JSONDecoder().decode(CopilotDraftArguments.self, from: data)
             let effectEquipmentIDs = Set(context.effects.compactMap(\.equipmentID))
-            let resolution = AssistantSourceResolver.resolve(question, context: context, excluding: effectEquipmentIDs)
+            let resolution = AssistantSourceResolver.resolve(
+                question, context: context, excluding: effectEquipmentIDs, requiresSourceIntent: false)
             if let clarification = resolution.clarification { return clarification }
             let sourceIDs = resolution.equipmentIDs
             guard !sourceIDs.isEmpty else { return AssistantDraftIntent.missingSource }

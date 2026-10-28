@@ -261,14 +261,14 @@ private struct AssistantContextFoundationTool: Tool {
 
 @available(iOS 27, macOS 27, *)
 @Generable(description: "A request to create a review-only Studio wiring draft.")
-private struct AssistantDraftArguments {
+struct AssistantDraftArguments {
     var sourceNames: [String]
     var effectNames: [String]
     var destination: String
 }
 
 @available(iOS 27, macOS 27, *)
-private struct AssistantDraftFoundationTool: Tool {
+struct AssistantDraftFoundationTool: Tool {
     let question: String
     let context: AssistantToolContext
     let coordinator: AssistantCoordinator
@@ -282,7 +282,8 @@ private struct AssistantDraftFoundationTool: Tool {
     func call(arguments: AssistantDraftArguments) async throws -> String {
         try authorizer.authorize(.buildPendingDraft)
         let effectEquipmentIDs = Set(context.effects.compactMap(\.equipmentID))
-        let resolution = AssistantSourceResolver.resolve(question, context: context, excluding: effectEquipmentIDs)
+        let resolution = AssistantSourceResolver.resolve(
+            question, context: context, excluding: effectEquipmentIDs, requiresSourceIntent: false)
         if let clarification = resolution.clarification { return clarification }
         let sources = resolution.equipmentIDs
         guard !sources.isEmpty else { return AssistantDraftIntent.missingSource }

@@ -29,12 +29,28 @@ final class WingLiveObservations {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: interval) } catch { return }
                 guard let currentSession = controller?.sessionID, currentSession == session else { return }
-                _ = await controller?.readFreshConfirmed(Self.addresses, session: session)
+                await controller?.refreshLiveObservationMetadata(session: session)
             }
         }
     }
 
     static let addresses: [String] = (1...24).map(WingAddress.inputName) + (1...40).flatMap {
         [WingAddress.name(.channel, $0), WingAddress.channelSourceGroup($0), WingAddress.channelSourceIndex($0)]
+    }
+}
+
+extension WingController {
+    /// Background metadata polling is GET-only and must never invalidate the
+    /// shared confirmations used by Listen or Temporary Move verification.
+    func refreshLiveObservationMetadata(session: UUID) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        for (offset, address) in WingLiveObservations.addresses.enumerated() {
+            guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session,
+                  ContinuousClock.now < deadline else { return }
+            await refresh(address)
+            if (offset + 1).isMultiple(of: WingNetwork.bulkRefreshBatchSize) {
+                do { try await Task.sleep(for: WingNetwork.bulkRefreshBatchDelay) } catch { return }
+            }
+        }
     }
 }

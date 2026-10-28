@@ -100,6 +100,37 @@ struct AssistantMixerChatTests {
         await wing.disconnect()
     }
 
+    @Test func punctuationSeparatedMixerClausesPreserveExistingDraftAndNeverReachProviderOrTransport() async throws {
+        let synth = Equipment(name: "Synth")
+        let prior = Equipment(name: "Prior")
+        let context = AssistantBackendFixture.context(equipment: [synth, prior], inputs: [
+            .init(connector: 7, equipmentID: synth.id, outputPort: 0),
+            .init(connector: 8, equipmentID: prior.id, outputPort: 0)
+        ])
+        let transport = AssistantRecordingWingTransport()
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        _ = await coordinator.perform(.buildStudioDraft(.init(sourceInstrumentIDs: [prior.id])), context: context)
+        let pending = coordinator.pendingStudioDraft
+        let provider = AssistantBackendGenerator()
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider)
+        chat.spokenRepliesEnabled = false
+        chat.mixerExecutor = AssistantMixerExecutor(controller: { wing }, layout: { FaderLayout() })
+        for boundary in [".", ":", "&", "!", "?", "—"] {
+            chat.composer = "route Synth to speakers\(boundary) mute main"
+            chat.send(context: context)
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(chat.selectedConversation?.messages.last?.text.contains("No mixer changes") == true)
+            #expect(provider.calls == 0)
+            #expect(coordinator.pendingStudioDraft == pending)
+            #expect(wing.transportWriteCount == 0)
+            #expect(await transport.writes.isEmpty)
+        }
+        await wing.disconnect()
+    }
+
     @Test func ordinaryHelpInventoryAndRoutingWithMixerWordsKeepTheirHandlingAndNeverExecuteMixer() async throws {
         let gear = Equipment(name: "Lower Synth")
         let context = AssistantBackendFixture.context(equipment: [gear],

@@ -76,6 +76,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var gateBaselineAfterNames = false
     private var namesRead: Set<String> = []
     private var gateReadback = false
+    private var verificationQueryAddress: String?
     private(set) var queryWaiting = false
     private var queryGates: [CheckedContinuation<Void, Never>] = []
 
@@ -117,9 +118,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
     }
     func pauseBaselineAfterNameDiscovery() { gateBaselineAfterNames = true; namesRead = [] }
     func pauseReadback() { gateReadback = true }
+    func pauseVerificationQuery(_ address: String) { verificationQueryAddress = address }
     func releaseQueries() {
         gateBaselineAfterNames = false
         gateReadback = false
+        verificationQueryAddress = nil
         let waiting = queryGates
         queryGates = []
         waiting.forEach { $0.resume() }
@@ -133,7 +136,8 @@ actor AssistantRecordingWingTransport: WingTransporting {
             guard answersQueries, writes.isEmpty || answersAfterWrite else { return }
             if address.hasPrefix("/ch/"), address.hasSuffix("/name") { namesRead.insert(address) }
             if (gateBaselineAfterNames && namesRead.count == 40 && ["/ch/7/fdr", "/ch/7/mute"].contains(address))
-                || (gateReadback && !writes.isEmpty) {
+                || (gateReadback && !writes.isEmpty)
+                || (verificationQueryAddress == address && writes.count >= 2) {
                 queryWaiting = true
                 await withCheckedContinuation { queryGates.append($0) }
             }
