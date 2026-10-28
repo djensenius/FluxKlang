@@ -25,16 +25,14 @@ enum AssistantMixerParseResult: Equatable, Sendable {
 
 enum AssistantMixerIntent {
     static let syntax = "Use one explicit mixer command: set main or channel N or an exact unique live channel name "
-        + "to X dB; lower/raise that target by X dB; or mute/unmute that target. "
+        + "to X dB; lower/raise or turn that target down/up by X dB; or mute/unmute that target. "
         + "Specify the target and amount; no default target or step is assumed."
 
     static func parse(_ text: String) -> AssistantMixerParseResult {
         let normalized = AssistantLiveWingContext.normalize(text)
-        guard
-            normalized.range(
-                of: #"\b(set|lower|raise|turn|mute|unmute|volume|fader|quieter|louder)\b"#,
-                options: .regularExpression) != nil
-        else { return .notMixerIntent }
+        let classificationText = AssistantLiveWingContext.normalize(
+            text.replacingOccurrences(of: "\n", with: ";").replacingOccurrences(of: "\r", with: ";"))
+        guard resemblesMixerRequest(classificationText) else { return .notMixerIntent }
         // Never partially execute quoted, negated, informational, hypothetical,
         // compound or routing/mixer requests. Unknown syntax also fails closed.
         guard text.count <= 200, !text.contains(where: { "\"'“”‘’`;\n\r?!".contains($0) }),
@@ -48,21 +46,38 @@ enum AssistantMixerIntent {
                     + "separately from routing or questions. " + syntax)
         }
         let number = #"([+-]?(?:\d+(?:\.\d+)?|\.\d+))"#
-        if let match = groups(#"^set (.+) to "# + number + #" db$"#, in: normalized),
+        if let match = groups(#"^set (.+) to "# + number + #"\s*db$"#, in: normalized),
             let amount = Float(match[1]), amount.isFinite {
             guard (-90...10).contains(amount) else {
                 return .clarification("No changes: fader levels must be finite and within -90...+10 dB.")
             }
             return command(target: match[0], operation: .setDB(amount))
         }
-        if let match = groups(#"^(lower|raise) (.+) by "# + number + #" db$"#, in: normalized),
+        if let match = groups(#"^(lower|raise) (.+) by\s*"# + number + #"\s*db$"#, in: normalized),
             let amount = Float(match[2]), amount.isFinite, amount > 0 {
             return command(target: match[1], operation: .adjustDB(match[0] == "lower" ? -amount : amount))
+        }
+        if let match = groups(#"^turn (.+) (down|up) by\s*"# + number + #"\s*db$"#, in: normalized),
+           let amount = Float(match[2]), amount.isFinite, amount > 0 {
+            return command(target: match[0], operation: .adjustDB(match[1] == "down" ? -amount : amount))
+        }
+        if let match = groups(#"^turn (down|up) (.+) by\s*"# + number + #"\s*db$"#, in: normalized),
+           let amount = Float(match[2]), amount.isFinite, amount > 0 {
+            return command(target: match[1], operation: .adjustDB(match[0] == "down" ? -amount : amount))
         }
         if let match = groups(#"^(mute|unmute) (.+)$"#, in: normalized) {
             return command(target: match[1], operation: .mute(match[0] == "mute"))
         }
         return .clarification("No mixer changes were made. " + syntax)
+    }
+
+    private static func resemblesMixerRequest(_ text: String) -> Bool {
+        let verb = #"(?:set(?!\s+up\b)|lower|raise|turn|mute|unmute)\b"#
+        let quote = #"[\"'“”‘’`]*"#
+        let prefix = #"(?:please |don't |do not |never |not |if |when |how (?:do i |to |can i )?|"#
+            + #"what is |why |explain |can you |could you )?"#
+        let clause = #"(?:^|[,;\n]\s*|\b(?:and|then|also|but)\s+)"#
+        return text.range(of: clause + quote + prefix + quote + verb, options: .regularExpression) != nil
     }
 
     private static func command(
@@ -71,7 +86,7 @@ enum AssistantMixerIntent {
         let resolved: AssistantMixerCommand.Target
         if target == "main" {
             resolved = .main(1)
-        } else if let groups = groups(#"^(channel|main) (\d+)$"#, in: target), let index = Int(groups[1]) {
+        } else if let groups = groups(#"^(channel|main)\s*(\d+)$"#, in: target), let index = Int(groups[1]) {
             guard (1...(groups[0] == "channel" ? 40 : 4)).contains(index) else {
                 return .clarification("No changes: channels are 1...40 and mains are 1...4.")
             }

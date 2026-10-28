@@ -79,6 +79,7 @@ enum WingReplyResolver {
 
 enum WingTransportError: Error, Sendable {
     case notStarted
+    case notAuthorized
 }
 
 /// Actor that owns the UDP socket and serialises all access to it.
@@ -156,13 +157,17 @@ actor WingTransport: WingTransporting {
         try socket.send(.message(OSCMessage(address, values: values)), to: host, port: port)
     }
 
-    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) throws {
-        // No suspension between checking the socket generation and sending.
-        guard self.sessionID == sessionID,
-              node.kind == .channel || node.kind == .main,
-              (1...node.kind.count).contains(node.index) else { throw WingTransportError.notStarted }
-        let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
-        try send(address, value.encodedForWing(address: address))
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) throws {
+        try authorization.consume {
+            // No suspension between authorization/session checks and the socket write.
+            guard self.sessionID == sessionID,
+                  WingController.isValidMixerValue(node, value: value, muted: muted) else {
+                throw WingTransportError.notAuthorized
+            }
+            let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
+            try send(address, value.encodedForWing(address: address))
+        }
     }
 
     private func stopSocket() {

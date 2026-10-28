@@ -5,10 +5,6 @@
 //  High-level, observable controller for a WING Rack. Owns the transport,
 //  drives the subscription keep-alive, and keeps a live cache of node values.
 //
-//  Because the WING is multi-client, this controller treats the console as the
-//  source of truth: it ingests broadcast updates (including changes made in the
-//  WING Co-Pilot app) and can re-query nodes on demand to stay in sync.
-//
 
 import Foundation
 import Observation
@@ -35,6 +31,7 @@ final class WingController {
     /// Values received from the console or demo transport. Unlike `values`,
     /// this never treats an attempted local SET as proof that hardware applied it.
     private(set) var confirmedValues: [String: WingValue] = [:]
+    private(set) var confirmedNameRevision = 0
     private(set) var confirmedReceivedAt: [String: Date] = [:]
     private(set) var sessionID: UUID?
     private var transportSessionID: UUID?
@@ -420,13 +417,14 @@ final class WingController {
 
     /// Closed channel/main fader-or-mute surface, never exposed to model tools.
     func setConfirmedMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool,
-                                session: UUID) async -> Bool {
+                                session: UUID, authorization: WingMixerWriteAuthorization) async -> Bool {
         guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session,
               Self.isValidMixerValue(node, value: value, muted: muted),
               let transportSessionID else { return false }
         transportWriteCount += 1
         do {
-            try await transport.sendMixerValue(node, value: value, muted: muted, sessionID: transportSessionID)
+            try await transport.sendMixerValue(node, value: value, muted: muted,
+                                               sessionID: transportSessionID, authorization: authorization)
             if sessionID == session {
                 let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
                 values[address] = value
@@ -453,6 +451,9 @@ final class WingController {
               isDemo || (transportSessionID != nil && message.transportSessionID == transportSessionID
                   && peerHosts.contains(message.host) && message.port == port),
               let value = message.effectiveValue else { return }
+        if message.address.hasSuffix("/name"), confirmedValues[message.address] != value {
+            confirmedNameRevision += 1
+        }
         values[message.address] = value
         confirmedValues[message.address] = value
         confirmedReceivedAt[message.address] = message.receivedAt

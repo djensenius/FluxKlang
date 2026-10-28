@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 extension AppModel {
     func configureAssistantMixer() {
@@ -51,6 +52,7 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
             !Task.isCancelled && controller() === wing && wing.sessionID == session
                 && wing.connection.isConnected && layout().strips == originalLayout
         }
+        let evidenceDeadline = ContinuousClock.now.advanced(by: timeout)
         var names: [Int: String] = [:]
         if case .liveName = command.target {
             let addresses = (1...40).map { WingAddress.name(.channel, $0) }
@@ -96,6 +98,10 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
                 return "No changes: the target name or uniqueness changed during the fresh read."
             }
         }
+        if case .adjustDB = command.operation, let position = baseline[valueAddress]?.floatValue,
+           FaderMath.isOff(position: position) {
+            return "No changes: this fader is off (−∞), not a finite dB baseline. Set an explicit absolute level first."
+        }
         guard let expected = Self.expectedValue(for: command.operation, baseline: baseline[valueAddress]) else {
             return "No changes: invalid fresh baseline or resulting level outside -90...+10 dB. "
                 + "Relative changes are rejected, not clamped."
@@ -103,7 +109,17 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
         guard current() else {
             return "No changes: the controller, session or layout changed, or the request was cancelled."
         }
-        let sent = await wing.setConfirmedMixerValue(node, value: expected, muted: isMute, session: session)
+        let authorization = WingMixerWriteAuthorization(deadline: evidenceDeadline)
+        defer { authorization.invalidate() }
+        let authorized = withObservationTracking {
+            _ = wing.confirmedNameRevision
+            return current()
+        } onChange: { authorization.invalidate() }
+        guard authorized else { return "No changes: the target changed before authorization." }
+        let sent = await withTaskCancellationHandler {
+            await wing.setConfirmedMixerValue(node, value: expected, muted: isMute,
+                                             session: session, authorization: authorization)
+        } onCancel: { authorization.invalidate() }
         // UDP send failure does not prove that the console did not act.
         guard sent else {
             return "Mixer send failed or was cancelled; the hardware outcome is unconfirmed. No retry was attempted."
@@ -117,11 +133,19 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
                 "Mixer command was sent once, but its outcome could not be confirmed "
                 + "(session, target, cancellation or timeout). Check the console; no retry or rollback was attempted."
         }
+        return Self.confirmedOutcome(node: node, expected: expected,
+                                     actual: confirmed[valueAddress], isMute: isMute)
+    }
+
+    private static func confirmedOutcome(node: WingNodeRef, expected: WingValue,
+                                         actual: WingValue?, isMute: Bool) -> String {
         let matches: Bool
         if isMute {
-            matches = confirmed[valueAddress]?.intValue == expected.intValue
-        } else if let actual = confirmed[valueAddress]?.floatValue, let desired = expected.floatValue {
-            matches = actual.isFinite && abs(actual - desired) <= 0.001
+            matches = actual?.intValue == expected.intValue
+        } else if let actual = actual?.floatValue, let desired = expected.floatValue {
+            matches = actual.isFinite && (0...1).contains(actual)
+                && FaderMath.isOff(position: actual) == FaderMath.isOff(position: desired)
+                && abs(actual - desired) <= 0.001
         } else {
             matches = false
         }
@@ -134,7 +158,9 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
         if isMute {
             action = expected.intValue == 1 ? "muted" : "unmuted"
         } else {
-            action = String(format: "%.1f dB", FaderMath.decibels(fromPosition: expected.floatValue!))
+            let position = expected.floatValue!
+            action = FaderMath.isOff(position: position) ? "off (−∞ dB; minimum fader position)"
+                : String(format: "%.1f dB", FaderMath.decibels(fromPosition: position))
         }
         return
             "Confirmed WING \(node.defaultLabel): \(action) from a fresh readback. "
@@ -151,6 +177,7 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
             else { return nil }
             let decibels: Float
             if case .adjustDB = operation {
+                guard !FaderMath.isOff(position: position) else { return nil }
                 decibels = FaderMath.decibels(fromPosition: position) + amount
             } else { decibels = amount }
             guard decibels.isFinite, (-90...10).contains(decibels) else { return nil }

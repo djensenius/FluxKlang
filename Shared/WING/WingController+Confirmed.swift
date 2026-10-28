@@ -56,7 +56,7 @@ extension WingController {
         return nil
     }
 
-    static func isValidMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool) -> Bool {
+    nonisolated static func isValidMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool) -> Bool {
         guard node.kind == .channel || node.kind == .main,
               (1...node.kind.count).contains(node.index) else { return false }
         if muted { return value.intValue.map { $0 == 0 || $0 == 1 } ?? false }

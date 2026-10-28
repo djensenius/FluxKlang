@@ -6,10 +6,19 @@ import Testing
 @MainActor
 struct AssistantMixerChatTests {
     @Test func explicitSubmissionInterceptsEveryProviderBeforeRoutingAndCannotRetryAfterReload() async throws {
-        for _ in AssistantProvider.allCases {
+        for provider in AssistantProvider.allCases {
             let backend = AssistantBackendHistoryStore()
             let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
-            let generator = AssistantBackendGenerator()
+            let apple = AssistantBackendGenerator()
+            let fallback = AssistantBackendGenerator()
+            let http = AssistantMixerHTTPSpy()
+            let defaultsName = "assistant-mixer-router-\(UUID().uuidString)"
+            let defaults = try #require(UserDefaults(suiteName: defaultsName))
+            defer { defaults.removePersistentDomain(forName: defaultsName) }
+            let settings = AssistantProviderSettings(defaults: defaults, credentials: AssistantMixerTestCredentials())
+            settings.provider = provider
+            let generator = ConfigurableAssistantGenerator(settings: settings, coordinator: coordinator,
+                appleGenerator: apple, fallback: fallback, httpClient: http)
             let executor = AssistantRecordingMixerExecutor()
             let store = AssistantConversationStore(local: backend, cloud: nil)
             let chat = AssistantChatController(coordinator: coordinator, store: store, generator: generator)
@@ -19,12 +28,18 @@ struct AssistantMixerChatTests {
             chat.send(context: AssistantBackendFixture.context())
             try await AssistantBackendFixture.wait { !chat.isStreaming }
             #expect(executor.commands.count == 1)
-            #expect(generator.calls == 0)
+            #expect(apple.calls == 0)
+            #expect(fallback.calls == 0)
+            #expect(await http.calls == 0)
+            #expect(coordinator.pendingStudioDraft == nil)
             #expect(chat.selectedConversation?.messages.last?.text == "Recorded outcome, not model prose")
             let response = try #require(chat.selectedConversation?.messages.last)
             chat.retry(messageID: response.id, context: AssistantBackendFixture.context())
             #expect(executor.commands.count == 1)
-            #expect(generator.calls == 0)
+            #expect(apple.calls == 0)
+            #expect(fallback.calls == 0)
+            #expect(await http.calls == 0)
+            #expect(coordinator.pendingStudioDraft == nil)
             let conversation = try #require(chat.selectedConversation)
             await store.save(conversation)
             let restored = AssistantChatController(coordinator: coordinator, store: store, generator: generator)
@@ -59,6 +74,51 @@ struct AssistantMixerChatTests {
         try await AssistantBackendFixture.wait { !chat.isStreaming }
         #expect(executor.commands.isEmpty)
         #expect(generator.calls == 1)
+    }
+
+    @Test func allUnsafeMixerCasesBlockEveryProviderAndMakeZeroActualTransportWrites() async throws {
+        let transport = AssistantRecordingWingTransport()
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        let generator = AssistantBackendGenerator()
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator)
+        chat.spokenRepliesEnabled = false
+        chat.mixerExecutor = AssistantMixerExecutor(controller: { wing }, layout: { FaderLayout() })
+        var context = AssistantBackendFixture.context()
+        context.liveWing.sessionID = wing.sessionID
+        for text in AssistantMixerRejectionCases.texts {
+            chat.composer = text
+            chat.send(context: context)
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(await transport.writes.isEmpty)
+            #expect(wing.transportWriteCount == 0)
+            #expect(generator.calls == 0)
+            #expect(coordinator.pendingStudioDraft == nil)
+        }
+        await wing.disconnect()
+    }
+
+    @Test func ordinaryHelpInventoryAndRoutingWithMixerWordsKeepTheirHandlingAndNeverExecuteMixer() async throws {
+        let gear = Equipment(name: "Lower Synth")
+        let context = AssistantBackendFixture.context(equipment: [gear],
+            inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let generator = AssistantBackendGenerator()
+        let executor = AssistantRecordingMixerExecutor()
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator)
+        chat.spokenRepliesEnabled = false
+        chat.mixerExecutor = executor
+        for text in ["help me set up my studio", "list equipment named Volume", "route Lower Synth to speakers"] {
+            chat.composer = text
+            chat.send(context: context)
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(executor.commands.isEmpty)
+        }
+        #expect(generator.calls == 1)
+        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
     }
 
     @Test func cancellationDoesNotReplayAndMissingExecutorIsTruthful() async throws {
@@ -121,4 +181,18 @@ actor AssistantBackendHistoryStore: AssistantHistoryBackend {
     var records: [UUID: AssistantConversationRecord] = [:]
     func loadRecords() -> [AssistantConversationRecord] { Array(records.values) }
     func save(_ record: AssistantConversationRecord) { records[record.id] = record }
+}
+
+private struct AssistantMixerTestCredentials: AssistantCredentialStore {
+    func value(for account: String) -> String? { "offline-test-token" }
+    func setValue(_ value: String, for account: String) throws {}
+    func removeValue(for account: String) throws {}
+}
+
+private actor AssistantMixerHTTPSpy: AssistantHTTPClient {
+    private(set) var calls = 0
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        calls += 1
+        throw BackendTestError.send
+    }
 }

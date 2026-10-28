@@ -22,7 +22,8 @@ protocol WingTransporting: Sendable {
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async throws
 
     /// Atomically checks the transport generation before a conversational SET.
-    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) async throws
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) async throws
 
     /// Closes the transport and stops receiving.
     func stop() async
@@ -35,7 +36,8 @@ protocol WingTransporting: Sendable {
 extension WingTransporting {
     var sessionID: UUID? { get async { nil } }
     var peerHosts: Set<String> { get async { [] } }
-    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) async throws {
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) async throws {
         throw WingTransportError.notStarted
     }
 

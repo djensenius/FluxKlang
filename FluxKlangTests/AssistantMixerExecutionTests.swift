@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 
 @testable import FluxKlang
@@ -46,10 +47,120 @@ struct AssistantMixerExecutionTests {
     @Test func mainUsesFaderLawAndNamedMonoRequiresFreshUniqueIdentity() async {
         let (wing, transport) = await connected()
         let main = await executor(wing).execute(.init(target: .main(1), operation: .setDB(-90)))
-        #expect(main.contains("Confirmed WING Main 1"))
+        #expect(main.contains("Confirmed WING Main 1: off (−∞ dB; minimum fader position)"))
+        #expect(!main.contains("-90.0 dB"))
         #expect(await transport.writes.last?.value == .float(-144))
         let named = await executor(wing).execute(.init(target: .liveName("Lead"), operation: .adjustDB(-3)))
         #expect(named.contains("Confirmed WING Channel 7"))
+        await wing.disconnect()
+    }
+
+    @Test func writeAuthorizationIsSingleUseEvenAfterSuccessfulSend() throws {
+        let authorization = WingMixerWriteAuthorization(deadline: ContinuousClock.now.advanced(by: .seconds(1)))
+        var actualWrites = 0
+        try authorization.consume { actualWrites += 1 }
+        #expect(throws: WingTransportError.notAuthorized) {
+            try authorization.consume { actualWrites += 1 }
+        }
+        #expect(actualWrites == 1)
+    }
+
+    @Test func relativeFromOffRejectsWithoutInventingFiniteBaseline() async {
+        let (wing, transport) = await connected()
+        await transport.put("/ch/7/fdr", .float(0))
+        for delta: Float in [-3, 3] {
+            let reply = await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(delta)))
+            #expect(reply.contains("off (−∞)"))
+            #expect(reply.contains("absolute level"))
+        }
+        #expect(await transport.writes.isEmpty)
+        #expect(wing.transportWriteCount == 0)
+        await wing.disconnect()
+    }
+
+    @Test func finalSendAuthorizationIsRevokedBeforeAnyActualWrite() async throws {
+        // Cancellation, expiry, socket session, active controller, layout and
+        // confirmed-name invalidation while the final send is already queued.
+        for scenario in 0...6 {
+            let (wing, transport) = await connected()
+            let state = AssistantMixerTestState(wing: wing)
+            let executor = AssistantMixerExecutor(controller: { state.wing }, layout: { state.layout },
+                                                  timeout: .seconds(1))
+            await transport.pauseMixerSend()
+            let task = Task { await executor.execute(.init(target: .channel(7), operation: .adjustDB(-3))) }
+            try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
+            switch scenario {
+            case 0: task.cancel()
+            case 1: try await Task.sleep(for: .milliseconds(1100))
+            case 2: await wing.disconnect()
+            case 3: state.wing = WingController(transport: AssistantRecordingWingTransport())
+            case 4:
+                let original = state.layout
+                state.layout = FaderLayout(strips: [.init(node: .channel(8))])
+                state.layout = original
+            case 5: await transport.start(remoteHost: "192.0.2.10", localPort: nil, broadcast: false)
+            default:
+                await transport.emit("/ch/7/name", .string("Renamed"))
+                try await AssistantBackendFixture.wait { wing.confirmedValues["/ch/7/name"] == .string("Renamed") }
+            }
+            await transport.releaseMixerSend()
+            let reply = await task.value
+            #expect(!reply.contains("Confirmed WING"))
+            #expect(await transport.writes.isEmpty)
+            await wing.disconnect()
+        }
+    }
+
+    @Test func renameOrDuplicateBetweenDiscoveryAndBaselineNeverWrites() async throws {
+        for renameSelected in [false, true] {
+            let (wing, transport) = await connected()
+            await transport.pauseBaselineAfterNameDiscovery()
+            let task = Task { await executor(wing).execute(.init(target: .liveName("Lead"), operation: .mute(true))) }
+            try await AssistantBackendFixture.waitAsync { await transport.queryWaiting }
+            let address = renameSelected ? "/ch/7/name" : "/ch/8/name"
+            let value = WingValue.string(renameSelected ? "Renamed" : "Lead")
+            await transport.put(address, value)
+            await transport.emit(address, value)
+            try await AssistantBackendFixture.wait { wing.confirmedValues[address] == value }
+            await transport.releaseQueries()
+            let reply = await task.value
+            #expect(!reply.contains("Confirmed WING"))
+            #expect(await transport.writes.isEmpty)
+            #expect(wing.transportWriteCount == 0)
+            await wing.disconnect()
+        }
+    }
+
+    @Test func sessionOrNameChangeAfterSetIsUnconfirmedWithExactlyOneActualWrite() async throws {
+        for changeSession in [false, true] {
+            let (wing, transport) = await connected()
+            await transport.pauseReadback()
+            let task = Task { await executor(wing).execute(.init(target: .channel(7), operation: .setDB(-12))) }
+            try await AssistantBackendFixture.waitAsync { await transport.queryWaiting }
+            #expect(await transport.writes.count == 1)
+            if changeSession { await wing.disconnect() } else {
+                await transport.put("/ch/7/name", .string("Renamed"))
+                await transport.emit("/ch/7/name", .string("Renamed"))
+                try await AssistantBackendFixture.wait { wing.confirmedValues["/ch/7/name"] == .string("Renamed") }
+            }
+            await transport.releaseQueries()
+            let reply = await task.value
+            #expect(reply.contains("could not be confirmed"))
+            #expect(!reply.contains("Confirmed WING"))
+            #expect(await transport.writes.count == 1)
+            await wing.disconnect()
+        }
+    }
+
+    @Test func realisticMultiValueReplyDecodingProvidesFreshEngineeringBaseline() async throws {
+        let (wing, transport) = await connected()
+        let reply = await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(-3)))
+        #expect(reply.contains("Confirmed WING Channel 7: -3.0 dB"))
+        #expect(await transport.writes.last?.value == .float(-3))
+        let mute = await executor(wing).execute(.init(target: .channel(7), operation: .mute(true)))
+        #expect(mute.contains("Confirmed WING Channel 7: muted"))
+        #expect(wing.confirmedValues["/ch/7/mute"] == .int(1))
+        #expect(wing.confirmedValues["/ch/7/fdr"]?.floatValue == FaderMath.position(fromDecibels: -3))
         await wing.disconnect()
     }
 
@@ -190,6 +301,7 @@ struct AssistantMixerExecutionTests {
 }
 
 @MainActor
+@Observable
 private final class AssistantMixerTestState {
     var wing: WingController
     var layout = FaderLayout()

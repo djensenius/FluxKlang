@@ -31,6 +31,14 @@ enum AssistantBackendFixture {
         return result
     }
 
+    static func waitAsync(_ condition: @MainActor () async -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await condition()) {
+            guard ContinuousClock.now < deadline else { throw BackendTestError.timeout }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     static func wait(_ condition: @MainActor () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while !condition() {
@@ -61,6 +69,14 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var failsWrites = false
     private var mismatchesWrites = false
     private var queryDelay: Duration = .zero
+    private var gateMixerSend = false
+    private(set) var mixerSendWaiting = false
+    private var mixerSendGate: CheckedContinuation<Void, Never>?
+    private var gateBaselineAfterNames = false
+    private var namesRead: Set<String> = []
+    private var gateReadback = false
+    private(set) var queryWaiting = false
+    private var queryGates: [CheckedContinuation<Void, Never>] = []
 
     init() {
         (incoming, continuation) = AsyncStream.makeStream()
@@ -87,22 +103,64 @@ actor AssistantRecordingWingTransport: WingTransporting {
         mismatchesWrites = mismatch
         queryDelay = delay
     }
+    func pauseMixerSend() { gateMixerSend = true }
+    func releaseMixerSend() {
+        gateMixerSend = false
+        mixerSendGate?.resume()
+        mixerSendGate = nil
+    }
+    func pauseBaselineAfterNameDiscovery() { gateBaselineAfterNames = true; namesRead = [] }
+    func pauseReadback() { gateReadback = true }
+    func releaseQueries() {
+        gateBaselineAfterNames = false
+        gateReadback = false
+        let waiting = queryGates
+        queryGates = []
+        waiting.forEach { $0.resume() }
+    }
     func put(_ address: String, _ value: WingValue) { values[address] = value }
     func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async throws {
         if let value {
-            writes.append(WingSetting(address: address, value: value))
-            if failsWrites { throw BackendTestError.send }
-            if !mismatchesWrites { values[address] = value.decodedFromWingSet(address: address) }
+            try recordWrite(address, value)
         } else {
             guard answersQueries, writes.isEmpty || answersAfterWrite else { return }
+            if address.hasPrefix("/ch/"), address.hasSuffix("/name") { namesRead.insert(address) }
+            if (gateBaselineAfterNames && namesRead.count == 40 && ["/ch/7/fdr", "/ch/7/mute"].contains(address))
+                || (gateReadback && !writes.isEmpty) {
+                queryWaiting = true
+                await withCheckedContinuation { queryGates.append($0) }
+            }
             if queryDelay != .zero { try await Task.sleep(for: queryDelay) }
-            if let value = values[address] { emit(address, value) }
+            if let value = values[address] { emitQuery(address, value) }
         }
     }
-    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID) async throws {
-        guard self.sessionID == sessionID else { throw BackendTestError.send }
-        let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
-        try await send(address, value.encodedForWing(address: address), to: nil, port: nil)
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) async throws {
+        if gateMixerSend {
+            mixerSendWaiting = true
+            await withCheckedContinuation { mixerSendGate = $0 }
+        }
+        try authorization.consume {
+            guard self.sessionID == sessionID else { throw BackendTestError.send }
+            let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
+            try recordWrite(address, value.encodedForWing(address: address))
+        }
+    }
+    private func recordWrite(_ address: String, _ value: WingValue) throws {
+        writes.append(WingSetting(address: address, value: value))
+        if failsWrites { throw BackendTestError.send }
+        if !mismatchesWrites { values[address] = value.decodedFromWingSet(address: address) }
+    }
+    private func emitQuery(_ address: String, _ value: WingValue) {
+        let reply: [WingValue]
+        if address.hasSuffix("/fdr"), let position = value.floatValue {
+            reply = [.string(FaderMath.label(forPosition: position)), .float(position),
+                     .float(FaderMath.decibels(fromPosition: position))]
+        } else if address.hasSuffix("/mute"), let muted = value.intValue {
+            reply = [.string(muted == 1 ? "ON" : "OFF"), .float(Float(muted)), .int(muted)]
+        } else { reply = [value] }
+        continuation.yield(WingIncoming(address: address, values: reply, host: "192.0.2.10",
+            port: WingNetwork.defaultPort, transportSessionID: sessionID))
     }
     func emit(
         _ address: String, _ value: WingValue, host: String = "192.0.2.10",
