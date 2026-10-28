@@ -28,10 +28,14 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         guard let prompt = Self.prompt(request) else {
             return .clarification("No changes were made. Shorten this request to fit the on-device input budget.")
         }
-        if AssistantActionInterpretationAdapter.isNonActionSubmission(request.text) { return .answer }
+        if !AssistantRoutingOwnership.owns(request.text),
+           AssistantActionInterpretationAdapter.isNonActionSubmission(request.text) { return .answer }
         #if canImport(FoundationModels)
         guard #available(iOS 27, macOS 27, *) else { throw InterpretationError.unavailable }
         guard await availability() == .available else { throw InterpretationError.unavailable }
+        if AssistantRoutingOwnership.owns(request.text) {
+            return try await interpretRouting(request.text)
+        }
         let session = LanguageModelSession(
             model: SystemLanguageModel.default, tools: [], instructions: Self.instructions)
         // Never publish partial generated snapshots. Completed content is still untrusted evidence.
@@ -65,6 +69,32 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         #endif
     }
 
+    #if canImport(FoundationModels)
+    @available(iOS 27, macOS 27, *)
+    private func interpretRouting(_ text: String) async throws -> AssistantActionInterpretation {
+        let session = LanguageModelSession(
+            model: SystemLanguageModel.default, tools: [], instructions: Self.routingInstructions)
+        let content = try await session.respond(to: text, generating: GuidedRoutingOutput.self,
+            options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 1_600)).content
+        try Task.checkCancellation()
+        switch content {
+        case .answer, .clarification:
+            return .clarification(AssistantRoutingOwnership.clarification)
+        case .routing(let routing):
+            let intent = AssistantRoutingIntent(
+                branches: routing.branches.map { branch in
+                    AssistantRoutingIntent.Branch(
+                        source: branch.source, effects: branch.effects, destination: branch.destination,
+                        destinationEvidence: branch.destinationEvidence,
+                        processingEvidence: branch.processingEvidence,
+                        includesDrySignal: branch.includesDrySignal, dryEvidence: branch.dryEvidence)
+                }, replacesSetup: routing.replacesSetup, modeEvidence: routing.modeEvidence,
+                excludedMentions: routing.excludedMentions, exclusionEvidence: routing.exclusionEvidence)
+            return AssistantRoutingInterpretationAdapter.validate(intent, text: text)
+        }
+    }
+    #endif
+
     enum InterpretationError: Error { case unavailable }
 
     private static let instructions = """
@@ -77,6 +107,40 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         Percent means absolute 0...100 fader travel, not gain or perceived loudness. dB amounts require dB.
         addPhrase is the copied add verb or empty string if no add was requested. actionPhrase is the
         copied volume/mute clause, separate from addPhrase. All proposals require deterministic review.
+        """
+
+    private static let routingInstructions = """
+        Interpret the user's physical routing request. Choose routing for a complete plan, clarification if unclear.
+        Never execute anything. Never fill in hardware IDs. Only the current text is evidence.
+        Copy ALL names and evidence EXACTLY from the input, preserving punctuation and spelling.
+        Evidence is a SUBSTRING of the input, never a rewritten path or arrows.
+        Make exactly one branch per instrument, each with its own destination and ordered effects.
+        A group destination applies to each member. A later source-specific through modifier changes ONLY
+        that source's effects. It does NOT create another direct path or apply to other sources.
+        destinationEvidence: copy the input clause containing this source AND its destination. For a group,
+        copy the SAME group clause for each member. processingEvidence: copy the source-specific through
+        clause containing that source and its effects. Empty string for direct paths.
+        includesDrySignal: FALSE by default, including all direct paths. Through means processed ONLY.
+        True ONLY when explicitly asking for both dry and wet signal; copy that source's clause as dryEvidence.
+        dryEvidence: empty string unless BOTH dry and wet were explicitly requested.
+        replacesSetup: FALSE by default. 'only' does not mean replace the setup.
+        modeEvidence: empty string unless explicit setup-level replacement was requested.
+        excludedMentions/exclusionEvidence: empty arrays unless the user excludes something; copy negative
+        clauses and names without adding them as positive branches.
+        Ambiguous references, parallel effects, unclear order, blend ratios, or a request that ALSO changes
+        mixer volume require clarification of the WHOLE request. Never return only a supported subset.
+
+        Example input: I want to use Atlas and Luna on mains, with Luna going through Echo, \
+        and I'd like my Vega going out the desktop speakers.
+        Example routing branches:
+        source="Atlas", effects=[], destination="mains", destinationEvidence="Atlas and Luna on mains",
+        processingEvidence="", includesDrySignal=false, dryEvidence=""
+        source="Luna", effects=["Echo"], destination="mains", destinationEvidence="Atlas and Luna on mains",
+        processingEvidence="Luna going through Echo", includesDrySignal=false, dryEvidence=""
+        source="Vega", effects=[], destination="desktop speakers", \
+        destinationEvidence="Vega going out the desktop speakers",
+        processingEvidence="", includesDrySignal=false, dryEvidence=""
+        Example remaining fields: replacesSetup=false, modeEvidence="", excludedMentions=[], exclusionEvidence=[]
         """
 
     // Leave room for instructions, generated schema and completed output in the model's context window.
@@ -125,4 +189,47 @@ private struct GeneratedActionProposal {
            .anyOf(["none", "lower", "raise", "setDB", "setFaderPercent", "mute", "unmute"]))
     var action: String
 }
+
+@available(iOS 27, macOS 27, *)
+@Generable(description: "A complete routing interpretation or a non-actionable clarification.")
+private enum GuidedRoutingOutput {
+    case answer
+    case clarification(question: String)
+    case routing(GeneratedRoutingIntent)
+}
+
+@available(iOS 27, macOS 27, *)
+@Generable(description: "Complete independent physical routes. No IDs, channels or cable coordinates.")
+private struct GeneratedRoutingIntent {
+    @Guide(description: "ALL source instruments, one branch per instrument, including direct paths.", .count(1...8))
+    var branches: [GeneratedRoutingBranch]
+    @Guide(description: "False for append, even when only modifies a source; true only for explicit setup replacement.")
+    var replacesSetup: Bool
+    var modeEvidence: String
+    var excludedMentions: [String]
+    var exclusionEvidence: [String]
+}
+
+@available(iOS 27, macOS 27, *)
+@Generable(description: "Exactly one source, its ordered processing, and one destination; all strings copied verbatim.")
+private struct GeneratedRoutingBranch {
+    @Guide(description: "ONLY the source instrument name copied exactly, not a clause or destination.")
+    var source: String
+    @Guide(description: "ONLY effect device names in signal order, NOT verbs or destinations. "
+           + "Empty array for direct paths.", .maximumCount(3))
+    var effects: [String]
+    @Guide(description: "ONLY this source's speaker destination copied exactly; keep desktop/desk qualifiers.")
+    var destination: String
+    @Guide(description: "Copied group or single-source clause containing this source AND its destination.")
+    var destinationEvidence: String
+    @Guide(description: "EXACT input substring including ALL intervening words (such as going). "
+           + "Empty for direct paths.")
+    var processingEvidence: String
+    @Guide(description: "FALSE unless explicitly requesting BOTH dry and wet/processed signal. "
+           + "Direct paths also FALSE.")
+    var includesDrySignal: Bool
+    @Guide(description: "Empty string unless both dry and wet were explicitly requested; otherwise copy source clause.")
+    var dryEvidence: String
+}
+
 #endif

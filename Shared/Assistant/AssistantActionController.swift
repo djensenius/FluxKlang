@@ -72,6 +72,7 @@ final class AssistantActionController: AssistantActionPlanning {
         latestResult = nil
         switch interpretation {
         case .answer: return .answer
+        case .routing: return .clarification(AssistantRoutingOwnership.clarification)
         case .clarification(let message): return .clarification(message)
         case .proposal(let intent):
             guard !confirming else {

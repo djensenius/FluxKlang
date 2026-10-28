@@ -103,7 +103,7 @@ struct SiriAppIntentsTests {
         #expect(model.wing.transportWriteCount == writesBefore)
     }
 
-    @Test func naturalLanguageSiriRequestParsesSpokenWiringToSpeakers() async throws {
+    @Test func unavailableAppleNaturalSiriNeverUsesLegacyWiringParser() async throws {
         let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
         let model = AppModel(assistant: coordinator, wing: .preview())
         let source = model.equipment.items[0]
@@ -116,16 +116,13 @@ struct SiriAppIntentsTests {
 
         let spoken = await SiriDraftStudioAction.execute(
             request: "Tell Flux Klang to wire \(source.name) through Tape Delay to speakers",
-            model: model
+            model: model,
+            interpreter: AssistantUnavailableActionInterpreter(reason: "disabled for deterministic test")
         )
 
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [source.id])
-        #expect(draft.request.effectChainIDs == [effect.id])
-        #expect(draft.request.destination == .finalMix)
-        #expect(spoken.contains("Drafted \(source.name)"))
-        #expect(model.section == .studio)
-        #expect(coordinator.navigationTarget == .reviewPendingDraft)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(spoken == AssistantRoutingOwnership.clarification)
+        #expect(coordinator.navigationTarget == nil)
         #expect(model.environments.activeStudioGraph == beforeGraph)
         #expect(model.wing.values == beforeValues)
         #expect(model.wing.transportWriteCount == writesBefore)

@@ -146,7 +146,7 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
-    @Test func completeWiringRequestBypassesModelConfirmation() async throws {
+    @Test func legacyPreflightCannotBypassAppleRoutingPreparation() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
         let astrolab = Equipment(name: "AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
@@ -195,11 +195,11 @@ struct AssistantReliabilityTests {
         }
 
         #expect(!text.contains("Please confirm"))
-        #expect(text.contains("SOMA Flux + AstroLab 88 → Main Speakers"))
-        #expect(coordinator.pendingStudioDraft?.applicationMode == .replace)
+        #expect(text == AssistantRoutingOwnership.clarification)
+        #expect(coordinator.pendingStudioDraft == nil)
     }
 
-    @Test func inventoryAndFollowUpAmendmentBypassModelGuessing() async throws {
+    @Test func inventoryRemainsGroundedButFollowUpCannotReconstructOldRouting() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
         let astrolab = Equipment(name: "Arturia AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
@@ -255,8 +255,8 @@ struct AssistantReliabilityTests {
 
         #expect(inventory.contains("Saved equipment (not connected-equipment detection):"))
         #expect(inventory.contains("Arturia AstroLab 88 (WING inputs 21/22)"))
-        #expect(amended.contains("SOMA Flux + Arturia AstroLab 88 → Main Speakers"))
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [flux.id, astrolab.id])
+        #expect(amended == "I do not know your gear.")
+        #expect(coordinator.pendingStudioDraft == nil)
     }
 
     private func emptyContext() -> AssistantToolContext {

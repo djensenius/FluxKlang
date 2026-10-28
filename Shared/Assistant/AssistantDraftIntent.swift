@@ -461,12 +461,17 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        if AssistantRoutingOwnership.owns(request.question) {
+            return textStream(AssistantRoutingOwnership.clarification)
+        }
         if AssistantDraftIntent.requestsInventory(request.question) {
             return inventoryStream(context: request.context)
         }
+        if AssistantActionInterpretationAdapter.isReadOnlyQuestion(request.question) {
+            return downstream.stream(request)
+        }
         let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
-        if let clarification = resolution.clarification { return textStream(clarification) }
-        if let clarification = AssistantDraftIntent.clarification(from: request) {
+        if let clarification = resolution.clarification ?? AssistantDraftIntent.clarification(from: request) {
             return textStream(clarification)
         }
         if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {

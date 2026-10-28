@@ -3,6 +3,7 @@ import Foundation
 extension AppModel {
     func configureAssistantActions() {
         assistantChat.actionPlanner = assistantActions
+        assistantChat.currentRoutingContext = { [weak self] in self?.assistantToolContext() }
     }
 
     func makeAssistantActionController() -> AssistantActionController {

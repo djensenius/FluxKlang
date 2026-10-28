@@ -29,6 +29,7 @@ enum AssistantActionInterpretation: Equatable, Sendable {
     case answer
     case clarification(String)
     case proposal(AssistantActionIntent)
+    case routing(AssistantRoutingIntent)
 }
 
 struct AssistantActionIntent: Equatable, Sendable {

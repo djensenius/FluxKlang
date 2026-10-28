@@ -9,7 +9,7 @@ import FoundationModels
 @Suite(.serialized)
 struct AssistantSourceResolutionRegressionTests {
     @Test(arguments: ["Help me route Synth through Echo to speakers.", "How do I connect Synth to speakers?"])
-    func savedSourcesRemainAvailableToHelpAndHowRoutingRequests(_ question: String) async throws {
+    func savedSourcesRemainInspectableButQuestionsCannotCreateDrafts(_ question: String) async throws {
         let synth = Equipment(name: "Synth")
         var context = AssistantBackendFixture.context(equipment: [synth], inputs: [
             .init(connector: 7, equipmentID: synth.id, outputPort: 0)
@@ -22,8 +22,8 @@ struct AssistantSourceResolutionRegressionTests {
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(request) {}
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
-        #expect(provider.calls == 0)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 1)
     }
 
     @Test func explicitDraftToolResolutionCanUseLiveAliasWithoutBroadInformationalClarification() {
@@ -44,7 +44,7 @@ struct AssistantSourceResolutionRegressionTests {
     #if canImport(FoundationModels)
     @Test(arguments: ["Help me route Synth to speakers.", "How do I connect Synth to speakers?",
                       "Help me route Lead to speakers.", "What EQ is on Lead?"])
-    func foundationDraftToolPreservesSavedAndLiveSourceResolution(_ question: String) async throws {
+    func retiredFoundationDraftToolCannotMutateFromSavedOrLiveMentions(_ question: String) async throws {
         let synth = Equipment(name: "Synth")
         let context = AssistantBackendFixture.observe([WingAddress.inputName(7): .string("Lead")],
             context: AssistantBackendFixture.context(equipment: [synth], inputs: [
@@ -55,8 +55,7 @@ struct AssistantSourceResolutionRegressionTests {
                                                coordinator: coordinator, authorizer: .model)
         _ = try await tool.call(arguments: AssistantDraftArguments(sourceNames: ["Synth"],
             effectNames: [], destination: "Final Mix"))
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
-        if question.contains("Lead") { #expect(coordinator.pendingStudioDraft?.liveReferences?.count == 1) }
+        #expect(coordinator.pendingStudioDraft == nil)
     }
     #endif
 

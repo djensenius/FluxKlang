@@ -152,7 +152,7 @@ enum StudioWiringAdvisor {
         currentGraph: StudioGraph,
         currentEnvironmentID: RoutingEnvironment.ID?
     ) -> StudioPatchDraft {
-        var refreshed = makeDraft(
+        var refreshed = build(
             request: StudioWiringRequest(
                 sourceInstrumentIDs: draft.request.sourceInstrumentIDs,
                 effectChainIDs: draft.request.effectChainIDs,
@@ -166,10 +166,20 @@ enum StudioWiringAdvisor {
             effects: effects,
             connections: connections,
             currentGraph: currentGraph,
-            environmentID: draft.request.environmentID,
-            currentEnvironmentID: currentEnvironmentID
+            environmentID: draft.request.environmentID
         )
+        refreshed.id = draft.id
         refreshed.createdAt = draft.createdAt
+        refreshed.liveReferences = draft.liveReferences
+        refreshed.outputReferences = draft.outputReferences
+        if draft.request.environmentID != currentEnvironmentID {
+            refreshed.validation.append(.error(
+                "environment-changed", "This draft belongs to a different Studio environment."))
+        }
+        if !(draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: connections.effectiveHome) }) {
+            refreshed.validation.append(.error("destination-changed",
+                "A configured speaker group changed. Create a new draft rather than reusing old output connectors."))
+        }
         return refreshed
     }
 
@@ -391,8 +401,12 @@ enum StudioWiringAdvisor {
                 usesActiveTemporaryMove: moved
             ))
         }
-        if request.destination == .finalMix {
-            for connection in mainSpeakerOutputs(in: effective) {
+        if request.destination == .finalMix || request.destination == .custom {
+            let selected = request.outputConnectors.map(Set.init)
+            let destinationOutputs = selected.map { connectors in
+                effective.outputs.filter { connectors.contains($0.outputConnector) }
+            } ?? (request.destination == .finalMix ? mainSpeakerOutputs(in: effective) : [])
+            for connection in destinationOutputs {
                 let label = connection.label(equipment: equipment)
                 instructions.append(StudioCableInstruction(
                     id: "destination-\(connection.bank.rawValue)-\(connection.connector)",

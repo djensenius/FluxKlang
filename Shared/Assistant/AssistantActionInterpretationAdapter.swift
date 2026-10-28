@@ -136,6 +136,9 @@ enum AssistantActionInterpretationAdapter {
     static func fallback(
         _ request: AssistantActionInterpretationRequest, reason: String
     ) -> AssistantActionInterpretation {
+        if AssistantRoutingOwnership.owns(request.text) {
+            return .clarification(AssistantRoutingOwnership.clarification)
+        }
         if isNonActionSubmission(request.text) { return .answer }
         switch AssistantMixerIntent.parse(request.text) {
         case .command(let command): return exactProposal(command, request: request)

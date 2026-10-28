@@ -31,6 +31,7 @@ struct StudioWiringRequest: Hashable, Sendable {
     var additionalRoutes: [StudioWiringRoute]
     var applicationMode: StudioDraftApplicationMode
     var liveReferences: [AssistantLiveReference] = []
+    var outputReferences: [AssistantRoutingOutputReference] = []
 
     init(
         sourceInstrumentIDs: [Equipment.ID],
@@ -118,11 +119,12 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
     var validation: [StudioDraftValidationIssue]
     var applicationMode: StudioDraftApplicationMode
     var liveReferences: [AssistantLiveReference]?
+    var outputReferences: [AssistantRoutingOutputReference]?
     var hasErrors: Bool { validation.contains { $0.severity == .error } }
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
-        case applicationMode, liveReferences
+        case applicationMode, liveReferences, outputReferences
     }
 
     init(from decoder: any Decoder) throws {
@@ -144,6 +146,8 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
             forKey: .validation
         ) ?? []
         liveReferences = try container.decodeIfPresent([AssistantLiveReference].self, forKey: .liveReferences)
+        outputReferences = try container.decodeIfPresent(
+            [AssistantRoutingOutputReference].self, forKey: .outputReferences)
         applicationMode = try container.decodeIfPresent(
             StudioDraftApplicationMode.self,
             forKey: .applicationMode

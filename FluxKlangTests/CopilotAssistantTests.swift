@@ -53,8 +53,7 @@ struct CopilotAssistantTests {
         }
         #expect(names == [
             "fluxklang_help",
-            "inspect_fluxklang",
-            "build_pending_studio_draft"
+            "inspect_fluxklang"
         ])
     }
 
@@ -102,7 +101,7 @@ struct CopilotAssistantTests {
         "Help me route OP-1 Field to speakers.",
         "How do I connect OP-1 Field to speakers?"
     ])
-    func copilotUsesVerifiedDraftReplyInsteadOfModelCommentary(_ question: String) async throws {
+    func copilotCannotCreateDraftsFromRoutingOrQuestionTools(_ question: String) async throws {
         let synth = Equipment(name: "OP-1 Field", outputs: ["Left", "Right"], isStereo: true)
         let context = emptyContext(
             equipment: [synth],
@@ -153,9 +152,13 @@ struct CopilotAssistantTests {
             context: context
         )
 
-        #expect(text.contains("Created a review-only Studio wiring draft"))
-        #expect(text.contains("OP-1 Field"))
-        #expect(!text.contains("cannot automatically"))
+        if AssistantRoutingOwnership.owns(question) {
+            #expect(text == AssistantRoutingOwnership.clarification)
+            #expect(await client.requests().isEmpty)
+        } else {
+            #expect(text.contains("cannot automatically"))
+            #expect(await client.requests().count == 2)
+        }
     }
 
     @Test func copilotDoesNotCreateAppendDraftForReplacementRequest() async throws {
@@ -208,7 +211,7 @@ struct CopilotAssistantTests {
         #expect(text.contains("start a new configuration"))
     }
 
-    @Test func copilotUsesGearMentionedByUserInsteadOfIncorrectToolArguments() async throws {
+    @Test func copilotCannotReconstructGlobalDraftFromRoutingMentionsOrToolArguments() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Left", "Right"], isStereo: true)
         let astrolab = Equipment(name: "AstroLab 88", outputs: ["Left", "Right"], isStereo: true)
         let op1 = Equipment(name: "OP-1 Field", outputs: ["Left", "Right"], isStereo: true)
@@ -258,12 +261,8 @@ struct CopilotAssistantTests {
             context: emptyContext(equipment: equipment, connections: connections)
         )
 
-        let summary = try #require(coordinator.pendingStudioDraft?.logicalRoutingSummary.first?.value)
-        #expect(summary.contains("SOMA Flux"))
-        #expect(summary.contains("AstroLab 88"))
-        #expect(!summary.contains("OP-1 Field"))
-        #expect(!summary.contains("OP-XY"))
-        #expect(coordinator.pendingStudioDraft?.applicationMode == .replace)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(await client.requests().isEmpty)
     }
 
     private func responseText(from generator: some AssistantGenerating) async throws -> String {

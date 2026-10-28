@@ -32,6 +32,9 @@ struct AssistantFallbackGenerator: AssistantGenerating {
     private func response(
         to request: AssistantGenerationRequest
     ) async throws -> (text: String, cards: [AssistantCard]) {
+        if AssistantRoutingOwnership.owns(request.question) {
+            return (AssistantRoutingOwnership.clarification, [])
+        }
         let normalized = request.question.lowercased()
         if let topic = helpTopic(in: normalized) {
             let entry = FluxKlangHelpCatalog.entry(for: topic)

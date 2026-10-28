@@ -359,6 +359,7 @@ final class AssistantCoordinator {
                 environmentID: context.activeEnvironmentID
             )
             draft.liveReferences = request.liveReferences
+            draft.outputReferences = request.outputReferences
             pendingStudioDraft = draft
             await draftStore.save(draft)
             return .pendingDraft(draft)
@@ -394,6 +395,28 @@ final class AssistantCoordinator {
             navigationTarget = .help(topic)
             return .help(FluxKlangHelpCatalog.entry(for: topic))
         }
+    }
+
+    /// Natural-language preparation is all-or-nothing. The last synchronous guard and mutation share
+    /// the main actor; no await can admit a stale response or replace a newer pending review.
+    func commitPreparedRouting(
+        _ draft: StudioPatchDraft, expectedPending: StudioPatchDraft?,
+        preparedContext: AssistantToolContext, currentContext: AssistantToolContext
+    ) async -> Bool {
+        guard !Task.isCancelled, !draft.hasErrors, pendingStudioDraft == expectedPending,
+              preparedContext.activeEnvironmentID == currentContext.activeEnvironmentID,
+              preparedContext.equipment == currentContext.equipment,
+              preparedContext.effects == currentContext.effects,
+              preparedContext.globalConnections == currentContext.globalConnections,
+              preparedContext.graph == currentContext.graph,
+              preparedContext.endpoints == currentContext.endpoints,
+              preparedContext.liveWing.sessionID == currentContext.liveWing.sessionID,
+              (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
+              (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
+        else { return false }
+        pendingStudioDraft = draft
+        await draftStore.save(draft)
+        return true
     }
 
     func discardPendingStudioDraft() async {

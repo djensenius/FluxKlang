@@ -2,6 +2,8 @@ import AVFoundation
 import Foundation
 import Observation
 
+// swiftlint:disable file_length
+
 @MainActor
 @Observable
 final class AssistantChatController {
@@ -18,6 +20,7 @@ final class AssistantChatController {
     var mixerExecutor: (any AssistantMixerExecuting)?
     /// Production uses reviewed planning only; the legacy executor is never reached when this is installed.
     var actionPlanner: (any AssistantActionPlanning)?
+    var currentRoutingContext: (@MainActor () -> AssistantToolContext?)?
 
     private(set) var conversations: [AssistantConversation] = []
     var selectedConversationID: UUID? {
@@ -168,7 +171,8 @@ final class AssistantChatController {
         }) else { return }
         let question = conversation.messages[..<failedIndex].last { $0.role == .user }?.text
         guard let question, !isStreaming,
-              !AssistantActionInterpretationAdapter.isPlausibleAction(question) else { return }
+              !AssistantActionInterpretationAdapter.isPlausibleAction(question),
+              !AssistantRoutingOwnership.owns(question) else { return }
         // Classify again rather than relying on ephemeral message state: this
         // also prevents replay from restored or cancelled command history.
         guard case .notMixerIntent = AssistantMixerIntent.parse(question) else { return }
@@ -252,6 +256,11 @@ final class AssistantChatController {
         isStreaming = true
         activeResponseID = responseID
         responseTask = Task {
+            if AssistantRoutingOwnership.owns(question) {
+                await handleRoutingSubmission(question: question, context: context,
+                                              conversationID: conversationID, responseID: responseID)
+                return
+            }
             if let actionPlanner {
                 do {
                     let handled = try await handleReviewedSubmission(
@@ -392,6 +401,38 @@ extension AssistantChatController {
         return FoundationModelActionInterpreter()
     }
 
+    private func handleRoutingSubmission(
+        question: String, context: AssistantToolContext, conversationID: UUID, responseID: UUID
+    ) async {
+        let expectedPending = coordinator.pendingStudioDraft
+        do {
+            let result = try await AssistantRoutingPreparation.interpret(
+                text: question, context: context, interpreter: actionInterpreter)
+            try Task.checkCancellation()
+            guard activeResponseID == responseID else { throw CancellationError() }
+            switch result {
+            case .clarification(let text):
+                apply(.text(text), conversationID: conversationID, responseID: responseID)
+            case .prepared(let draft):
+                guard let current = (currentRoutingContext == nil ? context : currentRoutingContext?())
+                else { throw CancellationError() }
+                try Task.checkCancellation()
+                guard activeResponseID == responseID else { throw CancellationError() }
+                let committed = await coordinator.commitPreparedRouting(
+                    draft, expectedPending: expectedPending, preparedContext: context, currentContext: current)
+                guard !Task.isCancelled, activeResponseID == responseID else { throw CancellationError() }
+                apply(.text(committed ? AssistantDraftReply.text(for: draft) : AssistantRoutingOwnership.clarification),
+                      conversationID: conversationID, responseID: responseID)
+                if committed {
+                    apply(.cards(Self.cards(for: draft)), conversationID: conversationID, responseID: responseID)
+                }
+            }
+            finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
+        } catch {
+            finishResponse(conversationID: conversationID, responseID: responseID, state: .cancelled)
+        }
+    }
+
     private func handleReviewedSubmission(
         question: String, context: AssistantToolContext, planner: any AssistantActionPlanning,
         conversationID: UUID, responseID: UUID
@@ -403,6 +444,8 @@ extension AssistantChatController {
         let preparation: AssistantActionPreparation
         switch interpretation {
         case .answer: return false
+        case .routing:
+            preparation = .clarification(AssistantRoutingOwnership.clarification)
         case .clarification(let text): preparation = .clarification(text)
         case .proposal:
             preparation = await planner.prepare(request, interpretation: interpretation)
