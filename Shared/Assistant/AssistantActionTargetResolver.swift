@@ -115,14 +115,19 @@ enum AssistantActionTargetResolver {
     static func target(_ mention: String) -> Target {
         let text = AssistantLiveWingContext.normalize(mention)
         if text == "main" { return .node(.main(1)) }
-        guard let range = text.range(of: #"^(channel|main)\s*[+-]?\d+(?:\.\d+)?$"#,
-                                     options: .regularExpression) else {
+        let kind: WingNodeKind
+        if text.hasPrefix("channel") {
+            kind = .channel
+        } else if text.hasPrefix("main") {
+            kind = .main
+        } else {
             return .name
         }
-        let kind: WingNodeKind = text.hasPrefix("channel") ? .channel : .main
-        let digits = text[range].dropFirst(kind == .channel ? "channel".count : "main".count)
+        let digits = text.dropFirst(kind == .channel ? "channel".count : "main".count)
             .trimmingCharacters(in: .whitespaces)
-        // Signed or fractional indices are numeric-shaped errors, never live-name aliases.
+        guard let first = digits.first, first.isNumber || "+-.".contains(first) else { return .name }
+        // Reserve all numeric-shaped suffixes, including signs, fractions and unsupported notation.
+        // Only canonical unsigned integer indices can authorize a numeric target.
         guard digits.allSatisfy({ $0.isASCII && $0.isNumber }),
               let index = Int(digits), (1...kind.count).contains(index) else { return .invalidIdentity }
         return .node(.init(kind: kind, index: index))

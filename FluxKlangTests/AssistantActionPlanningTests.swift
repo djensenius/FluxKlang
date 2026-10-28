@@ -322,6 +322,7 @@ extension AssistantActionPlanningTests {
     @Test func invalidNumericIdentitiesNeverFallThroughToCollidingLiveLabels() async throws {
         for target in ["main5", "main 5", "channel0", "channel 0", "channel41", "channel 41",
                        "main -1", "main-1", "channel -1", "channel-1", "main+1", "channel 1.5",
+                       "channel .5", "main-.5", "main1e2", "channel0x7", "main1.",
                        "main999999999999999999999999999999"] {
             let (state, transport, service) = await fixture(label: target)
             let submission = request("set \(target) to -12dB", state: state)
