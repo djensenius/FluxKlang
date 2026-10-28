@@ -91,6 +91,90 @@ struct StudioCanvasGeometryTests {
         expectFullCardWithMarginIsReachable(at: final, in: geometry)
     }
 
+    @Test func legacySavedRowsAndEffectColumnsSeparateWithoutChangingSavedPositions() {
+        let saved = (0..<8).map { CGPoint(x: 700, y: 120 + CGFloat($0) * 100) }
+            + (0..<6).map { CGPoint(x: 150, y: 150 + CGFloat($0) * 110) }
+            + (0..<4).map { CGPoint(x: 360 + CGFloat($0) * 190, y: 160) }
+        let placements = saved.map { StudioCanvasGeometry.Placement(position: $0, lane: .gear) }
+        let rendered = StudioCanvasGeometry.layoutPositions(for: placements)
+
+        #expect(placements.map(\.position) == saved)
+        #expect(rendered != saved)
+        #expect(rendered == StudioCanvasGeometry.layoutPositions(for: placements))
+        expectNoOverlap(rendered)
+        let geometry = StudioCanvasGeometry(positions: rendered)
+        for position in rendered { expectFullCardWithMarginIsReachable(at: position, in: geometry) }
+    }
+
+    @Test func unobstructedCustomPositionsArePreservedIncludingNegativeAndFutureCards() {
+        let saved = [CGPoint(x: -200, y: -300), CGPoint(x: -200, y: -200), CGPoint(x: -200, y: 20)]
+        let placements = saved.map { StudioCanvasGeometry.Placement(position: $0, lane: .gear) }
+        let rendered = StudioCanvasGeometry.layoutPositions(for: placements)
+
+        #expect(rendered[0] == saved[0])
+        #expect(rendered[2] == saved[2])
+        #expect(rendered[1] != saved[1])
+        expectNoOverlap(rendered)
+    }
+
+    @Test func deleteMiddleThenAddUsesFirstFreeGearAndControlSlots() {
+        for lane in [StudioCanvasGeometry.Lane.gear, .controls] {
+            let position = lane == .controls ? StudioCanvasGeometry.controlPosition : StudioCanvasGeometry.gearPosition
+            let occupied = [0, 2, 3].map {
+                StudioCanvasGeometry.Placement(position: position($0), lane: lane)
+            }
+            let added = StudioCanvasGeometry.firstFreePosition(in: lane, avoiding: occupied)
+
+            #expect(added == position(1))
+            expectNoOverlap(occupied.map(\.position) + [added])
+        }
+    }
+
+    @Test func insertionReservesMovedCardsBothLanesFallbackAndSeparatedPositions() {
+        let placements = [
+            StudioCanvasGeometry.Placement(position: CGPoint(x: 150, y: 160), lane: .controls),
+            StudioCanvasGeometry.Placement(position: CGPoint(x: 150, y: 160), lane: .gear),
+            StudioCanvasGeometry.Placement(position: .zero, lane: .controls)
+        ]
+        let rendered = StudioCanvasGeometry.layoutPositions(for: placements)
+        let added = StudioCanvasGeometry.firstFreePosition(in: .gear, avoiding: placements)
+
+        #expect(added != StudioCanvasGeometry.gearPosition(at: 0))
+        #expect(!StudioCanvasGeometry.cardRect(center: added).intersects(
+            StudioCanvasGeometry.cardRect(center: placements[0].position)
+        ))
+        expectNoOverlap(rendered + [added])
+    }
+
+    @Test func accessibilityCardSizeUsesMatchingSeparationBoundsAnchorsAndHitRects() {
+        let size = CGSize(width: 720, height: 432)
+        let placements = (0..<10).map {
+            StudioCanvasGeometry.Placement(position: StudioCanvasGeometry.gearPosition(at: $0), lane: .gear)
+        }
+        let positions = StudioCanvasGeometry.layoutPositions(for: placements, cardSize: size)
+        let geometry = StudioCanvasGeometry(positions: positions, cardSize: size, controlSize: 132)
+
+        expectNoOverlap(positions, size: size)
+        for position in positions {
+            let card = geometry.contentCardRect(center: position)
+            let output = geometry.outputAnchor(center: position)
+            #expect(card.size == size)
+            #expect(card.contains(output))
+            #expect(output == CGPoint(x: card.maxX - 76, y: card.maxY - 76))
+            #expect(geometry.worldBounds.contains(StudioCanvasGeometry.cardRect(center: position, size: size)))
+        }
+    }
+
+    private func expectNoOverlap(_ positions: [CGPoint], size: CGSize = StudioCanvasGeometry.cardSize) {
+        for index in positions.indices {
+            for other in positions.dropFirst(index + 1) {
+                #expect(!StudioCanvasGeometry.cardRect(center: positions[index], size: size).intersects(
+                    StudioCanvasGeometry.cardRect(center: other, size: size)
+                ))
+            }
+        }
+    }
+
     private func expectFullCardWithMarginIsReachable(at point: CGPoint, in geometry: StudioCanvasGeometry) {
         let paddedCard = StudioCanvasGeometry.cardRect(center: point).insetBy(
             dx: -StudioCanvasGeometry.margin,

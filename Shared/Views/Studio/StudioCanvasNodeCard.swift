@@ -7,6 +7,8 @@ import SwiftUI
 
 struct StudioCanvasNodeCard: View {
     let node: StudioNode
+    let cardSize: CGSize
+    let controlSize: CGFloat
     let title: String
     let subtitle: String
     let tint: Color
@@ -41,9 +43,10 @@ struct StudioCanvasNodeCard: View {
                 moveHandle
                 routeDot
             }
+            .frame(height: controlSize)
         }
         .padding(StudioCanvasGeometry.cardPadding)
-        .frame(width: StudioCanvasGeometry.cardSize.width, height: StudioCanvasGeometry.cardSize.height)
+        .frame(width: cardSize.width, height: cardSize.height)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
@@ -58,7 +61,8 @@ struct StudioCanvasNodeCard: View {
     private var removeButton: some View {
         Button(role: .destructive, action: remove) {
             Image(systemName: "xmark.circle.fill")
-                .frame(width: StudioCanvasGeometry.controlSize, height: StudioCanvasGeometry.controlSize)
+                .font(.system(size: 18))
+                .frame(width: controlSize, height: controlSize)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -74,7 +78,7 @@ struct StudioCanvasNodeCard: View {
                 Text(isRoutingFrom ? "Cancel" : isRouteTarget ? "Here" : "Draw")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
-                    .frame(minWidth: StudioCanvasGeometry.controlSize, minHeight: StudioCanvasGeometry.controlSize)
+                    .frame(minWidth: controlSize, minHeight: controlSize)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -84,15 +88,16 @@ struct StudioCanvasNodeCard: View {
             .accessibilityIdentifier("studio.node.\(node.id).route")
         } else {
             Color.clear
-                .frame(width: StudioCanvasGeometry.controlSize, height: StudioCanvasGeometry.controlSize)
+                .frame(width: controlSize, height: controlSize)
                 .accessibilityHidden(true)
         }
     }
 
     private var moveHandle: some View {
         Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+            .font(.system(size: 18))
             .foregroundStyle(.secondary)
-            .frame(width: StudioCanvasGeometry.controlSize, height: StudioCanvasGeometry.controlSize)
+            .frame(width: controlSize, height: controlSize)
             .contentShape(Rectangle())
             .gesture(moveGesture)
             .accessibilityLabel("Move \(title)")
@@ -108,7 +113,7 @@ struct StudioCanvasNodeCard: View {
                     .fill(tint)
                     .frame(width: 14, height: 14)
                     .overlay(Circle().strokeBorder(.background, lineWidth: 2))
-                    .frame(width: StudioCanvasGeometry.controlSize, height: StudioCanvasGeometry.controlSize)
+                    .frame(width: controlSize, height: controlSize)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -119,8 +124,9 @@ struct StudioCanvasNodeCard: View {
             .help("Drag to draw a connection")
         } else {
             Image(systemName: "slider.vertical.3")
+                .font(.system(size: 18))
                 .foregroundStyle(tint)
-                .frame(width: StudioCanvasGeometry.controlSize, height: StudioCanvasGeometry.controlSize)
+                .frame(width: controlSize, height: controlSize)
                 .accessibilityHidden(true)
         }
     }

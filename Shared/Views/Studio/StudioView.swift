@@ -161,8 +161,8 @@ struct StudioView: View {
             onMoveNode: moveNode,
             viewportHeight: viewportHeight
         )
+        .id(store.active?.id)
     }
-
     private var addGearMenu: some View {
         Menu {
             ForEach(appModel.equipment.items) { item in
@@ -179,14 +179,12 @@ struct StudioView: View {
         }
         .accessibilityIdentifier("studio.addGear")
     }
-
     private var newGearButton: some View {
         Button { addBlankGear() } label: {
             actionLabel("New Gear", systemImage: "plus.square")
         }
         .accessibilityIdentifier("studio.newGear")
     }
-
     private var addControlMenu: some View {
         Menu {
             Button("Mix Control") { addEndpoint(.finalMix) }
@@ -341,7 +339,7 @@ struct StudioView: View {
         )
         store.addStudioEndpointNode(
             endpoint,
-            position: StudioCanvasGeometry.controlPosition(at: endpoints.count)
+            position: nextPosition(in: .controls)
         )
     }
     private func addGear(_ equipment: Equipment) {
@@ -349,7 +347,7 @@ struct StudioView: View {
         store.addStudioNode(StudioNode(
             kind: .instrument(equipment.id),
             title: equipment.name,
-            position: nextGearPosition()
+            position: nextPosition(in: .gear)
         ))
     }
     private func addGear(_ effect: Effect) {
@@ -357,13 +355,15 @@ struct StudioView: View {
         store.addStudioNode(StudioNode(
             kind: .effect(effect.id),
             title: effect.name,
-            position: nextGearPosition()
+            position: nextPosition(in: .gear)
         ))
     }
     private func addBlankGear() {
         let effect = Effect(name: "Gear \(effects.count + 1)")
         store.add(effect)
-        store.addStudioNode(StudioNode(kind: .effect(effect.id), title: effect.name, position: nextGearPosition()))
+        store.addStudioNode(StudioNode(
+            kind: .effect(effect.id), title: effect.name, position: nextPosition(in: .gear)
+        ))
     }
     private func connect(from source: StudioNode.ID, to destination: StudioNode.ID) {
         store.connectStudio(
@@ -380,12 +380,12 @@ struct StudioView: View {
     private func moveNode(_ id: StudioNode.ID, to position: CGPoint) {
         store.moveStudioNode(id, to: position)
     }
-    private func nextGearPosition() -> CGPoint {
-        let gearCount = graph.nodes.filter { node in
-            if case .endpoint = node.kind { return false }
-            return true
-        }.count
-        return StudioCanvasGeometry.gearPosition(at: gearCount)
+    private func nextPosition(in lane: StudioCanvasGeometry.Lane) -> CGPoint {
+        let placements = graph.nodes.map { node in
+            let nodeLane: StudioCanvasGeometry.Lane = if case .endpoint = node.kind { .controls } else { .gear }
+            return StudioCanvasGeometry.Placement(position: node.position, lane: nodeLane)
+        }
+        return StudioCanvasGeometry.firstFreePosition(in: lane, avoiding: placements)
     }
     private func output(_ node: StudioNode) -> StudioPortRef {
         StudioPortRef(nodeID: node.id, side: .output, port: 0)

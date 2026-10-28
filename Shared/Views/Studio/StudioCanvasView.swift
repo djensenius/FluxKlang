@@ -18,6 +18,9 @@ struct StudioCanvasView: View {
     let onMoveNode: (StudioNode.ID, CGPoint) -> Void
     var viewportHeight: CGFloat = 560
 
+    @ScaledMetric(relativeTo: .subheadline) private var nodeWidth = StudioCanvasGeometry.cardSize.width
+    @ScaledMetric(relativeTo: .subheadline) private var nodeHeight = StudioCanvasGeometry.cardSize.height
+    @ScaledMetric(relativeTo: .subheadline) private var scaledControlSize = StudioCanvasGeometry.controlSize
     @State private var routingFrom: StudioNode.ID?
     @State private var retainedBounds: CGRect?
     @GestureState private var nodeMove: NodeMove?
@@ -25,7 +28,6 @@ struct StudioCanvasView: View {
 
     private struct NodeMove {
         var nodeID: StudioNode.ID
-        var start: CGPoint
         var position: CGPoint
         var geometry: StudioCanvasGeometry
     }
@@ -36,8 +38,19 @@ struct StudioCanvasView: View {
     }
 
     var body: some View {
+        let positions = layoutPositions
+        let geometry = StudioCanvasGeometry(
+            positions: graph.nodes.map { displayPosition(for: $0, positions: positions) },
+            retaining: retainedBounds,
+            cardSize: nodeSize, controlSize: controlSize
+        )
         VStack(alignment: .leading, spacing: 12) {
-            canvas
+            canvas(positions: positions, geometry: geometry)
+            if graph.nodes.contains(where: { $0.position != .zero && positions[$0.id] != $0.position }) {
+                Text("Overlapping cards are separated for display. Only cards you move are saved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             routeList
         }
         .onChange(of: geometry.worldBounds, initial: true) { _, bounds in
@@ -52,7 +65,7 @@ struct StudioCanvasView: View {
         }
     }
 
-    private var canvas: some View {
+    private func canvas(positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry) -> some View {
         ScrollView([.horizontal, .vertical]) {
             ZStack(alignment: .topLeading) {
                 // A background tap can cancel routing, but never owns a pan.
@@ -60,13 +73,15 @@ struct StudioCanvasView: View {
                     .fill(.clear)
                     .contentShape(Rectangle())
                     .onTapGesture { routingFrom = nil }
-                laneBackgrounds
+                laneBackgrounds(geometry: geometry)
                     .allowsHitTesting(false)
-                wires
+                wires(positions: positions, geometry: geometry)
                     .allowsHitTesting(false)
                 ForEach(graph.nodes) { node in
                     StudioCanvasNodeCard(
                         node: node,
+                        cardSize: nodeSize,
+                        controlSize: controlSize,
                         title: title(for: node),
                         subtitle: subtitle(for: node),
                         tint: tint(for: node),
@@ -75,15 +90,18 @@ struct StudioCanvasView: View {
                         isRouteTarget: routingFrom != nil && routingFrom != node.id,
                         remove: { remove(node) },
                         route: { routeAction(for: node) },
-                        moveGesture: moveGesture(for: node),
-                        routeGesture: routeGesture(for: node)
+                        moveGesture: moveGesture(
+                            for: node, start: positions[node.id] ?? node.position, geometry: geometry
+                        ),
+                        routeGesture: routeGesture(for: node, positions: positions, geometry: geometry)
                     )
-                    .position(geometry.contentPoint(fromWorld: displayPosition(for: node)))
+                    .position(geometry.contentPoint(fromWorld: displayPosition(for: node, positions: positions)))
                 }
             }
             .frame(width: geometry.contentSize.width, height: geometry.contentSize.height)
             .coordinateSpace(name: "studioCanvas")
         }
+        .defaultScrollAnchor(.topLeading)
         .frame(height: viewportHeight)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay {
@@ -94,24 +112,41 @@ struct StudioCanvasView: View {
         .accessibilityIdentifier("studio.canvas")
     }
 
-    private var geometry: StudioCanvasGeometry {
-        StudioCanvasGeometry(positions: graph.nodes.map(displayPosition), retaining: retainedBounds)
+    private var nodeSize: CGSize {
+        CGSize(
+            width: max(nodeWidth, StudioCanvasGeometry.cardSize.width),
+            height: max(nodeHeight, StudioCanvasGeometry.cardSize.height)
+        )
     }
 
-    private var laneBackgrounds: some View {
+    private var controlSize: CGFloat { max(scaledControlSize, StudioCanvasGeometry.controlSize) }
+
+    private var layoutPositions: [StudioNode.ID: CGPoint] {
+        let placements = graph.nodes.map {
+            StudioCanvasGeometry.Placement(position: $0.position, lane: isControl($0) ? .controls : .gear)
+        }
+        let positions = StudioCanvasGeometry.layoutPositions(for: placements, cardSize: nodeSize)
+        return Dictionary(uniqueKeysWithValues: zip(graph.nodes.map(\.id), positions))
+    }
+
+    private func laneBackgrounds(geometry: StudioCanvasGeometry) -> some View {
         HStack(spacing: 0) {
             lane(
                 "Gear", "Anything that makes sound, takes sound in, or both", .blue,
-                width: StudioCanvasGeometry.gearWidth - geometry.worldBounds.minX
+                width: StudioCanvasGeometry.gearWidth - geometry.worldBounds.minX,
+                height: geometry.contentSize.height
             )
             lane(
                 "Controls", "Where branches become playable", .purple,
-                width: geometry.worldBounds.maxX - StudioCanvasGeometry.gearWidth
+                width: geometry.worldBounds.maxX - StudioCanvasGeometry.gearWidth,
+                height: geometry.contentSize.height
             )
         }
     }
 
-    private func lane(_ title: String, _ subtitle: String, _ color: Color, width: CGFloat) -> some View {
+    private func lane(
+        _ title: String, _ subtitle: String, _ color: Color, width: CGFloat, height: CGFloat
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.headline)
@@ -121,25 +156,25 @@ struct StudioCanvasView: View {
             Spacer()
         }
         .padding()
-        .frame(width: width, height: geometry.contentSize.height, alignment: .topLeading)
+        .frame(width: width, height: height, alignment: .topLeading)
         .background(color.opacity(0.06))
     }
 
-    private var wires: some View {
+    private func wires(positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry) -> some View {
         Canvas { context, _ in
             for edge in graph.edges {
                 guard let start = graph.node(edge.from.nodeID),
                       let end = graph.node(edge.to.nodeID) else { continue }
                 drawWire(
-                    from: geometry.outputAnchor(center: displayPosition(for: start)),
-                    to: geometry.inputAnchor(center: displayPosition(for: end)),
+                    from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
+                    to: geometry.inputAnchor(center: displayPosition(for: end, positions: positions)),
                     color: .accentColor.opacity(0.72),
                     context: context
                 )
             }
             if let routeDrag, let start = graph.node(routeDrag.from) {
                 drawWire(
-                    from: geometry.outputAnchor(center: displayPosition(for: start)),
+                    from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
                     to: routeDrag.current,
                     color: .green.opacity(0.78),
                     context: context
@@ -196,45 +231,37 @@ struct StudioCanvasView: View {
         .padding(.vertical, 4)
     }
 
-    private func storedPosition(for node: StudioNode) -> CGPoint {
-        guard node.position == .zero else { return node.position }
-        let peers = graph.nodes.filter { isControl($0) == isControl(node) }
-        let index = peers.firstIndex { $0.id == node.id } ?? 0
-        return isControl(node)
-            ? StudioCanvasGeometry.controlPosition(at: index)
-            : StudioCanvasGeometry.gearPosition(at: index)
-    }
-
-    private func displayPosition(for node: StudioNode) -> CGPoint {
+    private func displayPosition(for node: StudioNode, positions: [StudioNode.ID: CGPoint]) -> CGPoint {
         if let nodeMove, nodeMove.nodeID == node.id { return nodeMove.position }
-        return storedPosition(for: node)
+        return positions[node.id] ?? node.position
     }
 
-    private func moveGesture(for node: StudioNode) -> AnyGesture<DragGesture.Value> {
+    private func moveGesture(
+        for node: StudioNode, start: CGPoint, geometry: StudioCanvasGeometry
+    ) -> AnyGesture<DragGesture.Value> {
         AnyGesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .named("studioCanvas"))
                 .updating($nodeMove) { value, state, _ in
-                    let start = state?.start ?? storedPosition(for: node)
                     let startingGeometry = state?.geometry ?? geometry
                     state = NodeMove(
                         nodeID: node.id,
-                        start: start,
                         position: startingGeometry.movedPosition(from: start, translation: value.translation),
                         geometry: startingGeometry
                     )
                 }
                 .onEnded { value in
-                    let start = nodeMove?.start ?? storedPosition(for: node)
                     let startingGeometry = nodeMove?.geometry ?? geometry
                     let final = startingGeometry.movedPosition(from: start, translation: value.translation)
-                    // The store is updated synchronously before GestureState resets.
-                    // Cancellation simply discards the transient position.
+                    // `start` is the render-layout baseline, not GestureState.
+                    // Only an explicit completed move persists this one node.
                     onMoveNode(node.id, final)
                 }
         )
     }
 
-    private func routeGesture(for node: StudioNode) -> AnyGesture<DragGesture.Value> {
+    private func routeGesture(
+        for node: StudioNode, positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry
+    ) -> AnyGesture<DragGesture.Value> {
         AnyGesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .named("studioCanvas"))
                 .updating($routeDrag) { value, state, _ in
@@ -242,7 +269,9 @@ struct StudioCanvasView: View {
                 }
                 .onEnded { value in
                     routingFrom = nil
-                    guard let destination = hitNode(at: value.location, excluding: node.id) else { return }
+                    guard let destination = hitNode(
+                        at: value.location, excluding: node.id, positions: positions, geometry: geometry
+                    ) else { return }
                     onConnect(node.id, destination.id)
                 }
         )
@@ -264,10 +293,14 @@ struct StudioCanvasView: View {
         onRemoveNode(node.id)
     }
 
-    private func hitNode(at point: CGPoint, excluding excluded: StudioNode.ID) -> StudioNode? {
-        // Reverse drawing order so the visually topmost overlapping card wins.
+    private func hitNode(
+        at point: CGPoint, excluding excluded: StudioNode.ID,
+        positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry
+    ) -> StudioNode? {
         graph.nodes.reversed().first {
-            $0.id != excluded && geometry.contentCardRect(center: displayPosition(for: $0)).contains(point)
+            $0.id != excluded && geometry.contentCardRect(
+                center: displayPosition(for: $0, positions: positions)
+            ).contains(point)
         }
     }
 
