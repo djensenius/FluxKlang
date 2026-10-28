@@ -88,8 +88,8 @@ previews.
   Both providers expose only authoritative help, read-only state inspection,
   and review-only Studio draft tools—never WING writes.
 - A deterministic grounded fallback remains available when the selected model
-  is unavailable or fails. Explicit push-to-talk transcription runs on device
-  when supported, and microphone audio is not retained. Visible conversation
+  is unavailable or fails. To dictate a message, use the system keyboard's
+  dictation feature; FluxKlang does not capture microphone audio. Visible conversation
   text and card references may sync through the user's private iCloud database;
   other app configuration uses iCloud key-value storage plus an offline copy.
 - **Launch Control XL 3:** FluxKlang listens to the main USB MIDI endpoint in

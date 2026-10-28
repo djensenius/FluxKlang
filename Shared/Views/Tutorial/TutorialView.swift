@@ -120,9 +120,10 @@ extension TutorialTopic {
             TutorialConcept(
                 title: "On-device and private",
                 detail: """
-                Generation and push-to-talk transcription run on device when available, with a grounded fallback \
-                when Foundation Models are unavailable. Audio is not retained. Visible conversation text may sync \
-                through your private iCloud database.
+                Apple Intelligence generation runs on device when available, with a grounded fallback when \
+                Foundation Models are unavailable. Use keyboard dictation to speak a message; FluxKlang does not \
+                capture microphone audio. Visible conversation text may sync through your private iCloud database. \
+                If you select GitHub Copilot, prompts and required tool results are sent to GitHub.
                 """,
                 systemImage: "hand.raised.fill",
                 tint: .purple
