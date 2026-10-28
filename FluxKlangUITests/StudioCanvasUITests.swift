@@ -5,13 +5,9 @@ final class StudioCanvasUITests: XCTestCase {
     private lazy var app = XCUIApplication()
 
     func testBlankCanvasPansToControlsAndLastAddedNodeCanBeRemoved() {
-        launchPatch()
-        showActions()
-        for _ in 0..<12 {
-            app.buttons["studio.addControl"].tap()
-            app.buttons["Mix Control"].tap()
-        }
-
+        // Seed the same persisted node layout without 24 menu interactions;
+        // the acceptance here is panning to and deleting the farthest full card.
+        launchPatch(longCanvas: true)
         showCanvas()
         let canvas = element("studio.canvas")
         panToControls(canvas)
@@ -90,33 +86,39 @@ final class StudioCanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Draw connection from OP-1 Field"].exists)
     }
 
-    func testActionsKeepFullLabelsAtDefaultAndAccessibilitySizes() {
-        for accessibilitySize in [false, true] {
-            launchPatch(accessibilitySize: accessibilitySize)
-            showActions()
-            for (identifier, title) in [
-                ("studio.addGear", "Add Gear"),
-                ("studio.newGear", "New Gear"),
-                ("studio.addControl", "Add Control"),
-                ("studio.connectNodes", "Connect Nodes")
-            ] {
-                let button = app.buttons[identifier]
-                revealOnPage(button)
-                XCTAssertTrue(button.isHittable)
-                XCTAssertTrue(button.label.contains(title))
-                XCTAssertGreaterThanOrEqual(button.frame.height, 44)
-                XCTAssertGreaterThanOrEqual(button.frame.width, 160, "Actions must not become fragment columns")
-                XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.maxX)
-            }
-            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            attachment.name = accessibilitySize ? "Studio actions AX XXXL" : "Studio actions default"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            app.terminate()
-        }
+    func testActionsKeepFullLabelsAtDefaultSize() {
+        assertActionLayout(accessibilitySize: false)
     }
 
-    private func launchPatch(accessibilitySize: Bool = false) {
+    func testActionsKeepFullLabelsAtAccessibilitySize() {
+        assertActionLayout(accessibilitySize: true)
+    }
+
+    private func assertActionLayout(accessibilitySize: Bool) {
+        launchPatch(accessibilitySize: accessibilitySize)
+        showActions()
+        for (identifier, title) in [
+            ("studio.addGear", "Add Gear"),
+            ("studio.newGear", "New Gear"),
+            ("studio.addControl", "Add Control"),
+            ("studio.connectNodes", "Connect Nodes")
+        ] {
+            // Native SwiftUI menus can expose PopUpButton rather than Button.
+            let button = element(identifier)
+            revealOnPage(button)
+            XCTAssertTrue(button.isHittable)
+            XCTAssertTrue(button.label.contains(title))
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 160, "Actions must not become fragment columns")
+            XCTAssertLessThanOrEqual(button.frame.maxX, app.frame.maxX)
+        }
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = accessibilitySize ? "Studio actions AX XXXL" : "Studio actions default"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func launchPatch(accessibilitySize: Bool = false, longCanvas: Bool = false) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         app.launchArguments = [
@@ -125,7 +127,12 @@ final class StudioCanvasUITests: XCTestCase {
         if accessibilitySize {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
+        if longCanvas { app.launchArguments.append("-ui-test-long-canvas") }
         app.launch()
+        if longCanvas {
+            XCTAssertTrue(element("studio.canvas").waitForExistence(timeout: 10))
+            return
+        }
         let review = app.buttons["assistant.pendingDraft.review"]
         _ = review.waitForExistence(timeout: 10)
         revealOnPage(review)

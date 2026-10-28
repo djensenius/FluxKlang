@@ -14,6 +14,15 @@ enum AcceptanceLaunchConfiguration {
         if arguments.contains("-ui-test-seed-acceptance") {
             do {
                 try await seedAcceptanceState(appModel)
+                if arguments.contains("-ui-test-long-canvas") {
+                    _ = await appModel.acceptPendingAssistantDraft()
+                    for index in 2...13 {
+                        appModel.environments.addStudioEndpointNode(
+                            StudioEndpoint(name: "Mix Control \(index)", destination: .finalMix),
+                            position: StudioCanvasGeometry.controlPosition(at: index - 1)
+                        )
+                    }
+                }
             } catch {
                 preconditionFailure("Unable to seed acceptance state: \(String(reflecting: error))")
             }
