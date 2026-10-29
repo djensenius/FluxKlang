@@ -272,4 +272,28 @@ struct AssistantActionCoordinationTests {
             await fixture.state.wing.disconnect()
         }
     }
+
+    @Test func differentAddTargetCannotReachConsoleOrLocalShortcutInsertion() async {
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        var localAdds = 0
+        let service = AssistantActionController(
+            controller: { controllerReads += 1; return state.wing }, layout: { state.layout },
+            scope: { state.scope }, addShortcut: { _, _, _, _ in localAdds += 1; return nil })
+        let intent = AssistantActionIntent(targetMention: "Astrolab", action: .mute, amount: nil, addToStudio: true,
+            evidence: .init(target: "Astrolab", action: "mute", amount: nil, add: "add"))
+        for text in ["mute Astrolab and add Juno", "add Astrolab and mute Juno"] {
+            let outcome = await service.prepare(.init(text: text), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else {
+                Issue.record("Compound request silently changed its add target")
+            }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(localAdds == 0)
+            #expect(state.scope.graph.nodes.isEmpty)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+        }
+    }
 }

@@ -5,8 +5,9 @@ enum AssistantActionIntentValidator {
     // Explicit fail-closed checks for each untrusted optional field.
     // swiftlint:disable:next cyclomatic_complexity
     static func clarification(for intent: AssistantActionIntent, text: String) -> String? {
+        let normalized = text.replacingOccurrences(of: "‘", with: "'").replacingOccurrences(of: "’", with: "'")
         guard !text.contains(where: { "\"“”`\n\r".contains($0) }),
-            text.range(
+            !hasSingleQuotedSpan(in: text), normalized.range(
                 of: #"\b(do not|don't|never|not|if|hypothetical|pretend|imagine|how|why|explain)\b"#,
                 options: [.regularExpression, .caseInsensitive]) == nil
         else {
@@ -92,6 +93,7 @@ enum AssistantActionIntentValidator {
         let clause = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard !hasUnsupportedControl(in: clause), !hasUnrepresentedTargets(in: clause),
+              compoundTargetsMatch(intent, text: text),
               mixerVerbCount(in: clause) <= 1 else { return false }
         // Multiple source/destination numbers cannot be bound safely by copied spans alone.
         if let amount = intent.amount, number(in: clause) != amount { return false }
@@ -126,8 +128,48 @@ enum AssistantActionIntentValidator {
     static func copiedAmount(_ evidence: String, from text: String) -> Bool {
         guard copied(evidence, from: text) else { return false }
         let token = NSRegularExpression.escapedPattern(for: evidence.trimmingCharacters(in: .whitespacesAndNewlines))
-        let pattern = #"(?<![\p{L}\p{N}_.+\-−])"# + token + #"(?![\p{L}\p{N}_.%])"#
+        let pattern = #"(?<![\p{L}\p{N}_.+\-−])"# + token + #"(?![\p{L}\p{N}_%]|\.[\p{L}\p{N}_])"#
         return !token.isEmpty && text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    static func hasSingleQuotedSpan(in text: String) -> Bool {
+        let normalized = text.replacingOccurrences(of: "‘", with: "'").replacingOccurrences(of: "’", with: "'")
+        return normalized.range(of: #"(?:^|\s)'[^']+'"#, options: .regularExpression) != nil
+    }
+
+    private static func compoundTargetsMatch(_ intent: AssistantActionIntent, text: String) -> Bool {
+        guard intent.addToStudio, let action = intent.action else { return true }
+        let scoped = text.replacingOccurrences(
+            of: evidencePattern(intent.evidence.target), with: " it ", options: [.regularExpression, .caseInsensitive])
+        let addPattern = #"\b(?:add|include)\s+.*?(?=\b(?:and|then|also)\b|[;,.!?]|$)"#
+        guard let range = scoped.range(of: addPattern, options: [.regularExpression, .caseInsensitive]) else {
+            return false
+        }
+        // An add object must be the recovered target or an explicit referring pronoun, not new gear.
+        let add = String(scoped[range])
+        let objectPattern = #"^(?:add|include)\s+(?:(?:my|the)\s+)?(?:it|this|that|them)"#
+            + #"(?:\s+as\s+(?:(?:a|an|the)\s+)?(?:existing\s+)?(?:live[-\s]+channel\s+)?shortcut"#
+            + #"|\s+to\s+(?:(?:my|the)\s+)?(?:studio|canvas))?\s*$"#
+        guard add.range(of: objectPattern, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        var remainder = scoped
+        remainder.replaceSubrange(range, with: " ")
+        if let amount = intent.evidence.amount {
+            remainder = remainder.replacingOccurrences(of: amount, with: " ", options: .caseInsensitive)
+        }
+        if action == .mute || action == .unmute {
+            let prefix = #"^\s*(?:(?:please|could you|can you|would you|and|then|also)\s+)*"#
+            let reference = #"\s+(?:(?:my|the)\s+)?(?:it|this|that|them)\s*(?:(?:and|then|also)\s*)?$"#
+            return remainder.range(of: prefix + "(?:" + actionWords(action).joined(separator: "|") + ")" + reference,
+                                   options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        // Allow the owner's implicit "turn the volume" reference, but not another named mixer target.
+        let allowed = Set(actionWords(action) + [
+            "and", "then", "also", "please", "could", "can", "would", "you", "my", "the", "a", "an",
+            "it", "its", "this", "that", "them", "their", "volume", "fader", "level", "master", "travel",
+            "to", "at", "by", "of", "for", "up", "down", "turn", "make", "bring", "adjust"
+        ])
+        return remainder.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .allSatisfy { allowed.contains(String($0)) }
     }
 
     private static func actionWords(_ action: AssistantActionIntent.Action) -> [String] {
