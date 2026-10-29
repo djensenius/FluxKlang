@@ -4,6 +4,42 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @MainActor @Test func hyphenatedLiveAliasesRemainNamesNotMalformedNumericIdentities() async throws {
+        for name in ["Channel-Lead", "Main-Keys", "Bus-Drums", "7-Lead"] {
+            let transport = AssistantRecordingWingTransport()
+            await transport.put("/ch/7/name", .string(name))
+            let wing = WingController(transport: transport)
+            await wing.connect(host: "192.0.2.10")
+            await AssistantBackendFixture.settleInitialActionEvidence(wing)
+            let state = AssistantActionTestState(wing: wing)
+            let service = AssistantActionController(controller: { wing }, layout: { state.layout },
+                scope: { state.scope }, addShortcut: { _, _, _, _ in nil }, timeout: .seconds(1))
+            let request = AssistantActionInterpretationRequest(text: "mute \(name)",
+                liveContext: .init(status: .observed, sessionID: wing.sessionID, capturedAt: Date(), observations: []))
+            let output = AssistantActionModelOutput(disposition: .proposal, target: name, action: .mute,
+                targetEvidence: name, actionEvidence: "mute")
+            for interpreted in [AssistantActionInterpretationAdapter.validate(output, request: request),
+                                AssistantActionInterpretationAdapter.fallback(request, reason: "Test")] {
+                guard case .proposal(let intent) = interpreted else {
+                    Issue.record("Hyphenated alias did not produce an untrusted proposal"); continue
+                }
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: request.text) == nil)
+                guard case .review(let review) = await service.prepare(request, interpretation: interpreted) else {
+                    Issue.record("Exact live alias was mistaken for a numeric identity: \(name)"); continue
+                }
+                #expect(review.stage == .ready)
+                #expect(review.target?.members.map { $0.identity.node } == [.channel(7)])
+                #expect(await transport.writes.isEmpty)
+            }
+            await wing.disconnect()
+        }
+        for target in ["channel-1", "main-1", "channel-.5", "main+1", "channel0x7", "main1e2"] {
+            if case .invalidIdentity = AssistantActionTargetResolver.target(target) {} else {
+                Issue.record("Malformed numeric identity became a named target: \(target)")
+            }
+        }
+    }
+
     @Test func scheduledActionsAndComparativePercentsCannotBecomeImmediateAbsoluteChanges() {
         let cases = [
             ("lower Lead by 3 dB after ten seconds", AssistantActionIntent.Action.lower,
