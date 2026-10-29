@@ -60,6 +60,9 @@ final class AppModel {
     /// User-visible assistant conversations, generation, history and speech.
     let assistantChat: AssistantChatController
 
+    /// In-memory reviewed live actions. Neither reviews nor permissions are persisted.
+    @ObservationIgnored lazy var assistantActions = makeAssistantActionController()
+
     /// Network scanner for finding WING consoles.
     let discovery = WingDiscovery()
 
@@ -118,6 +121,7 @@ final class AppModel {
             )
         )
         configureAssistantMixer()
+        configureAssistantActions()
     }
 
     var isConnected: Bool { wing.connection.isConnected }
@@ -167,6 +171,7 @@ final class AppModel {
 
     /// Re-reads every persisted store, used when iCloud syncs new state.
     func reloadStores() async {
+        assistantActions.cancel()
         await faderLayout.reload()
         await equipment.reload()
         await environments.reload()
@@ -374,6 +379,7 @@ final class AppModel {
 
     /// Enters offline Demo Mode with a simulated WING, replacing any live link.
     func enterDemoMode() async {
+        assistantActions.cancel()
         await wing.disconnect()
         let demo = WingController.demo()
         wing = demo
@@ -382,6 +388,7 @@ final class AppModel {
 
     /// Connects to a real WING at `host`, leaving Demo Mode if it was active.
     func connect(host: String, port: UInt16 = WingNetwork.defaultPort) async {
+        assistantActions.cancel()
         await wing.disconnect()
         let live = WingController(port: port)
         wing = live
@@ -394,11 +401,13 @@ final class AppModel {
 
     /// Disconnects and returns to a fresh, idle live controller.
     func disconnect() async {
+        assistantActions.cancel()
         await wing.disconnect()
         wing = WingController()
     }
 
     func showAcceptanceConnectionFailure() async {
+        assistantActions.cancel()
         await wing.disconnect()
         wing = .acceptanceFailure(reason: "Acceptance test: WING unavailable")
     }

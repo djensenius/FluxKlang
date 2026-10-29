@@ -329,6 +329,12 @@ struct FluxKlangShortcuts: AppShortcutsProvider {
         )
         if #available(iOS 27.0, macOS 27.0, *) {
             AppShortcut(
+                intent: AskFluxKlangIntent(),
+                phrases: ["Ask \(.applicationName)", "Review a request in \(.applicationName)"],
+                shortTitle: "Ask FluxKlang",
+                systemImageName: "text.bubble"
+            )
+            AppShortcut(
                 intent: WireStudioRequestIntent(),
                 phrases: [
                     "Tell \(.applicationName) to wire studio gear",

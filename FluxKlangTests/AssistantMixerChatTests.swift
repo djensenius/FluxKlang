@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct AssistantMixerChatTests {
-    @Test func explicitSubmissionInterceptsEveryProviderBeforeRoutingAndCannotRetryAfterReload() async throws {
+    @Test func missingPlannerFailsClosedForEveryProviderAndCannotRetryAfterReload() async throws {
         for provider in AssistantProvider.allCases {
             let backend = AssistantBackendHistoryStore()
             let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
@@ -27,15 +27,16 @@ struct AssistantMixerChatTests {
             chat.composer = "lower main by 3 dB"
             chat.send(context: AssistantBackendFixture.context())
             try await AssistantBackendFixture.wait { !chat.isStreaming }
-            #expect(executor.commands.count == 1)
+            #expect(executor.commands.isEmpty)
             #expect(apple.calls == 0)
             #expect(fallback.calls == 0)
             #expect(await http.calls == 0)
             #expect(coordinator.pendingStudioDraft == nil)
-            #expect(chat.selectedConversation?.messages.last?.text == "Recorded outcome, not model prose")
+            #expect(chat.selectedConversation?.messages.last?.text
+                == "No changes: reviewed action planning is not configured.")
             let response = try #require(chat.selectedConversation?.messages.last)
             chat.retry(messageID: response.id, context: AssistantBackendFixture.context())
-            #expect(executor.commands.count == 1)
+            #expect(executor.commands.isEmpty)
             #expect(apple.calls == 0)
             #expect(fallback.calls == 0)
             #expect(await http.calls == 0)
@@ -46,7 +47,7 @@ struct AssistantMixerChatTests {
             restored.mixerExecutor = executor
             await restored.load()
             restored.retry(messageID: response.id, context: AssistantBackendFixture.context())
-            #expect(executor.commands.count == 1)
+            #expect(executor.commands.isEmpty)
         }
     }
 

@@ -87,7 +87,7 @@ struct StudioCanvasView: View {
                         tint: tint(for: node),
                         canStartRoute: canStartRoute(node),
                         isRoutingFrom: routingFrom == node.id || routeDrag?.from == node.id,
-                        isRouteTarget: routingFrom != nil && routingFrom != node.id,
+                        isRouteTarget: !node.isLiveChannelShortcut && routingFrom != nil && routingFrom != node.id,
                         remove: { remove(node) },
                         route: { routeAction(for: node) },
                         moveGesture: moveGesture(
@@ -123,7 +123,7 @@ struct StudioCanvasView: View {
 
     private var layoutPositions: [StudioNode.ID: CGPoint] {
         let placements = graph.nodes.map {
-            StudioCanvasGeometry.Placement(position: $0.position, lane: isControl($0) ? .controls : .gear)
+            StudioCanvasGeometry.Placement(position: $0.position, lane: $0.isStudioControl ? .controls : .gear)
         }
         let positions = StudioCanvasGeometry.layoutPositions(for: placements, cardSize: nodeSize)
         return Dictionary(zip(graph.nodes.map(\.id), positions), uniquingKeysWith: { first, _ in first })
@@ -137,7 +137,7 @@ struct StudioCanvasView: View {
                 height: geometry.contentSize.height
             )
             lane(
-                "Controls", "Where branches become playable", .purple,
+                "Controls", "Playable branches and existing-channel shortcuts", .purple,
                 width: geometry.worldBounds.maxX - StudioCanvasGeometry.gearWidth,
                 height: geometry.contentSize.height
             )
@@ -164,7 +164,8 @@ struct StudioCanvasView: View {
         Canvas { context, _ in
             for edge in graph.edges {
                 guard let start = graph.node(edge.from.nodeID),
-                      let end = graph.node(edge.to.nodeID) else { continue }
+                      let end = graph.node(edge.to.nodeID),
+                      !start.isLiveChannelShortcut, !end.isLiveChannelShortcut else { continue }
                 drawWire(
                     from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
                     to: geometry.inputAnchor(center: displayPosition(for: end, positions: positions)),
@@ -172,7 +173,7 @@ struct StudioCanvasView: View {
                     context: context
                 )
             }
-            if let routeDrag, let start = graph.node(routeDrag.from) {
+            if let routeDrag, let start = graph.node(routeDrag.from), canStartRoute(start) {
                 drawWire(
                     from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
                     to: routeDrag.current,
@@ -200,7 +201,9 @@ struct StudioCanvasView: View {
             Text("Connections")
                 .font(.headline)
             if graph.edges.isEmpty {
-                Text("Drag from a gear card’s output dot to a card, or tap Draw then Here.")
+                Text(graph.nodes.allSatisfy(\.isLiveChannelShortcut)
+                    ? "Existing-channel shortcuts have no audio ports. Inspect a shortcut for a fresh Assistant review."
+                    : "Drag from a gear card’s output dot to a card, or tap Draw then Here. Shortcuts cannot connect.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -215,6 +218,8 @@ struct StudioCanvasView: View {
                             routingFrom = edge.from.nodeID
                         }
                         .buttonStyle(.bordered)
+                        .disabled(graph.node(edge.from.nodeID)?.isLiveChannelShortcut == true
+                            || graph.node(edge.to.nodeID)?.isLiveChannelShortcut == true)
                         Button(role: .destructive) {
                             onRemoveEdge(edge.id)
                         } label: {
@@ -265,11 +270,12 @@ struct StudioCanvasView: View {
         AnyGesture(
             DragGesture(minimumDistance: 3, coordinateSpace: .named("studioCanvas"))
                 .updating($routeDrag) { value, state, _ in
+                    guard canStartRoute(node) else { return }
                     state = RouteDrag(from: node.id, current: value.location)
                 }
                 .onEnded { value in
                     routingFrom = nil
-                    guard let destination = hitNode(
+                    guard canStartRoute(node), let destination = hitNode(
                         at: value.location, excluding: node.id, positions: positions, geometry: geometry
                     ) else { return }
                     onConnect(node.id, destination.id)
@@ -278,11 +284,13 @@ struct StudioCanvasView: View {
     }
 
     private func routeAction(for node: StudioNode) {
+        guard !node.isLiveChannelShortcut else { return }
         if routingFrom == node.id {
             routingFrom = nil
         } else if let source = routingFrom {
-            onConnect(source, node.id)
             routingFrom = nil
+            guard let sourceNode = graph.node(source), canStartRoute(sourceNode) else { return }
+            onConnect(source, node.id)
         } else if canStartRoute(node) {
             routingFrom = node.id
         }
@@ -298,30 +306,18 @@ struct StudioCanvasView: View {
         positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry
     ) -> StudioNode? {
         graph.nodes.reversed().first {
-            $0.id != excluded && geometry.contentCardRect(
+            $0.id != excluded && !$0.isLiveChannelShortcut && geometry.contentCardRect(
                 center: displayPosition(for: $0, positions: positions)
             ).contains(point)
         }
     }
 
     private func canStartRoute(_ node: StudioNode) -> Bool {
-        !isControl(node)
-    }
-
-    private func isControl(_ node: StudioNode) -> Bool {
-        if case .endpoint = node.kind { return true }
-        return false
+        !node.isStudioControl
     }
 
     private func title(for node: StudioNode) -> String {
-        switch node.kind {
-        case .instrument(let id):
-            return equipment.first { $0.id == id }?.name ?? node.title
-        case .effect(let id):
-            return effects.first { $0.id == id }?.name ?? node.title
-        case .endpoint(let id):
-            return endpoints.first { $0.id == id }?.name ?? node.title
-        }
+        node.studioDisplayTitle(equipment: equipment, effects: effects, endpoints: endpoints)
     }
 
     private func subtitle(for node: StudioNode) -> String {
@@ -332,6 +328,8 @@ struct StudioCanvasView: View {
             return "gear · in/out"
         case .endpoint(let id):
             return endpoints.first { $0.id == id }?.destination.label ?? "control"
+        case .liveChannel:
+            return "shortcut · unverified · inspect"
         }
     }
 
@@ -339,6 +337,7 @@ struct StudioCanvasView: View {
         switch node.kind {
         case .instrument: return .blue
         case .effect: return .teal
+        case .liveChannel: return .orange
         case .endpoint(let id):
             return endpoints.first { $0.id == id }.map { Theme.color(for: $0.destination) } ?? .purple
         }

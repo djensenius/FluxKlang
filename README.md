@@ -87,13 +87,21 @@ previews.
   prompts and required FluxKlang tool results are sent to GitHub when selected.
   Both providers expose only authoritative help, read-only state inspection,
   and review-only Studio draft tools—never WING writes.
-- Direct mixer commands are handled separately from model generation. Specify a
-  target and amount, for example `set channel 7 to -12 dB`,
-  `lower main 1 by 3 dB`, or `mute channel 7`. Ambiguous targets, missing amounts,
-  stale readings, and ambiguous stereo names make no changes. Commands use fresh
-  console readings and report whether the result was confirmed; they are never
-  automatically replayed by Retry or conversation history. Routing still requires
-  draft review and the separate **Listen** action.
+- **Apple instrument understanding** uses a separate, tool-free on-device model
+  to interpret requests such as “turn down the volume of my Astrolab” or “add my
+  Mother-32 and turn the volume to 50%.” The app resolves current WING targets and
+  prepares a review; the model cannot change the mixer. Similar names require
+  selection, missing relative amounts are visibly suggested, and percentages mean
+  **fader travel**, not loudness. Only explicit confirmation can execute a reviewed
+  action, with fresh identity/level checks and truthful per-channel outcomes.
+  Adding a live shortcut creates no cables, routing or new buses. Routing still
+  requires its separate draft review and **Listen** action.
+- The new **Ask FluxKlang** Siri/Shortcuts action brings a request into the
+  Assistant composer. Tap Send to interpret it, then review and confirm any
+  proposed action. It never writes hardware or accepts a routing draft merely
+  because Siri invoked it. Apple command understanding does not silently fall
+  back to Copilot; unavailable Apple Intelligence offers local exact commands
+  for review or manual controls. [Design and qualification notes](docs/APPLE_INTELLIGENCE_ACTIONS.md).
 - The assistant distinguishes saved studio equipment from observed WING input and
   channel labels. A console label is not proof of an attached instrument or cable.
   Unknown live labels require linking to saved equipment and its ports before

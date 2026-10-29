@@ -125,7 +125,10 @@ struct StudioView: View {
                 canvasActions
             }
         } footer: {
-            Text("A patch is simply: gear anywhere on the left, playable controls on the right.")
+            Text("""
+            Gear is on the left; controls and existing-channel shortcuts are on the right. Shortcuts \
+            are unverified observations, not audio routing nodes.
+            """)
         }
     }
 
@@ -379,7 +382,7 @@ struct StudioView: View {
     }
     private func nextPosition(in lane: StudioCanvasGeometry.Lane) -> CGPoint {
         let placements = graph.nodes.map { node in
-            let nodeLane: StudioCanvasGeometry.Lane = if case .endpoint = node.kind { .controls } else { .gear }
+            let nodeLane: StudioCanvasGeometry.Lane = node.isStudioControl ? .controls : .gear
             return StudioCanvasGeometry.Placement(position: node.position, lane: nodeLane)
         }
         return StudioCanvasGeometry.firstFreePosition(in: lane, avoiding: placements)
@@ -391,14 +394,7 @@ struct StudioView: View {
         StudioPortRef(nodeID: node.id, side: .input, port: 0)
     }
     private func nodeTitle(_ node: StudioNode) -> String {
-        switch node.kind {
-        case .instrument(let id):
-            return appModel.equipment.items.first { $0.id == id }?.name ?? node.title
-        case .effect(let id):
-            return effects.first { $0.id == id }?.name ?? node.title
-        case .endpoint(let id):
-            return endpoints.first { $0.id == id }?.name ?? node.title
-        }
+        node.studioDisplayTitle(equipment: appModel.equipment.items, effects: effects, endpoints: endpoints)
     }
 
     private func applyStudioPatch() {

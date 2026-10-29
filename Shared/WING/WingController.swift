@@ -32,6 +32,7 @@ final class WingController {
     private(set) var confirmedValues: [String: WingValue] = [:]
     let liveObservations = WingLiveObservations()
     private(set) var confirmedNameRevision = 0
+    let assistantActionEvidence = WingAssistantActionEvidence()
     private(set) var confirmedReceivedAt: [String: Date] = [:]
     private(set) var sessionID: UUID?
     private var transportSessionID: UUID?
@@ -43,7 +44,6 @@ final class WingController {
     private(set) var transportWriteCount = 0
 
     private(set) var host: String?
-
     let port: UInt16
 
     /// Whether this controller is running in offline Demo Mode.
@@ -452,13 +452,14 @@ final class WingController {
         if message.address.hasSuffix("/name"), previousName != value {
             confirmedNameRevision += 1
         }
+        assistantActionEvidence.record(message.address, value: value)
         values[message.address] = value
         liveObservations.record(message, value: value)
         confirmedValues[message.address] = value
         confirmedReceivedAt[message.address] = message.receivedAt
     }
-
     private func invalidateConfirmations() {
+        assistantActionEvidence.reset()
         sessionID = nil
         transportSessionID = nil
         peerHosts = []
@@ -466,7 +467,6 @@ final class WingController {
         confirmedReceivedAt = [:]
         liveObservations.reset()
     }
-
     private func startKeepAlive() {
         keepAliveTask = Task { [weak self] in
             while !Task.isCancelled {

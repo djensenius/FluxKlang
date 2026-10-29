@@ -96,6 +96,8 @@ enum AssistantCard: Codable, Hashable, Sendable {
     case conflicts([String])
     case moves([String])
     case pendingDraft(id: UUID, summary: String, hasErrors: Bool)
+    /// Inert display reference only; execution authority lives exclusively in the in-memory planner.
+    case actionReview(id: UUID, summary: String)
 }
 
 struct AssistantConversationRecord: Identifiable, Codable, Hashable, Sendable {

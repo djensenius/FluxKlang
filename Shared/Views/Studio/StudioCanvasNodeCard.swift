@@ -19,6 +19,12 @@ struct StudioCanvasNodeCard: View {
     let route: () -> Void
     let moveGesture: AnyGesture<DragGesture.Value>
     let routeGesture: AnyGesture<DragGesture.Value>
+    @State private var showsLiveDetails = false
+
+    private var liveBinding: StudioLiveChannelBinding? {
+        if case .liveChannel(let binding) = node.kind { return binding }
+        return nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,7 +40,11 @@ struct StudioCanvasNodeCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .contentShape(Rectangle())
             .onTapGesture {
-                if isRouteTarget { route() }
+                if liveBinding != nil {
+                    showsLiveDetails = true
+                } else if isRouteTarget {
+                    route()
+                }
             }
             HStack(spacing: 0) {
                 removeButton
@@ -56,6 +66,9 @@ struct StudioCanvasNodeCard: View {
         .shadow(radius: 2, y: 1)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("studio.node.\(node.id)")
+        .sheet(isPresented: $showsLiveDetails) {
+            if let liveBinding { StudioLiveChannelDetailsView(binding: liveBinding) }
+        }
     }
 
     private var removeButton: some View {
@@ -66,14 +79,23 @@ struct StudioCanvasNodeCard: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Remove \(title) from patch")
+        .accessibilityLabel(node.isLiveChannelShortcut
+            ? "Remove shortcut \(title) from canvas" : "Remove \(title) from patch")
         .accessibilityIdentifier("studio.node.\(node.id).remove")
-        .help("Remove from patch")
+        .help(node.isLiveChannelShortcut ? "Remove only the local shortcut; no WING changes" : "Remove from patch")
     }
 
     @ViewBuilder
     private var routeButton: some View {
-        if isRoutingFrom || isRouteTarget || canStartRoute {
+        if liveBinding != nil {
+            Button { showsLiveDetails = true } label: {
+                Image(systemName: "info.circle")
+                    .frame(minWidth: controlSize, minHeight: controlSize)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Inspect unverified shortcut \(title)")
+            .accessibilityIdentifier("studio.node.\(node.id).inspect")
+        } else if isRoutingFrom || isRouteTarget || canStartRoute {
             Button(action: route) {
                 Text(isRoutingFrom ? "Cancel" : isRouteTarget ? "Here" : "Draw")
                     .font(.caption.weight(.semibold))
@@ -123,7 +145,7 @@ struct StudioCanvasNodeCard: View {
             .accessibilityIdentifier("studio.node.\(node.id).output")
             .help("Drag to draw a connection")
         } else {
-            Image(systemName: "slider.vertical.3")
+            Image(systemName: node.isLiveChannelShortcut ? "link" : "slider.vertical.3")
                 .font(.system(size: 18))
                 .foregroundStyle(tint)
                 .frame(width: controlSize, height: controlSize)

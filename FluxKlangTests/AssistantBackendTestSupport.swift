@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import FluxKlang
 
@@ -29,6 +30,26 @@ enum AssistantBackendFixture {
             snapshot, equipment: context.equipment,
             connections: context.effectiveConnections)
         return result
+    }
+
+    static func settleInitialActionEvidence(_ wing: WingController) async {
+        guard let session = wing.sessionID else { Issue.record("Recording fixture did not connect"); return }
+        // Fixture readiness, not an authorization refresh: subscription/bulk replies already observed
+        // in this session count. Finish issuing missing GETs before bounding the listener-drain wait.
+        let addresses = AssistantActionController.discoveryAddresses
+            + [WingAddress.fader(.channel, 7), WingAddress.mute(.channel, 7), WingAddress.name(.main, 1)]
+        for address in addresses where wing.confirmedValues[address] == nil {
+            await wing.refresh(address)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while !Task.isCancelled, wing.sessionID == session, ContinuousClock.now < deadline,
+              addresses.contains(where: { wing.confirmedValues[$0] == nil }) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let missing = addresses.filter { wing.confirmedValues[$0] == nil }
+        let actualSession = wing.sessionID
+        #expect(actualSession == session && missing.isEmpty,
+                "Evidence missing: \(missing); expected \(session), actual \(String(describing: actualSession))")
     }
 
     static func waitAsync(_ condition: @MainActor () async -> Bool) async throws {
@@ -89,12 +110,17 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var mismatchesWrites = false
     private var queryDelay: Duration = .zero
     private var gateMixerSend = false
+    private var mixerGateAfterWrites = 0
     private(set) var mixerSendWaiting = false
     private var mixerSendGate: CheckedContinuation<Void, Never>?
+    private var gateMixerAcknowledgement = false
+    private(set) var mixerAcknowledgementWaiting = false
+    private var mixerAcknowledgementGate: CheckedContinuation<Void, Never>?
     private var gateBaselineAfterNames = false
     private var namesRead: Set<String> = []
     private var gateReadback = false
     private var verificationQueryAddress: String?
+    private var pausedQueryAddress: String?
     private(set) var queryWaiting = false
     private var queryGates: [CheckedContinuation<Void, Never>] = []
     private var gateStart = false
@@ -158,24 +184,41 @@ actor AssistantRecordingWingTransport: WingTransporting {
         mismatchesWrites = mismatch
         queryDelay = delay
     }
-    func pauseMixerSend() { gateMixerSend = true }
+    func pauseMixerSend(afterWrites: Int = 0) {
+        mixerSendWaiting = false
+        mixerGateAfterWrites = afterWrites
+        gateMixerSend = true
+    }
     func releaseMixerSend() {
         gateMixerSend = false
         mixerSendGate?.resume()
         mixerSendGate = nil
     }
+    func pauseMixerAcknowledgement() { gateMixerAcknowledgement = true; mixerAcknowledgementWaiting = false }
+    func releaseMixerAcknowledgement() {
+        gateMixerAcknowledgement = false
+        mixerAcknowledgementGate?.resume()
+        mixerAcknowledgementGate = nil
+    }
     func pauseBaselineAfterNameDiscovery() { gateBaselineAfterNames = true; namesRead = [] }
     func pauseReadback() { gateReadback = true }
     func pauseVerificationQuery(_ address: String) { verificationQueryAddress = address }
+    func pauseQueries(at address: String) { pausedQueryAddress = address; queryWaiting = false }
     func releaseQueries() {
         gateBaselineAfterNames = false
         gateReadback = false
         verificationQueryAddress = nil
+        pausedQueryAddress = nil
         let waiting = queryGates
         queryGates = []
         waiting.forEach { $0.resume() }
     }
     func put(_ address: String, _ value: WingValue) { values[address] = value }
+    func emitInitialSnapshot(excluding addresses: Set<String> = []) {
+        for (address, value) in values where !addresses.contains(address) {
+            emitQuery(address, value)
+        }
+    }
     func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async throws {
         if let value {
             try recordWrite(address, value)
@@ -183,7 +226,8 @@ actor AssistantRecordingWingTransport: WingTransporting {
             queries.append(address)
             guard answersQueries, writes.isEmpty || answersAfterWrite else { return }
             if address.hasPrefix("/ch/"), address.hasSuffix("/name") { namesRead.insert(address) }
-            if (gateBaselineAfterNames && namesRead.count == 40 && ["/ch/7/fdr", "/ch/7/mute"].contains(address))
+            if pausedQueryAddress == address
+                || (gateBaselineAfterNames && namesRead.count == 40 && ["/ch/7/fdr", "/ch/7/mute"].contains(address))
                 || (gateReadback && !writes.isEmpty)
                 || (verificationQueryAddress == address && writes.count >= 2) {
                 queryWaiting = true
@@ -195,14 +239,18 @@ actor AssistantRecordingWingTransport: WingTransporting {
     }
     func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
                         authorization: WingMixerWriteAuthorization) async throws {
-        if gateMixerSend {
+        if gateMixerSend && writes.count >= mixerGateAfterWrites {
             mixerSendWaiting = true
             await withCheckedContinuation { mixerSendGate = $0 }
         }
-        try authorization.consume {
+        try authorization.consume(node: node, value: value, muted: muted) {
             guard self.currentSessionID == sessionID else { throw BackendTestError.send }
             let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
             try recordWrite(address, value.encodedForWing(address: address))
+        }
+        if gateMixerAcknowledgement {
+            mixerAcknowledgementWaiting = true
+            await withCheckedContinuation { mixerAcknowledgementGate = $0 }
         }
     }
     private func recordWrite(_ address: String, _ value: WingValue) throws {

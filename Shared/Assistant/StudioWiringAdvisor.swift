@@ -213,7 +213,11 @@ enum StudioWiringAdvisor {
     ) -> [StudioDraftNode] {
         var result: [StudioDraftNode] = []
         var placements = currentGraph.nodes.map { node in
-            let lane: StudioCanvasGeometry.Lane = if case .endpoint = node.kind { .controls } else { .gear }
+            let lane: StudioCanvasGeometry.Lane
+            switch node.kind {
+            case .endpoint, .liveChannel: lane = .controls
+            case .instrument, .effect: lane = .gear
+            }
             return StudioCanvasGeometry.Placement(position: node.position, lane: lane)
         }
         func append(kind: StudioNodeKind, title: String, lane: StudioCanvasGeometry.Lane) {
@@ -433,6 +437,7 @@ enum StudioWiringAdvisor {
         case .instrument(let id): "instrument:\(id.uuidString)"
         case .effect(let id): "effect:\(id.uuidString)"
         case .endpoint(let id): "endpoint:\(id.uuidString)"
+        case .liveChannel(let binding): "liveChannel:\(binding.id.uuidString)"
         }
     }
 

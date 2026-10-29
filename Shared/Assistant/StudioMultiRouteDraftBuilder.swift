@@ -87,6 +87,7 @@ enum StudioMultiRouteDraftBuilder {
         case .instrument(let id): "instrument:\(id.uuidString)"
         case .effect(let id): "effect:\(id.uuidString)"
         case .endpoint(let id): "endpoint:\(id.uuidString)"
+        case .liveChannel(let binding): "liveChannel:\(binding.id.uuidString)"
         }
     }
 

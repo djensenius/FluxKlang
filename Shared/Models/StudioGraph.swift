@@ -65,6 +65,12 @@ enum StudioNodeKind: Codable, Hashable, Sendable {
     case instrument(Equipment.ID)
     case effect(Effect.ID)
     case endpoint(StudioEndpoint.ID)
+    case liveChannel(StudioLiveChannelBinding)
+
+    var isRoutable: Bool {
+        if case .liveChannel = self { return false }
+        return true
+    }
 }
 
 /// A node placed on the studio canvas.
@@ -138,7 +144,9 @@ extension StudioGraph {
     /// Connects output -> input. Fan-out and fan-in are both allowed; exact
     /// duplicate wires are ignored so the same branch is not compiled twice.
     mutating func connect(from origin: StudioPortRef, to destination: StudioPortRef) {
-        guard origin.side == .output, destination.side == .input else { return }
+        guard origin.side == .output, destination.side == .input,
+              node(origin.nodeID)?.kind.isRoutable == true,
+              node(destination.nodeID)?.kind.isRoutable == true else { return }
         guard !edges.contains(where: { $0.from == origin && $0.to == destination }) else { return }
         edges.append(StudioEdge(from: origin, to: destination))
     }
@@ -167,6 +175,7 @@ struct StudioRoutingIssue: Identifiable, Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         case missingNode(edgeID: StudioEdge.ID)
         case invalidDirection(edgeID: StudioEdge.ID)
+        case nonroutableLiveChannel(edgeID: StudioEdge.ID)
         case missingEndpoint(nodeID: StudioNode.ID, endpointID: StudioEndpoint.ID)
         case unfinishedBranch(nodeID: StudioNode.ID)
         case cycle(nodeID: StudioNode.ID)
@@ -196,7 +205,8 @@ enum StudioRoutingPlanner {
         let nodeByID = Dictionary(graph.nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let structurallyValidEdges = graph.edges.filter { edge in
             edge.from.side == .output && edge.to.side == .input &&
-                nodeByID[edge.from.nodeID] != nil && nodeByID[edge.to.nodeID] != nil
+                nodeByID[edge.from.nodeID]?.kind.isRoutable == true &&
+                nodeByID[edge.to.nodeID]?.kind.isRoutable == true
         }
         let cyclicNodeIDs = cyclicNodes(in: graph.nodes, edges: structurallyValidEdges)
         let validEdges = structurallyValidEdges.filter {
@@ -270,6 +280,11 @@ enum StudioRoutingPlanner {
     ) -> [StudioRoutingIssue] {
         var issues: [StudioRoutingIssue] = []
         for edge in graph.edges {
+            if nodeByID[edge.from.nodeID]?.kind.isRoutable == false
+                || nodeByID[edge.to.nodeID]?.kind.isRoutable == false {
+                issues.append(.error(.nonroutableLiveChannel(edgeID: edge.id),
+                    "Live channel shortcuts have no audio ports and cannot be routed."))
+            }
             if edge.from.side != .output || edge.to.side != .input {
                 issues.append(.error(.invalidDirection(edgeID: edge.id), "A wire is not output to input."))
             }
@@ -332,7 +347,7 @@ enum StudioRoutingPlanner {
         edgeIDs: inout Set<StudioEdge.ID>,
         issues: inout [StudioRoutingIssue]
     ) -> Set<StudioNode.ID> {
-        guard let node = context.nodeByID[nodeID] else { return [] }
+        guard let node = context.nodeByID[nodeID], node.kind.isRoutable else { return [] }
         guard !visited.contains(nodeID) else {
             issues.append(.error(.cycle(nodeID: nodeID), "\(node.title) is part of an unsupported feedback cycle."))
             return []
@@ -391,7 +406,7 @@ enum StudioRoutingPlanner {
     }
 
     private static func hasOutputIntent(_ node: StudioNode) -> Bool {
-        !isEndpoint(node)
+        node.kind.isRoutable && !isEndpoint(node)
     }
 
     private static func isEndpoint(_ node: StudioNode) -> Bool {
