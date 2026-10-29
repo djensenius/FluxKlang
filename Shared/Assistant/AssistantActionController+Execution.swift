@@ -50,7 +50,7 @@ extension AssistantActionController {
         let evidenceDeadline = ContinuousClock.now.advanced(by: timeout)
         guard
             let discovery = await plan.wing.readFreshConfirmed(
-                Self.discoveryAddresses, session: plan.session, timeout: timeout, preservingCache: true),
+                Self.discoveryAddresses, session: plan.session, timeout: timeout),
             current(), discovery == plan.discovery
         else {
             return result(
@@ -61,7 +61,7 @@ extension AssistantActionController {
         guard
             let fresh = await plan.wing.readFreshConfirmed(
                 Self.memberAddresses(candidate.members),
-                session: plan.session, timeout: timeout, preservingCache: true), current(),
+                session: plan.session, timeout: timeout), current(),
             Self.discoveryUnchanged(discovery, snapshot: plan.wing.confirmedSnapshot()),
             let latest = Self.targetEvidence(candidate, session: plan.session, fresh: fresh), latest == target
         else {
@@ -158,7 +158,7 @@ extension AssistantActionController {
         if !attempted.isEmpty, current(requireAuthority: false),
             let readback = await plan.wing.readFreshConfirmed(
                 Self.memberAddresses(candidate.members),
-                session: plan.session, timeout: timeout, preservingCache: true), current(requireAuthority: false),
+                session: plan.session, timeout: timeout), current(requireAuthority: false),
             Self.identitiesMatch(candidate, fresh: readback) {
             for (index, _) in attempted {
                 let change = plan.review.faderChanges[index]
