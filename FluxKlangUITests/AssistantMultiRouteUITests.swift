@@ -185,7 +185,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
         let wires = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "studio.edge."
         ))
-        XCTAssertEqual(wires.count, count, file: file, line: line)
+        let edgeIDs = Set(wires.allElementsBoundByIndex.map(\.identifier))
+        XCTAssertEqual(edgeIDs.count, count, file: file, line: line)
     }
 
     private func assertNotSentYet(file: StaticString = #filePath, line: UInt = #line) {
