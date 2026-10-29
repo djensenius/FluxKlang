@@ -368,6 +368,29 @@ struct AssistantRoutingReviewRegressionTests {
         #expect(coordinator.pendingStudioDraft == nil)
     }
 
+    @Test func revalidationDoesNotTransferOwnershipOfACancelledSave() async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let draft = try fixture.prepared()
+        await store.pauseNextSave()
+        let submission = Task { await coordinator.commitPreparedRouting(draft, expectedPending: prior,
+            preparedContext: fixture.context, currentContext: fixture.context) }
+        try await AssistantBackendFixture.waitAsync { await store.isWaiting }
+        var changed = fixture.context
+        changed.equipment.removeAll { $0.id == fixture.solar.id }
+        _ = await coordinator.perform(.validatePendingStudioDraft, context: changed)
+        #expect(coordinator.pendingStudioDraft != draft)
+        submission.cancel()
+        await store.resume()
+        #expect(!(await submission.value))
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(await store.draft == prior)
+    }
+
     @Test func overlappingCancelledSubmissionsCannotRestoreAnAbortedDraft() async throws {
         let fixture = AssistantRoutingFixture()
         let store = RoutingTestDraftStore()

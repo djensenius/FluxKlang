@@ -303,6 +303,7 @@ enum AssistantFallbackResponder {
 final class AssistantCoordinator {
     private let draftStore: any PendingStudioPatchPersisting
     private var settledStudioDraft: StudioPatchDraft?
+    private var routingSubmissionID: UUID?
 
     private(set) var pendingStudioDraft: StudioPatchDraft?
     var navigationTarget: AssistantNavigationTarget? {
@@ -320,6 +321,7 @@ final class AssistantCoordinator {
     func load() async {
         pendingStudioDraft = await draftStore.load()
         settledStudioDraft = pendingStudioDraft
+        routingSubmissionID = nil
     }
 
     // Every supported capability is explicit and typed; there is no arbitrary
@@ -364,6 +366,7 @@ final class AssistantCoordinator {
             draft.outputReferences = request.outputReferences
             pendingStudioDraft = draft
             settledStudioDraft = draft
+            routingSubmissionID = nil
             await persistPendingDraft()
             return .pendingDraft(draft)
         case .validatePendingStudioDraft:
@@ -421,9 +424,14 @@ final class AssistantCoordinator {
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
         else { return false }
         let rollback = settledStudioDraft
+        let submissionID = UUID()
+        routingSubmissionID = submissionID
+        defer {
+            if routingSubmissionID == submissionID { routingSubmissionID = nil }
+        }
         pendingStudioDraft = draft
         await persistPendingDraft()
-        if Task.isCancelled, pendingStudioDraft == draft {
+        if Task.isCancelled, routingSubmissionID == submissionID {
             pendingStudioDraft = rollback
             await persistPendingDraft()
         }
@@ -435,6 +443,7 @@ final class AssistantCoordinator {
     func discardPendingStudioDraft() async {
         pendingStudioDraft = nil
         settledStudioDraft = nil
+        routingSubmissionID = nil
         navigationTarget = nil
         await persistPendingDraft()
     }
