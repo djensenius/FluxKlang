@@ -14,6 +14,7 @@ enum StudioEndpointNormalizer {
         var canonicalNodeByKey: [String: StudioNode.ID] = [:]
         var nodeRemap: [StudioNode.ID: StudioNode.ID] = [:]
         var retainedNodes: [StudioNode] = []
+        var referencesByKey: [String: [AssistantRoutingOutputReference]] = [:]
 
         for node in graph.nodes {
             guard case .endpoint(let endpointID) = node.kind,
@@ -22,6 +23,7 @@ enum StudioEndpointNormalizer {
                 retainedNodes.append(node)
                 continue
             }
+            referencesByKey[key, default: []].append(contentsOf: endpoint.outputReferences ?? [])
             if let canonicalNodeID = canonicalNodeByKey[key] {
                 nodeRemap[node.id] = canonicalNodeID
             } else {
@@ -46,6 +48,12 @@ enum StudioEndpointNormalizer {
         var seenEndpoints: Set<StudioEndpoint.ID> = []
         let normalizedEndpoints = endpoints.filter {
             referencedEndpointIDs.contains($0.id) && seenEndpoints.insert($0.id).inserted
+        }.map { endpoint in
+            var endpoint = endpoint
+            if let key = mergeKey(for: endpoint) {
+                endpoint.retainOutputReferences(referencesByKey[key] ?? [])
+            }
+            return endpoint
         }
         return NormalizedStudioEndpoints(graph: normalizedGraph, endpoints: normalizedEndpoints)
     }

@@ -388,6 +388,58 @@ struct StudioGraphTests {
 }
 
 extension StudioGraphTests {
+    @Test(arguments: [false, true], 0...3)
+    func acceptedDeskMappingIsRecheckedBeforeCompilation(reuse: Bool, change: Int) throws {
+        let synth = Equipment(name: "Synth", outputs: ["Out"])
+        var connections = GlobalStudioConnections(home: .init(
+            inputs: [.init(connector: 19, equipmentID: synth.id, outputPort: 0)],
+            outputs: [.init(connector: 5, destinationName: "Desk Speakers L"),
+                      .init(connector: 6, destinationName: "Desk Speakers R")]
+        ))
+        let reference = try #require(AssistantRoutingOutputResolver.resolve(
+            "desktop speakers", in: connections.home)?.reference)
+        var draft = StudioWiringAdvisor.build(
+            request: .init(sourceInstrumentIDs: [synth.id], destination: .custom,
+                           outputConnectors: reference.connectors),
+            equipment: [synth], effects: [], connections: connections, currentGraph: StudioGraph())
+        if change != 3 { draft.outputReferences = [reference] }
+        let legacy = StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                                    outputConnectors: reference.connectors)
+        let graph = StudioGraph(nodes: reuse ? [.init(kind: .endpoint(legacy.id), title: legacy.name)] : [])
+        let accepted = StudioPatchDraftMerger.merge(
+            draft, into: graph, endpoints: reuse ? [legacy] : [], equipment: [synth], effects: [])
+        #expect(!draft.hasErrors)
+        #expect(accepted.endpoints.count == 1)
+        #expect(accepted.endpoints.first?.outputReferences == (change == 3 ? nil : [reference]))
+        if reuse { #expect(accepted.endpoints.first?.id == legacy.id) }
+        if change == 1 || change == 3 {
+            connections.home.outputs[0].connector = 7
+            connections.home.outputs[1].connector = 8
+        } else if change == 2 {
+            connections.home.outputs[0].destinationName = "Desk Speakers R"
+            connections.home.outputs[1].destinationName = "Desk Speakers L"
+        }
+        let persisted = try JSONDecoder().decode([StudioEndpoint].self, from: JSONEncoder().encode(accepted.endpoints))
+        #expect(persisted == accepted.endpoints)
+        let compiled = StudioSignalCompiler.compile(.init(
+            graph: accepted.graph, endpoints: persisted, effects: [], connections: connections,
+            equipment: [synth], speakers: []))
+        let rejects = change == 1 || change == 2
+        #expect(compiled.hasErrors == rejects)
+        #expect(compiled.settings.isEmpty == rejects)
+        if rejects {
+            #expect(compiled.issues.contains {
+                $0.severity == .error && $0.kind == .outputMappingChanged(persisted[0].id)
+            })
+        } else {
+            let values = Dictionary(compiled.settings.map { ($0.address, $0.value) },
+                                    uniquingKeysWith: { _, last in last })
+            #expect(values[WingAddress.outputSourceGroup(5)] == .string("BUS"))
+            #expect(values[WingAddress.outputSourceIndex(5)] == .int(1))
+            #expect(values[WingAddress.outputSourceIndex(6)] == .int(2))
+        }
+    }
+
     @Test func emptyMappingIsUnspecifiedOnlyForLegacyMains() {
         let mains = StudioEndpoint(name: "Main Speakers", destination: .finalMix, outputConnectors: [])
         let custom = StudioEndpoint(name: "Custom", destination: .custom, outputConnectors: [])
