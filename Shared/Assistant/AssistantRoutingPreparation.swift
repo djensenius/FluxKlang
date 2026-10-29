@@ -246,7 +246,7 @@ enum AssistantRoutingPreparation {
 
     private static func directivesCovered(_ intent: AssistantRoutingIntent, in text: String) -> Bool {
         let operands = maskingEntities(in: text, intent: intent, markSources: true)
-        guard operands.range(of: #"\b(?:to|into|through|via|followed by)\s+(?:(?:the|my)\s+)?fk_source\b"#,
+        guard operands.range(of: #"\b(?:to|into|through|via|then|followed\s+by)\s+(?:(?:the|my)\s+)?fk_source\b"#,
                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)

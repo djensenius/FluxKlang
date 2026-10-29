@@ -94,9 +94,10 @@ struct AssistantRoutingNameEvidenceTests {
         #expect(!fixture.rejects(text: intent.modeEvidence + " and " + text, intent: intent, context: context))
     }
 
-    @Test func serialSourceOperandsCannotBecomeSeparateRoutes() {
+    @Test(arguments: ["followed by", "followed  by", "then"])
+    func serialSourceOperandsCannotBecomeSeparateRoutes(serial: String) {
         let fixture = AssistantRoutingFixture()
-        let text = "route Solar through evil pet followed by Osmose to mains"
+        let text = "route Solar through evil pet \(serial) Osmose to mains"
         var intent = AssistantRoutingIntent(branches: [
             .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
                   processingEvidence: "Solar through evil pet"),
