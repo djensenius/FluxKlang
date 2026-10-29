@@ -142,7 +142,7 @@ enum AssistantActionIntentValidator {
     }
 
     private static func compoundTargetsMatch(_ intent: AssistantActionIntent, text: String) -> Bool {
-        guard intent.addToStudio, let action = intent.action else { return true }
+        guard intent.addToStudio else { return true }
         let scoped = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " it ", options: [.regularExpression, .caseInsensitive])
         let addPattern = #"\b(?:add|include)\s+.*?(?=\b(?:and|then|also)\b|[;,.!?]|$)"#
@@ -155,6 +155,7 @@ enum AssistantActionIntentValidator {
             + #"(?:\s+as\s+(?:(?:a|an|the)\s+)?(?:existing\s+)?(?:live[-\s]+channel\s+)?shortcut"#
             + #"|\s+to\s+(?:(?:my|the)\s+)?(?:studio|canvas))?\s*$"#
         guard add.range(of: objectPattern, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        guard let action = intent.action else { return true }
         var remainder = scoped
         remainder.replaceSubrange(range, with: " ")
         if let amount = intent.evidence.amount {
@@ -162,7 +163,7 @@ enum AssistantActionIntentValidator {
         }
         if action == .mute || action == .unmute {
             let prefix = #"^\s*(?:(?:please|could you|can you|would you|and|then|also)\s+)*"#
-            let reference = #"\s+(?:(?:my|the)\s+)?(?:it|this|that|them)\s*(?:(?:and|then|also)\s*)?$"#
+            let reference = #"\s+(?:(?:my|the)\s+)?(?:it|this|that|them)\s*(?:(?:and|then|also)\s*)?[.!?]*\s*$"#
             return remainder.range(of: prefix + "(?:" + actionWords(action).joined(separator: "|") + ")" + reference,
                                    options: [.regularExpression, .caseInsensitive]) != nil
         }
