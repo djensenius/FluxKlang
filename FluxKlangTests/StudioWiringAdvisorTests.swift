@@ -198,7 +198,8 @@ struct StudioWiringAdvisorTests {
         #expect(draft.cableInstructions.map(\.connectorKind) == [.wingInput, .wingInput])
     }
 
-    @Test func finalMixDraftNamesAndShowsConfiguredMainSpeakerOutputs() {
+    @Test(arguments: [false, true])
+    func finalMixDraftNamesAndShowsConfiguredMainSpeakerOutputs(legacyEmpty: Bool) {
         let synth = Equipment(name: "Synth", outputs: ["Output L", "Output R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
             inputs: [
@@ -212,7 +213,7 @@ struct StudioWiringAdvisorTests {
         ))
 
         let draft = StudioWiringAdvisor.build(
-            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id]),
+            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id], outputConnectors: legacyEmpty ? [] : nil),
             equipment: [synth],
             effects: [],
             connections: connections,
@@ -222,6 +223,9 @@ struct StudioWiringAdvisorTests {
         #expect(draft.fragment.endpoints.first?.name == "Main Speakers")
         #expect(draft.logicalRoutingSummary.first?.value == "Synth → Main Speakers")
         #expect(draft.cableInstructions.filter { $0.connectorKind == .wingOutput }.map(\.connector) == [7, 8])
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: [synth], effects: [],
+            connections: connections, currentGraph: StudioGraph(), currentEnvironmentID: nil)
+        #expect(refreshed.cableInstructions.filter { $0.connectorKind == .wingOutput }.map(\.connector) == [7, 8])
     }
 
     @Test func advisorReportsMissingGearAndConnectionConflicts() {
@@ -398,5 +402,33 @@ struct StudioWiringAdvisorTests {
         #expect(normalized.endpoints == [firstEndpoint])
         #expect(normalized.graph.nodes.count == 2)
         #expect(normalized.graph.edges.first?.to.nodeID == firstNode.id)
+    }
+}
+
+extension StudioWiringAdvisorTests {
+    @Test func legacyEndpointDecodesWithoutOutputProvenance() throws {
+        let endpoint = StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                                      outputConnectors: [.init(index: 5), .init(index: 6)])
+        let data = try JSONEncoder().encode(endpoint)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["outputReferences"] == nil)
+        #expect(try JSONDecoder().decode(StudioEndpoint.self, from: data) == endpoint)
+    }
+
+    @Test(arguments: [false, true])
+    func normalizationKeepsReviewedOutputProvenance(referenceFirst: Bool) {
+        let reference = AssistantRoutingOutputReference(mention: "desktop speakers", groupName: "desk speakers",
+                                                       connectors: [.init(index: 5), .init(index: 6)])
+        let endpoints = [true, false].map { first in
+            StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                           outputConnectors: reference.connectors,
+                           outputReferences: first == referenceFirst ? [reference] : nil)
+        }
+        let graph = StudioGraph(nodes: endpoints.map { .init(kind: .endpoint($0.id), title: $0.name) })
+        let normalized = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
+        #expect(normalized.endpoints.count == 1)
+        #expect(normalized.endpoints.first?.outputReferences == [reference])
+        #expect(StudioEndpointNormalizer.normalize(graph: normalized.graph,
+                                                   endpoints: normalized.endpoints) == normalized)
     }
 }

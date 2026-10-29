@@ -162,7 +162,7 @@ struct AssistantReviewedChatTests {
         }
     }
 
-    @Test func installedPlannerPreservesRoutingNamesButBlocksMixedUnavailableActions() async throws {
+    @Test func installedPlannerCannotFallbackForRoutingNamesOrMixedUnavailableActions() async throws {
         let gear = Equipment(name: "Lower Synth")
         let context = AssistantBackendFixture.context(equipment: [gear],
             inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
@@ -180,16 +180,15 @@ struct AssistantReviewedChatTests {
             chat.composer = "route Lower Synth to speakers"
             chat.send(context: context)
             try await AssistantBackendFixture.wait { !chat.isStreaming }
-            #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
-            let original = try #require(coordinator.pendingStudioDraft)
-            #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == false)
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(chat.selectedConversation?.messages.last?.text.isEmpty == false)
             for suffix in ["and mute main", "; unsilence Astrolab", "and could you attenuate Astrolab",
                            "and make Astrolab softer", "and Astrolab quieter", "and set channel 7 to -10 dB"] {
                 chat.composer = "route Lower Synth to speakers \(suffix)"
                 chat.send(context: context)
                 try await AssistantBackendFixture.wait { !chat.isStreaming }
-                #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true)
-                #expect(coordinator.pendingStudioDraft == original)
+                #expect(chat.selectedConversation?.messages.last?.text.isEmpty == false)
+                #expect(coordinator.pendingStudioDraft == nil)
                 #expect(planner.pendingReview == nil)
             }
             #expect(provider.calls == 0)
@@ -199,7 +198,7 @@ struct AssistantReviewedChatTests {
         }
     }
 
-    @Test func routingAnswerUsesReviewedPreflightAndInvalidInterpretationClarifiesWithoutProvider() async throws {
+    @Test func routingAnswerAndInvalidInterpretationCannotUseLegacyPreflightOrProvider() async throws {
         let gear = Equipment(name: "Lower Synth")
         let context = AssistantBackendFixture.context(equipment: [gear],
             inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
@@ -221,13 +220,8 @@ struct AssistantReviewedChatTests {
             #expect(planner.intents.isEmpty)
             #expect(planner.confirmations == 0)
             #expect(legacy.commands.isEmpty)
-            if answer {
-                #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
-            } else {
-                #expect(coordinator.pendingStudioDraft == nil)
-                #expect(chat.selectedConversation?.messages.last?.text
-                    == AssistantActionInterpretationAdapter.invalidOutput)
-            }
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(chat.selectedConversation?.messages.last?.text == AssistantRoutingOwnership.clarification)
         }
     }
 

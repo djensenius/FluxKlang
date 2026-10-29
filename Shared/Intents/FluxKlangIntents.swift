@@ -177,29 +177,33 @@ struct DraftStudioPatchIntent: AppIntent {
 enum SiriDraftStudioAction {
     static func execute(
         request: String,
-        model: AppModel
+        model: AppModel,
+        interpreter: any AssistantActionInterpreting = FoundationModelActionInterpreter()
     ) async -> String {
         let context = await prepareContext(model: model)
         let normalizedRequest = removeSiriInvocationPrefix(from: request)
-        let generationRequest = AssistantGenerationRequest(
-            question: normalizedRequest,
-            recentMessages: [],
-            summary: "",
-            context: context
-        )
-        guard let wiringRequest = AssistantDraftIntent.wiringRequest(from: generationRequest) else {
-            if let clarification = AssistantDraftIntent.clarification(from: generationRequest) {
-                return clarification
+        let expectedPending = model.assistant.pendingStudioDraft
+        do {
+            let preparation = try await AssistantRoutingPreparation.interpret(
+                text: normalizedRequest, context: context, interpreter: interpreter)
+            try Task.checkCancellation()
+            guard case .prepared(let draft) = preparation else {
+                return AssistantRoutingOwnership.clarification
             }
-            return AssistantDraftIntent.missingSource
+            guard await model.assistant.commitPreparedRouting(
+                draft, expectedPending: expectedPending, preparedContext: context,
+                currentContext: model.assistantToolContext()) else {
+                return AssistantRoutingOwnership.clarification
+            }
+            guard !Task.isCancelled, model.assistant.pendingStudioDraft == draft else {
+                return "Routing review was cancelled or changed; no WING changes were made."
+            }
+            _ = await model.assistant.perform(.openReview, context: model.assistantToolContext())
+            model.section = .studio
+            return spokenSummary(for: draft)
+        } catch {
+            return AssistantRoutingOwnership.clarification
         }
-        let result = await model.assistant.perform(.buildStudioDraft(wiringRequest), context: context)
-        guard case .pendingDraft(let draft?) = result else {
-            return "I couldn't create a Studio draft."
-        }
-        _ = await model.assistant.perform(.openReview, context: context)
-        model.section = .studio
-        return spokenSummary(for: draft)
     }
 
     static func execute(
@@ -264,7 +268,7 @@ enum SiriDraftStudioAction {
     }
 
     static func spokenSummary(for draft: StudioPatchDraft) -> String {
-        let path = draft.logicalRoutingSummary.first?.value ?? "Studio draft"
+        let path = draft.logicalRoutingSummary.map(\.value).joined(separator: "; ")
         if draft.hasErrors {
             let count = draft.validation.count
             return "Drafted \(path). Review \(count) issue\(count == 1 ? "" : "s") in FluxKlang."

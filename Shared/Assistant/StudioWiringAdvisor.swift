@@ -150,9 +150,10 @@ enum StudioWiringAdvisor {
         effects: [Effect],
         connections: GlobalStudioConnections,
         currentGraph: StudioGraph,
-        currentEnvironmentID: RoutingEnvironment.ID?
+        currentEnvironmentID: RoutingEnvironment.ID?,
+        currentEndpoints: [StudioEndpoint] = []
     ) -> StudioPatchDraft {
-        var refreshed = makeDraft(
+        var refreshed = build(
             request: StudioWiringRequest(
                 sourceInstrumentIDs: draft.request.sourceInstrumentIDs,
                 effectChainIDs: draft.request.effectChainIDs,
@@ -166,10 +167,35 @@ enum StudioWiringAdvisor {
             effects: effects,
             connections: connections,
             currentGraph: currentGraph,
-            environmentID: draft.request.environmentID,
-            currentEnvironmentID: currentEnvironmentID
+            environmentID: draft.request.environmentID
         )
+        refreshed.id = draft.id
         refreshed.createdAt = draft.createdAt
+        refreshed.liveReferences = draft.liveReferences
+        refreshed.outputReferences = draft.outputReferences
+        refreshed.nameReferences = draft.nameReferences
+        if draft.hasEffectDeviceConflict(effects: effects) {
+            refreshed.validation.append(.error("effect-device-changed",
+                "A reviewed effect device changed or is shared with another requested or excluded effect. "
+                    + "Create a new routing draft."))
+        }
+        if draft.request.environmentID != currentEnvironmentID {
+            refreshed.validation.append(.error(
+                "environment-changed", "This draft belongs to a different Studio environment."))
+        }
+        if !(draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: connections.effectiveHome) }) {
+            refreshed.validation.append(.error("destination-changed",
+                "A configured speaker group changed. Create a new draft rather than reusing old output connectors."))
+        }
+        let graphConflict = AssistantRoutingPreparation.conflictsWithExistingGraph(
+            draft.request, effects: effects, graph: currentGraph)
+        let destinationConflict = AssistantRoutingPreparation.conflictsWithExistingDestinations(
+            draft, endpoints: currentEndpoints)
+        if draft.outputReferences?.isEmpty == false, draft.applicationMode == .append,
+           graphConflict || destinationConflict {
+            refreshed.validation.append(.error("routing-graph-changed",
+                "A requested source, effect or speaker mapping conflicts with the current graph. Create a new draft."))
+        }
         return refreshed
     }
 
@@ -391,8 +417,13 @@ enum StudioWiringAdvisor {
                 usesActiveTemporaryMove: moved
             ))
         }
-        if request.destination == .finalMix {
-            for connection in mainSpeakerOutputs(in: effective) {
+        if request.destination == .finalMix || request.destination == .custom {
+            let unspecifiedMains = request.destination == .finalMix && request.outputConnectors?.isEmpty == true
+            let selected = unspecifiedMains ? nil : request.outputConnectors.map(Set.init)
+            let destinationOutputs = selected.map { connectors in
+                effective.outputs.filter { connectors.contains($0.outputConnector) }
+            } ?? (request.destination == .finalMix ? mainSpeakerOutputs(in: effective) : [])
+            for connection in destinationOutputs {
                 let label = connection.label(equipment: equipment)
                 instructions.append(StudioCableInstruction(
                     id: "destination-\(connection.bank.rawValue)-\(connection.connector)",
@@ -481,10 +512,9 @@ enum StudioWiringAdvisor {
     private static func mainSpeakerOutputs(
         in connections: StudioHomeConnections
     ) -> [StudioOutputConnection] {
-        connections.outputs.filter {
-            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
-        }.sorted {
-            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+        let connectors = AssistantRoutingOutputResolver.resolve("mains", in: connections)?.reference.connectors ?? []
+        return connectors.compactMap { connector in
+            connections.outputs.first { $0.outputConnector == connector }
         }
     }
 

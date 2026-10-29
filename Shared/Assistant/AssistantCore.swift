@@ -302,6 +302,8 @@ enum AssistantFallbackResponder {
 @Observable
 final class AssistantCoordinator {
     private let draftStore: any PendingStudioPatchPersisting
+    private var settledStudioDraft: StudioPatchDraft?
+    private var routingSubmissionID: UUID?
 
     private(set) var pendingStudioDraft: StudioPatchDraft?
     var navigationTarget: AssistantNavigationTarget? {
@@ -318,6 +320,8 @@ final class AssistantCoordinator {
 
     func load() async {
         pendingStudioDraft = await draftStore.load()
+        settledStudioDraft = pendingStudioDraft
+        routingSubmissionID = nil
     }
 
     // Every supported capability is explicit and typed; there is no arbitrary
@@ -359,18 +363,23 @@ final class AssistantCoordinator {
                 environmentID: context.activeEnvironmentID
             )
             draft.liveReferences = request.liveReferences
+            draft.outputReferences = request.outputReferences
             pendingStudioDraft = draft
-            await draftStore.save(draft)
+            settledStudioDraft = draft
+            routingSubmissionID = nil
+            await persistPendingDraft()
             return .pendingDraft(draft)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
+            let wasSettled = settledStudioDraft == draft
             var refreshed = StudioWiringAdvisor.revalidate(
                 draft,
                 equipment: context.equipment,
                 effects: context.effects,
                 connections: context.globalConnections,
                 currentGraph: context.graph,
-                currentEnvironmentID: context.activeEnvironmentID
+                currentEnvironmentID: context.activeEnvironmentID,
+                currentEndpoints: context.endpoints
             )
             refreshed.liveReferences = draft.liveReferences
             if !(draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: context.liveWing) }) {
@@ -380,8 +389,14 @@ final class AssistantCoordinator {
                         + "Relink and create a new draft before accepting."
                 ))
             }
+            if !(draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: context) }) {
+                refreshed.validation.append(StudioDraftValidationIssue(
+                    code: "routing-name-changed", severity: .error,
+                    message: "A routing name now resolves differently. Create a new draft before accepting."))
+            }
             pendingStudioDraft = refreshed
-            await draftStore.save(refreshed)
+            if wasSettled { settledStudioDraft = refreshed }
+            await persistPendingDraft()
             return .pendingDraft(refreshed)
         case .openReview:
             guard pendingStudioDraft != nil else {
@@ -396,10 +411,56 @@ final class AssistantCoordinator {
         }
     }
 
+    /// Natural-language preparation is all-or-nothing. The last synchronous guard and mutation share
+    /// the main actor; no await can admit a stale response or replace a newer pending review.
+    func commitPreparedRouting(
+        _ draft: StudioPatchDraft, expectedPending: StudioPatchDraft?,
+        preparedContext: AssistantToolContext, currentContext: AssistantToolContext
+    ) async -> Bool {
+        guard !Task.isCancelled, !draft.hasErrors, pendingStudioDraft == expectedPending,
+              preparedContext.activeEnvironmentID == currentContext.activeEnvironmentID,
+              preparedContext.equipment == currentContext.equipment,
+              preparedContext.effects == currentContext.effects,
+              preparedContext.globalConnections == currentContext.globalConnections,
+              preparedContext.graph == currentContext.graph,
+              preparedContext.endpoints == currentContext.endpoints,
+              preparedContext.liveWing.sessionID == currentContext.liveWing.sessionID,
+              (draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: currentContext) }),
+              (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
+              (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
+        else { return false }
+        let rollback = settledStudioDraft
+        let submissionID = UUID()
+        routingSubmissionID = submissionID
+        defer {
+            if routingSubmissionID == submissionID { routingSubmissionID = nil }
+        }
+        pendingStudioDraft = draft
+        await persistPendingDraft()
+        if Task.isCancelled, routingSubmissionID == submissionID {
+            pendingStudioDraft = rollback
+            await persistPendingDraft()
+        }
+        guard !Task.isCancelled, pendingStudioDraft == draft else { return false }
+        settledStudioDraft = draft
+        return true
+    }
+
     func discardPendingStudioDraft() async {
         pendingStudioDraft = nil
+        settledStudioDraft = nil
+        routingSubmissionID = nil
         navigationTarget = nil
-        await draftStore.save(nil)
+        await persistPendingDraft()
+    }
+
+    private func persistPendingDraft() async {
+        var saved = pendingStudioDraft
+        while true {
+            await draftStore.save(saved)
+            guard saved != pendingStudioDraft else { return }
+            saved = pendingStudioDraft
+        }
     }
 
     func clearNavigation() {

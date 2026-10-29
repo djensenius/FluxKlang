@@ -125,41 +125,39 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
-    @Test func completeSourceScopedRequestBuildsDraftThroughPreflight() async throws {
+    @Test func completeSourceScopedRequestCannotBypassApplePreparationThroughPreflight() async throws {
         let context = musicianRoutingContext()
         let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         let reply = try await text(from: generator,
             question: "Route Flux through Cosmos and AstroLab through Evil Pet to mains.", context: context)
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [context.equipment[0].id])
-        #expect(draft.request.effectChainIDs == [context.effects[1].id])
-        #expect(draft.request.additionalRoutes.first?.sourceInstrumentIDs == [context.equipment[1].id])
-        #expect(draft.request.additionalRoutes.first?.effectChainIDs == [context.effects[0].id])
-        #expect(reply.contains("review-only"))
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(reply.contains("No draft was changed"))
         #expect(provider.calls == 0)
     }
 
-    @Test func connectedNowFollowUpUsesRoutingHistoryThroughChat() async throws {
+    @Test func connectedNowFollowUpCannotReconstructRoutingHistoryThroughChat() async throws {
         let context = musicianRoutingContext()
         let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
         let provider = AssistantBackendGenerator()
         let chat = AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider)
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
+        _ = await coordinator.perform(.buildStudioDraft(.init(sourceInstrumentIDs: [context.equipment[0].id])),
+                                      context: context)
+        let prior = try #require(coordinator.pendingStudioDraft)
         chat.spokenRepliesEnabled = false
         chat.composer = "Route Flux through Cosmos to mains."
         chat.send(context: context)
         try await AssistantBackendFixture.wait { !chat.isStreaming }
-        _ = try #require(coordinator.pendingStudioDraft)
-        await coordinator.discardPendingStudioDraft()
+        #expect(coordinator.pendingStudioDraft == prior)
         chat.composer = "It is connected now, try again."
         chat.send(context: context)
         try await AssistantBackendFixture.wait { !chat.isStreaming }
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [context.equipment[0].id])
-        #expect(draft.request.effectChainIDs == [context.effects[1].id])
-        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == false)
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
         #expect(provider.calls == 0)
     }
 
@@ -184,7 +182,7 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
-    @Test func completeWiringRequestBypassesModelConfirmation() async throws {
+    @Test func legacyPreflightCannotBypassAppleRoutingPreparation() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
         let astrolab = Equipment(name: "AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
@@ -233,11 +231,11 @@ struct AssistantReliabilityTests {
         }
 
         #expect(!text.contains("Please confirm"))
-        #expect(text.contains("SOMA Flux + AstroLab 88 → Main Speakers"))
-        #expect(coordinator.pendingStudioDraft?.applicationMode == .replace)
+        #expect(text == AssistantRoutingOwnership.clarification)
+        #expect(coordinator.pendingStudioDraft == nil)
     }
 
-    @Test func inventoryAndFollowUpAmendmentBypassModelGuessing() async throws {
+    @Test func inventoryRemainsGroundedButFollowUpCannotReconstructOldRouting() async throws {
         let flux = Equipment(name: "SOMA Flux", outputs: ["Out L", "Out R"], isStereo: true)
         let astrolab = Equipment(name: "Arturia AstroLab 88", outputs: ["Out L", "Out R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
@@ -293,8 +291,8 @@ struct AssistantReliabilityTests {
 
         #expect(inventory.contains("Saved equipment (not connected-equipment detection):"))
         #expect(inventory.contains("Arturia AstroLab 88 (WING inputs 21/22)"))
-        #expect(amended.contains("SOMA Flux + Arturia AstroLab 88 → Main Speakers"))
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [flux.id, astrolab.id])
+        #expect(amended.contains("No draft was changed"))
+        #expect(coordinator.pendingStudioDraft == nil)
     }
 
     private func emptyContext() -> AssistantToolContext {

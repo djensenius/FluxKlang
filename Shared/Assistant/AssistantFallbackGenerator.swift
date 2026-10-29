@@ -32,6 +32,9 @@ struct AssistantFallbackGenerator: AssistantGenerating {
     private func response(
         to request: AssistantGenerationRequest
     ) async throws -> (text: String, cards: [AssistantCard]) {
+        if AssistantRoutingOwnership.owns(request.question) {
+            return (AssistantRoutingOwnership.clarification, [])
+        }
         let normalized = request.question.lowercased()
         if let topic = helpTopic(in: normalized) {
             let entry = FluxKlangHelpCatalog.entry(for: topic)
@@ -72,29 +75,8 @@ struct AssistantFallbackGenerator: AssistantGenerating {
             return (text, cards(for: coordinator.pendingStudioDraft))
         }
         if normalized.contains("wire") || normalized.contains("connect") || normalized.contains("patch") {
-            let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
-            let resolution = AssistantSourceResolver.resolve(
-                request.question, context: request.context, excluding: effectEquipmentIDs
-            )
-            if let clarification = resolution.clarification { return (clarification, []) }
-            let sourceIDs = resolution.equipmentIDs
-            if !sourceIDs.isEmpty {
-                var wiringRequest = StudioWiringRequest(
-                    sourceInstrumentIDs: sourceIDs,
-                    applicationMode: AssistantDraftIntent.requestsReplacement(request.question) ? .replace : .append
-                )
-                wiringRequest.liveReferences = resolution.references
-                let result = await coordinator.perform(.buildStudioDraft(wiringRequest), context: request.context)
-                let text = try AssistantFallbackResponder.response(
-                    to: .live(request.question, requires: [.pendingDraft]),
-                    groundedBy: [result]
-                )
-                return (text, cards(for: coordinator.pendingStudioDraft))
-            }
-            return (
-                "Choose one or more source instruments in the wiring form so I can create a reviewable draft.",
-                []
-            )
+            let entry = FluxKlangHelpCatalog.entry(for: .studio)
+            return (entry.overview, [.help(topic: .studio, title: entry.title, overview: entry.overview)])
         }
         let results = [
             await coordinator.perform(.describeCurrentScreen, context: request.context),

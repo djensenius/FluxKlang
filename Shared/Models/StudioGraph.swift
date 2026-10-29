@@ -36,6 +36,12 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
     var controls: Set<StudioEndpointControl>
     /// Explicit physical outputs for custom destinations such as Desk Speakers.
     var outputConnectors: [WingOutputConnector]?
+    /// Reviewed configured groups whose ordered mapping must still hold before Listen.
+    var outputReferences: [AssistantRoutingOutputReference]?
+    // Legacy final-mix drafts stored [] to mean configured mains, not an explicit mapping.
+    var explicitOutputConnectors: [WingOutputConnector]? {
+        destination == .finalMix && outputConnectors?.isEmpty == true ? nil : outputConnectors
+    }
     /// Stable, UI-level color token. The actual SwiftUI color is resolved by the view layer.
     var colorName: String?
     /// Space endpoints can be positioned independently.
@@ -47,6 +53,7 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
         destination: StudioEndpointDestination,
         controls: Set<StudioEndpointControl> = StudioEndpoint.defaultControls,
         outputConnectors: [WingOutputConnector]? = nil,
+        outputReferences: [AssistantRoutingOutputReference]? = nil,
         colorName: String? = nil,
         placement: VoicePlacement? = nil
     ) {
@@ -55,8 +62,15 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
         self.destination = destination
         self.controls = controls
         self.outputConnectors = outputConnectors
+        self.outputReferences = outputReferences
         self.colorName = colorName
         self.placement = placement
+    }
+
+    mutating func retainOutputReferences(_ references: [AssistantRoutingOutputReference]) {
+        for reference in references where !(outputReferences ?? []).contains(reference) {
+            outputReferences = (outputReferences ?? []) + [reference]
+        }
     }
 }
 

@@ -31,6 +31,7 @@ struct StudioWiringRequest: Hashable, Sendable {
     var additionalRoutes: [StudioWiringRoute]
     var applicationMode: StudioDraftApplicationMode
     var liveReferences: [AssistantLiveReference] = []
+    var outputReferences: [AssistantRoutingOutputReference] = []
 
     init(
         sourceInstrumentIDs: [Equipment.ID],
@@ -118,11 +119,27 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
     var validation: [StudioDraftValidationIssue]
     var applicationMode: StudioDraftApplicationMode
     var liveReferences: [AssistantLiveReference]?
+    var outputReferences: [AssistantRoutingOutputReference]?
+    var nameReferences: [AssistantRoutingNameReference]?
     var hasErrors: Bool { validation.contains { $0.severity == .error } }
+
+    func hasEffectDeviceConflict(effects: [Effect]) -> Bool {
+        let requestedIDs = Set(request.effectChainIDs + request.additionalRoutes.flatMap(\.effectChainIDs))
+        let requested = effects.filter { requestedIDs.contains($0.id) }
+        let requestedDevices = Set(requested.compactMap(\.equipmentID))
+        let excludedIDs = Set((nameReferences ?? []).filter { $0.kind == .excludedEffect }.map(\.id))
+        let excludedDevices = Set(effects.filter { excludedIDs.contains($0.id) }.compactMap(\.equipmentID))
+        let changedLinks = (nameReferences ?? []).contains { reference in
+            guard let device = reference.equipmentID else { return false }
+            return effects.first(where: { $0.id == reference.id })?.equipmentID != device
+        }
+        return changedLinks || !Effect.sharedEquipmentIDs(in: requested).isEmpty
+            || !requestedDevices.isDisjoint(with: excludedDevices)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
-        case applicationMode, liveReferences
+        case applicationMode, liveReferences, outputReferences, nameReferences
     }
 
     init(from decoder: any Decoder) throws {
@@ -144,6 +161,10 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
             forKey: .validation
         ) ?? []
         liveReferences = try container.decodeIfPresent([AssistantLiveReference].self, forKey: .liveReferences)
+        outputReferences = try container.decodeIfPresent(
+            [AssistantRoutingOutputReference].self, forKey: .outputReferences)
+        nameReferences = try container.decodeIfPresent(
+            [AssistantRoutingNameReference].self, forKey: .nameReferences)
         applicationMode = try container.decodeIfPresent(
             StudioDraftApplicationMode.self,
             forKey: .applicationMode

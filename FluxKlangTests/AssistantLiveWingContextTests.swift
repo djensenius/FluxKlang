@@ -310,7 +310,7 @@ struct AssistantLiveWingContextTests {
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: spy)
         for (question, expected) in [
-            ("route Synthbook to speakers", "channel 7"), ("what equipment is connected", "Saved equipment")
+            ("route Synthbook to speakers", "No draft was changed"), ("what equipment is connected", "Saved equipment")
         ] {
             var text = ""
             for try await event in preflight.stream(
@@ -318,7 +318,7 @@ struct AssistantLiveWingContextTests {
                 if case .text(let value) = event { text = value }
             }
             #expect(text.contains(expected))
-            #expect(text.contains("Synthbook"))
+            if question == "what equipment is connected" { #expect(text.contains("Synthbook")) }
         }
         #expect(spy.calls == 0)
         #expect(coordinator.pendingStudioDraft == nil)

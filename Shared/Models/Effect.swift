@@ -74,6 +74,16 @@ struct Effect: Identifiable, Codable, Hashable, Sendable {
         sourceInstruments.contains(instrument)
     }
 
+    static func sharedEquipmentIDs(in effects: [Effect]) -> [Equipment.ID] {
+        let linked = effects.compactMap { effect -> (Equipment.ID, Effect.ID)? in
+            guard let device = effect.equipmentID else { return nil }
+            return (device, effect.id)
+        }
+        return Dictionary(grouping: linked, by: \.0).compactMap { device, effects in
+            Set(effects.map(\.1)).count > 1 ? device : nil
+        }
+    }
+
     /// Returns a copy with `instrument` added to or removed from its sources.
     func togglingSource(_ instrument: Equipment.ID, _ isOn: Bool) -> Effect {
         var copy = self

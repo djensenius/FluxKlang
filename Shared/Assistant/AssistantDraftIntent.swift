@@ -429,6 +429,8 @@ extension AssistantDraftIntent {
 
     static func requestsDraftAmendment(_ question: String) -> Bool {
         let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if AssistantActionInterpretationAdapter.isReadOnlyQuestion(question),
+           !normalized.hasPrefix("what about ") { return false }
         return normalized.hasPrefix("and ")
             || normalized.hasPrefix("also ")
             || normalized.hasPrefix("add ")
@@ -519,87 +521,32 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         let request = AssistantGenerationRequest(
             question: question, recentMessages: request.recentMessages,
             summary: request.summary, context: request.context)
+        if AssistantRoutingOwnership.owns(request.question)
+            || AssistantDraftIntent.requestsDraftAmendment(request.question) {
+            return textStream(AssistantRoutingOwnership.clarification)
+        }
         if AssistantDraftIntent.requestsInventory(request.question) {
             return inventoryStream(context: request.context)
         }
+        if AssistantActionInterpretationAdapter.isReadOnlyQuestion(request.question) {
+            return downstream.stream(request)
+        }
         let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
         if let clarification = resolution.clarification { return textStream(clarification) }
-        if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
-            return draftStream(wiringRequest, context: request.context)
+        if AssistantDraftIntent.wiringRequest(from: request) != nil {
+            return textStream(AssistantRoutingOwnership.clarification)
         }
         if let clarification = AssistantDraftIntent.clarification(from: request) {
             return textStream(clarification)
         }
 
-        let mentionedSources = resolution.equipmentIDs
-        guard AssistantDraftIntent.requestsDraftAmendment(request.question),
-              !mentionedSources.isEmpty else {
-            return downstream.stream(request)
-        }
-        return AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                guard let pending = coordinator.pendingStudioDraft else {
-                    do {
-                        for try await event in downstream.stream(request) {
-                            continuation.yield(event)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                    return
-                }
-                let updatedSources = orderedUnique(
-                    pending.request.sourceInstrumentIDs + mentionedSources
-                )
-                var wiringRequest = StudioWiringRequest(
-                    sourceInstrumentIDs: updatedSources,
-                    effectChainIDs: pending.request.effectChainIDs,
-                    destination: pending.request.destination,
-                    includesDrySignal: pending.request.includesDrySignal,
-                    additionalRoutes: pending.request.additionalRoutes,
-                    applicationMode: pending.applicationMode
-                )
-                wiringRequest.liveReferences = (pending.liveReferences ?? []) + resolution.references
-                let result = await coordinator.perform(
-                    .buildStudioDraft(wiringRequest),
-                    context: request.context
-                )
-                guard case .pendingDraft(let draft?) = result else {
-                    continuation.finish()
-                    return
-                }
-                continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                continuation.yield(.cards(cards(for: draft)))
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        return downstream.stream(request)
     }
 
     private func textStream(_ text: String) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
         AsyncThrowingStream { continuation in
             continuation.yield(.text(text))
             continuation.finish()
-        }
-    }
-
-    private func draftStream(
-        _ wiringRequest: StudioWiringRequest,
-        context: AssistantToolContext
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                let result = await coordinator.perform(.buildStudioDraft(wiringRequest), context: context)
-                guard case .pendingDraft(let draft?) = result else {
-                    continuation.finish()
-                    return
-                }
-                continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                continuation.yield(.cards(cards(for: draft)))
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -630,28 +577,5 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
             ))
             continuation.finish()
         }
-    }
-
-    private func cards(for draft: StudioPatchDraft) -> [AssistantCard] {
-        var result: [AssistantCard] = [
-            .wiring(
-                summary: draft.logicalRoutingSummary.map(\.value),
-                cableInstructions: draft.cableInstructions.map(\.instruction.value)
-            ),
-            .pendingDraft(
-                id: draft.id,
-                summary: draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"),
-                hasErrors: draft.hasErrors
-            )
-        ]
-        if !draft.validation.isEmpty {
-            result.append(.conflicts(draft.validation.map(\.message)))
-        }
-        return result
-    }
-
-    private func orderedUnique<T: Hashable>(_ values: [T]) -> [T] {
-        var seen: Set<T> = []
-        return values.filter { seen.insert($0).inserted }
     }
 }

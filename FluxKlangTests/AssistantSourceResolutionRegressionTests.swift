@@ -72,7 +72,7 @@ struct AssistantSourceResolutionRegressionTests {
 
     @Test(arguments: ["Help me route Synth through Echo to speakers.", "How do I connect Synth to speakers?",
                       "Help me to route Synth to speakers.", "How to connect Synth to speakers?"])
-    func savedSourcesRemainAvailableToHelpAndHowRoutingRequests(_ question: String) async throws {
+    func savedSourcesRemainInspectableButQuestionsCannotCreateDrafts(_ question: String) async throws {
         let synth = Equipment(name: "Synth")
         var context = AssistantBackendFixture.context(equipment: [synth], inputs: [
             .init(connector: 7, equipmentID: synth.id, outputPort: 0)
@@ -85,8 +85,8 @@ struct AssistantSourceResolutionRegressionTests {
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(request) {}
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
-        #expect(provider.calls == 0)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 1)
     }
 
     @Test func coordinatedSourceClausesReachPreflightWithoutDroppingTheSecondSource() async throws {
@@ -94,12 +94,13 @@ struct AssistantSourceResolutionRegressionTests {
         let bass = Equipment(name: "Bass")
         let context = AssistantBackendFixture.context(equipment: [synth, bass])
         let question = "Route Synth to speakers and Bass to speakers."
+        #expect(AssistantSourceResolver.resolve(question, context: context).equipmentIDs == [synth.id, bass.id])
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(
             .init(question: question, recentMessages: [], summary: "", context: context)) {}
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id, bass.id])
+        #expect(coordinator.pendingStudioDraft == nil)
         #expect(provider.calls == 0)
     }
 
@@ -117,7 +118,7 @@ struct AssistantSourceResolutionRegressionTests {
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(
             .init(question: question, recentMessages: [], summary: "", context: context)) {}
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
+        #expect(coordinator.pendingStudioDraft == nil)
         #expect(provider.calls == 0)
     }
 
@@ -183,14 +184,15 @@ struct AssistantSourceResolutionRegressionTests {
         for excluded in [false, true] {
             let question = "route \(kind) 7 and \(kind) 8 to speakers"
                 + (excluded ? ", don't use \(kind) 8" : "")
+            let resolution = AssistantSourceResolver.resolve(question, context: context)
+            #expect(resolution.equipmentIDs == (excluded ? [synth.id] : [synth.id, bass.id]))
+            #expect(resolution.references.count == (excluded ? 1 : 2))
             let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
             let provider = AssistantBackendGenerator()
             let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
             for try await _ in generator.stream(
                 .init(question: question, recentMessages: [], summary: "", context: context)) {}
-            let draft = try #require(coordinator.pendingStudioDraft)
-            #expect(draft.request.sourceInstrumentIDs == (excluded ? [synth.id] : [synth.id, bass.id]))
-            #expect(draft.liveReferences?.count == (excluded ? 1 : 2))
+            #expect(coordinator.pendingStudioDraft == nil)
             #expect(provider.calls == 0)
         }
     }
@@ -213,7 +215,7 @@ struct AssistantSourceResolutionRegressionTests {
     #if canImport(FoundationModels)
     @Test(arguments: ["Help me route Synth to speakers.", "How do I connect Synth to speakers?",
                       "Help me route Lead to speakers.", "What EQ is on Lead?"])
-    func foundationDraftToolPreservesSavedAndLiveSourceResolution(_ question: String) async throws {
+    func retiredFoundationDraftToolCannotMutateFromSavedOrLiveMentions(_ question: String) async throws {
         let synth = Equipment(name: "Synth")
         let context = AssistantBackendFixture.observe([WingAddress.inputName(7): .string("Lead")],
             context: AssistantBackendFixture.context(equipment: [synth], inputs: [
@@ -224,8 +226,7 @@ struct AssistantSourceResolutionRegressionTests {
                                                coordinator: coordinator, authorizer: .model)
         _ = try await tool.call(arguments: AssistantDraftArguments(sourceNames: ["Synth"],
             effectNames: [], destination: "Final Mix"))
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
-        if question.contains("Lead") { #expect(coordinator.pendingStudioDraft?.liveReferences?.count == 1) }
+        #expect(coordinator.pendingStudioDraft == nil)
     }
     #endif
 
@@ -274,7 +275,7 @@ struct AssistantSourceResolutionRegressionTests {
     }
 
     @Test(arguments: [false, true])
-    func preflightPreservesLiveAliasReferencesWhenCompletingCurrentOrHistoricalRoute(retry: Bool) async throws {
+    func preflightCannotResolveLiveAliasesWithoutApplePreparation(retry: Bool) async throws {
         let synth = Equipment(name: "Synth")
         let context = AssistantBackendFixture.observe([WingAddress.inputName(7): .string("Lead")],
             context: AssistantBackendFixture.context(equipment: [synth], inputs: [
@@ -288,10 +289,7 @@ struct AssistantSourceResolutionRegressionTests {
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(request) {}
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [synth.id])
-        #expect(draft.liveReferences?.count == 1)
-        #expect(draft.liveReferences?.first?.equipmentID == synth.id)
+        #expect(coordinator.pendingStudioDraft == nil)
         #expect(provider.calls == 0)
     }
 
@@ -348,12 +346,14 @@ struct AssistantSourceResolutionRegressionTests {
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
-        for try await _ in generator.stream(.init(question: "It is connected now, try again.",
-            recentMessages: history.map { .init(role: .user, text: $0) }, summary: "", context: context)) {}
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [synth.id])
-        #expect(draft.request.effectChainIDs == [echo.id])
-        #expect(draft.liveReferences?.map(\.equipmentID) == [synth.id])
+        let request = AssistantGenerationRequest(question: "It is connected now, try again.",
+            recentMessages: history.map { .init(role: .user, text: $0) }, summary: "", context: context)
+        for try await _ in generator.stream(request) {}
+        let inspected = try #require(AssistantDraftIntent.wiringRequest(from: request))
+        #expect(inspected.sourceInstrumentIDs == [synth.id])
+        #expect(inspected.effectChainIDs == [echo.id])
+        #expect(inspected.liveReferences.map(\.equipmentID) == [synth.id])
+        #expect(coordinator.pendingStudioDraft == nil)
         #expect(provider.calls == 0)
     }
 
@@ -373,14 +373,17 @@ struct AssistantSourceResolutionRegressionTests {
             let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
             let provider = AssistantBackendGenerator()
             let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
-            for try await _ in generator.stream(.init(question: "route \(source) to speakers",
-                recentMessages: [], summary: "", context: context)) {}
+            let request = AssistantGenerationRequest(question: "route \(source) to speakers",
+                recentMessages: [], summary: "", context: context)
+            for try await _ in generator.stream(request) {}
+            #expect(coordinator.pendingStudioDraft == nil)
+            let inspected = AssistantDraftIntent.wiringRequest(from: request)
             if expected.isEmpty {
-                #expect(coordinator.pendingStudioDraft == nil)
+                #expect(inspected == nil)
             } else {
-                let draft = try #require(coordinator.pendingStudioDraft)
-                #expect(draft.request.sourceInstrumentIDs == expected)
-                #expect(draft.liveReferences?.count ?? 0 == (source == label ? 1 : 0))
+                let route = try #require(inspected)
+                #expect(route.sourceInstrumentIDs == expected)
+                #expect(route.liveReferences.count == (source == label ? 1 : 0))
             }
             #expect(provider.calls == 0)
         }

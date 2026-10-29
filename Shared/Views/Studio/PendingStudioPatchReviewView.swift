@@ -16,6 +16,8 @@ struct PendingStudioPatchCard: View {
                 .font(.headline)
             Text(draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("assistant.pendingDraft.routingSummary")
             HStack {
                 Button("Review", action: review)
                     .buttonStyle(.borderedProminent)
@@ -41,6 +43,10 @@ struct PendingStudioPatchReviewView: View {
         NavigationStack {
             List {
                 Section("Safety") {
+                    Text(draft.applicationMode == .replace
+                        ? "Replace current Studio graph" : "Append to current Studio graph")
+                        .font(.headline)
+                        .accessibilityIdentifier("assistant.pendingDraft.applicationMode")
                     if draft.applicationMode == .replace {
                         Label(
                             """
@@ -54,7 +60,7 @@ struct PendingStudioPatchReviewView: View {
                         Label(
                             """
                             Accept only adds valid Studio nodes and wires. \
-                            It does not remove routing or write to the WING.
+                            It does not remove routing or write to the WING. Listen remains a separate action.
                             """,
                             systemImage: "checkmark.shield"
                         )
@@ -62,10 +68,15 @@ struct PendingStudioPatchReviewView: View {
                 }
 
                 Section("Logical Routing") {
-                    ForEach(draft.logicalRoutingSummary, id: \.self) { summary in
-                        Text(summary.value)
+                    PendingStudioRoutingSummaryView(draft: draft)
+                }
+                #if DEBUG
+                if AcceptanceLaunchConfiguration.isMultiRouteUITesting {
+                    Section("UI Fixture Safety") {
+                        MultiRouteAcceptanceDiagnosticsView()
                     }
                 }
+                #endif
                 Section("Cable Instructions") {
                     if draft.cableInstructions.isEmpty {
                         Text("No complete configured cable path is available.")
@@ -74,6 +85,8 @@ struct PendingStudioPatchReviewView: View {
                     ForEach(draft.cableInstructions) { instruction in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(instruction.instruction.value)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("assistant.pendingDraft.cable.\(instruction.id)")
                             if instruction.usesActiveTemporaryMove {
                                 Text("Uses an active Temporary Move instead of Home.")
                                     .font(.caption)

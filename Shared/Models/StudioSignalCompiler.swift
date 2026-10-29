@@ -24,6 +24,8 @@ struct StudioCompileIssue: Identifiable, Hashable, Sendable {
         case unsupportedEdge(StudioEdge.ID)
         case physicalConnection(StudioConnectionIssue.Kind)
         case legacyConnectionMigration(StudioConnectionMigrationIssue.ID)
+        case outputMappingChanged(UUID)
+        case sharedEffectEquipment(Equipment.ID)
     }
 
     var severity: Severity
@@ -81,11 +83,14 @@ enum StudioSignalCompiler {
         let migrationIssues = input.connections.migrationIssues.map {
             StudioCompileIssue.warning(.legacyConnectionMigration($0.id), $0.message)
         }
-        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues)
+        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues + context.effectDeviceIssues
+            + input.outputMappingIssues(for: resourcePlan.allocations))
         let settings: [WingSetting]
         let hasPhysicalErrors = issues.contains {
             guard $0.severity == .error else { return false }
             if case .physicalConnection = $0.kind { return true }
+            if case .outputMappingChanged = $0.kind { return true }
+            if case .sharedEffectEquipment = $0.kind { return true }
             return false
         }
         if !hasPhysicalErrors {
@@ -362,15 +367,11 @@ enum StudioSignalCompiler {
         for allocations: [StudioEndpointAllocation],
         connections: StudioHomeConnections
     ) -> [WingSetting] {
-        let outputs = connections.outputs.filter {
-            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
-        }.sorted {
-            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
-        }
+        let outputs = AssistantRoutingOutputResolver.resolve("mains", in: connections)?.reference.connectors ?? []
         let maxMainCount = min(2, WingNodeKind.main.count)
         let mains = Array(1...maxMainCount)
         let outputSettings = zip(outputs, mains).flatMap { output, main in
-            WingOutputSource(group: .main, index: main).settings(forOutput: output.outputConnector)
+            WingOutputSource(group: .main, index: main).settings(forOutput: output)
         }
         let sendSettings = allocations.filter { $0.endpoint.destination == .finalMix }.flatMap { allocation in
             let buses = [allocation.controlNode, allocation.rightControlNode].compactMap { $0 }
@@ -477,6 +478,31 @@ enum StudioSignalCompiler {
     }
 }
 
+private extension StudioCompilationInput {
+    func outputMappingIssues(for allocations: [StudioEndpointAllocation]) -> [StudioCompileIssue] {
+        let mainConnectors = AssistantRoutingOutputResolver.resolve(
+            "mains", in: connections.effectiveHome)?.reference.connectors
+        return allocations.compactMap { allocation in
+            if !(allocation.endpoint.outputReferences ?? []).allSatisfy({
+                $0.connectors == allocation.endpoint.explicitOutputConnectors
+                    && $0.isValid(in: connections.effectiveHome)
+            }) {
+                return .error(.outputMappingChanged(allocation.endpoint.id),
+                              "The reviewed output group mapping changed. Create a new routing draft.")
+            }
+            guard allocation.endpoint.destination == .finalMix else { return nil }
+            guard let mainConnectors else {
+                return .error(.outputMappingChanged(allocation.endpoint.id),
+                              "Main Speakers need a complete stereo output mapping before compiling.")
+            }
+            guard let outputs = allocation.endpoint.explicitOutputConnectors, outputs != mainConnectors
+            else { return nil }
+            return .error(.outputMappingChanged(allocation.endpoint.id),
+                          "The reviewed Main Speakers mapping changed. Create a new routing draft.")
+        }
+    }
+}
+
 private struct CompileContext {
     var graph: StudioGraph
     var effectByID: [Effect.ID: Effect]
@@ -513,6 +539,17 @@ private struct CompileContext {
 
     func isAppliable(_ edge: StudioEdge) -> Bool {
         appliableEdges.contains(edge.id)
+    }
+
+    var effectDeviceIssues: [StudioCompileIssue] {
+        let activeNodes = Set(graph.edges.filter(isAppliable).flatMap { [$0.from.nodeID, $0.to.nodeID] })
+        let effects = graph.nodes.filter { activeNodes.contains($0.id) }.compactMap { node -> Effect? in
+            guard case .effect(let id) = node.kind else { return nil }
+            return effectByID[id]
+        }
+        return Effect.sharedEquipmentIDs(in: effects).map {
+            .error(.sharedEffectEquipment($0), "Independent effect paths cannot share one physical device.")
+        }
     }
 
     func endpointBuses(for nodeID: StudioNode.ID) -> (left: Int, right: Int)? {

@@ -65,15 +65,28 @@ extension AppModel {
         let controller = wing
         let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
         guard refreshedReferences, !Task.isCancelled, wing === controller,
-              assistant.pendingStudioDraft?.id == original.id else { return nil }
+              assistant.pendingStudioDraft == original else { return nil }
+        let validationContext = assistantToolContext()
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
-            context: assistantToolContext()
+            context: validationContext
         )
+        let currentContext = assistantToolContext()
         guard case .pendingDraft(let refreshed?) = validation,
               !refreshed.hasErrors, !Task.isCancelled, wing === controller,
-              assistant.pendingStudioDraft?.id == refreshed.id,
-              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: assistantToolContext().liveWing) })
+              assistant.pendingStudioDraft == refreshed,
+              validationContext.activeEnvironmentID == currentContext.activeEnvironmentID,
+              validationContext.equipment == currentContext.equipment,
+              validationContext.effects == currentContext.effects,
+              validationContext.globalConnections == currentContext.globalConnections,
+              validationContext.graph == currentContext.graph,
+              validationContext.endpoints == currentContext.endpoints,
+              validationContext.liveWing.sessionID == currentContext.liveWing.sessionID,
+              (refreshed.nameReferences ?? []).allSatisfy({ $0.isValid(in: currentContext) }),
+              (refreshed.outputReferences ?? []).allSatisfy({
+                  $0.isValid(in: currentContext.effectiveConnections)
+              }),
+              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) })
         else { return nil }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
