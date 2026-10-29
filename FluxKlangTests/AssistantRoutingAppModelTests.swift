@@ -261,6 +261,16 @@ struct AssistantRoutingAppModelTests {
             currentEnvironmentID: nil, currentEndpoints: context.endpoints)
         #expect(refreshed.validation.contains { $0.code == "routing-graph-changed" })
     }
+
+    @Test func destinationUsedByAnotherSourceCannotHideAnOmittedDestination() {
+        let fixture = AssistantRoutingFixture()
+        let text = "route Osmose to mains and desktop speakers and Solar to desktop speakers"
+        let partial = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains"),
+            .init(source: "Solar", destination: "desktop speakers", destinationEvidence: "Solar to desktop speakers")
+        ])
+        #expect(fixture.rejects(text: text, intent: partial))
+    }
 }
 
 private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {

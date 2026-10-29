@@ -232,11 +232,19 @@ enum AssistantRoutingPreparation {
             (NSRegularExpression.escapedPattern(for: effect),
              intent.branches.filter { $0.effects.contains(effect) }.map(\.processingEvidence))
         }
+        let destinationChecks = Set(intent.branches.map(\.destination)).map { destination in
+            (NSRegularExpression.escapedPattern(for: destination),
+             intent.branches.filter {
+                 AssistantRoutingInterpretationAdapter.normalize($0.destination)
+                     == AssistantRoutingInterpretationAdapter.normalize(destination)
+             }.map(\.destinationEvidence))
+        }
         for (pattern, evidence) in [
             ("through|via", processing), ("dry|wet|parallel", dry)
-        ] + effectChecks {
+        ] + effectChecks + destinationChecks {
             guard let regex = try? NSRegularExpression(
-                pattern: "\\b(?:" + pattern + ")\\b", options: .caseInsensitive) else { return false }
+                pattern: "(?<![\\p{L}\\p{N}_])(?:" + pattern + ")(?![\\p{L}\\p{N}_])",
+                options: .caseInsensitive) else { return false }
             let covered = (evidence + intent.exclusionEvidence).compactMap { text.range(of: $0) }
             for match in regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) {
                 guard let range = Range(match.range, in: text),
