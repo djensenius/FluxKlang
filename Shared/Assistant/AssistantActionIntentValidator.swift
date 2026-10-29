@@ -185,9 +185,13 @@ enum AssistantActionIntentValidator {
             + #"(?:\s+as\s+(?:(?:a|an|the)\s+)?(?:existing\s+)?(?:live[-\s]+channel\s+)?shortcut"#
             + #"|\s+to\s+(?:(?:my|the)\s+)?(?:studio|canvas))?\s*$"#
         guard add.range(of: objectPattern, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
-        guard let action = intent.action else { return true }
         var remainder = scoped
         remainder.replaceSubrange(range, with: " ")
+        guard let action = intent.action else {
+            // A single addition must cover the whole request, not just its first add clause.
+            return remainder.range(of: #"^\s*(?:(?:please|could you|can you|would you)\s*)*[.!?]*\s*$"#,
+                                   options: [.regularExpression, .caseInsensitive]) != nil
+        }
         if let amount = intent.evidence.amount {
             remainder = remainder.replacingOccurrences(of: amount, with: " ", options: .caseInsensitive)
         }

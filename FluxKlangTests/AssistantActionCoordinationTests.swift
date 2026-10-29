@@ -273,6 +273,28 @@ struct AssistantActionCoordinationTests {
         }
     }
 
+    @Test func omittedSecondAdditionCannotCreateReviewOrQueryConsole() async {
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        var localAdds = 0
+        let service = AssistantActionController(controller: { controllerReads += 1; return state.wing },
+            layout: { state.layout }, scope: { state.scope },
+            addShortcut: { _, _, _, _ in localAdds += 1; return nil })
+        let intent = AssistantActionIntent(targetMention: "Juno", action: nil, amount: nil, addToStudio: true,
+            evidence: .init(target: "Juno", action: nil, amount: nil, add: "add"))
+        for text in ["add Juno and add Solar", "add Juno then add Solar", "add Juno also include Solar"] {
+            let outcome = await service.prepare(.init(text: text), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Partial addition became a review") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(localAdds == 0)
+            #expect(state.scope.graph.nodes.isEmpty)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+        }
+    }
+
     @Test func truncatedAlphabeticTargetCannotCreateReviewOrQueryConsole() async {
         let transport = AssistantRecordingWingTransport()
         let state = AssistantActionTestState(wing: WingController(transport: transport))
