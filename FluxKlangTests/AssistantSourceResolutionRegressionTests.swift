@@ -247,7 +247,8 @@ struct AssistantSourceResolutionRegressionTests {
             ]))
         let route = "Route Lead to speakers."
         let request = AssistantGenerationRequest(question: retry ? "It is connected now, try again." : route,
-            recentMessages: retry ? [.init(role: .user, text: route)] : [], summary: "", context: context)
+            recentMessages: retry ? [.init(role: .user, text: "List equipment"),
+                                     .init(role: .user, text: route)] : [], summary: "", context: context)
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
@@ -266,13 +267,90 @@ struct AssistantSourceResolutionRegressionTests {
         ], context: AssistantBackendFixture.context(equipment: [synth]))
         let route = "Route Synth to speakers."
         let request = AssistantGenerationRequest(question: retry ? "It is connected now, try again." : route,
-            recentMessages: retry ? [.init(role: .user, text: route)] : [], summary: "", context: context)
+            recentMessages: retry ? [.init(role: .user, text: "List equipment"),
+                                     .init(role: .user, text: route)] : [], summary: "", context: context)
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let provider = AssistantBackendGenerator()
         let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
         for try await _ in generator.stream(request) {}
         #expect(coordinator.pendingStudioDraft == nil)
         #expect(provider.calls == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func retryWithoutOneUnambiguousHistoricalRoutingRequestClarifies(multiple: Bool) async throws {
+        let synth = Equipment(name: "Synth")
+        let context = AssistantBackendFixture.context(equipment: [synth])
+        let history = multiple ? ["Route Synth to speakers.", "Route Synth to Space."] : ["List equipment"]
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        var reply = ""
+        for try await event in generator.stream(.init(question: "try again",
+            recentMessages: history.map { .init(role: .user, text: $0) }, summary: "", context: context)) {
+            if case .text(let text) = event { reply += text }
+        }
+        #expect(!reply.isEmpty)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 0)
+    }
+
+    @Test func retryRetainsLaterAmendmentsAndExclusionsWithoutInventoryContamination() async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        var context = AssistantBackendFixture.observe([
+            WingAddress.inputName(7): .string("Lead"), WingAddress.inputName(8): .string("Pad")
+        ], context: AssistantBackendFixture.context(equipment: [synth, bass], inputs: [
+            .init(connector: 7, equipmentID: synth.id, outputPort: 0),
+            .init(connector: 8, equipmentID: bass.id, outputPort: 0)
+        ]))
+        let echo = Effect(name: "Echo")
+        context.effects = [echo]
+        let history = ["List equipment", "Route Lead and Pad to speakers.", "Also include Echo.", "Don't use Pad."]
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        let request = AssistantGenerationRequest(question: "It is connected now, try again.",
+            recentMessages: history.map { .init(role: .user, text: $0) }, summary: "", context: context)
+        for try await _ in generator.stream(request) {}
+        let inspected = try #require(AssistantDraftIntent.wiringRequest(from: request))
+        #expect(inspected.sourceInstrumentIDs == [synth.id])
+        #expect(inspected.effectChainIDs == [echo.id])
+        #expect(inspected.liveReferences.map(\.equipmentID) == [synth.id])
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 0)
+    }
+
+    @Test(arguments: ["Route", "And"], [false, true])
+    func commandAndCoordinationWordsAreOnlyAliasesWhenExplicitOperands(label: String, linked: Bool) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        let other = Equipment(name: "Other")
+        let context = AssistantBackendFixture.observe([
+            WingAddress.inputName(9): .string(label), WingAddress.name(.channel, 7): .string("Lead"),
+            WingAddress.channelSourceGroup(7): .string("LCL"), WingAddress.channelSourceIndex(7): .int(7)
+        ], context: AssistantBackendFixture.context(equipment: [synth, bass, other], inputs:
+            [.init(connector: 7, equipmentID: synth.id, outputPort: 0)]
+                + (linked ? [.init(connector: 9, equipmentID: other.id, outputPort: 0)] : [])))
+        for (source, expected) in [("Synth", [synth.id]), ("Synth and Bass", [synth.id, bass.id]),
+                                   (label, linked ? [other.id] : []), ("channel 7 and \(label)", [])] {
+            let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+            let provider = AssistantBackendGenerator()
+            let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+            let request = AssistantGenerationRequest(question: "route \(source) to speakers",
+                recentMessages: [], summary: "", context: context)
+            for try await _ in generator.stream(request) {}
+            #expect(coordinator.pendingStudioDraft == nil)
+            let inspected = AssistantDraftIntent.wiringRequest(from: request)
+            if expected.isEmpty {
+                #expect(inspected == nil)
+            } else {
+                let route = try #require(inspected)
+                #expect(route.sourceInstrumentIDs == expected)
+                #expect(route.liveReferences.count == (source == label ? 1 : 0))
+            }
+            #expect(provider.calls == 0)
+        }
     }
 
     @Test func metadataPollingDuringListenVerificationCannotEraseConfirmationsOrRetryPatchWrites() async throws {

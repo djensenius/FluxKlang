@@ -454,4 +454,41 @@ extension AssistantActionPlanningTests {
             await state.wing.disconnect()
         }
     }
+
+    @Test func unsupportedPreampRequestNeverCreatesFaderReviewOrSendsSET() async {
+        let (state, transport, service) = await fixture()
+        let submission = request("set channel 7 preamp gain to 10 dB", state: state)
+        let intent = AssistantActionIntent(targetMention: "channel 7", action: .setDB, amount: 10,
+            addToStudio: false, evidence: .init(target: "channel 7", action: "set", amount: "10 dB", add: nil))
+        let outcome = await service.prepare(submission, interpretation: .proposal(intent))
+        if case .clarification = outcome {} else { Issue.record("Preamp request became a fader review") }
+        #expect(service.pendingReview == nil)
+        #expect(await transport.queries.isEmpty)
+        #expect(await transport.writes.isEmpty)
+        #expect(state.scope.graph.nodes.isEmpty)
+        await state.wing.disconnect()
+    }
+
+    @Test func excludedOrMixedRoutingTargetNeverCreatesMuteReviewOrQueries() async {
+        // No connection background GETs: assert rejection before the console is even requested.
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(
+            controller: { controllerReads += 1; return state.wing }, layout: { state.layout },
+            scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+        let intent = AssistantActionIntent(targetMention: "Astrolab", action: .mute, amount: nil,
+            addToStudio: false, evidence: .init(target: "Astrolab", action: "mute", amount: nil, add: nil))
+        for text in ["mute everything except Astrolab", "mute all channels excluding Astrolab",
+                     "route Astrolab to speakers and mute it", "connect Astrolab to speakers and mute it"] {
+            let outcome = await service.prepare(request(text, state: state), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Excluded or mixed target became a mute review") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+            #expect(state.scope.graph.nodes.isEmpty)
+        }
+        await state.wing.disconnect()
+    }
 }

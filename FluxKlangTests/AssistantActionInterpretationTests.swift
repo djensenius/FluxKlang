@@ -283,6 +283,45 @@ struct AssistantActionInterpretationTests {
         }
     }
 
+    @Test func unsupportedControlsCannotBecomeFaderChangesButTargetNamesRemainIntact() {
+        for control in ["preamp gain", "input gain", "trim", "EQ", "compressor threshold", "pan", "bus send"] {
+            rejectInBothLayers(.init(disposition: .proposal, target: "channel 7", action: .setDB, amount: 10,
+                targetEvidence: "channel 7", actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set channel 7 \(control) to 10 dB")
+        }
+        for control in ["fader", "volume"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: "channel 7", action: .setDB, amount: 10,
+                targetEvidence: "channel 7", actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set channel 7 \(control) to 10 dB")
+        }
+        for target in ["Preamp Synth", "EQ Keys", "Bus Send Synth"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: 10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set \(target) volume to 10 dB")
+        }
+    }
+
+    @Test func excludedTargetsCannotBecomePositiveMuteTargetsButNamesRemainScoped() {
+        for text in ["mute everything except Astrolab", "mute all channels excluding Astrolab",
+                     "mute everything other than Astrolab", "mute everything apart from Astrolab",
+                     "mute everything but Astrolab", "mute Astrolab excluding Juno"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"), text: text)
+        }
+        for target in ["Except Synth", "Excluding Keys", "Other Than Synth", "But Synth"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .mute,
+                targetEvidence: target, actionEvidence: "mute"), text: "mute \(target)")
+        }
+    }
+
+    @Test func generatedMuteCannotSilentlyDropRoutingInstructions() {
+        for verb in ["route", "wire", "connect", "patch", "send", "reroute", "rewire"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"),
+                               text: "\(verb) Astrolab to speakers and mute it")
+        }
+        expectAcceptedInBothLayers(.init(disposition: .proposal, target: "Wire Synth", action: .mute,
+            targetEvidence: "Wire Synth", actionEvidence: "mute"), text: "mute Wire Synth")
+    }
+
     @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
         for (text, output) in [
             ("silence Astrolab", malformed(.mute, action: "silence")),

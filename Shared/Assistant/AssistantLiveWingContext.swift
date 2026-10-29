@@ -178,9 +178,7 @@ enum AssistantSourceResolver {
         let identities = mentions.filter { !excluded.contains($0) && requested.contains($0.identity.lowercased()) }
         if !identities.isEmpty {
             let otherSourceText = sourceText.replacingOccurrences(
-                of: explicitIdentityPattern, with: " ", options: .regularExpression).replacingOccurrences(
-                of: #"^\s*(?:route|connect|wire|patch|add|include|use)\b\s*"#,
-                with: "", options: .regularExpression)
+                of: explicitIdentityPattern, with: " ", options: .regularExpression)
             let otherSaved = AssistantDraftIntent.mentionedEquipmentIDs(
                 in: otherSourceText, equipment: context.equipment, excluding: excludedIDs)
             let otherLive = mentions.contains {
