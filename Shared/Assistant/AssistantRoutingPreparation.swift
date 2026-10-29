@@ -196,11 +196,17 @@ enum AssistantRoutingPreparation {
                 of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
                     + "(?![\\p{L}\\p{N}_])", with: " ", options: [.regularExpression, .caseInsensitive])
         }
-        let words = remaining.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
-        return effects.filter { !covered.contains($0.id) }.allSatisfy { effect in
+        let words = remaining.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        return effects.allSatisfy { effect in
             !words.indices.contains { index in
+                if covered.contains(effect.id) {
+                    var preceding = words[..<index]
+                    if ["the", "my"].contains(preceding.last ?? "") { preceding = preceding.dropLast() }
+                    guard ["then", "through", "via", "into"].contains(preceding.last ?? "")
+                        || Array(preceding.suffix(2)) == ["followed", "by"] else { return false }
+                }
                 // Every valid alias has a matching prefix of at most three tokens (minimum three characters).
-                (1...min(3, words.count - index)).contains { count in
+                return (1...min(3, words.count - index)).contains { count in
                     matchesName(words[index..<(index + count)].joined(separator: " "), name: effect.name)
                 }
             }

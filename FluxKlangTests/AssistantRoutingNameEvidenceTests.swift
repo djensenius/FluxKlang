@@ -132,4 +132,20 @@ struct AssistantRoutingNameEvidenceTests {
         ])
         #expect(!fixture.rejects(text: complete, intent: valid, context: context))
     }
+
+    @Test func alreadyUsedEffectAliasesCannotBecomeDryOperatorsInSerialPositions() {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.effects[0].name = "Dry Wet Delay"
+        let text = "route Solar through Dry Wet Delay then Dry then Wet to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Dry Wet Delay"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through Dry Wet Delay", includesDrySignal: true, dryEvidence: text)
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        let explicitBlend = "route Solar through Dry Wet Delay to mains with Solar dry and wet"
+        intent.branches[0].destinationEvidence = "Solar through Dry Wet Delay to mains"
+        intent.branches[0].dryEvidence = "Solar dry and wet"
+        #expect(!fixture.rejects(text: explicitBlend, intent: intent, context: context))
+    }
 }
