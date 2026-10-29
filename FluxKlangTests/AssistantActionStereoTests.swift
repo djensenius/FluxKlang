@@ -166,6 +166,60 @@ struct AssistantActionStereoTests {
         }
     }
 
+    @Test func consumedFirstMemberCannotHideABABeforeTransportAcknowledgement() async throws {
+        for scenario in 0...4 {
+            let transport = AssistantRecordingWingTransport()
+            for index in 7...8 {
+                await transport.put("/ch/\(index)/name", .string("Astrolab \(index)"))
+                await transport.put("/ch/\(index)/fdr", .float(0.75))
+                await transport.put("/ch/\(index)/mute", .int(0))
+            }
+            let wing = WingController(transport: transport)
+            await wing.connect(host: "192.0.2.10")
+            let state = AssistantActionTestState(wing: wing)
+            let strip = FaderStrip(node: .channel(7), rightNode: .channel(8), customLabel: "Astrolab")
+            state.layout = .init(strips: [strip])
+            let service = AssistantActionController(controller: { state.wing }, layout: { state.layout },
+                scope: { state.scope }, addShortcut: { _, _, _, _ in nil }, timeout: .seconds(1))
+            let request = AssistantActionInterpretationRequest(text: "set Astrolab to 50%",
+                liveContext: .init(status: .observed, sessionID: wing.sessionID, capturedAt: Date(), observations: []))
+            guard case .review(let choice) = await service.prepare(request, interpretation: .proposal(intent())),
+                  case .review(let ready) = await service.selectCandidate(
+                    reviewID: choice.id, candidateID: "pair-" + strip.id.uuidString)
+            else { throw BackendTestError.send }
+            await transport.pauseMixerAcknowledgement()
+            let confirmation = Task { await service.confirm(reviewID: ready.id) }
+            try await AssistantBackendFixture.waitAsync { await transport.mixerAcknowledgementWaiting }
+            #expect(await transport.writes.count == 1)
+            if scenario < 3 {
+                let address = scenario == 0 ? "/ch/7/fdr"
+                    : (scenario == 1 ? WingAddress.channelSourceIndex(7) : "/ch/8/fdr")
+                let original: WingValue = scenario == 1 ? .int(7) : .float(0.75)
+                let changed: WingValue = scenario == 1 ? .int(8) : .float(0.6)
+                let revision = wing.assistantActionEvidence.revision
+                // Scenario zero is an expected completed-member echo, not a revocation.
+                await transport.emit(address, scenario == 0 ? .float(0.5) : changed)
+                if scenario != 0 { await transport.emit(address, original) }
+                try await AssistantBackendFixture.wait {
+                    wing.assistantActionEvidence.revision >= revision + (scenario == 0 ? 1 : 2)
+                }
+            } else if scenario == 3 {
+                let original = state.scope.environmentID
+                state.scope.environmentID = UUID()
+                state.scope.environmentID = original
+            } else {
+                let original = state.layout
+                state.layout = .init()
+                state.layout = original
+            }
+            await transport.releaseMixerAcknowledgement()
+            let result = await confirmation.value
+            #expect(await transport.writes.count == (scenario == 0 ? 2 : 1))
+            #expect(result.members.map(\.status) == (scenario == 0 ? [.confirmed, .confirmed] : [.confirmed, .notSent]))
+            await wing.disconnect()
+        }
+    }
+
     @Test func scopedEvidenceIgnoresCompletedBaselineButResetAlwaysRevokes() throws {
         let evidence = WingAssistantActionEvidence()
         let completed = WingAddress.fader(.channel, 7)

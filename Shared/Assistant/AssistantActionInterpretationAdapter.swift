@@ -55,7 +55,8 @@ enum AssistantActionInterpretationAdapter {
                   !output.addToStudio || word("add|include", in: output.addEvidence ?? "")
             else { return .clarification(invalidOutput) }
             if let amount = output.amount {
-                guard let evidence = output.amountEvidence, copied(evidence, from: request.text),
+                guard let evidence = output.amountEvidence,
+                      AssistantActionIntentValidator.copiedAmount(evidence, from: request.text),
                       numericValue(evidence) == amount, validUnit(evidence, action: output.action)
                 else { return .clarification(invalidOutput) }
             } else if output.amountEvidence != nil { return .clarification(invalidOutput) }
@@ -89,28 +90,13 @@ enum AssistantActionInterpretationAdapter {
 
     private static func validActionEvidence(_ output: AssistantActionModelOutput, text: String) -> Bool {
         guard let action = output.action else { return output.actionEvidence == nil }
-        let evidence = output.actionEvidence ?? ""
-        guard containsWholePhrase(evidence, in: text) else { return false }
-        let lower = "lower|down|quieter|softer|reduce|decrease|attenuate|cut"
-        let raise = "raise|up|louder|boost|increase"
-        switch action {
-        case .lower: return word(lower, in: evidence) && !word(raise, in: text)
-        case .raise: return word(raise, in: evidence) && !word(lower, in: text)
-        case .mute: return word("mute|silence", in: evidence) && !word("unmute|unsilence", in: text)
-        case .unmute: return word("unmute|unsilence", in: evidence) && !word("mute|silence", in: text)
-        case .setDB, .setFaderPercent:
-            return word("set|turn|put|bring|adjust|change|volume|level|fader|gain|make", in: evidence)
-        }
+        return AssistantActionIntentValidator.matchesActionEvidence(
+            output.actionEvidence ?? "", action: action, in: text)
     }
 
     private static func word(_ alternatives: String, in text: String) -> Bool {
         text.range(of: "(?<![\\p{L}\\p{N}_])(?:" + alternatives + ")(?![\\p{L}\\p{N}_])",
                    options: [.regularExpression, .caseInsensitive]) != nil
-    }
-
-    private static func containsWholePhrase(_ phrase: String, in text: String) -> Bool {
-        guard !phrase.isEmpty else { return false }
-        return word(NSRegularExpression.escapedPattern(for: phrase), in: text)
     }
 
     private static func validAmount(_ output: AssistantActionModelOutput) -> Bool {

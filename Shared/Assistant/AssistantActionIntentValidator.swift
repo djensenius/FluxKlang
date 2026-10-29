@@ -21,7 +21,7 @@ enum AssistantActionIntentValidator {
         }
         let actionText = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
-        guard preservesMeaning(intent, in: actionText) else {
+        guard preservesMeaning(intent, in: text) else {
             return "No changes: the interpretation omitted or changed the requested operation or amount."
         }
         guard mixerVerbCount(in: actionText) <= 1 else {
@@ -47,15 +47,9 @@ enum AssistantActionIntentValidator {
         guard let evidence = intent.evidence.action, copied(evidence, from: actionText) else {
             return "No changes: the action must be stated in the current request."
         }
-        let verbs: [String]
-        switch action {
-        case .lower: verbs = ["lower", "down", "reduce", "decrease", "quieter"]
-        case .raise: verbs = ["raise", "up", "increase", "louder"]
-        case .setDB, .setFaderPercent: verbs = ["set", "turn", "to"]
-        case .mute: verbs = ["mute"]
-        case .unmute: verbs = ["unmute"]
+        guard matchesActionEvidence(evidence, action: action, in: actionText) else {
+            return "No changes: the action evidence is inconsistent."
         }
-        guard hasWord(verbs, in: evidence) else { return "No changes: the action evidence is inconsistent." }
         if action == .mute || action == .unmute {
             return intent.amount == nil && intent.evidence.amount == nil
                 ? nil : "No changes: mute/unmute does not take a numeric amount."
@@ -65,7 +59,7 @@ enum AssistantActionIntentValidator {
                 ? nil : "Specify an absolute amount before reviewing this change."
         }
         guard amount.isFinite, let amountEvidence = intent.evidence.amount,
-            copied(amountEvidence, from: text), number(in: amountEvidence) == amount
+            copiedAmount(amountEvidence, from: text), number(in: amountEvidence) == amount
         else {
             return "No changes: the amount must match a finite number in the current request."
         }
@@ -89,13 +83,19 @@ enum AssistantActionIntentValidator {
 
     /// Copied spans alone do not prove that the model preserved the current clause's meaning.
     static func preservesMeaning(_ intent: AssistantActionIntent, in text: String) -> Bool {
+        // A numeric suffix belongs to the target, not to an abbreviated model mention.
+        let completeTarget = evidencePattern(intent.evidence.target)
+            + #"(?!\s*[+-]?(?:\d|\.\d)|[.+-][\p{L}\p{N}])"#
+        guard text.range(of: completeTarget, options: [.regularExpression, .caseInsensitive]) != nil else {
+            return false
+        }
         let clause = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
-        let lower = hasWord(
-            ["lower", "down", "reduce", "decrease", "quieter", "softer", "cut", "attenuate"], in: clause)
-        let raise = hasWord(["raise", "up", "increase", "louder", "boost"], in: clause)
-        let mute = hasWord(["mute", "silence"], in: clause)
-        let unmute = hasWord(["unmute", "unsilence"], in: clause)
+        guard !hasUnrepresentedTargets(in: clause), mixerVerbCount(in: clause) <= 1 else { return false }
+        let lower = hasWord(actionWords(.lower), in: clause)
+        let raise = hasWord(actionWords(.raise), in: clause)
+        let mute = hasWord(actionWords(.mute), in: clause)
+        let unmute = hasWord(actionWords(.unmute), in: clause)
         if intent.amount == nil,
            clause.contains("%") || hasWord(["by", "db", "decibel", "decibels", "percent"], in: clause)
             || clause.range(of: #"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"#, options: .regularExpression) != nil { return false }
@@ -103,7 +103,7 @@ enum AssistantActionIntentValidator {
             of: #"\b(?:to|at)\s*[+-]?(?:\d|\.)"#, options: [.regularExpression, .caseInsensitive]) != nil
         switch intent.action {
         case .none:
-            return !lower && !raise && !hasWord(
+            return !lower && !raise && !mute && !unmute && !hasWord(
                 ["set", "turn", "put", "bring", "adjust", "change", "make", "mute", "unmute", "silence"], in: clause)
         case .lower: return lower && !raise && !destination && !mute && !unmute
         case .raise: return raise && !lower && !destination && !mute && !unmute
@@ -114,9 +114,45 @@ enum AssistantActionIntentValidator {
         }
     }
 
+    static func matchesActionEvidence(
+        _ evidence: String, action: AssistantActionIntent.Action, in text: String
+    ) -> Bool {
+        copied(evidence, from: text) && hasWord(actionWords(action), in: evidence)
+    }
+
+    static func copiedAmount(_ evidence: String, from text: String) -> Bool {
+        guard copied(evidence, from: text) else { return false }
+        let token = NSRegularExpression.escapedPattern(for: evidence.trimmingCharacters(in: .whitespacesAndNewlines))
+        let pattern = #"(?<![\p{L}\p{N}_.+\-−])"# + token + #"(?![\p{L}\p{N}_.%])"#
+        return !token.isEmpty && text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func actionWords(_ action: AssistantActionIntent.Action) -> [String] {
+        switch action {
+        case .lower: return ["lower", "down", "quieter", "softer", "reduce", "decrease", "attenuate", "cut"]
+        case .raise: return ["raise", "up", "louder", "boost", "increase"]
+        case .mute: return ["mute", "silence"]
+        case .unmute: return ["unmute", "unsilence"]
+        case .setDB, .setFaderPercent:
+            return ["set", "turn", "to", "put", "bring", "adjust", "change", "volume", "level", "fader", "gain", "make"]
+        }
+    }
+
+    private static func hasUnrepresentedTargets(in clause: String) -> Bool {
+        // Removing the complete represented alias also preserves saved pair names containing "and".
+        // A remaining conjunction may introduce another represented action, but not another target.
+        let actions = ["add", "include", "turn", "set", "make", "put", "bring", "adjust", "change",
+                       "lower", "raise", "reduce", "decrease", "increase", "boost", "attenuate",
+                       "cut", "mute", "unmute", "silence", "unsilence"].joined(separator: "|")
+        let pattern = #"(?:\b(?:and|plus|along with|as well as)\b|[,&/])\s*+(?!(?:"# + actions + #")\b)"#
+        return hasWord(["both"], in: clause)
+            || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     private static func mixerVerbCount(in text: String) -> Int {
         let regex = try? NSRegularExpression(
-            pattern: #"\b(set|lower|raise|turn|mute|unmute|reduce|decrease|increase)\b"#,
+            pattern: #"\b(set|lower|raise|turn|mute|unmute|reduce|decrease|increase|silence|unsilence|"#
+                + #"boost|attenuate|cut|put|bring|adjust|change|make)\b"#,
             options: .caseInsensitive)
         return regex?.numberOfMatches(in: text, range: NSRange(text.startIndex..., in: text)) ?? 0
     }

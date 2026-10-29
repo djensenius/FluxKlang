@@ -20,6 +20,7 @@ extension AssistantActionController {
         }
         let version = operationID
         var reviewValidated = false
+        let executionValidity = AssistantActionReviewValidity()
         var executionScope = plan.scope
         var localStatus: AssistantActionResult.LocalStatus = plan.intent.addToStudio ? .notAttempted : .notRequested
         var shortcutID: UUID?
@@ -31,12 +32,12 @@ extension AssistantActionController {
                     shortcutNodeID: shortcutID, members: outcomes, message: message,
                     submissionID: plan.request.submissionID))
         }
-        func current() -> Bool {
+        func current(requireAuthority: Bool = true) -> Bool {
             isCurrent(
                 version, wing: plan.wing, session: plan.session,
                 originalScope: executionScope, strips: plan.strips)
                 && plan.deadline > .now && plan.review.expiresAt > Date()
-                && (reviewValidated || plan.validity.isValid)
+                && (!requireAuthority || (reviewValidated ? executionValidity.isValid : plan.validity.isValid))
         }
         guard current(), let target = plan.review.target,
             let candidate = plan.review.candidates.first(where: { $0.id == plan.review.selectedCandidateID })
@@ -127,6 +128,17 @@ extension AssistantActionController {
                 authorization.invalidate()
                 break
             }
+            // The token may already be consumed while its transport await is still pending.
+            // Persist revocation for later members, excluding this member's expected echo.
+            let awaitingSend = AssistantActionReviewValidity()
+            withObservationTracking {
+                plan.wing.assistantActionEvidence.observeChanges(
+                    at: Self.discoveryAddresses
+                        + Self.memberAddresses(target.members.dropFirst(index + 1).map(\.identity)))
+                _ = current()
+            } onChange: {
+                if awaitingSend.isValid { executionValidity.invalidate() }
+            }
             // A transport failure may happen after a UDP send. Record uncertainty before awaiting.
             outcomes[index] = .init(node: change.node, status: .sentUnconfirmed)
             let sent = await withTaskCancellationHandler {
@@ -136,16 +148,17 @@ extension AssistantActionController {
             } onCancel: {
                 authorization.invalidate()
             }
+            awaitingSend.invalidate()
             authorization.invalidate()
             activeAuthorization = nil
             if !authorization.wasConsumed { outcomes[index] = .init(node: change.node, status: .notSent) }
             guard sent else { break }
         }
         let attempted = outcomes.enumerated().filter { $0.element.status == .sentUnconfirmed }
-        if !attempted.isEmpty, current(),
+        if !attempted.isEmpty, current(requireAuthority: false),
             let readback = await plan.wing.readFreshConfirmed(
                 Self.memberAddresses(candidate.members),
-                session: plan.session, timeout: timeout, preservingCache: true), current(),
+                session: plan.session, timeout: timeout, preservingCache: true), current(requireAuthority: false),
             Self.identitiesMatch(candidate, fresh: readback) {
             for (index, _) in attempted {
                 let change = plan.review.faderChanges[index]
