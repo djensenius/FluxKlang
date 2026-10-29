@@ -229,8 +229,7 @@ enum AssistantRoutingPreparation {
             guard !allEffects.subtracting(branch.effects).contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, evidence)
             }) else { return false }
-            if branch.effects.isEmpty,
-               AssistantRoutingOwnership.word("through|via", in: evidence) { return false }
+            if branch.effects.isEmpty, !directDestinationOnly(branch, intent: intent) { return false }
             if !branch.includesDrySignal,
                AssistantRoutingOwnership.word("dry|wet|parallel", in: evidence) { return false }
         }
@@ -261,6 +260,20 @@ enum AssistantRoutingPreparation {
             }
         }
         return true
+    }
+
+    private static func directDestinationOnly(
+        _ branch: AssistantRoutingIntent.Branch, intent: AssistantRoutingIntent
+    ) -> Bool {
+        let evidence = branch.destinationEvidence
+        guard !AssistantRoutingOwnership.word("through|via", in: evidence) else { return false }
+        guard let into = evidence.range(of: #"\binto\b"#, options: [.regularExpression, .caseInsensitive]),
+              let destination = evidence.range(of: branch.destination, options: .caseInsensitive),
+              into.upperBound <= destination.lowerBound else { return true }
+        let operand = String(evidence[into.upperBound..<destination.lowerBound])
+        return !intent.branches.contains {
+            AssistantRoutingInterpretationAdapter.contains($0.source, operand)
+        }
     }
 
     private static func sourceOccurrencesCovered(_ branch: AssistantRoutingIntent.Branch, in text: String) -> Bool {

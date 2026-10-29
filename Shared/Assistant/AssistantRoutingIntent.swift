@@ -73,7 +73,7 @@ enum AssistantRoutingInterpretationAdapter {
                     || AssistantRoutingOwnership.word("replace|remove|delete|clear", in: text) { return invalid }
         for (mention, evidence) in zip(intent.excludedMentions, intent.exclusionEvidence) {
             guard validMention(mention, text), copied(evidence, text), contains(mention, evidence),
-                  isNegative(evidence)
+                  validExclusion(mention, evidence: evidence, mentions: intent.excludedMentions)
             else { return invalid }
         }
         for branch in intent.branches {
@@ -135,6 +135,25 @@ enum AssistantRoutingInterpretationAdapter {
     private static func isNegative(_ text: String) -> Bool {
         AssistantRoutingOwnership.word("without|except|not|don't|do not|never|exclude",
                                        in: text.replacingOccurrences(of: "’", with: "'"))
+    }
+    private static func validExclusion(_ mention: String, evidence: String, mentions: [String]) -> Bool {
+        var neutral = evidence.replacingOccurrences(of: "’", with: "'")
+        let pattern = "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
+            + "(?![\\p{L}\\p{N}_])"
+        guard let operand = neutral.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+              let negation = neutral.range(
+                of: #"\b(?:without|except|not|don't|do not|never|exclude)\b"#,
+                options: [.regularExpression, .caseInsensitive]),
+              negation.upperBound <= operand.lowerBound else { return false }
+        for excluded in mentions.sorted(by: { $0.count > $1.count }) {
+            neutral = neutral.replacingOccurrences(
+                of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: excluded)
+                    + "(?![\\p{L}\\p{N}_])", with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        let allowed = Set(
+            "without except not don't do never exclude use include and or the my please".split(separator: " "))
+        return neutral.lowercased().split(whereSeparator: { !$0.isLetter && $0 != "'" })
+            .allSatisfy { allowed.contains($0) }
     }
     private static func occursOnce(_ mention: String, in text: String) -> Bool {
         let pattern = "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)

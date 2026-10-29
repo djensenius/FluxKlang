@@ -417,7 +417,7 @@ final class AssistantCoordinator {
         else { return false }
         pendingStudioDraft = draft
         await draftStore.save(draft)
-        return true
+        return !Task.isCancelled && pendingStudioDraft == draft
     }
 
     func discardPendingStudioDraft() async {

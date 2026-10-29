@@ -30,8 +30,20 @@ actor RoutingTestInterpreter: AssistantActionInterpreting {
 actor RoutingTestDraftStore: PendingStudioPatchPersisting {
     private(set) var draft: StudioPatchDraft?
     private(set) var saves = 0
+    private var pauseNext = false
+    private var gate: CheckedContinuation<Void, Never>?
+    var isWaiting: Bool { gate != nil }
+    func pauseNextSave() { pauseNext = true }
+    func resume() { gate?.resume(); gate = nil }
     func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) { self.draft = draft; saves += 1 }
+    func save(_ draft: StudioPatchDraft?) async {
+        self.draft = draft
+        saves += 1
+        if pauseNext {
+            pauseNext = false
+            await withCheckedContinuation { gate = $0 }
+        }
+    }
 }
 
 actor RoutingTestHistory: AssistantHistoryBackend {
@@ -315,6 +327,57 @@ struct AssistantRoutingChatTests {
         #expect(planner.intents.count == 1)
         #expect(planner.confirmations == 0)
         #expect(coordinator.pendingStudioDraft == nil)
+        #expect(await generator.calls == 0)
+    }
+
+    @Test func exclusionsCannotAbsorbAPositiveRoutingClause() {
+        let text = "route OP-XY to mains and Osmose to mains without Solar"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "OP-XY", destination: "mains", destinationEvidence: "OP-XY to mains")
+        ], excludedMentions: ["Osmose", "Solar"],
+            exclusionEvidence: ["Osmose to mains without Solar", "without Solar"])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test func serialSourcesCannotBecomeIndependentDirectPaths() {
+        let text = "route Osmose into Solar to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: text),
+            .init(source: "Solar", destination: "mains", destinationEvidence: text)
+        ])
+        let fixture = AssistantRoutingFixture()
+        #expect(fixture.rejects(text: text, intent: intent))
+        let direct = "route Osmose into mains"
+        #expect(!fixture.rejects(text: direct, intent: .init(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: direct)
+        ])))
+    }
+
+    @Test(arguments: [false, true])
+    func supersededRoutingSaveCannotPublishSuccess(replaced: Bool) async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let generator = RoutingTestGenerator()
+        let chat = chat(coordinator: coordinator, interpreter: RoutingTestInterpreter(), generator: generator)
+        await store.pauseNextSave()
+        chat.composer = AssistantRoutingFixture.text
+        chat.send(context: fixture.context)
+        try await wait { await store.isWaiting }
+        var replacement: StudioPatchDraft?
+        if replaced {
+            let draft = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(draft, expectedPending: coordinator.pendingStudioDraft,
+                preparedContext: fixture.context, currentContext: fixture.context))
+            replacement = draft
+        } else {
+            await coordinator.discardPendingStudioDraft()
+        }
+        await store.resume()
+        try await wait { !chat.isStreaming }
+        #expect(coordinator.pendingStudioDraft == replacement)
+        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+        #expect(chat.selectedConversation?.messages.last?.text.contains("Created a review-only") == false)
         #expect(await generator.calls == 0)
     }
 
