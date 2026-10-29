@@ -4,6 +4,67 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @Test func thenCoordinationPreservesOneTargetAndOneMixerAction() {
+        for connector in ["then", "and then"] {
+            for (target, action, amount, evidence, verb, followUp) in [
+                ("mother-32", AssistantActionIntent.Action.setFaderPercent,
+                 Optional(50.0), Optional("50%"), "turn", "turn volume to 50%"),
+                ("Juno", .lower, 3.0, "3 dB", "lower", "lower it by 3 dB"),
+                ("After Hours", .mute, nil, nil, "mute", "mute it")
+            ] {
+                let text = "add my \(target) \(connector) \(followUp)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: action,
+                    amount: amount, addToStudio: true, targetEvidence: target, actionEvidence: verb,
+                    amountEvidence: evidence, addEvidence: "add")
+                let intent = AssistantActionIntent(targetMention: target, action: action, amount: amount,
+                    addToStudio: true, evidence: .init(target: target, action: verb, amount: evidence, add: "add"))
+                if case .proposal = AssistantActionInterpretationAdapter.validate(output, request: .init(text: text)) {
+                } else { Issue.record("Valid connector rejected: \(text)") }
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) == nil)
+            }
+            for followUp in ["lower Solar by 3 dB", "lower it by 3 dB after ten seconds"] {
+                let text = "add Juno \(connector) \(followUp)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: "Juno", action: .lower,
+                    amount: 3, addToStudio: true, targetEvidence: "Juno", actionEvidence: "lower",
+                    amountEvidence: "3 dB", addEvidence: "add")
+                #expect(AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+                    == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+                let intent = AssistantActionIntent(targetMention: "Juno", action: .lower, amount: 3,
+                    addToStudio: true, evidence: .init(target: "Juno", action: "lower", amount: "3 dB", add: "add"))
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) != nil)
+            }
+        }
+    }
+
+    @MainActor @Test func thenCompoundPreparesReviewWithoutSETOrLocalInsertion() async throws {
+        for name in ["Juno", "Then Synth", "After Hours"] {
+            let transport = AssistantRecordingWingTransport()
+            await transport.put("/ch/7/name", .string(name))
+            let wing = WingController(transport: transport)
+            await wing.connect(host: "192.0.2.10")
+            await AssistantBackendFixture.settleInitialActionEvidence(wing)
+            let state = AssistantActionTestState(wing: wing)
+            let service = AssistantActionController(controller: { wing }, layout: { state.layout },
+                scope: { state.scope }, addShortcut: { _, _, _, _ in
+                    Issue.record("Preparation added a shortcut"); return nil
+                })
+            let request = AssistantActionInterpretationRequest(text: "add \(name) and then lower it by 3 dB",
+                liveContext: .init(status: .observed, sessionID: wing.sessionID, capturedAt: Date(), observations: []))
+            let intent = AssistantActionIntent(targetMention: name, action: .lower, amount: 3, addToStudio: true,
+                evidence: .init(target: name, action: "lower", amount: "3 dB", add: "add"))
+            guard case .review(let review) = await service.prepare(request, interpretation: .proposal(intent)) else {
+                Issue.record("Then compound did not prepare a review"); await wing.disconnect(); continue
+            }
+            #expect(review.stage == .ready)
+            #expect(review.addsLiveShortcut)
+            #expect(review.faderChanges.count == 1)
+            #expect(review.target?.members.map { $0.identity.node } == [.channel(7)])
+            #expect(state.scope.graph.nodes.isEmpty)
+            #expect(await transport.writes.isEmpty)
+            await wing.disconnect()
+        }
+    }
+
     @MainActor @Test func hyphenatedLiveAliasesRemainNamesNotMalformedNumericIdentities() async throws {
         for name in ["Channel-Lead", "Main-Keys", "Bus-Drums", "7-Lead"] {
             let transport = AssistantRecordingWingTransport()

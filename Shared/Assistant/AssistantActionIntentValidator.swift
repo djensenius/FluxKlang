@@ -225,11 +225,11 @@ enum AssistantActionIntentValidator {
 
     private static func hasUnrepresentedTargets(in clause: String) -> Bool {
         // Removing the complete represented alias also preserves saved pair names containing "and".
-        // A remaining conjunction may introduce another represented action, but not another target.
+        // A conjunction (including "and then") may introduce an action, but not another target.
         let actions = ["add", "include", "turn", "set", "make", "put", "bring", "adjust", "change",
                        "lower", "raise", "reduce", "decrease", "increase", "boost", "attenuate",
                        "cut", "mute", "unmute", "silence", "unsilence"].joined(separator: "|")
-        let pattern = #"(?:\b(?:and|plus|along with|as well as)\b|[,&/])\s*+(?!(?:"# + actions + #")\b)"#
+        let pattern = #"(?:\b(?:and|plus|along with|as well as)\b|[,&/])\s*+(?!(?:then\s+)?(?:"# + actions + #")\b)"#
         return hasWord(
             ["both", "except", "excepting", "exclude", "excludes", "excluding", "without", "besides", "but",
              "omit", "omitting", "other than", "apart from", "save for", "leave out"], in: clause)
