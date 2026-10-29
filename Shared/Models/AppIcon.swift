@@ -71,7 +71,7 @@ final class AppIconManager {
     private(set) var selected: AppIconOption
 
     init() {
-        let stored = UserDefaults.standard.string(forKey: storageKey)
+        let stored = AppPersistence.defaults.string(forKey: storageKey)
         selected = stored.flatMap(AppIconOption.init(rawValue:)) ?? .waveform
         #if os(macOS)
         applyToDock(selected)
@@ -108,7 +108,7 @@ final class AppIconManager {
     /// has succeeded.
     private func commit(_ option: AppIconOption) {
         selected = option
-        UserDefaults.standard.set(option.rawValue, forKey: storageKey)
+        AppPersistence.defaults.set(option.rawValue, forKey: storageKey)
     }
 
     #if os(macOS)

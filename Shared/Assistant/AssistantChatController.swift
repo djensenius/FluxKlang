@@ -24,7 +24,7 @@ final class AssistantChatController {
     var suggestedPrompt: String?
     var spokenRepliesEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
+            AppPersistence.defaults.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
         }
     }
 
@@ -61,7 +61,7 @@ final class AssistantChatController {
                 )
             )
         }
-        spokenRepliesEnabled = UserDefaults.standard.bool(forKey: Self.spokenRepliesKey)
+        spokenRepliesEnabled = AppPersistence.defaults.bool(forKey: Self.spokenRepliesKey)
     }
 
     var selectedConversation: AssistantConversation? {

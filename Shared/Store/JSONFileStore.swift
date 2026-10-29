@@ -12,14 +12,55 @@ import Foundation
 
 /// Test hosts must never read user files or mirror seeded state to iCloud.
 enum AppPersistence {
-    static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-        || ProcessInfo.processInfo.arguments.contains("-ui-testing")
+    struct Storage: Sendable {
+        let directory: URL
+        let cloud: (any CloudKeyValueStore)?
+        let preferencesSuiteName: String?
 
-    static let directory: URL = {
-        if isTesting {
-            return URL.temporaryDirectory
-                .appendingPathComponent("FluxKlang-tests-\(UUID().uuidString)", isDirectory: true)
+        var defaults: UserDefaults {
+            guard let preferencesSuiteName else { return .standard }
+            guard let defaults = UserDefaults(suiteName: preferencesSuiteName) else {
+                preconditionFailure("Unable to create isolated test preferences")
+            }
+            return defaults
         }
+    }
+
+    static let isTesting: Bool = {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return true }
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-ui-testing")
+        #else
+        return false
+        #endif
+    }()
+
+    /// Selected once, before any default store or preference access.
+    static let storage = makeStorage(
+        isTesting: isTesting, productionDirectory: productionDirectory(), productionCloud: UbiquitousCloudStore())
+
+    static var directory: URL { storage.directory }
+    static var defaultCloud: (any CloudKeyValueStore)? { storage.cloud }
+    static var defaults: UserDefaults { storage.defaults }
+
+    /// Production inputs are lazy: test selection never constructs a cloud
+    /// backend or accesses the normal Application Support directory.
+    static func makeStorage(
+        isTesting: Bool,
+        productionDirectory: @autoclosure () -> URL,
+        productionCloud: @autoclosure () -> (any CloudKeyValueStore)?,
+        productionPreferencesSuiteName: String? = nil
+    ) -> Storage {
+        if isTesting {
+            let name = "FluxKlang-tests-\(UUID().uuidString)"
+            return Storage(directory: URL.temporaryDirectory.appendingPathComponent(name, isDirectory: true),
+                           cloud: nil, preferencesSuiteName: name)
+        }
+        return Storage(directory: productionDirectory(), cloud: productionCloud(),
+                       preferencesSuiteName: productionPreferencesSuiteName)
+    }
+
+    private static func productionDirectory() -> URL {
         let base = (try? FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -27,10 +68,6 @@ enum AppPersistence {
             create: true
         )) ?? URL.temporaryDirectory
         return base.appendingPathComponent("FluxKlang", isDirectory: true)
-    }()
-
-    static var defaultCloud: (any CloudKeyValueStore)? {
-        isTesting ? nil : UbiquitousCloudStore()
     }
 }
 
@@ -41,8 +78,8 @@ actor JSONFileStore {
     private let fileManager = FileManager.default
     private let cloud: (any CloudKeyValueStore)?
 
-    init(cloud: (any CloudKeyValueStore)? = AppPersistence.defaultCloud) {
-        directory = AppPersistence.directory
+    init(directory: URL = AppPersistence.directory, cloud: (any CloudKeyValueStore)? = AppPersistence.defaultCloud) {
+        self.directory = directory
         self.cloud = cloud
     }
 
