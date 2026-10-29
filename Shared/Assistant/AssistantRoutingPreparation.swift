@@ -62,8 +62,10 @@ enum AssistantRoutingPreparation {
             // Copied evidence must not promise one source's processing for another named source.
             let others = intent.branches.filter { $0.source != branch.source }.map(\.source)
             let destination = AssistantRoutingInterpretationAdapter.normalize(branch.destination)
-            guard destinationSpans(in: branch.destinationEvidence, intent: intent)
-                .allSatisfy({ $0.name == destination }) else { return failure }
+            guard destinationSpans(in: branch.destinationEvidence, intent: intent,
+                additionalNames: AssistantRoutingOutputResolver.groups(in: context.effectiveConnections).map(\.name))
+                .allSatisfy({ $0.name == destination }),
+                  completeDestinationPhrase(branch, intent: intent) else { return failure }
             guard !others.contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, branch.processingEvidence)
                     || AssistantRoutingInterpretationAdapter.contains($0, branch.dryEvidence)
@@ -336,17 +338,33 @@ enum AssistantRoutingPreparation {
         }
     }
 
-    private static func destinationSpans(
-        in text: String, intent: AssistantRoutingIntent
+    private static func completeDestinationPhrase(
+        _ branch: AssistantRoutingIntent.Branch, intent: AssistantRoutingIntent
+    ) -> Bool {
+        let prefixes = Set(
+            "to on out into through via then the my a an both directly straight and".split(separator: " "))
+        return destinationSpans(in: branch.destinationEvidence, intent: intent).allSatisfy { destination in
+            let prefix = branch.destinationEvidence[..<destination.range.lowerBound]
+                .lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).last
+            return prefix.map { prefixes.contains($0) } ?? false
+        }
+    }
+
+    static func destinationSpans(
+        in text: String, intent: AssistantRoutingIntent, additionalNames: [String] = []
     ) -> [(name: String, range: Range<String.Index>)] {
-        let names = Set(intent.branches.map(\.destination)).sorted { $0.count > $1.count }
+        let destinations = Set((intent.branches.map(\.destination) + additionalNames)
+            .map(AssistantRoutingInterpretationAdapter.normalize))
+        let names = Set(intent.branches.flatMap { [$0.source, $0.destination] + $0.effects }
+            + intent.excludedMentions + additionalNames).filter { !$0.isEmpty }.sorted { $0.count > $1.count }
             .map(NSRegularExpression.escapedPattern).joined(separator: "|")
         guard let regex = try? NSRegularExpression(
             pattern: "(?<![\\p{L}\\p{N}_])(?:" + names + ")(?![\\p{L}\\p{N}_])",
             options: .caseInsensitive) else { return [] }
         return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).compactMap {
             guard let range = Range($0.range, in: text) else { return nil }
-            return (AssistantRoutingInterpretationAdapter.normalize(String(text[range])), range)
+            let name = AssistantRoutingInterpretationAdapter.normalize(String(text[range]))
+            return destinations.contains(name) ? (name, range) : nil
         }
     }
 

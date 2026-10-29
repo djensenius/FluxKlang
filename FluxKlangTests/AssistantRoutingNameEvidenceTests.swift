@@ -263,4 +263,52 @@ struct AssistantRoutingNameEvidenceTests {
         intent.branches[0].destinationEvidence = processed
         #expect(!fixture.rejects(text: processed, intent: intent, context: context))
     }
+
+    @Test(arguments: [false, true])
+    func destinationQualifiersCannotDisappearIntoDryWetOperators(configured: Bool) throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        if configured {
+            context.globalConnections.home.outputs += [
+                .init(connector: 1, destinationName: "Dry Speakers L"),
+                .init(connector: 2, destinationName: "Dry Speakers R")
+            ]
+            context.effectiveConnections = context.globalConnections.effectiveHome
+        }
+        let text = "route Solar through evil pet dry and wet to Dry Speakers"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "Speakers", destinationEvidence: text,
+                  processingEvidence: "Solar through evil pet", includesDrySignal: true, dryEvidence: text)
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        intent.branches[0].destination = "Dry Speakers"
+        if configured {
+            let draft = try fixture.prepared(text: text, intent: intent, context: context)
+            #expect(draft.request.outputConnectors == [.init(index: 1), .init(index: 2)])
+        } else {
+            #expect(fixture.rejects(text: text, intent: intent, context: context))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func completeEffectNamesDoNotCountAsDestinationOccurrences(grouped: Bool) {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.effects[0].name = "Main Speakers Delay"
+        let output = grouped ? "desktop speakers" : "Main Speakers"
+        let clause = "Solar through Main Speakers Delay to \(output)"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Main Speakers Delay"], destination: output, destinationEvidence: clause,
+                  processingEvidence: "Solar through Main Speakers Delay")
+        ])
+        let text = "route " + clause + (grouped ? " and Osmose to Main Speakers" : "")
+        if grouped {
+            intent.branches.append(.init(source: "Osmose", destination: "Main Speakers",
+                                         destinationEvidence: "Osmose to Main Speakers"))
+        }
+        #expect(!fixture.rejects(text: text, intent: intent, context: context))
+        let repeated = text + " and " + output
+        intent.branches[0].destinationEvidence = repeated
+        #expect(fixture.rejects(text: repeated, intent: intent, context: context))
+    }
 }

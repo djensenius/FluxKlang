@@ -102,8 +102,9 @@ enum AssistantRoutingInterpretationAdapter {
                   copied(branch.destinationEvidence, text),
                   contains(branch.source, branch.destinationEvidence),
                   contains(branch.destination, branch.destinationEvidence),
-                  occursOnce(branch.destination, in: branch.destinationEvidence),
-                  sourceScopedDestination(branch),
+                  AssistantRoutingPreparation.destinationSpans(in: branch.destinationEvidence, intent: intent)
+                    .filter({ $0.name == normalize(branch.destination) }).count == 1,
+                  sourceScopedDestination(branch, intent: intent),
                   !isNegative(branch.destinationEvidence),
                   !intent.excludedMentions.contains(where: { excluded in
                       contains(excluded, branch.source) || branch.effects.contains(where: { contains(excluded, $0) })
@@ -181,13 +182,17 @@ enum AssistantRoutingInterpretationAdapter {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return false }
         return regex.numberOfMatches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) == 1
     }
-    private static func sourceScopedDestination(_ branch: AssistantRoutingIntent.Branch) -> Bool {
+    private static func sourceScopedDestination(
+        _ branch: AssistantRoutingIntent.Branch, intent: AssistantRoutingIntent
+    ) -> Bool {
         let evidence = branch.destinationEvidence
         let range: (String) -> Range<String.Index>? = { mention in
             evidence.range(of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
                 + "(?![\\p{L}\\p{N}_])", options: [.regularExpression, .caseInsensitive])
         }
-        guard let source = range(branch.source), let destination = range(branch.destination) else { return false }
+        guard let source = range(branch.source),
+              let destination = AssistantRoutingPreparation.destinationSpans(in: evidence, intent: intent)
+                .first(where: { $0.name == normalize(branch.destination) })?.range else { return false }
         return source.upperBound <= destination.lowerBound
     }
 
