@@ -125,6 +125,8 @@ enum AssistantActionTargetResolver {
         }
         let digits = text.dropFirst(kind == .channel ? "channel".count : "main".count)
             .trimmingCharacters(in: .whitespaces)
+        // A hyphen joined to an alphabetic alias is not a negative numeric index.
+        if digits.first == "-", digits.dropFirst().first?.isLetter == true { return .name }
         guard let first = digits.first, first.isNumber || "+-.".contains(first) else { return .name }
         // Reserve all numeric-shaped suffixes, including signs, fractions and unsupported notation.
         // Only canonical unsigned integer indices can authorize a numeric target.

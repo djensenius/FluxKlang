@@ -150,6 +150,38 @@ struct AssistantReviewedChatTests {
         }
     }
 
+    @Test func routingAnswerUsesReviewedPreflightAndInvalidInterpretationClarifiesWithoutProvider() async throws {
+        let gear = Equipment(name: "Lower Synth")
+        let context = AssistantBackendFixture.context(equipment: [gear],
+            inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
+        for answer in [false, true] {
+            let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+            let provider = AssistantBackendGenerator()
+            let planner = ReviewedChatPlanner()
+            let interpreter = ReviewedChatInterpreter(result: answer ? .answer
+                : .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+            let chat = makeChat(interpreter: interpreter, planner: planner,
+                provider: AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider),
+                coordinator: coordinator)
+            let legacy = AssistantRecordingMixerExecutor()
+            chat.mixerExecutor = legacy
+            chat.composer = "route Lower Synth to speakers"
+            chat.send(context: context)
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(provider.calls == 0)
+            #expect(planner.intents.isEmpty)
+            #expect(planner.confirmations == 0)
+            #expect(legacy.commands.isEmpty)
+            if answer {
+                #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
+            } else {
+                #expect(coordinator.pendingStudioDraft == nil)
+                #expect(chat.selectedConversation?.messages.last?.text
+                    == AssistantActionInterpretationAdapter.invalidOutput)
+            }
+        }
+    }
+
     @Test func cancellationAndSupersessionCannotPublishLateInterpretationOrConfirm() async throws {
         let interpreter = ReviewedChatSuspendedInterpreter()
         let planner = ReviewedChatPlanner()
