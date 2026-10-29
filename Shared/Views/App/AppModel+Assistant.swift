@@ -82,6 +82,7 @@ extension AppModel {
               validationContext.graph == currentContext.graph,
               validationContext.endpoints == currentContext.endpoints,
               validationContext.liveWing.sessionID == currentContext.liveWing.sessionID,
+              (refreshed.nameReferences ?? []).allSatisfy({ $0.isValid(in: currentContext) }),
               (refreshed.outputReferences ?? []).allSatisfy({
                   $0.isValid(in: currentContext.effectiveConnections)
               }),

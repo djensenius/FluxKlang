@@ -46,6 +46,17 @@ enum AssistantRoutingOwnership {
     }
 }
 
+struct AssistantRoutingNameReference: Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Hashable, Sendable { case source, effect, excludedSource, excludedEffect }
+    var mention: String
+    var id: UUID
+    var kind: Kind
+
+    func isValid(in context: AssistantToolContext) -> Bool {
+        AssistantRoutingPreparation.isValidNameReference(self, context: context)
+    }
+}
+
 /// Validates the bounded completed model representation, before configuration lookup.
 enum AssistantRoutingInterpretationAdapter {
     static let replacementPattern = #"\breplace\s+(?:(?:my|the|entire|whole|current)\s+)*"#
@@ -182,6 +193,7 @@ enum AssistantRoutingInterpretationAdapter {
         let relationship = String(evidence[source.upperBound..<effect.lowerBound])
         return AssistantRoutingOwnership.word("through|via|into", in: relationship)
             && !AssistantRoutingOwnership.word("from", in: relationship)
+            && !contains(branch.destination, relationship)
     }
 
     private static func operatorEvidence(_ text: String, branch: AssistantRoutingIntent.Branch) -> String {
@@ -207,6 +219,7 @@ enum AssistantRoutingInterpretationAdapter {
                !AssistantRoutingOwnership.word("then|followed by", in: String(remaining[..<range.lowerBound])) {
                 return false
             }
+            if hasPrevious, contains(branch.destination, String(remaining[..<range.lowerBound])) { return false }
             remaining = remaining[range.upperBound...]
             hasPrevious = true
         }

@@ -120,11 +120,12 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
     var applicationMode: StudioDraftApplicationMode
     var liveReferences: [AssistantLiveReference]?
     var outputReferences: [AssistantRoutingOutputReference]?
+    var nameReferences: [AssistantRoutingNameReference]?
     var hasErrors: Bool { validation.contains { $0.severity == .error } }
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
-        case applicationMode, liveReferences, outputReferences
+        case applicationMode, liveReferences, outputReferences, nameReferences
     }
 
     init(from decoder: any Decoder) throws {
@@ -148,6 +149,8 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
         liveReferences = try container.decodeIfPresent([AssistantLiveReference].self, forKey: .liveReferences)
         outputReferences = try container.decodeIfPresent(
             [AssistantRoutingOutputReference].self, forKey: .outputReferences)
+        nameReferences = try container.decodeIfPresent(
+            [AssistantRoutingNameReference].self, forKey: .nameReferences)
         applicationMode = try container.decodeIfPresent(
             StudioDraftApplicationMode.self,
             forKey: .applicationMode

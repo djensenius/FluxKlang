@@ -389,6 +389,11 @@ final class AssistantCoordinator {
                         + "Relink and create a new draft before accepting."
                 ))
             }
+            if !(draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: context) }) {
+                refreshed.validation.append(StudioDraftValidationIssue(
+                    code: "routing-name-changed", severity: .error,
+                    message: "A routing name now resolves differently. Create a new draft before accepting."))
+            }
             pendingStudioDraft = refreshed
             if wasSettled { settledStudioDraft = refreshed }
             await persistPendingDraft()
@@ -420,6 +425,7 @@ final class AssistantCoordinator {
               preparedContext.graph == currentContext.graph,
               preparedContext.endpoints == currentContext.endpoints,
               preparedContext.liveWing.sessionID == currentContext.liveWing.sessionID,
+              (draft.nameReferences ?? []).allSatisfy({ $0.isValid(in: currentContext) }),
               (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
         else { return false }

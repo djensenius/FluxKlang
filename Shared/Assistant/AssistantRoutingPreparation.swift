@@ -16,6 +16,7 @@ enum AssistantRoutingPreparation {
               completeCoverage(intent, text: text) else { return failure }
         var routes: [StudioWiringRoute] = []
         var references: [AssistantLiveReference] = []
+        var names: [AssistantRoutingNameReference] = []
         var outputs: [AssistantRoutingOutputReference] = []
         var sources: Set<Equipment.ID> = []
         var usedEffects: Set<Effect.ID> = []
@@ -31,9 +32,11 @@ enum AssistantRoutingPreparation {
             if let source {
                 excludedSources.insert(source.id)
                 references.append(contentsOf: source.references)
+                names.append(.init(mention: excluded, id: source.id, kind: .excludedSource))
             }
             if let effect = effects.first {
                 excludedEffects.insert(effect.id)
+                names.append(.init(mention: excluded, id: effect.id, kind: .excludedEffect))
                 if let device = effect.equipmentID { excludedDevices.insert(device) }
             }
         }
@@ -44,6 +47,7 @@ enum AssistantRoutingPreparation {
                   let output = AssistantRoutingOutputResolver.resolve(
                     branch.destination, in: context.effectiveConnections)
             else { return failure }
+            names.append(.init(mention: branch.source, id: source.id, kind: .source))
             var effects: [Effect.ID] = []
             for mention in branch.effects {
                 let matches = context.effects.filter { matchesName(mention, name: $0.name) }
@@ -52,6 +56,7 @@ enum AssistantRoutingPreparation {
                       usedEffects.insert(effect.id).inserted, usedEffectDevices.insert(device).inserted
                 else { return failure }
                 effects.append(effect.id)
+                names.append(.init(mention: mention, id: effect.id, kind: .effect))
             }
             // Copied evidence must not promise one source's processing for another named source.
             let others = intent.branches.filter { $0.source != branch.source }.map(\.source)
@@ -69,7 +74,9 @@ enum AssistantRoutingPreparation {
                 destination: output.destination, includesDrySignal: branch.includesDrySignal,
                 outputConnectors: output.reference.connectors))
         }
-        guard let primary = routes.first else { return failure }
+        let mentioned = AssistantSourceResolver.resolve(text, context: context, excluding: effectEquipment)
+        guard mentioned.clarification == nil, Set(mentioned.equipmentIDs).isSubset(of: sources),
+              let primary = routes.first else { return failure }
         var request = StudioWiringRequest(
             sourceInstrumentIDs: primary.sourceInstrumentIDs, effectChainIDs: primary.effectChainIDs,
             destination: primary.destination, includesDrySignal: primary.includesDrySignal,
@@ -83,6 +90,7 @@ enum AssistantRoutingPreparation {
             environmentID: context.activeEnvironmentID)
         draft.liveReferences = request.liveReferences
         draft.outputReferences = request.outputReferences
+        draft.nameReferences = names
         guard !draft.hasErrors else { return failure }
         guard intent.replacesSetup || (!conflictsWithExistingGraph(
             draft.request, effects: context.effects, graph: context.graph)
@@ -141,6 +149,20 @@ enum AssistantRoutingPreparation {
     }
 
     private static var failure: Result { .clarification(AssistantRoutingOwnership.clarification) }
+
+    static func isValidNameReference(
+        _ reference: AssistantRoutingNameReference, context: AssistantToolContext
+    ) -> Bool {
+        let effects = context.effects.filter { matchesName(reference.mention, name: $0.name) }
+        let source = resolveSource(reference.mention, context: context,
+            excluding: Set(context.effects.compactMap(\.equipmentID)))
+        switch reference.kind {
+        case .source: return source?.id == reference.id
+        case .effect: return effects.count == 1 && effects.first?.id == reference.id
+        case .excludedSource: return effects.isEmpty && source?.id == reference.id
+        case .excludedEffect: return source == nil && effects.count == 1 && effects.first?.id == reference.id
+        }
+    }
 
     private static func resolveSource(
         _ mention: String, context: AssistantToolContext, excluding: Set<Equipment.ID>

@@ -173,6 +173,7 @@ enum StudioWiringAdvisor {
         refreshed.createdAt = draft.createdAt
         refreshed.liveReferences = draft.liveReferences
         refreshed.outputReferences = draft.outputReferences
+        refreshed.nameReferences = draft.nameReferences
         if draft.request.environmentID != currentEnvironmentID {
             refreshed.validation.append(.error(
                 "environment-changed", "This draft belongs to a different Studio environment."))
