@@ -89,12 +89,19 @@ struct AssistantReviewedChatTests {
             #expect(planner.intents.first?.amount == 3)
             #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
             #expect(chat.selectedConversation?.messages.last?.cards.count == 1)
+            chat.composer = "turn Down Synth up by 3 dB"
+            chat.send(context: AssistantBackendFixture.context())
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(planner.intents.count == 2)
+            #expect(planner.intents.last?.action == .raise)
+            #expect(planner.intents.last?.evidence.action == "up")
             for text in ["add my mother-32 and turn the volume to 50%", "make my Astrolab softer",
-                         "silence Astrolab", "bring Astrolab down", "Astrolab -6"] {
+                         "silence Astrolab", "bring Astrolab down", "Astrolab -6",
+                         "unsilence Astrolab", "attenuate Astrolab", "add my Astrolab as a live-channel shortcut"] {
                 chat.composer = text
                 chat.send(context: AssistantBackendFixture.context())
                 try await AssistantBackendFixture.wait { !chat.isStreaming }
-                #expect(planner.intents.count == 1)
+                #expect(planner.intents.count == 2)
                 #expect(planner.pendingReview == nil)
                 #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true)
                 #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)

@@ -263,6 +263,25 @@ struct AssistantActionInterpretationTests {
         }
     }
 
+    @Test func sourceAndDestinationAmountsCannotBeConfusedAfterRemovingIndexedTarget() {
+        for target in ["Astrolab", "main 2", "channel 7"] {
+            for amount in [-20.0, -10] {
+                rejectInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: amount,
+                    targetEvidence: target, actionEvidence: "set", amountEvidence: "\(Int(amount)) dB"),
+                    text: "set \(target) from -20 dB to -10 dB")
+            }
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: -10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "-10 dB"),
+                text: "set \(target) to -10 dB")
+        }
+    }
+
+    @Test func explicitShortcutGuidanceDoesNotInterceptOrdinaryRoutingAmendments() {
+        for text in ["add reverb to my Astrolab route", "add another instrument to the routing draft"] {
+            #expect(AssistantActionInterpretationAdapter.fallback(.init(text: text), reason: "disabled") == .answer)
+        }
+    }
+
     @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
         for (text, output) in [
             ("silence Astrolab", malformed(.mute, action: "silence")),

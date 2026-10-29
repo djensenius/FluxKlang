@@ -168,8 +168,9 @@ enum AssistantActionInterpretationAdapter {
     /// This does not interpret actions; it prevents unknown action-looking input reaching cloud Q&A.
     static func isPlausibleAction(_ text: String) -> Bool {
         if isNonActionSubmission(text) { return false }
-        return word("volume|fader|quieter|louder|softer|mute|unmute|silence|down|up|level|gain|db|percent|"
-                    + "boost|cut|reduce|increase|decrease|bring|lower|raise|set|turn|make", in: text)
+        return word("volume|fader|quieter|louder|softer|mute|unmute|silence|unsilence|down|up|level|gain|db|percent|"
+                    + "boost|cut|reduce|increase|decrease|attenuate|bring|lower|raise|set|turn|make", in: text)
+            || (word("add|include", in: text) && word("shortcut", in: text))
             || text.contains("%")
             || text.range(of: #"(?:^|\s)[+-]\d+(?:\.\d+)?\s*$"#, options: .regularExpression) != nil
     }
@@ -191,7 +192,7 @@ enum AssistantActionInterpretationAdapter {
         else { return .clarification(invalidOutput) }
         var actionEvidence = actionWord
         if case .adjustDB = command.operation, actionWord.lowercased() == "turn",
-           let direction = firstMatch(#"\b(down|up)\b"#, in: request.text) {
+           let direction = firstMatch(#"\b(down|up)\b"#, in: outsideTarget(request.text, target: target)) {
             actionEvidence = direction
         }
         var output = AssistantActionModelOutput(disposition: .proposal, target: target,

@@ -92,6 +92,8 @@ enum AssistantActionIntentValidator {
         let clause = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard !hasUnrepresentedTargets(in: clause), mixerVerbCount(in: clause) <= 1 else { return false }
+        // Multiple source/destination numbers cannot be bound safely by copied spans alone.
+        if let amount = intent.amount, number(in: clause) != amount { return false }
         let lower = hasWord(actionWords(.lower), in: clause)
         let raise = hasWord(actionWords(.raise), in: clause)
         let mute = hasWord(actionWords(.mute), in: clause)
