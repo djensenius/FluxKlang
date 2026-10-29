@@ -157,7 +157,8 @@ struct AssistantRoutingPreparationTests {
             #expect(result.destination == .custom)
             #expect(result.reference.connectors == [.init(index: 5), .init(index: 6)])
         }
-        for name in ["unknown speakers", "studio monitors", "basement desktop speakers"] {
+        for name in ["unknown speakers", "studio monitors", "basement desktop speakers",
+                     "Desk Speakers R", "Desktop Speakers Left", "Main Speakers L"] {
             #expect(AssistantRoutingOutputResolver.resolve(name, in: fixture.connections.home) == nil)
         }
         var home = fixture.connections.home
@@ -373,11 +374,46 @@ struct AssistantRoutingPreparationTests {
         #expect(draft.request.sourceInstrumentIDs == [fixture.osmose.id])
         #expect(draft.liveReferences?.count == 1)
         #expect(context.equipment == fixture.equipment)
+        var excluded = intent
+        excluded.excludedMentions = ["Osmose"]
+        excluded.exclusionEvidence = ["without Osmose"]
+        #expect(fixture.rejects(text: text + " without Osmose", intent: excluded, context: context))
         context.liveWing.observations[0].isStale = true
         #expect(fixture.rejects(text: text, intent: intent, context: context))
         context.liveWing.observations[0].isStale = false
         context.liveWing.observations[0].equipmentID = nil
         #expect(fixture.rejects(text: text, intent: intent, context: context))
+    }
+
+    @Test func excludedEffectAliasesCannotReuseTheSamePhysicalDevice() {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.effects.append(Effect(name: "Echo", equipmentID: fixture.evil.id))
+        let text = "Solar through Echo to mains without evil pet"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Echo"], destination: "mains",
+                  destinationEvidence: "Solar through Echo to mains", processingEvidence: "Solar through Echo")
+        ], excludedMentions: ["evil pet"], exclusionEvidence: ["without evil pet"])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+    }
+
+    @Test func eachBranchMustCoverItsOwnProcessingAndDryDirectives() {
+        let fixture = AssistantRoutingFixture()
+        let text = "Solar through evil pet to mains and Osmose through evil pet to desktop speakers"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: "Solar through evil pet to mains", processingEvidence: "Solar through evil pet"),
+            .init(source: "Osmose", destination: "desktop speakers",
+                  destinationEvidence: "Osmose through evil pet to desktop speakers")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent))
+        let dryText = "Solar through evil pet dry and wet to mains and Osmose dry and wet to desktop speakers"
+        var dry = intent
+        dry.branches[0].destinationEvidence = "Solar through evil pet dry and wet to mains"
+        dry.branches[0].includesDrySignal = true
+        dry.branches[0].dryEvidence = "Solar through evil pet dry and wet"
+        dry.branches[1].destinationEvidence = "Osmose dry and wet to desktop speakers"
+        #expect(fixture.rejects(text: dryText, intent: dry))
     }
 
     @Test func explicitSerialOrderIsRetainedAndUnclearOrParallelOrderClarifies() throws {
@@ -433,5 +469,12 @@ struct AssistantRoutingPreparationTests {
         intent.branches = Array(repeating: intent.branches[0], count: 9)
         #expect(fixture.rejects(intent: intent))
         #expect(fixture.rejects(text: String(repeating: " ", count: 2_001) + AssistantRoutingFixture.text))
+        let negated = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", destination: "mains", destinationEvidence: "Solar to mains")
+        ])
+        #expect(fixture.rejects(text: "don’t route Solar to mains", intent: negated))
+        var broad = negated
+        broad.branches[0].destinationEvidence = "don’t route Solar to mains"
+        #expect(fixture.rejects(text: "don’t route Solar to mains", intent: broad))
     }
 }

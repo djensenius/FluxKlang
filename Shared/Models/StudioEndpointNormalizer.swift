@@ -55,6 +55,17 @@ enum StudioEndpointNormalizer {
         graph: StudioGraph,
         endpoints: [StudioEndpoint]
     ) -> StudioNode? {
+        if endpoint.destination == .finalMix {
+            let matchingIDs = Set(endpoints.filter {
+                $0.destination == .finalMix && $0.name.caseInsensitiveCompare(endpoint.name) == .orderedSame
+                    && ($0.outputConnectors == nil || endpoint.outputConnectors == nil
+                        || $0.outputConnectors == endpoint.outputConnectors)
+            }.map(\.id))
+            return graph.nodes.first {
+                if case .endpoint(let id) = $0.kind { return matchingIDs.contains(id) }
+                return false
+            }
+        }
         guard let key = mergeKey(for: endpoint) else { return nil }
         let matchingIDs = Set(endpoints.compactMap {
             mergeKey(for: $0) == key ? $0.id : nil
@@ -69,9 +80,10 @@ enum StudioEndpointNormalizer {
         switch endpoint.destination {
         case .finalMix:
             let name = endpoint.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return "\(endpoint.destination.rawValue)|\(name)"
+            let connectors = endpoint.outputConnectors?.map(\.label).joined(separator: ",") ?? "unspecified"
+            return "\(endpoint.destination.rawValue)|\(name)|\(connectors)"
         case .custom:
-            let connectors = (endpoint.outputConnectors ?? []).map(\.label).sorted().joined(separator: ",")
+            let connectors = (endpoint.outputConnectors ?? []).map(\.label).joined(separator: ",")
             return connectors.isEmpty ? nil : "\(endpoint.destination.rawValue)|\(connectors)"
         case .space:
             return nil

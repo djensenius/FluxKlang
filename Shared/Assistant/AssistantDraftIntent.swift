@@ -461,7 +461,8 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        if AssistantRoutingOwnership.owns(request.question) {
+        if AssistantRoutingOwnership.owns(request.question)
+            || AssistantDraftIntent.requestsDraftAmendment(request.question) {
             return textStream(AssistantRoutingOwnership.clarification)
         }
         if AssistantDraftIntent.requestsInventory(request.question) {
@@ -479,56 +480,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
             return textStream(clarification)
         }
 
-        let mentionedSources = resolution.equipmentIDs
-        guard AssistantDraftIntent.requestsDraftAmendment(request.question),
-              !mentionedSources.isEmpty else {
-            return downstream.stream(request)
-        }
-        return amendmentStream(request, resolution: resolution)
-    }
-
-    private func amendmentStream(
-        _ request: AssistantGenerationRequest, resolution: AssistantSourceResolver.Resolution
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                guard let pending = coordinator.pendingStudioDraft else {
-                    do {
-                        for try await event in downstream.stream(request) {
-                            continuation.yield(event)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                    return
-                }
-                let updatedSources = orderedUnique(
-                    pending.request.sourceInstrumentIDs + resolution.equipmentIDs
-                )
-                var wiringRequest = StudioWiringRequest(
-                    sourceInstrumentIDs: updatedSources,
-                    effectChainIDs: pending.request.effectChainIDs,
-                    destination: pending.request.destination,
-                    includesDrySignal: pending.request.includesDrySignal,
-                    additionalRoutes: pending.request.additionalRoutes,
-                    applicationMode: pending.applicationMode
-                )
-                wiringRequest.liveReferences = (pending.liveReferences ?? []) + resolution.references
-                let result = await coordinator.perform(
-                    .buildStudioDraft(wiringRequest),
-                    context: request.context
-                )
-                guard case .pendingDraft(let draft?) = result else {
-                    continuation.finish()
-                    return
-                }
-                continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                continuation.yield(.cards(cards(for: draft)))
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        return downstream.stream(request)
     }
 
     private func textStream(_ text: String) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
@@ -602,10 +554,5 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
             result.append(.conflicts(draft.validation.map(\.message)))
         }
         return result
-    }
-
-    private func orderedUnique<T: Hashable>(_ values: [T]) -> [T] {
-        var seen: Set<T> = []
-        return values.filter { seen.insert($0).inserted }
     }
 }

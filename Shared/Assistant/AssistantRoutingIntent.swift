@@ -70,7 +70,7 @@ enum AssistantRoutingInterpretationAdapter {
                     || AssistantRoutingOwnership.word("replace|remove|delete|clear", in: text) { return invalid }
         for (mention, evidence) in zip(intent.excludedMentions, intent.exclusionEvidence) {
             guard validMention(mention, text), copied(evidence, text), contains(mention, evidence),
-                  AssistantRoutingOwnership.word("without|except|not|don't|do not|never|exclude", in: evidence)
+                  isNegative(evidence)
             else { return invalid }
         }
         for branch in intent.branches {
@@ -129,7 +129,8 @@ enum AssistantRoutingInterpretationAdapter {
         !evidence.isEmpty && evidence.count <= 400 && text.range(of: evidence) != nil
     }
     private static func isNegative(_ text: String) -> Bool {
-        AssistantRoutingOwnership.word("without|except|not|don't|do not|never|exclude", in: text)
+        AssistantRoutingOwnership.word("without|except|not|don't|do not|never|exclude",
+                                       in: text.replacingOccurrences(of: "’", with: "'"))
     }
     private static func ordered(_ mentions: [String], in text: String) -> Bool {
         var remaining = text[...]

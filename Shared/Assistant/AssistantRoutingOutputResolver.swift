@@ -70,7 +70,7 @@ enum AssistantRoutingOutputResolver {
     }
 
     private static func alias(_ name: String) -> String {
-        let normalized = baseName(name)
+        let normalized = AssistantRoutingInterpretationAdapter.normalize(name)
         return normalized == "desktop speakers" ? "desk speakers" : normalized
     }
 

@@ -217,7 +217,8 @@ struct AssistantRoutingChatTests {
             preparedContext: fixture.context, currentContext: fixture.context))
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
         let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: fallback)
-        for question in ["try again", "It is connected now, try again.", "How do I connect Osmose to speakers?"] {
+        for question in ["try again", "It is connected now, try again.", "How do I connect Osmose to speakers?",
+                         "also Solar", "and OP-XY", "what about Osmose"] {
             let request = AssistantGenerationRequest(question: question,
                 recentMessages: [.init(role: .user, text: AssistantRoutingFixture.text)],
                 summary: "", context: fixture.context)

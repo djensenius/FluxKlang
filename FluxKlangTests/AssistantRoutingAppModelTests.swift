@@ -108,4 +108,67 @@ struct AssistantRoutingAppModelTests {
             #expect(model.wing.transportWriteCount == 0)
         }
     }
+
+    @Test func incompatibleExistingSpeakerOrderBlocksPreparationAndRevalidation() throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.globalConnections.home.outputs[2].connector = 6
+        context.globalConnections.home.outputs[3].connector = 5
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let draft = try fixture.prepared(context: context)
+        let endpoint = StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                                      outputConnectors: [.init(index: 5), .init(index: 6)])
+        let graph = StudioGraph(nodes: [.init(kind: .endpoint(endpoint.id), title: endpoint.name)])
+        context.graph = graph
+        context.endpoints = [endpoint]
+        #expect(fixture.rejects(context: context))
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
+            effects: [fixture.effect], connections: context.globalConnections, currentGraph: graph,
+            currentEnvironmentID: nil, currentEndpoints: [endpoint])
+        #expect(refreshed.hasErrors)
+        let merged = StudioPatchDraftMerger.merge(draft, into: graph, endpoints: [endpoint],
+            equipment: fixture.equipment, effects: [fixture.effect])
+        let usedEndpointIDs = Set(merged.graph.edges.compactMap { edge -> UUID? in
+            guard let node = merged.graph.nodes.first(where: { $0.id == edge.to.nodeID }),
+                  case .endpoint(let id) = node.kind else { return nil }
+            return id
+        })
+        let desk = try #require(merged.endpoints.first {
+            $0.destination == .custom && usedEndpointIDs.contains($0.id)
+        })
+        #expect(desk.outputConnectors == [.init(index: 6), .init(index: 5)])
+        let compiled = StudioSignalCompiler.compile(.init(graph: merged.graph, endpoints: merged.endpoints,
+            effects: [fixture.effect], connections: context.globalConnections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(!compiled.hasErrors)
+    }
+
+    @Test func compatibleLegacyMainEndpointKeepsReviewedMappingAfterMergeAndCompilation() throws {
+        let fixture = AssistantRoutingFixture()
+        let draft = try fixture.prepared()
+        let reviewed = try #require(draft.fragment.endpoints.first { $0.destination == .finalMix })
+        var legacy = reviewed
+        legacy.id = UUID()
+        legacy.outputConnectors = nil
+        let graph = StudioGraph(nodes: [.init(kind: .endpoint(legacy.id), title: legacy.name)])
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
+            effects: [fixture.effect], connections: fixture.connections, currentGraph: graph,
+            currentEnvironmentID: nil, currentEndpoints: [legacy])
+        #expect(!refreshed.hasErrors)
+        let merged = StudioPatchDraftMerger.merge(refreshed, into: graph, endpoints: [legacy],
+            equipment: fixture.equipment, effects: [fixture.effect])
+        #expect(merged.endpoints.first { $0.id == legacy.id }?.outputConnectors == reviewed.outputConnectors)
+        #expect(merged.endpoints.filter { $0.destination == .finalMix }.count == 1)
+        let compiled = StudioSignalCompiler.compile(.init(graph: merged.graph, endpoints: merged.endpoints,
+            effects: [fixture.effect], connections: fixture.connections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(!compiled.hasErrors)
+        var moved = fixture.connections
+        moved.home.outputs[4].destinationName = "Main Speakers R"
+        moved.home.outputs[5].destinationName = "Main Speakers L"
+        let drifted = StudioSignalCompiler.compile(.init(graph: merged.graph, endpoints: merged.endpoints,
+            effects: [fixture.effect], connections: moved, equipment: fixture.equipment, speakers: []))
+        #expect(drifted.hasErrors)
+        #expect(drifted.settings.isEmpty)
+    }
 }

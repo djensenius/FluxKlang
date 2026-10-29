@@ -291,7 +291,7 @@ struct AssistantReliabilityTests {
 
         #expect(inventory.contains("Saved equipment (not connected-equipment detection):"))
         #expect(inventory.contains("Arturia AstroLab 88 (WING inputs 21/22)"))
-        #expect(amended == "I do not know your gear.")
+        #expect(amended.contains("No draft was changed"))
         #expect(coordinator.pendingStudioDraft == nil)
     }
 

@@ -150,7 +150,8 @@ enum StudioWiringAdvisor {
         effects: [Effect],
         connections: GlobalStudioConnections,
         currentGraph: StudioGraph,
-        currentEnvironmentID: RoutingEnvironment.ID?
+        currentEnvironmentID: RoutingEnvironment.ID?,
+        currentEndpoints: [StudioEndpoint] = []
     ) -> StudioPatchDraft {
         var refreshed = build(
             request: StudioWiringRequest(
@@ -180,11 +181,14 @@ enum StudioWiringAdvisor {
             refreshed.validation.append(.error("destination-changed",
                 "A configured speaker group changed. Create a new draft rather than reusing old output connectors."))
         }
+        let graphConflict = AssistantRoutingPreparation.conflictsWithExistingGraph(
+            draft.request, effects: effects, graph: currentGraph)
+        let destinationConflict = AssistantRoutingPreparation.conflictsWithExistingDestinations(
+            draft, endpoints: currentEndpoints)
         if draft.outputReferences?.isEmpty == false, draft.applicationMode == .append,
-           AssistantRoutingPreparation.conflictsWithExistingGraph(
-            draft.request, effects: effects, graph: currentGraph) {
+           graphConflict || destinationConflict {
             refreshed.validation.append(.error("routing-graph-changed",
-                "A requested source or physical effect is already used. Create a new draft for the current graph."))
+                "A requested source, effect or speaker mapping conflicts with the current graph. Create a new draft."))
         }
         return refreshed
     }

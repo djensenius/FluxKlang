@@ -20,14 +20,23 @@ enum AssistantRoutingPreparation {
         var sources: Set<Equipment.ID> = []
         var usedEffects: Set<Effect.ID> = []
         var usedEffectDevices: Set<Equipment.ID> = []
+        var excludedSources: Set<Equipment.ID> = []
+        var excludedEffects: Set<Effect.ID> = []
+        var excludedDevices: Set<Equipment.ID> = []
         let effectEquipment = Set(context.effects.compactMap(\.equipmentID))
         for excluded in intent.excludedMentions {
             let effects = context.effects.filter { matchesName(excluded, name: $0.name) }
-            guard effects.count == 1 || resolveSource(excluded, context: context, excluding: effectEquipment) != nil
-            else { return failure }
+            let source = resolveSource(excluded, context: context, excluding: effectEquipment)
+            guard effects.count + (source == nil ? 0 : 1) == 1 else { return failure }
+            if let source { excludedSources.insert(source.id) }
+            if let effect = effects.first {
+                excludedEffects.insert(effect.id)
+                if let device = effect.equipmentID { excludedDevices.insert(device) }
+            }
         }
         for branch in intent.branches {
             guard let source = resolveSource(branch.source, context: context, excluding: effectEquipment),
+                  !excludedSources.contains(source.id),
                   sources.insert(source.id).inserted,
                   let output = AssistantRoutingOutputResolver.resolve(
                     branch.destination, in: context.effectiveConnections)
@@ -36,6 +45,7 @@ enum AssistantRoutingPreparation {
             for mention in branch.effects {
                 let matches = context.effects.filter { matchesName(mention, name: $0.name) }
                 guard matches.count == 1, let effect = matches.first, let device = effect.equipmentID,
+                      !excludedEffects.contains(effect.id), !excludedDevices.contains(device),
                       usedEffects.insert(effect.id).inserted, usedEffectDevices.insert(device).inserted
                 else { return failure }
                 effects.append(effect.id)
@@ -71,9 +81,23 @@ enum AssistantRoutingPreparation {
         draft.liveReferences = request.liveReferences
         draft.outputReferences = request.outputReferences
         guard !draft.hasErrors else { return failure }
-        guard intent.replacesSetup || !conflictsWithExistingGraph(
-            draft.request, effects: context.effects, graph: context.graph) else { return failure }
+        guard intent.replacesSetup || (!conflictsWithExistingGraph(
+            draft.request, effects: context.effects, graph: context.graph)
+            && !conflictsWithExistingDestinations(draft, endpoints: context.endpoints)) else { return failure }
         return .prepared(draft)
+    }
+
+    static func conflictsWithExistingDestinations(_ draft: StudioPatchDraft, endpoints: [StudioEndpoint]) -> Bool {
+        draft.fragment.endpoints.contains { proposed in
+            endpoints.contains { existing in
+                guard let old = existing.outputConnectors, let new = proposed.outputConnectors else { return false }
+                let sameMains = existing.destination == .finalMix && proposed.destination == .finalMix
+                let sameName = existing.destination == proposed.destination
+                    && AssistantRoutingInterpretationAdapter.normalize(existing.name)
+                        == AssistantRoutingInterpretationAdapter.normalize(proposed.name)
+                return old != new && (sameMains || sameName || !Set(old).isDisjoint(with: new))
+            }
+        }
     }
 
     static func conflictsWithExistingGraph(
@@ -151,7 +175,8 @@ enum AssistantRoutingPreparation {
     /// Coverage is a rejection fence, not a topology parser. Unknown names, referents and unsupported
     /// operators must not disappear from an otherwise valid subset. Apple alone supplies branch scope.
     private static func completeCoverage(_ intent: AssistantRoutingIntent, text: String) -> Bool {
-        guard intent.branches.allSatisfy({ sourceOccurrencesCovered($0, in: text) }) else { return false }
+        guard intent.branches.allSatisfy({ sourceOccurrencesCovered($0, in: text) }),
+              directivesCovered(intent, in: text) else { return false }
         var remaining = text
         for evidence in intent.exclusionEvidence {
             let positiveNames = intent.branches.flatMap { [$0.source] + $0.effects }
@@ -159,7 +184,7 @@ enum AssistantRoutingPreparation {
                 AssistantRoutingInterpretationAdapter.contains($0, evidence)
             }) else { return false }
             let neutral = evidence.replacingOccurrences(
-                of: #"\b(?:without|except|not|don't|do not|never|exclude)\b"#, with: " ",
+                of: #"\b(?:without|except|not|don['’]t|do not|never|exclude)\b"#, with: " ",
                 options: [.regularExpression, .caseInsensitive])
             remaining = remaining.replacingOccurrences(of: evidence, with: neutral)
         }
@@ -181,7 +206,39 @@ enum AssistantRoutingPreparation {
         // A bare parallel/dry request is not permission to invent a blend or drop its raw path.
         if AssistantRoutingOwnership.word("dry|wet|parallel", in: remaining),
            !intent.branches.contains(where: \.includesDrySignal) { return false }
-        if AssistantRoutingOwnership.word("without|except|not|don't|never|exclude", in: remaining) { return false }
+        if AssistantRoutingOwnership.word("without|except|not|don't|never|exclude",
+            in: remaining.replacingOccurrences(of: "’", with: "'")) { return false }
+        return true
+    }
+
+    private static func directivesCovered(_ intent: AssistantRoutingIntent, in text: String) -> Bool {
+        let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
+        let dry = intent.branches.filter(\.includesDrySignal).map(\.dryEvidence)
+        let allEffects = Set(intent.branches.flatMap(\.effects))
+        for branch in intent.branches {
+            let evidence = branch.destinationEvidence + " " + branch.processingEvidence + " " + branch.dryEvidence
+            guard !allEffects.subtracting(branch.effects).contains(where: {
+                AssistantRoutingInterpretationAdapter.contains($0, evidence)
+            }) else { return false }
+            if branch.effects.isEmpty,
+               AssistantRoutingOwnership.word("through|via", in: evidence) { return false }
+            if !branch.includesDrySignal,
+               AssistantRoutingOwnership.word("dry|wet|parallel", in: evidence) { return false }
+        }
+        for (pattern, evidence) in [
+            ("through|via", processing), ("dry|wet|parallel", dry)
+        ] {
+            guard let regex = try? NSRegularExpression(
+                pattern: "\\b(?:" + pattern + ")\\b", options: .caseInsensitive) else { return false }
+            let covered = (evidence + intent.exclusionEvidence).compactMap { text.range(of: $0) }
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) {
+                guard let range = Range(match.range, in: text),
+                      covered.contains(where: {
+                          $0.lowerBound <= range.lowerBound && $0.upperBound >= range.upperBound
+                      })
+                else { return false }
+            }
+        }
         return true
     }
 

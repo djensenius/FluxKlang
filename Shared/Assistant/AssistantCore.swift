@@ -371,7 +371,8 @@ final class AssistantCoordinator {
                 effects: context.effects,
                 connections: context.globalConnections,
                 currentGraph: context.graph,
-                currentEnvironmentID: context.activeEnvironmentID
+                currentEnvironmentID: context.activeEnvironmentID,
+                currentEndpoints: context.endpoints
             )
             refreshed.liveReferences = draft.liveReferences
             if !(draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: context.liveWing) }) {
