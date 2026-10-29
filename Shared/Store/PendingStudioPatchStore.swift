@@ -13,14 +13,7 @@ actor PendingStudioPatchStore: PendingStudioPatchPersisting {
             self.fileURL = fileURL
             return
         }
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL.temporaryDirectory
-        self.fileURL = base
-            .appendingPathComponent("FluxKlang", isDirectory: true)
+        self.fileURL = AppPersistence.directory
             .appendingPathComponent("assistant-pending-studio-draft.json")
     }
 

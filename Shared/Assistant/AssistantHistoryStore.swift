@@ -11,13 +11,7 @@ actor LocalAssistantHistoryBackend: AssistantHistoryBackend {
     private let legacyFileURL: URL?
 
     init(directory: URL? = nil, legacyFileURL: URL? = nil) {
-        let base = directory ?? ((try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL.temporaryDirectory)
-            .appendingPathComponent("FluxKlang", isDirectory: true)
+        let base = directory ?? AppPersistence.directory
             .appendingPathComponent("AssistantHistory", isDirectory: true)
         self.directory = base
         self.legacyFileURL = legacyFileURL
@@ -150,9 +144,7 @@ actor AssistantConversationStore {
     }
 
     static func live() -> AssistantConversationStore {
-        let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.arguments.contains("-ui-testing")
-        guard !isTesting else {
+        guard !AppPersistence.isTesting else {
             return AssistantConversationStore(initialDiagnostics: [
                 """
                 Private iCloud sync is inactive in the unsigned test host. Conversations remain available in \

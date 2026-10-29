@@ -30,6 +30,18 @@ struct CloudSyncTests {
 
     private func uniqueName() -> String { "test-\(UUID().uuidString).json" }
 
+    @Test func defaultTestPersistenceIsLocalAndIsolated() async throws {
+        #expect(AppPersistence.isTesting)
+        #expect(AppPersistence.defaultCloud == nil)
+        #expect(AppPersistence.directory.lastPathComponent.hasPrefix("FluxKlang-tests-"))
+        #expect(AppPersistence.directory.path.hasPrefix(URL.temporaryDirectory.path))
+
+        let name = uniqueName()
+        await JSONFileStore.shared.save(Model(value: 13), to: name)
+        let data = try Data(contentsOf: AppPersistence.directory.appendingPathComponent(name))
+        #expect(try JSONDecoder().decode(Model.self, from: data) == Model(value: 13))
+    }
+
     @Test func saveMirrorsToCloudAndLoads() async {
         let cloud = MemoryCloudStore()
         let store = JSONFileStore(cloud: cloud)

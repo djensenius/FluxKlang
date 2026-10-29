@@ -10,6 +10,30 @@
 
 import Foundation
 
+/// Test hosts must never read user files or mirror seeded state to iCloud.
+enum AppPersistence {
+    static let isTesting = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || ProcessInfo.processInfo.arguments.contains("-ui-testing")
+
+    static let directory: URL = {
+        if isTesting {
+            return URL.temporaryDirectory
+                .appendingPathComponent("FluxKlang-tests-\(UUID().uuidString)", isDirectory: true)
+        }
+        let base = (try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? URL.temporaryDirectory
+        return base.appendingPathComponent("FluxKlang", isDirectory: true)
+    }()
+
+    static var defaultCloud: (any CloudKeyValueStore)? {
+        isTesting ? nil : UbiquitousCloudStore()
+    }
+}
+
 actor JSONFileStore {
     static let shared = JSONFileStore()
 
@@ -17,14 +41,8 @@ actor JSONFileStore {
     private let fileManager = FileManager.default
     private let cloud: (any CloudKeyValueStore)?
 
-    init(cloud: (any CloudKeyValueStore)? = UbiquitousCloudStore()) {
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL.temporaryDirectory
-        directory = base.appendingPathComponent("FluxKlang", isDirectory: true)
+    init(cloud: (any CloudKeyValueStore)? = AppPersistence.defaultCloud) {
+        directory = AppPersistence.directory
         self.cloud = cloud
     }
 
