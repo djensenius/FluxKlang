@@ -59,7 +59,7 @@ struct AssistantLiveWingAppModelTests {
         await model.wing.disconnect()
     }
 
-    @Test func staleAliasDraftIsRefreshedBeforeAcceptanceWithoutHardwareWrites() async throws {
+    @Test func staleAliasDraftReviewRefreshesBeforeEnablingAcceptanceWithoutHardwareWrites() async throws {
         let fixture = try await fixture()
         let model = fixture.model
         let transport = fixture.transport
@@ -71,12 +71,41 @@ struct AssistantLiveWingAppModelTests {
         _ = await model.assistant.perform(.validatePendingStudioDraft, context: stale)
         #expect(model.assistant.pendingStudioDraft?.validation.contains { $0.code == "live-alias-changed" } == true)
         let before = await transport.queries.filter { $0 == WingAddress.inputName(7) }.count
+        let graph = model.environments.activeStudioGraph
+        await model.refreshPendingAssistantDraftForReview()
+        #expect(model.assistant.pendingStudioDraft?.hasErrors == false, "Review must allow safe acceptance again")
+        #expect(model.environments.activeStudioGraph == graph)
+        #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
+        #expect(await transport.writes.isEmpty)
         let result = await model.acceptPendingAssistantDraft()
         #expect(result != nil)
         #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
         #expect(model.wing.transportWriteCount == 0)
         #expect(await transport.writes.isEmpty)
         await model.wing.disconnect()
+    }
+
+    @Test func reviewRefreshRejectsChangedOrUnconfirmedAliasesWithoutAllowingAcceptance() async throws {
+        for scenario in 0...2 {
+            let fixture = try await fixture()
+            let model = fixture.model
+            try await buildAliasDraft(model, gear: fixture.gear)
+            let graph = model.environments.activeStudioGraph
+            let home = model.studioConnections.connections
+            switch scenario {
+            case 0: await fixture.transport.put(WingAddress.inputName(7), .string("Renamed"))
+            case 1: await fixture.transport.configure(answers: false)
+            default: await model.wing.disconnect()
+            }
+            await model.refreshPendingAssistantDraftForReview()
+            #expect(model.assistant.pendingStudioDraft?.hasErrors == true)
+            #expect(await model.acceptPendingAssistantDraft() == nil)
+            #expect(model.environments.activeStudioGraph == graph)
+            #expect(model.studioConnections.connections == home)
+            #expect(model.wing.transportWriteCount == 0)
+            #expect(await fixture.transport.writes.isEmpty)
+            await model.wing.disconnect()
+        }
     }
 
     @Test func changedDisconnectedOrUnconfirmedAliasAcceptancePreservesGraphAndHomeWithoutWrites() async throws {

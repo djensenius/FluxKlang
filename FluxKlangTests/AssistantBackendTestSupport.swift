@@ -84,6 +84,10 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var pausedQueryAddress: String?
     private(set) var queryWaiting = false
     private var queryGates: [CheckedContinuation<Void, Never>] = []
+    private var gateStart = false
+    private var startGate: CheckedContinuation<Void, Never>?
+    private(set) var startWaiting = false
+    private(set) var stopCount = 0
 
     init() {
         (incoming, continuation) = AsyncStream.makeStream()
@@ -103,8 +107,21 @@ actor AssistantRecordingWingTransport: WingTransporting {
         }
     }
 
-    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) { sessionID = UUID() }
-    func stop() { sessionID = nil }
+    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async {
+        sessionID = UUID()
+        if gateStart {
+            gateStart = false
+            startWaiting = true
+            await withCheckedContinuation { startGate = $0 }
+        }
+    }
+    func pauseStart() { gateStart = true }
+    func releaseStart() {
+        startWaiting = false
+        startGate?.resume()
+        startGate = nil
+    }
+    func stop() { stopCount += 1; sessionID = nil }
     func configure(
         answers: Bool = true, afterWrite: Bool = true, fail: Bool = false,
         mismatch: Bool = false, delay: Duration = .zero

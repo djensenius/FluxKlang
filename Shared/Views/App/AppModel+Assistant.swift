@@ -44,6 +44,18 @@ extension AppModel {
         studioConnections.connections
     }
 
+    /// Review must refresh stale aliases before validation disables Accept.
+    /// This is GET-only; acceptance still independently refreshes and validates.
+    func refreshPendingAssistantDraftForReview() async {
+        guard let original = assistant.pendingStudioDraft else { return }
+        let controller = wing
+        let refreshed = await controller.refreshLiveReferences(original.liveReferences ?? [])
+        guard !Task.isCancelled, wing === controller, assistant.pendingStudioDraft?.id == original.id else { return }
+        var context = assistantToolContext()
+        if !refreshed { context.liveWing = .unavailable }
+        _ = await assistant.perform(.validatePendingStudioDraft, context: context)
+    }
+
     /// Appends a reviewed draft to the active semantic graph. This method never
     /// applies settings; it only refreshes referenced metadata with bounded GETs.
     /// Listen remains the only Studio routing hardware-write action.
