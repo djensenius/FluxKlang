@@ -54,7 +54,7 @@ final class WingController {
     private var listenTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
-
+    let mixerBaselineAuthorizations = WingMixerBaselineAuthorizations()
     /// Creates a live controller that talks to a real WING over OSC/UDP.
     init(port: UInt16 = WingNetwork.defaultPort) {
         mode = .live
@@ -449,6 +449,7 @@ final class WingController {
               isDemo || (transportSessionID != nil && message.transportSessionID == transportSessionID
                   && peerHosts.contains(message.host) && message.port == port),
               let value = message.effectiveValue else { return }
+        mixerBaselineAuthorizations.record(message.address, value: value)
         if message.address.hasSuffix("/name"), liveObservations.values[message.address] != value {
             confirmedNameRevision += 1
         }
