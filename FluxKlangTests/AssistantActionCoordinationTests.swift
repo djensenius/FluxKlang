@@ -38,10 +38,10 @@ struct AssistantActionCoordinationTests {
         let session = try #require(wing.sessionID)
         let source = WingAddress.channelSourceGroup(7)
         let original = try #require(await wing.readFreshConfirmed([source], session: session,
-            timeout: .seconds(1), preservingCache: true))
+            timeout: .seconds(1)))
         await fixture.transport.configure(answers: false)
         let result = await wing.readFreshConfirmed([source], session: session,
-            timeout: .milliseconds(50), preservingCache: true)
+            timeout: .milliseconds(50))
         #expect(result == nil)
         #expect(wing.confirmedValues[source] == original[source])
         #expect(wing.confirmedReceivedAt[source] != nil)
