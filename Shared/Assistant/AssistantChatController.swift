@@ -419,7 +419,7 @@ extension AssistantChatController {
         case .review(let review):
             let text = [notice, review.summary].compactMap { $0 }.joined(separator: "\n\n")
             apply(.text(text), conversationID: conversationID, responseID: responseID)
-            apply(.cards([.actionReview(id: review.id, summary: review.summary)]),
+            apply(.cards([.actionReview(id: review.submissionID, summary: review.summary)]),
                   conversationID: conversationID, responseID: responseID)
         }
         finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)

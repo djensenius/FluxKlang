@@ -124,4 +124,81 @@ struct AssistantActionCoordinationTests {
         #expect(await fixture.transport.writes.isEmpty)
         await fixture.state.wing.disconnect()
     }
+
+    @Test func reviewRevokesOnABABeforeOrDuringEitherConfirmationRefresh() async throws {
+        for phase in 0...2 {
+            for scenario in 0...3 {
+                let fixture = await fixture()
+                guard case .review(let preview) = await fixture.service.prepare(
+                    request(fixture), interpretation: interpretation) else { throw BackendTestError.send }
+                let pausedAddress = phase == 2 ? "/ch/7/fdr"
+                    : try #require(AssistantActionController.discoveryAddresses.sorted().first)
+                var confirmation: Task<AssistantActionResult, Never>?
+                if phase > 0 {
+                    await fixture.transport.pauseQueries(at: pausedAddress)
+                    confirmation = Task { await fixture.service.confirm(reviewID: preview.id) }
+                    try await AssistantBackendFixture.waitAsync { await fixture.transport.queryWaiting }
+                }
+                switch scenario {
+                case 0, 1:
+                    let address = scenario == 0 ? WingAddress.channelSourceIndex(7) : "/ch/7/fdr"
+                    let original: WingValue = scenario == 0 ? .int(7) : .float(0.75)
+                    let changed: WingValue = scenario == 0 ? .int(8) : .float(0.6)
+                    let revision = fixture.state.wing.assistantActionEvidence.revision
+                    await fixture.transport.emit(address, changed)
+                    await fixture.transport.emit(address, original)
+                    try await AssistantBackendFixture.wait {
+                        fixture.state.wing.assistantActionEvidence.revision >= revision + 2
+                    }
+                case 2:
+                    let original = fixture.state.scope.environmentID
+                    fixture.state.scope.environmentID = UUID()
+                    fixture.state.scope.environmentID = original
+                default:
+                    let original = fixture.state.layout
+                    fixture.state.layout = .init(strips: [.init(node: .channel(8))])
+                    fixture.state.layout = original
+                }
+                await fixture.transport.releaseQueries()
+                let result: AssistantActionResult
+                if let confirmation {
+                    result = await confirmation.value
+                } else {
+                    result = await fixture.service.confirm(reviewID: preview.id)
+                }
+                #expect(result.members.map(\.status) == [.notSent])
+                #expect(await fixture.transport.writes.isEmpty)
+                #expect(fixture.state.scope.graph.nodes.isEmpty)
+                await fixture.state.wing.disconnect()
+            }
+        }
+    }
+
+    @Test func candidateRefreshKeepsDisplayLinkButReplacesConfirmationAuthority() async throws {
+        let fixture = await fixture(label: "Astro-lab")
+        let submission = request(fixture)
+        guard case .review(let choice) = await fixture.service.prepare(
+            submission, interpretation: interpretation),
+            case .review(let ready) = await fixture.service.selectCandidate(
+                reviewID: choice.id, candidateID: WingNodeRef.channel(7).id)
+        else { throw BackendTestError.send }
+        #expect(choice.id != ready.id)
+        #expect(choice.submissionID == ready.submissionID)
+        let obsolete = await fixture.service.confirm(reviewID: choice.id)
+        #expect(obsolete.members.isEmpty)
+        let displayOnly = await fixture.service.confirm(reviewID: choice.submissionID)
+        #expect(displayOnly.members.isEmpty)
+        #expect(fixture.service.pendingReview?.id == ready.id)
+        await fixture.transport.configure(afterWrite: false, fail: true)
+        let result = await fixture.service.confirm(reviewID: ready.id)
+        #expect(result.reviewID == ready.id)
+        #expect(result.submissionID == choice.submissionID)
+        #expect(result.members.map(\.status) == [.sentUnconfirmed])
+        #expect(result.message.contains("Partial or uncertain"))
+        #expect(fixture.service.pendingReview == nil)
+        #expect(fixture.service.latestResult == result)
+        _ = await fixture.service.confirm(reviewID: ready.id)
+        #expect(await fixture.transport.writes.count == 1)
+        await fixture.state.wing.disconnect()
+    }
 }

@@ -59,11 +59,15 @@ enum AssistantActionInterpretationAdapter {
                       numericValue(evidence) == amount, validUnit(evidence, action: output.action)
                 else { return .clarification(invalidOutput) }
             } else if output.amountEvidence != nil { return .clarification(invalidOutput) }
-            return .proposal(AssistantActionIntent(
+            let intent = AssistantActionIntent(
                 targetMention: output.target, action: output.action, amount: output.amount,
                 addToStudio: output.addToStudio,
                 evidence: .init(target: output.targetEvidence, action: output.actionEvidence,
-                                amount: output.amountEvidence, add: output.addEvidence)))
+                                amount: output.amountEvidence, add: output.addEvidence))
+            guard AssistantActionIntentValidator.preservesMeaning(intent, in: request.text) else {
+                return .clarification(invalidOutput)
+            }
+            return .proposal(intent)
         }
     }
 

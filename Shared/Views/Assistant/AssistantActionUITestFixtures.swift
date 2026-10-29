@@ -45,7 +45,7 @@ private struct AssistantActionUITestFixtureHost: View {
                 NavigationStack {
                     ScrollView {
                         AssistantActionReviewCard(
-                            reviewID: planner.fixtureReview.id,
+                            submissionID: planner.fixtureReview.submissionID,
                             summary: planner.fixtureReview.summary,
                             planner: planner
                         )
@@ -86,7 +86,8 @@ private final class AssistantActionUITestPlanner: AssistantActionPlanning {
             latestResult = AssistantActionResult(
                 id: UUID(), reviewID: review.id, localStatus: .added, shortcutNodeID: UUID(),
                 members: [.init(node: .channel(7), status: .confirmed), .init(node: .channel(8), status: .notSent)],
-                message: "Shortcut added locally. Left confirmed; right not sent after cancellation."
+                message: "Shortcut added locally. Left confirmed; right not sent after cancellation.",
+                submissionID: review.submissionID
             )
         }
     }
@@ -101,7 +102,8 @@ private final class AssistantActionUITestPlanner: AssistantActionPlanning {
               let selected = review.candidates.first(where: { $0.id == candidateID }) else {
             return .clarification("Inactive fixture review.")
         }
-        let refreshed = Self.makeReview(candidate: false, expired: false, selected: selected, id: review.id)
+        let refreshed = Self.makeReview(
+            candidate: false, expired: false, selected: selected, submissionID: review.submissionID)
         pendingReview = refreshed
         return .review(refreshed)
     }
@@ -120,7 +122,8 @@ private final class AssistantActionUITestPlanner: AssistantActionPlanning {
             members: consumed.faderChanges.map {
                 .init(node: $0.node, status: cancelled ? .notSent : .confirmed)
             },
-            message: "UI fixture only. No hardware writes or local graph changes."
+            message: "UI fixture only. No hardware writes or local graph changes.",
+            submissionID: consumed.submissionID
         )
         latestResult = result
         return result
@@ -132,7 +135,7 @@ private final class AssistantActionUITestPlanner: AssistantActionPlanning {
     }
 
     private static func makeReview(
-        candidate: Bool, expired: Bool, selected: AssistantActionCandidate? = nil, id: UUID = UUID()
+        candidate: Bool, expired: Bool, selected: AssistantActionCandidate? = nil, submissionID: UUID = UUID()
     ) -> AssistantActionReview {
         let session = UUID()
         let mono = [identity(7, label: "AstroLab", source: 4)]
@@ -148,7 +151,7 @@ private final class AssistantActionUITestPlanner: AssistantActionPlanning {
                                      pairStripID: nil, match: .similar)
         ]
         return AssistantActionReview(
-            id: id, submissionID: UUID(), stage: candidate ? .chooseCandidate : .ready,
+            id: UUID(), submissionID: submissionID, stage: candidate ? .chooseCandidate : .ready,
             targetMention: candidate || selected != nil ? "Astrolab" : "mother32", candidates: candidates,
             selectedCandidateID: selected?.id,
             target: candidate ? nil : .init(sessionID: session, members: members.map {

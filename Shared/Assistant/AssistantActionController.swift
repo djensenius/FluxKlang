@@ -37,6 +37,7 @@ final class AssistantActionController: AssistantActionPlanning {
         let discovery: [String: WingValue]
         let review: AssistantActionReview
         let deadline: ContinuousClock.Instant
+        let validity: AssistantActionReviewValidity
     }
 
     init(
@@ -88,6 +89,7 @@ final class AssistantActionController: AssistantActionPlanning {
         guard !confirming, let original = pending, original.review.id == reviewID,
             original.review.stage == .chooseCandidate,
             let chosen = original.review.candidates.first(where: { $0.id == candidateID }),
+            original.validity.isValid,
             original.deadline > .now, original.review.expiresAt > Date()
         else {
             cancel()
@@ -127,6 +129,7 @@ final class AssistantActionController: AssistantActionPlanning {
         }
         func current() -> Bool {
             isCurrent(version, wing: wing, session: session, originalScope: originalScope, strips: strips)
+                && (previous?.validity.isValid ?? true)
         }
         guard
             let discovery = await wing.readFreshConfirmed(
@@ -204,10 +207,22 @@ final class AssistantActionController: AssistantActionPlanning {
             expiresAt: Date().addingTimeInterval(reviewLifetime),
             summary: Self.summary(intent: intent, candidate: selected, suggested: suggested),
             warnings: Self.warnings(intent: intent, target: evidence))
+        let validity = AssistantActionReviewValidity()
         let prepared = Pending(
             request: request, intent: intent, wing: wing, session: session,
             scope: originalScope, strips: strips, discovery: discovery, review: review,
-            deadline: .now.advanced(by: .seconds(reviewLifetime)))
+            deadline: .now.advanced(by: .seconds(reviewLifetime)), validity: validity)
+        withObservationTracking {
+            wing.assistantActionEvidence.observeChanges(
+                at: Self.discoveryAddresses + Self.memberAddresses(evidence?.members.map(\.identity) ?? []))
+            _ = controller()
+            _ = wing.sessionID
+            _ = wing.connection
+            _ = scope()
+            _ = layout().strips
+        } onChange: {
+            validity.invalidate()
+        }
         pending = prepared
         pendingReview = review
         return .review(review)

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The persisted card holds only display data. Only the planner's live review can open confirmation.
+/// The persisted submission ID links selection, refreshed review and result for display only.
+/// Only the planner's live review UUID can authorize confirmation.
 struct AssistantActionReviewCard: View {
-    let reviewID: UUID
+    let submissionID: UUID
     let summary: String
     let planner: any AssistantActionPlanning
     @State private var displayedReview: AssistantActionReview?
@@ -12,12 +13,12 @@ struct AssistantActionReviewCard: View {
             Label("WING Action Review", systemImage: "checklist")
                 .font(.headline)
             Text(summary)
-            if let review = planner.pendingReview, review.id == reviewID {
+            if let review = planner.pendingReview, review.submissionID == submissionID {
                 Button("Show Review") { displayedReview = review }
                     .buttonStyle(.bordered)
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("assistant.action.showReview")
-            } else if let result = planner.latestResult, result.reviewID == reviewID {
+            } else if let result = planner.latestResult, result.submissionID == submissionID {
                 AssistantActionResultView(result: result)
             } else {
                 Text("""
