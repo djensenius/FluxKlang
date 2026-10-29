@@ -302,6 +302,7 @@ enum AssistantFallbackResponder {
 @Observable
 final class AssistantCoordinator {
     private let draftStore: any PendingStudioPatchPersisting
+    private var settledStudioDraft: StudioPatchDraft?
 
     private(set) var pendingStudioDraft: StudioPatchDraft?
     var navigationTarget: AssistantNavigationTarget? {
@@ -318,6 +319,7 @@ final class AssistantCoordinator {
 
     func load() async {
         pendingStudioDraft = await draftStore.load()
+        settledStudioDraft = pendingStudioDraft
     }
 
     // Every supported capability is explicit and typed; there is no arbitrary
@@ -361,10 +363,12 @@ final class AssistantCoordinator {
             draft.liveReferences = request.liveReferences
             draft.outputReferences = request.outputReferences
             pendingStudioDraft = draft
+            settledStudioDraft = draft
             await persistPendingDraft()
             return .pendingDraft(draft)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
+            let wasSettled = settledStudioDraft == draft
             var refreshed = StudioWiringAdvisor.revalidate(
                 draft,
                 equipment: context.equipment,
@@ -383,6 +387,7 @@ final class AssistantCoordinator {
                 ))
             }
             pendingStudioDraft = refreshed
+            if wasSettled { settledStudioDraft = refreshed }
             await persistPendingDraft()
             return .pendingDraft(refreshed)
         case .openReview:
@@ -415,17 +420,21 @@ final class AssistantCoordinator {
               (draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) }),
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
         else { return false }
+        let rollback = settledStudioDraft
         pendingStudioDraft = draft
         await persistPendingDraft()
         if Task.isCancelled, pendingStudioDraft == draft {
-            pendingStudioDraft = expectedPending
+            pendingStudioDraft = rollback
             await persistPendingDraft()
         }
-        return !Task.isCancelled && pendingStudioDraft == draft
+        guard !Task.isCancelled, pendingStudioDraft == draft else { return false }
+        settledStudioDraft = draft
+        return true
     }
 
     func discardPendingStudioDraft() async {
         pendingStudioDraft = nil
+        settledStudioDraft = nil
         navigationTarget = nil
         await persistPendingDraft()
     }

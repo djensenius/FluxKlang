@@ -368,6 +368,33 @@ struct AssistantRoutingReviewRegressionTests {
         #expect(coordinator.pendingStudioDraft == nil)
     }
 
+    @Test func overlappingCancelledSubmissionsCannotRestoreAnAbortedDraft() async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let first = try fixture.prepared()
+        await store.pauseNextSave()
+        let firstTask = Task { await coordinator.commitPreparedRouting(first, expectedPending: prior,
+            preparedContext: fixture.context, currentContext: fixture.context) }
+        try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 1 }
+        firstTask.cancel()
+        let second = try fixture.prepared()
+        await store.pauseNextSave()
+        let secondTask = Task { await coordinator.commitPreparedRouting(second, expectedPending: first,
+            preparedContext: fixture.context, currentContext: fixture.context) }
+        try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 2 }
+        await store.resume()
+        #expect(!(await firstTask.value))
+        secondTask.cancel()
+        await store.resume()
+        #expect(!(await secondTask.value))
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(await store.draft == prior)
+    }
+
     @Test(arguments: [false, true])
     func cancelledSaveRestoresPriorReviewWithoutOverwritingANewerDraft(replaced: Bool) async throws {
         let fixture = AssistantRoutingFixture()

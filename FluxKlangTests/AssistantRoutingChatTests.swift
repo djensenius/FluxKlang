@@ -31,16 +31,20 @@ actor RoutingTestDraftStore: PendingStudioPatchPersisting {
     private(set) var draft: StudioPatchDraft?
     private(set) var saves = 0
     private var pauseNext = false
-    private var gate: CheckedContinuation<Void, Never>?
-    var isWaiting: Bool { gate != nil }
+    private var gates: [CheckedContinuation<Void, Never>] = []
+    var isWaiting: Bool { !gates.isEmpty }
+    var waitingSaves: Int { gates.count }
     func pauseNextSave() { pauseNext = true }
-    func resume() { gate?.resume(); gate = nil }
+    func resume() {
+        guard !gates.isEmpty else { return }
+        gates.removeFirst().resume()
+    }
     func load() -> StudioPatchDraft? { draft }
     func save(_ draft: StudioPatchDraft?) async {
         saves += 1
         if pauseNext {
             pauseNext = false
-            await withCheckedContinuation { gate = $0 }
+            await withCheckedContinuation { gates.append($0) }
         }
         self.draft = draft
     }
