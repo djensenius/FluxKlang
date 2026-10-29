@@ -186,6 +186,8 @@ struct AssistantActionCoordinationTests {
         else { throw BackendTestError.send }
         #expect(choice.id != ready.id)
         #expect(choice.submissionID == ready.submissionID)
+        _ = await fixture.service.selectCandidate(reviewID: choice.id, candidateID: WingNodeRef.channel(7).id)
+        #expect(fixture.service.pendingReview?.id == ready.id)
         let obsolete = await fixture.service.confirm(reviewID: choice.id)
         #expect(obsolete.members.isEmpty)
         let displayOnly = await fixture.service.confirm(reviewID: choice.submissionID)
@@ -442,7 +444,14 @@ extension AssistantActionCoordinationTests {
         guard case .review(let review) = await fixture.service.prepare(
             request(fixture), interpretation: interpretation) else { throw BackendTestError.send }
         #expect(review.stage == .ready)
-        let result = await fixture.service.confirm(reviewID: review.id)
+        await fixture.transport.pauseMixerSend()
+        let confirmation = Task { await fixture.service.confirm(reviewID: review.id) }
+        try await AssistantBackendFixture.waitAsync { await fixture.transport.mixerSendWaiting }
+        let version = fixture.service.operationID
+        _ = await fixture.service.selectCandidate(reviewID: UUID(), candidateID: WingNodeRef.channel(7).id)
+        #expect(fixture.service.operationID == version)
+        await fixture.transport.releaseMixerSend()
+        let result = await confirmation.value
         #expect(result.members.map(\.status) == [.confirmed])
         #expect(result.localStatus == .notRequested)
         #expect(await fixture.transport.writes.count == 1)

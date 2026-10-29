@@ -120,8 +120,8 @@ enum AssistantActionIntentValidator {
         case .raise: return raise && !lower && !destination && !mute && !unmute
         case .setDB, .setFaderPercent:
             return !lower && !raise && !mute && !unmute && !hasWord(["by"], in: clause)
-        case .mute: return !lower && !raise && !unmute
-        case .unmute: return !lower && !raise && !mute
+        case .mute: return !lower && !raise && !unmute && !hasUnsupportedTiming(in: clause)
+        case .unmute: return !lower && !raise && !mute && !hasUnsupportedTiming(in: clause)
         }
     }
 
@@ -233,6 +233,14 @@ enum AssistantActionIntentValidator {
             ["both", "except", "excepting", "exclude", "excludes", "excluding", "without", "besides", "but",
              "omit", "omitting", "other than", "apart from", "save for", "leave out"], in: clause)
             || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func hasUnsupportedTiming(in clause: String) -> Bool {
+        hasWord(
+            ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks",
+             "temporarily", "briefly", "until", "after", "during", "tomorrow", "tonight", "later",
+             "for a while", "for a bit", "for a moment"],
+            in: clause)
     }
 
     private static func hasRelativePercentReference(in clause: String) -> Bool {

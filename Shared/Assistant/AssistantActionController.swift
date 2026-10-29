@@ -92,7 +92,6 @@ final class AssistantActionController: AssistantActionPlanning {
             original.validity.isValid,
             original.deadline > .now, original.review.expiresAt > Date()
         else {
-            cancel()
             return .clarification("This selection expired. Submit a new request; no changes were made.")
         }
         cancel()
