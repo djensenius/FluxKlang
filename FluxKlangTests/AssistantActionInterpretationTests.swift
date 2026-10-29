@@ -377,3 +377,43 @@ struct AssistantActionInterpretationTests {
             == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
     }
 }
+
+extension AssistantActionInterpretationTests {
+    @Test func completeUnitTokensAllowSentencePunctuationWithoutLosingNumericPrefixProtection() {
+        expectAcceptedInBothLayers(malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50%"),
+                                  text: "set Astrolab to 50%.")
+        expectAcceptedInBothLayers(malformed(.setDB, amount: -10, action: "set", evidence: "-10 dB"),
+                                  text: "set Astrolab to -10 dB.")
+        rejectInBothLayers(malformed(.setDB, amount: 10, action: "set", evidence: "10 dB"),
+                           text: "set Astrolab to -10 dB.")
+        rejectInBothLayers(malformed(.setDB, amount: 5, action: "set", evidence: "5 dB"),
+                           text: "set Astrolab to -1.5 dB.")
+    }
+
+    @Test func compoundAdditionAndMixerActionMustKeepSameTargetReference() {
+        let output = malformed(.mute, action: "mute", add: true)
+        for text in ["mute Astrolab and add Juno", "add Juno and mute Astrolab",
+                     "add Astrolab and mute Juno", "mute Astrolab and add Volume",
+                     "add Astrolab and mute Volume"] {
+            rejectInBothLayers(output, text: text)
+        }
+        for text in ["mute Astrolab and add it", "add Astrolab and mute it",
+                     "mute Astrolab and add Astrolab"] {
+            expectAcceptedInBothLayers(output, text: text)
+        }
+        expectAcceptedInBothLayers(.init(disposition: .proposal, target: "mother-32", action: .setFaderPercent,
+            amount: 50, addToStudio: true, targetEvidence: "mother-32", actionEvidence: "turn",
+            amountEvidence: "50%", addEvidence: "add"), text: "add my mother-32 and turn the volume to 50%")
+    }
+
+    @Test func smartSingleQuotedProposalsAndNegatedContractionsRemainInert() {
+        for text in ["‘mute Astrolab’", "'mute Astrolab'", "‘mute Astrolab'", "'mute Astrolab’",
+                     "don't mute Astrolab", "don’t mute Astrolab"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"), text: text)
+            #expect(AssistantActionInterpretationAdapter.isNonActionSubmission(text))
+        }
+        for text in ["I'm asking you to mute Astrolab", "I’m asking you to mute Astrolab"] {
+            expectAcceptedInBothLayers(malformed(.mute, action: "mute"), text: text)
+        }
+    }
+}

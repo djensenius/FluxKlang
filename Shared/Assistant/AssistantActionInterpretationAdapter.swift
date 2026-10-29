@@ -157,12 +157,12 @@ enum AssistantActionInterpretationAdapter {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).range(
             of: #"^(?:hello|hi|hey|thanks|thank you|good morning|good evening)[.!?\s]*$"#,
             options: [.regularExpression, .caseInsensitive]) != nil { return true }
-        let normalized = text.replacingOccurrences(of: "’", with: "'")
+        let normalized = text.replacingOccurrences(of: "‘", with: "'").replacingOccurrences(of: "’", with: "'")
         if word("don't|do not|not|never|without|suppose|imagine|hypothetically|if|when", in: normalized) {
             return true
         }
         return text.contains(where: { "\"“”`".contains($0) })
-            || text.range(of: #"(?:^|\s)'[^']+'"#, options: .regularExpression) != nil
+            || AssistantActionIntentValidator.hasSingleQuotedSpan(in: text)
     }
 
     /// This does not interpret actions; it prevents unknown action-looking input reaching cloud Q&A.
