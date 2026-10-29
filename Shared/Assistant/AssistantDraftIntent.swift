@@ -466,11 +466,11 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         }
         let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
         if let clarification = resolution.clarification { return textStream(clarification) }
-        if let clarification = AssistantDraftIntent.clarification(from: request) {
-            return textStream(clarification)
-        }
         if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
             return draftStream(wiringRequest, context: request.context)
+        }
+        if let clarification = AssistantDraftIntent.clarification(from: request) {
+            return textStream(clarification)
         }
 
         let mentionedSources = resolution.equipmentIDs

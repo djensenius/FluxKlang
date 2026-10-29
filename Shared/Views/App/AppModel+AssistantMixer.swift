@@ -116,6 +116,12 @@ final class AssistantMixerExecutor: AssistantMixerExecuting {
             return current()
         } onChange: { authorization.invalidate() }
         guard authorized else { return "No changes: the target changed before authorization." }
+        let relativeBaseline: WingValue? = if case .adjustDB = command.operation { baseline[valueAddress] } else { nil }
+        guard relativeBaseline == nil || wing.confirmedValues[valueAddress] == relativeBaseline
+        else { return "No changes: the relative baseline changed before authorization." }
+        let baselineID = wing.mixerBaselineAuthorizations.register(
+            address: valueAddress, value: relativeBaseline, authorization: authorization)
+        defer { wing.mixerBaselineAuthorizations.remove(baselineID) }
         let sent = await withTaskCancellationHandler {
             await wing.setConfirmedMixerValue(node, value: expected, muted: isMute,
                                              session: session, authorization: authorization)
