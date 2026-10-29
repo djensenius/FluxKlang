@@ -58,8 +58,8 @@ enum StudioEndpointNormalizer {
         if endpoint.destination == .finalMix {
             let matchingIDs = Set(endpoints.filter {
                 $0.destination == .finalMix && $0.name.caseInsensitiveCompare(endpoint.name) == .orderedSame
-                    && ($0.outputConnectors == nil || endpoint.outputConnectors == nil
-                        || $0.outputConnectors == endpoint.outputConnectors)
+                    && ($0.explicitOutputConnectors == nil || endpoint.explicitOutputConnectors == nil
+                        || $0.explicitOutputConnectors == endpoint.explicitOutputConnectors)
             }.map(\.id))
             return graph.nodes.first {
                 if case .endpoint(let id) = $0.kind { return matchingIDs.contains(id) }
@@ -80,7 +80,7 @@ enum StudioEndpointNormalizer {
         switch endpoint.destination {
         case .finalMix:
             let name = endpoint.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let connectors = endpoint.outputConnectors?.map(\.label).joined(separator: ",") ?? "unspecified"
+            let connectors = endpoint.explicitOutputConnectors?.map(\.label).joined(separator: ",") ?? "unspecified"
             return "\(endpoint.destination.rawValue)|\(name)|\(connectors)"
         case .custom:
             let connectors = (endpoint.outputConnectors ?? []).map(\.label).joined(separator: ",")

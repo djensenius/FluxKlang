@@ -54,17 +54,26 @@ extension AppModel {
         let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
         guard refreshedReferences, !Task.isCancelled, wing === controller,
               assistant.pendingStudioDraft == original else { return nil }
+        let validationContext = assistantToolContext()
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
-            context: assistantToolContext()
+            context: validationContext
         )
+        let currentContext = assistantToolContext()
         guard case .pendingDraft(let refreshed?) = validation,
               !refreshed.hasErrors, !Task.isCancelled, wing === controller,
               assistant.pendingStudioDraft == refreshed,
+              validationContext.activeEnvironmentID == currentContext.activeEnvironmentID,
+              validationContext.equipment == currentContext.equipment,
+              validationContext.effects == currentContext.effects,
+              validationContext.globalConnections == currentContext.globalConnections,
+              validationContext.graph == currentContext.graph,
+              validationContext.endpoints == currentContext.endpoints,
+              validationContext.liveWing.sessionID == currentContext.liveWing.sessionID,
               (refreshed.outputReferences ?? []).allSatisfy({
-                  $0.isValid(in: studioConnectionsForCurrentWing().effectiveHome)
+                  $0.isValid(in: currentContext.effectiveConnections)
               }),
-              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: assistantToolContext().liveWing) })
+              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.liveWing) })
         else { return nil }
         let result = StudioPatchDraftMerger.merge(
             refreshed,

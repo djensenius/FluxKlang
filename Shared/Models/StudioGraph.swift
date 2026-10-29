@@ -36,6 +36,10 @@ struct StudioEndpoint: Identifiable, Codable, Hashable, Sendable {
     var controls: Set<StudioEndpointControl>
     /// Explicit physical outputs for custom destinations such as Desk Speakers.
     var outputConnectors: [WingOutputConnector]?
+    // Legacy final-mix drafts stored [] to mean configured mains, not an explicit mapping.
+    var explicitOutputConnectors: [WingOutputConnector]? {
+        destination == .finalMix && outputConnectors?.isEmpty == true ? nil : outputConnectors
+    }
     /// Stable, UI-level color token. The actual SwiftUI color is resolved by the view layer.
     var colorName: String?
     /// Space endpoints can be positioned independently.

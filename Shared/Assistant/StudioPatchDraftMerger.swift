@@ -30,7 +30,7 @@ enum StudioPatchDraftMerger {
                 nodeIDMap[draftNode.node.id] = existing.id
                 if case .endpoint(let existingID) = existing.kind,
                    let index = endpoints.firstIndex(where: { $0.id == existingID }),
-                   endpoints[index].outputConnectors == nil {
+                   endpoints[index].explicitOutputConnectors == nil {
                     endpoints[index].outputConnectors = endpoint.outputConnectors
                 }
                 continue

@@ -482,7 +482,8 @@ private extension StudioCompilationInput {
             "mains", in: connections.effectiveHome)?.reference.connectors
         return allocations.compactMap { allocation in
             guard allocation.endpoint.destination == .finalMix,
-                  let outputs = allocation.endpoint.outputConnectors, outputs != mainConnectors else { return nil }
+                  let outputs = allocation.endpoint.explicitOutputConnectors, outputs != mainConnectors
+            else { return nil }
             return .error(.outputMappingChanged(allocation.endpoint.id),
                           "The reviewed Main Speakers mapping changed. Create a new routing draft.")
         }

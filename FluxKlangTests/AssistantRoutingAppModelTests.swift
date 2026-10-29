@@ -5,8 +5,9 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AssistantRoutingAppModelTests {
-    private func model(fixture: AssistantRoutingFixture) async throws -> AppModel {
-        let model = AppModel(assistant: AssistantCoordinator(draftStore: RoutingTestDraftStore()), wing: .preview())
+    private func model(fixture: AssistantRoutingFixture,
+                       store: any PendingStudioPatchPersisting = RoutingTestDraftStore()) async throws -> AppModel {
+        let model = AppModel(assistant: AssistantCoordinator(draftStore: store), wing: .preview())
         await model.equipment.load()
         for gear in fixture.equipment {
             if model.equipment.items.contains(where: { $0.id == gear.id }) {
@@ -143,14 +144,28 @@ struct AssistantRoutingAppModelTests {
         #expect(!compiled.hasErrors)
     }
 
-    @Test func compatibleLegacyMainEndpointKeepsReviewedMappingAfterMergeAndCompilation() throws {
+    @Test(arguments: [false, true])
+    func compatibleLegacyMainEndpointKeepsReviewedMappingAfterMergeAndCompilation(emptyMapping: Bool) throws {
         let fixture = AssistantRoutingFixture()
         let draft = try fixture.prepared()
         let reviewed = try #require(draft.fragment.endpoints.first { $0.destination == .finalMix })
         var legacy = reviewed
         legacy.id = UUID()
-        legacy.outputConnectors = nil
+        legacy.outputConnectors = emptyMapping ? [] : nil
         let graph = StudioGraph(nodes: [.init(kind: .endpoint(legacy.id), title: legacy.name)])
+        var context = fixture.context
+        context.graph = graph
+        context.endpoints = [legacy]
+        #expect(!fixture.rejects(context: context))
+        var legacyEndpoints = draft.fragment.endpoints
+        legacyEndpoints[try #require(legacyEndpoints.firstIndex { $0.id == reviewed.id })].outputConnectors
+            = legacy.outputConnectors
+        let legacyCompiled = StudioSignalCompiler.compile(.init(
+            graph: StudioGraph(nodes: draft.fragment.nodes.map(\.node), edges: draft.fragment.edges.map(\.edge)),
+            endpoints: legacyEndpoints, effects: [fixture.effect], connections: fixture.connections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(!legacyCompiled.hasErrors)
+        #expect(!legacyCompiled.settings.isEmpty)
         let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
             effects: [fixture.effect], connections: fixture.connections, currentGraph: graph,
             currentEnvironmentID: nil, currentEndpoints: [legacy])
@@ -170,5 +185,70 @@ struct AssistantRoutingAppModelTests {
             effects: [fixture.effect], connections: moved, equipment: fixture.equipment, speakers: []))
         #expect(drifted.hasErrors)
         #expect(drifted.settings.isEmpty)
+    }
+
+    @Test(arguments: 0...4)
+    func contextChangesDuringValidationSaveBlockAcceptance(change: Int) async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = PausingRoutingDraftStore()
+        let model = try await model(fixture: fixture, store: store)
+        _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                               model: model, interpreter: RoutingTestInterpreter())
+        let prior = try #require(model.assistant.pendingStudioDraft)
+        if change == 4 {
+            let endpoint = StudioEndpoint(name: "Existing endpoint", destination: .space)
+            let graph = StudioGraph(nodes: [.init(kind: .endpoint(endpoint.id), title: endpoint.name)])
+            model.environments.replaceStudio(graph: graph, endpoints: [endpoint])
+        }
+        await store.pauseNextSave()
+        let acceptance = Task { await model.acceptPendingAssistantDraft() }
+        defer { Task { await store.resume() } }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await store.isPaused) {
+            try #require(ContinuousClock.now < deadline)
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        switch change {
+        case 0:
+            _ = model.environments.addEnvironment(named: "Changed during validation")
+        case 1:
+            let graph = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Keep this edit")])
+            model.environments.replaceStudio(graph: graph, endpoints: [])
+        case 2:
+            var gear = fixture.osmose
+            gear.name = "Changed during validation"
+            model.equipment.update(gear)
+        case 3:
+            model.environments.add(Effect(name: "Changed during validation"))
+        default:
+            var endpoints = model.environments.activeStudioEndpoints
+            endpoints[0].name = "Keep this endpoint edit"
+            model.environments.replaceStudio(graph: model.environments.activeStudioGraph, endpoints: endpoints)
+        }
+        let current = model.assistantToolContext()
+        await store.resume()
+        #expect(await acceptance.value == nil)
+        #expect(model.environments.activeID == current.activeEnvironmentID)
+        #expect(model.environments.activeStudioGraph == current.graph)
+        #expect(model.environments.activeStudioEndpoints == current.endpoints)
+        #expect(model.assistant.pendingStudioDraft?.id == prior.id)
+        #expect(model.wing.transportWriteCount == 0)
+    }
+}
+
+private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {
+    private var draft: StudioPatchDraft?
+    private var pauses = false
+    private var gate: CheckedContinuation<Void, Never>?
+    var isPaused: Bool { gate != nil }
+    func load() -> StudioPatchDraft? { draft }
+    func pauseNextSave() { pauses = true }
+    func resume() { gate?.resume(); gate = nil }
+    func save(_ draft: StudioPatchDraft?) async {
+        self.draft = draft
+        if pauses {
+            pauses = false
+            await withCheckedContinuation { gate = $0 }
+        }
     }
 }

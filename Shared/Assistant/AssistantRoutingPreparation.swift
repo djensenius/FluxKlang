@@ -90,7 +90,8 @@ enum AssistantRoutingPreparation {
     static func conflictsWithExistingDestinations(_ draft: StudioPatchDraft, endpoints: [StudioEndpoint]) -> Bool {
         draft.fragment.endpoints.contains { proposed in
             endpoints.contains { existing in
-                guard let old = existing.outputConnectors, let new = proposed.outputConnectors else { return false }
+                guard let old = existing.explicitOutputConnectors, let new = proposed.explicitOutputConnectors
+                else { return false }
                 let sameMains = existing.destination == .finalMix && proposed.destination == .finalMix
                 let sameName = existing.destination == proposed.destination
                     && AssistantRoutingInterpretationAdapter.normalize(existing.name)

@@ -473,8 +473,8 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         }
         let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
         if let clarification = resolution.clarification { return textStream(clarification) }
-        if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
-            return draftStream(wiringRequest, context: request.context)
+        if AssistantDraftIntent.wiringRequest(from: request) != nil {
+            return textStream(AssistantRoutingOwnership.clarification)
         }
         if let clarification = AssistantDraftIntent.clarification(from: request) {
             return textStream(clarification)
@@ -487,25 +487,6 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         AsyncThrowingStream { continuation in
             continuation.yield(.text(text))
             continuation.finish()
-        }
-    }
-
-    private func draftStream(
-        _ wiringRequest: StudioWiringRequest,
-        context: AssistantToolContext
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { @MainActor in
-                let result = await coordinator.perform(.buildStudioDraft(wiringRequest), context: context)
-                guard case .pendingDraft(let draft?) = result else {
-                    continuation.finish()
-                    return
-                }
-                continuation.yield(.text(AssistantDraftReply.text(for: draft)))
-                continuation.yield(.cards(cards(for: draft)))
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -536,23 +517,5 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
             ))
             continuation.finish()
         }
-    }
-
-    private func cards(for draft: StudioPatchDraft) -> [AssistantCard] {
-        var result: [AssistantCard] = [
-            .wiring(
-                summary: draft.logicalRoutingSummary.map(\.value),
-                cableInstructions: draft.cableInstructions.map(\.instruction.value)
-            ),
-            .pendingDraft(
-                id: draft.id,
-                summary: draft.logicalRoutingSummary.map(\.value).joined(separator: "\n"),
-                hasErrors: draft.hasErrors
-            )
-        ]
-        if !draft.validation.isEmpty {
-            result.append(.conflicts(draft.validation.map(\.message)))
-        }
-        return result
     }
 }
