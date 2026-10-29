@@ -18,6 +18,15 @@ struct AssistantMixerExecutionTests {
         AssistantMixerExecutor(controller: { wing }, layout: { FaderLayout() }, timeout: .seconds(1))
     }
 
+    private func settleInitialNames(_ wing: WingController) async throws {
+        // The fake answers these initial names; later first-seen names legitimately revoke authorization.
+        let names = WingLiveObservations.addresses.filter { $0.hasSuffix("/name") }
+            + [WingAddress.name(.main, 1)]
+        let session = try #require(wing.sessionID)
+        let fresh = try #require(await wing.readFreshConfirmed(names, session: session, timeout: .seconds(1)))
+        #expect(fresh.count == names.count)
+    }
+
     @Test func absoluteRelativeAndMuteUseFreshReadbackAndOnlyAllowlistedAddresses() async throws {
         for operation in [AssistantMixerCommand.Operation.setDB(-12), .adjustDB(-3), .mute(true), .mute(false)] {
             let (wing, transport) = await connected()
@@ -190,6 +199,7 @@ struct AssistantMixerExecutionTests {
     @Test(arguments: [false, true])
     func unchangedOrUnrelatedBaselineDoesNotRevokeQueuedRelativeSend(unrelated: Bool) async throws {
         let (wing, transport) = await connected()
+        try await settleInitialNames(wing)
         await transport.pauseMixerSend()
         let task = Task { await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(-3))) }
         try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
@@ -203,6 +213,25 @@ struct AssistantMixerExecutionTests {
         #expect(reply.contains("Confirmed WING Channel 7: -3.0 dB"))
         #expect(await transport.writes.count == 1)
         #expect(await transport.writes.last?.value == .float(-3))
+        await wing.disconnect()
+    }
+
+    @Test func lateFirstNameConfirmationStillRevokesQueuedRelativeSend() async throws {
+        let (wing, transport) = await connected()
+        try await settleInitialNames(wing)
+        await transport.pauseMixerSend()
+        let task = Task { await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(-3))) }
+        try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
+        let address = WingAddress.name(.bus, 1)
+        #expect(wing.confirmedValues[address] == nil)
+        let revision = wing.confirmedNameRevision
+        await transport.emit(address, .string("First observation"))
+        try await AssistantBackendFixture.wait { wing.confirmedValues[address] == .string("First observation") }
+        #expect(wing.confirmedNameRevision == revision + 1)
+        await transport.releaseMixerSend()
+        let reply = await task.value
+        #expect(reply.contains("Mixer send failed or was cancelled"))
+        #expect(await transport.writes.isEmpty)
         await wing.disconnect()
     }
 
