@@ -4,6 +4,28 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @Test func addOnlyProposalCannotSilentlyOmitAnotherRequestedAddition() {
+        for (text, accepted) in [
+            ("add Juno and Solar", false), ("add Juno and add Solar", false),
+            ("add Juno then add Solar", false), ("add Juno also include Solar", false),
+            ("add Juno ; add Solar", false), ("add Juno", true),
+            ("Could you add my Juno to the studio?", true), ("add Juno as a live-channel shortcut.", true),
+            ("Please add Juno!", true)
+        ] {
+            let output = AssistantActionModelOutput(disposition: .proposal, target: "Juno", addToStudio: true,
+                targetEvidence: "Juno", addEvidence: "add")
+            let interpreted = AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+            if accepted {
+                guard case .proposal = interpreted else { Issue.record("Single addition rejected"); continue }
+            } else {
+                #expect(interpreted == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+            }
+            let intent = AssistantActionIntent(targetMention: "Juno", action: nil, amount: nil, addToStudio: true,
+                evidence: .init(target: "Juno", action: nil, amount: nil, add: "add"))
+            #expect((AssistantActionIntentValidator.clarification(for: intent, text: text) == nil) == accepted)
+        }
+    }
+
     @Test func recoveredTargetMustIncludePunctuationConnectedNameParts() {
         for separator in ["_", ":", "—"] {
             for name in ["Juno\(separator)Alpha", "Alpha\(separator)Juno"] {
