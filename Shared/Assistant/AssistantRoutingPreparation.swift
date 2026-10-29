@@ -56,8 +56,9 @@ enum AssistantRoutingPreparation {
             guard !otherDestinations.contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, branch.destinationEvidence)
             }) else { return failure }
-            guard branch.effects.isEmpty || !others.contains(where: {
+            guard !others.contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, branch.processingEvidence)
+                    || AssistantRoutingInterpretationAdapter.contains($0, branch.dryEvidence)
             }) else { return failure }
             references.append(contentsOf: source.references)
             outputs.append(output.reference)

@@ -83,6 +83,8 @@ enum AssistantRoutingInterpretationAdapter {
                   copied(branch.destinationEvidence, text),
                   contains(branch.source, branch.destinationEvidence),
                   contains(branch.destination, branch.destinationEvidence),
+                  occursOnce(branch.destination, in: branch.destinationEvidence),
+                  sourceScopedDestination(branch),
                   !isNegative(branch.destinationEvidence),
                   !intent.excludedMentions.contains(where: { excluded in
                       contains(excluded, branch.source) || branch.effects.contains(where: { contains(excluded, $0) })
@@ -97,8 +99,7 @@ enum AssistantRoutingInterpretationAdapter {
                       AssistantRoutingOwnership.word("through|via|into", in: branch.processingEvidence)
                 else { return invalid }
                 if branch.effects.count > 1 {
-                    guard AssistantRoutingOwnership.word("then|followed by", in: branch.processingEvidence),
-                          ordered(branch.effects, in: branch.processingEvidence) else { return invalid }
+                    guard seriallyOrdered(branch) else { return invalid }
                 }
                 if branch.includesDrySignal {
                     guard copied(branch.dryEvidence, text), contains(branch.source, branch.dryEvidence),
@@ -140,11 +141,32 @@ enum AssistantRoutingInterpretationAdapter {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return false }
         return regex.numberOfMatches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) == 1
     }
-    private static func ordered(_ mentions: [String], in text: String) -> Bool {
-        var remaining = text[...]
-        for mention in mentions {
+    private static func sourceScopedDestination(_ branch: AssistantRoutingIntent.Branch) -> Bool {
+        let evidence = branch.destinationEvidence
+        let range: (String) -> Range<String.Index>? = { mention in
+            evidence.range(of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
+                + "(?![\\p{L}\\p{N}_])", options: [.regularExpression, .caseInsensitive])
+        }
+        guard let source = range(branch.source), let destination = range(branch.destination) else { return false }
+        return source.upperBound <= destination.lowerBound
+    }
+
+    private static func seriallyOrdered(_ branch: AssistantRoutingIntent.Branch) -> Bool {
+        var topology = branch.processingEvidence
+        for mention in [branch.source] + branch.effects {
+            topology = topology.replacingOccurrences(of: mention, with: " ", options: .caseInsensitive)
+        }
+        guard !AssistantRoutingOwnership.word("parallel", in: topology) else { return false }
+        var remaining = branch.processingEvidence[...]
+        var hasPrevious = false
+        for mention in branch.effects {
             guard let range = remaining.range(of: mention) else { return false }
+            if hasPrevious,
+               !AssistantRoutingOwnership.word("then|followed by", in: String(remaining[..<range.lowerBound])) {
+                return false
+            }
             remaining = remaining[range.upperBound...]
+            hasPrevious = true
         }
         return true
     }

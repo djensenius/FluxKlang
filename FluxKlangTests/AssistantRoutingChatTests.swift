@@ -228,6 +228,49 @@ struct AssistantRoutingChatTests {
         }
     }
 
+    @Test func dryEvidenceCannotStealAnotherSourcesTrailingDirective() {
+        let fixture = AssistantRoutingFixture()
+        let text = "Solar through evil pet to mains and Osmose to desktop speakers "
+            + "with dry and wet signal in parallel"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: "Solar through evil pet to mains", processingEvidence: "Solar through evil pet",
+                  includesDrySignal: true, dryEvidence: text),
+            .init(source: "Osmose", destination: "desktop speakers", destinationEvidence: "Osmose to desktop speakers")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent))
+    }
+
+    @Test func serialOrderMustBeBetweenEffectsAndParallelEffectsMustClarify() {
+        let fixture = AssistantRoutingFixture()
+        let device = Equipment(name: "Echo", inputs: ["In"], outputs: ["Out"])
+        let echo = Effect(name: "Echo", equipmentID: device.id, isStereo: false)
+        var context = fixture.context
+        context.equipment.append(device)
+        context.effects.append(echo)
+        context.globalConnections.home.inputs.append(.init(connector: 9, equipmentID: device.id, outputPort: 0))
+        context.globalConnections.home.outputs.append(.init(connector: 1, equipmentID: device.id, inputPort: 0))
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        for parallel in [false, true] {
+            let text = parallel ? "Solar dry and wet through evil pet and Echo in parallel then to mains"
+                : "Solar through evil pet and Echo then to mains"
+            let intent = AssistantRoutingIntent(branches: [
+                .init(source: "Solar", effects: ["evil pet", "Echo"], destination: "mains",
+                      destinationEvidence: text, processingEvidence: text,
+                      includesDrySignal: parallel, dryEvidence: parallel ? text : "")
+            ])
+            #expect(fixture.rejects(text: text, intent: intent, context: context))
+        }
+        let serial = "Solar through evil pet then Echo to mains with Solar dry and wet in parallel"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet", "Echo"], destination: "mains",
+                  destinationEvidence: "Solar through evil pet then Echo to mains",
+                  processingEvidence: "Solar through evil pet then Echo", includesDrySignal: true,
+                  dryEvidence: "Solar dry and wet in parallel")
+        ])
+        #expect(!fixture.rejects(text: serial, intent: intent, context: context))
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"))
     func optInNativeOwnerAndPriorMonoQualification() async throws {
         let interpreter = FoundationModelActionInterpreter()

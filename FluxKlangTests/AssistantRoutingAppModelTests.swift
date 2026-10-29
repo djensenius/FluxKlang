@@ -265,10 +265,12 @@ struct AssistantRoutingAppModelTests {
     @Test func destinationUsedByAnotherSourceCannotHideAnOmittedDestination() {
         let fixture = AssistantRoutingFixture()
         let text = "route Osmose to mains and desktop speakers and Solar to desktop speakers"
-        let partial = AssistantRoutingIntent(branches: [
+        var partial = AssistantRoutingIntent(branches: [
             .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains"),
             .init(source: "Solar", destination: "desktop speakers", destinationEvidence: "Solar to desktop speakers")
         ])
+        #expect(fixture.rejects(text: text, intent: partial))
+        partial.branches[1].destinationEvidence = "desktop speakers and Solar to desktop speakers"
         #expect(fixture.rejects(text: text, intent: partial))
     }
 
