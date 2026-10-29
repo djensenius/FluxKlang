@@ -201,4 +201,75 @@ struct AssistantActionCoordinationTests {
         #expect(await fixture.transport.writes.count == 1)
         await fixture.state.wing.disconnect()
     }
+
+    @Test func expandedModelTargetCannotHideControlWordsBehindAnyShorterGroundedAlias() async throws {
+        for scenario in 0...3 {
+            let fixture = await fixture(label: scenario == 0 ? "Astrolab" : "Lead")
+            if scenario == 1 {
+                let gear = Equipment(name: "Astrolab")
+                fixture.state.scope.equipment = [gear]
+                fixture.state.scope.connections.inputs = [.init(connector: 7, equipmentID: gear.id, outputPort: 0)]
+            } else if scenario == 2 {
+                await fixture.transport.put(WingAddress.inputName(7), .string("Astrolab"))
+            } else if scenario == 3 {
+                await fixture.transport.put("/ch/8/name", .string("Right"))
+                fixture.state.layout = .init(strips: [
+                    .init(node: .channel(7), rightNode: .channel(8), customLabel: "Astrolab")
+                ])
+            }
+            let target = "Astrolab preamp gain"
+            let submission = AssistantActionInterpretationRequest(
+                text: "set \(target) to 10 dB", liveContext: request(fixture).liveContext)
+            // Text validation cannot know whether these words are an actual equipment name.
+            let interpretation = AssistantActionInterpretationAdapter.validate(.init(
+                disposition: .proposal, target: target, action: .setDB, amount: 10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "10 dB"), request: submission)
+            guard case .proposal = interpretation else { throw BackendTestError.send }
+            let prepared = await fixture.service.prepare(submission, interpretation: interpretation)
+            if case .clarification = prepared {} else { Issue.record("Expanded model span became a target candidate") }
+            #expect(fixture.service.pendingReview == nil)
+            let selection = await fixture.service.selectCandidate(
+                reviewID: UUID(), candidateID: WingNodeRef.channel(7).id)
+            if case .clarification = selection {} else { Issue.record("Ungrounded target survived selection") }
+            #expect(fixture.service.pendingReview == nil)
+            #expect(await fixture.transport.writes.isEmpty)
+            #expect(fixture.state.scope.graph.nodes.isEmpty)
+            await fixture.state.wing.disconnect()
+        }
+    }
+
+    @Test func groundedControlWordNamesAndTruePartialMentionsStillPrepareReviews() async throws {
+        for scenario in 0...2 {
+            let name = "Astrolab preamp gain"
+            let fixture = await fixture(label: scenario == 2 ? "Lead" : name)
+            if scenario == 2 {
+                let gear = Equipment(name: name)
+                fixture.state.scope.equipment = [gear]
+                fixture.state.scope.connections.inputs = [.init(connector: 7, equipmentID: gear.id, outputPort: 0)]
+            }
+            let mention = scenario == 1 ? "Astrolab" : name
+            let submission = AssistantActionInterpretationRequest(
+                text: "set \(mention) to 10 dB", liveContext: request(fixture).liveContext)
+            let interpretation = AssistantActionInterpretationAdapter.validate(.init(
+                disposition: .proposal, target: mention, action: .setDB, amount: 10,
+                targetEvidence: mention, actionEvidence: "set", amountEvidence: "10 dB"), request: submission)
+            guard case .review(let initial) = await fixture.service.prepare(
+                submission, interpretation: interpretation) else { throw BackendTestError.send }
+            let ready: AssistantActionReview
+            if scenario == 0 {
+                #expect(initial.stage == .ready)
+                ready = initial
+            } else {
+                #expect(initial.stage == .chooseCandidate)
+                guard case .review(let selected) = await fixture.service.selectCandidate(
+                    reviewID: initial.id, candidateID: WingNodeRef.channel(7).id) else { throw BackendTestError.send }
+                ready = selected
+            }
+            #expect(ready.stage == .ready)
+            #expect(ready.target?.members.map { $0.identity.node } == [.channel(7)])
+            #expect(ready.faderChanges.first?.afterPosition == FaderMath.position(fromDecibels: 10))
+            #expect(await fixture.transport.writes.isEmpty)
+            await fixture.state.wing.disconnect()
+        }
+    }
 }

@@ -150,7 +150,8 @@ enum AssistantActionTargetResolver {
         let left = normalizedLetters(lhs)
         let right = normalizedLetters(rhs)
         guard left.count >= 3, right.count >= 3 else { return left == right && !left.isEmpty }
-        if left == right || left.contains(right) || right.contains(left) { return true }
+        // A partial mention may omit alias text, but cannot append ungrounded control instructions.
+        if left == right || right.contains(left) { return true }
         // A bounded one-edit distance ranks typos; it never auto-selects them.
         guard abs(left.count - right.count) <= 1, max(left.count, right.count) <= 160 else { return false }
         let longer = Array(left.count >= right.count ? left : right)

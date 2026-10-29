@@ -321,6 +321,17 @@ struct AssistantActionInterpretationTests {
             targetEvidence: "Wire Synth", actionEvidence: "mute"), text: "mute Wire Synth")
     }
 
+    @Test func partialGeneratedProposalCannotDropSoloOrUnsoloClause() {
+        for text in ["mute Astrolab then solo Juno", "mute Astrolab then unsolo Juno",
+                     "solo Juno and mute Astrolab", "mute Astrolab; solo Juno"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"), text: text)
+        }
+        for target in ["Solo Synth", "Unsolo Keys"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .mute,
+                targetEvidence: target, actionEvidence: "mute"), text: "mute \(target)")
+        }
+    }
+
     @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
         for (text, output) in [
             ("silence Astrolab", malformed(.mute, action: "silence")),
