@@ -273,6 +273,26 @@ struct AssistantActionCoordinationTests {
         }
     }
 
+    @Test func currentRelativePercentCannotCreateAbsoluteReviewOrQueryConsole() async {
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(controller: { controllerReads += 1; return state.wing },
+            layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+        let intent = AssistantActionIntent(
+            targetMention: "Astrolab", action: .setFaderPercent, amount: 50, addToStudio: false,
+            evidence: .init(target: "Astrolab", action: "set", amount: "50%", add: nil))
+        for reference in ["of its current level", "of the current volume"] {
+            let outcome = await service.prepare(.init(text: "set Astrolab to 50% \(reference)"),
+                                                interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Relative percentage became absolute travel") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+        }
+    }
+
     @Test func wordedDestinationCannotCreateSuggestedRelativeReviewOrQueryConsole() async {
         let transport = AssistantRecordingWingTransport()
         let state = AssistantActionTestState(wing: WingController(transport: transport))

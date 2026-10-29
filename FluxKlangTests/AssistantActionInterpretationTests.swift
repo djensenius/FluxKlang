@@ -380,6 +380,22 @@ struct AssistantActionInterpretationTests {
 }
 
 extension AssistantActionInterpretationTests {
+    @Test func currentRelativePercentagesCannotBecomeAbsoluteFaderTravel() {
+        let output = malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50%")
+        for reference in ["of its current level", "of the current volume", "of current fader position",
+                          "of its present level", "relative to its current level", "of its volume"] {
+            rejectInBothLayers(output, text: "set Astrolab to 50% \(reference)")
+        }
+        for text in ["set Astrolab to 50%", "set Astrolab to 50% of fader travel"] {
+            expectAcceptedInBothLayers(output, text: text)
+        }
+        for target in ["Current Synth", "Current Volume", "Present Level Keys"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setFaderPercent,
+                amount: 50, targetEvidence: target, actionEvidence: "set", amountEvidence: "50%"),
+                text: "set \(target) to 50%")
+        }
+    }
+
     @Test func amplitudeAndLoudnessPercentagesCannotBecomeFaderTravel() {
         let output = malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50%")
         for control in ["amplitude", "loudness"] {
