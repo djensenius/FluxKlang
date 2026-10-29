@@ -47,7 +47,9 @@ extension AssistantActionController {
                     + "Prepare a new preview."
             )
         }
-        let evidenceDeadline = ContinuousClock.now.advanced(by: timeout)
+        // The physical-send capability must expire with the review, even while queued on transport.
+        let reviewDeadline = ContinuousClock.now.advanced(by: .seconds(plan.review.expiresAt.timeIntervalSinceNow))
+        let evidenceDeadline = min(plan.deadline, min(reviewDeadline, .now.advanced(by: timeout)))
         guard
             let discovery = await plan.wing.readFreshConfirmed(
                 Self.discoveryAddresses, session: plan.session, timeout: timeout),
