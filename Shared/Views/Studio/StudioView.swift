@@ -31,10 +31,7 @@ struct StudioView: View {
                         discard: discardPendingDraft
                     )
                     .task {
-                        _ = await appModel.assistant.perform(
-                            .validatePendingStudioDraft,
-                            context: appModel.assistantToolContext()
-                        )
+                        await appModel.refreshPendingAssistantDraftForReview()
                     }
                 }
             }

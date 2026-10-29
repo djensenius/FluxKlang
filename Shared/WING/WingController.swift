@@ -111,10 +111,12 @@ final class WingController {
         connection = .connecting
         do {
             try await transport.start(remoteHost: host, localPort: nil, broadcast: false)
-            guard sessionID == attempt, !Task.isCancelled else { return }
+            guard sessionID == attempt else { return }
+            try Task.checkCancellation()
             transportSessionID = await transport.sessionID
             peerHosts = await transport.peerHosts
             guard sessionID == attempt else { return }
+            try Task.checkCancellation()
             self.host = isDemo ? nil : host
             connection = .connected(name: isDemo ? "Demo WING Rack" : nil)
             startListening()
@@ -123,16 +125,15 @@ final class WingController {
             liveObservations.start(controller: self)
         } catch {
             guard sessionID == attempt else { return }
+            if Task.isCancelled { await disconnect(); return }
             invalidateConfirmations()
             connection = .failed(reason: error.localizedDescription)
         }
     }
-
     /// Convenience entry point for Demo Mode that needs no host.
     func connectDemo() async {
         await connect(host: "demo")
     }
-
     /// Disconnects and tears down the keep-alive and listener.
     func disconnect() async {
         invalidateConfirmations()
@@ -141,7 +142,6 @@ final class WingController {
         host = nil
         await transport.stop()
     }
-
     // MARK: - Control
 
     /// Sets a fader by decibels, converted to the WING fader law.

@@ -144,39 +144,41 @@ enum AssistantSourceResolver {
         requiresSourceIntent: Bool = true
     ) -> Resolution {
         let sourceText = AssistantDraftIntent.sourceMentionText(question)
+        let excludedEquipment = excluding.union(
+            AssistantDraftIntent.excludedEquipmentIDs(in: question, equipment: context.equipment))
         var ids = AssistantDraftIntent.mentionedEquipmentIDs(
-            in: sourceText, equipment: context.equipment, excluding: excluding)
+            in: sourceText, equipment: context.equipment, excluding: excludedEquipment)
         var references: [AssistantLiveReference] = []
         // Intent gating applies only to live aliases and their clarifications;
         // saved source names remain available to help/how requests and tools.
         guard !requiresSourceIntent || AssistantDraftIntent.requestsSourceDraft(question) else {
             return Resolution(equipmentIDs: ids, references: [], clarification: nil)
         }
+        let exclusionClauses = AssistantDraftIntent.exclusionClauses(in: question)
+        let requested = explicitIdentities(in: sourceText)
+            .subtracting(exclusionClauses.flatMap { explicitIdentities(in: $0) })
         let live = context.liveWing
         guard live.status == .observed || live.status == .stale, let session = live.sessionID else {
-            return Resolution(equipmentIDs: ids, references: [], clarification: nil)
+            return requested.isEmpty ? Resolution(equipmentIDs: ids, references: [], clarification: nil)
+                : missingIdentityEvidence
         }
+        guard requested.isSubset(of: Set(live.observations.map { $0.identity.lowercased() }))
+        else { return missingIdentityEvidence }
         let mentions = live.observations.filter {
-            contains($0.label.value, in: sourceText) || contains($0.identity, in: sourceText)
+            contains($0.label.value, in: sourceText) || requested.contains($0.identity.lowercased())
         }
         let excluded = mentions.filter { observation in
-            ["without", "don't use", "do not use", "don't want to use", "do not want to use", "remove", "get rid"]
-                .contains { marker in
-                    guard let range = question.range(of: marker, options: .caseInsensitive) else { return false }
-                    let excludedText = String(question[range.upperBound...])
-                    return contains(observation.label.value, in: excludedText)
-                        || contains(observation.identity, in: excludedText)
-                }
-        }
-        let excludedIDs = Set(excluded.compactMap(\.equipmentID)).union(excluding)
-        ids.removeAll { excludedIDs.contains($0) }
-        let identities = mentions.filter { !excluded.contains($0) && contains($0.identity, in: sourceText) }
-        if !identities.isEmpty {
-            var otherSourceText = sourceText
-            for observation in identities {
-                otherSourceText = otherSourceText.replacingOccurrences(of: observation.identity.lowercased(), with: " ")
+            exclusionClauses.contains {
+                contains(observation.label.value, in: $0)
+                    || explicitIdentities(in: $0).contains(observation.identity.lowercased())
             }
-            otherSourceText = otherSourceText.replacingOccurrences(
+        }
+        let excludedIDs = Set(excluded.compactMap(\.equipmentID)).union(excludedEquipment)
+        ids.removeAll { excludedIDs.contains($0) }
+        let identities = mentions.filter { !excluded.contains($0) && requested.contains($0.identity.lowercased()) }
+        if !identities.isEmpty {
+            let otherSourceText = sourceText.replacingOccurrences(
+                of: explicitIdentityPattern, with: " ", options: .regularExpression).replacingOccurrences(
                 of: #"^\s*(?:route|connect|wire|patch|add|include|use)\b\s*"#,
                 with: "", options: .regularExpression)
             let otherSaved = AssistantDraftIntent.mentionedEquipmentIDs(
@@ -233,6 +235,25 @@ enum AssistantSourceResolver {
                     sourceIndex: observation.sourceIndex, equipmentID: id))
         }
         return Resolution(equipmentIDs: ids, references: references, clarification: nil)
+    }
+
+    private static let explicitIdentityPattern = #"\b(channel|local\s*input)\s*(\d+)\b"#
+
+    private static func explicitIdentities(in text: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: explicitIdentityPattern, options: .caseInsensitive)
+        else { return [] }
+        return Set(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let kind = Range(match.range(at: 1), in: text),
+                  let number = Range(match.range(at: 2), in: text) else { return nil }
+            let index = Int(text[number]).map(String.init) ?? String(text[number])
+            return "\(text[kind].lowercased().hasPrefix("channel") ? "channel" : "local input") \(index)"
+        })
+    }
+
+    private static var missingIdentityEvidence: Resolution {
+        Resolution(equipmentIDs: [], references: [], clarification:
+            "No draft was created: every requested channel/LOCAL input needs current usable metadata "
+                + "and a saved Equipment link. Refresh/reconnect and link all requested sources first.")
     }
 
     static func contains(_ phrase: String, in text: String) -> Bool {

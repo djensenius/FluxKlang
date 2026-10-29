@@ -67,6 +67,10 @@ enum AssistantDraftIntent {
         }
     }
 
+    static func excludedEquipmentIDs(in question: String, equipment: [Equipment]) -> Set<Equipment.ID> {
+        Set(excludedIDsMentioned(in: question, candidates: equipment.map { ($0.id, $0.name) }))
+    }
+
     static let missingSource = """
         No draft was created because I could not identify a requested source instrument in your message. \
         Name the source gear you want in the new path.
@@ -193,21 +197,36 @@ enum AssistantDraftIntent {
         return hasRoutingIntent(normalized) || requestsDraftAmendment(question)
     }
 
+}
+
+extension AssistantDraftIntent {
     /// Only source positions participate in gear/alias lookup. Effect and
     /// destination scribbles are metadata, not extra source instruments.
     static func sourceMentionText(_ question: String) -> String {
-        let normalized = question.lowercased()
-        let clauses = normalized.replacingOccurrences(of: #"\b(?:and|then)\b|[,;\n]"#,
-            with: "\n", options: .regularExpression).components(separatedBy: "\n")
+        let normalized = question.lowercased().replacingOccurrences(
+            of: #"^\s*(?:help me (?:to )?|how (?:do i|can i|should i|to) )(?=(?:route|connect|wire|patch)\b)"#,
+            with: "", options: .regularExpression)
+        let clauses = normalized.replacingOccurrences(of: #"\bthen\b|[,;\n]"#,
+            with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: #"\band\b"#, with: "\nand ", options: .regularExpression)
+            .components(separatedBy: "\n")
         var continuesSources = true
-        return clauses.compactMap { clause -> String? in
+        var completedDestination = false
+        return clauses.compactMap { text -> String? in
+            let text = text.trimmingCharacters(in: .whitespaces)
+            let coordinated = text.hasPrefix("and ")
+            let clause = coordinated ? String(text.dropFirst(4)) : text
             let from = clause.range(of: " from ")
             let hasNewSource = continuesSources || from != nil || clause.contains(" through ")
+                || (coordinated && completedDestination && clause.range(of: #"\s+(?:to|via|into|towards)\s+"#,
+                                               options: .regularExpression) != nil)
                 || clause.range(of: #"^\s*(?:route|connect|wire|patch|add|include)\b"#,
                                 options: .regularExpression) != nil
             let source = from.map { String(clause[$0.upperBound...]) } ?? clause
             let boundary = source.range(of: #"\s+(?:through|via|to|into|towards)\s+"#,
                                         options: .regularExpression)
+            completedDestination = completedDestination
+                || clause.range(of: #"\s+(?:to|towards)\s+"#, options: .regularExpression) != nil
             continuesSources = hasNewSource && boundary == nil
             guard hasNewSource else { return nil }
             return boundary.map { String(source[..<$0.lowerBound]) } ?? source
@@ -429,7 +448,11 @@ enum AssistantDraftIntent {
         in question: String,
         candidates: [(id: ID, name: String)]
     ) -> [ID] {
-        let normalized = question.lowercased()
+        exclusionClauses(in: question).flatMap { mentionedIDs(in: $0, candidates: candidates) }
+    }
+
+    static func exclusionClauses(in question: String) -> [String] {
+        let normalized = question.lowercased().replacingOccurrences(of: "’", with: "'")
         let markers = [
             "don't use",
             "do not use",
@@ -439,9 +462,9 @@ enum AssistantDraftIntent {
             "remove",
             "get rid"
         ]
-        return markers.flatMap { marker -> [ID] in
-            guard let range = normalized.range(of: marker) else { return [] }
-            return mentionedIDs(in: String(normalized[range.upperBound...]), candidates: candidates)
+        return markers.compactMap { marker in
+            guard let range = normalized.range(of: marker) else { return nil }
+            return String(normalized[range.upperBound...])
         }
     }
 

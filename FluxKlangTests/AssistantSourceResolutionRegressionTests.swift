@@ -8,7 +8,8 @@ import FoundationModels
 @MainActor
 @Suite(.serialized)
 struct AssistantSourceResolutionRegressionTests {
-    @Test(arguments: ["Help me route Synth through Echo to speakers.", "How do I connect Synth to speakers?"])
+    @Test(arguments: ["Help me route Synth through Echo to speakers.", "How do I connect Synth to speakers?",
+                      "Help me to route Synth to speakers.", "How to connect Synth to speakers?"])
     func savedSourcesRemainAvailableToHelpAndHowRoutingRequests(_ question: String) async throws {
         let synth = Equipment(name: "Synth")
         var context = AssistantBackendFixture.context(equipment: [synth], inputs: [
@@ -24,6 +25,112 @@ struct AssistantSourceResolutionRegressionTests {
         for try await _ in generator.stream(request) {}
         #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
         #expect(provider.calls == 0)
+    }
+
+    @Test func coordinatedSourceClausesReachPreflightWithoutDroppingTheSecondSource() async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        let context = AssistantBackendFixture.context(equipment: [synth, bass])
+        let question = "Route Synth to speakers and Bass to speakers."
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        for try await _ in generator.stream(
+            .init(question: question, recentMessages: [], summary: "", context: context)) {}
+        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id, bass.id])
+        #expect(provider.calls == 0)
+    }
+
+    @Test(arguments: ["don't use Bass", "don’t use Bass", "without Bass"])
+    func fullQuestionExclusionsSurvivePositiveSourceScoping(_ exclusion: String) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        var context = AssistantBackendFixture.context(equipment: [synth, bass])
+        context.effects = [Effect(name: "Echo")]
+        let question = "Route Synth and Bass through Echo to speakers, \(exclusion)."
+        let resolution = AssistantSourceResolver.resolve(question, context: context)
+        #expect(resolution.equipmentIDs == [synth.id])
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        for try await _ in generator.stream(
+            .init(question: question, recentMessages: [], summary: "", context: context)) {}
+        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [synth.id])
+        #expect(provider.calls == 0)
+    }
+
+    @Test(arguments: ["channel 7 and channel 8", "channel7 and channel8",
+                      "LOCAL input 7 and LOCAL input 8", "LOCALinput7 and LOCALinput8",
+                      "channel7 and channel999999999999999999999999",
+                      "LOCALinput7 and LOCALinput999999999999999999999999"])
+    func explicitIdentitiesNeverPublishOnlyTheObservedSubset(_ identities: String) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        for scenario in 0...4 {
+            var values: [String: WingValue] = [
+                WingAddress.name(.channel, 7): .string("Lead"),
+                WingAddress.channelSourceGroup(7): .string("LCL"),
+                WingAddress.channelSourceIndex(7): .int(7),
+                WingAddress.inputName(7): .string("Lead"),
+                WingAddress.name(.channel, 8): .string(scenario == 0 ? "" : "Pad"),
+                WingAddress.channelSourceGroup(8): .string(scenario == 2 ? "USB" : "LCL"),
+                WingAddress.channelSourceIndex(8): .int(8),
+                WingAddress.inputName(8): .string(scenario == 0 ? "" : "Pad")
+            ]
+            if scenario == 1 {
+                values[WingAddress.name(.channel, 8)] = nil
+                values[WingAddress.inputName(8)] = nil
+            }
+            var inputs = [StudioInputConnection(connector: 7, equipmentID: synth.id, outputPort: 0)]
+            if scenario != 2 { inputs.append(.init(connector: 8, equipmentID: bass.id, outputPort: 0)) }
+            let context = AssistantBackendFixture.observe(values,
+                context: AssistantBackendFixture.context(equipment: [synth, bass], inputs: inputs),
+                age: scenario == 3 ? 31 : 0, status: scenario == 4 ? .disconnected : .observed)
+            let question = "route \(identities) to speakers"
+            let resolution = AssistantSourceResolver.resolve(question, context: context)
+            #expect(resolution.equipmentIDs.isEmpty)
+            #expect(resolution.references.isEmpty)
+            #expect(resolution.clarification != nil)
+            let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+            let provider = AssistantBackendGenerator()
+            let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+            for try await _ in generator.stream(
+                .init(question: question, recentMessages: [], summary: "", context: context)) {}
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(provider.calls == 0)
+        }
+    }
+
+    @Test(arguments: ["channel", "LOCAL input"])
+    func usableExplicitIdentitiesIncludeAllSourcesUnlessExplicitlyExcluded(_ kind: String) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        let context = AssistantBackendFixture.observe([
+            WingAddress.name(.channel, 7): .string("Lead"),
+            WingAddress.channelSourceGroup(7): .string("LCL"),
+            WingAddress.channelSourceIndex(7): .int(7),
+            WingAddress.inputName(7): .string("Lead"),
+            WingAddress.name(.channel, 8): .string("Pad"),
+            WingAddress.channelSourceGroup(8): .string("LCL"),
+            WingAddress.channelSourceIndex(8): .int(8),
+            WingAddress.inputName(8): .string("Pad")
+        ], context: AssistantBackendFixture.context(equipment: [synth, bass], inputs: [
+            .init(connector: 7, equipmentID: synth.id, outputPort: 0),
+            .init(connector: 8, equipmentID: bass.id, outputPort: 0)
+        ]))
+        for excluded in [false, true] {
+            let question = "route \(kind) 7 and \(kind) 8 to speakers"
+                + (excluded ? ", don't use \(kind) 8" : "")
+            let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+            let provider = AssistantBackendGenerator()
+            let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+            for try await _ in generator.stream(
+                .init(question: question, recentMessages: [], summary: "", context: context)) {}
+            let draft = try #require(coordinator.pendingStudioDraft)
+            #expect(draft.request.sourceInstrumentIDs == (excluded ? [synth.id] : [synth.id, bass.id]))
+            #expect(draft.liveReferences?.count == (excluded ? 1 : 2))
+            #expect(provider.calls == 0)
+        }
     }
 
     @Test func explicitDraftToolResolutionCanUseLiveAliasWithoutBroadInformationalClarification() {
