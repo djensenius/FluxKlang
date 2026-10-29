@@ -150,7 +150,7 @@ struct AssistantReviewedChatTests {
         }
     }
 
-    @Test func routingAnswerUsesReviewedPreflightAndInvalidInterpretationClarifiesWithoutProvider() async throws {
+    @Test func routingAnswerAndInvalidInterpretationCannotUseLegacyPreflightOrProvider() async throws {
         let gear = Equipment(name: "Lower Synth")
         let context = AssistantBackendFixture.context(equipment: [gear],
             inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
@@ -172,13 +172,8 @@ struct AssistantReviewedChatTests {
             #expect(planner.intents.isEmpty)
             #expect(planner.confirmations == 0)
             #expect(legacy.commands.isEmpty)
-            if answer {
-                #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
-            } else {
-                #expect(coordinator.pendingStudioDraft == nil)
-                #expect(chat.selectedConversation?.messages.last?.text
-                    == AssistantActionInterpretationAdapter.invalidOutput)
-            }
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(chat.selectedConversation?.messages.last?.text == AssistantRoutingOwnership.clarification)
         }
     }
 

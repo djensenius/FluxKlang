@@ -123,6 +123,7 @@ enum AssistantRoutingInterpretationAdapter {
                     guard copied(branch.dryEvidence, text), contains(branch.source, branch.dryEvidence),
                           AssistantRoutingOwnership.word("dry", in: operators),
                           AssistantRoutingOwnership.word("wet|processed", in: operators),
+                          parallelPaths(in: operators),
                           !isNegative(branch.dryEvidence) else { return invalid }
                 } else if !branch.dryEvidence.isEmpty { return invalid }
             }
@@ -208,6 +209,13 @@ enum AssistantRoutingInterpretationAdapter {
                     of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
                         + "(?![\\p{L}\\p{N}_])", with: " ", options: [.regularExpression, .caseInsensitive])
             }
+    }
+
+    private static func parallelPaths(in text: String) -> Bool {
+        let pair = #"\b(?:dry(?:\s+signal)?\s*(?:and|/|&|\+)\s*(?:wet|processed)"#
+            + #"|(?:wet|processed)(?:\s+signal)?\s*(?:and|/|&|\+)\s*dry)\b"#
+        return AssistantRoutingOwnership.word("parallel", in: text)
+            || text.range(of: pair, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func seriallyOrdered(_ branch: AssistantRoutingIntent.Branch) -> Bool {

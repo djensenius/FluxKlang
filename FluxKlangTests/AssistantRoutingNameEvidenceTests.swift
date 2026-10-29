@@ -224,4 +224,42 @@ struct AssistantRoutingNameEvidenceTests {
         ])
         #expect(!AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
+
+    @Test func serialDryInputAndWetOutputDoNotAuthorizeParallelDelivery() {
+        let text = "send Solar dry signal through evil pet then wet signal to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar dry signal through evil pet", includesDrySignal: true, dryEvidence: text)
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test func sourceFanoutCannotBecomeIndependentMainsBranches() {
+        let text = "route Osmose to both Solar and mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: text),
+            .init(source: "Solar", destination: "mains", destinationEvidence: text)
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test func coordinatedDirectLegAfterSerialEffectsCannotDisappear() {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        let echo = Equipment(name: "Echo", inputs: ["In"], outputs: ["Out"])
+        context.equipment.append(echo)
+        context.effects.append(.init(name: "Echo", equipmentID: echo.id, isStereo: false))
+        context.globalConnections.home.inputs.append(.init(connector: 9, equipmentID: echo.id, outputPort: 0))
+        context.globalConnections.home.outputs.append(.init(connector: 1, equipmentID: echo.id, inputPort: 0))
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let text = "route Solar through evil pet then Echo and directly to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet", "Echo"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through evil pet then Echo")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        let processed = "route Solar through evil pet then Echo directly to mains"
+        intent.branches[0].destinationEvidence = processed
+        #expect(!fixture.rejects(text: processed, intent: intent, context: context))
+    }
 }
