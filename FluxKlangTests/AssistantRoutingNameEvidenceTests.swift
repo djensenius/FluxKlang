@@ -108,4 +108,26 @@ struct AssistantRoutingNameEvidenceTests {
         intent.branches[0].destinationEvidence = "Solar through evil pet to mains"
         #expect(!fixture.rejects(text: coordinated, intent: intent))
     }
+
+    @Test(arguments: [false, true])
+    func configuredEffectNamesCannotDisappearAsOperators(parallel: Bool) {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        let names = parallel ? ["Parallel"] : ["Dry", "Wet"]
+        context.effects += names.map { .init(id: UUID(), name: $0, equipmentID: nil) }
+        let suffix = parallel ? "Parallel dry and wet" : "Dry then Wet"
+        let text = "route Solar through evil pet then \(suffix) to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through evil pet", includesDrySignal: true, dryEvidence: text)
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        context.effects[0].name = "Dry Wet Delay"
+        let complete = "route Solar through Dry Wet Delay to mains"
+        let valid = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Dry Wet Delay"], destination: "mains", destinationEvidence: complete,
+                  processingEvidence: "Solar through Dry Wet Delay")
+        ])
+        #expect(!fixture.rejects(text: complete, intent: valid, context: context))
+    }
 }
