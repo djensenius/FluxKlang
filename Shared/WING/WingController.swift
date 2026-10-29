@@ -44,7 +44,6 @@ final class WingController {
     private(set) var transportWriteCount = 0
 
     private(set) var host: String?
-
     let port: UInt16
 
     /// Whether this controller is running in offline Demo Mode.
