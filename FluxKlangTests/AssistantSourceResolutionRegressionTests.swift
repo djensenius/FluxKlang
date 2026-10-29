@@ -8,6 +8,42 @@ import FoundationModels
 @MainActor
 @Suite(.serialized)
 struct AssistantSourceResolutionRegressionTests {
+    @Test(arguments: [false, true], [false, true])
+    func connectedNowInventoryNeverRetriesOrMutatesDraft(priorRoute: Bool, existingDraft: Bool) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        let context = AssistantBackendFixture.observe([WingAddress.inputName(7): .string("Lead")],
+            context: AssistantBackendFixture.context(equipment: [synth, bass], inputs: [
+                .init(connector: 7, equipmentID: synth.id, outputPort: 0)
+            ]))
+        let store = AssistantBackendDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        if existingDraft {
+            _ = await coordinator.perform(.buildStudioDraft(.init(sourceInstrumentIDs: [bass.id])), context: context)
+        }
+        let pending = coordinator.pendingStudioDraft
+        let persisted = await store.load()
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        let question = "What equipment is connected now?"
+        let request = AssistantGenerationRequest(question: question,
+            recentMessages: priorRoute ? [.init(role: .user, text: "Route Synth to speakers.")] : [],
+            summary: "", context: context)
+        var reply = ""
+        for try await event in generator.stream(request) {
+            if case .text(let text) = event { reply += text }
+        }
+        #expect(AssistantDraftIntent.routingQuestion(from: request) == question)
+        #expect(reply.contains("Saved equipment (not connected-equipment detection)"))
+        #expect(reply.contains("Synth (WING inputs 7)"))
+        #expect(reply.contains("Lead"))
+        #expect(!reply.contains("Which routing request should I retry?"))
+        #expect(coordinator.pendingStudioDraft == pending)
+        #expect(await store.load() == persisted)
+        #expect(context.graph == StudioGraph())
+        #expect(provider.calls == 0)
+    }
+
     @Test(arguments: ["channel 8", "channel8", "Pad", "Bass"])
     func scopedBranchesCannotRestoreGloballyExcludedSources(_ excluded: String) async throws {
         let synth = Equipment(name: "Synth")
