@@ -369,6 +369,7 @@ enum SiriEntityIntegration {
 
     @MainActor
     static func indexCurrentEntities(model: AppModel) async {
+        guard !AppPersistence.isTesting else { return }
         guard #available(iOS 27.0, macOS 27.0, *) else { return }
         guard CSSearchableIndex.isIndexingAvailable() else { return }
         let equipment = model.equipment.items.map(EquipmentEntity.init)
@@ -398,6 +399,7 @@ enum SiriEntityIntegration {
         destination: StudioEndpointDestination,
         context: AssistantToolContext
     ) {
+        guard !AppPersistence.isTesting else { return }
         guard #available(iOS 27.0, macOS 27.0, *) else { return }
         let equipmentByID = Dictionary(
             context.equipment.map { ($0.id, $0) },

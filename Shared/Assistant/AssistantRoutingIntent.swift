@@ -32,7 +32,7 @@ enum AssistantRoutingOwnership {
         if AssistantActionInterpretationAdapter.isReadOnlyQuestion(text) { return false }
         return word("route|routing|wire|wired|wiring|patch|patching|connect|through|into|towards|mains|"
                     + "speaker|speakers|monitor|monitors|desktop|desk|feed|feeds|feeding|output|outputs|"
-                    + "outboard|parallel|serial|dry|wet|setup", in: text)
+                    + "outboard|parallel|serial|dry|wet|setup|try again|connected now", in: text)
             || text.range(of: #"\b(?:use|send|going|goes|go)\b.+\b(?:on|to|out|into)\b"#,
                           options: [.regularExpression, .caseInsensitive]) != nil
             || text.range(of: #"\b(?:add|include)\b.+\b(?:to|into|on)\s+(?![+-]?(?:\d|\.\d))\S"#,

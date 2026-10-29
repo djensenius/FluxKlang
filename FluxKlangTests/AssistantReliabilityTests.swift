@@ -125,6 +125,42 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
+    @Test func completeSourceScopedRequestCannotBypassApplePreparationThroughPreflight() async throws {
+        let context = musicianRoutingContext()
+        let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        let reply = try await text(from: generator,
+            question: "Route Flux through Cosmos and AstroLab through Evil Pet to mains.", context: context)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(reply.contains("No draft was changed"))
+        #expect(provider.calls == 0)
+    }
+
+    @Test func connectedNowFollowUpCannotReconstructRoutingHistoryThroughChat() async throws {
+        let context = musicianRoutingContext()
+        let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
+        let provider = AssistantBackendGenerator()
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
+        _ = await coordinator.perform(.buildStudioDraft(.init(sourceInstrumentIDs: [context.equipment[0].id])),
+                                      context: context)
+        let prior = try #require(coordinator.pendingStudioDraft)
+        chat.spokenRepliesEnabled = false
+        chat.composer = "Route Flux through Cosmos to mains."
+        chat.send(context: context)
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        #expect(coordinator.pendingStudioDraft == prior)
+        chat.composer = "It is connected now, try again."
+        chat.send(context: context)
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+        #expect(provider.calls == 0)
+    }
+
     @Test func emptyModelResponseUsesDeterministicFallback() async throws {
         let router = AssistantGeneratorRouter(
             model: EmptyGenerator(),

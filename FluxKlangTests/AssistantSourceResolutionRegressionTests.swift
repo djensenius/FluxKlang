@@ -103,6 +103,43 @@ struct AssistantSourceResolutionRegressionTests {
             context: context).equipmentIDs == [synth.id, other.id])
     }
 
+    @Test(arguments: [false, true])
+    func preflightCannotResolveLiveAliasesWithoutApplePreparation(retry: Bool) async throws {
+        let synth = Equipment(name: "Synth")
+        let context = AssistantBackendFixture.observe([WingAddress.inputName(7): .string("Lead")],
+            context: AssistantBackendFixture.context(equipment: [synth], inputs: [
+                .init(connector: 7, equipmentID: synth.id, outputPort: 0)
+            ]))
+        let route = "Route Lead to speakers."
+        let request = AssistantGenerationRequest(question: retry ? "It is connected now, try again." : route,
+            recentMessages: retry ? [.init(role: .user, text: route)] : [], summary: "", context: context)
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        for try await _ in generator.stream(request) {}
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func preflightRejectsConflictingLiveAliasInCurrentOrHistoricalRoute(retry: Bool) async throws {
+        let synth = Equipment(name: "Synth")
+        let context = AssistantBackendFixture.observe([
+            WingAddress.name(.channel, 8): .string("Synth"),
+            WingAddress.channelSourceGroup(8): .string("USB"),
+            WingAddress.channelSourceIndex(8): .int(3)
+        ], context: AssistantBackendFixture.context(equipment: [synth]))
+        let route = "Route Synth to speakers."
+        let request = AssistantGenerationRequest(question: retry ? "It is connected now, try again." : route,
+            recentMessages: retry ? [.init(role: .user, text: route)] : [], summary: "", context: context)
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        for try await _ in generator.stream(request) {}
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(provider.calls == 0)
+    }
+
     @Test func metadataPollingDuringListenVerificationCannotEraseConfirmationsOrRetryPatchWrites() async throws {
         let transport = AssistantRecordingWingTransport()
         let wing = WingController(transport: transport)

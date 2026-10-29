@@ -4,7 +4,8 @@ import SwiftUI
 @MainActor
 enum MultiRouteAcceptanceFixture {
     static func seed(_ appModel: AppModel, arguments: [String]) async throws {
-        guard AcceptanceLaunchConfiguration.isMultiRouteUITesting, appModel.isDemo else {
+        guard AcceptanceLaunchConfiguration.isMultiRouteUITesting, AppPersistence.isTesting,
+              AppPersistence.defaultCloud == nil, appModel.isDemo else {
             throw FixtureError.requiresUITestingDemo
         }
         let devices = try fixtureEquipment(in: appModel)

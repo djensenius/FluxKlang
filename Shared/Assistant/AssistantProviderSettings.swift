@@ -30,7 +30,10 @@ protocol AssistantCredentialStore: Sendable {
 }
 
 struct KeychainAssistantCredentialStore: AssistantCredentialStore {
-    private let service = "org.davidjensenius.FluxKlang.assistant"
+    private var service: String {
+        let base = "org.davidjensenius.FluxKlang.assistant"
+        return AppPersistence.isTesting ? "\(base).\(AppPersistence.directory.lastPathComponent)" : base
+    }
 
     func value(for account: String) -> String? {
         let query: [String: Any] = [
@@ -101,7 +104,7 @@ final class AssistantProviderSettings {
     private let credentials: any AssistantCredentialStore
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppPersistence.defaults,
         credentials: any AssistantCredentialStore = KeychainAssistantCredentialStore()
     ) {
         self.defaults = defaults

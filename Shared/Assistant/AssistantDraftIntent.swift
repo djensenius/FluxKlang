@@ -461,8 +461,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        if AssistantRoutingOwnership.owns(request.question)
-            || AssistantRoutingOwnership.word("try again|connected now", in: request.question) {
+        if AssistantRoutingOwnership.owns(request.question) {
             return textStream(AssistantRoutingOwnership.clarification)
         }
         if AssistantDraftIntent.requestsInventory(request.question) {
@@ -472,11 +471,12 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
             return downstream.stream(request)
         }
         let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
-        if let clarification = resolution.clarification ?? AssistantDraftIntent.clarification(from: request) {
-            return textStream(clarification)
-        }
+        if let clarification = resolution.clarification { return textStream(clarification) }
         if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
             return draftStream(wiringRequest, context: request.context)
+        }
+        if let clarification = AssistantDraftIntent.clarification(from: request) {
+            return textStream(clarification)
         }
 
         let mentionedSources = resolution.equipmentIDs
@@ -484,7 +484,13 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
               !mentionedSources.isEmpty else {
             return downstream.stream(request)
         }
-        return AsyncThrowingStream { continuation in
+        return amendmentStream(request, resolution: resolution)
+    }
+
+    private func amendmentStream(
+        _ request: AssistantGenerationRequest, resolution: AssistantSourceResolver.Resolution
+    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 guard let pending = coordinator.pendingStudioDraft else {
                     do {
@@ -498,7 +504,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
                     return
                 }
                 let updatedSources = orderedUnique(
-                    pending.request.sourceInstrumentIDs + mentionedSources
+                    pending.request.sourceInstrumentIDs + resolution.equipmentIDs
                 )
                 var wiringRequest = StudioWiringRequest(
                     sourceInstrumentIDs: updatedSources,

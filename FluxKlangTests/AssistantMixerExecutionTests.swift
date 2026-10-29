@@ -132,6 +132,52 @@ struct AssistantMixerExecutionTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func changedRelativeBaselineRevokesQueuedFinalSendWithoutRetry(restoreBaseline: Bool) async throws {
+        let (wing, transport) = await connected()
+        await transport.pauseMixerSend()
+        let task = Task { await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(-3))) }
+        try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
+        let address = WingAddress.fader(.channel, 7)
+        #expect(wing.confirmedValues[address] == .float(FaderMath.position(fromDecibels: 0)))
+        let changed = WingValue.float(FaderMath.position(fromDecibels: -30))
+        await transport.put(address, changed)
+        await transport.emit(address, changed)
+        try await AssistantBackendFixture.wait { wing.confirmedValues[address] == changed }
+        if restoreBaseline {
+            let restored = WingValue.float(FaderMath.position(fromDecibels: 0))
+            await transport.put(address, restored)
+            await transport.emit(address, restored)
+            try await AssistantBackendFixture.wait { wing.confirmedValues[address] == restored }
+        }
+        await transport.releaseMixerSend()
+        let reply = await task.value
+        #expect(!reply.contains("Confirmed WING"))
+        #expect(reply.contains("No retry was attempted"))
+        #expect(await transport.writes.isEmpty)
+        #expect(wing.transportWriteCount == 1, "Only the revoked send attempt; never retry or recalculate")
+        await wing.disconnect()
+    }
+
+    @Test(arguments: [false, true])
+    func unchangedOrUnrelatedBaselineDoesNotRevokeQueuedRelativeSend(unrelated: Bool) async throws {
+        let (wing, transport) = await connected()
+        await transport.pauseMixerSend()
+        let task = Task { await executor(wing).execute(.init(target: .channel(7), operation: .adjustDB(-3))) }
+        try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
+        let address = WingAddress.fader(.channel, unrelated ? 8 : 7)
+        let receivedAt = wing.confirmedReceivedAt[address] ?? .distantPast
+        let value = WingValue.float(FaderMath.position(fromDecibels: unrelated ? -30 : 0))
+        await transport.emit(address, value)
+        try await AssistantBackendFixture.wait { (wing.confirmedReceivedAt[address] ?? .distantPast) > receivedAt }
+        await transport.releaseMixerSend()
+        let reply = await task.value
+        #expect(reply.contains("Confirmed WING Channel 7: -3.0 dB"))
+        #expect(await transport.writes.count == 1)
+        #expect(await transport.writes.last?.value == .float(-3))
+        await wing.disconnect()
+    }
+
     @Test func sessionOrNameChangeAfterSetIsUnconfirmedWithExactlyOneActualWrite() async throws {
         for changeSession in [false, true] {
             let (wing, transport) = await connected()
