@@ -336,7 +336,8 @@ enum AssistantRoutingPreparation {
     private static func sourceOperandsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
         let positive = intent.exclusionEvidence.reduce(text) { $0.replacingOccurrences(of: $1, with: " ") }
         let operands = maskingEntities(in: positive, intent: intent, markSources: true)
-            .replacingOccurrences(of: #"(?:,\s*)?\band\b|[,&+]"#, with: " and ",
+            .replacingOccurrences(of: #"(?:[,&+/;:|.]\s*)?\band\b|[,&+/;:|.](?=\s*[\p{L}\p{N}_])"#,
+                                  with: " and ",
                                   options: [.regularExpression, .caseInsensitive])
         let words = operands.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)
         let verbs = Set("route send use wire connect patch add include".split(separator: " ").map(String.init))
@@ -438,7 +439,8 @@ extension AssistantRoutingPreparation {
             with: "fk_entity", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"\b(?:i want to|i would like to|i['’]d like|id like|would like to)\s+"#,
                                   with: " ", options: [.regularExpression, .caseInsensitive])
-            .replacingOccurrences(of: #"(?:,\s*)?\band\b|[,&+]"#, with: " and ",
+            .replacingOccurrences(of: #"(?:[,&+/;:|.]\s*)?\band\b|[,&+/;:|.](?=\s*[\p{L}\p{N}_])"#,
+                                  with: " and ",
                                   options: [.regularExpression, .caseInsensitive])
         let words = masked.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)
         let fillers = Set("the my a an both also just only".split(separator: " ").map(String.init))
@@ -457,7 +459,7 @@ extension AssistantRoutingPreparation {
 
     private static func directPathsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
         let continuation = #"(?:(?!\band\b)[\s\p{L},;])*"#
-        let coordinator = #"(?:\band\b|[&+])\s*(?:(?:also|just|only)\s+)*"#
+        let coordinator = #"(?:\band\b|[&+/;:|.,])\s*(?:(?:also|just|only)\s+)*"#
         let split = #"\b(?:(?:through|via|into)\b"# + continuation + coordinator + #"(?:directly|straight)"#
             + #"|(?:directly|straight)\b"# + continuation + coordinator + #"(?:through|via|into))\b"#
         return intent.branches.allSatisfy { branch in

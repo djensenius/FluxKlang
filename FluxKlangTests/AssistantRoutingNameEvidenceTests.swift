@@ -184,7 +184,9 @@ struct AssistantRoutingNameEvidenceTests {
         "both through evil pet and directly", "through evil pet and directly",
         "both through evil pet and also directly", "both directly and through evil pet",
         "through evil pet and straight", "through evil pet & directly", "through evil pet + directly",
-        "directly & through evil pet", "directly + through evil pet"
+        "directly & through evil pet", "directly + through evil pet",
+        "through evil pet / directly", "directly / through evil pet",
+        "through evil pet; directly", "through evil pet | directly"
     ])
     func explicitProcessedAndDirectPathsCannotLoseTheDirectLeg(path: String) {
         let text = "route Solar \(path) to mains"
@@ -315,7 +317,8 @@ struct AssistantRoutingNameEvidenceTests {
     @Test(arguments: [
         "route Osmose and Signal to mains", "route Signal and Osmose to mains",
         "route Osmose and Signal and Solar to mains", "Signal and Osmose to mains",
-        "my Signal & Osmose to mains"
+        "my Signal & Osmose to mains", "route Osmose / Signal to mains",
+        "Signal / Osmose to mains"
     ])
     func unknownCoordinatedSourceOperandsCannotDisappear(text: String) {
         var intent = AssistantRoutingIntent(branches: [
