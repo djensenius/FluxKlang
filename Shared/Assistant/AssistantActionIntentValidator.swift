@@ -93,6 +93,7 @@ enum AssistantActionIntentValidator {
         let clause = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard !hasUnsupportedControl(in: clause), !hasUnrepresentedTargets(in: clause),
+              !hasRelativePercentReference(in: clause),
               compoundTargetsMatch(intent, text: text),
               mixerVerbCount(in: clause) <= 1 else { return false }
         // Multiple source/destination numbers cannot be bound safely by copied spans alone.
@@ -199,6 +200,13 @@ enum AssistantActionIntentValidator {
             ["both", "except", "excepting", "exclude", "excludes", "excluding", "without", "besides", "but",
              "omit", "omitting", "other than", "apart from", "save for", "leave out"], in: clause)
             || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func hasRelativePercentReference(in clause: String) -> Bool {
+        let pattern = #"(?:%|\bpercent)\s+(?:of|relative\s+to|compared\s+to)\s+"#
+            + #"(?:(?:(?:its|the|their|my|our)\s+)?(?:current|present|existing|previous|starting|original)\b"#
+            + #"|(?:its|their)\s+(?:level|volume|position|setting|value)\b)"#
+        return clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func hasUnsupportedControl(in clause: String) -> Bool {
