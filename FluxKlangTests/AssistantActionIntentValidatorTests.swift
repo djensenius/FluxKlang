@@ -4,9 +4,51 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @Test func scheduledActionsAndComparativePercentsCannotBecomeImmediateAbsoluteChanges() {
+        let cases = [
+            ("lower Lead by 3 dB after ten seconds", AssistantActionIntent.Action.lower,
+             Optional(3.0), Optional("3 dB"), "lower"),
+            ("after ten seconds lower Lead", .lower, nil, nil, "lower"),
+            ("raise Lead by 3 dB tomorrow", .raise, 3, "3 dB", "raise"),
+            ("set Lead to -10 dB after a minute", .setDB, -10, "-10 dB", "set"),
+            ("set Lead to 20 percent tomorrow", .setFaderPercent, 20, "20 percent", "set"),
+            ("set Lead to 20 percent less", .setFaderPercent, 20, "20 percent", "set"),
+            ("set Lead to 20 percent more than its level", .setFaderPercent, 20, "20 percent", "set"),
+            ("set Lead to 20 percent of the volume", .setFaderPercent, 20, "20 percent", "set"),
+            ("set Lead to 20 percent lower than current", .setFaderPercent, 20, "20 percent", "set"),
+            ("mute Lead tomorrow", .mute, nil, nil, "mute")
+        ]
+        for (text, action, amount, evidence, verb) in cases {
+            let output = AssistantActionModelOutput(disposition: .proposal, target: "Lead", action: action,
+                amount: amount, targetEvidence: "Lead", actionEvidence: verb, amountEvidence: evidence)
+            #expect(AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+                == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+            let intent = AssistantActionIntent(targetMention: "Lead", action: action, amount: amount,
+                addToStudio: false, evidence: .init(target: "Lead", action: verb, amount: evidence, add: nil))
+            #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) != nil)
+        }
+    }
+
+    @Test func immediateActionsPreserveTemporalLookingNamesAndExplicitTravel() {
+        for target in ["Tomorrow Synth", "After Hours", "Ten Seconds"] {
+            for (action, amount, evidence, verb, suffix) in [
+                (AssistantActionIntent.Action.lower, 3.0, "3 decibels", "lower", "by 3 decibels"),
+                (.setFaderPercent, 50.0, "50%", "set", "to 50% of the full fader travel")
+            ] {
+                let text = "\(verb) \(target) \(suffix)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: action,
+                    amount: amount, targetEvidence: target, actionEvidence: verb, amountEvidence: evidence)
+                guard case .proposal(let intent) = AssistantActionInterpretationAdapter.validate(
+                    output, request: .init(text: text)) else { Issue.record("Immediate action rejected"); continue }
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) == nil)
+            }
+        }
+    }
+
     @Test func timedMuteAndUnmuteCannotBecomePersistentChanges() {
         for action in [AssistantActionIntent.Action.mute, .unmute] {
-            for suffix in ["for 10 seconds", "for ten seconds", "for a minute", "for one hour", "for a while"] {
+            for suffix in ["for 10 seconds", "for ten seconds", "for a minute", "for one hour", "for a while",
+                           "for a bit"] {
                 let text = "\(action.rawValue) Lead \(suffix)"
                 let output = AssistantActionModelOutput(disposition: .proposal, target: "Lead", action: action,
                     targetEvidence: "Lead", actionEvidence: action.rawValue)
@@ -45,6 +87,21 @@ struct AssistantActionIntentValidatorTests {
                 #expect(await transport.queries.isEmpty)
                 #expect(await transport.writes.isEmpty)
             }
+        }
+        for (text, action, amount, evidence, verb) in [
+            ("lower Lead by 3 dB after ten seconds", AssistantActionIntent.Action.lower, 3.0, "3 dB", "lower"),
+            ("set Lead to 20 percent less", .setFaderPercent, 20.0, "20 percent", "set"),
+            ("set Lead to 50% of the volume", .setFaderPercent, 50.0, "50%", "set")
+        ] {
+            let intent = AssistantActionIntent(
+                targetMention: "Lead", action: action, amount: amount, addToStudio: false,
+                evidence: .init(target: "Lead", action: verb, amount: evidence, add: nil))
+            let outcome = await service.prepare(.init(text: text), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Unsupported qualifier became a review") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
         }
     }
 

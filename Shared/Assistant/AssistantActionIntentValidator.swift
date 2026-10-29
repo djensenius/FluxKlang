@@ -95,6 +95,7 @@ enum AssistantActionIntentValidator {
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard !hasUnsupportedControl(in: clause), !hasUnrepresentedTargets(in: clause),
               !hasRelativePercentReference(in: clause),
+              hasOnlySupportedQualifiers(intent, in: clause),
               compoundTargetsMatch(intent, text: text),
               mixerVerbCount(in: clause) <= 1 else { return false }
         // Multiple source/destination numbers cannot be bound safely by copied spans alone.
@@ -120,8 +121,8 @@ enum AssistantActionIntentValidator {
         case .raise: return raise && !lower && !destination && !mute && !unmute
         case .setDB, .setFaderPercent:
             return !lower && !raise && !mute && !unmute && !hasWord(["by"], in: clause)
-        case .mute: return !lower && !raise && !unmute && !hasUnsupportedTiming(in: clause)
-        case .unmute: return !lower && !raise && !mute && !hasUnsupportedTiming(in: clause)
+        case .mute: return !lower && !raise && !unmute
+        case .unmute: return !lower && !raise && !mute
         }
     }
 
@@ -235,18 +236,28 @@ enum AssistantActionIntentValidator {
             || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    private static func hasUnsupportedTiming(in clause: String) -> Bool {
-        hasWord(
-            ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks",
-             "temporarily", "briefly", "until", "after", "during", "tomorrow", "tonight", "later",
-             "for a while", "for a bit", "for a moment"],
-            in: clause)
+    private static func hasOnlySupportedQualifiers(_ intent: AssistantActionIntent, in clause: String) -> Bool {
+        // After removing copied operands, every remaining word must belong to the supported immediate command.
+        // Unknown timing or comparative modifiers cannot silently acquire persistent/absolute semantics.
+        var remainder = clause
+        if let amount = intent.evidence.amount {
+            remainder = remainder.replacingOccurrences(of: amount, with: " ", options: .caseInsensitive)
+        }
+        let allowed = Set(AssistantActionIntent.Action.allCases.flatMap { actionWords($0) } + [
+            "i", "m", "am", "asking", "like", "you", "can", "could", "would", "please", "my", "the", "a", "an",
+            "it", "its", "this", "that", "them", "their", "and", "then", "also", "as", "to", "at", "by",
+            "of", "for", "me", "us", "on", "volume", "fader", "level", "master", "travel", "full", "existing",
+            "live", "channel", "shortcut", "studio", "canvas", "add", "include", "now", "slightly", "little", "bit"
+        ])
+        guard remainder.range(of: #"\bfor\s++(?!(?:me|us)\b)"#,
+                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
+        return remainder.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .allSatisfy { allowed.contains(String($0)) }
     }
 
     private static func hasRelativePercentReference(in clause: String) -> Bool {
-        let pattern = #"(?:%|\bpercent)\s+(?:of|relative\s+to|compared\s+to)\s+"#
-            + #"(?:(?:(?:its|the|their|my|our)\s+)?(?:current|present|existing|previous|starting|original)\b"#
-            + #"|(?:its|their)\s+(?:level|volume|position|setting|value)\b)"#
+        let pattern = #"(?:%|\bpercent)\s+(?:of\s++(?!(?:the\s+)?(?:full\s+)?fader\s+travel\b)"#
+            + #"|relative\s+to\b|compared\s+to\b)"#
         return clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
