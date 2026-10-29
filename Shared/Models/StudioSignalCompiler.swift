@@ -481,8 +481,12 @@ private extension StudioCompilationInput {
         let mainConnectors = AssistantRoutingOutputResolver.resolve(
             "mains", in: connections.effectiveHome)?.reference.connectors
         return allocations.compactMap { allocation in
-            guard allocation.endpoint.destination == .finalMix,
-                  let outputs = allocation.endpoint.explicitOutputConnectors, outputs != mainConnectors
+            guard allocation.endpoint.destination == .finalMix else { return nil }
+            guard let mainConnectors else {
+                return .error(.outputMappingChanged(allocation.endpoint.id),
+                              "Main Speakers need a complete stereo output mapping before compiling.")
+            }
+            guard let outputs = allocation.endpoint.explicitOutputConnectors, outputs != mainConnectors
             else { return nil }
             return .error(.outputMappingChanged(allocation.endpoint.id),
                           "The reviewed Main Speakers mapping changed. Create a new routing draft.")
