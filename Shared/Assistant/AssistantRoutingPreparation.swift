@@ -281,10 +281,11 @@ enum AssistantRoutingPreparation {
         guard operands.range(of: sourceOperand,
                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let continuation = #"(?:(?!\bfk_source\b|\band\b)[\s\p{L},;])*"#
+        let coordinator = #"(?:\band\b|[&+])\s*(?:also\s+)?"#
         let split = #"\b(?:(?:through|via|into)\b"# + continuation
-            + #"\band\s+(?:also\s+)?(?:directly|straight)"#
+            + coordinator + #"(?:directly|straight)"#
             + #"|(?:directly|straight)\b"# + continuation
-            + #"\band\s+(?:also\s+)?(?:through|via|into))\b"#
+            + coordinator + #"(?:through|via|into))\b"#
         guard operands.range(of: split, options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
