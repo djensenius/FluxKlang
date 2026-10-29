@@ -179,4 +179,20 @@ struct AssistantRoutingNameEvidenceTests {
         #expect(coordinator.pendingStudioDraft == prior)
         #expect(await store.saves == 1)
     }
+
+    @Test(arguments: ["directly", "straight"])
+    func explicitProcessedAndDirectPathsCannotLoseTheDirectLeg(direct: String) {
+        let text = "route Solar both through evil pet and \(direct) to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar both through evil pet")
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+        let processedOnly = "route Solar through evil pet \(direct) to mains"
+        let single = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: processedOnly,
+                  processingEvidence: "Solar through evil pet")
+        ])
+        #expect(!AssistantRoutingFixture().rejects(text: processedOnly, intent: single))
+    }
 }

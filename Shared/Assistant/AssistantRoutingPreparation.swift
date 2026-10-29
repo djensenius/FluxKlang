@@ -263,6 +263,9 @@ enum AssistantRoutingPreparation {
         let words = remaining.lowercased().replacingOccurrences(of: "’", with: "'")
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
         guard words.allSatisfy({ allowed.contains($0) }) else { return false }
+        if remaining.range(
+            of: #"\bboth\s+(?:through|via|into)\s+and\s+(?:directly|straight)\s+(?:to|into|on|out)\b"#,
+            options: [.regularExpression, .caseInsensitive]) != nil { return false }
         // A bare parallel/dry request is not permission to invent a blend or drop its raw path.
         if AssistantRoutingOwnership.word("dry|wet|parallel", in: remaining),
            !intent.branches.contains(where: \.includesDrySignal) { return false }
