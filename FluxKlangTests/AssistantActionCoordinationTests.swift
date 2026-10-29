@@ -273,6 +273,38 @@ struct AssistantActionCoordinationTests {
         }
     }
 
+    @Test func truncatedAlphabeticTargetCannotCreateReviewOrQueryConsole() async {
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(controller: { controllerReads += 1; return state.wing },
+            layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+        let intent = AssistantActionIntent(targetMention: "Juno", action: .mute, amount: nil, addToStudio: false,
+            evidence: .init(target: "Juno", action: "mute", amount: nil, add: nil))
+        for text in ["mute Juno Alpha", "mute Alpha Juno"] {
+            let outcome = await service.prepare(.init(text: text), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Truncated target became a review") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+        }
+    }
+
+    @Test func trueSubmittedPartialNameStillRequiresCandidateSelection() async throws {
+        let fixture = await fixture(label: "Juno Alpha")
+        let intent = AssistantActionIntent(targetMention: "Juno", action: .mute, amount: nil, addToStudio: false,
+            evidence: .init(target: "Juno", action: "mute", amount: nil, add: nil))
+        let submission = AssistantActionInterpretationRequest(
+            text: "mute Juno", liveContext: request(fixture).liveContext)
+        guard case .review(let review) = await fixture.service.prepare(submission, interpretation: .proposal(intent))
+        else { throw BackendTestError.send }
+        #expect(review.stage == .chooseCandidate)
+        #expect(review.candidates.contains { $0.id == WingNodeRef.channel(7).id })
+        #expect(await fixture.transport.writes.isEmpty)
+        await fixture.state.wing.disconnect()
+    }
+
     @Test func currentRelativePercentCannotCreateAbsoluteReviewOrQueryConsole() async {
         let transport = AssistantRecordingWingTransport()
         let state = AssistantActionTestState(wing: WingController(transport: transport))
