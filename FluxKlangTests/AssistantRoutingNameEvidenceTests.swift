@@ -314,7 +314,8 @@ struct AssistantRoutingNameEvidenceTests {
 
     @Test(arguments: [
         "route Osmose and Signal to mains", "route Signal and Osmose to mains",
-        "route Osmose and Signal and Solar to mains"
+        "route Osmose and Signal and Solar to mains", "Signal and Osmose to mains",
+        "my Signal & Osmose to mains"
     ])
     func unknownCoordinatedSourceOperandsCannotDisappear(text: String) {
         var intent = AssistantRoutingIntent(branches: [
@@ -323,6 +324,16 @@ struct AssistantRoutingNameEvidenceTests {
         if text.contains("Solar") {
             intent.branches.append(.init(source: "Solar", destination: "mains", destinationEvidence: text))
         }
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test(arguments: ["then Signal", "followed by Signal", "then my Signal"])
+    func unknownSerialEffectOperandsCannotDisappear(continuation: String) {
+        let text = "route Solar through evil pet \(continuation) to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: text, processingEvidence: "Solar through evil pet")
+        ])
         #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
 
