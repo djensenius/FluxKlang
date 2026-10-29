@@ -180,19 +180,48 @@ struct AssistantRoutingNameEvidenceTests {
         #expect(await store.saves == 1)
     }
 
-    @Test(arguments: ["directly", "straight"])
-    func explicitProcessedAndDirectPathsCannotLoseTheDirectLeg(direct: String) {
-        let text = "route Solar both through evil pet and \(direct) to mains"
+    @Test(arguments: [
+        "both through evil pet and directly", "through evil pet and directly",
+        "both through evil pet and also directly", "both directly and through evil pet",
+        "through evil pet and straight"
+    ])
+    func explicitProcessedAndDirectPathsCannotLoseTheDirectLeg(path: String) {
+        let text = "route Solar \(path) to mains"
         let intent = AssistantRoutingIntent(branches: [
             .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
-                  processingEvidence: "Solar both through evil pet")
+                  processingEvidence: "Solar \(path)")
         ])
         #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
-        let processedOnly = "route Solar through evil pet \(direct) to mains"
+        let processedOnly = "route Solar through evil pet directly to mains"
         let single = AssistantRoutingIntent(branches: [
             .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: processedOnly,
                   processingEvidence: "Solar through evil pet")
         ])
         #expect(!AssistantRoutingFixture().rejects(text: processedOnly, intent: single))
+    }
+
+    @Test(arguments: [false, true])
+    func completeSourceAndDestinationNamesTakePrecedenceOverEffectAliases(destination: Bool) {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.equipment[0].name = "Dry Synth"
+        context.effects.append(.init(id: UUID(), name: destination ? "Desktop Delay" : "Dry Delay", equipmentID: nil))
+        let source = destination ? "Solar" : "Dry Synth"
+        let output = destination ? "desktop speakers" : "mains"
+        let text = "route \(source) to \(output)"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: source, destination: output, destinationEvidence: text)
+        ])
+        #expect(!fixture.rejects(text: text, intent: intent, context: context))
+    }
+
+    @Test func independentlyCoordinatedProcessedAndDirectSourcesRemainSeparate() {
+        let text = "route Solar through evil pet and Osmose directly to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through evil pet"),
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose directly to mains")
+        ])
+        #expect(!AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
 }

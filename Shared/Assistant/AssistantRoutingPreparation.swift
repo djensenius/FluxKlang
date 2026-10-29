@@ -77,7 +77,8 @@ enum AssistantRoutingPreparation {
         let mentioned = AssistantSourceResolver.resolve(text, context: context, excluding: effectEquipment)
         guard mentioned.clarification == nil, Set(mentioned.equipmentIDs).isSubset(of: sources),
               effectMentionsCovered(text, effects: context.effects, covered: usedEffects.union(excludedEffects),
-                  mentions: intent.branches.flatMap(\.effects) + intent.excludedMentions),
+                  mentions: intent.branches.flatMap { [$0.source, $0.destination] + $0.effects }
+                    + intent.excludedMentions),
               let primary = routes.first else { return failure }
         var request = StudioWiringRequest(
             sourceInstrumentIDs: primary.sourceInstrumentIDs, effectChainIDs: primary.effectChainIDs,
@@ -263,9 +264,6 @@ enum AssistantRoutingPreparation {
         let words = remaining.lowercased().replacingOccurrences(of: "’", with: "'")
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
         guard words.allSatisfy({ allowed.contains($0) }) else { return false }
-        if remaining.range(
-            of: #"\bboth\s+(?:through|via|into)\s+and\s+(?:directly|straight)\s+(?:to|into|on|out)\b"#,
-            options: [.regularExpression, .caseInsensitive]) != nil { return false }
         // A bare parallel/dry request is not permission to invent a blend or drop its raw path.
         if AssistantRoutingOwnership.word("dry|wet|parallel", in: remaining),
            !intent.branches.contains(where: \.includesDrySignal) { return false }
@@ -278,6 +276,9 @@ enum AssistantRoutingPreparation {
         let operands = maskingEntities(in: text, intent: intent, markSources: true)
         guard operands.range(of: #"\b(?:to|into|through|via|then|followed\s+by)\s+(?:(?:the|my|a|an)\s+)*fk_source\b"#,
                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
+        let split = #"\b(?:(?:through|via|into)\s+and\s+(?:also\s+)?(?:directly|straight)"#
+            + #"|(?:directly|straight)\s+and\s+(?:also\s+)?(?:through|via|into))\b"#
+        guard operands.range(of: split, options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
         let dry = intent.branches.filter(\.includesDrySignal).map(\.dryEvidence)
