@@ -117,8 +117,6 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         Make exactly one branch per instrument, each with its own destination and ordered effects.
         A group destination applies to each member. A later source-specific through modifier changes ONLY
         that source's effects. It does NOT create another direct path or apply to other sources.
-        Group destinations and source-specific modifiers apply regardless of clause order.
-        Another source instrument is NOT a speaker destination.
         destinationEvidence: copy the input clause containing this source AND its destination. For a group,
         copy the SAME group clause for each member. processingEvidence: copy the source-specific through
         clause containing that source and its effects. Empty string for direct paths.
@@ -143,17 +141,6 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         destinationEvidence="Vega going out the desktop speakers",
         processingEvidence="", includesDrySignal=false, dryEvidence=""
         Example remaining fields: replacesSetup=false, modeEvidence="", excludedMentions=[], exclusionEvidence=[]
-
-        Reordered input: Vega going out the Desktop Speakers, with Luna going through Echo, \
-        use Luna and Atlas on mains
-        Reordered branches:
-        source="Vega", effects=[], destination="Desktop Speakers", \
-        destinationEvidence="Vega going out the Desktop Speakers", processingEvidence=""
-        source="Luna", effects=["Echo"], destination="mains", \
-        destinationEvidence="use Luna and Atlas on mains", processingEvidence="Luna going through Echo"
-        source="Atlas", effects=[], destination="mains", \
-        destinationEvidence="use Luna and Atlas on mains", processingEvidence=""
-        All reordered branches: includesDrySignal=false, dryEvidence="". Remaining fields are unchanged.
         """
 
     // Leave room for instructions, generated schema and completed output in the model's context window.

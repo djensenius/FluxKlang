@@ -52,3 +52,31 @@ Accepting a valid draft merges the complete semantic graph locally. It does not 
 - Existing pending draft survives a rejected request. Cancellation or an old async response cannot publish a late draft.
 - Apple unavailable/errors/invalid output cannot trigger heuristic/provider fallback mutation.
 - Zero hardware SETs during interpretation, preparation, review and local acceptance; physical WING qualification remains a separate controlled operator task.
+
+## Native qualification boundary (October 28, 2026)
+
+Real on-device inference passed the exact example above and this shared-destination
+variant through physical preparation, revalidation and local graph merge:
+
+> Route Osmose and Solar to mains, with only Solar through evil pet, and route OP-XY to desktop speakers
+
+The resulting graph had exactly three branches, four wires and the fixture's
+configured Desk output pair. Separate final-action validation also passed
+Astrolab-down and Mother-32-add-with-50%-fader-travel requests.
+
+Native paraphrase handling is **not fully qualified**. This reordered version
+returned clarification rather than a draft:
+
+> OP-XY going out the Desktop Speakers, with Solar going through Evil Pet, use Solar and Osmose on mains
+
+Diagnostic output included a wrong Solar destination and omitted processing;
+independent validation correctly rejected it. An additional prompt example did
+not fix the reordered request and also caused the shared-destination check to
+clarify, so that experiment was removed rather than weakening validation.
+Use a clearer complete request or the Studio wiring form when clarification is
+returned. Deterministic injected-intent tests do not establish native-model
+reliability for every clause order, paraphrase, device or language.
+
+Qualification used an on-device Mac model and isolated local fixtures, not a
+physical iPhone, actual studio cabling or a live WING. No hardware writes or
+physical audio behavior were qualified.
