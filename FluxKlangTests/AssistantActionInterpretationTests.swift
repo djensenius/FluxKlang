@@ -380,6 +380,20 @@ struct AssistantActionInterpretationTests {
 }
 
 extension AssistantActionInterpretationTests {
+    @Test func wordedAbsoluteDestinationsCannotBecomeSuggestedRelativeSteps() {
+        for destination in ["zero", "off", "ten", "fifty percent", "half", "full", "the minimum", "unity"] {
+            rejectInBothLayers(malformed(.lower, action: "down"),
+                               text: "turn Astrolab down to \(destination)")
+            rejectInBothLayers(malformed(.raise, action: "up"),
+                               text: "turn Astrolab up to \(destination)")
+        }
+        expectAcceptedInBothLayers(malformed(.lower, action: "down"), text: "turn Astrolab down")
+        for target in ["Zero Synth", "Off Synth", "Half Volume", "Down to Zero"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .lower,
+                targetEvidence: target, actionEvidence: "down"), text: "turn \(target) down")
+        }
+    }
+
     @Test func completeUnitTokensAllowSentencePunctuationWithoutLosingNumericPrefixProtection() {
         expectAcceptedInBothLayers(malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50%"),
                                   text: "set Astrolab to 50%.")

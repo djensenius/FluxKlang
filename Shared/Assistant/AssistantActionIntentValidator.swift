@@ -105,7 +105,11 @@ enum AssistantActionIntentValidator {
            clause.contains("%") || hasWord(["by", "db", "decibel", "decibels", "percent"], in: clause)
             || clause.range(of: #"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"#, options: .regularExpression) != nil { return false }
         let destination = clause.range(
-            of: #"\b(?:to|at)\s*[+-]?(?:\d|\.)"#, options: [.regularExpression, .caseInsensitive]) != nil
+            of: #"\b(?:to|at)\s*(?:[+-]?(?:\d|\.)|(?:(?:the|a|an)\s+)?"#
+                + #"(?:zero|off|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"#
+                + #"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|"#
+                + #"fifty|sixty|seventy|eighty|ninety|hundred|half|quarter|full|minimum|maximum|unity|silence)\b)"#,
+            options: [.regularExpression, .caseInsensitive]) != nil
         switch intent.action {
         case .none:
             return !lower && !raise && !mute && !unmute && !hasWord(
