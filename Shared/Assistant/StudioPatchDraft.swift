@@ -123,6 +123,20 @@ struct StudioPatchDraft: Identifiable, Codable, Hashable, Sendable {
     var nameReferences: [AssistantRoutingNameReference]?
     var hasErrors: Bool { validation.contains { $0.severity == .error } }
 
+    func hasEffectDeviceConflict(effects: [Effect]) -> Bool {
+        let requestedIDs = Set(request.effectChainIDs + request.additionalRoutes.flatMap(\.effectChainIDs))
+        let requested = effects.filter { requestedIDs.contains($0.id) }
+        let requestedDevices = Set(requested.compactMap(\.equipmentID))
+        let excludedIDs = Set((nameReferences ?? []).filter { $0.kind == .excludedEffect }.map(\.id))
+        let excludedDevices = Set(effects.filter { excludedIDs.contains($0.id) }.compactMap(\.equipmentID))
+        let changedLinks = (nameReferences ?? []).contains { reference in
+            guard let device = reference.equipmentID else { return false }
+            return effects.first(where: { $0.id == reference.id })?.equipmentID != device
+        }
+        return changedLinks || !Effect.sharedEquipmentIDs(in: requested).isEmpty
+            || !requestedDevices.isDisjoint(with: excludedDevices)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, request, fragment, cableInstructions, logicalRoutingSummary, validation
         case applicationMode, liveReferences, outputReferences, nameReferences

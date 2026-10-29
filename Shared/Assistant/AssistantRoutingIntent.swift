@@ -53,6 +53,8 @@ struct AssistantRoutingNameReference: Codable, Hashable, Sendable {
     var mention: String
     var id: UUID
     var kind: Kind
+    /// Physical authority for reviewed effect names; absent in legacy drafts.
+    var equipmentID: Equipment.ID?
 
     func isValid(in context: AssistantToolContext) -> Bool {
         AssistantRoutingPreparation.isValidNameReference(self, context: context)
