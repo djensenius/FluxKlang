@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import FluxKlang
 
@@ -29,6 +30,15 @@ enum AssistantBackendFixture {
             snapshot, equipment: context.equipment,
             connections: context.effectiveConnections)
         return result
+    }
+
+    static func settleInitialActionEvidence(_ wing: WingController) async {
+        guard let session = wing.sessionID else { Issue.record("Recording fixture did not connect"); return }
+        // Establish the fake's initial discovery and baseline replies before installing review observations.
+        let addresses = AssistantActionController.discoveryAddresses
+            + [WingAddress.fader(.channel, 7), WingAddress.mute(.channel, 7), WingAddress.name(.main, 1)]
+        let initial = await wing.readFreshConfirmed(addresses, session: session, timeout: .seconds(1))
+        #expect(initial?.count == addresses.count, "Initial action evidence did not settle before review preparation")
     }
 
     static func waitAsync(_ condition: @MainActor () async -> Bool) async throws {

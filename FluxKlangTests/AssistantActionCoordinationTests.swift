@@ -17,6 +17,7 @@ struct AssistantActionCoordinationTests {
         await transport.put("/ch/7/name", .string(label))
         let wing = WingController(transport: transport)
         await wing.connect(host: "192.0.2.10")
+        await AssistantBackendFixture.settleInitialActionEvidence(wing)
         let state = AssistantActionTestState(wing: wing)
         let service = AssistantActionController(controller: { state.wing }, layout: { state.layout },
             scope: { state.scope }, addShortcut: { _, _, _, _ in nil },
@@ -131,8 +132,12 @@ struct AssistantActionCoordinationTests {
         for phase in 0...2 {
             for scenario in 0...3 {
                 let fixture = await fixture()
-                guard case .review(let preview) = await fixture.service.prepare(
-                    request(fixture), interpretation: interpretation) else { throw BackendTestError.send }
+                let prepared = await fixture.service.prepare(request(fixture), interpretation: interpretation)
+                guard case .review(let preview) = prepared else {
+                    Issue.record("ABA phase \(phase), scenario \(scenario) preparation: \(prepared)")
+                    await fixture.state.wing.disconnect()
+                    throw BackendTestError.send
+                }
                 let pausedAddress = phase == 2 ? "/ch/7/fdr"
                     : try #require(AssistantActionController.discoveryAddresses.sorted().first)
                 var confirmation: Task<AssistantActionResult, Never>?
