@@ -37,12 +37,12 @@ actor RoutingTestDraftStore: PendingStudioPatchPersisting {
     func resume() { gate?.resume(); gate = nil }
     func load() -> StudioPatchDraft? { draft }
     func save(_ draft: StudioPatchDraft?) async {
-        self.draft = draft
         saves += 1
         if pauseNext {
             pauseNext = false
             await withCheckedContinuation { gate = $0 }
         }
+        self.draft = draft
     }
 }
 

@@ -361,7 +361,7 @@ final class AssistantCoordinator {
             draft.liveReferences = request.liveReferences
             draft.outputReferences = request.outputReferences
             pendingStudioDraft = draft
-            await draftStore.save(draft)
+            await persistPendingDraft()
             return .pendingDraft(draft)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
@@ -383,7 +383,7 @@ final class AssistantCoordinator {
                 ))
             }
             pendingStudioDraft = refreshed
-            await draftStore.save(refreshed)
+            await persistPendingDraft()
             return .pendingDraft(refreshed)
         case .openReview:
             guard pendingStudioDraft != nil else {
@@ -416,14 +416,27 @@ final class AssistantCoordinator {
               (draft.outputReferences ?? []).allSatisfy({ $0.isValid(in: currentContext.effectiveConnections) })
         else { return false }
         pendingStudioDraft = draft
-        await draftStore.save(draft)
+        await persistPendingDraft()
+        if Task.isCancelled, pendingStudioDraft == draft {
+            pendingStudioDraft = expectedPending
+            await persistPendingDraft()
+        }
         return !Task.isCancelled && pendingStudioDraft == draft
     }
 
     func discardPendingStudioDraft() async {
         pendingStudioDraft = nil
         navigationTarget = nil
-        await draftStore.save(nil)
+        await persistPendingDraft()
+    }
+
+    private func persistPendingDraft() async {
+        var saved = pendingStudioDraft
+        while true {
+            await draftStore.save(saved)
+            guard saved != pendingStudioDraft else { return }
+            saved = pendingStudioDraft
+        }
     }
 
     func clearNavigation() {

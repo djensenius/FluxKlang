@@ -28,7 +28,10 @@ enum AssistantRoutingPreparation {
             let effects = context.effects.filter { matchesName(excluded, name: $0.name) }
             let source = resolveSource(excluded, context: context, excluding: effectEquipment)
             guard effects.count + (source == nil ? 0 : 1) == 1 else { return failure }
-            if let source { excludedSources.insert(source.id) }
+            if let source {
+                excludedSources.insert(source.id)
+                references.append(contentsOf: source.references)
+            }
             if let effect = effects.first {
                 excludedEffects.insert(effect.id)
                 if let device = effect.equipmentID { excludedDevices.insert(device) }
@@ -221,6 +224,10 @@ enum AssistantRoutingPreparation {
     }
 
     private static func directivesCovered(_ intent: AssistantRoutingIntent, in text: String) -> Bool {
+        let operands = maskingEntities(in: text, intent: intent, markSources: true)
+        guard operands.range(of: #"\b(?:to|into|through|via)\s+(?:(?:the|my)\s+)?fk_source\b"#,
+                             options: [.regularExpression, .caseInsensitive]) == nil else { return false }
+        let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
         let dry = intent.branches.filter(\.includesDrySignal).map(\.dryEvidence)
         let allEffects = Set(intent.branches.flatMap(\.effects))
@@ -229,9 +236,11 @@ enum AssistantRoutingPreparation {
             guard !allEffects.subtracting(branch.effects).contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, evidence)
             }) else { return false }
-            if branch.effects.isEmpty, !directDestinationOnly(branch, intent: intent) { return false }
+            let operatorEvidence = maskingEntities(in: evidence, intent: intent)
+            if branch.effects.isEmpty,
+               AssistantRoutingOwnership.word("through|via", in: operatorEvidence) { return false }
             if !branch.includesDrySignal,
-               AssistantRoutingOwnership.word("dry|wet|parallel", in: evidence) { return false }
+               AssistantRoutingOwnership.word("dry|wet|parallel", in: operatorEvidence) { return false }
         }
         let effectChecks = allEffects.map { effect in
             (NSRegularExpression.escapedPattern(for: effect),
@@ -251,7 +260,9 @@ enum AssistantRoutingPreparation {
                 pattern: "(?<![\\p{L}\\p{N}_])(?:" + pattern + ")(?![\\p{L}\\p{N}_])",
                 options: .caseInsensitive) else { return false }
             let covered = (evidence + intent.exclusionEvidence).compactMap { text.range(of: $0) }
-            for match in regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) {
+            let scanned = ["through|via", "dry|wet|parallel"].contains(pattern) ? operators : text
+            let range = NSRange(scanned.startIndex..<scanned.endIndex, in: scanned)
+            for match in regex.matches(in: scanned, range: range) {
                 guard let range = Range(match.range, in: text),
                       covered.contains(where: {
                           $0.lowerBound <= range.lowerBound && $0.upperBound >= range.upperBound
@@ -262,18 +273,27 @@ enum AssistantRoutingPreparation {
         return true
     }
 
-    private static func directDestinationOnly(
-        _ branch: AssistantRoutingIntent.Branch, intent: AssistantRoutingIntent
-    ) -> Bool {
-        let evidence = branch.destinationEvidence
-        guard !AssistantRoutingOwnership.word("through|via", in: evidence) else { return false }
-        guard let into = evidence.range(of: #"\binto\b"#, options: [.regularExpression, .caseInsensitive]),
-              let destination = evidence.range(of: branch.destination, options: .caseInsensitive),
-              into.upperBound <= destination.lowerBound else { return true }
-        let operand = String(evidence[into.upperBound..<destination.lowerBound])
-        return !intent.branches.contains {
-            AssistantRoutingInterpretationAdapter.contains($0.source, operand)
+    private static func maskingEntities(
+        in text: String, intent: AssistantRoutingIntent, markSources: Bool = false
+    ) -> String {
+        let sources = Set(intent.branches.map { AssistantRoutingInterpretationAdapter.normalize($0.source) })
+        let mentions = Set(intent.branches.flatMap { [$0.source, $0.destination] + $0.effects }
+            + intent.excludedMentions)
+        let names = mentions.sorted { $0.count > $1.count }
+            .map(NSRegularExpression.escapedPattern).joined(separator: "|")
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?<![\\p{L}\\p{N}_])(?:" + names + ")(?![\\p{L}\\p{N}_])",
+            options: .caseInsensitive) else { return text }
+        let original = text as NSString
+        let masked = NSMutableString(string: text)
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
+            let mention = AssistantRoutingInterpretationAdapter.normalize(original.substring(with: match.range))
+            let source = sources.contains(mention)
+            // Spaces retain UTF-16 offsets for copied-evidence coverage against the original text.
+            let replacement = markSources && source ? "fk_source" : String(repeating: " ", count: match.range.length)
+            masked.replaceCharacters(in: match.range, with: replacement)
         }
+        return masked as String
     }
 
     private static func sourceOccurrencesCovered(_ branch: AssistantRoutingIntent.Branch, in text: String) -> Bool {

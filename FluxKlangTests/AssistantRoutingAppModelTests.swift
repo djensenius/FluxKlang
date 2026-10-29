@@ -305,6 +305,99 @@ struct AssistantRoutingAppModelTests {
     }
 }
 
+@MainActor
+struct AssistantRoutingReviewRegressionTests {
+    @Test(arguments: [false, true])
+    func sourceToSourceRoutesCannotBecomeParallelMainsPaths(processed: Bool) {
+        let text = processed ? "route Solar through evil pet into Osmose to mains"
+            : "route Osmose to Solar then to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: processed ? "Solar" : "Osmose", effects: processed ? ["evil pet"] : [],
+                  destination: "mains", destinationEvidence: text,
+                  processingEvidence: processed ? "Solar through evil pet" : ""),
+            .init(source: processed ? "Osmose" : "Solar", destination: "mains",
+                  destinationEvidence: processed ? "Osmose to mains" : text)
+        ])
+        let fixture = AssistantRoutingFixture()
+        #expect(fixture.rejects(text: text, intent: intent))
+        let grouped = "route Osmose and Solar to mains"
+        #expect(!fixture.rejects(text: grouped, intent: .init(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: grouped),
+            .init(source: "Solar", destination: "mains", destinationEvidence: grouped)
+        ])))
+    }
+
+    @Test(arguments: [false, true])
+    func dryInConfiguredNamesOrLiveAliasesIsNotAnOperator(live: Bool) throws {
+        let fixture = AssistantRoutingFixture()
+        let gear = Equipment(name: live ? "Saved Synth" : "Dry Synth")
+        var context = fixture.context
+        context.equipment.append(gear)
+        context.globalConnections.home.inputs.append(.init(connector: 9, equipmentID: gear.id, outputPort: 0))
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        if live {
+            context = AssistantBackendFixture.observe(
+                [WingAddress.inputName(9): .string("Dry Synth")], context: context)
+        }
+        let text = "route Dry Synth to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Dry Synth", destination: "mains", destinationEvidence: text)
+        ])
+        let draft = try fixture.prepared(text: text, intent: intent, context: context)
+        #expect(draft.request.sourceInstrumentIDs == [gear.id])
+        #expect(fixture.rejects(text: text + " with dry and wet signal", intent: intent, context: context))
+    }
+
+    @Test func excludedLiveAliasesRetainProvenanceAcrossSameSessionChanges() async throws {
+        let fixture = AssistantRoutingFixture()
+        let session = UUID()
+        let context = AssistantBackendFixture.observe([WingAddress.inputName(3): .string("Lead")],
+            context: fixture.context, session: session)
+        let text = "route Osmose to mains without Lead"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains")
+        ], excludedMentions: ["Lead"], exclusionEvidence: ["without Lead"])
+        let draft = try fixture.prepared(text: text, intent: intent, context: context)
+        #expect(draft.liveReferences?.map(\.equipmentID) == [fixture.solar.id])
+        let changed = AssistantBackendFixture.observe([
+            WingAddress.inputName(3): .string("Other"), WingAddress.inputName(1): .string("Lead")
+        ], context: context, session: session)
+        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
+        #expect(!(await coordinator.commitPreparedRouting(draft, expectedPending: nil,
+            preparedContext: context, currentContext: changed)))
+        #expect(coordinator.pendingStudioDraft == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func cancelledSaveRestoresPriorReviewWithoutOverwritingANewerDraft(replaced: Bool) async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: RoutingTestHistory(), cloud: nil),
+            generator: RoutingTestGenerator(), actionInterpreter: RoutingTestInterpreter())
+        await store.pauseNextSave()
+        chat.composer = AssistantRoutingFixture.text
+        chat.send(context: fixture.context)
+        try await AssistantBackendFixture.waitAsync { await store.isWaiting }
+        chat.cancel()
+        var expected = prior
+        if replaced {
+            expected = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(expected, expectedPending: coordinator.pendingStudioDraft,
+                preparedContext: fixture.context, currentContext: fixture.context))
+        }
+        await store.resume()
+        try await AssistantBackendFixture.waitAsync { await store.saves >= (replaced ? 4 : 3) }
+        #expect(coordinator.pendingStudioDraft == expected)
+        #expect(await store.draft == expected)
+        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+    }
+}
+
 private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
     private var pauses = false
