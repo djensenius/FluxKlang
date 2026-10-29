@@ -103,9 +103,10 @@ enum AssistantRoutingInterpretationAdapter {
                     guard seriallyOrdered(branch) else { return invalid }
                 }
                 if branch.includesDrySignal {
+                    let operators = operatorEvidence(branch.dryEvidence, branch: branch)
                     guard copied(branch.dryEvidence, text), contains(branch.source, branch.dryEvidence),
-                          AssistantRoutingOwnership.word("dry", in: branch.dryEvidence),
-                          AssistantRoutingOwnership.word("wet|processed", in: branch.dryEvidence),
+                          AssistantRoutingOwnership.word("dry", in: operators),
+                          AssistantRoutingOwnership.word("wet|processed", in: operators),
                           !isNegative(branch.dryEvidence) else { return invalid }
                 } else if !branch.dryEvidence.isEmpty { return invalid }
             }
@@ -181,6 +182,15 @@ enum AssistantRoutingInterpretationAdapter {
         let relationship = String(evidence[source.upperBound..<effect.lowerBound])
         return AssistantRoutingOwnership.word("through|via|into", in: relationship)
             && !AssistantRoutingOwnership.word("from", in: relationship)
+    }
+
+    private static func operatorEvidence(_ text: String, branch: AssistantRoutingIntent.Branch) -> String {
+        ([branch.source, branch.destination] + branch.effects).sorted { $0.count > $1.count }
+            .reduce(text) { remaining, mention in
+                remaining.replacingOccurrences(
+                    of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
+                        + "(?![\\p{L}\\p{N}_])", with: " ", options: [.regularExpression, .caseInsensitive])
+            }
     }
 
     private static func seriallyOrdered(_ branch: AssistantRoutingIntent.Branch) -> Bool {

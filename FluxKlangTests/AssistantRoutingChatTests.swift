@@ -17,6 +17,7 @@ actor RoutingTestInterpreter: AssistantActionInterpreting {
         self.fails = fails
         self.suspend = suspend
     }
+
     func availability() -> AssistantActionInterpreterAvailability { available }
     func interpret(_ request: AssistantActionInterpretationRequest) async throws -> AssistantActionInterpretation {
         requests.append(request)
@@ -25,6 +26,45 @@ actor RoutingTestInterpreter: AssistantActionInterpreting {
         return result
     }
     func resume() { gate?.resume(); gate = nil }
+}
+
+struct AssistantRoutingEvidenceRegressionTests {
+    @Test func effectNameWordsCannotAuthorizeAnUnrequestedDryPath() throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.effects[0].name = "Dry Wet Delay"
+        let text = "route Solar through Dry Wet Delay to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Dry Wet Delay"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through Dry Wet Delay", includesDrySignal: true,
+                  dryEvidence: "Solar through Dry Wet Delay")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        intent.branches[0].includesDrySignal = false
+        intent.branches[0].dryEvidence = ""
+        #expect(!fixture.rejects(text: text, intent: intent, context: context))
+        intent.branches[0].includesDrySignal = true
+        intent.branches[0].dryEvidence = "Solar dry and wet"
+        #expect(!fixture.rejects(text: text + " with Solar dry and wet", intent: intent, context: context))
+    }
+
+    @Test func destinationCapitalizationDoesNotInventAnotherOutput() {
+        let text = "route Osmose to mains and Solar to MAINS"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains"),
+            .init(source: "Solar", destination: "MAINS", destinationEvidence: "Solar to MAINS")
+        ])
+        #expect(!AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test func completeDestinationNamesTakePrecedenceOverTheirSuffixes() {
+        let text = "route Osmose to speakers and Solar to desktop speakers"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "speakers", destinationEvidence: "Osmose to speakers"),
+            .init(source: "Solar", destination: "desktop speakers", destinationEvidence: "Solar to desktop speakers")
+        ])
+        #expect(!AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
 }
 
 actor RoutingTestDraftStore: PendingStudioPatchPersisting {

@@ -55,10 +55,9 @@ enum AssistantRoutingPreparation {
             }
             // Copied evidence must not promise one source's processing for another named source.
             let others = intent.branches.filter { $0.source != branch.source }.map(\.source)
-            let otherDestinations = Set(intent.branches.map(\.destination)).subtracting([branch.destination])
-            guard !otherDestinations.contains(where: {
-                AssistantRoutingInterpretationAdapter.contains($0, branch.destinationEvidence)
-            }) else { return failure }
+            let destination = AssistantRoutingInterpretationAdapter.normalize(branch.destination)
+            guard destinationSpans(in: branch.destinationEvidence, intent: intent)
+                .allSatisfy({ $0.name == destination }) else { return failure }
             guard !others.contains(where: {
                 AssistantRoutingInterpretationAdapter.contains($0, branch.processingEvidence)
                     || AssistantRoutingInterpretationAdapter.contains($0, branch.dryEvidence)
@@ -246,16 +245,9 @@ enum AssistantRoutingPreparation {
             (NSRegularExpression.escapedPattern(for: effect),
              intent.branches.filter { $0.effects.contains(effect) }.map(\.processingEvidence))
         }
-        let destinationChecks = Set(intent.branches.map(\.destination)).map { destination in
-            (NSRegularExpression.escapedPattern(for: destination),
-             intent.branches.filter {
-                 AssistantRoutingInterpretationAdapter.normalize($0.destination)
-                     == AssistantRoutingInterpretationAdapter.normalize(destination)
-             }.map(\.destinationEvidence))
-        }
         for (pattern, evidence) in [
             ("through|via", processing), ("dry|wet|parallel", dry)
-        ] + effectChecks + destinationChecks {
+        ] + effectChecks {
             guard let regex = try? NSRegularExpression(
                 pattern: "(?<![\\p{L}\\p{N}_])(?:" + pattern + ")(?![\\p{L}\\p{N}_])",
                 options: .caseInsensitive) else { return false }
@@ -270,7 +262,28 @@ enum AssistantRoutingPreparation {
                 else { return false }
             }
         }
-        return true
+        return destinationSpans(in: text, intent: intent).allSatisfy { destination in
+            let evidence = intent.branches.filter {
+                AssistantRoutingInterpretationAdapter.normalize($0.destination) == destination.name
+            }.map(\.destinationEvidence) + intent.exclusionEvidence
+            return evidence.compactMap { text.range(of: $0) }.contains {
+                $0.lowerBound <= destination.range.lowerBound && $0.upperBound >= destination.range.upperBound
+            }
+        }
+    }
+
+    private static func destinationSpans(
+        in text: String, intent: AssistantRoutingIntent
+    ) -> [(name: String, range: Range<String.Index>)] {
+        let names = Set(intent.branches.map(\.destination)).sorted { $0.count > $1.count }
+            .map(NSRegularExpression.escapedPattern).joined(separator: "|")
+        guard let regex = try? NSRegularExpression(
+            pattern: "(?<![\\p{L}\\p{N}_])(?:" + names + ")(?![\\p{L}\\p{N}_])",
+            options: .caseInsensitive) else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).compactMap {
+            guard let range = Range($0.range, in: text) else { return nil }
+            return (AssistantRoutingInterpretationAdapter.normalize(String(text[range])), range)
+        }
     }
 
     private static func maskingEntities(
