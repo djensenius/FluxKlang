@@ -420,4 +420,43 @@ extension AssistantActionIntentValidatorTests {
             await wing.disconnect()
         }
     }
+
+    @MainActor @Test func initialEvidenceBarrierAcceptsCompleteSnapshotWithoutNewQueryReplies() async throws {
+        let transport = AssistantRecordingWingTransport()
+        await transport.configure(answers: false)
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        await transport.emitInitialSnapshot()
+        let addresses = AssistantActionController.discoveryAddresses
+            + [WingAddress.fader(.channel, 7), WingAddress.mute(.channel, 7), WingAddress.name(.main, 1)]
+        try await AssistantBackendFixture.wait { addresses.allSatisfy { wing.confirmedValues[$0] != nil } }
+        await AssistantBackendFixture.settleInitialActionEvidence(wing)
+        #expect(await transport.writes.isEmpty)
+        await wing.disconnect()
+    }
+
+    @MainActor @Test func initialEvidenceBarrierWaitsForMissingFirstNameBeforeSettling() async throws {
+        let transport = AssistantRecordingWingTransport()
+        await transport.configure(answers: false)
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        var settled = false
+        let barrier = Task {
+            await AssistantBackendFixture.settleInitialActionEvidence(wing)
+            settled = true
+        }
+        // The helper has started its GETs, but no incoming reply has reached the listener yet.
+        try await AssistantBackendFixture.waitAsync { await transport.queries.contains("/main/1/name") }
+        #expect(!settled)
+        await transport.emitInitialSnapshot(excluding: ["/ch/40/name"])
+        try await AssistantBackendFixture.wait { wing.confirmedValues["/main/1/name"] != nil }
+        #expect(wing.confirmedValues["/ch/40/name"] == nil)
+        #expect(!settled)
+        await transport.emit("/ch/40/name", .string(""))
+        await barrier.value
+        #expect(settled)
+        #expect(wing.confirmedValues["/ch/40/name"] == .string(""))
+        #expect(await transport.writes.isEmpty)
+        await wing.disconnect()
+    }
 }
