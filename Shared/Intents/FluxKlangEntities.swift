@@ -286,7 +286,7 @@ func fluxKlangSpotlightIndex(
     indexDescription: CSSearchableIndexDescription
 ) -> CSSearchableIndex {
     let protectionClass = indexDescription.protectionClass
-    UserDefaults.standard.set(
+    AppPersistence.defaults.set(
         protectionClass?.rawValue ?? "",
         forKey: fluxKlangSpotlightProtectionClassKey
     )
@@ -294,7 +294,7 @@ func fluxKlangSpotlightIndex(
 }
 
 func fluxKlangSpotlightIndexForManualRefresh() -> CSSearchableIndex {
-    let rawValue = UserDefaults.standard.string(
+    let rawValue = AppPersistence.defaults.string(
         forKey: fluxKlangSpotlightProtectionClassKey
     )
     let protectionClass = rawValue.flatMap {

@@ -5,10 +5,6 @@
 //  High-level, observable controller for a WING Rack. Owns the transport,
 //  drives the subscription keep-alive, and keeps a live cache of node values.
 //
-//  Because the WING is multi-client, this controller treats the console as the
-//  source of truth: it ingests broadcast updates (including changes made in the
-//  WING Co-Pilot app) and can re-query nodes on demand to stay in sync.
-//
 
 import Foundation
 import Observation
@@ -25,7 +21,6 @@ final class WingController {
     /// Whether this controller is live or running in offline Demo Mode.
     let mode: WingMode
 
-    /// Current connection state.
     private(set) var connection: WingConnectionState = .disconnected
 
     /// Last-known values keyed by OSC address. Reflects changes from any
@@ -35,15 +30,20 @@ final class WingController {
     /// Values received from the console or demo transport. Unlike `values`,
     /// this never treats an attempted local SET as proof that hardware applied it.
     private(set) var confirmedValues: [String: WingValue] = [:]
+    let liveObservations = WingLiveObservations()
+    private(set) var confirmedNameRevision = 0
+    private(set) var confirmedReceivedAt: [String: Date] = [:]
+    private(set) var sessionID: UUID?
+    private var transportSessionID: UUID?
+    private var peerHosts: Set<String> = []
+    private var sessionStartedAt = Date.distantFuture
 
     /// Number of local SET operations attempted through the transport. Read by
     /// safety tests to prove draft-only paths never attempt hardware writes.
     private(set) var transportWriteCount = 0
 
-    /// Host the controller is connected (or connecting) to.
     private(set) var host: String?
 
-    /// The WING OSC port in use.
     let port: UInt16
 
     /// Whether this controller is running in offline Demo Mode.
@@ -53,12 +53,19 @@ final class WingController {
     private var listenTask: Task<Void, Never>?
     private var keepAliveTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
-
+    let mixerBaselineAuthorizations = WingMixerBaselineAuthorizations()
     /// Creates a live controller that talks to a real WING over OSC/UDP.
     init(port: UInt16 = WingNetwork.defaultPort) {
         mode = .live
         self.port = port
         transport = WingTransport(remotePort: port)
+    }
+
+    /// Injection seam for recording transports; no network is needed by tests.
+    init(transport: any WingTransporting, mode: WingMode = .live, port: UInt16 = WingNetwork.defaultPort) {
+        self.transport = transport
+        self.mode = mode
+        self.port = port
     }
 
     private init(demoTransport: DemoWingTransport) {
@@ -97,32 +104,44 @@ final class WingController {
     func connect(host: String) async {
         guard connection != .connecting else { return }
         cancelTasks()
+        invalidateConfirmations()
+        let attempt = UUID()
+        sessionID = attempt
+        sessionStartedAt = Date()
         connection = .connecting
         do {
             try await transport.start(remoteHost: host, localPort: nil, broadcast: false)
+            guard sessionID == attempt else { return }
+            try Task.checkCancellation()
+            let transportSessionID = await transport.sessionID, peerHosts = await transport.peerHosts
+            guard sessionID == attempt else { return }
+            try Task.checkCancellation()
+            (self.transportSessionID, self.peerHosts) = (transportSessionID, peerHosts)
             self.host = isDemo ? nil : host
             connection = .connected(name: isDemo ? "Demo WING Rack" : nil)
             startListening()
             startKeepAlive()
             startBulkRefresh()
+            liveObservations.start(controller: self)
         } catch {
+            guard sessionID == attempt else { return }
+            if Task.isCancelled { await disconnect(); return }
+            invalidateConfirmations()
             connection = .failed(reason: error.localizedDescription)
         }
     }
-
     /// Convenience entry point for Demo Mode that needs no host.
     func connectDemo() async {
         await connect(host: "demo")
     }
-
     /// Disconnects and tears down the keep-alive and listener.
     func disconnect() async {
-        cancelTasks()
-        await transport.stop()
-        host = nil
+        invalidateConfirmations()
         connection = .disconnected
+        cancelTasks()
+        host = nil
+        await transport.stop()
     }
-
     // MARK: - Control
 
     /// Sets a fader by decibels, converted to the WING fader law.
@@ -180,9 +199,7 @@ final class WingController {
         return String(trimmed.prefix(maxLength))
     }
 
-    /// Re-queries a node so its cached value reflects the console (for example,
-    /// after a change was made in the WING Co-Pilot app). The reply arrives on
-    /// the incoming stream.
+    /// Re-queries a node; its reply arrives on the incoming stream.
     func refresh(_ address: String) async {
         try? await transport.send(address)
     }
@@ -190,18 +207,19 @@ final class WingController {
     /// Invalidates prior confirmations and re-queries only the supplied nodes.
     /// Callers can then distinguish fresh transport replies from optimistic SETs.
     func refreshForVerification(_ addresses: [String]) async {
-        for address in addresses {
-            confirmedValues[address] = nil
-        }
+        invalidateConfirmedValues(addresses)
         await query(addresses)
     }
 
-    /// Re-queries every relevant node so the cache reflects the console's
-    /// current state — for example after connecting, or as a manual "Resync
-    /// from console" action. Replies arrive on the incoming stream and populate
-    /// `values`. Queries are paced in small batches to avoid flooding the
-    /// console, and the loop honours cancellation so a disconnect mid-refresh
-    /// tears down cleanly.
+    func invalidateConfirmedValues(_ addresses: [String]) {
+        for address in addresses {
+            confirmedValues[address] = nil
+            confirmedReceivedAt[address] = nil
+        }
+    }
+
+    /// Re-queries every relevant node in paced batches. Incoming replies update
+    /// the cache; cancellation stops further GETs on disconnect.
     func refreshAll() async {
         let addresses = WingAddress.allQueryAddresses()
         var batch: [String] = []
@@ -382,8 +400,6 @@ final class WingController {
         }
     }
 
-    // MARK: - Private
-
     @discardableResult
     private func set(_ address: String, _ value: WingValue) async -> Bool {
         transportWriteCount += 1
@@ -396,20 +412,59 @@ final class WingController {
         }
     }
 
+    /// Closed channel/main fader-or-mute surface, never exposed to model tools.
+    func setConfirmedMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool,
+                                session: UUID, authorization: WingMixerWriteAuthorization) async -> Bool {
+        guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session,
+              Self.isValidMixerValue(node, value: value, muted: muted),
+              let transportSessionID else { return false }
+        transportWriteCount += 1
+        do {
+            try await transport.sendMixerValue(node, value: value, muted: muted,
+                                               sessionID: transportSessionID, authorization: authorization)
+            if sessionID == session {
+                let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
+                values[address] = value
+            }
+            return true
+        } catch { return false }
+    }
+
     private func startListening() {
         let incoming = transport.incoming
+        let session = sessionID
         listenTask = Task { [weak self] in
             for await message in incoming {
-                guard let self else { break }
+                guard let self, !Task.isCancelled, self.sessionID == session else { break }
                 ingest(message)
             }
         }
     }
-
     private func ingest(_ message: WingIncoming) {
-        guard let value = message.effectiveValue else { return }
+        guard connection.isConnected, sessionID != nil,
+              message.receivedAt >= sessionStartedAt,
+              message.receivedAt <= Date(),
+              isDemo || (transportSessionID != nil && message.transportSessionID == transportSessionID
+                  && peerHosts.contains(message.host) && message.port == port),
+              let value = message.effectiveValue else { return }
+        mixerBaselineAuthorizations.record(message.address, value: value)
+        let previousName = liveObservations.values[message.address] ?? confirmedValues[message.address]
+        if message.address.hasSuffix("/name"), previousName != value {
+            confirmedNameRevision += 1
+        }
         values[message.address] = value
+        liveObservations.record(message, value: value)
         confirmedValues[message.address] = value
+        confirmedReceivedAt[message.address] = message.receivedAt
+    }
+
+    private func invalidateConfirmations() {
+        sessionID = nil
+        transportSessionID = nil
+        peerHosts = []
+        confirmedValues = [:]
+        confirmedReceivedAt = [:]
+        liveObservations.reset()
     }
 
     private func startKeepAlive() {
@@ -434,6 +489,7 @@ final class WingController {
     }
 
     private func cancelTasks() {
+        liveObservations.stop()
         keepAliveTask?.cancel()
         keepAliveTask = nil
         listenTask?.cancel()

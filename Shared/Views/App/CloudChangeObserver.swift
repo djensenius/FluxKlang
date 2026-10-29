@@ -5,6 +5,7 @@ final class CloudChangeObserver {
     private var token: (any NSObjectProtocol)?
 
     init(onChange: @escaping @Sendable () -> Void) {
+        guard !AppPersistence.isTesting else { return }
         let store = NSUbiquitousKeyValueStore.default
         token = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,

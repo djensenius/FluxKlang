@@ -110,9 +110,10 @@ extension TutorialTopic {
             TutorialConcept(
                 title: "Assistant and Siri create drafts",
                 detail: """
-                The assistant and Siri can create a pending Studio draft, never direct console changes. Review \
-                validation and cable instructions before accepting. Accept adds semantic Studio routing only; \
-                Listen is the separate action that can write compiled routing to a connected WING.
+                Assistant and Siri routing requests create a pending Studio draft. Review validation and cable \
+                instructions before accepting. Accept adds semantic routing only; Listen applies it to the WING. \
+                Explicit chat mixer commands are separate: specify a channel or main and a dB amount, or mute \
+                a target. They use fresh console readings and report whether the result was confirmed.
                 """,
                 systemImage: "checkmark.shield",
                 tint: .green
@@ -120,9 +121,10 @@ extension TutorialTopic {
             TutorialConcept(
                 title: "On-device and private",
                 detail: """
-                Generation and push-to-talk transcription run on device when available, with a grounded fallback \
-                when Foundation Models are unavailable. Audio is not retained. Visible conversation text may sync \
-                through your private iCloud database.
+                Apple Intelligence generation runs on device when available, with a grounded fallback when \
+                Foundation Models are unavailable. Use keyboard dictation to speak a message; FluxKlang does not \
+                capture microphone audio. Visible conversation text may sync through your private iCloud database. \
+                If you select GitHub Copilot, prompts and required tool results are sent to GitHub.
                 """,
                 systemImage: "hand.raised.fill",
                 tint: .purple

@@ -50,6 +50,7 @@ struct AssistantToolContext: Sendable {
     var endpoints: [StudioEndpoint]
     var effects: [Effect]
     var globalConnections: GlobalStudioConnections
+    var liveWing: AssistantLiveWingContext = .unavailable
 }
 
 enum AssistantNavigationTarget: Hashable, Sendable {
@@ -144,6 +145,7 @@ enum AssistantTool: Hashable, Sendable {
     case describeCurrentScreen
     case inspectConnectionState
     case listEquipment
+    case inspectLiveWing
     case listHomeConnections
     case listEffectiveConnections
     case listActiveMoves
@@ -162,6 +164,7 @@ enum AssistantGrounding: String, Hashable, Sendable {
     case currentScreen
     case connectionState
     case equipment
+    case liveWing
     case homeConnections
     case effectiveConnections
     case activeMoves
@@ -178,6 +181,7 @@ enum AssistantToolResult: Sendable {
     case currentScreen(AssistantScreen)
     case connectionState(AssistantConnectionState)
     case equipment([Equipment])
+    case liveWing(AssistantLiveWingContext)
     case homeConnections(StudioHomeConnections)
     case effectiveConnections(StudioHomeConnections)
     case activeMoves([TemporaryDeviceMove])
@@ -194,6 +198,7 @@ enum AssistantToolResult: Sendable {
         switch self {
         case .currentScreen: .currentScreen
         case .connectionState: .connectionState
+        case .liveWing: .liveWing
         case .equipment: .equipment
         case .homeConnections: .homeConnections
         case .effectiveConnections: .effectiveConnections
@@ -252,7 +257,9 @@ enum AssistantFallbackResponder {
         case .connectionState(let state):
             "Connection: \(state.status.rawValue)\(state.isDemo ? " (Demo Mode)" : "")."
         case .equipment(let equipment):
-            namedList("Equipment", names: equipment.map(\.name))
+            namedList("Saved Equipment (not live discovery)", names: equipment.map(\.name))
+        case .liveWing(let live):
+            live.summary
         case .homeConnections(let connections):
             "Home connections: \(connections.inputs.count) inputs and \(connections.outputs.count) outputs."
         case .effectiveConnections(let connections):
@@ -322,6 +329,8 @@ final class AssistantCoordinator {
             return .currentScreen(context.currentScreen)
         case .inspectConnectionState:
             return .connectionState(context.connection)
+        case .inspectLiveWing:
+            return .liveWing(context.liveWing)
         case .listEquipment:
             return .equipment(context.equipment)
         case .listHomeConnections:
@@ -341,7 +350,7 @@ final class AssistantCoordinator {
         case .inspectStudioGraph:
             return .studioGraph(context.graph)
         case .buildStudioDraft(let request):
-            let draft = StudioWiringAdvisor.build(
+            var draft = StudioWiringAdvisor.build(
                 request: request,
                 equipment: context.equipment,
                 effects: context.effects,
@@ -349,12 +358,13 @@ final class AssistantCoordinator {
                 currentGraph: context.graph,
                 environmentID: context.activeEnvironmentID
             )
+            draft.liveReferences = request.liveReferences
             pendingStudioDraft = draft
             await draftStore.save(draft)
             return .pendingDraft(draft)
         case .validatePendingStudioDraft:
             guard let draft = pendingStudioDraft else { return .pendingDraft(nil) }
-            let refreshed = StudioWiringAdvisor.revalidate(
+            var refreshed = StudioWiringAdvisor.revalidate(
                 draft,
                 equipment: context.equipment,
                 effects: context.effects,
@@ -362,6 +372,14 @@ final class AssistantCoordinator {
                 currentGraph: context.graph,
                 currentEnvironmentID: context.activeEnvironmentID
             )
+            refreshed.liveReferences = draft.liveReferences
+            if !(draft.liveReferences ?? []).allSatisfy({ $0.isValid(in: context.liveWing) }) {
+                refreshed.validation.append(StudioDraftValidationIssue(
+                    code: "live-alias-changed", severity: .error,
+                    message: "The WING session, label or saved input link used by this draft changed or is stale. "
+                        + "Relink and create a new draft before accepting."
+                ))
+            }
             pendingStudioDraft = refreshed
             await draftStore.save(refreshed)
             return .pendingDraft(refreshed)

@@ -10,6 +10,7 @@
 
 import Foundation
 import SwiftOSC
+import Darwin
 
 /// An OSC message received from the WING.
 struct WingIncoming: Sendable {
@@ -17,6 +18,8 @@ struct WingIncoming: Sendable {
     let values: [WingValue]
     let host: String
     let port: UInt16
+    let transportSessionID: UUID?
+    let receivedAt: Date
 
     /// The semantic value represented by a WING reply.
     ///
@@ -26,15 +29,20 @@ struct WingIncoming: Sendable {
         WingReplyResolver.resolve(address: address, values: values)
     }
 
-    init(address: String, values: [WingValue], host: String, port: UInt16) {
+    init(address: String, values: [WingValue], host: String, port: UInt16,
+         transportSessionID: UUID? = nil, receivedAt: Date = Date()) {
         self.address = address
         self.values = values
         self.host = host
         self.port = port
+        self.transportSessionID = transportSessionID
+        self.receivedAt = receivedAt
     }
 
-    init(address: String, value: WingValue?, host: String, port: UInt16) {
-        self.init(address: address, values: value.map { [$0] } ?? [], host: host, port: port)
+    init(address: String, value: WingValue?, host: String, port: UInt16,
+         transportSessionID: UUID? = nil, receivedAt: Date = Date()) {
+        self.init(address: address, values: value.map { [$0] } ?? [], host: host, port: port,
+                  transportSessionID: transportSessionID, receivedAt: receivedAt)
     }
 }
 
@@ -71,6 +79,8 @@ enum WingReplyResolver {
 
 enum WingTransportError: Error, Sendable {
     case notStarted
+    case notAuthorized
+    case unresolvedPeer
 }
 
 /// Actor that owns the UDP socket and serialises all access to it.
@@ -83,6 +93,8 @@ actor WingTransport: WingTransporting {
 
     private let continuation: AsyncStream<WingIncoming>.Continuation
     private var socket: OSCUDPSocket?
+    private(set) var sessionID: UUID?
+    private(set) var peerHosts: Set<String> = []
 
     init(remotePort: UInt16 = WingNetwork.defaultPort) {
         self.remotePort = remotePort
@@ -98,6 +110,10 @@ actor WingTransport: WingTransporting {
     func start(remoteHost: String, localPort: UInt16? = nil, broadcast: Bool = false) throws {
         stopSocket()
         let continuation = continuation
+        let sessionID = UUID()
+        let peers = WingPeerIdentity.ipv4Addresses(for: remoteHost)
+        guard broadcast || !peers.isEmpty else { throw WingTransportError.unresolvedPeer }
+        let expectedPort = remotePort
         let socket = OSCUDPSocket(
             localPort: localPort,
             remoteHost: remoteHost,
@@ -107,18 +123,22 @@ actor WingTransport: WingTransporting {
             isIPv6Enabled: false,
             queue: nil,
             receiveHandler: .messages { message, _, host, port in
+                guard broadcast || (peers.contains(host) && port == expectedPort) else { return }
                 continuation.yield(
                     WingIncoming(
                         address: message.addressPattern.stringValue,
                         values: message.values.compactMap(WingValue.init(osc:)),
                         host: host,
-                        port: port
+                        port: port,
+                        transportSessionID: sessionID
                     )
                 )
             }
         )
         try socket.start()
         self.socket = socket
+        self.sessionID = sessionID
+        self.peerHosts = peers
     }
 
     func stop() {
@@ -139,8 +159,50 @@ actor WingTransport: WingTransporting {
         try socket.send(.message(OSCMessage(address, values: values)), to: host, port: port)
     }
 
+    func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
+                        authorization: WingMixerWriteAuthorization) throws {
+        try authorization.consume {
+            // No suspension between authorization/session checks and the socket write.
+            guard self.sessionID == sessionID,
+                  WingController.isValidMixerValue(node, value: value, muted: muted) else {
+                throw WingTransportError.notAuthorized
+            }
+            let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
+            try send(address, value.encodedForWing(address: address))
+        }
+    }
+
     private func stopSocket() {
         socket?.stop()
         socket = nil
+        sessionID = nil
+        peerHosts = []
+    }
+}
+
+/// WING transport is IPv4-only. Resolve hostnames before accepting replies;
+/// never accept the first arbitrary sender as the console's identity.
+enum WingPeerIdentity {
+    static func ipv4Addresses(for host: String) -> Set<String> {
+        guard !host.isEmpty, !host.unicodeScalars.contains(where: {
+            CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0)
+        }) else { return [] }
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0 else { return [] }
+        defer { freeaddrinfo(result) }
+        var addresses = Set<String>()
+        var cursor = result
+        while let entry = cursor {
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(entry.pointee.ai_addr, entry.pointee.ai_addrlen,
+                           &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                if let address = String(bytes: bytes, encoding: .utf8) { addresses.insert(address) }
+            }
+            cursor = entry.pointee.ai_next
+        }
+        return addresses
     }
 }

@@ -8,19 +8,12 @@ protocol PendingStudioPatchPersisting: Sendable {
 actor PendingStudioPatchStore: PendingStudioPatchPersisting {
     private let fileURL: URL
 
-    init(fileURL: URL? = nil) {
+    init(fileURL: URL? = nil, directory: URL = AppPersistence.directory) {
         if let fileURL {
             self.fileURL = fileURL
             return
         }
-        let base = (try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL.temporaryDirectory
-        self.fileURL = base
-            .appendingPathComponent("FluxKlang", isDirectory: true)
+        self.fileURL = directory
             .appendingPathComponent("assistant-pending-studio-draft.json")
     }
 

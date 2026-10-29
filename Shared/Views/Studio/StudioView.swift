@@ -1,21 +1,12 @@
-//
-//  StudioView.swift
-//  FluxKlang
-//
-//  The first user-facing slice of the redesigned studio workflow. It exposes the
-//  semantic model — gear, custom controls/stems, Space and Final Mix —
-//  without asking the user to think in WING buses/channels.
-//
-
 import CoreGraphics
 import SwiftUI
 
 struct StudioView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var isApplying = false
     @State private var applyVerification: WingApplyVerification?
-
     private var store: EnvironmentStore { appModel.environments }
     private var graph: StudioGraph { store.activeStudioGraph }
     private var endpoints: [StudioEndpoint] { store.activeStudioEndpoints }
@@ -28,7 +19,6 @@ struct StudioView: View {
             + resourcePlan.issues.map(StudioIssueText.resource)
             + compiled.issues.map(StudioIssueText.compile)
     }
-
     var body: some View {
         content
             .navigationTitle("Studio")
@@ -41,10 +31,7 @@ struct StudioView: View {
                         discard: discardPendingDraft
                     )
                     .task {
-                        _ = await appModel.assistant.perform(
-                            .validatePendingStudioDraft,
-                            context: appModel.assistantToolContext()
-                        )
+                        await appModel.refreshPendingAssistantDraftForReview()
                     }
                 }
             }
@@ -171,18 +158,8 @@ struct StudioView: View {
             onMoveNode: moveNode,
             viewportHeight: viewportHeight
         )
+        .id(store.active?.id)
     }
-
-    private var canvasActions: some View {
-        HStack {
-            addGearMenu
-            newGearButton
-            addControlMenu
-            StudioConnectNodesMenu(graph: graph, title: nodeTitle, connect: connect)
-        }
-        .buttonStyle(.bordered)
-    }
-
     private var addGearMenu: some View {
         Menu {
             ForEach(appModel.equipment.items) { item in
@@ -195,23 +172,24 @@ struct StudioView: View {
                 }
             }
         } label: {
-            Label("Add Gear", systemImage: "square.stack.3d.up")
+            actionLabel("Add Gear", systemImage: "square.stack.3d.up")
         }
+        .accessibilityIdentifier("studio.addGear")
     }
-
     private var newGearButton: some View {
         Button { addBlankGear() } label: {
-            Label("New Gear", systemImage: "plus.square")
+            actionLabel("New Gear", systemImage: "plus.square")
         }
+        .accessibilityIdentifier("studio.newGear")
     }
-
     private var addControlMenu: some View {
         Menu {
             Button("Mix Control") { addEndpoint(.finalMix) }
             Button("Space Control") { addEndpoint(.space) }
         } label: {
-            Label("Add Control", systemImage: "slider.vertical.3")
+            actionLabel("Add Control", systemImage: "slider.vertical.3")
         }
+        .accessibilityIdentifier("studio.addControl")
     }
 
     private var endpointsSection: some View {
@@ -325,13 +303,12 @@ struct StudioView: View {
     private func allocation(for endpoint: StudioEndpoint) -> StudioEndpointAllocation? {
         resourcePlan.allocations.first { $0.endpoint.id == endpoint.id }
     }
-
     private func seedStarterSketch() {
         guard let first = appModel.equipment.items.first else { return }
         let instrument = StudioNode(
             kind: .instrument(first.id),
             title: first.name,
-            position: CGPoint(x: 150, y: 170)
+            position: StudioCanvasGeometry.gearPosition(at: 0)
         )
         let dry = StudioEndpoint(name: "\(first.name) Dry", destination: .finalMix, colorName: "blue")
         let space = StudioEndpoint(
@@ -340,14 +317,15 @@ struct StudioView: View {
             colorName: "purple",
             placement: VoicePlacement()
         )
-        let dryNode = StudioNode(kind: .endpoint(dry.id), title: dry.name, position: CGPoint(x: 700, y: 130))
-        let spaceNode = StudioNode(kind: .endpoint(space.id), title: space.name, position: CGPoint(x: 700, y: 250))
+        let dryPosition = StudioCanvasGeometry.controlPosition(at: 0)
+        let spacePosition = StudioCanvasGeometry.controlPosition(at: 1)
+        let dryNode = StudioNode(kind: .endpoint(dry.id), title: dry.name, position: dryPosition)
+        let spaceNode = StudioNode(kind: .endpoint(space.id), title: space.name, position: spacePosition)
         var sketch = StudioGraph(nodes: [instrument, dryNode, spaceNode])
         sketch.connect(from: output(instrument), to: input(dryNode))
         sketch.connect(from: output(instrument), to: input(spaceNode))
         store.replaceStudio(graph: sketch, endpoints: [dry, space])
     }
-
     private func addEndpoint(_ destination: StudioEndpointDestination) {
         let number = endpoints.filter { $0.destination == destination }.count + 1
         let name = destination == .space ? "Space Control \(number)" : "Mix Control \(number)"
@@ -358,69 +336,60 @@ struct StudioView: View {
         )
         store.addStudioEndpointNode(
             endpoint,
-            position: CGPoint(x: 700, y: 120 + CGFloat(endpoints.count) * 100)
+            position: nextPosition(in: .controls)
         )
     }
-
     private func addGear(_ equipment: Equipment) {
         guard !graph.nodes.contains(where: { $0.kind == .instrument(equipment.id) }) else { return }
         store.addStudioNode(StudioNode(
             kind: .instrument(equipment.id),
             title: equipment.name,
-            position: nextGearPosition()
+            position: nextPosition(in: .gear)
         ))
     }
-
     private func addGear(_ effect: Effect) {
         guard !graph.nodes.contains(where: { $0.kind == .effect(effect.id) }) else { return }
         store.addStudioNode(StudioNode(
             kind: .effect(effect.id),
             title: effect.name,
-            position: nextGearPosition()
+            position: nextPosition(in: .gear)
         ))
     }
-
     private func addBlankGear() {
         let effect = Effect(name: "Gear \(effects.count + 1)")
         store.add(effect)
-        store.addStudioNode(StudioNode(kind: .effect(effect.id), title: effect.name, position: nextGearPosition()))
+        store.addStudioNode(StudioNode(
+            kind: .effect(effect.id), title: effect.name, position: nextPosition(in: .gear)
+        ))
     }
-
     private func connect(from source: StudioNode.ID, to destination: StudioNode.ID) {
         store.connectStudio(
             from: StudioPortRef(nodeID: source, side: .output, port: 0),
             to: StudioPortRef(nodeID: destination, side: .input, port: 0)
         )
     }
-
     private func removeEdge(_ id: StudioEdge.ID) {
         store.removeStudioEdge(id)
     }
-
     private func removeNode(_ id: StudioNode.ID) {
         store.removeStudioNode(id)
     }
-
     private func moveNode(_ id: StudioNode.ID, to position: CGPoint) {
         store.moveStudioNode(id, to: position)
     }
-
-    private func nextGearPosition() -> CGPoint {
-        let gearCount = graph.nodes.filter { node in
-            if case .endpoint = node.kind { return false }
-            return true
-        }.count
-        return CGPoint(x: 150 + CGFloat(gearCount % 2) * 230, y: 150 + CGFloat(gearCount / 2) * 110)
+    private func nextPosition(in lane: StudioCanvasGeometry.Lane) -> CGPoint {
+        let placements = graph.nodes.map { node in
+            let nodeLane: StudioCanvasGeometry.Lane = if case .endpoint = node.kind { .controls } else { .gear }
+            return StudioCanvasGeometry.Placement(position: node.position, lane: nodeLane)
+        }
+        return StudioCanvasGeometry.firstFreePosition(in: lane, avoiding: placements)
     }
-
     private func output(_ node: StudioNode) -> StudioPortRef {
         StudioPortRef(nodeID: node.id, side: .output, port: 0)
     }
-
     private func input(_ node: StudioNode) -> StudioPortRef {
         StudioPortRef(nodeID: node.id, side: .input, port: 0)
     }
-
     private func nodeTitle(_ node: StudioNode) -> String {
         switch node.kind {
         case .instrument(let id):
@@ -439,10 +408,45 @@ struct StudioView: View {
             isApplying = false
         }
     }
-
 }
 
 private extension StudioView {
+    @ViewBuilder
+    func actionLabel(_ title: String, systemImage: String) -> some View {
+        let label = Label(title, systemImage: systemImage)
+        #if os(macOS)
+        label
+        #else
+        label.fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        #endif
+    }
+    @ViewBuilder
+    var canvasActions: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            canvasActionGrid.labelStyle(.titleOnly)
+        } else {
+            canvasActionGrid
+        }
+    }
+
+    var canvasActionGrid: some View {
+        LazyVGrid(columns: actionColumns, alignment: .leading, spacing: 12) {
+            addGearMenu
+            newGearButton
+            addControlMenu
+            StudioConnectNodesMenu(graph: graph, title: nodeTitle, connect: connect)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
+        .buttonStyle(.bordered).controlSize(.large)
+        .accessibilityIdentifier("studio.actions")
+    }
+    var actionColumns: [GridItem] {
+        if dynamicTypeSize.isAccessibilitySize {
+            return [GridItem(.flexible(), alignment: .leading)]
+        }
+        return [GridItem(.adaptive(minimum: 240), alignment: .leading)]
+    }
     @ViewBuilder
     var pendingDraftSection: some View {
         if let draft = appModel.assistant.pendingStudioDraft {

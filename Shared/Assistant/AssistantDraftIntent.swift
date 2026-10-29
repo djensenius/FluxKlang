@@ -67,6 +67,10 @@ enum AssistantDraftIntent {
         }
     }
 
+    static func excludedEquipmentIDs(in question: String, equipment: [Equipment]) -> Set<Equipment.ID> {
+        Set(excludedIDsMentioned(in: question, candidates: equipment.map { ($0.id, $0.name) }))
+    }
+
     static let missingSource = """
         No draft was created because I could not identify a requested source instrument in your message. \
         Name the source gear you want in the new path.
@@ -76,22 +80,18 @@ enum AssistantDraftIntent {
         let current = request.question.lowercased()
         let isRetry = current.contains("try again") || current.contains("connected now")
         guard hasRoutingIntent(current) || isRetry else { return nil }
-        let recentUserText = request.recentMessages.suffix(8)
-            .filter { $0.role == .user }
-            .map(\.text)
-            .joined(separator: "\n")
-        let groundingText = isRetry ? recentUserText + "\n" + request.question : request.question
+        guard let groundingText = routingQuestion(from: request) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
-        let sourceIDs = mentionedEquipmentIDs(
-            in: groundingText,
-            equipment: request.context.equipment,
-            excluding: effectEquipmentIDs
+        let resolution = AssistantSourceResolver.resolve(
+            groundingText, context: request.context, excluding: effectEquipmentIDs
         )
-        guard !sourceIDs.isEmpty else { return nil }
+        let sourceIDs = resolution.equipmentIDs
+        guard resolution.clarification == nil, !sourceIDs.isEmpty else { return nil }
         let effectIDs = mentionedEffectIDs(in: groundingText, effects: request.context.effects)
         let scopedRoutes = sourceScopedRoutes(
             in: groundingText,
-            equipment: request.context.equipment,
+            context: request.context,
+            allowedSources: resolution,
             effects: request.context.effects,
             outputs: request.context.effectiveConnections.outputs
         )
@@ -107,7 +107,7 @@ enum AssistantDraftIntent {
             outputs: request.context.effectiveConnections.outputs
         )
         guard let primary = routes.first else { return nil }
-        return StudioWiringRequest(
+        var result = StudioWiringRequest(
             sourceInstrumentIDs: primary.sourceInstrumentIDs,
             effectChainIDs: primary.effectChainIDs,
             destination: primary.destination,
@@ -116,6 +116,8 @@ enum AssistantDraftIntent {
             additionalRoutes: Array(routes.dropFirst()),
             applicationMode: requestsReplacement(groundingText) ? .replace : .append
         )
+        result.liveReferences = resolution.references
+        return result
     }
 
     static func clarification(from request: AssistantGenerationRequest) -> String? {
@@ -123,11 +125,11 @@ enum AssistantDraftIntent {
         let normalized = question.lowercased()
         guard hasRoutingIntent(normalized), !isInformationalQuestion(normalized) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
-        let sources = mentionedEquipmentIDs(
-            in: question,
-            equipment: request.context.equipment,
-            excluding: effectEquipmentIDs
+        let resolution = AssistantSourceResolver.resolve(
+            question, context: request.context, excluding: effectEquipmentIDs
         )
+        if let clarification = resolution.clarification { return clarification }
+        let sources = resolution.equipmentIDs
         if sources.isEmpty {
             return "Which source instrument should I route?"
         }
@@ -160,6 +162,8 @@ enum AssistantDraftIntent {
     static func requestsInventory(_ question: String) -> Bool {
         let normalized = question.lowercased()
         return [
+            "what is connected", "what equipment is connected", "which instruments are connected",
+            "live labels", "wing labels", "channel labels", "input labels",
             "list gear",
             "list equipment",
             "list instruments",
@@ -177,6 +181,77 @@ enum AssistantDraftIntent {
         return ["raw", "dry", "unprocessed", "clean signal"].contains {
             normalized.contains($0)
         }
+    }
+
+    static func requestsSourceDraft(_ question: String) -> Bool {
+        let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if requestsDraftAmendment(question) { return true }
+        if normalized.range(of: #"^(?:help me (?:to )?|how (?:do i|can i|should i|to) )"#
+            + #"(?:route|connect|wire|patch)\b"#, options: .regularExpression) != nil { return true }
+        guard !["what ", "why ", "how ", "help ", "explain ", "tell me ", "list ", "show "].contains(where: {
+            normalized.hasPrefix($0)
+        }) else { return false }
+        return hasRoutingIntent(normalized) || requestsDraftAmendment(question)
+    }
+
+}
+
+extension AssistantDraftIntent {
+    /// Retry one identifiable routing request, not the conversation's opening
+    /// inventory/help intent. Multiple historical routes require clarification.
+    static func routingQuestion(from request: AssistantGenerationRequest) -> String? {
+        guard !requestsInventory(request.question) else { return request.question }
+        func isRetry(_ text: String) -> Bool {
+            let text = text.lowercased()
+            return text.contains("try again") || text.contains("connected now")
+        }
+        guard isRetry(request.question) else { return request.question }
+        let history = request.recentMessages.suffix(8).filter { $0.role == .user }.map(\.text)
+        let candidates = history.indices.filter {
+            !isRetry(history[$0]) && !requestsDraftAmendment(history[$0])
+                && requestsSourceDraft(history[$0]) && hasRoutingIntent(history[$0].lowercased())
+        }
+        guard candidates.count == 1, let index = candidates.first else { return nil }
+        let amendments = (Array(history.dropFirst(index + 1)) + [request.question]).filter {
+            requestsDraftAmendment($0) || !exclusionClauses(in: $0).isEmpty
+        }
+        return ([history[index]] + amendments).joined(separator: "\n")
+    }
+
+    /// Only source positions participate in gear/alias lookup. Effect and
+    /// destination scribbles are metadata, not extra source instruments.
+    static func sourceMentionText(_ question: String) -> String {
+        let normalized = question.lowercased().replacingOccurrences(
+            of: #"^\s*(?:help me (?:to )?|how (?:do i|can i|should i|to) )(?=(?:route|connect|wire|patch)\b)"#,
+            with: "", options: .regularExpression)
+        let clauses = normalized.replacingOccurrences(of: #"\bthen\b|[,;\n]"#,
+            with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+and\s+(?!(?:to|through|via|into|towards|and)\b)"#,
+                                  with: "\n& ", options: .regularExpression)
+            .components(separatedBy: "\n")
+        var continuesSources = true
+        var completedDestination = false
+        return clauses.compactMap { text -> String? in
+            let text = text.trimmingCharacters(in: .whitespaces)
+            let coordinated = text.hasPrefix("& ")
+            let clause = coordinated ? String(text.dropFirst(2)) : text
+            let from = clause.range(of: " from ")
+            let hasNewSource = continuesSources || from != nil || clause.contains(" through ")
+                || (coordinated && completedDestination && clause.range(of: #"\s+(?:to|via|into|towards)\s+"#,
+                                               options: .regularExpression) != nil)
+                || clause.range(of: #"^\s*(?:route|connect|wire|patch|add|include)\b"#,
+                                options: .regularExpression) != nil
+            let source = from.map { String(clause[$0.upperBound...]) } ?? clause.replacingOccurrences(
+                of: #"^\s*(?:route|connect|wire|patch|add|include|use)\s+(?!(?:to|through|via|into|towards)\b)"#,
+                with: "", options: .regularExpression)
+            let boundary = source.range(of: #"\s+(?:through|via|to|into|towards)\s+"#,
+                                        options: .regularExpression)
+            completedDestination = completedDestination
+                || clause.range(of: #"\s+(?:to|towards)\s+"#, options: .regularExpression) != nil
+            continuesSources = hasNewSource && boundary == nil
+            guard hasNewSource else { return nil }
+            return boundary.map { String(source[..<$0.lowerBound]) } ?? source
+        }.joined(separator: "\n")
     }
 
     private static func hasRoutingIntent(_ normalized: String) -> Bool {
@@ -247,7 +322,8 @@ enum AssistantDraftIntent {
 
     private static func sourceScopedRoutes(
         in question: String,
-        equipment: [Equipment],
+        context: AssistantToolContext,
+        allowedSources: AssistantSourceResolver.Resolution,
         effects: [Effect],
         outputs: [StudioOutputConnection]
     ) -> [StudioWiringRoute]? {
@@ -257,21 +333,26 @@ enum AssistantDraftIntent {
         let clauses = question.lowercased()
             .replacingOccurrences(of: ",", with: " and ")
             .components(separatedBy: " and ")
-        let routes = clauses.compactMap { clause -> StudioWiringRoute? in
-            let sources = mentionedEquipmentIDs(
-                in: clause,
-                equipment: equipment,
-                excluding: effectEquipmentIDs
+        var routes: [StudioWiringRoute] = []
+        for clause in clauses {
+            let resolution = AssistantSourceResolver.resolve(
+                clause, context: context, excluding: effectEquipmentIDs
             )
+            let sources = resolution.equipmentIDs
             let clauseEffects = mentionedEffectIDs(in: clause, effects: effects)
-            guard !sources.isEmpty, !clauseEffects.isEmpty else { return nil }
-            return StudioWiringRoute(
+            guard !sources.isEmpty, !clauseEffects.isEmpty else { continue }
+            // A branch must not undo whole-question exclusions or lose the
+            // live identity guard established by the complete request.
+            guard resolution.clarification == nil,
+                  Set(sources).isSubset(of: Set(allowedSources.equipmentIDs)),
+                  Set(resolution.references).isSubset(of: Set(allowedSources.references)) else { return nil }
+            routes.append(StudioWiringRoute(
                 sourceInstrumentIDs: sources,
                 effectChainIDs: clauseEffects,
                 destination: destinations[0].kind,
                 includesDrySignal: includesDrySignal(clause),
                 outputConnectors: destinations[0].outputConnectors
-            )
+            ))
         }
         let distinctSources = Set(routes.flatMap(\.sourceInstrumentIDs))
         return routes.count > 1 && distinctSources.count > 1 ? routes : nil
@@ -368,9 +449,11 @@ enum AssistantDraftIntent {
         }
         return candidates.indices.compactMap { index -> (ID, Int)? in
             let nameTokens = candidateTokens[index]
-            let fullNameIndex = firstSubsequenceIndex(of: nameTokens, in: questionTokens)
+            let fullNameIndex = candidateTokens.filter { $0 == nameTokens }.count == 1
+                ? firstSubsequenceIndex(of: nameTokens, in: questionTokens) : nil
             let prefix = Array(nameTokens.prefix(2))
-            let prefixIndex = firstSubsequenceIndex(of: prefix, in: questionTokens)
+            let prefixIndex = candidateTokens.filter { Array($0.prefix(2)) == prefix }.count == 1
+                ? firstSubsequenceIndex(of: prefix, in: questionTokens) : nil
             let uniqueTokenIndex = nameTokens.compactMap { token -> Int? in
                 guard token.count >= 3, tokenCounts[token] == 1 else { return nil }
                 return questionTokens.firstIndex(of: token)
@@ -394,7 +477,11 @@ enum AssistantDraftIntent {
         in question: String,
         candidates: [(id: ID, name: String)]
     ) -> [ID] {
-        let normalized = question.lowercased()
+        exclusionClauses(in: question).flatMap { mentionedIDs(in: $0, candidates: candidates) }
+    }
+
+    static func exclusionClauses(in question: String) -> [String] {
+        let normalized = question.lowercased().replacingOccurrences(of: "’", with: "'")
         let markers = [
             "don't use",
             "do not use",
@@ -404,9 +491,9 @@ enum AssistantDraftIntent {
             "remove",
             "get rid"
         ]
-        return markers.flatMap { marker -> [ID] in
-            guard let range = normalized.range(of: marker) else { return [] }
-            return mentionedIDs(in: String(normalized[range.upperBound...]), candidates: candidates)
+        return markers.compactMap { marker in
+            guard let range = normalized.range(of: marker) else { return nil }
+            return String(normalized[range.upperBound...])
         }
     }
 
@@ -426,19 +513,25 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        guard let question = AssistantDraftIntent.routingQuestion(from: request) else {
+            return textStream("Which routing request should I retry? Restate the sources, effects and destination.")
+        }
+        let request = AssistantGenerationRequest(
+            question: question, recentMessages: request.recentMessages,
+            summary: request.summary, context: request.context)
+        if AssistantDraftIntent.requestsInventory(request.question) {
+            return inventoryStream(context: request.context)
+        }
+        let resolution = AssistantSourceResolver.resolve(request.question, context: request.context)
+        if let clarification = resolution.clarification { return textStream(clarification) }
         if let wiringRequest = AssistantDraftIntent.wiringRequest(from: request) {
             return draftStream(wiringRequest, context: request.context)
         }
         if let clarification = AssistantDraftIntent.clarification(from: request) {
             return textStream(clarification)
         }
-        if AssistantDraftIntent.requestsInventory(request.question) {
-            return inventoryStream(context: request.context)
-        }
-        let mentionedSources = AssistantDraftIntent.mentionedEquipmentIDs(
-            in: request.question,
-            equipment: request.context.equipment
-        )
+
+        let mentionedSources = resolution.equipmentIDs
         guard AssistantDraftIntent.requestsDraftAmendment(request.question),
               !mentionedSources.isEmpty else {
             return downstream.stream(request)
@@ -459,7 +552,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
                 let updatedSources = orderedUnique(
                     pending.request.sourceInstrumentIDs + mentionedSources
                 )
-                let wiringRequest = StudioWiringRequest(
+                var wiringRequest = StudioWiringRequest(
                     sourceInstrumentIDs: updatedSources,
                     effectChainIDs: pending.request.effectChainIDs,
                     destination: pending.request.destination,
@@ -467,6 +560,7 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
                     additionalRoutes: pending.request.additionalRoutes,
                     applicationMode: pending.applicationMode
                 )
+                wiringRequest.liveReferences = (pending.liveReferences ?? []) + resolution.references
                 let result = await coordinator.perform(
                     .buildStudioDraft(wiringRequest),
                     context: request.context
@@ -530,8 +624,9 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
         let outputText = outputs.isEmpty ? "No configured outputs." : outputs.joined(separator: "\n")
         return AsyncThrowingStream { continuation in
             continuation.yield(.text(
-                "Available equipment:\n\(available)\n\nConfigured source instruments:\n\(sourceText)"
-                    + "\n\nConfigured outputs:\n\(outputText)"
+                "Saved equipment (not connected-equipment detection):\n\(available)"
+                    + "\n\nSaved configured source instruments (effective Home + Temporary Moves):\n\(sourceText)"
+                    + "\n\nSaved configured outputs:\n\(outputText)\n\n\(context.liveWing.summary)"
             ))
             continuation.finish()
         }

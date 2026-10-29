@@ -95,8 +95,8 @@ final class AppModel {
     /// The most recently connected WING host, persisted across launches and used
     /// as a fallback when broadcast discovery finds nothing.
     var lastHost: String? {
-        get { UserDefaults.standard.string(forKey: lastHostKey) }
-        set { UserDefaults.standard.setValue(newValue, forKey: lastHostKey) }
+        get { AppPersistence.defaults.string(forKey: lastHostKey) }
+        set { AppPersistence.defaults.setValue(newValue, forKey: lastHostKey) }
     }
 
     init(
@@ -117,6 +117,7 @@ final class AppModel {
                 fallback: fallback
             )
         )
+        configureAssistantMixer()
     }
 
     var isConnected: Bool { wing.connection.isConnected }

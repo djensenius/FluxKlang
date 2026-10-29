@@ -2,16 +2,11 @@
 //  StudioCanvasView.swift
 //  FluxKlang
 //
-//  Guided semantic patch canvas: Gear -> Controls. Gear can make sound, process
-//  sound, or both; Controls are where a branch becomes playable.
+//  Guided semantic patch canvas: Gear -> Controls.
 //
 
 import SwiftUI
 
-// The canvas centralizes hit-testing so moved cards, hover help and connection
-// drops stay in sync. Splitting that state across child views reintroduced stale
-// hit areas after layout changes.
-// swiftlint:disable:next type_body_length
 struct StudioCanvasView: View {
     let graph: StudioGraph
     let endpoints: [StudioEndpoint]
@@ -23,82 +18,135 @@ struct StudioCanvasView: View {
     let onMoveNode: (StudioNode.ID, CGPoint) -> Void
     var viewportHeight: CGFloat = 560
 
+    @ScaledMetric(relativeTo: .subheadline) private var nodeWidth = StudioCanvasGeometry.cardSize.width
+    @ScaledMetric(relativeTo: .subheadline) private var nodeHeight = StudioCanvasGeometry.cardSize.height
+    @ScaledMetric(relativeTo: .subheadline) private var scaledControlSize = StudioCanvasGeometry.controlSize
     @State private var routingFrom: StudioNode.ID?
-    @State private var routeDrag: RouteDrag?
-    @State private var dragOverrides: [StudioNode.ID: CGPoint] = [:]
-    @State private var interaction: Interaction?
-    @State private var hoverHint: HoverHint?
+    @State private var retainedBounds: CGRect?
+    @GestureState private var nodeMove: NodeMove?
+    @GestureState private var routeDrag: RouteDrag?
 
-    private let cardSize = CGSize(width: 190, height: 76)
-    private let gearWidth: CGFloat = 560
-    private let controlsWidth: CGFloat = 280
-    private let fixedCanvasHeight: CGFloat = 900
-    private let topPadding: CGFloat = 84
-    private let rowHeight: CGFloat = 100
+    private struct NodeMove {
+        var nodeID: StudioNode.ID
+        var position: CGPoint
+        var geometry: StudioCanvasGeometry
+    }
 
     private struct RouteDrag {
         var from: StudioNode.ID
         var current: CGPoint
     }
 
-    private struct HoverHint {
-        var message: String
-        var point: CGPoint
-    }
-
-    private enum Interaction {
-        case moving(node: StudioNode.ID, start: CGPoint)
-        case routing(node: StudioNode.ID)
-        case tapping(start: CGPoint)
-    }
-
     var body: some View {
+        let positions = layoutPositions
+        let geometry = StudioCanvasGeometry(
+            positions: graph.nodes.map { displayPosition(for: $0, positions: positions) },
+            retaining: retainedBounds,
+            cardSize: nodeSize, controlSize: controlSize
+        )
         VStack(alignment: .leading, spacing: 12) {
-            canvas
+            canvas(positions: positions, geometry: geometry)
+            if graph.nodes.contains(where: { $0.position != .zero && positions[$0.id] != $0.position }) {
+                Text("Overlapping cards are separated for display. Only cards you move are saved.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             routeList
+        }
+        .onChange(of: geometry.worldBounds, initial: true) { _, bounds in
+            // Never shrink a mounted canvas: removing a far node or resetting a
+            // gesture must not clamp the scroll offset or shift its world origin.
+            retainedBounds = bounds
+        }
+        .onChange(of: graph.nodes.map(\.id)) { _, nodeIDs in
+            if let routingFrom, !nodeIDs.contains(routingFrom) {
+                self.routingFrom = nil
+            }
         }
     }
 
-    private var canvas: some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: false) {
+    private func canvas(positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry) -> some View {
+        ScrollView([.horizontal, .vertical]) {
             ZStack(alignment: .topLeading) {
-                laneBackgrounds
-                wires
+                // A background tap can cancel routing, but never owns a pan.
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture { routingFrom = nil }
+                laneBackgrounds(geometry: geometry)
+                    .allowsHitTesting(false)
+                wires(positions: positions, geometry: geometry)
+                    .allowsHitTesting(false)
                 ForEach(graph.nodes) { node in
                     StudioCanvasNodeCard(
                         node: node,
+                        cardSize: nodeSize,
+                        controlSize: controlSize,
                         title: title(for: node),
                         subtitle: subtitle(for: node),
                         tint: tint(for: node),
                         canStartRoute: canStartRoute(node),
-                        canReceiveRoute: canReceiveRoute(node),
                         isRoutingFrom: routingFrom == node.id || routeDrag?.from == node.id,
-                        isRouteTarget: routingFrom != nil && routingFrom != node.id && canReceiveRoute(node)
+                        isRouteTarget: routingFrom != nil && routingFrom != node.id,
+                        remove: { remove(node) },
+                        route: { routeAction(for: node) },
+                        moveGesture: moveGesture(
+                            for: node, start: positions[node.id] ?? node.position, geometry: geometry
+                        ),
+                        routeGesture: routeGesture(for: node, positions: positions, geometry: geometry)
                     )
-                    .position(displayPosition(for: node))
+                    .position(geometry.contentPoint(fromWorld: displayPosition(for: node, positions: positions)))
                 }
-                interactionLayer
-                hoverTip
             }
+            .frame(width: geometry.contentSize.width, height: geometry.contentSize.height)
             .coordinateSpace(name: "studioCanvas")
-            .frame(width: canvasWidth, height: canvasHeight)
         }
+        .defaultScrollAnchor(.topLeading)
         .frame(height: viewportHeight)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay {
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(.quaternary)
+                .allowsHitTesting(false)
         }
+        .accessibilityIdentifier("studio.canvas")
     }
 
-    private var laneBackgrounds: some View {
+    private var nodeSize: CGSize {
+        CGSize(
+            width: max(nodeWidth, StudioCanvasGeometry.cardSize.width),
+            height: max(nodeHeight, StudioCanvasGeometry.cardSize.height)
+        )
+    }
+
+    private var controlSize: CGFloat { max(scaledControlSize, StudioCanvasGeometry.controlSize) }
+
+    private var layoutPositions: [StudioNode.ID: CGPoint] {
+        let placements = graph.nodes.map {
+            StudioCanvasGeometry.Placement(position: $0.position, lane: isControl($0) ? .controls : .gear)
+        }
+        let positions = StudioCanvasGeometry.layoutPositions(for: placements, cardSize: nodeSize)
+        return Dictionary(zip(graph.nodes.map(\.id), positions), uniquingKeysWith: { first, _ in first })
+    }
+
+    private func laneBackgrounds(geometry: StudioCanvasGeometry) -> some View {
         HStack(spacing: 0) {
-            lane("Gear", "Anything that makes sound, takes sound in, or both", .blue, width: gearWidth)
-            lane("Controls", "Where branches become playable", .purple, width: controlsWidth)
+            lane(
+                "Gear", "Anything that makes sound, takes sound in, or both", .blue,
+                width: StudioCanvasGeometry.gearWidth - geometry.worldBounds.minX,
+                height: geometry.contentSize.height
+            )
+            lane(
+                "Controls", "Where branches become playable", .purple,
+                width: geometry.worldBounds.maxX - StudioCanvasGeometry.gearWidth,
+                height: geometry.contentSize.height
+            )
         }
     }
 
-    private func lane(_ title: String, _ subtitle: String, _ color: Color, width: CGFloat) -> some View {
+    private func lane(
+        _ title: String, _ subtitle: String, _ color: Color, width: CGFloat, height: CGFloat
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.headline)
@@ -108,68 +156,30 @@ struct StudioCanvasView: View {
             Spacer()
         }
         .padding()
-        .frame(width: width, height: canvasHeight, alignment: .topLeading)
+        .frame(width: width, height: height, alignment: .topLeading)
         .background(color.opacity(0.06))
     }
 
-    private var wires: some View {
+    private func wires(positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry) -> some View {
         Canvas { context, _ in
             for edge in graph.edges {
                 guard let start = graph.node(edge.from.nodeID),
                       let end = graph.node(edge.to.nodeID) else { continue }
                 drawWire(
-                    from: outputAnchor(for: start),
-                    to: inputAnchor(for: end),
+                    from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
+                    to: geometry.inputAnchor(center: displayPosition(for: end, positions: positions)),
                     color: .accentColor.opacity(0.72),
                     context: context
                 )
             }
             if let routeDrag, let start = graph.node(routeDrag.from) {
                 drawWire(
-                    from: outputAnchor(for: start),
+                    from: geometry.outputAnchor(center: displayPosition(for: start, positions: positions)),
                     to: routeDrag.current,
                     color: .green.opacity(0.78),
                     context: context
                 )
             }
-        }
-    }
-
-    @ViewBuilder
-    private var interactionLayer: some View {
-        let layer = Rectangle()
-            .fill(.clear)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .named("studioCanvas"))
-                    .onChanged(handleInteractionChanged)
-                    .onEnded(handleInteractionEnded)
-            )
-        #if os(macOS)
-        layer.onContinuousHover(coordinateSpace: .named("studioCanvas")) { phase in
-            switch phase {
-            case .active(let point):
-                hoverHint = hoverHint(at: point).map { HoverHint(message: $0, point: point) }
-            case .ended:
-                hoverHint = nil
-            }
-        }
-        #else
-        layer
-        #endif
-    }
-
-    @ViewBuilder
-    private var hoverTip: some View {
-        if let hoverHint {
-            Text(hoverHint.message)
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.quaternary))
-                .position(hoverTipPosition(for: hoverHint.point))
-                .allowsHitTesting(false)
         }
     }
 
@@ -198,6 +208,7 @@ struct StudioCanvasView: View {
                     HStack {
                         Text(edgeLabel(edge))
                             .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("Reroute") {
                             onRemoveEdge(edge.id)
@@ -207,246 +218,94 @@ struct StudioCanvasView: View {
                         Button(role: .destructive) {
                             onRemoveEdge(edge.id)
                         } label: {
-                            Label("Remove", systemImage: "xmark")
+                            Image(systemName: "xmark")
+                                .frame(minWidth: 44, minHeight: 44)
                         }
-                        .labelStyle(.iconOnly)
+                        .accessibilityLabel("Remove connection \(edgeLabel(edge))")
                         .buttonStyle(.bordered)
                     }
+                    .accessibilityIdentifier("studio.edge.\(edge.id)")
                 }
             }
         }
         .padding(.vertical, 4)
     }
 
-    private var canvasWidth: CGFloat {
-        gearWidth + controlsWidth
+    private func displayPosition(for node: StudioNode, positions: [StudioNode.ID: CGPoint]) -> CGPoint {
+        if let nodeMove, nodeMove.nodeID == node.id { return nodeMove.position }
+        return positions[node.id] ?? node.position
     }
 
-    private var canvasHeight: CGFloat {
-        fixedCanvasHeight
-    }
-
-    private var gearNodes: [StudioNode] {
-        graph.nodes.filter { !isControl($0) }
-    }
-
-    private var controlNodes: [StudioNode] {
-        graph.nodes.filter(isControl)
-    }
-
-    private func fallbackPosition(for node: StudioNode) -> CGPoint {
-        if isControl(node) {
-            let row = controlNodes.firstIndex(where: { $0.id == node.id }) ?? 0
-            return CGPoint(x: gearWidth + controlsWidth / 2, y: topPadding + CGFloat(row) * rowHeight)
-        }
-        let row = gearNodes.firstIndex(where: { $0.id == node.id }) ?? 0
-        let column = row % 2
-        return CGPoint(
-            x: 150 + CGFloat(column) * 230,
-            y: topPadding + CGFloat(row / 2) * rowHeight
+    private func moveGesture(
+        for node: StudioNode, start: CGPoint, geometry: StudioCanvasGeometry
+    ) -> AnyGesture<DragGesture.Value> {
+        AnyGesture(
+            DragGesture(minimumDistance: 3, coordinateSpace: .named("studioCanvas"))
+                .updating($nodeMove) { value, state, _ in
+                    let startingGeometry = state?.geometry ?? geometry
+                    state = NodeMove(
+                        nodeID: node.id,
+                        position: startingGeometry.movedPosition(from: start, translation: value.translation),
+                        geometry: startingGeometry
+                    )
+                }
+                .onEnded { value in
+                    let startingGeometry = nodeMove?.geometry ?? geometry
+                    let final = startingGeometry.movedPosition(from: start, translation: value.translation)
+                    // `start` is the render-layout baseline, not GestureState.
+                    // Only an explicit completed move persists this one node.
+                    onMoveNode(node.id, final)
+                }
         )
     }
 
-    private func displayPosition(for node: StudioNode) -> CGPoint {
-        dragOverrides[node.id] ?? storedPosition(for: node)
-    }
-
-    private func storedPosition(for node: StudioNode) -> CGPoint {
-        node.position == .zero ? fallbackPosition(for: node) : node.position
-    }
-
-    private func inputAnchor(for node: StudioNode) -> CGPoint {
-        let center = displayPosition(for: node)
-        return CGPoint(x: center.x - cardSize.width / 2, y: center.y)
-    }
-
-    private func outputAnchor(for node: StudioNode) -> CGPoint {
-        let center = displayPosition(for: node)
-        return CGPoint(x: center.x + cardSize.width / 2, y: center.y)
-    }
-
-    private func connect(to destination: StudioNode.ID) {
-        guard let source = routingFrom, source != destination else { return }
-        onConnect(source, destination)
-        routingFrom = nil
-    }
-
-    private func finishRouteDrag(from source: StudioNode.ID, at point: CGPoint) {
-        defer { routeDrag = nil }
-        guard let hit = hitNode(at: point, excluding: source, receivingOnly: true) else { return }
-        onConnect(source, hit.id)
-    }
-
-    private func move(_ nodeID: StudioNode.ID, from start: CGPoint, by translation: CGSize) {
-        dragOverrides[nodeID] = clamp(CGPoint(
-            x: start.x + translation.width,
-            y: start.y + translation.height
-        ))
-    }
-
-    private func commitMove(_ nodeID: StudioNode.ID, from start: CGPoint, by translation: CGSize) {
-        let final = clamp(CGPoint(
-            x: start.x + translation.width,
-            y: start.y + translation.height
-        ))
-        dragOverrides[nodeID] = nil
-        onMoveNode(nodeID, final)
-    }
-
-    private func handleInteractionChanged(_ value: DragGesture.Value) {
-        hoverHint = nil
-        if interaction == nil {
-            interaction = interactionStarting(at: value.startLocation)
-        }
-        switch interaction {
-        case .moving(let nodeID, let start):
-            move(nodeID, from: start, by: value.translation)
-        case .routing(let nodeID):
-            routeDrag = RouteDrag(from: nodeID, current: value.location)
-        case .tapping, .none:
-            break
-        }
-    }
-
-    private func handleInteractionEnded(_ value: DragGesture.Value) {
-        defer {
-            interaction = nil
-            hoverHint = nil
-        }
-        switch interaction {
-        case .moving(let nodeID, let start):
-            commitMove(nodeID, from: start, by: value.translation)
-        case .routing(let nodeID):
-            finishRouteDrag(from: nodeID, at: value.location)
-        case .tapping(let start):
-            handleTap(start: start, end: value.location)
-        case .none:
-            break
-        }
-    }
-
-    private func interactionStarting(at point: CGPoint) -> Interaction {
-        if let node = graph.nodes.first(where: { moveHandleRect(for: $0).contains(point) }) {
-            return .moving(node: node.id, start: storedPosition(for: node))
-        }
-        if let node = graph.nodes.first(where: { routeStartRect(for: $0).contains(point) && canStartRoute($0) }) {
-            return .routing(node: node.id)
-        }
-        return .tapping(start: point)
-    }
-
-    private func hoverHint(at point: CGPoint) -> String? {
-        guard interaction == nil else { return nil }
-        if let node = graph.nodes.reversed().first(where: { removeButtonRect(for: $0).contains(point) }) {
-            return "Remove \(title(for: node)) from this patch"
-        }
-        if let node = graph.nodes.reversed().first(where: { moveHandleRect(for: $0).contains(point) }) {
-            return "Drag to move \(title(for: node))"
-        }
-        if let node = graph.nodes.reversed().first(where: {
-            routeStartRect(for: $0).contains(point) && canStartRoute($0)
-        }) {
-            return "Drag from here to connect \(title(for: node))"
-        }
-        if let source = routingFrom,
-           let destination = hitNode(at: point, excluding: source, receivingOnly: true) {
-            return "Click to connect to \(title(for: destination))"
-        }
-        if let node = graph.nodes.reversed().first(where: {
-            drawButtonRect(for: $0).contains(point) && canStartRoute($0)
-        }) {
-            return "Click, then click another card to connect \(title(for: node))"
-        }
-        if let node = hitNode(at: point, excluding: nil, receivingOnly: false) {
-            return isControl(node)
-                ? "Controls are where a branch becomes playable"
-                : "Gear can make sound, process sound, or both"
-        }
-        return "Drag a dot to draw a connection"
-    }
-
-    private func hoverTipPosition(for point: CGPoint) -> CGPoint {
-        CGPoint(
-            x: min(max(point.x + 92, 90), canvasWidth - 110),
-            y: min(max(point.y - 26, 24), canvasHeight - 24)
+    private func routeGesture(
+        for node: StudioNode, positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry
+    ) -> AnyGesture<DragGesture.Value> {
+        AnyGesture(
+            DragGesture(minimumDistance: 3, coordinateSpace: .named("studioCanvas"))
+                .updating($routeDrag) { value, state, _ in
+                    state = RouteDrag(from: node.id, current: value.location)
+                }
+                .onEnded { value in
+                    routingFrom = nil
+                    guard let destination = hitNode(
+                        at: value.location, excluding: node.id, positions: positions, geometry: geometry
+                    ) else { return }
+                    onConnect(node.id, destination.id)
+                }
         )
     }
 
-    private func handleTap(start: CGPoint, end: CGPoint) {
-        guard distance(start, end) < 8 else { return }
-        if let source = routingFrom {
-            if let destination = hitNode(at: end, excluding: source, receivingOnly: true) {
-                onConnect(source, destination.id)
-                routingFrom = nil
-            } else {
-                routingFrom = nil
-            }
-            return
-        }
-        if let node = graph.nodes.first(where: { removeButtonRect(for: $0).contains(end) }) {
-            onRemoveNode(node.id)
-            return
-        }
-        if let node = graph.nodes.first(where: { drawButtonRect(for: $0).contains(end) && canStartRoute($0) }) {
+    private func routeAction(for node: StudioNode) {
+        if routingFrom == node.id {
+            routingFrom = nil
+        } else if let source = routingFrom {
+            onConnect(source, node.id)
+            routingFrom = nil
+        } else if canStartRoute(node) {
             routingFrom = node.id
         }
     }
 
+    private func remove(_ node: StudioNode) {
+        if routingFrom == node.id { routingFrom = nil }
+        onRemoveNode(node.id)
+    }
+
     private func hitNode(
-        at point: CGPoint,
-        excluding excluded: StudioNode.ID?,
-        receivingOnly: Bool
+        at point: CGPoint, excluding excluded: StudioNode.ID,
+        positions: [StudioNode.ID: CGPoint], geometry: StudioCanvasGeometry
     ) -> StudioNode? {
-        graph.nodes.reversed().first { node in
-            node.id != excluded &&
-                (!receivingOnly || canReceiveRoute(node)) &&
-                cardRect(for: node).insetBy(dx: -10, dy: -10).contains(point)
+        graph.nodes.reversed().first {
+            $0.id != excluded && geometry.contentCardRect(
+                center: displayPosition(for: $0, positions: positions)
+            ).contains(point)
         }
-    }
-
-    private func cardRect(for node: StudioNode) -> CGRect {
-        let center = displayPosition(for: node)
-        return CGRect(
-            x: center.x - cardSize.width / 2,
-            y: center.y - cardSize.height / 2,
-            width: cardSize.width,
-            height: cardSize.height
-        )
-    }
-
-    private func moveHandleRect(for node: StudioNode) -> CGRect {
-        let rect = cardRect(for: node)
-        return CGRect(x: rect.maxX - 58, y: rect.minY + 6, width: 36, height: 36)
-    }
-
-    private func removeButtonRect(for node: StudioNode) -> CGRect {
-        let rect = cardRect(for: node)
-        return CGRect(x: rect.minX + 6, y: rect.minY + 6, width: 34, height: 34)
-    }
-
-    private func routeStartRect(for node: StudioNode) -> CGRect {
-        let rect = cardRect(for: node)
-        return CGRect(x: rect.maxX - 28, y: rect.minY + 8, width: 38, height: 38)
-    }
-
-    private func drawButtonRect(for node: StudioNode) -> CGRect {
-        let rect = cardRect(for: node)
-        return CGRect(x: rect.minX + 8, y: rect.maxY - 30, width: 60, height: 26)
-    }
-
-    private func clamp(_ point: CGPoint) -> CGPoint {
-        CGPoint(
-            x: min(max(point.x, cardSize.width / 2 + 12), canvasWidth - cardSize.width / 2 - 12),
-            y: min(max(point.y, topPadding), canvasHeight - cardSize.height / 2 - 12)
-        )
     }
 
     private func canStartRoute(_ node: StudioNode) -> Bool {
         !isControl(node)
-    }
-
-    private func canReceiveRoute(_ node: StudioNode) -> Bool {
-        true
     }
 
     private func isControl(_ node: StudioNode) -> Bool {
@@ -489,9 +348,5 @@ struct StudioCanvasView: View {
         let start = graph.node(edge.from.nodeID).map(title) ?? "Missing"
         let end = graph.node(edge.to.nodeID).map(title) ?? "Missing"
         return "\(start) -> \(end)"
-    }
-
-    private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
-        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
     }
 }

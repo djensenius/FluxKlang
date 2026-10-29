@@ -31,8 +31,9 @@ enum StudioWiringAdvisor {
                 currentEnvironmentID: environmentID
             )
         }
+        var placementGraph = request.applicationMode == .replace ? StudioGraph() : currentGraph
         let drafts = routes.map { route in
-            makeDraft(
+            let draft = makeDraft(
                 request: StudioWiringRequest(
                     sourceInstrumentIDs: route.sourceInstrumentIDs,
                     effectChainIDs: route.effectChainIDs,
@@ -43,10 +44,14 @@ enum StudioWiringAdvisor {
                 equipment: equipment,
                 effects: effects,
                 connections: connections,
-                currentGraph: currentGraph,
+                currentGraph: placementGraph,
                 environmentID: environmentID,
                 currentEnvironmentID: environmentID
             )
+            for spec in draft.fragment.nodes where placementGraph.node(spec.node.id) == nil {
+                placementGraph.addNode(spec.node)
+            }
+            return draft
         }
         return StudioMultiRouteDraftBuilder.combine(
             drafts,
@@ -207,30 +212,30 @@ enum StudioWiringAdvisor {
         currentGraph: StudioGraph
     ) -> [StudioDraftNode] {
         var result: [StudioDraftNode] = []
-        for (index, id) in request.sourceInstrumentIDs.enumerated() {
+        var placements = currentGraph.nodes.map { node in
+            let lane: StudioCanvasGeometry.Lane = if case .endpoint = node.kind { .controls } else { .gear }
+            return StudioCanvasGeometry.Placement(position: node.position, lane: lane)
+        }
+        func append(kind: StudioNodeKind, title: String, lane: StudioCanvasGeometry.Lane) {
+            let spec = node(
+                kind: kind, title: title,
+                position: StudioCanvasGeometry.firstFreePosition(in: lane, avoiding: placements),
+                currentGraph: currentGraph
+            )
+            result.append(spec)
+            if !spec.reusesExistingNode {
+                placements.append(StudioCanvasGeometry.Placement(position: spec.node.position, lane: lane))
+            }
+        }
+        for id in request.sourceInstrumentIDs {
             guard let equipment = equipmentByID[id] else { continue }
-            result.append(node(
-                kind: .instrument(id),
-                title: equipment.name,
-                position: CGPoint(x: 120, y: 100 + CGFloat(index) * 110),
-                currentGraph: currentGraph
-            ))
+            append(kind: .instrument(id), title: equipment.name, lane: .gear)
         }
-        for (index, id) in request.effectChainIDs.enumerated() {
+        for id in request.effectChainIDs {
             guard let effect = effectsByID[id] else { continue }
-            result.append(node(
-                kind: .effect(id),
-                title: effect.name,
-                position: CGPoint(x: 360 + CGFloat(index) * 190, y: 160),
-                currentGraph: currentGraph
-            ))
+            append(kind: .effect(id), title: effect.name, lane: .gear)
         }
-        result.append(node(
-            kind: .endpoint(endpoint.id),
-            title: endpoint.name,
-            position: CGPoint(x: 650 + CGFloat(request.effectChainIDs.count) * 190, y: 160),
-            currentGraph: currentGraph
-        ))
+        append(kind: .endpoint(endpoint.id), title: endpoint.name, lane: .controls)
         return result
     }
 

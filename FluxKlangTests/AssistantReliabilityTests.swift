@@ -125,6 +125,44 @@ struct AssistantReliabilityTests {
         #expect(text == "fallback")
     }
 
+    @Test func completeSourceScopedRequestBuildsDraftThroughPreflight() async throws {
+        let context = musicianRoutingContext()
+        let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        let reply = try await text(from: generator,
+            question: "Route Flux through Cosmos and AstroLab through Evil Pet to mains.", context: context)
+        let draft = try #require(coordinator.pendingStudioDraft)
+        #expect(draft.request.sourceInstrumentIDs == [context.equipment[0].id])
+        #expect(draft.request.effectChainIDs == [context.effects[1].id])
+        #expect(draft.request.additionalRoutes.first?.sourceInstrumentIDs == [context.equipment[1].id])
+        #expect(draft.request.additionalRoutes.first?.effectChainIDs == [context.effects[0].id])
+        #expect(reply.contains("review-only"))
+        #expect(provider.calls == 0)
+    }
+
+    @Test func connectedNowFollowUpUsesRoutingHistoryThroughChat() async throws {
+        let context = musicianRoutingContext()
+        let coordinator = AssistantCoordinator(draftStore: ReliabilityDraftStore())
+        let provider = AssistantBackendGenerator()
+        let chat = AssistantChatController(coordinator: coordinator,
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider)
+        chat.spokenRepliesEnabled = false
+        chat.composer = "Route Flux through Cosmos to mains."
+        chat.send(context: context)
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        _ = try #require(coordinator.pendingStudioDraft)
+        await coordinator.discardPendingStudioDraft()
+        chat.composer = "It is connected now, try again."
+        chat.send(context: context)
+        try await AssistantBackendFixture.wait { !chat.isStreaming }
+        let draft = try #require(coordinator.pendingStudioDraft)
+        #expect(draft.request.sourceInstrumentIDs == [context.equipment[0].id])
+        #expect(draft.request.effectChainIDs == [context.effects[1].id])
+        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == false)
+        #expect(provider.calls == 0)
+    }
+
     @Test func emptyModelResponseUsesDeterministicFallback() async throws {
         let router = AssistantGeneratorRouter(
             model: EmptyGenerator(),
@@ -144,24 +182,6 @@ struct AssistantReliabilityTests {
         }
 
         #expect(text == "fallback")
-    }
-
-    @Test func voiceTranscriberIsCreatedOnlyWhenDictationStarts() async throws {
-        let transcriber = ReadyTranscriber()
-        var creationCount = 0
-        let voice = AssistantVoiceController {
-            creationCount += 1
-            return transcriber
-        }
-
-        #expect(creationCount == 0)
-        voice.start()
-        for _ in 0..<100 where voice.state != .listening {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(voice.state == .listening)
-        #expect(creationCount == 1)
-        voice.cancel()
     }
 
     @Test func completeWiringRequestBypassesModelConfirmation() async throws {
@@ -271,7 +291,7 @@ struct AssistantReliabilityTests {
             context: context
         )
 
-        #expect(inventory.contains("Available equipment:"))
+        #expect(inventory.contains("Saved equipment (not connected-equipment detection):"))
         #expect(inventory.contains("Arturia AstroLab 88 (WING inputs 21/22)"))
         #expect(amended.contains("SOMA Flux + Arturia AstroLab 88 → Main Speakers"))
         #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [flux.id, astrolab.id])
@@ -412,18 +432,6 @@ private struct EmptyGenerator: AssistantGenerating {
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
         AsyncThrowingStream { $0.finish() }
     }
-}
-
-private actor ReadyTranscriber: AssistantSpeechTranscribing {
-    func permissionState() -> AssistantVoicePermissionState { .granted }
-    func requestPermission() -> AssistantVoicePermissionState { .granted }
-
-    func start() -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
-        AsyncThrowingStream { _ in }
-    }
-
-    func finish() {}
-    func cancel() {}
 }
 
 private enum ReliabilityTestError: Error {

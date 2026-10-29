@@ -97,7 +97,12 @@ struct CopilotAssistantTests {
         #expect((toolMessage?["content"] as? String)?.localizedCaseInsensitiveContains("disconnected") == true)
     }
 
-    @Test func copilotUsesVerifiedDraftReplyInsteadOfModelCommentary() async throws {
+    @Test(arguments: [
+        "Wire my OP-1 Field to the final mix.",
+        "Help me route OP-1 Field to speakers.",
+        "How do I connect OP-1 Field to speakers?"
+    ])
+    func copilotUsesVerifiedDraftReplyInsteadOfModelCommentary(_ question: String) async throws {
         let synth = Equipment(name: "OP-1 Field", outputs: ["Left", "Right"], isStereo: true)
         let context = emptyContext(
             equipment: [synth],
@@ -144,7 +149,7 @@ struct CopilotAssistantTests {
 
         let text = try await responseText(
             from: generator,
-            question: "Wire my OP-1 Field to the final mix.",
+            question: question,
             context: context
         )
 

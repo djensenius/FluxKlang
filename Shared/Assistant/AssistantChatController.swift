@@ -9,7 +9,11 @@ final class AssistantChatController {
     private let generator: any AssistantGenerating
     private let coordinator: AssistantCoordinator
     private var responseTask: Task<Void, Never>?
+    private var activeResponseID: UUID?
     private var hasLoaded = false
+
+    /// Explicit submission-only capability, never passed to a model/provider.
+    var mixerExecutor: (any AssistantMixerExecuting)?
 
     private(set) var conversations: [AssistantConversation] = []
     var selectedConversationID: UUID?
@@ -20,7 +24,7 @@ final class AssistantChatController {
     var suggestedPrompt: String?
     var spokenRepliesEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
+            AppPersistence.defaults.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
         }
     }
 
@@ -57,7 +61,7 @@ final class AssistantChatController {
                 )
             )
         }
-        spokenRepliesEnabled = UserDefaults.standard.bool(forKey: Self.spokenRepliesKey)
+        spokenRepliesEnabled = AppPersistence.defaults.bool(forKey: Self.spokenRepliesKey)
     }
 
     var selectedConversation: AssistantConversation? {
@@ -125,7 +129,10 @@ final class AssistantChatController {
               let failedIndex = conversation.messages.firstIndex(where: { $0.id == messageID }),
               failedIndex > 0 else { return }
         let question = conversation.messages[..<failedIndex].last { $0.role == .user }?.text
-        guard let question else { return }
+        guard let question, !isStreaming else { return }
+        // Classify again rather than relying on ephemeral message state: this
+        // also prevents replay from restored or cancelled command history.
+        guard case .notMixerIntent = AssistantMixerIntent.parse(question) else { return }
         updateConversation(id: conversation.id) {
             $0.messages.remove(at: failedIndex)
         }
@@ -170,6 +177,7 @@ final class AssistantChatController {
         }
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     private func send(
         question: String,
         context: AssistantToolContext,
@@ -201,7 +209,29 @@ final class AssistantChatController {
             context: context
         )
         isStreaming = true
+        activeResponseID = responseID
+        let mixerIntent = AssistantMixerIntent.parse(question)
         responseTask = Task {
+            switch mixerIntent {
+            case .clarification(let text):
+                apply(.text(text), conversationID: conversationID, responseID: responseID)
+                finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
+                return
+            case .command(let command):
+                let text: String
+                if Task.isCancelled {
+                    text = "No mixer command was started: submission was cancelled."
+                } else if let mixerExecutor {
+                    text = await mixerExecutor.execute(command, sessionID: context.liveWing.sessionID)
+                } else {
+                    text = "No changes: live mixer execution is not configured."
+                }
+                apply(.text(text), conversationID: conversationID, responseID: responseID)
+                // Always retain the truthful outcome even if cancelled after SET.
+                finishResponse(conversationID: conversationID, responseID: responseID, state: .complete)
+                return
+            case .notMixerIntent: break
+            }
             do {
                 for try await event in generator.stream(request) {
                     try Task.checkCancellation()
@@ -255,6 +285,8 @@ final class AssistantChatController {
             conversation.summary = Self.summary(for: conversation.messages)
             spokenText = conversation.messages[index].text
         }
+        guard activeResponseID == responseID else { return }
+        activeResponseID = nil
         isStreaming = false
         responseTask = nil
         if state == .complete, spokenRepliesEnabled, let spokenText, !spokenText.isEmpty {
@@ -264,6 +296,7 @@ final class AssistantChatController {
 
     private func stopStreaming() {
         responseTask?.cancel()
+        activeResponseID = nil
         responseTask = nil
         isStreaming = false
     }

@@ -32,31 +32,49 @@ extension AppModel {
             graph: environments.activeStudioGraph,
             endpoints: environments.activeStudioEndpoints,
             effects: environments.activeEffects,
-            globalConnections: currentConnections
+            globalConnections: currentConnections,
+            liveWing: AssistantLiveWingContext.project(wing.confirmedSnapshot(), equipment: equipment.items,
+                                                       connections: currentConnections.effectiveHome)
         )
     }
 
     func studioConnectionsForCurrentWing() -> GlobalStudioConnections {
-        let liveInputNames = Dictionary(uniqueKeysWithValues: StudioHomeConnections.inputRange.compactMap { connector in
-            wing.inputName(connector).map { (connector, $0) }
-        })
-        return studioConnections.connections.reconcilingLiveInputNames(
-            liveInputNames,
-            equipment: equipment.items
-        )
+        // A console scribble is observation metadata, not authorization to move
+        // cables or replace saved Home. Aliases use the effective saved port map.
+        studioConnections.connections
+    }
+
+    /// Review must refresh stale aliases before validation disables Accept.
+    /// This is GET-only; acceptance still independently refreshes and validates.
+    func refreshPendingAssistantDraftForReview() async {
+        guard let original = assistant.pendingStudioDraft else { return }
+        let controller = wing
+        let refreshed = await controller.refreshLiveReferences(original.liveReferences ?? [])
+        guard !Task.isCancelled, wing === controller, assistant.pendingStudioDraft?.id == original.id else { return }
+        var context = assistantToolContext()
+        if !refreshed { context.liveWing = .unavailable }
+        _ = await assistant.perform(.validatePendingStudioDraft, context: context)
     }
 
     /// Appends a reviewed draft to the active semantic graph. This method never
-    /// calls `wing` or compiles/applies settings; Listen remains the only Studio
-    /// hardware-write action.
+    /// applies settings; it only refreshes referenced metadata with bounded GETs.
+    /// Listen remains the only Studio routing hardware-write action.
     @discardableResult
     func acceptPendingAssistantDraft() async -> StudioPatchMergeResult? {
+        guard let original = assistant.pendingStudioDraft else { return nil }
+        let controller = wing
+        let refreshedReferences = await controller.refreshLiveReferences(original.liveReferences ?? [])
+        guard refreshedReferences, !Task.isCancelled, wing === controller,
+              assistant.pendingStudioDraft?.id == original.id else { return nil }
         let validation = await assistant.perform(
             .validatePendingStudioDraft,
             context: assistantToolContext()
         )
         guard case .pendingDraft(let refreshed?) = validation,
-              !refreshed.hasErrors else { return nil }
+              !refreshed.hasErrors, !Task.isCancelled, wing === controller,
+              assistant.pendingStudioDraft?.id == refreshed.id,
+              (refreshed.liveReferences ?? []).allSatisfy({ $0.isValid(in: assistantToolContext().liveWing) })
+        else { return nil }
         let result = StudioPatchDraftMerger.merge(
             refreshed,
             into: environments.activeStudioGraph,

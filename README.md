@@ -75,7 +75,7 @@ previews.
   selected connectors without mutating Home. Returning Home requires a cable
   checklist, an explicit routing preview/apply action, and verification before
   the override is removed.
-- The in-app assistant and Siri can create only a **pending Studio draft**.
+- For routing, the in-app assistant and Siri create only a **pending Studio draft**.
   Equipment names and prompts are treated as untrusted text. The user must open
   the review, resolve validation errors, and explicitly accept before semantic
   Studio nodes are added. Accepting still does not write to a WING; **Listen** is
@@ -87,9 +87,20 @@ previews.
   prompts and required FluxKlang tool results are sent to GitHub when selected.
   Both providers expose only authoritative help, read-only state inspection,
   and review-only Studio draft tools—never WING writes.
+- Direct mixer commands are handled separately from model generation. Specify a
+  target and amount, for example `set channel 7 to -12 dB`,
+  `lower main 1 by 3 dB`, or `mute channel 7`. Ambiguous targets, missing amounts,
+  stale readings, and ambiguous stereo names make no changes. Commands use fresh
+  console readings and report whether the result was confirmed; they are never
+  automatically replayed by Retry or conversation history. Routing still requires
+  draft review and the separate **Listen** action.
+- The assistant distinguishes saved studio equipment from observed WING input and
+  channel labels. A console label is not proof of an attached instrument or cable.
+  Unknown live labels require linking to saved equipment and its ports before
+  creating a physical wiring draft; they do not silently create gear entries.
 - A deterministic grounded fallback remains available when the selected model
-  is unavailable or fails. Explicit push-to-talk transcription runs on device
-  when supported, and microphone audio is not retained. Visible conversation
+  is unavailable or fails. To dictate a message, use the system keyboard's
+  dictation feature; FluxKlang does not capture microphone audio. Visible conversation
   text and card references may sync through the user's private iCloud database;
   other app configuration uses iCloud key-value storage plus an offline copy.
 - **Launch Control XL 3:** FluxKlang listens to the main USB MIDI endpoint in

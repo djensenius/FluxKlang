@@ -174,19 +174,6 @@ struct InAppAssistantTests {
         #expect(chat.selectedConversation?.messages.filter { $0.role == .user }.count == 1)
     }
 
-    @Test func voiceStartIgnoresOverlappingRequests() async throws {
-        let transcriber = CountingSpeechTranscriber()
-        let voice = AssistantVoiceController(transcriber: transcriber)
-
-        voice.start()
-        voice.start()
-        try await waitUntil { voice.state == .listening }
-
-        let startCount = await transcriber.startCount
-        #expect(startCount == 1)
-        voice.cancel()
-    }
-
     @Test func historyMigratesSyncsAndPropagatesDeletionTombstones() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("assistant-history-\(UUID().uuidString)", isDirectory: true)
@@ -213,28 +200,6 @@ struct InAppAssistantTests {
         let afterDelete = await store.load()
         #expect(afterDelete.isEmpty)
         #expect(await cloud.record(id: legacy.id)?.deletedAt != nil)
-    }
-
-    @Test func voiceControllerSurfacesDeniedAndGrantedPermissionStates() async throws {
-        let denied = AssistantVoiceController(
-            transcriber: StubSpeechTranscriber(permission: .denied)
-        )
-        denied.start()
-        try await waitUntil {
-            if case .failed = denied.state { return true }
-            return false
-        }
-        #expect(denied.permission == .denied)
-
-        let granted = AssistantVoiceController(
-            transcriber: StubSpeechTranscriber(permission: .granted)
-        )
-        granted.start()
-        try await waitUntil {
-            granted.transcript == "Studio patch"
-        }
-        #expect(granted.permission == .granted)
-        #expect(granted.isFinal)
     }
 
     @Test func assistantDraftPathCannotChangeWingValues() async throws {
@@ -419,45 +384,9 @@ private actor MemoryHistoryBackend: AssistantHistoryBackend {
     }
 }
 
-private actor CountingSpeechTranscriber: AssistantSpeechTranscribing {
-    private(set) var startCount = 0
-
-    func permissionState() async -> AssistantVoicePermissionState { .granted }
-    func requestPermission() async -> AssistantVoicePermissionState { .granted }
-
-    func start() async -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
-        startCount += 1
-        return AsyncThrowingStream { _ in }
-    }
-
-    func finish() async {}
-    func cancel() async {}
-}
-
 private actor MemoryDraftStore: PendingStudioPatchPersisting {
     private var draft: StudioPatchDraft?
 
     func load() async -> StudioPatchDraft? { draft }
     func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
-}
-
-private actor StubSpeechTranscriber: AssistantSpeechTranscribing {
-    let permission: AssistantVoicePermissionState
-
-    init(permission: AssistantVoicePermissionState) {
-        self.permission = permission
-    }
-
-    func permissionState() async -> AssistantVoicePermissionState { permission }
-    func requestPermission() async -> AssistantVoicePermissionState { permission }
-
-    func start() async -> AsyncThrowingStream<AssistantTranscriptUpdate, any Error> {
-        AsyncThrowingStream { continuation in
-            continuation.yield(AssistantTranscriptUpdate(text: "Studio patch", isFinal: true))
-            continuation.finish()
-        }
-    }
-
-    func finish() async {}
-    func cancel() async {}
 }
