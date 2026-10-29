@@ -138,6 +138,12 @@ enum AssistantActionIntentValidator {
                 ])
         return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).allSatisfy { match in
             guard let range = Range(match.range, in: text) else { return false }
+            // A copied alias must occupy a complete operand, not part of a punctuation-connected name.
+            let before = text[..<range.lowerBound]
+            let after = text[range.upperBound...]
+            guard before.last.map(\.isWhitespace) ?? true,
+                  after.first.map(\.isWhitespace) ?? true
+                    || after.allSatisfy({ $0.isWhitespace || ".!?".contains($0) }) else { return false }
             let neighbors = [(String(text[..<range.lowerBound]), #"[\p{L}]+\s+$"#),
                              (String(text[range.upperBound...]), #"^\s+[\p{L}]+"#)]
             return neighbors.allSatisfy { fragment, pattern in

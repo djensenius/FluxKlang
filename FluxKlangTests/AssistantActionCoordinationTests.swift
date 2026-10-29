@@ -281,7 +281,8 @@ struct AssistantActionCoordinationTests {
             layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
         let intent = AssistantActionIntent(targetMention: "Juno", action: .mute, amount: nil, addToStudio: false,
             evidence: .init(target: "Juno", action: "mute", amount: nil, add: nil))
-        for text in ["mute Juno Alpha", "mute Alpha Juno"] {
+        for text in ["mute Juno Alpha", "mute Alpha Juno", "mute Juno_Alpha", "mute Alpha_Juno",
+                     "mute Juno:Alpha", "mute Alpha:Juno", "mute Juno—Alpha", "mute Alpha—Juno"] {
             let outcome = await service.prepare(.init(text: text), interpretation: .proposal(intent))
             if case .clarification = outcome {} else { Issue.record("Truncated target became a review") }
             #expect(service.pendingReview == nil)
