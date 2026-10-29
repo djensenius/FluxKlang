@@ -208,6 +208,25 @@ struct AssistantRoutingChatTests {
         #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
     }
 
+    @Test func legacyRetryAndReadOnlyFallbackCannotReplacePriorDraft() async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let fallback = AssistantFallbackGenerator(coordinator: coordinator)
+        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: fallback)
+        for question in ["try again", "It is connected now, try again.", "How do I connect Osmose to speakers?"] {
+            let request = AssistantGenerationRequest(question: question,
+                recentMessages: [.init(role: .user, text: AssistantRoutingFixture.text)],
+                summary: "", context: fixture.context)
+            for try await _ in preflight.stream(request) {}
+            #expect(coordinator.pendingStudioDraft == prior)
+            #expect(await store.saves == 1)
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"))
     func optInNativeOwnerAndPriorMonoQualification() async throws {
         let interpreter = FoundationModelActionInterpreter()

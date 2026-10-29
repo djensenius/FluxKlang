@@ -55,7 +55,8 @@ enum AssistantRoutingOutputResolver {
         let grouped = Dictionary(grouping: outputs) { baseName($0.destinationName ?? "") }
         return grouped.map { name, outputs in
             Group(name: name, outputs: outputs.sorted {
-                ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+                (side($0.destinationName ?? "") ?? "", $0.bank.rawValue, $0.connector)
+                    < (side($1.destinationName ?? "") ?? "", $1.bank.rawValue, $1.connector)
             })
         }.sorted { $0.name < $1.name }
     }

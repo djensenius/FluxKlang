@@ -461,7 +461,8 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        if AssistantRoutingOwnership.owns(request.question) {
+        if AssistantRoutingOwnership.owns(request.question)
+            || AssistantRoutingOwnership.word("try again|connected now", in: request.question) {
             return textStream(AssistantRoutingOwnership.clarification)
         }
         if AssistantDraftIntent.requestsInventory(request.question) {

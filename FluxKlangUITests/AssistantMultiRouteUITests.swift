@@ -49,7 +49,7 @@ final class AssistantMultiRouteUITests: XCTestCase {
     }
 
     func testDiscardLeavesPriorLocalGraphUnchanged() {
-        launchFixture()
+        launchFixture(extraArguments: ["-ui-test-multi-route-prior"])
         openReview()
         assertOwnerPaths()
         assertFixtureHasNotWritten()
@@ -60,11 +60,11 @@ final class AssistantMultiRouteUITests: XCTestCase {
         waitForReviewToClose()
         XCTAssertFalse(app.buttons["assistant.pendingDraft.review"].exists)
         assertNotSentYet()
-        assertConnection("\(osmose) -> Main Speakers")
+        assertConnection("Preserved Synth -> Main Speakers")
         XCTAssertFalse(app.staticTexts["\(solar) -> \(evilPet)"].exists)
         XCTAssertFalse(app.staticTexts["OP-XY -> Desk Speakers"].exists)
         assertWireCount(1)
-        capture("Discard keeps the prior Osmose graph")
+        capture("Discard keeps the unrelated prior graph")
     }
 
     func testExplicitDryParallelShowsFourPathsAndAcceptsTheDryWire() {

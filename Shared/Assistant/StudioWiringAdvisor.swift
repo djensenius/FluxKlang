@@ -180,6 +180,12 @@ enum StudioWiringAdvisor {
             refreshed.validation.append(.error("destination-changed",
                 "A configured speaker group changed. Create a new draft rather than reusing old output connectors."))
         }
+        if draft.outputReferences?.isEmpty == false, draft.applicationMode == .append,
+           AssistantRoutingPreparation.conflictsWithExistingGraph(
+            draft.request, effects: effects, graph: currentGraph) {
+            refreshed.validation.append(.error("routing-graph-changed",
+                "A requested source or physical effect is already used. Create a new draft for the current graph."))
+        }
         return refreshed
     }
 
@@ -495,10 +501,9 @@ enum StudioWiringAdvisor {
     private static func mainSpeakerOutputs(
         in connections: StudioHomeConnections
     ) -> [StudioOutputConnection] {
-        connections.outputs.filter {
-            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
-        }.sorted {
-            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
+        let connectors = AssistantRoutingOutputResolver.resolve("mains", in: connections)?.reference.connectors ?? []
+        return connectors.compactMap { connector in
+            connections.outputs.first { $0.outputConnector == connector }
         }
     }
 

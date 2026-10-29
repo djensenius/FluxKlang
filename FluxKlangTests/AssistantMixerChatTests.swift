@@ -57,7 +57,9 @@ struct AssistantMixerChatTests {
         let backend = AssistantBackendHistoryStore()
         let chat = AssistantChatController(
             coordinator: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
-            store: AssistantConversationStore(local: backend, cloud: nil), generator: generator)
+            store: AssistantConversationStore(local: backend, cloud: nil), generator: generator,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
         chat.spokenRepliesEnabled = false
         chat.mixerExecutor = executor
         for text in [
@@ -84,7 +86,9 @@ struct AssistantMixerChatTests {
         let generator = AssistantBackendGenerator()
         let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
         let chat = AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator)
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
         chat.spokenRepliesEnabled = false
         chat.mixerExecutor = AssistantMixerExecutor(controller: { wing }, layout: { FaderLayout() })
         var context = AssistantBackendFixture.context()
@@ -116,14 +120,16 @@ struct AssistantMixerChatTests {
         let pending = coordinator.pendingStudioDraft
         let provider = AssistantBackendGenerator()
         let chat = AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider)
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: provider,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
         chat.spokenRepliesEnabled = false
         chat.mixerExecutor = AssistantMixerExecutor(controller: { wing }, layout: { FaderLayout() })
         for boundary in [".", ":", "&", "!", "?", "—"] {
             chat.composer = "route Synth to speakers\(boundary) mute main"
             chat.send(context: context)
             try await AssistantBackendFixture.wait { !chat.isStreaming }
-            #expect(chat.selectedConversation?.messages.last?.text.contains("No mixer changes") == true)
+            #expect(chat.selectedConversation?.messages.last?.text.contains("No draft was changed") == true)
             #expect(provider.calls == 0)
             #expect(coordinator.pendingStudioDraft == pending)
             #expect(wing.transportWriteCount == 0)
@@ -140,7 +146,9 @@ struct AssistantMixerChatTests {
         let generator = AssistantBackendGenerator()
         let executor = AssistantRecordingMixerExecutor()
         let chat = AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator)
+            store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil), generator: generator,
+            actionInterpreter: RoutingTestInterpreter(available: .unavailable("deterministic test")))
+        defer { chat.cancel() }
         chat.spokenRepliesEnabled = false
         chat.mixerExecutor = executor
         for text in ["help me set up my studio", "list equipment named Volume", "route Lower Synth to speakers"] {
@@ -150,7 +158,8 @@ struct AssistantMixerChatTests {
             #expect(executor.commands.isEmpty)
         }
         #expect(generator.calls == 1)
-        #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(chat.selectedConversation?.messages.last?.text.contains("No draft was changed") == true)
     }
 
     @Test func cancellationDoesNotReplayAndMissingExecutorIsTruthful() async throws {

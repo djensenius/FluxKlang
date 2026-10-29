@@ -24,6 +24,7 @@ struct StudioCompileIssue: Identifiable, Hashable, Sendable {
         case unsupportedEdge(StudioEdge.ID)
         case physicalConnection(StudioConnectionIssue.Kind)
         case legacyConnectionMigration(StudioConnectionMigrationIssue.ID)
+        case outputMappingChanged(UUID)
     }
 
     var severity: Severity
@@ -81,11 +82,13 @@ enum StudioSignalCompiler {
         let migrationIssues = input.connections.migrationIssues.map {
             StudioCompileIssue.warning(.legacyConnectionMigration($0.id), $0.message)
         }
-        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues)
+        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues
+            + input.outputMappingIssues(for: resourcePlan.allocations))
         let settings: [WingSetting]
         let hasPhysicalErrors = issues.contains {
             guard $0.severity == .error else { return false }
             if case .physicalConnection = $0.kind { return true }
+            if case .outputMappingChanged = $0.kind { return true }
             return false
         }
         if !hasPhysicalErrors {
@@ -362,15 +365,11 @@ enum StudioSignalCompiler {
         for allocations: [StudioEndpointAllocation],
         connections: StudioHomeConnections
     ) -> [WingSetting] {
-        let outputs = connections.outputs.filter {
-            $0.destinationName?.localizedCaseInsensitiveContains("main speaker") == true
-        }.sorted {
-            ($0.bank.rawValue, $0.connector) < ($1.bank.rawValue, $1.connector)
-        }
+        let outputs = AssistantRoutingOutputResolver.resolve("mains", in: connections)?.reference.connectors ?? []
         let maxMainCount = min(2, WingNodeKind.main.count)
         let mains = Array(1...maxMainCount)
         let outputSettings = zip(outputs, mains).flatMap { output, main in
-            WingOutputSource(group: .main, index: main).settings(forOutput: output.outputConnector)
+            WingOutputSource(group: .main, index: main).settings(forOutput: output)
         }
         let sendSettings = allocations.filter { $0.endpoint.destination == .finalMix }.flatMap { allocation in
             let buses = [allocation.controlNode, allocation.rightControlNode].compactMap { $0 }
@@ -474,6 +473,19 @@ enum StudioSignalCompiler {
             result.append(issue)
         }
         return result
+    }
+}
+
+private extension StudioCompilationInput {
+    func outputMappingIssues(for allocations: [StudioEndpointAllocation]) -> [StudioCompileIssue] {
+        let mainConnectors = AssistantRoutingOutputResolver.resolve(
+            "mains", in: connections.effectiveHome)?.reference.connectors
+        return allocations.compactMap { allocation in
+            guard allocation.endpoint.destination == .finalMix,
+                  let outputs = allocation.endpoint.outputConnectors, outputs != mainConnectors else { return nil }
+            return .error(.outputMappingChanged(allocation.endpoint.id),
+                          "The reviewed Main Speakers mapping changed. Create a new routing draft.")
+        }
     }
 }
 

@@ -80,4 +80,32 @@ struct AssistantRoutingAppModelTests {
             #expect(model.wing.transportWriteCount == 0)
         }
     }
+
+    @Test func graphChangesAfterPreparationBlockAcceptanceAndPreserveCurrentGraph() async throws {
+        let fixture = AssistantRoutingFixture()
+        for useEffect in [false, true] {
+            let model = try await model(fixture: fixture)
+            _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                                   model: model, interpreter: RoutingTestInterpreter())
+            let prior = try #require(model.assistant.pendingStudioDraft)
+            let changed: StudioGraph
+            if useEffect {
+                changed = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Now in use")])
+            } else {
+                let direct = StudioWiringAdvisor.build(request: .init(sourceInstrumentIDs: [fixture.solar.id]),
+                    equipment: fixture.equipment, effects: [fixture.effect], connections: fixture.connections,
+                    currentGraph: StudioGraph(), environmentID: model.environments.activeID)
+                changed = StudioGraph(nodes: direct.fragment.nodes.map(\.node),
+                                      edges: direct.fragment.edges.map(\.edge))
+            }
+            model.environments.replaceStudio(graph: changed, endpoints: [])
+            #expect(await model.acceptPendingAssistantDraft() == nil)
+            #expect(model.environments.activeStudioGraph == changed)
+            #expect(model.assistant.pendingStudioDraft?.id == prior.id)
+            #expect(model.assistant.pendingStudioDraft?.validation.contains {
+                $0.code == "routing-graph-changed"
+            } == true)
+            #expect(model.wing.transportWriteCount == 0)
+        }
+    }
 }

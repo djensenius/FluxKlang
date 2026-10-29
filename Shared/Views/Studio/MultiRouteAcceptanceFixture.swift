@@ -24,33 +24,41 @@ enum MultiRouteAcceptanceFixture {
         for move in appModel.studioConnections.connections.temporaryMoves {
             await appModel.studioConnections.removeTemporaryMove(move.id)
         }
-        let home = physicalHome(devices)
+        var home = physicalHome(devices)
+        let priorSource = Equipment(
+            id: UUID(uuidString: "B6326F55-CA48-4975-9EE8-1E567931D128")!,
+            name: "Preserved Synth", outputs: ["Out"])
+        if arguments.contains("-ui-test-multi-route-prior") {
+            appModel.equipment.add(priorSource)
+            home.inputs.append(.init(connector: 9, equipmentID: priorSource.id, outputPort: 0))
+        }
         try await appModel.studioConnections.replaceHome(home, equipment: appModel.equipment.items)
-        try seedPriorGraph(appModel, source: osmose)
-        let request = StudioWiringRequest(
-            sourceInstrumentIDs: [osmose.id],
-            destination: .finalMix,
-            additionalRoutes: [
-                StudioWiringRoute(
-                    sourceInstrumentIDs: [solar.id],
-                    effectChainIDs: [effect.id],
-                    destination: .finalMix,
-                    includesDrySignal: arguments.contains("-ui-test-multi-route-dry-parallel")
-                ),
-                StudioWiringRoute(
-                    sourceInstrumentIDs: [opxy.id],
-                    destination: .custom,
-                    outputConnectors: home.outputs.filter { $0.destinationName?.hasPrefix("Desk Speakers") == true }
-                        .map(\.outputConnector)
-                )
-            ],
-            applicationMode: arguments.contains("-ui-test-multi-route-replace") ? .replace : .append
-        )
-        let result = await appModel.assistant.perform(
-            .buildStudioDraft(request), context: appModel.assistantToolContext()
-        )
-        guard case .pendingDraft(let draft?) = result else {
-            throw FixtureError.invalidPhysicalDraft("Coordinator did not produce a pending Studio draft.")
+        if arguments.contains("-ui-test-multi-route-prior") {
+            try seedPriorGraph(appModel, source: priorSource)
+        }
+        let direct = "\(osmose.name) to mains"
+        let processed = "\(solar.name) through \(evilPet.name) to mains"
+        let desktop = "\(opxy.name) to desktop speakers"
+        let dry = arguments.contains("-ui-test-multi-route-dry-parallel")
+            ? "\(solar.name) dry and wet in parallel" : ""
+        let replace = arguments.contains("-ui-test-multi-route-replace") ? "replace the entire setup" : ""
+        let text = [direct, processed, desktop, dry, replace].filter { !$0.isEmpty }.joined(separator: ", ")
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: osmose.name, destination: "mains", destinationEvidence: direct),
+            .init(source: solar.name, effects: [evilPet.name], destination: "mains",
+                  destinationEvidence: processed, processingEvidence: processed,
+                  includesDrySignal: !dry.isEmpty, dryEvidence: dry),
+            .init(source: opxy.name, destination: "desktop speakers", destinationEvidence: desktop)
+        ], replacesSetup: !replace.isEmpty, modeEvidence: replace)
+        let context = appModel.assistantToolContext()
+        guard case .prepared(let draft) = AssistantRoutingPreparation.prepare(
+            text: text, intent: intent, context: context
+        ) else { throw FixtureError.invalidPhysicalDraft("Typed fixture preparation failed.") }
+        guard await appModel.assistant.commitPreparedRouting(
+            draft, expectedPending: appModel.assistant.pendingStudioDraft,
+            preparedContext: context, currentContext: context
+        ) else {
+            throw FixtureError.invalidPhysicalDraft("Coordinator did not stage the prepared Studio draft.")
         }
         try requireValid(draft)
         guard appModel.wing.transportWriteCount == 0 else { throw FixtureError.unexpectedTransportWrite }

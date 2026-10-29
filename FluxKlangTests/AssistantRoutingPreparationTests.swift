@@ -221,6 +221,90 @@ struct AssistantRoutingPreparationTests {
         #expect(refreshed.fragment.edges.count == 4)
     }
 
+    @Test func omittedRepeatedSourceDirectivesCannotHideBehindCoveredNamesOrBroadEvidence() {
+        let fixture = AssistantRoutingFixture()
+        let text = AssistantRoutingFixture.text + " and also Solar directly to desktop speakers"
+        #expect(fixture.rejects(text: text))
+        var broad = AssistantRoutingFixture.intent
+        broad.branches[1].destinationEvidence = text
+        broad.branches[1].processingEvidence = text
+        #expect(fixture.rejects(text: text, intent: broad))
+    }
+
+    @Test func interveningSourceAndPhysicalEffectGraphUseInvalidatesPreparedDraft() throws {
+        let fixture = AssistantRoutingFixture()
+        let draft = try fixture.prepared()
+        let direct = StudioWiringAdvisor.build(request: .init(sourceInstrumentIDs: [fixture.solar.id]),
+            equipment: fixture.equipment, effects: [fixture.effect], connections: fixture.connections,
+            currentGraph: StudioGraph())
+        let directGraph = StudioGraph(nodes: direct.fragment.nodes.map(\.node),
+                                      edges: direct.fragment.edges.map(\.edge))
+        let effectGraph = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Now in use")])
+        for graph in [directGraph, effectGraph] {
+            let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
+                effects: [fixture.effect], connections: fixture.connections,
+                currentGraph: graph, currentEnvironmentID: nil)
+            #expect(refreshed.hasErrors)
+            #expect(refreshed.validation.contains { $0.code == "routing-graph-changed" })
+        }
+    }
+
+    @Test func reversedSpeakerNumberingPreservesSidesAndSideDriftInvalidatesReview() throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.globalConnections.home.outputs[2].connector = 6
+        context.globalConnections.home.outputs[3].connector = 5
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let draft = try fixture.prepared(context: context)
+        let desk = try #require(draft.fragment.endpoints.first { $0.destination == .custom })
+        #expect(desk.outputConnectors == [.init(index: 6), .init(index: 5)])
+        let graph = StudioGraph(nodes: draft.fragment.nodes.map(\.node), edges: draft.fragment.edges.map(\.edge))
+        let compiled = StudioSignalCompiler.compile(.init(graph: graph, endpoints: draft.fragment.endpoints,
+            effects: [fixture.effect], connections: context.globalConnections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(!compiled.hasErrors)
+        let allocation = try #require(compiled.resourcePlan.allocations.first { $0.endpoint.id == desk.id })
+        let values = Dictionary(compiled.settings.map { ($0.address, $0.value) }, uniquingKeysWith: { _, last in last })
+        #expect(values[WingAddress.outputSourceIndex(6)] == .int(Int32(allocation.controlNode.index)))
+        let right = try #require(allocation.rightControlNode)
+        #expect(values[WingAddress.outputSourceIndex(5)] == .int(Int32(right.index)))
+        context.globalConnections.home.outputs[2].destinationName = "Desk Speakers R"
+        context.globalConnections.home.outputs[3].destinationName = "Desk Speakers L"
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
+            effects: [fixture.effect], connections: context.globalConnections,
+            currentGraph: StudioGraph(), currentEnvironmentID: nil)
+        #expect(refreshed.validation.contains { $0.code == "destination-changed" })
+    }
+
+    @Test func exactMainGroupAgreesWithCompilerAndMappingDriftFailsClosed() throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.globalConnections.home.outputs += [
+            .init(connector: 1, destinationName: "Backup Main Speakers L"),
+            .init(connector: 2, destinationName: "Backup Main Speakers R")
+        ]
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let draft = try fixture.prepared(context: context)
+        let graph = StudioGraph(nodes: draft.fragment.nodes.map(\.node), edges: draft.fragment.edges.map(\.edge))
+        let compiled = StudioSignalCompiler.compile(.init(graph: graph, endpoints: draft.fragment.endpoints,
+            effects: [fixture.effect], connections: context.globalConnections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(!compiled.hasErrors)
+        let values = Dictionary(compiled.settings.map { ($0.address, $0.value) }, uniquingKeysWith: { _, last in last })
+        #expect(values[WingAddress.outputSourceGroup(7)] == .string("MAIN"))
+        #expect(values[WingAddress.outputSourceIndex(7)] == .int(1))
+        #expect(values[WingAddress.outputSourceIndex(8)] == .int(2))
+        #expect(values[WingAddress.outputSourceGroup(1)] == nil)
+        #expect(values[WingAddress.outputSourceGroup(2)] == nil)
+        context.globalConnections.home.outputs[4].destinationName = "Main Speakers R"
+        context.globalConnections.home.outputs[5].destinationName = "Main Speakers L"
+        let drifted = StudioSignalCompiler.compile(.init(graph: graph, endpoints: draft.fragment.endpoints,
+            effects: [fixture.effect], connections: context.globalConnections,
+            equipment: fixture.equipment, speakers: []))
+        #expect(drifted.hasErrors)
+        #expect(drifted.settings.isEmpty)
+    }
+
     @Test func onlyIsScopedAndExclusionsNeverBecomePositiveOrReplacement() throws {
         let fixture = AssistantRoutingFixture()
         let text = "only Solar going through evil pet to mains without Osmose"

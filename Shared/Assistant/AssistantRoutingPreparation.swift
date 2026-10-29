@@ -71,25 +71,28 @@ enum AssistantRoutingPreparation {
         draft.liveReferences = request.liveReferences
         draft.outputReferences = request.outputReferences
         guard !draft.hasErrors else { return failure }
-        // Existing effects are shared physical devices, not independently instantiated processors.
-        if !intent.replacesSetup {
-            let existingEffects = context.graph.nodes.compactMap { node -> Effect.ID? in
-                if case .effect(let id) = node.kind { return id }
-                return nil
-            }
-            let existingSourceNodes = Set(context.graph.nodes.compactMap { node -> StudioNode.ID? in
-                if case .instrument(let id) = node.kind, sources.contains(id) { return node.id }
-                return nil
-            })
-            let existingEffectDevices = Set(context.effects.filter {
-                existingEffects.contains($0.id)
-            }.compactMap(\.equipmentID))
-            guard usedEffects.isDisjoint(with: existingEffects),
-                  usedEffectDevices.isDisjoint(with: existingEffectDevices),
-                  !context.graph.edges.contains(where: { existingSourceNodes.contains($0.from.nodeID) })
-            else { return failure }
-        }
+        guard intent.replacesSetup || !conflictsWithExistingGraph(
+            draft.request, effects: context.effects, graph: context.graph) else { return failure }
         return .prepared(draft)
+    }
+
+    static func conflictsWithExistingGraph(
+        _ request: StudioPatchRequest, effects: [Effect], graph: StudioGraph
+    ) -> Bool {
+        let sources = Set(request.sourceInstrumentIDs + request.additionalRoutes.flatMap(\.sourceInstrumentIDs))
+        let usedEffects = Set(request.effectChainIDs + request.additionalRoutes.flatMap(\.effectChainIDs))
+        let existingEffects = Set(graph.nodes.compactMap { node -> Effect.ID? in
+            if case .effect(let id) = node.kind { return id }
+            return nil
+        })
+        let existingSourceNodes = Set(graph.nodes.compactMap { node -> StudioNode.ID? in
+            if case .instrument(let id) = node.kind, sources.contains(id) { return node.id }
+            return nil
+        })
+        let existingDevices = Set(effects.filter { existingEffects.contains($0.id) }.compactMap(\.equipmentID))
+        let usedDevices = Set(effects.filter { usedEffects.contains($0.id) }.compactMap(\.equipmentID))
+        return !usedEffects.isDisjoint(with: existingEffects) || !usedDevices.isDisjoint(with: existingDevices)
+            || graph.edges.contains { existingSourceNodes.contains($0.from.nodeID) }
     }
 
     /// Cancellation/unavailability/misclassification never falls through to a regex or external provider.
@@ -148,6 +151,7 @@ enum AssistantRoutingPreparation {
     /// Coverage is a rejection fence, not a topology parser. Unknown names, referents and unsupported
     /// operators must not disappear from an otherwise valid subset. Apple alone supplies branch scope.
     private static func completeCoverage(_ intent: AssistantRoutingIntent, text: String) -> Bool {
+        guard intent.branches.allSatisfy({ sourceOccurrencesCovered($0, in: text) }) else { return false }
         var remaining = text
         for evidence in intent.exclusionEvidence {
             let positiveNames = intent.branches.flatMap { [$0.source] + $0.effects }
@@ -179,5 +183,22 @@ enum AssistantRoutingPreparation {
            !intent.branches.contains(where: \.includesDrySignal) { return false }
         if AssistantRoutingOwnership.word("without|except|not|don't|never|exclude", in: remaining) { return false }
         return true
+    }
+
+    private static func sourceOccurrencesCovered(_ branch: AssistantRoutingIntent.Branch, in text: String) -> Bool {
+        let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: branch.source)
+            + "(?![\\p{L}\\p{N}])"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return false }
+        let evidence = [branch.destinationEvidence, branch.processingEvidence, branch.dryEvidence]
+            .filter { !$0.isEmpty }
+        // A broad copied span must not hide an additional directive for the same source.
+        guard evidence.allSatisfy({
+            regex.numberOfMatches(in: $0, range: NSRange($0.startIndex..<$0.endIndex, in: $0)) == 1
+        }) else { return false }
+        let covered = evidence.compactMap { text.range(of: $0) }
+        return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).allSatisfy {
+            guard let occurrence = Range($0.range, in: text) else { return false }
+            return covered.contains { $0.lowerBound <= occurrence.lowerBound && $0.upperBound >= occurrence.upperBound }
+        }
     }
 }
