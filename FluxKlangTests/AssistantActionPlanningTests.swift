@@ -454,4 +454,18 @@ extension AssistantActionPlanningTests {
             await state.wing.disconnect()
         }
     }
+
+    @Test func unsupportedPreampRequestNeverCreatesFaderReviewOrSendsSET() async {
+        let (state, transport, service) = await fixture()
+        let submission = request("set channel 7 preamp gain to 10 dB", state: state)
+        let intent = AssistantActionIntent(targetMention: "channel 7", action: .setDB, amount: 10,
+            addToStudio: false, evidence: .init(target: "channel 7", action: "set", amount: "10 dB", add: nil))
+        let outcome = await service.prepare(submission, interpretation: .proposal(intent))
+        if case .clarification = outcome {} else { Issue.record("Preamp request became a fader review") }
+        #expect(service.pendingReview == nil)
+        #expect(await transport.queries.isEmpty)
+        #expect(await transport.writes.isEmpty)
+        #expect(state.scope.graph.nodes.isEmpty)
+        await state.wing.disconnect()
+    }
 }

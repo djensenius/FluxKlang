@@ -114,6 +114,43 @@ struct AssistantReviewedChatTests {
         }
     }
 
+    @Test func installedPlannerPreservesRoutingNamesButBlocksMixedUnavailableActions() async throws {
+        let gear = Equipment(name: "Lower Synth")
+        let context = AssistantBackendFixture.context(equipment: [gear],
+            inputs: [.init(connector: 7, equipmentID: gear.id, outputPort: 0)])
+        for fails in [false, true] {
+            let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+            let provider = AssistantBackendGenerator()
+            let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+            let planner = ReviewedChatPlanner()
+            let interpreter = ReviewedChatInterpreter(result: .answer,
+                availability: fails ? .available : .unavailable("disabled"), fails: fails)
+            let chat = makeChat(interpreter: interpreter, planner: planner, provider: preflight,
+                                coordinator: coordinator)
+            let legacy = AssistantRecordingMixerExecutor()
+            chat.mixerExecutor = legacy
+            chat.composer = "route Lower Synth to speakers"
+            chat.send(context: context)
+            try await AssistantBackendFixture.wait { !chat.isStreaming }
+            #expect(coordinator.pendingStudioDraft?.request.sourceInstrumentIDs == [gear.id])
+            let original = try #require(coordinator.pendingStudioDraft)
+            #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == false)
+            for suffix in ["and mute main", "; unsilence Astrolab", "and could you attenuate Astrolab",
+                           "and make Astrolab softer", "and Astrolab quieter", "and set channel 7 to -10 dB"] {
+                chat.composer = "route Lower Synth to speakers \(suffix)"
+                chat.send(context: context)
+                try await AssistantBackendFixture.wait { !chat.isStreaming }
+                #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true)
+                #expect(coordinator.pendingStudioDraft == original)
+                #expect(planner.pendingReview == nil)
+            }
+            #expect(provider.calls == 0)
+            #expect(planner.intents.isEmpty)
+            #expect(planner.confirmations == 0)
+            #expect(legacy.commands.isEmpty)
+        }
+    }
+
     @Test func cancellationAndSupersessionCannotPublishLateInterpretationOrConfirm() async throws {
         let interpreter = ReviewedChatSuspendedInterpreter()
         let planner = ReviewedChatPlanner()

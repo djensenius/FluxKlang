@@ -282,6 +282,24 @@ struct AssistantActionInterpretationTests {
         }
     }
 
+    @Test func unsupportedControlsCannotBecomeFaderChangesButTargetNamesRemainIntact() {
+        for control in ["preamp gain", "input gain", "trim", "EQ", "compressor threshold", "pan", "bus send"] {
+            rejectInBothLayers(.init(disposition: .proposal, target: "channel 7", action: .setDB, amount: 10,
+                targetEvidence: "channel 7", actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set channel 7 \(control) to 10 dB")
+        }
+        for control in ["fader", "volume"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: "channel 7", action: .setDB, amount: 10,
+                targetEvidence: "channel 7", actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set channel 7 \(control) to 10 dB")
+        }
+        for target in ["Preamp Synth", "EQ Keys", "Bus Send Synth"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: 10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "10 dB"),
+                text: "set \(target) volume to 10 dB")
+        }
+    }
+
     @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
         for (text, output) in [
             ("silence Astrolab", malformed(.mute, action: "silence")),

@@ -91,7 +91,8 @@ enum AssistantActionIntentValidator {
         }
         let clause = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
-        guard !hasUnrepresentedTargets(in: clause), mixerVerbCount(in: clause) <= 1 else { return false }
+        guard !hasUnsupportedControl(in: clause), !hasUnrepresentedTargets(in: clause),
+              mixerVerbCount(in: clause) <= 1 else { return false }
         // Multiple source/destination numbers cannot be bound safely by copied spans alone.
         if let amount = intent.amount, number(in: clause) != amount { return false }
         let lower = hasWord(actionWords(.lower), in: clause)
@@ -149,6 +150,16 @@ enum AssistantActionIntentValidator {
         let pattern = #"(?:\b(?:and|plus|along with|as well as)\b|[,&/])\s*+(?!(?:"# + actions + #")\b)"#
         return hasWord(["both"], in: clause)
             || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func hasUnsupportedControl(in clause: String) -> Bool {
+        hasWord(
+            ["preamp", "preamplifier", "headamp", "trim", "pan", "balance", "eq", "equalizer", "equaliser",
+             "compressor", "compression", "threshold", "ratio", "attack", "release", "gate", "filter",
+             "frequency", "hpf", "lpf", "phantom", "48v", "send", "sends", "bus", "aux", "routing", "route", "patch"],
+            in: clause)
+            || clause.range(of: #"\binput\s+(?:gain|level|trim)\b"#,
+                            options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func mixerVerbCount(in text: String) -> Int {

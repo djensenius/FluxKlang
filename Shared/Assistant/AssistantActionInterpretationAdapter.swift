@@ -168,6 +168,16 @@ enum AssistantActionInterpretationAdapter {
     /// This does not interpret actions; it prevents unknown action-looking input reaching cloud Q&A.
     static func isPlausibleAction(_ text: String) -> Bool {
         if isNonActionSubmission(text) { return false }
+        // In a direct routing clause, action-looking words may be equipment names.
+        // Only a separate mixer clause (or numeric mixer units) should block routing preflight.
+        if text.range(of: #"^\s*(?:please\s+)?(?:route|wire|connect|patch|send)\s+.+?\s+(?:to|through|via|into)\s+\S"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil {
+            let clauses = text.replacingOccurrences(
+                of: #"[.,;:&?!—–\n]|\b(?:and|then|also|but)\b"#, with: "\n",
+                options: [.regularExpression, .caseInsensitive]).split(separator: "\n")
+            return clauses.dropFirst().contains { isPlausibleAction(String($0)) }
+                || word("db|percent", in: text) || text.contains("%")
+        }
         return word("volume|fader|quieter|louder|softer|mute|unmute|silence|unsilence|down|up|level|gain|db|percent|"
                     + "boost|cut|reduce|increase|decrease|attenuate|bring|lower|raise|set|turn|make", in: text)
             || (word("add|include", in: text) && word("shortcut", in: text))
