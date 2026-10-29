@@ -148,7 +148,9 @@ enum AssistantActionIntentValidator {
                        "lower", "raise", "reduce", "decrease", "increase", "boost", "attenuate",
                        "cut", "mute", "unmute", "silence", "unsilence"].joined(separator: "|")
         let pattern = #"(?:\b(?:and|plus|along with|as well as)\b|[,&/])\s*+(?!(?:"# + actions + #")\b)"#
-        return hasWord(["both"], in: clause)
+        return hasWord(
+            ["both", "except", "excepting", "exclude", "excludes", "excluding", "without", "besides", "but",
+             "omit", "omitting", "other than", "apart from", "save for", "leave out"], in: clause)
             || clause.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
@@ -156,7 +158,8 @@ enum AssistantActionIntentValidator {
         hasWord(
             ["preamp", "preamplifier", "headamp", "trim", "pan", "balance", "eq", "equalizer", "equaliser",
              "compressor", "compression", "threshold", "ratio", "attack", "release", "gate", "filter",
-             "frequency", "hpf", "lpf", "phantom", "48v", "send", "sends", "bus", "aux", "routing", "route", "patch"],
+             "frequency", "hpf", "lpf", "phantom", "48v", "send", "sends", "bus", "aux", "routing", "route", "patch",
+             "wire", "connect", "rewire", "reroute"],
             in: clause)
             || clause.range(of: #"\binput\s+(?:gain|level|trim)\b"#,
                             options: [.regularExpression, .caseInsensitive]) != nil

@@ -468,4 +468,27 @@ extension AssistantActionPlanningTests {
         #expect(state.scope.graph.nodes.isEmpty)
         await state.wing.disconnect()
     }
+
+    @Test func excludedOrMixedRoutingTargetNeverCreatesMuteReviewOrQueries() async {
+        // No connection background GETs: assert rejection before the console is even requested.
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(
+            controller: { controllerReads += 1; return state.wing }, layout: { state.layout },
+            scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+        let intent = AssistantActionIntent(targetMention: "Astrolab", action: .mute, amount: nil,
+            addToStudio: false, evidence: .init(target: "Astrolab", action: "mute", amount: nil, add: nil))
+        for text in ["mute everything except Astrolab", "mute all channels excluding Astrolab",
+                     "route Astrolab to speakers and mute it", "connect Astrolab to speakers and mute it"] {
+            let outcome = await service.prepare(request(text, state: state), interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Excluded or mixed target became a mute review") }
+            #expect(service.pendingReview == nil)
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+            #expect(state.scope.graph.nodes.isEmpty)
+        }
+        await state.wing.disconnect()
+    }
 }

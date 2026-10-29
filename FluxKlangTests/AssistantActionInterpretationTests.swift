@@ -300,6 +300,27 @@ struct AssistantActionInterpretationTests {
         }
     }
 
+    @Test func excludedTargetsCannotBecomePositiveMuteTargetsButNamesRemainScoped() {
+        for text in ["mute everything except Astrolab", "mute all channels excluding Astrolab",
+                     "mute everything other than Astrolab", "mute everything apart from Astrolab",
+                     "mute everything but Astrolab", "mute Astrolab excluding Juno"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"), text: text)
+        }
+        for target in ["Except Synth", "Excluding Keys", "Other Than Synth", "But Synth"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .mute,
+                targetEvidence: target, actionEvidence: "mute"), text: "mute \(target)")
+        }
+    }
+
+    @Test func generatedMuteCannotSilentlyDropRoutingInstructions() {
+        for verb in ["route", "wire", "connect", "patch", "send", "reroute", "rewire"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"),
+                               text: "\(verb) Astrolab to speakers and mute it")
+        }
+        expectAcceptedInBothLayers(.init(disposition: .proposal, target: "Wire Synth", action: .mute,
+            targetEvidence: "Wire Synth", actionEvidence: "mute"), text: "mute Wire Synth")
+    }
+
     @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
         for (text, output) in [
             ("silence Astrolab", malformed(.mute, action: "silence")),
