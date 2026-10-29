@@ -302,7 +302,14 @@ enum AssistantActionIntentValidator {
         }
     }
 
-    static func hasDBUnit(in text: String) -> Bool { hasAmountUnit(#"(?:db|decibels?)"#, in: text) }
+    private static let decibelUnit = #"(?:db|decibels?)"#
+
+    static func hasDBUnit(in text: String) -> Bool { hasAmountUnit(decibelUnit, in: text) }
+
+    static func mentionsDBUnit(in text: String) -> Bool {
+        text.range(of: #"(?<![\p{L}\p{N}_])"# + decibelUnit + #"(?![\p{L}\p{N}_])"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     private static func hasAmountUnit(_ unit: String, in text: String) -> Bool {
         let pattern = #"^\s*[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*"# + unit + #"\s*$"#
