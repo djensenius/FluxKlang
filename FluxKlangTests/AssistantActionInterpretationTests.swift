@@ -115,6 +115,50 @@ struct AssistantActionInterpretationTests {
             request: .init(text: "Could you add my mother-32 and turn the volume to 50%?"))
     }
 
+    @Test func copiedSpansCannotChangeOperationsOrOmitExplicitInstructions() {
+        let cases: [(String, AssistantActionModelOutput)] = [
+            ("turn Astrolab down by 3 dB", malformed(.setDB, amount: 3, action: "turn", evidence: "3 dB")),
+            ("turn Astrolab down by 10%", malformed(.setFaderPercent, amount: 10, action: "turn", evidence: "10%")),
+            ("turn Astrolab up by 3 dB", malformed(.setDB, amount: 3, action: "turn", evidence: "3 dB")),
+            ("turn Astrolab down to 3 dB", malformed(.lower, amount: 3, action: "down", evidence: "3 dB")),
+            ("turn Astrolab down then up by 3 dB", malformed(.lower, amount: 3, action: "down", evidence: "3 dB")),
+            ("turn Astrolab down by 12dB", malformed(.lower, action: "down")),
+            ("turn Astrolab down by twelve dB", malformed(.lower, action: "down")),
+            ("add Astrolab and turn the volume to 50%", malformed(nil, add: true)),
+            ("add Astrolab and mute it", malformed(nil, add: true))
+        ]
+        for (text, output) in cases {
+            expectRejected(output, request: .init(text: text))
+            let intent = AssistantActionIntent(
+                targetMention: output.target, action: output.action, amount: output.amount,
+                addToStudio: output.addToStudio,
+                evidence: .init(target: output.targetEvidence, action: output.actionEvidence,
+                                amount: output.amountEvidence, add: output.addEvidence))
+            #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) != nil)
+        }
+        let text = "add my mother-32 and turn the volume to 50%"
+        let omitted = AssistantActionIntent(targetMention: "mother-32", action: nil, amount: nil, addToStudio: true,
+            evidence: .init(target: "mother-32", action: nil, amount: nil, add: "add"))
+        #expect(AssistantActionIntentValidator.clarification(for: omitted, text: text) != nil)
+        expectRejected(.init(disposition: .proposal, target: "mother-32", addToStudio: true,
+                             targetEvidence: "mother-32", addEvidence: "add"), request: .init(text: text))
+        let relative = malformed(.lower, amount: 3, action: "down", evidence: "3 dB")
+        guard case .proposal(let intent) = AssistantActionInterpretationAdapter.validate(
+            relative, request: .init(text: "I would like you to turn Astrolab down by 3 dB"))
+        else { Issue.record("An introductory 'to' is not an absolute destination"); return }
+        #expect(AssistantActionIntentValidator.clarification(
+            for: intent, text: "I would like you to turn Astrolab down by 3 dB") == nil)
+    }
+
+    private func malformed(
+        _ operation: AssistantActionIntent.Action?, amount: Double? = nil,
+        action: String? = nil, evidence: String? = nil, add: Bool = false
+    ) -> AssistantActionModelOutput {
+        .init(disposition: .proposal, target: "Astrolab", action: operation, amount: amount,
+              addToStudio: add, targetEvidence: "Astrolab", actionEvidence: action,
+              amountEvidence: evidence, addEvidence: add ? "add" : nil)
+    }
+
     @Test func promptOmitsAllLiveMetadataAndBoundsTotalInputWithoutTruncation() throws {
         var live = AssistantLiveWingContext.unavailable
         live.observations = (1...100).map { index in

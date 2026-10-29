@@ -1,5 +1,23 @@
 import Foundation
 
+/// One-way latch: restoring an observed value never restores review authority.
+final class AssistantActionReviewValidity: @unchecked Sendable {
+    private let lock = NSLock()
+    private var valid = true
+
+    var isValid: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return valid
+    }
+
+    func invalidate() {
+        lock.lock()
+        defer { lock.unlock() }
+        valid = false
+    }
+}
+
 extension AssistantActionController {
     static var discoveryAddresses: [String] {
         (1...40).flatMap {

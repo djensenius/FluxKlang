@@ -40,7 +40,7 @@ struct AssistantCardView: View {
                     }
                 }
             case .actionReview(let id, let summary):
-                AssistantActionReviewCard(reviewID: id, summary: summary, planner: appModel.assistantActions)
+                AssistantActionReviewCard(submissionID: id, summary: summary, planner: appModel.assistantActions)
             case .pendingDraft(_, let summary, let hasErrors):
                 AssistantInlineCard(title: "Pending Draft", systemImage: "doc.badge.clock") {
                     Text(summary)

@@ -19,6 +19,7 @@ extension AssistantActionController {
             activeAuthorization = nil
         }
         let version = operationID
+        var reviewValidated = false
         var executionScope = plan.scope
         var localStatus: AssistantActionResult.LocalStatus = plan.intent.addToStudio ? .notAttempted : .notRequested
         var shortcutID: UUID?
@@ -27,13 +28,15 @@ extension AssistantActionController {
             recordResult(
                 .init(
                     id: UUID(), reviewID: reviewID, localStatus: localStatus,
-                    shortcutNodeID: shortcutID, members: outcomes, message: message))
+                    shortcutNodeID: shortcutID, members: outcomes, message: message,
+                    submissionID: plan.request.submissionID))
         }
         func current() -> Bool {
             isCurrent(
                 version, wing: plan.wing, session: plan.session,
                 originalScope: executionScope, strips: plan.strips)
                 && plan.deadline > .now && plan.review.expiresAt > Date()
+                && (reviewValidated || plan.validity.isValid)
         }
         guard current(), let target = plan.review.target,
             let candidate = plan.review.candidates.first(where: { $0.id == plan.review.selectedCandidateID })
@@ -69,6 +72,9 @@ extension AssistantActionController {
         guard current(), ContinuousClock.now < evidenceDeadline else {
             return result("No changes: final evidence expired. Prepare a new preview.")
         }
+        // From here, local insertion and completed SET echoes are expected changes.
+        // Each remaining member gets its own final-send observation below, without an await gap.
+        reviewValidated = true
         if plan.intent.addToStudio {
             guard let environmentID = executionScope.environmentID,
                 target.members.allSatisfy({ $0.identity.node.kind == .channel })

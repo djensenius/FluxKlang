@@ -21,6 +21,9 @@ enum AssistantActionIntentValidator {
         }
         let actionText = text.replacingOccurrences(
             of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
+        guard preservesMeaning(intent, in: actionText) else {
+            return "No changes: the interpretation omitted or changed the requested operation or amount."
+        }
         guard mixerVerbCount(in: actionText) <= 1 else {
             return "No changes: multiple mixer actions need a new direct request."
         }
@@ -82,6 +85,33 @@ enum AssistantActionIntentValidator {
         case .mute, .unmute: break
         }
         return nil
+    }
+
+    /// Copied spans alone do not prove that the model preserved the current clause's meaning.
+    static func preservesMeaning(_ intent: AssistantActionIntent, in text: String) -> Bool {
+        let clause = text.replacingOccurrences(
+            of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
+        let lower = hasWord(
+            ["lower", "down", "reduce", "decrease", "quieter", "softer", "cut", "attenuate"], in: clause)
+        let raise = hasWord(["raise", "up", "increase", "louder", "boost"], in: clause)
+        let mute = hasWord(["mute", "silence"], in: clause)
+        let unmute = hasWord(["unmute", "unsilence"], in: clause)
+        if intent.amount == nil,
+           clause.contains("%") || hasWord(["by", "db", "decibel", "decibels", "percent"], in: clause)
+            || clause.range(of: #"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"#, options: .regularExpression) != nil { return false }
+        let destination = clause.range(
+            of: #"\b(?:to|at)\s*[+-]?(?:\d|\.)"#, options: [.regularExpression, .caseInsensitive]) != nil
+        switch intent.action {
+        case .none:
+            return !lower && !raise && !hasWord(
+                ["set", "turn", "put", "bring", "adjust", "change", "make", "mute", "unmute", "silence"], in: clause)
+        case .lower: return lower && !raise && !destination && !mute && !unmute
+        case .raise: return raise && !lower && !destination && !mute && !unmute
+        case .setDB, .setFaderPercent:
+            return !lower && !raise && !mute && !unmute && !hasWord(["by"], in: clause)
+        case .mute: return !lower && !raise && !unmute
+        case .unmute: return !lower && !raise && !mute
+        }
     }
 
     private static func mixerVerbCount(in text: String) -> Int {

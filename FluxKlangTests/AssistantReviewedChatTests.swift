@@ -31,7 +31,7 @@ struct AssistantReviewedChatTests {
             #expect(provider.calls == 0)
             #expect(coordinator.pendingStudioDraft == nil)
             #expect(chat.selectedConversation?.messages.last?.cards == [
-                .actionReview(id: try #require(planner.pendingReview?.id), summary: "Review only; no changes")
+                .actionReview(id: try #require(planner.pendingReview?.submissionID), summary: "Review only; no changes")
             ])
         }
     }

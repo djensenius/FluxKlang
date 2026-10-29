@@ -134,6 +134,8 @@ struct AssistantActionResult: Identifiable, Hashable, Sendable {
     let shortcutNodeID: UUID?
     let members: [Member]
     let message: String
+    /// Stable chat-card linkage only; confirmation still requires the live reviewID.
+    var submissionID: UUID?
 }
 
 /// Inject this narrow surface into chat; do not inject AppModel, WingController or a model tool.
