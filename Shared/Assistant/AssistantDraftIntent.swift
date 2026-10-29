@@ -80,11 +80,7 @@ enum AssistantDraftIntent {
         let current = request.question.lowercased()
         let isRetry = current.contains("try again") || current.contains("connected now")
         guard hasRoutingIntent(current) || isRetry else { return nil }
-        let recentUserText = request.recentMessages.suffix(8)
-            .filter { $0.role == .user }
-            .map(\.text)
-            .joined(separator: "\n")
-        let groundingText = isRetry ? recentUserText + "\n" + request.question : request.question
+        guard let groundingText = routingQuestion(from: request) else { return nil }
         let effectEquipmentIDs = Set(request.context.effects.compactMap(\.equipmentID))
         let resolution = AssistantSourceResolver.resolve(
             groundingText, context: request.context, excluding: effectEquipmentIDs
@@ -201,6 +197,26 @@ enum AssistantDraftIntent {
 }
 
 extension AssistantDraftIntent {
+    /// Retry one identifiable routing request, not the conversation's opening
+    /// inventory/help intent. Multiple historical routes require clarification.
+    static func routingQuestion(from request: AssistantGenerationRequest) -> String? {
+        func isRetry(_ text: String) -> Bool {
+            let text = text.lowercased()
+            return text.contains("try again") || text.contains("connected now")
+        }
+        guard isRetry(request.question) else { return request.question }
+        let history = request.recentMessages.suffix(8).filter { $0.role == .user }.map(\.text)
+        let candidates = history.indices.filter {
+            !isRetry(history[$0]) && !requestsDraftAmendment(history[$0])
+                && requestsSourceDraft(history[$0]) && hasRoutingIntent(history[$0].lowercased())
+        }
+        guard candidates.count == 1, let index = candidates.first else { return nil }
+        let amendments = (Array(history.dropFirst(index + 1)) + [request.question]).filter {
+            requestsDraftAmendment($0) || !exclusionClauses(in: $0).isEmpty
+        }
+        return ([history[index]] + amendments).joined(separator: "\n")
+    }
+
     /// Only source positions participate in gear/alias lookup. Effect and
     /// destination scribbles are metadata, not extra source instruments.
     static func sourceMentionText(_ question: String) -> String {
@@ -209,21 +225,24 @@ extension AssistantDraftIntent {
             with: "", options: .regularExpression)
         let clauses = normalized.replacingOccurrences(of: #"\bthen\b|[,;\n]"#,
             with: "\n", options: .regularExpression)
-            .replacingOccurrences(of: #"\band\b"#, with: "\nand ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+and\s+(?!(?:to|through|via|into|towards|and)\b)"#,
+                                  with: "\n& ", options: .regularExpression)
             .components(separatedBy: "\n")
         var continuesSources = true
         var completedDestination = false
         return clauses.compactMap { text -> String? in
             let text = text.trimmingCharacters(in: .whitespaces)
-            let coordinated = text.hasPrefix("and ")
-            let clause = coordinated ? String(text.dropFirst(4)) : text
+            let coordinated = text.hasPrefix("& ")
+            let clause = coordinated ? String(text.dropFirst(2)) : text
             let from = clause.range(of: " from ")
             let hasNewSource = continuesSources || from != nil || clause.contains(" through ")
                 || (coordinated && completedDestination && clause.range(of: #"\s+(?:to|via|into|towards)\s+"#,
                                                options: .regularExpression) != nil)
                 || clause.range(of: #"^\s*(?:route|connect|wire|patch|add|include)\b"#,
                                 options: .regularExpression) != nil
-            let source = from.map { String(clause[$0.upperBound...]) } ?? clause
+            let source = from.map { String(clause[$0.upperBound...]) } ?? clause.replacingOccurrences(
+                of: #"^\s*(?:route|connect|wire|patch|add|include|use)\s+(?!(?:to|through|via|into|towards)\b)"#,
+                with: "", options: .regularExpression)
             let boundary = source.range(of: #"\s+(?:through|via|to|into|towards)\s+"#,
                                         options: .regularExpression)
             completedDestination = completedDestination
@@ -231,7 +250,7 @@ extension AssistantDraftIntent {
             continuesSources = hasNewSource && boundary == nil
             guard hasNewSource else { return nil }
             return boundary.map { String(source[..<$0.lowerBound]) } ?? source
-        }.joined(separator: " and ")
+        }.joined(separator: "\n")
     }
 
     private static func hasRoutingIntent(_ normalized: String) -> Bool {
@@ -493,6 +512,12 @@ struct AssistantDraftPreflightGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        guard let question = AssistantDraftIntent.routingQuestion(from: request) else {
+            return textStream("Which routing request should I retry? Restate the sources, effects and destination.")
+        }
+        let request = AssistantGenerationRequest(
+            question: question, recentMessages: request.recentMessages,
+            summary: request.summary, context: request.context)
         if AssistantDraftIntent.requestsInventory(request.question) {
             return inventoryStream(context: request.context)
         }

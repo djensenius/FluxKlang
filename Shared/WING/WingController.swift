@@ -440,7 +440,6 @@ final class WingController {
             }
         }
     }
-
     private func ingest(_ message: WingIncoming) {
         guard connection.isConnected, sessionID != nil,
               message.receivedAt >= sessionStartedAt,
@@ -449,7 +448,8 @@ final class WingController {
                   && peerHosts.contains(message.host) && message.port == port),
               let value = message.effectiveValue else { return }
         mixerBaselineAuthorizations.record(message.address, value: value)
-        if message.address.hasSuffix("/name"), liveObservations.values[message.address] != value {
+        let previousName = liveObservations.values[message.address] ?? confirmedValues[message.address]
+        if message.address.hasSuffix("/name"), previousName != value {
             confirmedNameRevision += 1
         }
         values[message.address] = value
