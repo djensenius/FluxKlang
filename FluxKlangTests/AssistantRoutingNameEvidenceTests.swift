@@ -311,4 +311,29 @@ struct AssistantRoutingNameEvidenceTests {
         intent.branches[0].destinationEvidence = repeated
         #expect(fixture.rejects(text: repeated, intent: intent, context: context))
     }
+
+    @Test(arguments: [
+        "route Osmose and Signal to mains", "route Signal and Osmose to mains",
+        "route Osmose and Signal and Solar to mains"
+    ])
+    func unknownCoordinatedSourceOperandsCannotDisappear(text: String) {
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: text)
+        ])
+        if text.contains("Solar") {
+            intent.branches.append(.init(source: "Solar", destination: "mains", destinationEvidence: text))
+        }
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test(arguments: ["and Solar directly", "and just directly", "and Solar just directly"])
+    func repeatedSourceOrFillerCannotHideTheDirectLeg(continuation: String) {
+        let text = "route Solar through evil pet \(continuation) to mains"
+        let destination = continuation.contains("Solar") ? String(continuation.dropFirst(4)) + " to mains" : text
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: destination, processingEvidence: "Solar through evil pet")
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
 }

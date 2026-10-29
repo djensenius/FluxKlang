@@ -284,14 +284,8 @@ enum AssistantRoutingPreparation {
         let sourceOperand = #"\b(?:to|into|through|via|then|followed\s+by)\s+"#
             + #"(?:(?:the|my|a|an|both)\s+)*fk_source\b"#
         guard operands.range(of: sourceOperand,
-                             options: [.regularExpression, .caseInsensitive]) == nil else { return false }
-        let continuation = #"(?:(?!\bfk_source\b|\band\b)[\s\p{L},;])*"#
-        let coordinator = #"(?:\band\b|[&+])\s*(?:also\s+)?"#
-        let split = #"\b(?:(?:through|via|into)\b"# + continuation
-            + coordinator + #"(?:directly|straight)"#
-            + #"|(?:directly|straight)\b"# + continuation
-            + coordinator + #"(?:through|via|into))\b"#
-        guard operands.range(of: split, options: [.regularExpression, .caseInsensitive]) == nil else { return false }
+                             options: [.regularExpression, .caseInsensitive]) == nil,
+              sourceOperandsCovered(intent, text: text), directPathsCovered(intent, text: text) else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
         let dry = intent.branches.filter(\.includesDrySignal).map(\.dryEvidence)
@@ -338,6 +332,24 @@ enum AssistantRoutingPreparation {
         }
     }
 
+    private static func sourceOperandsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
+        let positive = intent.exclusionEvidence.reduce(text) { $0.replacingOccurrences(of: $1, with: " ") }
+        let operands = maskingEntities(in: positive, intent: intent, markSources: true)
+            .replacingOccurrences(of: #"[,&+]"#, with: " and ", options: .regularExpression)
+        let words = operands.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)
+        let verbs = Set("route send use wire connect patch add include".split(separator: " ").map(String.init))
+        let fillers = Set("the my a an both only just also then".split(separator: " ").map(String.init))
+        for (index, word) in words.enumerated() {
+            let joined = word == "fk_source" && words.dropFirst(index + 1).first == "and"
+            guard verbs.contains(word) || joined else { continue }
+            var next = index + (joined ? 2 : 1)
+            while next < words.count && fillers.contains(words[next]) { next += 1 }
+            guard next < words.count,
+                  words[next] == "fk_source" || (joined && verbs.contains(words[next])) else { return false }
+        }
+        return true
+    }
+
     private static func completeDestinationPhrase(
         _ branch: AssistantRoutingIntent.Branch, intent: AssistantRoutingIntent
     ) -> Bool {
@@ -369,7 +381,7 @@ enum AssistantRoutingPreparation {
     }
 
     static func maskingEntities(
-        in text: String, intent: AssistantRoutingIntent, markSources: Bool = false
+        in text: String, intent: AssistantRoutingIntent, markSources: Bool = false, highlightingSource: String? = nil
     ) -> String {
         let sources = Set(intent.branches.map { AssistantRoutingInterpretationAdapter.normalize($0.source) })
         let mentions = Set(intent.branches.flatMap { [$0.source, $0.destination] + $0.effects }
@@ -384,8 +396,10 @@ enum AssistantRoutingPreparation {
         for match in regex.matches(in: text, range: NSRange(location: 0, length: original.length)).reversed() {
             let mention = AssistantRoutingInterpretationAdapter.normalize(original.substring(with: match.range))
             let source = sources.contains(mention)
+            let marker = mention == highlightingSource.map(AssistantRoutingInterpretationAdapter.normalize)
+                ? "fk_same_source" : "fk_source"
             // Spaces retain UTF-16 offsets for copied-evidence coverage against the original text.
-            let replacement = markSources && source ? "fk_source" : String(repeating: " ", count: match.range.length)
+            let replacement = markSources && source ? marker : String(repeating: " ", count: match.range.length)
             masked.replaceCharacters(in: match.range, with: replacement)
         }
         return masked as String
@@ -405,6 +419,24 @@ enum AssistantRoutingPreparation {
         return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).allSatisfy {
             guard let occurrence = Range($0.range, in: text) else { return false }
             return covered.contains { $0.lowerBound <= occurrence.lowerBound && $0.upperBound >= occurrence.upperBound }
+        }
+    }
+}
+
+extension AssistantRoutingPreparation {
+    private static func directPathsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
+        let continuation = #"(?:(?!\band\b)[\s\p{L},;])*"#
+        let coordinator = #"(?:\band\b|[&+])\s*(?:(?:also|just|only)\s+)*"#
+        let split = #"\b(?:(?:through|via|into)\b"# + continuation + coordinator + #"(?:directly|straight)"#
+            + #"|(?:directly|straight)\b"# + continuation + coordinator + #"(?:through|via|into))\b"#
+        return intent.branches.allSatisfy { branch in
+            let clauses = maskingEntities(in: text, intent: intent, markSources: true,
+                highlightingSource: branch.source).components(separatedBy: "fk_source")
+            return clauses.allSatisfy { clause in
+                guard let source = clause.range(of: "fk_same_source") else { return true }
+                let scoped = clause[source.upperBound...].replacingOccurrences(of: "fk_same_source", with: " ")
+                return scoped.range(of: split, options: [.regularExpression, .caseInsensitive]) == nil
+            }
         }
     }
 }
