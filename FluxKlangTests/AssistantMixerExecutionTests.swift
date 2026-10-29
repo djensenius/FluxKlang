@@ -112,6 +112,34 @@ struct AssistantMixerExecutionTests {
         }
     }
 
+    @Test(arguments: [WingNodeKind.main, .bus, .matrix], [false, true])
+    func nonChannelNameRepliesOnlyRevokeQueuedSendWhenChanged(kind: WingNodeKind, changed: Bool) async throws {
+        let (wing, transport) = await connected()
+        let names = WingLiveObservations.addresses.filter { $0.hasSuffix("/name") }
+        for name in names { await wing.refresh(name) }
+        try await AssistantBackendFixture.wait { names.allSatisfy { wing.confirmedValues[$0] != nil } }
+        let address = WingAddress.name(kind, 1)
+        await transport.put(address, .string("Original"))
+        await transport.emit(address, .string("Original"))
+        try await AssistantBackendFixture.wait { wing.confirmedValues[address] == .string("Original") }
+        await transport.pauseMixerSend()
+        let task = Task { await executor(wing).execute(.init(target: .main(1), operation: .adjustDB(-3))) }
+        try await AssistantBackendFixture.waitAsync { await transport.mixerSendWaiting }
+        let revision = wing.confirmedNameRevision
+        let receivedAt = wing.confirmedReceivedAt[address] ?? .distantPast
+        let value = WingValue.string(changed ? "Renamed" : "Original")
+        await transport.put(address, value)
+        await transport.emit(address, value)
+        try await AssistantBackendFixture.wait { (wing.confirmedReceivedAt[address] ?? .distantPast) > receivedAt }
+        #expect(wing.confirmedNameRevision == revision + (changed ? 1 : 0))
+        await transport.releaseMixerSend()
+        let reply = await task.value
+        #expect(reply.contains("Confirmed WING Main 1") == !changed)
+        #expect(await transport.writes.count == (changed ? 0 : 1))
+        if changed { #expect(reply.contains("No retry was attempted")) }
+        await wing.disconnect()
+    }
+
     @Test func renameOrDuplicateBetweenDiscoveryAndBaselineNeverWrites() async throws {
         for renameSelected in [false, true] {
             let (wing, transport) = await connected()
