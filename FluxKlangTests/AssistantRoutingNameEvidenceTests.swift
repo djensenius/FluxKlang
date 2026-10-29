@@ -337,6 +337,21 @@ struct AssistantRoutingNameEvidenceTests {
         #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
 
+    @Test(arguments: [
+        "route Solar to Signal and mains",
+        "route Solar through evil pet and Signal to mains",
+        "route Osmose with my Signal to mains"
+    ])
+    func unknownRoutingContinuationsCannotBecomeFiller(text: String) {
+        let source = text.contains("Osmose") ? "Osmose" : "Solar"
+        let processed = text.contains("evil pet")
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: source, effects: processed ? ["evil pet"] : [], destination: "mains",
+                  destinationEvidence: text, processingEvidence: processed ? "Solar through evil pet" : "")
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
     @Test(arguments: ["and Solar directly", "and just directly", "and Solar just directly"])
     func repeatedSourceOrFillerCannotHideTheDirectLeg(continuation: String) {
         let text = "route Solar through evil pet \(continuation) to mains"

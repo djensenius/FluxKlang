@@ -285,7 +285,7 @@ enum AssistantRoutingPreparation {
             + #"(?:(?:the|my|a|an|both)\s+)*fk_source\b"#
         guard operands.range(of: sourceOperand,
                              options: [.regularExpression, .caseInsensitive]) == nil,
-              sourceOperandsCovered(intent, text: text), serialOperandsCovered(intent, text: text),
+              sourceOperandsCovered(intent, text: text), continuationOperandsCovered(intent, text: text),
               directPathsCovered(intent, text: text) else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
@@ -336,7 +336,8 @@ enum AssistantRoutingPreparation {
     private static func sourceOperandsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
         let positive = intent.exclusionEvidence.reduce(text) { $0.replacingOccurrences(of: $1, with: " ") }
         let operands = maskingEntities(in: positive, intent: intent, markSources: true)
-            .replacingOccurrences(of: #"[,&+]"#, with: " and ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?:,\s*)?\band\b|[,&+]"#, with: " and ",
+                                  options: [.regularExpression, .caseInsensitive])
         let words = operands.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)
         let verbs = Set("route send use wire connect patch add include".split(separator: " ").map(String.init))
         let fillers = Set("the my a an both only just also then".split(separator: " ").map(String.init))
@@ -427,7 +428,7 @@ enum AssistantRoutingPreparation {
 }
 
 extension AssistantRoutingPreparation {
-    private static func serialOperandsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
+    private static func continuationOperandsCovered(_ intent: AssistantRoutingIntent, text: String) -> Bool {
         let mentions = Set(intent.branches.flatMap { [$0.source, $0.destination] + $0.effects })
         let names = mentions.sorted { $0.count > $1.count }
             .map(NSRegularExpression.escapedPattern).joined(separator: "|")
@@ -435,16 +436,21 @@ extension AssistantRoutingPreparation {
         let masked = positive.replacingOccurrences(
             of: "(?<![\\p{L}\\p{N}_])(?:" + names + ")(?![\\p{L}\\p{N}_])",
             with: "fk_entity", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"\b(?:i want to|i would like to|i['’]d like|id like|would like to)\s+"#,
+                                  with: " ", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"(?:,\s*)?\band\b|[,&+]"#, with: " and ",
+                                  options: [.regularExpression, .caseInsensitive])
         let words = masked.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)
-        let fillers = Set("the my a an also just only into through via to out".split(separator: " ").map(String.init))
+        let fillers = Set("the my a an both also just only".split(separator: " ").map(String.init))
+        let operators = Set("and with to on out through via into then".split(separator: " ").map(String.init))
+        let operands = Set(("fk_entity route send use wire connect patch with through via into to on out "
+            + "directly straight dry wet processed parallel").split(separator: " ").map(String.init))
         for (index, word) in words.enumerated() {
             let followed = word == "followed" && words.dropFirst(index + 1).first == "by"
-            guard word == "then" || followed else { continue }
+            guard operators.contains(word) || followed else { continue }
             var next = index + (followed ? 2 : 1)
             while next < words.count && fillers.contains(words[next]) { next += 1 }
-            guard next < words.count,
-                  ["fk_entity", "route", "send", "wire", "connect", "patch"].contains(words[next])
-            else { return false }
+            guard next < words.count, operands.contains(words[next]) else { return false }
         }
         return true
     }
