@@ -380,6 +380,36 @@ struct AssistantActionInterpretationTests {
 }
 
 extension AssistantActionInterpretationTests {
+    @Test func amplitudeAndLoudnessPercentagesCannotBecomeFaderTravel() {
+        let output = malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50%")
+        for control in ["amplitude", "loudness"] {
+            rejectInBothLayers(output, text: "set Astrolab \(control) to 50%")
+        }
+        for control in ["volume", "fader"] {
+            expectAcceptedInBothLayers(output, text: "set Astrolab \(control) to 50%")
+        }
+        expectAcceptedInBothLayers(malformed(.setFaderPercent, amount: 50, action: "turn", evidence: "50%"),
+                                  text: "turn Astrolab volume to 50%")
+        for target in ["Amplitude Synth", "Loudness Keys"] {
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setFaderPercent,
+                amount: 50, targetEvidence: target, actionEvidence: "set", amountEvidence: "50%"),
+                text: "set \(target) volume to 50%")
+        }
+    }
+
+    @Test func spelledDecibelUnitsKeepCopiedAmountAndOperationMeaning() {
+        for unit in ["decibel", "decibels", "DECIBELS"] {
+            expectAcceptedInBothLayers(malformed(.lower, amount: 3, action: "lower", evidence: "3 \(unit)"),
+                                      text: "lower Astrolab by 3 \(unit)")
+            expectAcceptedInBothLayers(malformed(.setDB, amount: -10, action: "set", evidence: "-10 \(unit)"),
+                                      text: "set Astrolab to -10 \(unit)")
+            rejectInBothLayers(malformed(.setDB, amount: 10, action: "set", evidence: "10 \(unit)"),
+                               text: "set Astrolab to -10 \(unit)")
+            rejectInBothLayers(malformed(.setFaderPercent, amount: 50, action: "set", evidence: "50 \(unit)"),
+                               text: "set Astrolab to 50 \(unit)")
+        }
+    }
+
     @Test func addOnlyProposalMustRepresentTheRequestedAddObject() {
         let output = AssistantActionModelOutput(disposition: .proposal, target: "Astrolab", addToStudio: true,
             targetEvidence: "Astrolab", addEvidence: "add")

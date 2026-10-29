@@ -104,7 +104,8 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         requests, proposal for one instrument action. Preserve BOTH requested add and mixer actions.
         Copy the instrument name and ALL evidence phrases verbatim from the user's submission.
         Do not invent amounts. For relative volume requests without amount, leave amountPhrase empty.
-        Percent means absolute 0...100 fader travel, not gain or perceived loudness. dB amounts require dB.
+        Percent means absolute 0...100 fader travel, not gain, amplitude or perceived loudness.
+        dB amounts require a copied dB, decibel or decibels unit.
         addPhrase is the copied add verb or empty string if no add was requested. actionPhrase is the
         copied volume/mute clause, separate from addPhrase. All proposals require deterministic review.
         """

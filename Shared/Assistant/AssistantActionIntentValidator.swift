@@ -206,7 +206,7 @@ enum AssistantActionIntentValidator {
             ["preamp", "preamplifier", "headamp", "trim", "pan", "balance", "eq", "equalizer", "equaliser",
              "compressor", "compression", "threshold", "ratio", "attack", "release", "gate", "filter",
              "frequency", "hpf", "lpf", "phantom", "48v", "send", "sends", "bus", "aux", "routing", "route", "patch",
-             "wire", "connect", "rewire", "reroute", "solo", "unsolo"],
+             "wire", "connect", "rewire", "reroute", "solo", "unsolo", "amplitude", "loudness"],
             in: clause)
             || clause.range(of: #"\binput\s+(?:gain|level|trim)\b"#,
                             options: [.regularExpression, .caseInsensitive]) != nil
@@ -237,7 +237,7 @@ enum AssistantActionIntentValidator {
         }
     }
 
-    private static func hasDBUnit(in text: String) -> Bool { hasAmountUnit(#"(?:db|decibels?)"#, in: text) }
+    static func hasDBUnit(in text: String) -> Bool { hasAmountUnit(#"(?:db|decibels?)"#, in: text) }
 
     private static func hasAmountUnit(_ unit: String, in text: String) -> Bool {
         let pattern = #"^\s*[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*"# + unit + #"\s*$"#

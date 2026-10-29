@@ -83,7 +83,7 @@ enum AssistantActionInterpretationAdapter {
         let suffix = evidence.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch action {
         case .setFaderPercent: return suffix.hasSuffix("%") || suffix.hasSuffix("percent")
-        case .lower, .raise, .setDB: return suffix.hasSuffix("db")
+        case .lower, .raise, .setDB: return AssistantActionIntentValidator.hasDBUnit(in: evidence)
         case .mute, .unmute, .none: return false
         }
     }
@@ -110,7 +110,7 @@ enum AssistantActionInterpretationAdapter {
     }
 
     static func numericValue(_ evidence: String) -> Double? {
-        let pattern = #"^\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent|dB)?\s*$"#
+        let pattern = #"^\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(?:%|percent|dB|decibels?)?\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.firstMatch(in: evidence, range: NSRange(evidence.startIndex..., in: evidence)),
               let range = Range(match.range(at: 1), in: evidence) else { return nil }
