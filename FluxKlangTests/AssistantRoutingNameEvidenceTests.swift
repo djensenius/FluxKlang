@@ -148,4 +148,35 @@ struct AssistantRoutingNameEvidenceTests {
         intent.branches[0].dryEvidence = "Solar dry and wet"
         #expect(!fixture.rejects(text: explicitBlend, intent: intent, context: context))
     }
+
+    @Test(arguments: ["the", "my", "a", "an"])
+    func sourceOperandArticlesCannotHideInstrumentTraversal(article: String) {
+        let text = "route Solar into \(article) Osmose to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", destination: "mains", destinationEvidence: text),
+            .init(source: "Osmose", destination: "mains", destinationEvidence: text)
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test func questionsAboutIncludedDraftSourcesReachProviderWithoutAmending() async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let generator = RoutingTestGenerator()
+        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: generator)
+        let request = AssistantGenerationRequest(question: "Does the pending draft include Solar?",
+            recentMessages: [], summary: "", context: fixture.context)
+        var reply = ""
+        for try await event in preflight.stream(request) {
+            if case .text(let text) = event { reply += text }
+        }
+        #expect(await generator.calls == 1)
+        #expect(reply == "read-only reply")
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(await store.saves == 1)
+    }
 }

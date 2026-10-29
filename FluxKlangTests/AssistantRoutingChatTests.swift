@@ -264,21 +264,24 @@ struct AssistantRoutingChatTests {
         #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
     }
 
-    @Test func questionsAboutIncludedDraftSourcesReachProviderWithoutAmending() async throws {
+    @Test(arguments: ["inputs and outputs", "ins and outs", "please inputs and outputs?"])
+    func standaloneInventoryBypassesRoutingWithoutChangingPendingDraft(question: String) async throws {
         let fixture = AssistantRoutingFixture()
         let store = RoutingTestDraftStore()
         let coordinator = AssistantCoordinator(draftStore: store)
         let prior = try fixture.prepared()
         #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
             preparedContext: fixture.context, currentContext: fixture.context))
-        let generator = RoutingTestGenerator()
-        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: generator)
-        let chat = chat(coordinator: coordinator, interpreter: RoutingTestInterpreter(.answer), generator: preflight)
-        chat.composer = "Does the pending draft include Solar?"
+        let downstream = RoutingTestGenerator()
+        let interpreter = RoutingTestInterpreter()
+        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: downstream)
+        let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: preflight)
+        chat.composer = question
         chat.send(context: fixture.context)
         try await wait { !chat.isStreaming }
-        #expect(await generator.calls == 1)
-        #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
+        #expect(chat.selectedConversation?.messages.last?.text.contains("WING inputs") == true)
+        #expect(await interpreter.requests.isEmpty)
+        #expect(await downstream.calls == 0)
         #expect(coordinator.pendingStudioDraft == prior)
         #expect(await store.saves == 1)
     }

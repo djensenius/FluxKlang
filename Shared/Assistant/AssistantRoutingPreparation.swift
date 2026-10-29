@@ -201,7 +201,7 @@ enum AssistantRoutingPreparation {
             !words.indices.contains { index in
                 if covered.contains(effect.id) {
                     var preceding = words[..<index]
-                    if ["the", "my"].contains(preceding.last ?? "") { preceding = preceding.dropLast() }
+                    while ["the", "my", "a", "an"].contains(preceding.last ?? "") { preceding = preceding.dropLast() }
                     guard ["then", "through", "via", "into"].contains(preceding.last ?? "")
                         || Array(preceding.suffix(2)) == ["followed", "by"] else { return false }
                 }
@@ -273,7 +273,7 @@ enum AssistantRoutingPreparation {
 
     private static func directivesCovered(_ intent: AssistantRoutingIntent, in text: String) -> Bool {
         let operands = maskingEntities(in: text, intent: intent, markSources: true)
-        guard operands.range(of: #"\b(?:to|into|through|via|then|followed\s+by)\s+(?:(?:the|my)\s+)?fk_source\b"#,
+        guard operands.range(of: #"\b(?:to|into|through|via|then|followed\s+by)\s+(?:(?:the|my|a|an)\s+)*fk_source\b"#,
                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)

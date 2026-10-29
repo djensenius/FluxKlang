@@ -30,6 +30,8 @@ enum AssistantRoutingOwnership {
     /// Safety ownership only. This never extracts names, destinations or topology.
     static func owns(_ text: String) -> Bool {
         if AssistantActionInterpretationAdapter.isReadOnlyQuestion(text) { return false }
+        if text.range(of: #"^\s*(?:please\s+)?(?:inputs\s+and\s+outputs|ins\s+and\s+outs)[.!?]*\s*$"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil { return false }
         if case .command = AssistantMixerIntent.parse(text) { return false }
         return word("route|routing|wire|wired|wiring|patch|patching|connect|through|into|towards|mains|"
                     + "speaker|speakers|monitor|monitors|desktop|desk|feed|feeds|feeding|output|outputs|"
