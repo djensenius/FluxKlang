@@ -91,4 +91,88 @@ struct StudioPhysicalOverlapTests {
             }
         }
     }
+
+    @MainActor @Test(arguments: [false, true], [false, true])
+    func preparedEffectRelinksCannotReuseRequestedOrExcludedDevices(excluded: Bool, relink: Bool) async throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        let device = Equipment(name: "Echo Device", inputs: ["L", "R"], outputs: ["L", "R"], isStereo: true)
+        let echo = Effect(name: "Echo", equipmentID: device.id)
+        context.equipment.append(device)
+        context.effects.append(echo)
+        context.globalConnections.home.inputs += [
+            .init(connector: 9, equipmentID: device.id, outputPort: 0),
+            .init(connector: 10, equipmentID: device.id, outputPort: 1)
+        ]
+        context.globalConnections.home.outputs += [
+            .init(connector: 1, equipmentID: device.id, inputPort: 0),
+            .init(connector: 2, equipmentID: device.id, inputPort: 1)
+        ]
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let text = excluded ? "Solar through Echo to mains without Evil Pet"
+            : "Solar through Echo to mains and Osmose through Evil Pet to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Echo"], destination: "mains",
+                  destinationEvidence: "Solar through Echo to mains", processingEvidence: "Solar through Echo")
+        ])
+        if excluded {
+            intent.excludedMentions = ["Evil Pet"]
+            intent.exclusionEvidence = ["without Evil Pet"]
+        } else {
+            intent.branches.append(.init(source: "Osmose", effects: ["Evil Pet"], destination: "mains",
+                destinationEvidence: "Osmose through Evil Pet to mains", processingEvidence: "Osmose through Evil Pet"))
+        }
+        let prepared = try fixture.prepared(text: text, intent: intent, context: context)
+        let draft = try JSONDecoder().decode(StudioPatchDraft.self, from: JSONEncoder().encode(prepared))
+        #expect(draft == prepared)
+        #expect(draft.nameReferences?.first { $0.id == echo.id }?.equipmentID == device.id)
+        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
+        #expect(await coordinator.commitPreparedRouting(draft, expectedPending: nil,
+            preparedContext: context, currentContext: context))
+        let accepted = StudioPatchDraftMerger.merge(
+            draft, into: context.graph, endpoints: [], equipment: context.equipment, effects: context.effects)
+        if relink {
+            let index = try #require(context.effects.firstIndex { $0.id == echo.id })
+            context.effects[index].equipmentID = fixture.evil.id
+        }
+        let refreshed = StudioWiringAdvisor.revalidate(
+            draft, equipment: context.equipment, effects: context.effects, connections: context.globalConnections,
+            currentGraph: context.graph, currentEnvironmentID: nil)
+        #expect(refreshed.hasErrors == relink)
+        #expect(refreshed.id == draft.id)
+        var legacy = draft
+        legacy.nameReferences = draft.nameReferences?.map { reference in
+            var reference = reference
+            reference.equipmentID = nil
+            return reference
+        }
+        #expect(StudioWiringAdvisor.revalidate(
+            legacy, equipment: context.equipment, effects: context.effects, connections: context.globalConnections,
+            currentGraph: context.graph, currentEnvironmentID: nil).hasErrors == relink)
+        guard case .pendingDraft(let reviewed?) = await coordinator.perform(
+            .validatePendingStudioDraft, context: context) else {
+            Issue.record("Expected a revalidated pending draft")
+            return
+        }
+        #expect(reviewed.hasErrors == relink)
+        if !excluded {
+            let compiled = StudioSignalCompiler.compile(.init(
+                graph: accepted.graph, endpoints: accepted.endpoints, effects: context.effects,
+                connections: context.globalConnections, equipment: context.equipment, speakers: []))
+            #expect(compiled.hasErrors == relink)
+            #expect(compiled.settings.isEmpty == relink)
+        }
+    }
+
+    @Test func effectDeviceReferenceDecodesLegacyAndPreservesReviewedLink() throws {
+        let legacy = AssistantRoutingNameReference(mention: "Echo", id: UUID(), kind: .effect)
+        let data = try JSONEncoder().encode(legacy)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["equipmentID"] == nil)
+        #expect(try JSONDecoder().decode(AssistantRoutingNameReference.self, from: data) == legacy)
+        var reviewed = legacy
+        reviewed.equipmentID = UUID()
+        #expect(try JSONDecoder().decode(AssistantRoutingNameReference.self,
+                                        from: JSONEncoder().encode(reviewed)) == reviewed)
+    }
 }

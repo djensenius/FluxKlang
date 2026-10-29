@@ -25,6 +25,7 @@ struct StudioCompileIssue: Identifiable, Hashable, Sendable {
         case physicalConnection(StudioConnectionIssue.Kind)
         case legacyConnectionMigration(StudioConnectionMigrationIssue.ID)
         case outputMappingChanged(UUID)
+        case sharedEffectEquipment(Equipment.ID)
     }
 
     var severity: Severity
@@ -82,13 +83,14 @@ enum StudioSignalCompiler {
         let migrationIssues = input.connections.migrationIssues.map {
             StudioCompileIssue.warning(.legacyConnectionMigration($0.id), $0.message)
         }
-        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues
+        let issues = uniqueIssues(physicalIssues + migrationIssues + compiled.issues + context.effectDeviceIssues
             + input.outputMappingIssues(for: resourcePlan.allocations))
         let settings: [WingSetting]
         let hasPhysicalErrors = issues.contains {
             guard $0.severity == .error else { return false }
             if case .physicalConnection = $0.kind { return true }
             if case .outputMappingChanged = $0.kind { return true }
+            if case .sharedEffectEquipment = $0.kind { return true }
             return false
         }
         if !hasPhysicalErrors {
@@ -537,6 +539,17 @@ private struct CompileContext {
 
     func isAppliable(_ edge: StudioEdge) -> Bool {
         appliableEdges.contains(edge.id)
+    }
+
+    var effectDeviceIssues: [StudioCompileIssue] {
+        let activeNodes = Set(graph.edges.filter(isAppliable).flatMap { [$0.from.nodeID, $0.to.nodeID] })
+        let effects = graph.nodes.filter { activeNodes.contains($0.id) }.compactMap { node -> Effect? in
+            guard case .effect(let id) = node.kind else { return nil }
+            return effectByID[id]
+        }
+        return Effect.sharedEquipmentIDs(in: effects).map {
+            .error(.sharedEffectEquipment($0), "Independent effect paths cannot share one physical device.")
+        }
     }
 
     func endpointBuses(for nodeID: StudioNode.ID) -> (left: Int, right: Int)? {

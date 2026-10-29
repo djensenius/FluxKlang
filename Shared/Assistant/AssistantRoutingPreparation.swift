@@ -36,7 +36,8 @@ enum AssistantRoutingPreparation {
             }
             if let effect = effects.first {
                 excludedEffects.insert(effect.id)
-                names.append(.init(mention: excluded, id: effect.id, kind: .excludedEffect))
+                names.append(.init(mention: excluded, id: effect.id, kind: .excludedEffect,
+                                   equipmentID: effect.equipmentID))
                 if let device = effect.equipmentID { excludedDevices.insert(device) }
             }
         }
@@ -56,7 +57,7 @@ enum AssistantRoutingPreparation {
                       usedEffects.insert(effect.id).inserted, usedEffectDevices.insert(device).inserted
                 else { return failure }
                 effects.append(effect.id)
-                names.append(.init(mention: mention, id: effect.id, kind: .effect))
+                names.append(.init(mention: mention, id: effect.id, kind: .effect, equipmentID: device))
             }
             // Copied evidence must not promise one source's processing for another named source.
             let others = intent.branches.filter { $0.source != branch.source }.map(\.source)
@@ -157,6 +158,8 @@ enum AssistantRoutingPreparation {
         _ reference: AssistantRoutingNameReference, context: AssistantToolContext
     ) -> Bool {
         let effects = context.effects.filter { matchesName(reference.mention, name: $0.name) }
+        if let device = reference.equipmentID,
+           effects.first(where: { $0.id == reference.id })?.equipmentID != device { return false }
         let source = resolveSource(reference.mention, context: context,
             excluding: Set(context.effects.compactMap(\.equipmentID)))
         switch reference.kind {
