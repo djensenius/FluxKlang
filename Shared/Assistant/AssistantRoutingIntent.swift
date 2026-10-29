@@ -30,6 +30,7 @@ enum AssistantRoutingOwnership {
     /// Safety ownership only. This never extracts names, destinations or topology.
     static func owns(_ text: String) -> Bool {
         if AssistantActionInterpretationAdapter.isReadOnlyQuestion(text) { return false }
+        if case .command = AssistantMixerIntent.parse(text) { return false }
         return word("route|routing|wire|wired|wiring|patch|patching|connect|through|into|towards|mains|"
                     + "speaker|speakers|monitor|monitors|desktop|desk|feed|feeds|feeding|output|outputs|"
                     + "outboard|parallel|serial|dry|wet|setup|try again|connected now", in: text)
@@ -96,7 +97,7 @@ enum AssistantRoutingInterpretationAdapter {
                 guard copied(branch.processingEvidence, text), contains(branch.source, branch.processingEvidence),
                       branch.effects.allSatisfy({ occursOnce($0, in: branch.processingEvidence) }),
                       !isNegative(branch.processingEvidence),
-                      AssistantRoutingOwnership.word("through|via|into", in: branch.processingEvidence)
+                      sourcePrecedesProcessing(branch)
                 else { return invalid }
                 if branch.effects.count > 1 {
                     guard seriallyOrdered(branch) else { return invalid }
@@ -149,6 +150,18 @@ enum AssistantRoutingInterpretationAdapter {
         }
         guard let source = range(branch.source), let destination = range(branch.destination) else { return false }
         return source.upperBound <= destination.lowerBound
+    }
+
+    private static func sourcePrecedesProcessing(_ branch: AssistantRoutingIntent.Branch) -> Bool {
+        let evidence = branch.processingEvidence
+        guard let first = branch.effects.first,
+              occursOnce(branch.source, in: evidence),
+              let source = evidence.range(of: branch.source, options: .caseInsensitive),
+              let effect = evidence.range(of: first, options: .caseInsensitive),
+              source.upperBound <= effect.lowerBound else { return false }
+        let relationship = String(evidence[source.upperBound..<effect.lowerBound])
+        return AssistantRoutingOwnership.word("through|via|into", in: relationship)
+            && !AssistantRoutingOwnership.word("from", in: relationship)
     }
 
     private static func seriallyOrdered(_ branch: AssistantRoutingIntent.Branch) -> Bool {

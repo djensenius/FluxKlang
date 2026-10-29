@@ -271,6 +271,53 @@ struct AssistantRoutingChatTests {
         #expect(!fixture.rejects(text: serial, intent: intent, context: context))
     }
 
+    @Test(arguments: ["into", "through"])
+    func reversedProcessingOperandsCannotStageTheOppositePath(_ operation: String) {
+        let text = "route evil pet \(operation) Solar to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: "Solar to mains", processingEvidence: "evil pet \(operation) Solar")
+        ])
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
+
+    @Test(arguments: ["Desk", "Wet", "Dry Synth", "Monitor"], [false, true])
+    func exactMixerTargetLabelsDoNotGrantRoutingOwnership(label: String, unavailable: Bool) async throws {
+        let gear = Equipment(name: "Saved Synth")
+        let context = AssistantBackendFixture.observe([
+            WingAddress.name(.channel, 7): .string(label),
+            WingAddress.channelSourceGroup(7): .string("LCL"),
+            WingAddress.channelSourceIndex(7): .int(7)
+        ], context: AssistantBackendFixture.context(equipment: [gear], inputs: [
+            .init(connector: 7, equipmentID: gear.id, outputPort: 0)
+        ]))
+        let text = label == "Desk" ? "mute \(label)" : "lower \(label) by 3 dB"
+        let intent = AssistantActionIntent(targetMention: label, action: label == "Desk" ? .mute : .lower,
+            amount: label == "Desk" ? nil : 3, addToStudio: false,
+            evidence: .init(target: label, action: label == "Desk" ? "mute" : "lower",
+                            amount: label == "Desk" ? nil : "3 dB", add: nil))
+        let interpreter = RoutingTestInterpreter(.proposal(intent),
+            available: unavailable ? .unavailable("disabled") : .available)
+        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
+        let generator = RoutingTestGenerator()
+        let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: generator)
+        let planner = ReviewedChatPlanner()
+        chat.actionPlanner = planner
+        chat.composer = text
+        chat.send(context: context)
+        try await wait { !chat.isStreaming }
+        #expect(planner.intents.count == 1)
+        #expect(planner.pendingReview != nil)
+        #expect(coordinator.pendingStudioDraft == nil)
+        chat.composer = text + " and route Saved Synth to speakers"
+        chat.send(context: context)
+        try await wait { !chat.isStreaming }
+        #expect(planner.intents.count == 1)
+        #expect(planner.confirmations == 0)
+        #expect(coordinator.pendingStudioDraft == nil)
+        #expect(await generator.calls == 0)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"))
     func optInNativeOwnerAndPriorMonoQualification() async throws {
         let interpreter = FoundationModelActionInterpreter()
