@@ -14,6 +14,7 @@ struct AssistantActionPlanningTests {
         await transport.put("/ch/7/name", .string(label))
         let wing = WingController(transport: transport)
         await wing.connect(host: "192.0.2.10")
+        await AssistantBackendFixture.settleInitialActionEvidence(wing)
         let state = AssistantActionTestState(wing: wing)
         let service = AssistantActionController(
             controller: { state.wing }, layout: { state.layout },
@@ -456,13 +457,18 @@ extension AssistantActionPlanningTests {
     }
 
     @Test func unsupportedPreampRequestNeverCreatesFaderReviewOrSendsSET() async {
-        let (state, transport, service) = await fixture()
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(controller: { controllerReads += 1; return state.wing },
+            layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
         let submission = request("set channel 7 preamp gain to 10 dB", state: state)
         let intent = AssistantActionIntent(targetMention: "channel 7", action: .setDB, amount: 10,
             addToStudio: false, evidence: .init(target: "channel 7", action: "set", amount: "10 dB", add: nil))
         let outcome = await service.prepare(submission, interpretation: .proposal(intent))
         if case .clarification = outcome {} else { Issue.record("Preamp request became a fader review") }
         #expect(service.pendingReview == nil)
+        #expect(controllerReads == 0)
         #expect(await transport.queries.isEmpty)
         #expect(await transport.writes.isEmpty)
         #expect(state.scope.graph.nodes.isEmpty)
