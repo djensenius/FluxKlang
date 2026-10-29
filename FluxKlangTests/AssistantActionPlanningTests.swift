@@ -436,4 +436,22 @@ extension AssistantActionPlanningTests {
             await state.wing.disconnect()
         }
     }
+
+    @Test func exactTurnFallbackExcludesDirectionWordsInsideRecoveredTarget() async throws {
+        for (label, direction) in [("Down Synth", "up"), ("Up Synth", "down")] {
+            let (state, transport, service) = await fixture(label: label)
+            let submission = request("turn \(label) \(direction) by 3 dB", state: state)
+            let interpretation = AssistantActionInterpretationAdapter.fallback(submission, reason: "disabled")
+            guard case .proposal(let intent) = interpretation else { throw BackendTestError.send }
+            #expect(intent.evidence.action == direction)
+            #expect(intent.action == (direction == "up" ? .raise : .lower))
+            let preview = try review(await service.prepare(submission, interpretation: interpretation))
+            #expect(preview.stage == .ready)
+            #expect(preview.target?.members.map { $0.identity.node } == [.channel(7)])
+            #expect(preview.faderChanges.first?.afterPosition
+                == FaderMath.position(fromDecibels: direction == "up" ? 3 : -3))
+            #expect(await transport.writes.isEmpty)
+            await state.wing.disconnect()
+        }
+    }
 }
