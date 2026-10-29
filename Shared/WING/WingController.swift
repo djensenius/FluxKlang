@@ -113,10 +113,10 @@ final class WingController {
             try await transport.start(remoteHost: host, localPort: nil, broadcast: false)
             guard sessionID == attempt else { return }
             try Task.checkCancellation()
-            transportSessionID = await transport.sessionID
-            peerHosts = await transport.peerHosts
+            let transportSessionID = await transport.sessionID, peerHosts = await transport.peerHosts
             guard sessionID == attempt else { return }
             try Task.checkCancellation()
+            (self.transportSessionID, self.peerHosts) = (transportSessionID, peerHosts)
             self.host = isDemo ? nil : host
             connection = .connected(name: isDemo ? "Demo WING Rack" : nil)
             startListening()

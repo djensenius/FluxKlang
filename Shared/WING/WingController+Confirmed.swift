@@ -24,19 +24,18 @@ extension WingController {
     }
 
     /// Address replies have no OSC transaction ID. This is a bounded,
-    /// incoming-only timestamp-gated read, not a transactional hardware lock.
-    /// Reviewed actions preserve the shared cache used by concurrent Listen/Temporary Move verification;
-    /// existing cached replies still cannot satisfy this read's requestedAt gate.
+    /// incoming-only read requiring new replies, not a transactional hardware lock.
     func readFreshConfirmed(
         _ addresses: [String], session: UUID,
-        timeout: Duration = .milliseconds(750), preservingCache: Bool = false
+        timeout: Duration = .milliseconds(750)
     ) async -> [String: WingValue]? {
         guard !Task.isCancelled, !isDemo, connection.isConnected, sessionID == session else { return nil }
         let addresses = Array(Set(addresses)).sorted()
         guard !addresses.isEmpty else { return [:] }
         let requestedAt = Date()
         let deadline = ContinuousClock.now.advanced(by: timeout)
-        if !preservingCache { invalidateConfirmedValues(addresses) }
+        // Keep shared Listen/Temporary Move confirmations intact. Only replies
+        // received after requestedAt can satisfy this independent read.
         // Queries run separately so even a delayed transport send cannot extend
         // the read deadline. Cancellation stops further GETs, never replays SETs.
         let queryTask = Task { [weak self] in

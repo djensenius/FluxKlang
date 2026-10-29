@@ -8,6 +8,32 @@ import FoundationModels
 @MainActor
 @Suite(.serialized)
 struct AssistantSourceResolutionRegressionTests {
+    @Test(arguments: ["channel 8", "channel8", "Pad", "Bass"])
+    func scopedBranchesCannotRestoreGloballyExcludedSources(_ excluded: String) async throws {
+        let synth = Equipment(name: "Synth")
+        let bass = Equipment(name: "Bass")
+        var context = AssistantBackendFixture.observe([
+            WingAddress.name(.channel, 7): .string("Lead"),
+            WingAddress.channelSourceGroup(7): .string("LCL"),
+            WingAddress.channelSourceIndex(7): .int(7),
+            WingAddress.name(.channel, 8): .string("Pad"),
+            WingAddress.channelSourceGroup(8): .string("LCL"),
+            WingAddress.channelSourceIndex(8): .int(8)
+        ], context: AssistantBackendFixture.context(equipment: [synth, bass], inputs: [
+            .init(connector: 7, equipmentID: synth.id, outputPort: 0),
+            .init(connector: 8, equipmentID: bass.id, outputPort: 0)
+        ]))
+        context.effects = [Effect(name: "Echo"), Effect(name: "Reverb")]
+        let question = "route channel 7 through Echo and channel 8 through Reverb to speakers, don't use \(excluded)"
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let provider = AssistantBackendGenerator()
+        let generator = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: provider)
+        for try await _ in generator.stream(
+            .init(question: question, recentMessages: [], summary: "", context: context)) {}
+        #expect(coordinator.pendingStudioDraft == nil, "Conflicting scoped routes must clarify atomically")
+        #expect(provider.calls == 0)
+    }
+
     @Test(arguments: ["Help me route Synth through Echo to speakers.", "How do I connect Synth to speakers?",
                       "Help me to route Synth to speakers.", "How to connect Synth to speakers?"])
     func savedSourcesRemainAvailableToHelpAndHowRoutingRequests(_ question: String) async throws {
