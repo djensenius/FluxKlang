@@ -200,6 +200,7 @@ extension AssistantDraftIntent {
     /// Retry one identifiable routing request, not the conversation's opening
     /// inventory/help intent. Multiple historical routes require clarification.
     static func routingQuestion(from request: AssistantGenerationRequest) -> String? {
+        guard !requestsInventory(request.question) else { return request.question }
         func isRetry(_ text: String) -> Bool {
             let text = text.lowercased()
             return text.contains("try again") || text.contains("connected now")
