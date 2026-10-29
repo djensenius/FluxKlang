@@ -60,8 +60,26 @@ actor AssistantBackendDraftStore: PendingStudioPatchPersisting {
 actor AssistantRecordingWingTransport: WingTransporting {
     nonisolated let incoming: AsyncStream<WingIncoming>
     private let continuation: AsyncStream<WingIncoming>.Continuation
-    private(set) var sessionID: UUID?
-    let peerHosts: Set<String> = ["192.0.2.10"]
+    private var currentSessionID: UUID?
+    private var currentPeerHosts: Set<String> = []
+    enum BindingRead: Sendable { case session, peers }
+    private var gatedBindingRead: BindingRead?
+    private var bindingGate: CheckedContinuation<Void, Never>?
+    private(set) var bindingReadWaiting = false
+    var sessionID: UUID? {
+        get async {
+            let captured = currentSessionID
+            await waitForBindingRead(.session)
+            return captured
+        }
+    }
+    var peerHosts: Set<String> {
+        get async {
+            let captured = currentPeerHosts
+            await waitForBindingRead(.peers)
+            return captured
+        }
+    }
     private(set) var writes: [WingSetting] = []
     private(set) var queries: [String] = []
     private var values: [String: WingValue]
@@ -103,7 +121,8 @@ actor AssistantRecordingWingTransport: WingTransporting {
     }
 
     func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async {
-        sessionID = UUID()
+        currentSessionID = UUID()
+        currentPeerHosts = [remoteHost]
         if gateStart {
             gateStart = false
             startWaiting = true
@@ -116,7 +135,19 @@ actor AssistantRecordingWingTransport: WingTransporting {
         startGate?.resume()
         startGate = nil
     }
-    func stop() { stopCount += 1; sessionID = nil }
+    func pauseBindingRead(_ read: BindingRead) { gatedBindingRead = read }
+    private func waitForBindingRead(_ read: BindingRead) async {
+        guard gatedBindingRead == read else { return }
+        gatedBindingRead = nil
+        bindingReadWaiting = true
+        await withCheckedContinuation { bindingGate = $0 }
+    }
+    func releaseBindingRead() {
+        bindingReadWaiting = false
+        bindingGate?.resume()
+        bindingGate = nil
+    }
+    func stop() { stopCount += 1; currentSessionID = nil }
     func configure(
         answers: Bool = true, afterWrite: Bool = true, fail: Bool = false,
         mismatch: Bool = false, delay: Duration = .zero
@@ -169,7 +200,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
             await withCheckedContinuation { mixerSendGate = $0 }
         }
         try authorization.consume {
-            guard self.sessionID == sessionID else { throw BackendTestError.send }
+            guard self.currentSessionID == sessionID else { throw BackendTestError.send }
             let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
             try recordWrite(address, value.encodedForWing(address: address))
         }
@@ -192,7 +223,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
             reply = [.string(group), .float(0), .string(group)]
         } else { reply = [value] }
         continuation.yield(WingIncoming(address: address, values: reply, host: "192.0.2.10",
-            port: WingNetwork.defaultPort, transportSessionID: sessionID))
+            port: WingNetwork.defaultPort, transportSessionID: currentSessionID))
     }
     func emit(
         _ address: String, _ value: WingValue, host: String = "192.0.2.10",
@@ -201,6 +232,6 @@ actor AssistantRecordingWingTransport: WingTransporting {
         continuation.yield(
             WingIncoming(
                 address: address, value: value, host: host, port: port,
-                transportSessionID: session ?? sessionID, receivedAt: date))
+                transportSessionID: session ?? currentSessionID, receivedAt: date))
     }
 }

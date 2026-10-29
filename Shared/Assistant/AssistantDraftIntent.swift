@@ -95,6 +95,7 @@ enum AssistantDraftIntent {
         let scopedRoutes = sourceScopedRoutes(
             in: groundingText,
             context: request.context,
+            allowedSources: resolution,
             effects: request.context.effects,
             outputs: request.context.effectiveConnections.outputs
         )
@@ -302,6 +303,7 @@ extension AssistantDraftIntent {
     private static func sourceScopedRoutes(
         in question: String,
         context: AssistantToolContext,
+        allowedSources: AssistantSourceResolver.Resolution,
         effects: [Effect],
         outputs: [StudioOutputConnection]
     ) -> [StudioWiringRoute]? {
@@ -311,19 +313,26 @@ extension AssistantDraftIntent {
         let clauses = question.lowercased()
             .replacingOccurrences(of: ",", with: " and ")
             .components(separatedBy: " and ")
-        let routes = clauses.compactMap { clause -> StudioWiringRoute? in
-            let sources = AssistantSourceResolver.resolve(
+        var routes: [StudioWiringRoute] = []
+        for clause in clauses {
+            let resolution = AssistantSourceResolver.resolve(
                 clause, context: context, excluding: effectEquipmentIDs
-            ).equipmentIDs
+            )
+            let sources = resolution.equipmentIDs
             let clauseEffects = mentionedEffectIDs(in: clause, effects: effects)
-            guard !sources.isEmpty, !clauseEffects.isEmpty else { return nil }
-            return StudioWiringRoute(
+            guard !sources.isEmpty, !clauseEffects.isEmpty else { continue }
+            // A branch must not undo whole-question exclusions or lose the
+            // live identity guard established by the complete request.
+            guard resolution.clarification == nil,
+                  Set(sources).isSubset(of: Set(allowedSources.equipmentIDs)),
+                  Set(resolution.references).isSubset(of: Set(allowedSources.references)) else { return nil }
+            routes.append(StudioWiringRoute(
                 sourceInstrumentIDs: sources,
                 effectChainIDs: clauseEffects,
                 destination: destinations[0].kind,
                 includesDrySignal: includesDrySignal(clause),
                 outputConnectors: destinations[0].outputConnectors
-            )
+            ))
         }
         let distinctSources = Set(routes.flatMap(\.sourceInstrumentIDs))
         return routes.count > 1 && distinctSources.count > 1 ? routes : nil

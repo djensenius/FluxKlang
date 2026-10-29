@@ -24,7 +24,7 @@ extension WingController {
     }
 
     /// Address replies have no OSC transaction ID. This is a bounded,
-    /// incoming-only read after invalidation, not a transactional hardware lock.
+    /// incoming-only read requiring new replies, not a transactional hardware lock.
     func readFreshConfirmed(
         _ addresses: [String], session: UUID,
         timeout: Duration = .milliseconds(750)
@@ -34,7 +34,8 @@ extension WingController {
         guard !addresses.isEmpty else { return [:] }
         let requestedAt = Date()
         let deadline = ContinuousClock.now.advanced(by: timeout)
-        invalidateConfirmedValues(addresses)
+        // Keep shared Listen/Temporary Move confirmations intact. Only replies
+        // received after requestedAt can satisfy this independent read.
         // Queries run separately so even a delayed transport send cannot extend
         // the read deadline. Cancellation stops further GETs, never replays SETs.
         let queryTask = Task { [weak self] in
