@@ -76,7 +76,8 @@ enum AssistantRoutingPreparation {
         }
         let mentioned = AssistantSourceResolver.resolve(text, context: context, excluding: effectEquipment)
         guard mentioned.clarification == nil, Set(mentioned.equipmentIDs).isSubset(of: sources),
-              effectMentionsCovered(text, effects: context.effects, covered: usedEffects.union(excludedEffects)),
+              effectMentionsCovered(text, effects: context.effects, covered: usedEffects.union(excludedEffects),
+                  mentions: intent.branches.flatMap(\.effects) + intent.excludedMentions),
               let primary = routes.first else { return failure }
         var request = StudioWiringRequest(
             sourceInstrumentIDs: primary.sourceInstrumentIDs, effectChainIDs: primary.effectChainIDs,
@@ -187,18 +188,22 @@ enum AssistantRoutingPreparation {
         return (id, [])
     }
 
-    private static func effectMentionsCovered(_ text: String, effects: [Effect], covered: Set<Effect.ID>) -> Bool {
-        let names = Set(effects.map(\.name).filter { !$0.isEmpty }).sorted { $0.count > $1.count }
-            .map(NSRegularExpression.escapedPattern).joined(separator: "|")
-        guard !names.isEmpty else { return true }
-        guard let regex = try? NSRegularExpression(
-            pattern: "(?<![\\p{L}\\p{N}_])(?:" + names + ")(?![\\p{L}\\p{N}_])",
-            options: .caseInsensitive) else { return false }
-        return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).allSatisfy {
-            guard let range = Range($0.range, in: text) else { return false }
-            let mention = AssistantRoutingInterpretationAdapter.normalize(String(text[range]))
-            return effects.filter { AssistantRoutingInterpretationAdapter.normalize($0.name) == mention }
-                .allSatisfy { covered.contains($0.id) }
+    private static func effectMentionsCovered(
+        _ text: String, effects: [Effect], covered: Set<Effect.ID>, mentions: [String]
+    ) -> Bool {
+        let remaining = Set(mentions).sorted { $0.count > $1.count }.reduce(text) { text, mention in
+            text.replacingOccurrences(
+                of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
+                    + "(?![\\p{L}\\p{N}_])", with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        let words = remaining.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        return effects.filter { !covered.contains($0.id) }.allSatisfy { effect in
+            !words.indices.contains { index in
+                // Every valid alias has a matching prefix of at most three tokens (minimum three characters).
+                (1...min(3, words.count - index)).contains { count in
+                    matchesName(words[index..<(index + count)].joined(separator: " "), name: effect.name)
+                }
+            }
         }
     }
 

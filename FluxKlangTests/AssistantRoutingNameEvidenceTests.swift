@@ -109,12 +109,14 @@ struct AssistantRoutingNameEvidenceTests {
         #expect(!fixture.rejects(text: coordinated, intent: intent))
     }
 
-    @Test(arguments: [false, true])
-    func configuredEffectNamesCannotDisappearAsOperators(parallel: Bool) {
+    @Test(arguments: [false, true], [false, true])
+    func configuredEffectNamesCannotDisappearAsOperators(parallel: Bool, aliased: Bool) {
         let fixture = AssistantRoutingFixture()
         var context = fixture.context
         let names = parallel ? ["Parallel"] : ["Dry", "Wet"]
-        context.effects += names.map { .init(id: UUID(), name: $0, equipmentID: nil) }
+        context.effects += names.map {
+            .init(id: UUID(), name: $0 + (aliased ? " Delay" : ""), equipmentID: nil)
+        }
         let suffix = parallel ? "Parallel dry and wet" : "Dry then Wet"
         let text = "route Solar through evil pet then \(suffix) to mains"
         let intent = AssistantRoutingIntent(branches: [
