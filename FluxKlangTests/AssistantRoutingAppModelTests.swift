@@ -271,6 +271,36 @@ struct AssistantRoutingAppModelTests {
         ])
         #expect(fixture.rejects(text: text, intent: partial))
     }
+
+    @Test(arguments: ["studio", "current"])
+    func destinationQualifiersCannotDisappearIntoSetupVocabulary(qualifier: String) throws {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.globalConnections.home.outputs += [
+            .init(connector: 1, destinationName: "\(qualifier) Speakers L"),
+            .init(connector: 2, destinationName: "\(qualifier) Speakers R")
+        ]
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let text = "route Solar to \(qualifier) speakers"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", destination: "speakers", destinationEvidence: "Solar to \(qualifier) speakers")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        intent.branches[0].destination = "\(qualifier) speakers"
+        let complete = try fixture.prepared(text: text, intent: intent, context: context)
+        #expect(complete.request.destination == .custom)
+        #expect(complete.request.outputConnectors == [.init(index: 1), .init(index: 2)])
+    }
+
+    @Test func explicitReplacementStillAcceptsSetupVocabularyInItsActualDirective() throws {
+        let fixture = AssistantRoutingFixture()
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", destination: "mains", destinationEvidence: "Solar to mains")
+        ], replacesSetup: true, modeEvidence: "replace the current studio graph")
+        let draft = try fixture.prepared(
+            text: "replace the current studio graph and route Solar to mains", intent: intent)
+        #expect(draft.applicationMode == .replace)
+    }
 }
 
 private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {

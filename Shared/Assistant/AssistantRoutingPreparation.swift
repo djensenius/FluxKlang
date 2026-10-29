@@ -181,6 +181,11 @@ enum AssistantRoutingPreparation {
         guard intent.branches.allSatisfy({ sourceOccurrencesCovered($0, in: text) }),
               directivesCovered(intent, in: text) else { return false }
         var remaining = text
+        if intent.replacesSetup {
+            remaining = remaining.replacingOccurrences(
+                of: AssistantRoutingInterpretationAdapter.replacementPattern, with: " ",
+                options: [.regularExpression, .caseInsensitive])
+        }
         for evidence in intent.exclusionEvidence {
             let positiveNames = intent.branches.flatMap { [$0.source] + $0.effects }
             guard !positiveNames.contains(where: {
@@ -201,7 +206,7 @@ enum AssistantRoutingPreparation {
         let allowed = Set(("i want to use and on with going through via into out the my i'd id like would "
             + "please route send connect wire patch add include also then followed by only just "
             + "dry wet processed signal in parallel both a an of directly straight "
-            + "without except not don't do never exclude replace entire whole current setup studio graph")
+            + "without except not don't do never exclude")
             .split(separator: " ").map(String.init))
         let words = remaining.lowercased().replacingOccurrences(of: "’", with: "'")
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)

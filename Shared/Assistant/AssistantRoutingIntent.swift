@@ -47,6 +47,8 @@ enum AssistantRoutingOwnership {
 
 /// Validates the bounded completed model representation, before configuration lookup.
 enum AssistantRoutingInterpretationAdapter {
+    static let replacementPattern = #"\breplace\s+(?:(?:my|the|entire|whole|current)\s+)*"#
+        + #"(?:studio(?:\s+graph)?|setup|graph)\b"#
     static let maximumBranches = 8
     static let maximumEffects = 3
 
@@ -64,7 +66,7 @@ enum AssistantRoutingInterpretationAdapter {
         if intent.replacesSetup {
             guard copied(intent.modeEvidence, text),
                   intent.modeEvidence.range(
-                    of: #"\breplace\s+(?:(?:my|the|entire|whole|current)\s+)*(?:setup|studio|graph)\b"#,
+                    of: replacementPattern,
                     options: [.regularExpression, .caseInsensitive]) != nil else { return invalid }
         } else if !intent.modeEvidence.isEmpty
                     || AssistantRoutingOwnership.word("replace|remove|delete|clear", in: text) { return invalid }
