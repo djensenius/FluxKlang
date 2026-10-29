@@ -15,13 +15,20 @@ enum StudioPatchDraftMerger {
         var endpoints = draft.applicationMode == .replace ? [] : normalized.endpoints
         var nodeIDMap: [StudioNode.ID: StudioNode.ID] = [:]
         var addedNodes = 0
+        let draftEndpoints = draft.fragment.endpoints.map { endpoint in
+            var endpoint = endpoint
+            endpoint.retainOutputReferences((draft.outputReferences ?? []).filter {
+                $0.connectors == endpoint.explicitOutputConnectors
+            })
+            return endpoint
+        }
 
         for draftNode in draft.fragment.nodes {
             guard isValid(draftNode.node.kind, equipmentIDs: equipmentIDs, effectIDs: effectIDs, draft: draft) else {
                 continue
             }
             if case .endpoint(let endpointID) = draftNode.node.kind,
-               let endpoint = draft.fragment.endpoints.first(where: { $0.id == endpointID }),
+               let endpoint = draftEndpoints.first(where: { $0.id == endpointID }),
                let existing = StudioEndpointNormalizer.matchingNode(
                    for: endpoint,
                    graph: graph,
@@ -29,10 +36,10 @@ enum StudioPatchDraftMerger {
                ) {
                 nodeIDMap[draftNode.node.id] = existing.id
                 if case .endpoint(let existingID) = existing.kind,
-                   let index = endpoints.firstIndex(where: { $0.id == existingID }),
-                   endpoints[index].explicitOutputConnectors == nil {
-                    endpoints[index].outputConnectors = endpoint.outputConnectors
+                   let index = endpoints.firstIndex(where: { $0.id == existingID }) {
+                    endpoints[index].retainReviewedMapping(from: endpoint)
                 }
+
                 continue
             }
             if let existing = graph.nodes.first(where: { $0.kind == draftNode.node.kind }) {
@@ -43,7 +50,7 @@ enum StudioPatchDraftMerger {
                 addedNodes += 1
             }
         }
-        for endpoint in draft.fragment.endpoints where !endpoints.contains(where: { $0.id == endpoint.id }) {
+        for endpoint in draftEndpoints where !endpoints.contains(where: { $0.id == endpoint.id }) {
             guard graph.nodes.contains(where: { $0.kind == .endpoint(endpoint.id) }) else { continue }
             endpoints.append(endpoint)
         }
@@ -80,5 +87,14 @@ enum StudioPatchDraftMerger {
         case .endpoint(let id): draft.fragment.endpoints.contains { $0.id == id }
         case .liveChannel: false
         }
+    }
+}
+
+private extension StudioEndpoint {
+    mutating func retainReviewedMapping(from endpoint: StudioEndpoint) {
+        if explicitOutputConnectors == nil {
+            outputConnectors = endpoint.outputConnectors
+        }
+        retainOutputReferences(endpoint.outputReferences ?? [])
     }
 }

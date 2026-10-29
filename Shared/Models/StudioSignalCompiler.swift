@@ -481,6 +481,13 @@ private extension StudioCompilationInput {
         let mainConnectors = AssistantRoutingOutputResolver.resolve(
             "mains", in: connections.effectiveHome)?.reference.connectors
         return allocations.compactMap { allocation in
+            if !(allocation.endpoint.outputReferences ?? []).allSatisfy({
+                $0.connectors == allocation.endpoint.explicitOutputConnectors
+                    && $0.isValid(in: connections.effectiveHome)
+            }) {
+                return .error(.outputMappingChanged(allocation.endpoint.id),
+                              "The reviewed output group mapping changed. Create a new routing draft.")
+            }
             guard allocation.endpoint.destination == .finalMix else { return nil }
             guard let mainConnectors else {
                 return .error(.outputMappingChanged(allocation.endpoint.id),

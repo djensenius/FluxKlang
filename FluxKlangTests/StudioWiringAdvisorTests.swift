@@ -404,3 +404,31 @@ struct StudioWiringAdvisorTests {
         #expect(normalized.graph.edges.first?.to.nodeID == firstNode.id)
     }
 }
+
+extension StudioWiringAdvisorTests {
+    @Test func legacyEndpointDecodesWithoutOutputProvenance() throws {
+        let endpoint = StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                                      outputConnectors: [.init(index: 5), .init(index: 6)])
+        let data = try JSONEncoder().encode(endpoint)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["outputReferences"] == nil)
+        #expect(try JSONDecoder().decode(StudioEndpoint.self, from: data) == endpoint)
+    }
+
+    @Test(arguments: [false, true])
+    func normalizationKeepsReviewedOutputProvenance(referenceFirst: Bool) {
+        let reference = AssistantRoutingOutputReference(mention: "desktop speakers", groupName: "desk speakers",
+                                                       connectors: [.init(index: 5), .init(index: 6)])
+        let endpoints = [true, false].map { first in
+            StudioEndpoint(name: "Desk Speakers", destination: .custom,
+                           outputConnectors: reference.connectors,
+                           outputReferences: first == referenceFirst ? [reference] : nil)
+        }
+        let graph = StudioGraph(nodes: endpoints.map { .init(kind: .endpoint($0.id), title: $0.name) })
+        let normalized = StudioEndpointNormalizer.normalize(graph: graph, endpoints: endpoints)
+        #expect(normalized.endpoints.count == 1)
+        #expect(normalized.endpoints.first?.outputReferences == [reference])
+        #expect(StudioEndpointNormalizer.normalize(graph: normalized.graph,
+                                                   endpoints: normalized.endpoints) == normalized)
+    }
+}
