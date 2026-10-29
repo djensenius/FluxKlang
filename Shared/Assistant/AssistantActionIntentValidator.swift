@@ -87,7 +87,8 @@ enum AssistantActionIntentValidator {
         // A numeric suffix belongs to the target, not to an abbreviated model mention.
         let completeTarget = evidencePattern(intent.evidence.target)
             + #"(?!\s*[+-]?(?:\d|\.\d)|[.+-][\p{L}\p{N}])"#
-        guard text.range(of: completeTarget, options: [.regularExpression, .caseInsensitive]) != nil else {
+        guard text.range(of: completeTarget, options: [.regularExpression, .caseInsensitive]) != nil,
+              hasCompleteTargetPhrase(intent.evidence.target, in: text) else {
             return false
         }
         let clause = text.replacingOccurrences(
@@ -121,6 +122,28 @@ enum AssistantActionIntentValidator {
             return !lower && !raise && !mute && !unmute && !hasWord(["by"], in: clause)
         case .mute: return !lower && !raise && !unmute
         case .unmute: return !lower && !raise && !mute
+        }
+    }
+
+    private static func hasCompleteTargetPhrase(_ target: String, in text: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: evidencePattern(target), options: .caseInsensitive) else {
+            return false
+        }
+        let syntax = Set(
+            [AssistantActionIntent.Action.lower, .raise, .mute, .unmute, .setDB, .setFaderPercent]
+                .flatMap { actionWords($0) } + [
+                    "add", "include", "please", "my", "the", "your", "our", "its", "this", "that", "a", "an",
+                    "volume", "fader", "level", "master", "travel", "of", "for", "on", "to", "at", "by",
+                    "and", "then", "also", "as", "with", "from"
+                ])
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).allSatisfy { match in
+            guard let range = Range(match.range, in: text) else { return false }
+            let neighbors = [(String(text[..<range.lowerBound]), #"[\p{L}]+\s+$"#),
+                             (String(text[range.upperBound...]), #"^\s+[\p{L}]+"#)]
+            return neighbors.allSatisfy { fragment, pattern in
+                guard let word = fragment.range(of: pattern, options: .regularExpression) else { return true }
+                return syntax.contains(fragment[word].trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            }
         }
     }
 
