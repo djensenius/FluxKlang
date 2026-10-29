@@ -90,7 +90,7 @@ enum AssistantRoutingInterpretationAdapter {
                 else { return invalid }
             } else {
                 guard copied(branch.processingEvidence, text), contains(branch.source, branch.processingEvidence),
-                      branch.effects.allSatisfy({ contains($0, branch.processingEvidence) }),
+                      branch.effects.allSatisfy({ occursOnce($0, in: branch.processingEvidence) }),
                       !isNegative(branch.processingEvidence),
                       AssistantRoutingOwnership.word("through|via|into", in: branch.processingEvidence)
                 else { return invalid }
@@ -131,6 +131,12 @@ enum AssistantRoutingInterpretationAdapter {
     private static func isNegative(_ text: String) -> Bool {
         AssistantRoutingOwnership.word("without|except|not|don't|do not|never|exclude",
                                        in: text.replacingOccurrences(of: "’", with: "'"))
+    }
+    private static func occursOnce(_ mention: String, in text: String) -> Bool {
+        let pattern = "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: mention)
+            + "(?![\\p{L}\\p{N}_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return false }
+        return regex.numberOfMatches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)) == 1
     }
     private static func ordered(_ mentions: [String], in text: String) -> Bool {
         var remaining = text[...]

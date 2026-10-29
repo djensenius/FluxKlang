@@ -96,7 +96,9 @@ enum AssistantRoutingPreparation {
                 let sameName = existing.destination == proposed.destination
                     && AssistantRoutingInterpretationAdapter.normalize(existing.name)
                         == AssistantRoutingInterpretationAdapter.normalize(proposed.name)
-                return old != new && (sameMains || sameName || !Set(old).isDisjoint(with: new))
+                let overlaps = !Set(old).isDisjoint(with: new)
+                return (overlaps && existing.destination != proposed.destination)
+                    || (old != new && (sameMains || sameName || overlaps))
             }
         }
     }
@@ -226,9 +228,13 @@ enum AssistantRoutingPreparation {
             if !branch.includesDrySignal,
                AssistantRoutingOwnership.word("dry|wet|parallel", in: evidence) { return false }
         }
+        let effectChecks = allEffects.map { effect in
+            (NSRegularExpression.escapedPattern(for: effect),
+             intent.branches.filter { $0.effects.contains(effect) }.map(\.processingEvidence))
+        }
         for (pattern, evidence) in [
             ("through|via", processing), ("dry|wet|parallel", dry)
-        ] {
+        ] + effectChecks {
             guard let regex = try? NSRegularExpression(
                 pattern: "\\b(?:" + pattern + ")\\b", options: .caseInsensitive) else { return false }
             let covered = (evidence + intent.exclusionEvidence).compactMap { text.range(of: $0) }

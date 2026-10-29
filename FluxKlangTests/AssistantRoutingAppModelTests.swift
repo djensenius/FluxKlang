@@ -234,6 +234,33 @@ struct AssistantRoutingAppModelTests {
         #expect(model.assistant.pendingStudioDraft?.id == prior.id)
         #expect(model.wing.transportWriteCount == 0)
     }
+
+    @Test func relabeledDeskPairCannotAlsoBeUsedAsAnIndependentMainsDestination() throws {
+        let fixture = AssistantRoutingFixture()
+        let existing = StudioWiringAdvisor.build(
+            request: .init(sourceInstrumentIDs: [fixture.opxy.id], destination: .custom,
+                           outputConnectors: [.init(index: 5), .init(index: 6)]),
+            equipment: fixture.equipment, effects: [fixture.effect], connections: fixture.connections,
+            currentGraph: StudioGraph())
+        var context = fixture.context
+        context.globalConnections.home.outputs.removeAll { $0.connector == 7 || $0.connector == 8 }
+        context.globalConnections.home.outputs[2].destinationName = "Main Speakers L"
+        context.globalConnections.home.outputs[3].destinationName = "Main Speakers R"
+        context.effectiveConnections = context.globalConnections.effectiveHome
+        let text = "route Osmose to mains"
+        let intent = AssistantRoutingIntent(branches: [
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains")
+        ])
+        let draft = try fixture.prepared(text: text, intent: intent, context: context)
+        context.graph = StudioGraph(nodes: existing.fragment.nodes.map(\.node),
+                                    edges: existing.fragment.edges.map(\.edge))
+        context.endpoints = existing.fragment.endpoints
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: fixture.equipment,
+            effects: [fixture.effect], connections: context.globalConnections, currentGraph: context.graph,
+            currentEnvironmentID: nil, currentEndpoints: context.endpoints)
+        #expect(refreshed.validation.contains { $0.code == "routing-graph-changed" })
+    }
 }
 
 private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {

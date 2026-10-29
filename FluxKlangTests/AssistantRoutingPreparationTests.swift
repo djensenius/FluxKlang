@@ -438,6 +438,14 @@ struct AssistantRoutingPreparationTests {
         unclear.branches[0].destinationEvidence = "Solar through evil pet and Echo to mains"
         #expect(fixture.rejects(text: "Solar through evil pet and Echo to mains", intent: unclear, context: context))
         #expect(fixture.rejects(text: text + " in parallel", intent: intent, context: context))
+        let repeatedText = "Solar through evil pet then through evil pet to mains"
+        var repeated = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: repeatedText, processingEvidence: repeatedText)
+        ])
+        #expect(fixture.rejects(text: repeatedText, intent: repeated))
+        repeated.branches[0].processingEvidence = "Solar through evil pet"
+        #expect(fixture.rejects(text: repeatedText, intent: repeated))
     }
 
     @Test func oldStoredRequestDecodesWithoutNewMetadata() throws {

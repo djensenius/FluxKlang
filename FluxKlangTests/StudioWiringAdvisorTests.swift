@@ -198,7 +198,8 @@ struct StudioWiringAdvisorTests {
         #expect(draft.cableInstructions.map(\.connectorKind) == [.wingInput, .wingInput])
     }
 
-    @Test func finalMixDraftNamesAndShowsConfiguredMainSpeakerOutputs() {
+    @Test(arguments: [false, true])
+    func finalMixDraftNamesAndShowsConfiguredMainSpeakerOutputs(legacyEmpty: Bool) {
         let synth = Equipment(name: "Synth", outputs: ["Output L", "Output R"], isStereo: true)
         let connections = GlobalStudioConnections(home: StudioHomeConnections(
             inputs: [
@@ -212,7 +213,7 @@ struct StudioWiringAdvisorTests {
         ))
 
         let draft = StudioWiringAdvisor.build(
-            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id]),
+            request: StudioWiringRequest(sourceInstrumentIDs: [synth.id], outputConnectors: legacyEmpty ? [] : nil),
             equipment: [synth],
             effects: [],
             connections: connections,
@@ -222,6 +223,9 @@ struct StudioWiringAdvisorTests {
         #expect(draft.fragment.endpoints.first?.name == "Main Speakers")
         #expect(draft.logicalRoutingSummary.first?.value == "Synth → Main Speakers")
         #expect(draft.cableInstructions.filter { $0.connectorKind == .wingOutput }.map(\.connector) == [7, 8])
+        let refreshed = StudioWiringAdvisor.revalidate(draft, equipment: [synth], effects: [],
+            connections: connections, currentGraph: StudioGraph(), currentEnvironmentID: nil)
+        #expect(refreshed.cableInstructions.filter { $0.connectorKind == .wingOutput }.map(\.connector) == [7, 8])
     }
 
     @Test func advisorReportsMissingGearAndConnectionConflicts() {

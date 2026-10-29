@@ -412,7 +412,8 @@ enum StudioWiringAdvisor {
             ))
         }
         if request.destination == .finalMix || request.destination == .custom {
-            let selected = request.outputConnectors.map(Set.init)
+            let unspecifiedMains = request.destination == .finalMix && request.outputConnectors?.isEmpty == true
+            let selected = unspecifiedMains ? nil : request.outputConnectors.map(Set.init)
             let destinationOutputs = selected.map { connectors in
                 effective.outputs.filter { connectors.contains($0.outputConnector) }
             } ?? (request.destination == .finalMix ? mainSpeakerOutputs(in: effective) : [])
