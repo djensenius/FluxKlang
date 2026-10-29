@@ -114,6 +114,54 @@ struct AssistantReviewedChatTests {
         }
     }
 
+    @Test func unavailableSpelledDecibelActionsNeverReachProviderButQuestionsStillDo() async throws {
+        for fails in [false, true] {
+            let transport = AssistantRecordingWingTransport()
+            let wing = WingController(transport: transport)
+            let state = AssistantActionTestState(wing: wing)
+            var controllerReads = 0
+            let planner = AssistantActionController(controller: { controllerReads += 1; return wing },
+                layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+            let provider = AssistantBackendGenerator()
+            let interpreter = ReviewedChatInterpreter(result: .answer,
+                availability: fails ? .available : .unavailable("disabled"), fails: fails)
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
+                store: AssistantConversationStore(local: AssistantBackendHistoryStore(), cloud: nil),
+                generator: provider, actionInterpreter: interpreter)
+            chat.actionPlanner = planner
+            chat.spokenRepliesEnabled = false
+            let legacy = AssistantRecordingMixerExecutor()
+            chat.mixerExecutor = legacy
+            for text in ["lower Lead by three decibels", "drop Lead by three decibels",
+                         "subtract one decibel from Lead", "Lead minus three DECIBELS",
+                         "lower Lead by 3 decibels", "drop Lead by 3 dB"] {
+                chat.composer = text
+                chat.send(context: AssistantBackendFixture.context())
+                try await AssistantBackendFixture.wait { !chat.isStreaming }
+                #expect(chat.selectedConversation?.messages.last?.text.contains("unavailable") == true, "\(text)")
+                #expect(chat.selectedConversation?.messages.last?.text.contains("manual mixer controls") == true)
+                #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+                #expect(provider.calls == 0)
+                #expect(planner.pendingReview == nil)
+            }
+            for (index, text) in ["What are decibels?", "Explain decibel levels",
+                                  "How do I lower Lead by three decibels?"].enumerated() {
+                chat.composer = text
+                chat.send(context: AssistantBackendFixture.context())
+                try await AssistantBackendFixture.wait { !chat.isStreaming }
+                #expect(provider.calls == index + 1)
+                #expect(chat.selectedConversation?.messages.last?.text == "provider reply")
+            }
+            #expect(controllerReads == 0)
+            #expect(await transport.queries.isEmpty)
+            #expect(await transport.writes.isEmpty)
+            #expect(legacy.commands.isEmpty)
+            #expect(planner.pendingReview == nil)
+            #expect(state.scope.graph.nodes.isEmpty)
+        }
+    }
+
     @Test func installedPlannerPreservesRoutingNamesButBlocksMixedUnavailableActions() async throws {
         let gear = Equipment(name: "Lower Synth")
         let context = AssistantBackendFixture.context(equipment: [gear],
