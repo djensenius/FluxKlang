@@ -64,6 +64,12 @@ The resulting graph had exactly three branches, four wires and the fixture's
 configured Desk output pair. Separate final-action validation also passed
 Astrolab-down and Mother-32-add-with-50%-fader-travel requests.
 
+Latest routing inference captures were produced at `ffc72b4`; those exact typed
+outputs also passed replay through the tightened validators at `4cab101`.
+The Apple-actions branch passed both mono examples again at `4da308e`.
+These are bounded, source-specific checks, not fresh inference at every later
+integration commit.
+
 Native paraphrase handling is **not fully qualified**. This reordered version
 returned clarification rather than a draft:
 

@@ -276,9 +276,10 @@ struct AssistantActionInterpretationTests {
         }
     }
 
-    @Test func explicitShortcutGuidanceDoesNotInterceptOrdinaryRoutingAmendments() {
+    @Test func routingAmendmentsUseRoutingClarificationInsteadOfShortcutGuidance() {
         for text in ["add reverb to my Astrolab route", "add another instrument to the routing draft"] {
-            #expect(AssistantActionInterpretationAdapter.fallback(.init(text: text), reason: "disabled") == .answer)
+            #expect(AssistantActionInterpretationAdapter.fallback(.init(text: text), reason: "disabled")
+                == .clarification(AssistantRoutingOwnership.clarification))
         }
     }
 
