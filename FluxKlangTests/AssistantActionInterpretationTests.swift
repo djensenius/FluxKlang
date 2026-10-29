@@ -379,6 +379,18 @@ struct AssistantActionInterpretationTests {
 }
 
 extension AssistantActionInterpretationTests {
+    @Test func addOnlyProposalMustRepresentTheRequestedAddObject() {
+        let output = AssistantActionModelOutput(disposition: .proposal, target: "Astrolab", addToStudio: true,
+            targetEvidence: "Astrolab", addEvidence: "add")
+        for text in ["add Juno to Astrolab", "add Juno as Astrolab", "add Astrolab to Juno"] {
+            rejectInBothLayers(output, text: text)
+        }
+        for text in ["add Astrolab", "add my Astrolab to the studio.", "Could you add Astrolab?",
+                     "add Astrolab as a live-channel shortcut!"] {
+            expectAcceptedInBothLayers(output, text: text)
+        }
+    }
+
     @Test func wordedAbsoluteDestinationsCannotBecomeSuggestedRelativeSteps() {
         for destination in ["zero", "off", "ten", "fifty percent", "half", "full", "the minimum", "unity"] {
             rejectInBothLayers(malformed(.lower, action: "down"),
@@ -408,11 +420,13 @@ extension AssistantActionInterpretationTests {
         let output = malformed(.mute, action: "mute", add: true)
         for text in ["mute Astrolab and add Juno", "add Juno and mute Astrolab",
                      "add Astrolab and mute Juno", "mute Astrolab and add Volume",
-                     "add Astrolab and mute Volume"] {
+                     "add Astrolab and mute Volume", "add Astrolab and mute Juno.",
+                     "Could you add Astrolab and mute Juno?"] {
             rejectInBothLayers(output, text: text)
         }
         for text in ["mute Astrolab and add it", "add Astrolab and mute it",
-                     "mute Astrolab and add Astrolab"] {
+                     "mute Astrolab and add Astrolab", "add Astrolab and mute it.",
+                     "Could you add Astrolab and mute it?", "mute Astrolab and add it!"] {
             expectAcceptedInBothLayers(output, text: text)
         }
         expectAcceptedInBothLayers(.init(disposition: .proposal, target: "mother-32", action: .setFaderPercent,
