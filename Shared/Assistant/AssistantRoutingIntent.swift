@@ -27,12 +27,16 @@ enum AssistantRoutingOwnership {
         + " or use the Studio wiring form. "
         + "Routing requires a separate draft review and Listen."
 
-    /// Safety ownership only. This never extracts names, destinations or topology.
+    /// Safety ownership only. This never resolves names or grants destination/topology authority.
     static func owns(_ text: String) -> Bool {
         if AssistantActionInterpretationAdapter.isReadOnlyQuestion(text) { return false }
-        if text.range(of: #"^\s*(?:please\s+)?(?:inputs\s+and\s+outputs|ins\s+and\s+outs)[.!?]*\s*$"#,
-                      options: [.regularExpression, .caseInsensitive]) != nil { return false }
+        let inventory = #"^\s*(?:please\s+)?(?:inputs\s+and\s+outputs|ins\s+and\s+outs)"#
+            + #"(?:\s+for\s+(.+?))?(?:\s+please)?[.!?]*\s*$"#
+        if AssistantDraftIntent.requestsInventory(text), boundedTarget(in: text, pattern: inventory) != nil {
+            return false
+        }
         if case .command = AssistantMixerIntent.parse(text) { return false }
+        if isReviewedNonRoutingRequest(text) { return false }
         return word("route|routing|wire|wired|wiring|patch|patching|connect|through|into|towards|mains|"
                     + "speaker|speakers|monitor|monitors|desktop|desk|feed|feeds|feeding|output|outputs|"
                     + "outboard|parallel|serial|dry|wet|setup|try again|connected now", in: text)
@@ -40,6 +44,40 @@ enum AssistantRoutingOwnership {
                           options: [.regularExpression, .caseInsensitive]) != nil
             || text.range(of: #"\b(?:add|include)\b.+\b(?:to|into|on)\s+(?![+-]?(?:\d|\.\d))\S"#,
                           options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Only whole, single-operand clauses can bypass keyword ownership. Validation still grants no authority.
+    private static func isReviewedNonRoutingRequest(_ text: String) -> Bool {
+        let prefix = #"^\s*(?:(?:please|could you|can you|would you)\s+)*"#
+        let patterns: [(String, AssistantActionIntent.Action?)] = [
+            (prefix + #"turn\s+down\s+the\s+volume\s+of\s+(?:my\s+|the\s+)?(.+?)[.!?]*\s*$"#, .lower),
+            (prefix + #"turn\s+up\s+the\s+volume\s+of\s+(?:my\s+|the\s+)?(.+?)[.!?]*\s*$"#, .raise),
+            (prefix + #"(?:add|include)\s+(?:my\s+|the\s+)?(.+?)\s+to\s+"#
+                + #"(?:(?:my|the)\s+)?(?:studio|canvas)[.!?]*\s*$"#, nil)
+        ]
+        return patterns.contains { pattern, action in
+            guard let target = boundedTarget(in: text, pattern: pattern), !target.isEmpty else { return false }
+            let intent = AssistantActionIntent(targetMention: target, action: action, amount: nil,
+                addToStudio: action == nil,
+                evidence: .init(target: target, action: action.map { $0 == .lower ? "down" : "up" }, amount: nil,
+                                add: action == nil ? (word("include", in: text) ? "include" : "add") : nil))
+            return AssistantActionIntentValidator.clarification(for: intent, text: text) == nil
+        }
+    }
+
+    private static func boundedTarget(in text: String, pattern: String) -> String? {
+        guard text.count <= 2_000,
+              let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+        else { return nil }
+        guard let range = Range(match.range(at: 1), in: text) else { return "" }
+        let target = String(text[range])
+        // Do not swallow another operand or a physical/action clause into a purported label.
+        guard target.range(of: #"^[\p{L}\p{N}][\p{L}\p{N} _'-]*$"#, options: .regularExpression) != nil,
+              !word("and|then|also|but|to|into|through|via|towards|route|routing|wire|wired|wiring|patch|"
+                    + "patching|connect|send|add|include|turn|set|lower|raise|mute|unmute", in: target)
+        else { return nil }
+        return target
     }
 
     static func word(_ alternatives: String, in text: String) -> Bool {
