@@ -119,6 +119,9 @@ final class AssistantActionController: AssistantActionPlanning {
                 "Connect to a real WING in the request's current session first. No changes were made.")
         }
         let originalScope = scope()
+        guard !intent.addToStudio || originalScope.environmentID != nil else {
+            return .clarification("Select an active environment before reviewing a live shortcut addition. No changes.")
+        }
         let strips = layout().strips
         if let previous {
             guard previous.wing === wing, previous.session == session, previous.scope == originalScope,

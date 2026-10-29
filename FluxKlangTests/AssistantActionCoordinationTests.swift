@@ -11,14 +11,16 @@ struct AssistantActionCoordinationTests {
         let service: AssistantActionController
     }
 
-    private func fixture(label: String = "Astrolab") async -> Fixture {
+    private func fixture(label: String = "Astrolab", timeout: Duration = .seconds(1),
+                         lifetime: TimeInterval = 60) async -> Fixture {
         let transport = AssistantRecordingWingTransport()
         await transport.put("/ch/7/name", .string(label))
         let wing = WingController(transport: transport)
         await wing.connect(host: "192.0.2.10")
         let state = AssistantActionTestState(wing: wing)
         let service = AssistantActionController(controller: { state.wing }, layout: { state.layout },
-            scope: { state.scope }, addShortcut: { _, _, _, _ in nil }, timeout: .seconds(1))
+            scope: { state.scope }, addShortcut: { _, _, _, _ in nil },
+            timeout: timeout, reviewLifetime: lifetime)
         return Fixture(state: state, transport: transport, service: service)
     }
 
@@ -388,6 +390,82 @@ struct AssistantActionCoordinationTests {
             #expect(state.scope.graph.nodes.isEmpty)
             #expect(await transport.queries.isEmpty)
             #expect(await transport.writes.isEmpty)
+        }
+    }
+}
+
+extension AssistantActionCoordinationTests {
+    @Test func shortcutOnlyConfirmationWithEnvironmentStaysLocalAndZeroSET() async throws {
+        let fixture = await fixture()
+        let state = fixture.state
+        let service = AssistantActionController(controller: { state.wing }, layout: { state.layout },
+            scope: { state.scope }, addShortcut: { binding, title, _, _ in
+                let node = StudioNode(kind: .liveChannel(binding), title: title)
+                state.scope.graph.addNode(node)
+                return (node.id, true)
+            }, timeout: .seconds(1))
+        let intent = AssistantActionIntent(targetMention: "Astrolab", action: nil, amount: nil, addToStudio: true,
+            evidence: .init(target: "Astrolab", action: nil, amount: nil, add: "add"))
+        let submission = AssistantActionInterpretationRequest(text: "add Astrolab",
+            liveContext: request(fixture).liveContext)
+        guard case .review(let review) = await service.prepare(submission, interpretation: .proposal(intent))
+        else { throw BackendTestError.send }
+        let result = await service.confirm(reviewID: review.id)
+        #expect(result.localStatus == .added)
+        #expect(result.members.isEmpty)
+        #expect(state.scope.graph.nodes.count == 1)
+        #expect(await fixture.transport.writes.isEmpty)
+        await state.wing.disconnect()
+    }
+
+    @Test func queuedFinalSendCannotOutliveReviewedDeadline() async throws {
+        let fixture = await fixture(timeout: .seconds(5), lifetime: 1)
+        guard case .review(let review) = await fixture.service.prepare(
+            request(fixture), interpretation: interpretation) else { throw BackendTestError.send }
+        let deadline = try #require(fixture.service.pending?.deadline)
+        await fixture.transport.pauseMixerSend()
+        let confirmation = Task { await fixture.service.confirm(reviewID: review.id) }
+        try await AssistantBackendFixture.waitAsync { await fixture.transport.mixerSendWaiting }
+        try await Task.sleep(until: deadline.advanced(by: .milliseconds(20)), clock: .continuous)
+        #expect(review.expiresAt < Date())
+        await fixture.transport.releaseMixerSend()
+        let result = await confirmation.value
+        #expect(result.members.map(\.status) == [.notSent])
+        #expect(await fixture.transport.writes.isEmpty)
+        #expect(fixture.state.scope.graph.nodes.isEmpty)
+        await fixture.state.wing.disconnect()
+    }
+
+    @Test func mixerOnlyConfirmationWorksWithoutActiveEnvironment() async throws {
+        let fixture = await fixture()
+        fixture.state.scope.environmentID = nil
+        guard case .review(let review) = await fixture.service.prepare(
+            request(fixture), interpretation: interpretation) else { throw BackendTestError.send }
+        #expect(review.stage == .ready)
+        let result = await fixture.service.confirm(reviewID: review.id)
+        #expect(result.members.map(\.status) == [.confirmed])
+        #expect(result.localStatus == .notRequested)
+        #expect(await fixture.transport.writes.count == 1)
+        #expect(fixture.state.scope.graph.nodes.isEmpty)
+        await fixture.state.wing.disconnect()
+    }
+
+    @Test func shortcutsWithoutActiveEnvironmentCannotOfferUnconfirmableReviews() async throws {
+        for mixer in [false, true] {
+            let fixture = await fixture()
+            fixture.state.scope.environmentID = nil
+            let intent = AssistantActionIntent(
+                targetMention: "Astrolab", action: mixer ? .mute : nil, amount: nil, addToStudio: true,
+                evidence: .init(target: "Astrolab", action: mixer ? "mute" : nil, amount: nil, add: "add"))
+            let submission = AssistantActionInterpretationRequest(
+                text: mixer ? "add Astrolab and mute it" : "add Astrolab",
+                liveContext: request(fixture).liveContext)
+            let outcome = await fixture.service.prepare(submission, interpretation: .proposal(intent))
+            if case .clarification = outcome {} else { Issue.record("Offered shortcut review without an environment") }
+            #expect(fixture.service.pendingReview == nil)
+            #expect(fixture.state.scope.graph.nodes.isEmpty)
+            #expect(await fixture.transport.writes.isEmpty)
+            await fixture.state.wing.disconnect()
         }
     }
 }
