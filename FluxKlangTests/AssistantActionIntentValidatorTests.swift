@@ -4,6 +4,50 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @Test func timedMuteAndUnmuteCannotBecomePersistentChanges() {
+        for action in [AssistantActionIntent.Action.mute, .unmute] {
+            for suffix in ["for 10 seconds", "for ten seconds", "for a minute", "for one hour", "for a while"] {
+                let text = "\(action.rawValue) Lead \(suffix)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: "Lead", action: action,
+                    targetEvidence: "Lead", actionEvidence: action.rawValue)
+                #expect(AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+                    == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+                let intent = AssistantActionIntent(targetMention: "Lead", action: action, amount: nil,
+                    addToStudio: false, evidence: .init(target: "Lead", action: action.rawValue, amount: nil, add: nil))
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) != nil)
+            }
+            for target in ["Lead", "Ten Seconds", "Minute Synth"] {
+                let text = "\(action.rawValue) \(target)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: action,
+                    targetEvidence: target, actionEvidence: action.rawValue)
+                guard case .proposal(let intent) = AssistantActionInterpretationAdapter.validate(
+                    output, request: .init(text: text)) else { Issue.record("Immediate mute rejected"); continue }
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) == nil)
+            }
+        }
+    }
+
+    @MainActor @Test func timedMuteNeverQueriesOrCreatesReview() async {
+        let transport = AssistantRecordingWingTransport()
+        let state = AssistantActionTestState(wing: WingController(transport: transport))
+        var controllerReads = 0
+        let service = AssistantActionController(controller: { controllerReads += 1; return state.wing },
+            layout: { state.layout }, scope: { state.scope }, addShortcut: { _, _, _, _ in nil })
+        for action in [AssistantActionIntent.Action.mute, .unmute] {
+            let intent = AssistantActionIntent(targetMention: "Lead", action: action, amount: nil, addToStudio: false,
+                evidence: .init(target: "Lead", action: action.rawValue, amount: nil, add: nil))
+            for duration in ["10 seconds", "ten seconds", "a minute"] {
+                let outcome = await service.prepare(.init(text: "\(action.rawValue) Lead for \(duration)"),
+                                                    interpretation: .proposal(intent))
+                if case .clarification = outcome {} else { Issue.record("Timed mute became permanent") }
+                #expect(service.pendingReview == nil)
+                #expect(controllerReads == 0)
+                #expect(await transport.queries.isEmpty)
+                #expect(await transport.writes.isEmpty)
+            }
+        }
+    }
+
     @Test func addOnlyProposalCannotSilentlyOmitAnotherRequestedAddition() {
         for (text, accepted) in [
             ("add Juno and Solar", false), ("add Juno and add Solar", false),
