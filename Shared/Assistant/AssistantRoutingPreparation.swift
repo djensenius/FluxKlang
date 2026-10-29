@@ -461,8 +461,14 @@ extension AssistantRoutingPreparation {
         let split = #"\b(?:(?:through|via|into)\b"# + continuation + coordinator + #"(?:directly|straight)"#
             + #"|(?:directly|straight)\b"# + continuation + coordinator + #"(?:through|via|into))\b"#
         return intent.branches.allSatisfy { branch in
-            let clauses = maskingEntities(in: text, intent: intent, markSources: true,
-                highlightingSource: branch.source).components(separatedBy: "fk_source")
+            let marked = maskingEntities(in: text, intent: intent, markSources: true,
+                highlightingSource: branch.source)
+            for occurrence in marked.components(separatedBy: "fk_same_source").dropFirst() {
+                let scoped = occurrence.components(separatedBy: "fk_source").first ?? ""
+                if !branch.effects.isEmpty, AssistantRoutingOwnership.word("directly|straight", in: scoped),
+                   !AssistantRoutingOwnership.word("through|via|into", in: scoped) { return false }
+            }
+            let clauses = marked.components(separatedBy: "fk_source")
             return clauses.allSatisfy { clause in
                 guard let source = clause.range(of: "fk_same_source") else { return true }
                 let scoped = clause[source.upperBound...].replacingOccurrences(of: "fk_same_source", with: " ")

@@ -362,4 +362,21 @@ struct AssistantRoutingNameEvidenceTests {
         ])
         #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
+
+    @Test(arguments: [
+        "route Solar through evil pet. Then route Solar directly to mains",
+        "route Solar through evil pet; Solar directly to mains",
+        "route Solar through evil pet and Osmose to mains and Solar directly to mains"
+    ])
+    func repeatedSourceDirectivesAcrossClausesCannotLoseDirectPaths(text: String) {
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains",
+                  destinationEvidence: "Solar directly to mains", processingEvidence: "Solar through evil pet")
+        ])
+        if text.contains("Osmose") {
+            intent.branches.append(.init(source: "Osmose", destination: "mains",
+                                         destinationEvidence: "Osmose to mains"))
+        }
+        #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
+    }
 }
