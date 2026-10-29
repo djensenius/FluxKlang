@@ -74,6 +74,9 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var mixerGateAfterWrites = 0
     private(set) var mixerSendWaiting = false
     private var mixerSendGate: CheckedContinuation<Void, Never>?
+    private var gateMixerAcknowledgement = false
+    private(set) var mixerAcknowledgementWaiting = false
+    private var mixerAcknowledgementGate: CheckedContinuation<Void, Never>?
     private var gateBaselineAfterNames = false
     private var namesRead: Set<String> = []
     private var gateReadback = false
@@ -81,6 +84,10 @@ actor AssistantRecordingWingTransport: WingTransporting {
     private var pausedQueryAddress: String?
     private(set) var queryWaiting = false
     private var queryGates: [CheckedContinuation<Void, Never>] = []
+    private var gateStart = false
+    private var startGate: CheckedContinuation<Void, Never>?
+    private(set) var startWaiting = false
+    private(set) var stopCount = 0
 
     init() {
         (incoming, continuation) = AsyncStream.makeStream()
@@ -100,8 +107,21 @@ actor AssistantRecordingWingTransport: WingTransporting {
         }
     }
 
-    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) { sessionID = UUID() }
-    func stop() { sessionID = nil }
+    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async {
+        sessionID = UUID()
+        if gateStart {
+            gateStart = false
+            startWaiting = true
+            await withCheckedContinuation { startGate = $0 }
+        }
+    }
+    func pauseStart() { gateStart = true }
+    func releaseStart() {
+        startWaiting = false
+        startGate?.resume()
+        startGate = nil
+    }
+    func stop() { stopCount += 1; sessionID = nil }
     func configure(
         answers: Bool = true, afterWrite: Bool = true, fail: Bool = false,
         mismatch: Bool = false, delay: Duration = .zero
@@ -121,6 +141,12 @@ actor AssistantRecordingWingTransport: WingTransporting {
         gateMixerSend = false
         mixerSendGate?.resume()
         mixerSendGate = nil
+    }
+    func pauseMixerAcknowledgement() { gateMixerAcknowledgement = true; mixerAcknowledgementWaiting = false }
+    func releaseMixerAcknowledgement() {
+        gateMixerAcknowledgement = false
+        mixerAcknowledgementGate?.resume()
+        mixerAcknowledgementGate = nil
     }
     func pauseBaselineAfterNameDiscovery() { gateBaselineAfterNames = true; namesRead = [] }
     func pauseReadback() { gateReadback = true }
@@ -164,6 +190,10 @@ actor AssistantRecordingWingTransport: WingTransporting {
             guard self.sessionID == sessionID else { throw BackendTestError.send }
             let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
             try recordWrite(address, value.encodedForWing(address: address))
+        }
+        if gateMixerAcknowledgement {
+            mixerAcknowledgementWaiting = true
+            await withCheckedContinuation { mixerAcknowledgementGate = $0 }
         }
     }
     private func recordWrite(_ address: String, _ value: WingValue) throws {

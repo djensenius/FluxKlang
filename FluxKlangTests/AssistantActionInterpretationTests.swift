@@ -219,6 +219,90 @@ struct AssistantActionInterpretationTests {
             "Could you add my mother-32 and turn the volume to 50%?"))
     }
 
+    @Test func numericTargetEvidenceCannotOmitIndexOrSuffixButAmountsAreNotIndices() {
+        for (text, target) in [
+            ("set main 2 to -10 dB", "main"), ("set main 2.5 to -10 dB", "main 2"),
+            ("set main2.5 to -10 dB", "main2"), ("set channel 7.5 to -10 dB", "channel 7"),
+            ("set main2extra to -10 dB", "main2")
+        ] {
+            rejectInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: -10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "-10 dB"), text: text)
+        }
+        for target in ["main", "main 2", "main2", "channel 7"] {
+            let text = "set \(target) to -10 dB"
+            expectAcceptedInBothLayers(.init(disposition: .proposal, target: target, action: .setDB, amount: -10,
+                targetEvidence: target, actionEvidence: "set", amountEvidence: "-10 dB"), text: text)
+        }
+    }
+
+    @Test func sharedVerbCannotSilentlyDropAnotherTarget() {
+        for text in ["mute Astrolab and Juno", "mute Juno and Astrolab", "mute Astrolab, Juno",
+                     "mute Astrolab & Juno", "mute both Astrolab and Juno", "mute Astrolab plus Juno"] {
+            rejectInBothLayers(malformed(.mute, action: "mute"), text: text)
+        }
+        let pair = "Astrolab and Juno"
+        expectAcceptedInBothLayers(.init(disposition: .proposal, target: pair, action: .mute,
+            targetEvidence: pair, actionEvidence: "mute"), text: "mute \(pair)")
+        // Existing owner compound and saved-stereo selection tests retain their positive coverage.
+    }
+
+    @Test func amountEvidenceMustIncludeEntireSignedDecimalToken() {
+        for (text, output) in [
+            ("set Astrolab to -10 dB", malformed(.setDB, amount: 10, action: "set", evidence: "10 dB")),
+            ("set Astrolab to -1.5 dB", malformed(.setDB, amount: 5, action: "set", evidence: "5 dB")),
+            ("set Astrolab to 1.5 dB", malformed(.setDB, amount: 5, action: "set", evidence: "5 dB"))
+        ] {
+            rejectInBothLayers(output, text: text)
+        }
+        for (text, output) in [
+            ("set Astrolab to -10 dB", malformed(.setDB, amount: -10, action: "set", evidence: "-10 dB")),
+            ("set Astrolab to -1.5 dB", malformed(.setDB, amount: -1.5, action: "set", evidence: "-1.5 dB")),
+            ("set Astrolab to +1.5 dB", malformed(.setDB, amount: 1.5, action: "set", evidence: "+1.5 dB"))
+        ] {
+            expectAcceptedInBothLayers(output, text: text)
+        }
+    }
+
+    @Test func adapterAndValidatorShareEvidenceVocabularyWithoutLosingSemanticChecks() {
+        for (text, output) in [
+            ("silence Astrolab", malformed(.mute, action: "silence")),
+            ("unsilence Astrolab", malformed(.unmute, action: "unsilence")),
+            ("make Astrolab softer", malformed(.lower, action: "softer")),
+            ("boost Astrolab by 3 dB", malformed(.raise, amount: 3, action: "boost", evidence: "3 dB")),
+            ("attenuate Astrolab by 3 dB", malformed(.lower, amount: 3, action: "attenuate", evidence: "3 dB")),
+            ("cut Astrolab by 3 dB", malformed(.lower, amount: 3, action: "cut", evidence: "3 dB"))
+        ] {
+            expectAcceptedInBothLayers(output, text: text)
+        }
+        for verb in ["put", "bring", "adjust", "change", "make"] {
+            expectAcceptedInBothLayers(malformed(.setDB, amount: -10, action: verb, evidence: "-10 dB"),
+                                      text: "\(verb) Astrolab to -10 dB")
+        }
+        rejectInBothLayers(malformed(.raise, amount: 3, action: "boost", evidence: "3 dB"),
+                           text: "boost Astrolab down by 3 dB")
+        rejectInBothLayers(malformed(.mute, action: "silence"), text: "silence Astrolab and silence Juno")
+    }
+
+    private func domainIntent(_ output: AssistantActionModelOutput) -> AssistantActionIntent {
+        .init(targetMention: output.target, action: output.action, amount: output.amount,
+              addToStudio: output.addToStudio,
+              evidence: .init(target: output.targetEvidence, action: output.actionEvidence,
+                              amount: output.amountEvidence, add: output.addEvidence))
+    }
+
+    private func rejectInBothLayers(_ output: AssistantActionModelOutput, text: String) {
+        expectRejected(output, request: .init(text: text))
+        #expect(AssistantActionIntentValidator.clarification(for: domainIntent(output), text: text) != nil)
+    }
+
+    private func expectAcceptedInBothLayers(_ output: AssistantActionModelOutput, text: String) {
+        guard case .proposal = AssistantActionInterpretationAdapter.validate(output, request: .init(text: text)) else {
+            Issue.record("Expected proposal for \(text)")
+            return
+        }
+        #expect(AssistantActionIntentValidator.clarification(for: domainIntent(output), text: text) == nil)
+    }
+
     private func expectRejected(_ output: AssistantActionModelOutput, request: AssistantActionInterpretationRequest) {
         #expect(AssistantActionInterpretationAdapter.validate(output, request: request)
             == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
