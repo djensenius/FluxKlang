@@ -429,6 +429,8 @@ extension AssistantDraftIntent {
 
     static func requestsDraftAmendment(_ question: String) -> Bool {
         let normalized = question.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if AssistantActionInterpretationAdapter.isReadOnlyQuestion(question),
+           !normalized.hasPrefix("what about ") { return false }
         return normalized.hasPrefix("and ")
             || normalized.hasPrefix("also ")
             || normalized.hasPrefix("add ")

@@ -71,4 +71,40 @@ struct AssistantRoutingNameEvidenceTests {
         ])
         #expect(AssistantRoutingFixture().rejects(text: text, intent: intent))
     }
+
+    @Test func effectNamesCannotAuthorizeReplacingTheGraph() {
+        let fixture = AssistantRoutingFixture()
+        var context = fixture.context
+        context.effects[0].name = "Replace Setup"
+        let text = "route Solar through Replace Setup to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["Replace Setup"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through Replace Setup")
+        ], replacesSetup: true, modeEvidence: "Replace Setup")
+        guard case .clarification = AssistantRoutingInterpretationAdapter.validate(intent, text: text) else {
+            Issue.record("An effect name is not replacement authorization")
+            return
+        }
+        #expect(fixture.rejects(text: text, intent: intent, context: context))
+        intent.replacesSetup = false
+        intent.modeEvidence = ""
+        #expect(!fixture.rejects(text: text, intent: intent, context: context))
+        intent.replacesSetup = true
+        intent.modeEvidence = "replace the current studio graph"
+        #expect(!fixture.rejects(text: intent.modeEvidence + " and " + text, intent: intent, context: context))
+    }
+
+    @Test func serialSourceOperandsCannotBecomeSeparateRoutes() {
+        let fixture = AssistantRoutingFixture()
+        let text = "route Solar through evil pet followed by Osmose to mains"
+        var intent = AssistantRoutingIntent(branches: [
+            .init(source: "Solar", effects: ["evil pet"], destination: "mains", destinationEvidence: text,
+                  processingEvidence: "Solar through evil pet"),
+            .init(source: "Osmose", destination: "mains", destinationEvidence: "Osmose to mains")
+        ])
+        #expect(fixture.rejects(text: text, intent: intent))
+        let coordinated = "route Solar through evil pet to mains and Osmose to mains"
+        intent.branches[0].destinationEvidence = "Solar through evil pet to mains"
+        #expect(!fixture.rejects(text: coordinated, intent: intent))
+    }
 }

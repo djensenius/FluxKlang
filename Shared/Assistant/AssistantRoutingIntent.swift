@@ -75,13 +75,16 @@ enum AssistantRoutingInterpretationAdapter {
               !AssistantActionInterpretationAdapter.isReadOnlyQuestion(text),
               !AssistantRoutingOwnership.word("suppose|imagine|hypothetically|if|maybe|perhaps", in: text),
               !text.contains(where: { "\"“”`".contains($0) }) else { return invalid }
+        let operators = AssistantRoutingPreparation.maskingEntities(in: text, intent: intent)
         if intent.replacesSetup {
+            let modeOperators = AssistantRoutingPreparation.maskingEntities(in: intent.modeEvidence, intent: intent)
             guard copied(intent.modeEvidence, text),
-                  intent.modeEvidence.range(
+                  operators.range(of: replacementPattern, options: [.regularExpression, .caseInsensitive]) != nil,
+                  modeOperators.range(
                     of: replacementPattern,
                     options: [.regularExpression, .caseInsensitive]) != nil else { return invalid }
         } else if !intent.modeEvidence.isEmpty
-                    || AssistantRoutingOwnership.word("replace|remove|delete|clear", in: text) { return invalid }
+                    || AssistantRoutingOwnership.word("replace|remove|delete|clear", in: operators) { return invalid }
         for (mention, evidence) in zip(intent.excludedMentions, intent.exclusionEvidence) {
             guard validMention(mention, text), copied(evidence, text), contains(mention, evidence),
                   validExclusion(mention, evidence: evidence, mentions: intent.excludedMentions)

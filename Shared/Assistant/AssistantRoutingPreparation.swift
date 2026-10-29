@@ -206,11 +206,6 @@ enum AssistantRoutingPreparation {
         guard intent.branches.allSatisfy({ sourceOccurrencesCovered($0, in: text) }),
               directivesCovered(intent, in: text) else { return false }
         var remaining = text
-        if intent.replacesSetup {
-            remaining = remaining.replacingOccurrences(
-                of: AssistantRoutingInterpretationAdapter.replacementPattern, with: " ",
-                options: [.regularExpression, .caseInsensitive])
-        }
         for evidence in intent.exclusionEvidence {
             let positiveNames = intent.branches.flatMap { [$0.source] + $0.effects }
             guard !positiveNames.contains(where: {
@@ -227,6 +222,11 @@ enum AssistantRoutingPreparation {
                 + "(?![\\p{L}\\p{N}])"
             remaining = remaining.replacingOccurrences(
                 of: pattern, with: " ", options: [.regularExpression, .caseInsensitive])
+        }
+        if intent.replacesSetup {
+            remaining = remaining.replacingOccurrences(
+                of: AssistantRoutingInterpretationAdapter.replacementPattern, with: " ",
+                options: [.regularExpression, .caseInsensitive])
         }
         let allowed = Set(("i want to use and on with going through via into out the my i'd id like would "
             + "please route send connect wire patch add include also then followed by only just "
@@ -246,7 +246,7 @@ enum AssistantRoutingPreparation {
 
     private static func directivesCovered(_ intent: AssistantRoutingIntent, in text: String) -> Bool {
         let operands = maskingEntities(in: text, intent: intent, markSources: true)
-        guard operands.range(of: #"\b(?:to|into|through|via)\s+(?:(?:the|my)\s+)?fk_source\b"#,
+        guard operands.range(of: #"\b(?:to|into|through|via|followed by)\s+(?:(?:the|my)\s+)?fk_source\b"#,
                              options: [.regularExpression, .caseInsensitive]) == nil else { return false }
         let operators = maskingEntities(in: text, intent: intent)
         let processing = intent.branches.filter { !$0.effects.isEmpty }.map(\.processingEvidence)
@@ -308,7 +308,7 @@ enum AssistantRoutingPreparation {
         }
     }
 
-    private static func maskingEntities(
+    static func maskingEntities(
         in text: String, intent: AssistantRoutingIntent, markSources: Bool = false
     ) -> String {
         let sources = Set(intent.branches.map { AssistantRoutingInterpretationAdapter.normalize($0.source) })

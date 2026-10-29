@@ -264,6 +264,25 @@ struct AssistantRoutingChatTests {
         #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
     }
 
+    @Test func questionsAboutIncludedDraftSourcesReachProviderWithoutAmending() async throws {
+        let fixture = AssistantRoutingFixture()
+        let store = RoutingTestDraftStore()
+        let coordinator = AssistantCoordinator(draftStore: store)
+        let prior = try fixture.prepared()
+        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+            preparedContext: fixture.context, currentContext: fixture.context))
+        let generator = RoutingTestGenerator()
+        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: generator)
+        let chat = chat(coordinator: coordinator, interpreter: RoutingTestInterpreter(.answer), generator: preflight)
+        chat.composer = "Does the pending draft include Solar?"
+        chat.send(context: fixture.context)
+        try await wait { !chat.isStreaming }
+        #expect(await generator.calls == 1)
+        #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
+        #expect(coordinator.pendingStudioDraft == prior)
+        #expect(await store.saves == 1)
+    }
+
     @Test func legacyRetryAndReadOnlyFallbackCannotReplacePriorDraft() async throws {
         let fixture = AssistantRoutingFixture()
         let store = RoutingTestDraftStore()
