@@ -4,11 +4,35 @@ import Testing
 @testable import FluxKlang
 
 struct AssistantActionIntentValidatorTests {
+    @Test func recoveredTargetMustIncludePunctuationConnectedNameParts() {
+        for separator in ["_", ":", "—"] {
+            for name in ["Juno\(separator)Alpha", "Alpha\(separator)Juno"] {
+                for target in ["Juno", name] {
+                    let accepted = target == name
+                    let text = "mute \(name)"
+                    let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: .mute,
+                        targetEvidence: target, actionEvidence: "mute")
+                    let interpreted = AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+                    if accepted {
+                        guard case .proposal = interpreted else { Issue.record("Whole alias rejected"); continue }
+                    } else {
+                        #expect(interpreted == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+                    }
+                    let intent = AssistantActionIntent(
+                        targetMention: target, action: .mute, amount: nil, addToStudio: false,
+                        evidence: .init(target: target, action: "mute", amount: nil, add: nil))
+                    #expect((AssistantActionIntentValidator.clarification(for: intent, text: text) == nil) == accepted)
+                }
+            }
+        }
+    }
+
     @Test func recoveredTargetCannotOmitAdjacentAlphabeticNameWords() {
         for (text, target, accepted) in [
             ("mute Juno Alpha", "Juno", false), ("mute Alpha Juno", "Juno", false),
             ("mute Juno Alpha", "Alpha", false), ("mute Juno Alpha", "Juno Alpha", true),
-            ("mute Juno", "Juno", true), ("Could you mute my Juno Alpha please?", "Juno Alpha", true)
+            ("mute Juno", "Juno", true), ("Could you mute my Juno Alpha please?", "Juno Alpha", true),
+            ("mute Juno.", "Juno", true), ("mute Juno!", "Juno", true), ("Could you mute Juno?", "Juno", true)
         ] {
             let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: .mute,
                 targetEvidence: target, actionEvidence: "mute")
