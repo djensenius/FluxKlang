@@ -342,4 +342,121 @@ struct AssistantActionIntentValidatorTests {
             #expect(AssistantActionIntentValidator.clarification(for: intent(), text: text) != nil)
         }
     }
+
+}
+
+extension AssistantActionIntentValidatorTests {
+    @Test func possessiveVolumeDescriptorsPreserveCompleteTargetsInBothLayers() {
+        for suffix in ["'s", "’s"] {
+            for target in ["Astrolab", "Channel-Lead", "Juno_Alpha", "Astrolab's App"] {
+                for descriptor in ["volume", "fader"] {
+                    let text = "turn down my \(target)\(suffix) \(descriptor)"
+                    let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: .lower,
+                        targetEvidence: target, actionEvidence: "down")
+                    if case .proposal = AssistantActionInterpretationAdapter.validate(
+                        output, request: .init(text: text)) {
+                    } else { Issue.record("Possessive descriptor rejected: \(text)") }
+                    let intent = AssistantActionIntent(targetMention: target, action: .lower, amount: nil,
+                        addToStudio: false, evidence: .init(target: target, action: "down", amount: nil, add: nil))
+                    #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) == nil)
+                }
+            }
+            for (target, operand) in [
+                ("Astrolab", "Astrolab\(suffix) App volume"),
+                ("Astrolab", "Astrolab\(suffix) volumeAlpha"),
+                ("Astrolab", "Astrolab\(suffix) volume_Alpha"),
+                ("Astrolab", "Astrolab\(suffix) volume-Lead"),
+                ("Astrolab", "Astrolab\(suffix) gain"),
+                ("Juno", "Juno_Alpha\(suffix) volume"),
+                ("Channel", "Channel-Lead\(suffix) volume")
+            ] {
+                let text = "turn down my \(operand)"
+                let output = AssistantActionModelOutput(disposition: .proposal, target: target, action: .lower,
+                    targetEvidence: target, actionEvidence: "down")
+                #expect(AssistantActionInterpretationAdapter.validate(output, request: .init(text: text))
+                    == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+                let intent = AssistantActionIntent(targetMention: target, action: .lower, amount: nil,
+                    addToStudio: false, evidence: .init(target: target, action: "down", amount: nil, add: nil))
+                #expect(AssistantActionIntentValidator.clarification(for: intent, text: text) != nil)
+            }
+        }
+        let expanded = AssistantActionModelOutput(disposition: .proposal, target: "Astrolab's App", action: .lower,
+            targetEvidence: "Astrolab", actionEvidence: "down")
+        #expect(AssistantActionInterpretationAdapter.validate(
+            expanded, request: .init(text: "turn down my Astrolab's volume"))
+            == .clarification(AssistantActionInterpretationAdapter.invalidOutput))
+        let intent = AssistantActionIntent(targetMention: "Astrolab's App", action: .lower, amount: nil,
+            addToStudio: false, evidence: .init(target: "Astrolab", action: "down", amount: nil, add: nil))
+        #expect(AssistantActionIntentValidator.clarification(
+            for: intent, text: "turn down my Astrolab's volume") != nil)
+    }
+
+    @MainActor @Test func possessiveVolumePreparesGroundedReviewWithoutSET() async {
+        for name in ["Astrolab", "Astrolab's App"] {
+            let transport = AssistantRecordingWingTransport()
+            await transport.put("/ch/7/name", .string(name))
+            let wing = WingController(transport: transport)
+            await wing.connect(host: "192.0.2.10")
+            await AssistantBackendFixture.settleInitialActionEvidence(wing)
+            let state = AssistantActionTestState(wing: wing)
+            let service = AssistantActionController(controller: { wing }, layout: { state.layout },
+                scope: { state.scope }, addShortcut: { _, _, _, _ in nil }, timeout: .seconds(1))
+            for suffix in ["'s", "’s"] {
+                let request = AssistantActionInterpretationRequest(text: "turn down my \(name)\(suffix) volume",
+                    liveContext: .init(status: .observed, sessionID: wing.sessionID,
+                                       capturedAt: Date(), observations: []))
+                let output = AssistantActionModelOutput(disposition: .proposal, target: name, action: .lower,
+                    targetEvidence: name, actionEvidence: "down")
+                let interpretation = AssistantActionInterpretationAdapter.validate(output, request: request)
+                guard case .review(let review) = await service.prepare(request, interpretation: interpretation) else {
+                    Issue.record("Possessive request did not prepare a review"); continue
+                }
+                #expect(review.stage == .ready)
+                #expect(review.target?.members.map { $0.identity.node } == [.channel(7)])
+                #expect(review.faderChanges.count == 1)
+                #expect(state.scope.graph.nodes.isEmpty)
+                #expect(await transport.writes.isEmpty)
+            }
+            await wing.disconnect()
+        }
+    }
+
+    @MainActor @Test func initialEvidenceBarrierAcceptsCompleteSnapshotWithoutNewQueryReplies() async throws {
+        let transport = AssistantRecordingWingTransport()
+        await transport.configure(answers: false)
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        await transport.emitInitialSnapshot()
+        let addresses = AssistantActionController.discoveryAddresses
+            + [WingAddress.fader(.channel, 7), WingAddress.mute(.channel, 7), WingAddress.name(.main, 1)]
+        try await AssistantBackendFixture.wait { addresses.allSatisfy { wing.confirmedValues[$0] != nil } }
+        await AssistantBackendFixture.settleInitialActionEvidence(wing)
+        #expect(await transport.writes.isEmpty)
+        await wing.disconnect()
+    }
+
+    @MainActor @Test func initialEvidenceBarrierWaitsForMissingFirstNameBeforeSettling() async throws {
+        let transport = AssistantRecordingWingTransport()
+        await transport.configure(answers: false)
+        let wing = WingController(transport: transport)
+        await wing.connect(host: "192.0.2.10")
+        var settled = false
+        let barrier = Task {
+            await AssistantBackendFixture.settleInitialActionEvidence(wing)
+            settled = true
+        }
+        // The helper has started its GETs, but no incoming reply has reached the listener yet.
+        try await AssistantBackendFixture.waitAsync { await transport.queries.contains("/main/1/name") }
+        #expect(!settled)
+        await transport.emitInitialSnapshot(excluding: ["/ch/40/name"])
+        try await AssistantBackendFixture.wait { wing.confirmedValues["/main/1/name"] != nil }
+        #expect(wing.confirmedValues["/ch/40/name"] == nil)
+        #expect(!settled)
+        await transport.emit("/ch/40/name", .string(""))
+        await barrier.value
+        #expect(settled)
+        #expect(wing.confirmedValues["/ch/40/name"] == .string(""))
+        #expect(await transport.writes.isEmpty)
+        await wing.disconnect()
+    }
 }

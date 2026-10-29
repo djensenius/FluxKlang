@@ -21,7 +21,7 @@ enum AssistantActionIntentValidator {
             return "No changes: the target must be stated in the current request."
         }
         let actionText = text.replacingOccurrences(
-            of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
+            of: operandPattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard preservesMeaning(intent, in: text) else {
             return "No changes: the interpretation omitted or changed the requested operation or amount."
         }
@@ -92,7 +92,7 @@ enum AssistantActionIntentValidator {
             return false
         }
         let clause = text.replacingOccurrences(
-            of: evidencePattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
+            of: operandPattern(intent.evidence.target), with: " ", options: [.regularExpression, .caseInsensitive])
         guard !hasUnsupportedControl(in: clause), !hasUnrepresentedTargets(in: clause),
               !hasRelativePercentReference(in: clause),
               hasOnlySupportedQualifiers(intent, in: clause),
@@ -127,7 +127,7 @@ enum AssistantActionIntentValidator {
     }
 
     private static func hasCompleteTargetPhrase(_ target: String, in text: String) -> Bool {
-        guard let regex = try? NSRegularExpression(pattern: evidencePattern(target), options: .caseInsensitive) else {
+        guard let regex = try? NSRegularExpression(pattern: operandPattern(target), options: .caseInsensitive) else {
             return false
         }
         let syntax = Set(
@@ -175,7 +175,7 @@ enum AssistantActionIntentValidator {
     private static func compoundTargetsMatch(_ intent: AssistantActionIntent, text: String) -> Bool {
         guard intent.addToStudio else { return true }
         let scoped = text.replacingOccurrences(
-            of: evidencePattern(intent.evidence.target), with: " it ", options: [.regularExpression, .caseInsensitive])
+            of: operandPattern(intent.evidence.target), with: " it ", options: [.regularExpression, .caseInsensitive])
         let addPattern = #"\b(?:add|include)\s+.*?(?=\b(?:and|then|also)\b|[;,.!?]|$)"#
         guard let range = scoped.range(of: addPattern, options: [.regularExpression, .caseInsensitive]) else {
             return false
@@ -287,6 +287,11 @@ enum AssistantActionIntentValidator {
 
     private static func evidencePattern(_ evidence: String) -> String {
         "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: evidence) + "(?![\\p{L}\\p{N}])"
+    }
+
+    private static func operandPattern(_ evidence: String) -> String {
+        // Possession is command grammar only before a supported descriptor, never an arbitrary name suffix.
+        evidencePattern(evidence) + #"(?:['’]s(?=\s+(?:volume|fader)\b))?"#
     }
 
     private static func hasWord(_ words: [String], in text: String) -> Bool {

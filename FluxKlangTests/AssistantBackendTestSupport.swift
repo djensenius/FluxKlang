@@ -34,11 +34,22 @@ enum AssistantBackendFixture {
 
     static func settleInitialActionEvidence(_ wing: WingController) async {
         guard let session = wing.sessionID else { Issue.record("Recording fixture did not connect"); return }
-        // Establish the fake's initial discovery and baseline replies before installing review observations.
+        // Fixture readiness, not an authorization refresh: subscription/bulk replies already observed
+        // in this session count. Finish issuing missing GETs before bounding the listener-drain wait.
         let addresses = AssistantActionController.discoveryAddresses
             + [WingAddress.fader(.channel, 7), WingAddress.mute(.channel, 7), WingAddress.name(.main, 1)]
-        let initial = await wing.readFreshConfirmed(addresses, session: session, timeout: .seconds(1))
-        #expect(initial?.count == addresses.count, "Initial action evidence did not settle before review preparation")
+        for address in addresses where wing.confirmedValues[address] == nil {
+            await wing.refresh(address)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while !Task.isCancelled, wing.sessionID == session, ContinuousClock.now < deadline,
+              addresses.contains(where: { wing.confirmedValues[$0] == nil }) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let missing = addresses.filter { wing.confirmedValues[$0] == nil }
+        let actualSession = wing.sessionID
+        #expect(actualSession == session && missing.isEmpty,
+                "Evidence missing: \(missing); expected \(session), actual \(String(describing: actualSession))")
     }
 
     static func waitAsync(_ condition: @MainActor () async -> Bool) async throws {
@@ -203,6 +214,11 @@ actor AssistantRecordingWingTransport: WingTransporting {
         waiting.forEach { $0.resume() }
     }
     func put(_ address: String, _ value: WingValue) { values[address] = value }
+    func emitInitialSnapshot(excluding addresses: Set<String> = []) {
+        for (address, value) in values where !addresses.contains(address) {
+            emitQuery(address, value)
+        }
+    }
     func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async throws {
         if let value {
             try recordWrite(address, value)
