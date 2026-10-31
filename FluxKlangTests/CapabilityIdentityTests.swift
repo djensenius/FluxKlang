@@ -3,6 +3,19 @@ import Testing
 @testable import FluxKlang
 
 struct CapabilityIdentityTests {
+    @Test func reservedExtensionsAreSeparateFromUnknownMetadata() throws {
+        let input = Data("""
+        {"id":"cap.audio","label":"Audio","extensions":{"vendor":"wide"},"future":"kept"}
+        """.utf8)
+        let capability = try ContractCoding.decode(CapabilityDefinition.self, from: input)
+        #expect(capability.extensions == ["vendor": .string("wide")])
+        #expect(capability.unknownFields == ["future": .string("kept")])
+
+        let output = try ContractCoding.makeEncoder().encode(capability)
+        #expect(try ContractCoding.decode(JSONValue.self, from: output)
+            == ContractCoding.decode(JSONValue.self, from: input))
+    }
+
     @Test func editingLabelPreservesFutureMetadata() throws {
         let input = Data("""
         {"id":"cap.audio.multichannel","label":"Original","vendor":{"formats":["audio"],"revision":2},"optional":null}

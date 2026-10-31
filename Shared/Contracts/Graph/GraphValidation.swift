@@ -58,6 +58,12 @@ extension GraphDocument {
         do { try checkCollectionBounds() } catch { return [.bounds(error)] }
         var errors = nodeErrors()
         if requiresReview { errors.insert(.reviewRequired, at: 0) }
+        // Match node(_:)/port(_:) first-occurrence semantics without scanning for each endpoint.
+        // Only scalar IDs form lookup keys; optional address metadata is not port identity.
+        let nodeByID = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let portsByNode = nodeByID.mapValues { node in
+            Dictionary(node.ports.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
         var linked: [(NodeID, NodeID)] = []
         var wires: Set<[String]> = []
         var edgeIDs: Set<EdgeID> = []
@@ -65,7 +71,7 @@ extension GraphDocument {
             if !edgeIDs.insert(edge.id).inserted { errors.append(.duplicateEdge(edge.id)) }
             let wire = [edge.from.node, edge.to.node].map(\.rawValue) + [edge.from.port, edge.to.port].map(\.rawValue)
             if !wires.insert(wire).inserted { errors.append(.duplicateWire(edge.id)) }
-            let edgeErrors = errorsForEdge(edge)
+            let edgeErrors = errorsForEdge(edge, nodes: nodeByID, ports: portsByNode)
             errors += edgeErrors
             if edgeErrors.isEmpty, edge.feedback == nil { linked.append((edge.from.node, edge.to.node)) }
         }
@@ -128,13 +134,17 @@ extension GraphDocument {
         return errors
     }
 
-    private func errorsForEdge(_ edge: GraphEdge) -> [GraphValidationError] {
+    private func errorsForEdge(
+        _ edge: GraphEdge, nodes nodeByID: [NodeID: GraphNode], ports portsByNode: [NodeID: [PortID: GraphPort]]
+    ) -> [GraphValidationError] {
         var errors: [GraphValidationError] = []
         var ports: [GraphPort] = []
         for address in [edge.from, edge.to] {
-            if node(address.node) == nil {
+            guard let node = nodeByID[address.node] else {
                 errors.append(.missingNode(edge: edge.id, address.node))
-            } else if let port = port(at: address), node(address.node)?.kind.isRoutable == true {
+                continue
+            }
+            if let port = portsByNode[address.node]?[address.port], node.kind.isRoutable {
                 ports.append(port)
             } else {
                 errors.append(.missingPort(edge: edge.id, address))

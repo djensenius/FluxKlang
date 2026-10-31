@@ -132,6 +132,66 @@ struct GraphContractTests {
         ])
     }
 
+    @Test func edgeLookupKeepsFirstDuplicateNodeAndPortAndDiagnosticOrder() {
+        let source = GraphNode(id: Self.node("nod.source"), kind: .plugin, label: "Source", ports: [
+            Self.port("out", .output, .control), Self.port("out", .input, .control)
+        ])
+        let destination = GraphNode(id: Self.node("nod.destination"), kind: .plugin, label: "Destination",
+                                    ports: [Self.port("in", .input, .control)])
+        let shortcut = GraphNode(id: source.id, kind: .observedShortcut, label: "Duplicate shortcut")
+        let edge = Self.edge("edg.lookup", Self.address("nod.source", "out"), Self.address("nod.destination", "in"))
+        var graph = GraphDocument(id: GraphID(validated: "gph.lookup"),
+                                  nodes: [source, destination, shortcut], edges: [edge])
+        #expect(graph.validationErrors() == [
+            .duplicatePort(source.id, PortID(validated: "out")), .duplicateNode(source.id)
+        ])
+
+        graph.nodes = [shortcut, destination, source]
+        #expect(graph.validationErrors() == [
+            .duplicateNode(source.id), .duplicatePort(source.id, PortID(validated: "out")),
+            .missingPort(edge: edge.id, edge.from)
+        ])
+    }
+
+    @Test func endpointMetadataDoesNotChangePortOrWireIdentity() {
+        var graph = Self.sampleGraph()
+        var duplicate = graph.edges[0]
+        duplicate.id = EdgeID(validated: "edg.copy")
+        graph.edges[0].from.extensions = ["note": .string("source metadata")]
+        graph.edges[0].from.unknownFields = ["futureSource": .bool(true)]
+        graph.edges[0].to.extensions = ["note": .string("destination metadata")]
+        graph.edges[0].to.unknownFields = ["futureDestination": .int(1)]
+        #expect(graph.validationErrors().isEmpty)
+        #expect(graph.validationErrors(strict: true) == [
+            .unknownFields(path: "$.edges[edg.keys-verb].from"),
+            .unknownFields(path: "$.edges[edg.keys-verb].to")
+        ])
+        graph.edges.append(duplicate)
+        #expect(graph.validationErrors() == [.duplicateWire(duplicate.id)])
+    }
+
+    @Test func validatesGraphAtNodeAndEdgeCollectionLimits() throws {
+        let nodes = try (0..<ProjectGraphLimits.nodes).map { index in
+            GraphNode(id: try NodeID("nod.\(index)"), kind: .plugin, label: "Node \(index)", ports: [
+                Self.port("in", .input, .control), Self.port("out", .output, .control)
+            ])
+        }
+        let half = nodes.count / 2
+        let edges = try (0..<ProjectGraphLimits.edges).map { index in
+            let source = nodes[index % half].id
+            let destination = nodes[half + (index % half + index / half) % half].id
+            return GraphEdge(
+                id: try EdgeID("edg.\(index)"),
+                from: PortAddress(node: source, port: PortID(validated: "out")),
+                to: PortAddress(node: destination, port: PortID(validated: "in"))
+            )
+        }
+        let graph = GraphDocument(id: GraphID(validated: "gph.bounded"), nodes: nodes, edges: edges)
+        #expect(graph.nodes.count == ProjectGraphLimits.nodes)
+        #expect(graph.edges.count == ProjectGraphLimits.edges)
+        try graph.validate(strict: true)
+    }
+
     @Test func cyclesNeedAnExplicitValidFeedbackEdge() {
         var graph = Self.sampleGraph()
         let feedback = graph.edges.firstIndex { $0.feedback != nil } ?? 0
@@ -170,6 +230,29 @@ struct GraphContractTests {
         }
         try graph.validateForPreparation(supportedCapabilities: [
             CapabilityID(validated: "cap.au-instrument"), CapabilityID(validated: "cap.au-effect")
+        ])
+    }
+
+    @Test func strictCapabilityExtensionsRoundTripButUnknownMembersReject() throws {
+        var graph = Self.sampleGraph()
+        let extensionBag: [String: JSONValue] = ["vendor": .object(["options": .array([.int(1), .null])])]
+        graph.capabilities[0] = CapabilityDefinition(
+            id: graph.capabilities[0].id, label: graph.capabilities[0].label, extensions: extensionBag
+        )
+        let data = try graph.encoded()
+        var decoded = try GraphDocument.decode(from: data)
+        #expect(decoded == graph)
+        #expect(decoded.capabilities[0].extensions == extensionBag)
+        #expect(decoded.capabilities[0].unknownFields.isEmpty)
+        #expect(decoded.validationErrors(strict: true).isEmpty)
+        #expect(try decoded.encoded() == data)
+
+        decoded.capabilities[0].unknownFields = ["futureCapability": .bool(true)]
+        let future = try GraphDocument.decode(from: decoded.encoded())
+        #expect(future == decoded)
+        #expect(future.validationErrors().isEmpty)
+        #expect(future.validationErrors(strict: true) == [
+            .unknownFields(path: "$.capabilities[cap.au-effect]")
         ])
     }
 
