@@ -6,6 +6,14 @@
 import Foundation
 
 extension AppModel {
+    /// Startup step from `loadStores()`: routes actions here, then loads and restarts the input.
+    func loadLaunchControlXL() async {
+        launchControlXL.setActionHandler { [weak self] action in
+            await self?.handleLaunchControlXL(action)
+        }
+        await launchControlXL.load()
+    }
+
     func handleLaunchControlXL(_ action: LaunchControlXLAction) async {
         switch action {
         case .moveBank(let delta):
