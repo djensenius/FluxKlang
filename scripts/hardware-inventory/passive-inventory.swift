@@ -2,14 +2,21 @@
 //  passive-inventory.swift
 //  FluxKlang passive hardware inventory (roadmap #48, issue #67)
 //
-//  Read-only listing of CoreAudio HAL devices and CoreMIDI devices. It only
-//  uses property has/size/get queries and CoreMIDI enumeration getters. It
-//  creates no MIDI client or port, starts no device I/O, changes no property,
-//  installs no listener and opens no connection of any kind.
+//  Read-only listing of CoreAudio HAL devices and CoreMIDI devices. The code
+//  only issues HAL property has/size/get queries and CoreMIDI enumeration and
+//  property getters. It creates no MIDI client or port, starts no device I/O,
+//  sets no property, installs no listener and itself sends nothing anywhere.
+//
+//  Side effects outside this file's control: the first HAL query connects to
+//  coreaudiod, which may load HAL driver plug-ins; property reads may make a
+//  driver issue USB control (GET) requests to the device; the first CoreMIDI
+//  call may launch the CoreMIDI server, which loads its own MIDI drivers
+//  (including the network and Bluetooth MIDI drivers).
 //
 //  Run standalone (not part of any app target):
 //      swift scripts/hardware-inventory/passive-inventory.swift
-//  JSON is written to standard output. Static self-check of this file:
+//  JSON is written to standard output. Defence-in-depth tripwire (not a proof)
+//  for this file's identifiers and linked symbols:
 //      scripts/hardware-inventory/passive-inventory.sh --self-check
 //
 
@@ -103,7 +110,6 @@ struct MidiInventory: Codable {
 struct Inventory: Codable {
     let schema: String
     let generatedAt: String
-    let readOnlyCalls: [String]
     let audioDevices: [DeviceInfo]
     let midi: MidiInventory
 }
@@ -311,17 +317,25 @@ func describe(_ device: AudioObjectID, defaults: DefaultDevices) -> DeviceInfo {
 }
 
 func audioDevices() -> [DeviceInfo] {
-    let system = AudioObjectID(kAudioObjectSystemObject)
+    let systemObject = AudioObjectID(kAudioObjectSystemObject)
     let defaults = DefaultDevices(
-        input: halValue(system, propertyAddress(kAudioHardwarePropertyDefaultInputDevice), empty: AudioObjectID(0)),
-        output: halValue(system, propertyAddress(kAudioHardwarePropertyDefaultOutputDevice), empty: AudioObjectID(0)),
+        input: halValue(
+            systemObject,
+            propertyAddress(kAudioHardwarePropertyDefaultInputDevice),
+            empty: AudioObjectID(0)
+        ),
+        output: halValue(
+            systemObject,
+            propertyAddress(kAudioHardwarePropertyDefaultOutputDevice),
+            empty: AudioObjectID(0)
+        ),
         systemOutput: halValue(
-            system,
+            systemObject,
             propertyAddress(kAudioHardwarePropertyDefaultSystemOutputDevice),
             empty: AudioObjectID(0)
         )
     )
-    let devices = halArray(system, propertyAddress(kAudioHardwarePropertyDevices), empty: AudioObjectID(0))
+    let devices = halArray(systemObject, propertyAddress(kAudioHardwarePropertyDevices), empty: AudioObjectID(0))
     return devices.map { describe($0, defaults: defaults) }
 }
 
@@ -384,15 +398,8 @@ func midiInventory() -> MidiInventory {
 // MARK: - Main
 
 let inventory = Inventory(
-    schema: "fluxklang.passive-hardware-inventory/1",
+    schema: "fluxklang.passive-hardware-inventory/2",
     generatedAt: ISO8601DateFormatter().string(from: Date()),
-    readOnlyCalls: [
-        "AudioObjectHasProperty",
-        "AudioObjectGetPropertyDataSize",
-        "AudioObjectGetPropertyData",
-        "MIDIGetNumberOfDevices/MIDIGetDevice/MIDIDeviceGetEntity/MIDIEntityGetSource/MIDIEntityGetDestination",
-        "MIDIObjectGetStringProperty/MIDIObjectGetIntegerProperty"
-    ],
     audioDevices: audioDevices(),
     midi: midiInventory()
 )
