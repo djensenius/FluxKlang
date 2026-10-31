@@ -138,7 +138,6 @@ def compatible(ports, src_id, dst_id, conversion):
 
 def check_graph(graph):
     ports = {p["id"]: p for p in graph["ports"]}
-    nodes = {n["id"]: n for n in graph["nodes"]}
     defined = {c["id"] for c in graph["capabilities"]}
     required, advisory = set(graph["requiredCapabilities"]), set(graph["advisoryCapabilities"])
     if not required | advisory <= defined or required & advisory:
@@ -149,7 +148,7 @@ def check_graph(graph):
         if not set(node.get("requiredCapabilities", [])) <= required or \
                 not set(node.get("advisoryCapabilities", [])) <= advisory:
             err("graph", f"{node['id']} capability level differs from the graph level")
-    adjacency = {n: set() for n in nodes}
+    links = set()
     for edge in graph["edges"]:
         verdict, fb = compatible(ports, edge["from"], edge["to"], edge.get("conversion")), edge.get("feedback")
         causal = (isinstance(fb, dict) and fb.get("delay") == "oneBlock"
@@ -159,34 +158,25 @@ def check_graph(graph):
         if verdict != "ok":
             err("graph", f"{edge['id']} is invalid: {verdict}")
         elif not causal:
-            adjacency[ports[edge["from"]]["node"]].add(ports[edge["to"]]["node"])
-    state = {}
-
-    def visit(n):
-        state[n] = "open"
-        for m in adjacency[n]:
-            if state.get(m) == "open" or (m not in state and visit(m)):
-                return True
-        state[n] = "done"
-        return False
-    if any(n not in state and visit(n) for n in nodes):
-        err("graph", "cycle without an explicit feedback edge")
+            links.add((ports[edge["from"]]["node"], ports[edge["to"]]["node"]))
+    while links:  # peel links into nodes with no exits; whatever remains is a cycle
+        sinks = {b for _, b in links} - {a for a, _ in links}
+        if not sinks:
+            err("graph", "cycle without an explicit feedback edge")
+            break
+        links = {(a, b) for a, b in links if b not in sinks}
     return ports
 
 
 def host_sessions(docs):
     """Each host session: one authority over its own live graph, rig, lease, epoch, logs and drafts."""
-    phone, transport = docs["separateHostSession"], docs["transport"]
-    session_a = docs["sessionStatus"]
-    epochs = {h["host"]: h["hostEpoch"] for h in transport["epochs"]["hosts"]}
-    return [
-        {"name": session_a["id"], "session": session_a, "rig": docs["deviceCapability"],
-         "hostEpoch": epochs.get(session_a["host"]), "logs": docs["command"]["logs"],
-         "connections": {c["id"]: c["connectionEpoch"] for c in transport["epochs"]["connections"]},
-         "trace": docs["transactionTrace"]},
-        {"name": phone["id"], "session": phone, "rig": phone["rig"], "hostEpoch": phone["transport"]["hostEpoch"],
-         "logs": [phone["commandLog"]], "connections": {}, "trace": phone["trace"]},
-    ]
+    phone, epochs, a = docs["separateHostSession"], docs["transport"]["epochs"], docs["sessionStatus"]
+    return [{"name": a["id"], "session": a, "rig": docs["deviceCapability"], "logs": docs["command"]["logs"],
+             "hostEpoch": {h["host"]: h["hostEpoch"] for h in epochs["hosts"]}.get(a["host"]),
+             "connections": {c["id"]: c["connectionEpoch"] for c in epochs["connections"]},
+             "trace": docs["transactionTrace"]},
+            {"name": phone["id"], "session": phone, "rig": phone["rig"], "logs": [phone["commandLog"]],
+             "hostEpoch": phone["transport"]["hostEpoch"], "connections": {}, "trace": phone["trace"]}]
 
 
 def check_authority(hs):
@@ -213,17 +203,13 @@ def check_ops_applied(graph, draft, where):
     edges, nodes = graph["edges"], {n["id"] for n in graph["nodes"]}
     for op in draft["ops"]:
         kind = op["op"]
-        if kind == "connect":
-            hit = [e for e in edges if e["from"] == op["from"] and e["to"] == op["to"]
-                   and e.get("conversion", {}).get("map") == op.get("conversion", {}).get("map")]
-            if not hit or ("edge" in op and hit[0]["id"] != op["edge"]):
-                err(where, f"committed connect {op['from']} -> {op['to']} is not in the graph")
-        elif kind == "disconnect" and any(e["id"] == op["edge"] for e in edges):
-            err(where, f"committed disconnect left {op['edge']} in the graph")
-        elif kind == "addNode" and op["proposedId"] not in nodes:
-            err(where, f"committed addNode {op['proposedId']} is not in the graph")
-        elif kind not in ("connect", "disconnect", "addNode"):
-            err(where, f"unknown draft op {kind!r}")
+        hit = [e["id"] for e in edges if e["from"] == op.get("from") and e["to"] == op.get("to")
+               and e.get("conversion", {}).get("map") == op.get("conversion", {}).get("map")]
+        if ((kind == "connect" and (not hit or op.get("edge", hit[0]) != hit[0]))
+                or (kind == "disconnect" and any(e["id"] == op["edge"] for e in edges))
+                or (kind == "addNode" and op["proposedId"] not in nodes)
+                or kind not in ("connect", "disconnect", "addNode")):
+            err(where, f"committed {kind} {op.get('edge') or op.get('proposedId') or op.get('to')} is not in the graph")
 
 
 def check_provenance(hs, draft, roles):
@@ -246,7 +232,6 @@ def check_transactions(hs, graph, history, ports, roles):
     drafts = {d["id"]: d for d in trace["drafts"]}
     if trace.get("stepOrder", STEP_ORDER) != STEP_ORDER:
         err(hs["name"], f"step order must be {STEP_ORDER}")
-    order = STEP_ORDER
     active, last_seq, used = trace["initialActiveGraphRevision"], 0, set()
     for draft in drafts.values():
         check_provenance(hs, draft, roles)
@@ -258,8 +243,8 @@ def check_transactions(hs, graph, history, ports, roles):
             err(where, "transaction has no steps")
             continue
         names = [s["step"] for s in steps]
-        if names != order[:len(names)]:
-            err(where, f"steps {names} do not follow {order}")
+        if names != STEP_ORDER[:len(names)]:
+            err(where, f"steps {names} do not follow {STEP_ORDER}")
         for i, step in enumerate(steps):
             if step["seq"] <= last_seq:
                 err(where, f"seq {step['seq']} is not monotonic")
@@ -285,9 +270,8 @@ def check_transactions(hs, graph, history, ports, roles):
                         or not draft.get("diffDigest") or bound.get("diffDigest") != draft["diffDigest"]):
                     err(where, "authorization is not bound to this draft, base, host epoch and diff digest")
         if txn["outcome"] == "committed":
-            commit = next((s for s in steps if s["step"] == "commit"), {})
-            ack = next((s for s in steps if s["step"] == "acknowledge"), {})
-            if names != order or any(s["result"] != "ok" for s in steps):
+            commit, ack = (next((s for s in steps if s["step"] == k), {}) for k in ("commit", "acknowledge"))
+            if names != STEP_ORDER or any(s["result"] != "ok" for s in steps):
                 err(where, "committed transactions need every step ok")
             if commit.get("resultGraphRevision") != base + 1:
                 err(where, "commit must produce base + 1")
