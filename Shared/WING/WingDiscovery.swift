@@ -158,15 +158,17 @@ final class WingDiscovery {
             }
         }
 
-        var sent = 0
+        var sent = 0, sendErrno: Int32?
         for host in broadcastHosts {
-            guard (try? await transport.send(WingAddress.info, nil, to: host, port: port)) != nil else { continue }
-            sent += 1
+            do {
+                try await transport.send(WingAddress.info, nil, to: host, port: port)
+                sent += 1
+            } catch {
+                sendErrno = sendErrno ?? LocalNetworkAccess.errno(in: error)
+            }
         }
         if sent == 0 {
-            unavailableReason = "The scan couldn't send on this network. If Local Network access is off for "
-                + "FluxKlang, allow it under Privacy & Security › Local Network in Settings, "
-                + "or enter the WING's IP address."
+            unavailableReason = LocalNetworkAccess.discoveryFailureReason(errno: sendErrno)
         } else {
             try? await Task.sleep(for: duration)
         }

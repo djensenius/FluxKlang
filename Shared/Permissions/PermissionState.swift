@@ -132,6 +132,47 @@ enum LocalNetworkAccess {
         }
     }
 
+    /// User-facing text for a broadcast scan that couldn't send. Uses the same
+    /// errno vocabulary as `connectFailureReason`. A possible denial never
+    /// suggests manual IP entry: that path is checked the same way and would
+    /// fail too. Only unclassified failures offer the IP fallback.
+    static func discoveryFailureReason(errno code: Int32?) -> String {
+        switch code.map(status(afterConnectErrno:)) {
+        case .unreachable:
+            return "This device isn't connected to a network that can reach the WING. "
+                + "Join the WING's network and scan again."
+        case .possiblyDenied:
+            return "The scan couldn't send. Check that this device is on the WING's network. If it is, "
+                + "Local Network access may be off for FluxKlang: allow it in \(settingsPath), then scan again."
+        default:
+            let detail = code.map { " (\(String(cString: strerror($0))))" } ?? ""
+            return "The scan couldn't send on this network\(detail). Try again, or enter the WING's IP address."
+        }
+    }
+
+    /// The POSIX errno behind a socket error, if one is recorded. Swift-NIO's
+    /// `IOError` (thrown through SwiftOSC) stores it privately as `error: .errno(CInt)`.
+    static func errno(in error: any Error, depth: Int = 3) -> Int32? {
+        if let posix = error as? POSIXError { return posix.code.rawValue }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain { return Int32(nsError.code) }
+        return errnoField(in: Mirror(reflecting: error), depth: depth)
+    }
+
+    private static func errnoField(in mirror: Mirror, depth: Int) -> Int32? {
+        guard depth > 0 else { return nil }
+        for child in mirror.children {
+            if child.label == "errno" || child.label == "errnoCode", let code = child.value as? Int32 {
+                return code
+            }
+            if let nested = child.value as? any Error, let code = errno(in: nested, depth: depth - 1) {
+                return code
+            }
+            if let code = errnoField(in: Mirror(reflecting: child.value), depth: depth - 1) { return code }
+        }
+        return nil
+    }
+
     /// Flip only together with project.yml once Apple grants
     /// com.apple.developer.networking.multicast for this App ID.
     static let hasMulticastEntitlement = false

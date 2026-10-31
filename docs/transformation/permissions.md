@@ -131,7 +131,16 @@ Other behaviour to know:
   match devices.
 - **macOS:** the entitlement isn't required, so the scan runs. If no broadcast
   interface is up, or every send fails, it shows the reason instead of "No
-  consoles found".
+  consoles found". A failed send is classified with the transport's errno
+  vocabulary (`LocalNetworkAccess.discoveryFailureReason`):
+  - `.unreachable`: "This device isn't connected to a network that can reach
+    the WING. Join the WING's network and scan again."
+  - `.possiblyDenied`: "…Local Network access may be off for FluxKlang: allow it
+    in System Settings › Privacy & Security › Local Network, then scan again."
+    It deliberately does **not** suggest entering an IP address, because manual
+    IP runs the same checked pre-flight and would fail the same way.
+  - Anything else (no errno, or an unclassified one): the manual-IP fallback is
+    offered.
 
 ## Keys and entitlements
 
@@ -223,8 +232,10 @@ Security › Local Network. The remove button exists on macOS 27.2 and later.
    4. Record the errno, for example with a debugger breakpoint on
       `localNetworkBlocked`.
 3. **M3, app stays usable:** Demo Mode, editing a preset and Settings all work.
-4. **M4, scan while denied:** run Scan for WING. Expect the "scan couldn't
-   send…" reason or an empty list, never a console that isn't there.
+4. **M4, scan while denied:** run Scan for WING. Expect "The scan couldn't
+   send. … Local Network access may be off …" with no advice to enter an IP
+   address, or an empty list. Never a console that isn't there. Record the
+   errno.
 5. **M4b, no network:** turn Wi-Fi off and connect. Expect "This device isn't
    connected to a network that can reach <ip>…", with no mention of Local
    Network.

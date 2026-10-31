@@ -12,6 +12,15 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+/// Mirrors NIOCore.IOError: `private enum Error { case errno(CInt) }; private let error: Error`.
+private struct NIOStyleIOError: Error {
+    enum Code { case errno(Int32) }
+    let error: Code
+    init(errnoCode: Int32) { error = .errno(errnoCode) }
+}
+
+private struct Wrapped: Error { let underlying: any Error }
+
 @MainActor
 @Suite(.serialized)
 struct PermissionStateTests {
@@ -56,6 +65,29 @@ struct PermissionStateTests {
             + "Local Network access may be off for FluxKlang: allow it in \(settings), then try again."
         #expect(LocalNetworkAccess.connectFailureReason(errno: EHOSTUNREACH, host: Self.host) == possible)
         #expect(LocalNetworkAccess.connectFailureReason(errno: EACCES, host: Self.host) == possible)
+    }
+
+    @Test func discoveryDenialGuidanceNeverOffersTheManualIPBypass() {
+        let possible = LocalNetworkAccess.discoveryFailureReason(errno: EHOSTUNREACH)
+        #expect(possible == "The scan couldn't send. Check that this device is on the WING's network. If it is, "
+            + "Local Network access may be off for FluxKlang: allow it in \(LocalNetworkAccess.settingsPath), "
+            + "then scan again.")
+        for code in [EHOSTUNREACH, EPERM, EACCES, ENETUNREACH] {
+            let reason = LocalNetworkAccess.discoveryFailureReason(errno: code)
+            #expect(!reason.contains("IP address"), "errno \(code) must not suggest manual IP")
+        }
+        let noRoute = LocalNetworkAccess.discoveryFailureReason(errno: ENETUNREACH)
+        #expect(noRoute.contains("Join the WING's network") && !noRoute.contains("Local Network"))
+        #expect(LocalNetworkAccess.discoveryFailureReason(errno: nil).contains("enter the WING's IP address"))
+        #expect(LocalNetworkAccess.discoveryFailureReason(errno: ECONNREFUSED).contains("IP address"))
+    }
+
+    @Test func socketErrorsYieldTheirErrno() {
+        #expect(LocalNetworkAccess.errno(in: POSIXError(.EHOSTUNREACH)) == EHOSTUNREACH)
+        #expect(LocalNetworkAccess.errno(in: NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))) == EPERM)
+        #expect(LocalNetworkAccess.errno(in: NIOStyleIOError(errnoCode: ENETUNREACH)) == ENETUNREACH)
+        #expect(LocalNetworkAccess.errno(in: Wrapped(underlying: NIOStyleIOError(errnoCode: EACCES))) == EACCES)
+        #expect(LocalNetworkAccess.errno(in: WingTransportError.notStarted) == nil)
     }
 
     @Test func iOSBroadcastDiscoveryIsUnsupportedWithoutTheMulticastEntitlement() {
