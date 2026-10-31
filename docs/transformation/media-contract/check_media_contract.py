@@ -589,7 +589,8 @@ class Trace:
         if self.protocols.setdefault(r["stream"], (ep, port)) != (ep, port):
             self.err(r, "a protocol change on a stream needs a formatChange discontinuity before the next capture")
         self.protocols[r["stream"]] = (ep, port)
-        if mt in (2, 4) and r["effective"] != ("midi2" if mt == 4 and ep == "midi2" else "midi1"):
+        if r["effective"] != "midi1" and ep != "midi2" \
+                or mt in (2, 4) and r["effective"] != ("midi2" if mt == 4 and ep == "midi2" else "midi1"):
             self.err(r, "effective fidelity is what the endpoint sent, never the container's resolution")
         frame = self.frame_at_host(r["hostTicks"])
         if frame is None or rnd(frame) != r["frame"]:
@@ -746,6 +747,7 @@ MUTATIONS = [
     ("08", "clocks.musical", {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}] * 2}, "strictly increase"),
     ("09", 2, {"ump": ["0x20903C64\n"]}, "violates length/pattern"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
+    ("09", 2, {"ump": ["0x30020102", "0x00000000"], "effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
     ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
