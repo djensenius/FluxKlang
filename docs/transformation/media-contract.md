@@ -147,13 +147,13 @@ re-anchors at the new position with `loopIteration` 0, as every new transport ge
 
 ### 5.5 Loop
 
-A loop is `[startTicks, endTicks)`. At the wrap frame the transport records a `loopWrap` discontinuity, re-anchors
-with `musicalTicks = startTicks` and `loopIteration + 1`, and dispatches owned-note releases first
-([§6.5](#65-ordering)). A pass anchored past `endTicks` does not wrap. A position resolves through the anchor in
-effect at its frame, so an event before the wrap keeps its pass even when delivered after the wrap anchor. A scheduled
-target is an **occurrence**: the pass holding its origin, plus its ticks. A wrap never moves it; musical-map revisions
-re-resolve it within its pass. A grid boundary equal to `endTicks` is the wrap frame, the next pass's start, and later
-boundaries continue on that pass's grid (example 03). In v1, musical targets must resolve inside
+A loop is `[startTicks, endTicks)`. At the wrap frame (exactly `endTicks` through the pass's anchor, rounded as in §5.2)
+the transport records a `loopWrap` discontinuity, re-anchors with `musicalTicks = startTicks` and `loopIteration + 1`,
+and dispatches owned-note releases first ([§6.5](#65-ordering)). A pass anchored past `endTicks` does not wrap. A
+position resolves through the anchor in effect at its frame, so an event before the wrap keeps its pass even when
+delivered after the wrap anchor. A scheduled target is an **occurrence**: the pass holding its origin, plus its ticks. A
+wrap never moves it; musical-map revisions re-resolve it within its pass. A grid boundary equal to `endTicks` is the
+wrap frame, and later ones continue on the next pass's grid (example 03). In v1, musical targets must resolve inside
 `[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
 
 ### 5.6 Tempo and meter
