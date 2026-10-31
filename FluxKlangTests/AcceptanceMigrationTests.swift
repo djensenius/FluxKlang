@@ -40,6 +40,40 @@ struct AcceptanceMigrationTests {
         #expect(roundTripped.home.inputs[0].id == decoded.home.inputs[0].id)
     }
 
+    @Test func legacyEnvironmentDuplicatesWithFreshSerialChainAndPlacements() throws {
+        let environmentID = UUID()
+        let hallID = UUID()
+        let echoID = UUID()
+        let synthID = UUID()
+        let json = """
+        {
+          "id": "\(environmentID.uuidString)",
+          "name": "Legacy Song",
+          "effects": [
+            {"id": "\(hallID.uuidString)", "name": "Hall", "sourceInstruments": ["\(synthID.uuidString)"]},
+            {"id": "\(echoID.uuidString)", "name": "Echo", "destinationEffectID": "\(hallID.uuidString)"}
+          ],
+          "placements": {
+            "return:\(hallID.uuidString)": {"position": [0.2, 0.8], "width": 0.3},
+            "source:\(synthID.uuidString)": {"position": [0.5, 0.5], "width": 0.5}
+          }
+        }
+        """
+
+        let legacy = try JSONDecoder().decode(RoutingEnvironment.self, from: Data(json.utf8))
+        let copy = legacy.duplicated(named: "Legacy Song Copy")
+        let encoded = try #require(String(bytes: JSONEncoder().encode(copy), encoding: .utf8))
+
+        #expect(copy.effects.map(\.name) == ["Hall", "Echo"])
+        #expect(copy.effects[1].destinationEffectID == copy.effects[0].id)
+        #expect(copy.effects[0].sourceInstruments == [synthID])
+        #expect(copy.placements[EnvironmentVoice.returnID(copy.effects[0].id)]?.width == 0.3)
+        #expect(copy.placements[EnvironmentVoice.sourceID(synthID)]?.width == 0.5)
+        for originalID in [environmentID, hallID, echoID] {
+            #expect(!encoded.contains(originalID.uuidString))
+        }
+    }
+
     @Test func legacyTemporaryMoveDefaultsToTrackedSafeState() throws {
         let moveID = UUID()
         let equipmentID = UUID()
