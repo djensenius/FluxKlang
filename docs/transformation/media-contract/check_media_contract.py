@@ -592,6 +592,8 @@ class Trace:
         if r["effective"] != "midi1" and ep != "midi2" \
                 or mt in (2, 4) and r["effective"] != ("midi2" if mt == 4 and ep == "midi2" else "midi1"):
             self.err(r, "effective fidelity is what the endpoint sent, never the container's resolution")
+        if mt in (2, 4) and (mt == 4) != (port == "midi2"):
+            self.err(r, "channel voice arrives in the port's protocol: MT 0x4 on a midi2 port, MT 0x2 on a midi1 port")
         frame = self.frame_at_host(r["hostTicks"])
         if frame is None or rnd(frame) != r["frame"]:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
@@ -752,6 +754,7 @@ MUTATIONS = [
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
     ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
     ("10", "timeline", {"8.musicalTicks": None, "11.losses.syntheticTempoMap": 1}, "exactly when one is"),
+    ("10", 2, {"portProtocol": "midi1", "translatedBy": "os"}, "MT 0x4 on a midi2 port"),
     ("10", 8, {"ump": ["0x22903C64"]}, "'groupsFlattened': 1"),
     ("10", 11, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
     ("10", 11, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),

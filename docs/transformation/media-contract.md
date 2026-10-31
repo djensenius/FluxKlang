@@ -313,6 +313,7 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
   differs from `portProtocol`, otherwise `none`. #81 and #83 verify this ([§14](#14-open-questions), question 8).
 - Every message from an endpoint that is not `midi2` is effective `midi1`, whatever its type. MT 0x2 (MIDI 1.0
   channel voice in UMP) is always effective `midi1`.
+- Channel voice arrives in the port's protocol: MT 0x4 on a `midi2` port, MT 0x2 on a `midi1` port.
 - MT 0x4 (MIDI 2.0 channel voice) is effective `midi2` **only** when the endpoint protocol is `midi2`; otherwise it
   is OS-upscaled MIDI 1.0 and effective `midi1`.
 - Effective protocol comes from the endpoint property, never from inspecting values.
@@ -464,7 +465,7 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used
 (`pattern` anchors as in ECMA-262, so `$` never matches before a final newline). It then replays each trace in exact
 rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and recomputing every outcome
-frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Thirty-six
+frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Thirty-seven
 mutation self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
 `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A malformed file or trace reports `FAIL`,
 never a crash, and is not used for mutations.
