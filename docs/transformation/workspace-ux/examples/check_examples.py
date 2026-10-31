@@ -117,8 +117,13 @@ def check_ids_and_revisions(docs):
     return defined, history
 
 
-def compatible(ports, src_id, dst_id, conversion):
-    src, dst = ports.get(src_id), ports.get(dst_id)
+def compatible(ports, edge):
+    """Why an edge or connect op is invalid, else "ok"; feedback must declare a causal one-block delay."""
+    src, dst, fb, conversion = (ports.get(edge["from"]), ports.get(edge["to"]),
+                                edge.get("feedback"), edge.get("conversion"))
+    if "feedback" in edge and not (isinstance(fb, dict) and fb.get("delay") == "oneBlock"
+                                   and type(fb.get("gainCeilingDb")) in (int, float) and fb["gainCeilingDb"] <= 0):
+        return "feedbackNeedsOneBlockDelayAndGainCeilingDb<=0"
     if not src or not dst or src["dir"] != "out" or dst["dir"] != "in":
         return "direction"
     if src["signal"] != dst["signal"]:
@@ -133,6 +138,21 @@ def compatible(ports, src_id, dst_id, conversion):
     return "ok"
 
 
+def faults(ports, edges):
+    """Edge verdicts plus "cycle" when non-feedback links loop (peel links into nodes with no exits)."""
+    links = {(ports[e["from"]]["node"], ports[e["to"]]["node"]) for e in edges
+             if "feedback" not in e and compatible(ports, e) == "ok"}
+    while links and (sinks := {b for _, b in links} - {a for a, _ in links}):
+        links = {(a, b) for a, b in links if b not in sinks}
+    return {compatible(ports, e) for e in edges} - {"ok"} | ({"cycle"} if links else set())
+
+
+def candidate(graph, draft):
+    """Live edges with a draft's ops applied; non-stale drafts sit on the active base."""
+    gone = {op.get("edge") for op in draft["ops"] if op["op"] == "disconnect"}
+    return [e for e in graph["edges"] if e["id"] not in gone] + [op for op in draft["ops"] if op["op"] == "connect"]
+
+
 def check_graph(graph):
     ports = {p["id"]: p for p in graph["ports"]}
     defined = {c["id"] for c in graph["capabilities"]}
@@ -145,23 +165,11 @@ def check_graph(graph):
         if not set(node.get("requiredCapabilities", [])) <= required or \
                 not set(node.get("advisoryCapabilities", [])) <= advisory:
             err("graph", f"{node['id']} capability level differs from the graph level")
-    links = set()
     for edge in graph["edges"]:
-        verdict, fb = compatible(ports, edge["from"], edge["to"], edge.get("conversion")), edge.get("feedback")
-        causal = (isinstance(fb, dict) and fb.get("delay") == "oneBlock"
-                  and type(fb.get("gainCeilingDb")) in (int, float) and fb["gainCeilingDb"] <= 0)
-        if "feedback" in edge and not causal:
-            err("graph", f"{edge['id']} feedback needs a oneBlock delay and gainCeilingDb <= 0")
-        if verdict != "ok":
+        if (verdict := compatible(ports, edge)) != "ok":
             err("graph", f"{edge['id']} is invalid: {verdict}")
-        elif not causal:
-            links.add((ports[edge["from"]]["node"], ports[edge["to"]]["node"]))
-    while links:  # peel links into nodes with no exits; whatever remains is a cycle
-        sinks = {b for _, b in links} - {a for a, _ in links}
-        if not sinks:
-            err("graph", "cycle without an explicit feedback edge")
-            break
-        links = {(a, b) for a, b in links if b not in sinks}
+    if "cycle" in faults(ports, graph["edges"]):
+        err("graph", "cycle without an explicit causal feedback edge")
     return ports
 
 
@@ -252,10 +260,9 @@ def check_transactions(hs, graph, history, ports, roles):
         stale = base != active
         if stale != (validate.get("code") == "staleBase") or (stale and validate["result"] != "failed"):
             err(where, f"base {base} vs active {active}: stale handling inconsistent")
-        verdicts = {compatible(ports, op["from"], op["to"], op.get("conversion"))
-                    for op in draft["ops"] if op["op"] == "connect"} - {"ok"}
-        if not stale and verdicts and validate.get("code") not in verdicts:
-            err(where, f"validate should fail with {sorted(verdicts)}")
+        found = set() if stale else faults(ports, candidate(graph, draft))
+        if found and (validate.get("result") != "failed" or validate.get("code") not in found):
+            err(where, f"validate must fail with one of {sorted(found)}")
         for step in steps:
             if step["step"] == "reviewAuthorize":
                 who = people.get(step.get("authorizedBy"), {})
@@ -282,10 +289,9 @@ def check_transactions(hs, graph, history, ports, roles):
         elif "commit" in names or txn.get("activeGraphRevisionAfter") != active:
             err(where, "uncommitted transactions must leave the active revision unchanged")
     for draft in drafts.values():
-        if draft["id"] not in used and draft["baseGraphRevision"] == active:
-            for op in draft["ops"]:
-                if op["op"] == "connect" and compatible(ports, op["from"], op["to"], op.get("conversion")) != "ok":
-                    err(draft["id"], "reviewable draft contains an invalid connection")
+        if draft["id"] not in used and draft["baseGraphRevision"] == active and (
+                found := faults(ports, candidate(graph, draft))):
+            err(draft["id"], f"reviewable draft fails validation: {sorted(found)}")
     if active != graph["revision"]:
         err(hs["name"], f"final active revision {active} != graph revision {graph['revision']}")
 
