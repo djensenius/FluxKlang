@@ -70,6 +70,8 @@ final class AppModel {
     let appIcon = AppIconManager()
 
     private let lastHostKey = "fluxklang.lastHost"
+    /// Service seams; the live WING transport and Local Network evidence come from here.
+    let hardware: HardwareServiceFactories
 
     /// Observes external iCloud key-value-store changes so stores reload when
     /// another device syncs updated state. Held so the observer is removed when
@@ -110,6 +112,7 @@ final class AppModel {
         launchControlXLStore: JSONFileStore = .shared
     ) {
         self.wing = wing
+        self.hardware = hardware
         launchControlXL = LaunchControlXLController(
             fileStore: launchControlXLStore, makeMIDIInput: hardware.makeLaunchControlXLInput)
         self.assistant = assistant
@@ -150,7 +153,7 @@ final class AppModel {
         await assistantChat.load()
         scheduleSiriEntityIndexing()
         startObservingCloudChanges()
-        if shouldReconnectOnStartup, let lastHost {
+        if allowsStartupReconnect(), let lastHost {
             await connect(host: lastHost)
         }
     }
@@ -162,10 +165,6 @@ final class AppModel {
         cloudObserver = CloudChangeObserver { [weak self] in
             Task { @MainActor in await self?.reloadStores() }
         }
-    }
-
-    private var shouldReconnectOnStartup: Bool {
-        allowsStartupReconnect
     }
 
     /// Re-reads every persisted store, used when iCloud syncs new state.
@@ -389,7 +388,7 @@ final class AppModel {
     func connect(host: String, port: UInt16 = WingNetwork.defaultPort) async {
         assistantActions.cancel()
         await wing.disconnect()
-        let live = WingController(port: port)
+        let live = makeLiveController(host: host, port: port)
         wing = live
         await live.connect(host: host)
         if live.connection.isConnected {

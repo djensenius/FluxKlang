@@ -38,9 +38,18 @@ struct HardwareServiceFactories: Sendable {
     var makeLaunchControlXLInput: @MainActor () -> any LaunchControlXLInput
     /// Reads/requests privacy permissions. Defaults to inert; only production queries the system.
     var makePermissionProbe: @MainActor () -> any PermissionProbe = { InertPermissionProbe() }
+    /// Pre-flight Local Network check for `AppModel.connect`. Inert reports "no route" without a syscall.
+    var localNetworkProbe: LocalNetworkProbe.Check = { _, _ in ENETUNREACH }
+    /// Builds the live WING transport; `probe` is AppModel's evidence-aware wrapper of `localNetworkProbe`.
+    var makeWingTransport: @Sendable (UInt16, @escaping LocalNetworkProbe.Check) -> any WingTransporting = {
+        WingTransport(remotePort: $0, localNetworkProbe: $1)
+    }
+    /// Startup-reconnect evidence (see `LocalNetworkGrantEvidence`).
+    var localNetworkEvidence: LocalNetworkGrantEvidence = .current
 
     static let production = HardwareServiceFactories(
-        makeLaunchControlXLInput: { CoreMIDIInput() }, makePermissionProbe: { SystemPermissionProbe() })
+        makeLaunchControlXLInput: { CoreMIDIInput() }, makePermissionProbe: { SystemPermissionProbe() },
+        localNetworkProbe: LocalNetworkProbe.connectErrno)
     static let inert = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
 
     /// Selected once, alongside `AppPersistence.storage`.

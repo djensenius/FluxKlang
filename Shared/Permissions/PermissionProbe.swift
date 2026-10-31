@@ -42,6 +42,8 @@ final class SystemPermissionProbe: PermissionProbe {
             @unknown default: return .unknown
             }
         case .localNetwork:
+            // Evidence only (a past successful connect, possibly to a routed host); never queried
+            // from the OS, which has no API for it. Not used by production code paths today.
             return localNetworkEvidence.hasGrant ? .granted : .unknown
         case .multicast:
             return LocalNetworkAccess.currentBroadcastDiscovery.status
@@ -70,55 +72,57 @@ final class InertPermissionProbe: PermissionProbe {
     }
 }
 
-/// On-device record that this build reached `host` after a user action. The
-/// file is excluded from backups so a restore onto a new device, where the
-/// privilege starts undetermined, never inherits it. A new app version also
-/// starts without evidence, so its first WING connect is a user action.
+/// On-device record that this app reached `host` after a user action. TN3179
+/// ties the privilege to the install and code signature, not the build number,
+/// so the record is keyed on bundle ID + host only. It lives in a directory
+/// excluded from backups (set before the first write), so a restore onto a new
+/// device, where the privilege starts undetermined, never inherits it. A stale
+/// record is cleared after one possibly-denied connect to that host.
 struct LocalNetworkGrantEvidence: Sendable {
-    let fileURL: URL
-    let buildFingerprint: String
+    let directory: URL
+    let bundleID: String
+
+    var fileURL: URL { directory.appendingPathComponent("local-network-grant", isDirectory: false) }
 
     static let current = LocalNetworkGrantEvidence(
-        fileURL: AppPersistence.directory.appendingPathComponent("local-network-grant", isDirectory: false),
-        buildFingerprint: mainBundleFingerprint
+        directory: AppPersistence.directory.appendingPathComponent("LocalNetwork", isDirectory: true),
+        bundleID: Bundle.main.bundleIdentifier ?? "?"
     )
 
-    static var mainBundleFingerprint: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(version)-\(build)"
-    }
-
-    /// Whether this build reached the local network on this device at all.
-    var hasGrant: Bool { record?.fingerprint == buildFingerprint }
+    /// Whether this app reached the local network on this device at all.
+    var hasGrant: Bool { record?.bundleID == bundleID }
 
     func hasGrant(for host: String) -> Bool {
-        record.map { $0.fingerprint == buildFingerprint && $0.host == host } ?? false
+        record.map { $0.bundleID == bundleID && $0.host == host } ?? false
     }
 
     func recordGrant(for host: String) {
-        let manager = FileManager.default
+        guard !hasGrant(for: host) else { return }
         do {
-            try manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try "\(buildFingerprint)\n\(host)".write(to: fileURL, atomically: true, encoding: .utf8)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             var values = URLResourceValues()
             values.isExcludedFromBackup = true
-            var url = fileURL
-            try url.setResourceValues(values)
+            var excluded = directory
+            try excluded.setResourceValues(values)
+            try "\(bundleID)\n\(host)".write(to: fileURL, atomically: true, encoding: .utf8)
         } catch {
             clear()
         }
     }
 
-    private var record: (fingerprint: String, host: String)? {
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
-        let lines = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-        guard lines.count == 2 else { return nil }
-        return (String(lines[0]), String(lines[1]))
+    /// Clears the record only when it names `host`.
+    func clear(host: String) {
+        if record?.host == host { clear() }
     }
 
     func clear() {
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    private var record: (bundleID: String, host: String)? {
+        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+        let lines = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        guard lines.count == 2 else { return nil }
+        return (String(lines[0]), String(lines[1]))
     }
 }
