@@ -41,7 +41,7 @@ was built, run, launched or measured.
 
 | Bundle | Framework | Files | Types | Tests |
 |---|---|---|---|---|
-| `FluxKlangTests` (iOS, app-hosted) | Swift Testing (`import Testing`) | 54 test files plus `TestSupport.swift` and `AssistantBackendTestSupport.swift` | 56 distinct `*Tests` types. 8 have an explicit `@Suite`; the rest are implicit suites. | 529 `@Test` declarations, including 54 parameterized (`arguments:`) declarations that expand to more cases at runtime |
+| `FluxKlangTests` (iOS, app-hosted) | Swift Testing (`import Testing`) | 54 test files plus `TestSupport.swift` and `AssistantBackendTestSupport.swift` | 56 distinct `*Tests` types. 8 have an explicit `@Suite`; the rest are implicit suites. | 536 `@Test` declarations (including 7 written as `@MainActor @Test` on one line), including 55 parameterized (`arguments:`) declarations that expand to more cases at runtime |
 | `FluxKlangUITests` (iOS) | XCTest | 5 | 5 `XCTestCase` classes | 22 `test…` methods |
 | Mac | none | — | — | No Mac test target or testable exists. |
 
@@ -104,8 +104,23 @@ retarget it to neutral contracts; **replace** = a new subsystem supersedes it;
 
 | Location | What it is | Decision | Owner |
 |---|---|---|---|
-| `Shared/Views/App/AppModel+StudioApply.swift:4` | `applyStudio()` → `WingApplyVerification`. The only path from graph to hardware. | replace with host-authority activation | #62 |
+| `Shared/Views/App/AppModel+StudioApply.swift:4` | `applyStudio()` → `WingApplyVerification`. The full-patch Listen entry point (verified apply at line 17). | replace with host-authority activation | #62 |
 | `Shared/Views/Studio/StudioView.swift:300` | `.disabled(!appModel.isConnected …)`, a guard that exists only in the UI | replace before exposing activation to peers or automation | #62 |
+
+`applyStudio()` is **not** the only path from the graph or the models to hardware. The
+authority migration (#62) must audit every direct WING write path, all of which bypass
+`applyStudio()`:
+
+| Location | Path | Owner |
+|---|---|---|
+| `Shared/Views/App/TemporaryMoveAppModel.swift:52` | `applyTemporaryMove(_:)` compiles the active Studio graph (lines 15-16) and calls `wing.apply` | #62 / #76 |
+| `Shared/Views/App/TemporaryMoveAppModel.swift:70` | `returnTemporaryMoveHome(_:)` → `wing.apply` | #62 / #76 |
+| `Shared/Views/App/AppModel.swift:208` | `applyChainRouting()` → `wing.apply` | #62 |
+| `Shared/Views/App/AppModel.swift:252` | `applyEnvironment()` → `wing.apply` | #62 |
+| `Shared/Views/App/AppModel.swift:316`, `:321` | `recall(_:)` / `recallRoutingSnapshot(_:)` → `wing.apply` | #62 / #104 |
+| `Shared/Views/App/AppModel.swift:421`, `:427` | `applyVoicePlacement(_:)` / `applyAllPlacements()` → `wing.apply` (spatial) | #62 / #114 |
+| `Shared/Views/App/AppModel.swift:435`, `:442`; `Shared/Views/App/LaunchControlXLAppModel.swift:19-41` | live fader/mute/pan setters (UI and Launch Control XL) | #87 / #62 (live-parameter policy) |
+| `Shared/Views/App/AppModel+AssistantMixer.swift:126` | reviewed assistant mixer write (`setConfirmedMixerValue`) | #62 / #117 (assistant parent) |
 
 ### Assistant (reuse review, cancellation and stale fences)
 
@@ -226,11 +241,11 @@ None of the following was qualified by reading the source for this ledger.
 
 ## Shared files and wave-1 ownership
 
-**Coordinator-only shared files.** These are edited only by the coordinator. Workers
-propose diffs instead.
+**Coordinator-only shared files.** These are owned only by the coordinator. Package
+workers propose diffs for coordinator integration; any shared-file change a package
+needs is an explicit, per-change coordinator decision, never a standing package right.
 
-- `project.yml`, generated `FluxKlang.xcodeproj/**` (except regenerating it after adding
-  source files in an existing directory), `Makefile`
+- `project.yml`, generated `FluxKlang.xcodeproj/**`, `Makefile`
 - `.github/**`, `release-please-config.json`, `.release-please-manifest.json`, `VERSION`,
   `CHANGELOG.md`, `.swiftlint.yml`
 - `Shared/Views/App/AppModel*.swift` and `Shared/Views/App/AppRootView.swift` (exception:
@@ -243,8 +258,8 @@ propose diffs instead.
 
 | Package | Exclusive files |
 |---|---|
-| #51 `startup-hardware-isolation` | `Shared/MIDI/CoreMIDIInput.swift`, `Shared/MIDI/LaunchControlXLController.swift`, and a narrow `AppModel` startup seam (`loadStores()` at `AppModel.swift:131`), coordinated with the coordinator |
-| #56 `native-mac-test-scaffolding` | `project.yml` and `Makefile` (delegated by the coordinator for this package), `FluxKlangMacTests/**` |
+| #51 `startup-hardware-isolation` | `Shared/MIDI/CoreMIDIInput.swift`, `Shared/MIDI/LaunchControlXLController.swift`; its `AppModel` startup seam (`loadStores()` at `AppModel.swift:131`) is a coordinator-integrated change |
+| #56 `native-mac-test-scaffolding` | `FluxKlangMacTests/**`; its `project.yml`/`Makefile`/generated-project changes are coordinator-integrated |
 | #53 `media-clock-fidelity-contracts` | `docs/transformation/media-contract*` |
 | #59 `toolchain-api-inventory` | `docs/transformation/toolchain-inventory.md` |
 | #98 `contract-ux-draft` | `docs/transformation/workspace-ux/**` |
