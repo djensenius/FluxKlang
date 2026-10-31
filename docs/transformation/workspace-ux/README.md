@@ -90,18 +90,23 @@ python3 docs/transformation/workspace-ux/examples/check_examples.py
 ```
 
 It enforces: object-shaped JSON with `synthetic: true` and unique contract names; unique IDs; resolved
-references; integer, monotonic revisions; ports owned by graph nodes; typed edges (direction, signal, conversion
-indices within the source's channels); cycles only through explicit causal feedback, in the graph and in each
-draft's candidate graph; one capability level per capability; one host authority per session (lease, rig, logs,
-drafts) using only its own rig; step order, outcomes that match their step results (only `awaitingReview` is
-pending) and stale-base detection; authorization bound to draft, base, host epoch and diff digest; commits
-advance by one, are cited in history and appear in the graph with the same feedback; stale epochs reject every
-command class; permissions come only from roles; a controller binding sets only its own parameter, held or
-accepted per its pickup; setter values stay within range and ceiling; the assistant holds only an allowlist and
-its drafts carry matching provenance; remotes open no engine or console write session; a phone runs as a full
-host; host roles keep Panic and Safe Mute; stale controllers produce no input; drafts never disable a Perform
-control; unmeasured meters show Unavailable; node states agree with routes and capabilities; Learn blocks
-excluded targets. Malformed input prints `FAIL` lines, never a traceback.
+references; integer (never boolean), monotonic revisions and sequence numbers; ports owned by graph nodes; typed
+edges (direction, signal, channel maps of integer indices within the source, where an empty row is a silent
+channel); no duplicate wires, and cycles only through explicit causal feedback, in the graph and in each draft's
+candidate graph; one capability level per capability; one host authority per session (lease, rig, logs, drafts)
+using only its own rig, whose route bindings follow device presence and whose capabilities are available only
+while a provider is present; step order, outcomes that match their step results (only `awaitingReview` is
+pending) and stale-base detection; authorization bound to draft, base, host epoch and diff digest; commits advance
+by one, are cited in history and appear in the graph with the same feedback; each operation fits its
+[command class and result](draft-active-transactions.md#policy-by-command-class), and draft commands name this
+session's draft and carry its exact ops; stale epochs reject every class; permissions come only from roles; a
+controller binding sets only its own parameter, held or accepted per its pickup; setter values stay within range
+and ceiling; the assistant holds only an allowlist and its drafts carry matching provenance; remotes open no
+engine or console write session; a phone runs as a full host; host roles keep Panic and Safe Mute; stale
+controllers produce no input; drafts never disable a Perform control; node states follow the Wiring state table
+from the host's own rig, and status, meters and diagnostics cite only that rig; measured meters need the running
+lease and, on a route, a confirmed binding, else show Unavailable; Learn blocks excluded targets. Malformed input
+prints `FAIL` lines, never a traceback.
 
 ## Single-owner integration map
 

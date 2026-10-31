@@ -55,9 +55,9 @@ def objects(value):
 def check_history(where, obj):
     hist = obj.get("history")
     revs = [h.get("revision") if isinstance(h, dict) else None for h in hist] if isinstance(hist, list) else []
-    if not revs or any(not isinstance(r, int) for r in revs) or revs != sorted(set(revs)):
+    if not revs or any(type(r) is not int for r in revs) or revs != sorted(set(revs)):
         err(where, f"history revisions must be strictly increasing integers: {revs}")
-    elif revs[-1] != obj.get("revision"):
+    elif revs[-1] != obj.get("revision") or type(obj.get("revision")) is not int:
         err(where, f"revision {obj.get('revision')} != last history revision {revs[-1]}")
 
 
@@ -140,12 +140,14 @@ def compatible(ports, edge):
 
 
 def faults(ports, edges):
-    """Edge verdicts plus "cycle" when non-feedback links loop (peel links into nodes with no exits)."""
+    """Edge verdicts, "duplicate" wires, and "cycle" when non-feedback links loop (peel links into exitless nodes)."""
     links = {(ports[e["from"]]["node"], ports[e["to"]]["node"]) for e in edges
              if "feedback" not in e and compatible(ports, e) == "ok"}
     while links and (sinks := {b for _, b in links} - {a for a, _ in links}):
         links = {(a, b) for a, b in links if b not in sinks}
-    return {compatible(ports, e) for e in edges} - {"ok"} | ({"cycle"} if links else set())
+    keys = [(e["from"], e["to"]) for e in edges] + [x for e in edges if (x := e.get("id") or e.get("edge"))]
+    return ({compatible(ports, e) for e in edges} - {"ok"} | ({"cycle"} if links else set())
+            | ({"duplicate"} if len(set(keys)) < len(keys) else set()))
 
 
 def candidate(ports, graph, draft):
@@ -153,7 +155,8 @@ def candidate(ports, graph, draft):
     cut = {op.get("edge") or op.get("node") for op in draft["ops"] if op["op"] in ("disconnect", "removeNode")}
     left = {k: p for k, p in ports.items() if p["node"] not in cut}
     keep = [e for e in graph["edges"] if e["id"] not in cut and e["from"] in left and e["to"] in left]
-    return left, keep + [op for op in draft["ops"] if op["op"] == "connect"]
+    kept = {e["id"]: shape(e) for e in keep}  # a committed connect identical to its live edge is that edge, not a copy
+    return left, keep + [op for op in draft["ops"] if op["op"] == "connect" and kept.get(op.get("edge")) != shape(op)]
 
 
 def check_graph(graph):
@@ -175,8 +178,8 @@ def check_graph(graph):
     for edge in graph["edges"]:
         if (verdict := compatible(ports, edge)) != "ok":
             err("graph", f"{edge['id']} is invalid: {verdict}")
-    if "cycle" in faults(ports, graph["edges"]):
-        err("graph", "cycle without an explicit causal feedback edge")
+    if found := faults(ports, graph["edges"]) & {"cycle", "duplicate"}:
+        err("graph", f"{sorted(found)}: loops need explicit causal feedback and each from/to pair is wired once")
     return ports
 
 
@@ -272,7 +275,7 @@ def check_transactions(hs, graph, history, ports, roles):
         if found and (validate.get("result") != "failed" or validate.get("code") not in found):
             err(where, f"validate must fail with one of {sorted(found)}")
         for step in steps:
-            if step["seq"] <= last_seq:
+            if type(step["seq"]) is not int or step["seq"] <= last_seq:
                 err(where, f"seq {step['seq']} is not monotonic")
             last_seq = step["seq"]
             if step["step"] == "reviewAuthorize":
@@ -324,7 +327,7 @@ def check_commands(hs, roles, docs):
             err(log["host"], "log hostEpoch differs from the session's host epoch")
         for cmd in log["commands"]:
             where, status, op = cmd["id"], cmd["result"]["status"], cmd["op"]
-            if cmd["seq"] <= last_seq:
+            if type(cmd["seq"]) is not int or cmd["seq"] <= last_seq:
                 err(where, "seq is not monotonic")
             last_seq = cmd["seq"]
             origin, binding = people.get(cmd["origin"]), bindings.get(cmd["origin"], {})

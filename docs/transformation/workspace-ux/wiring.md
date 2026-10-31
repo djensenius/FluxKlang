@@ -55,7 +55,7 @@ Rotors: **Ports**, **Connections**, **Needs attention**. Edge label: *"Keys to R
 | Signal mismatch | audio → `prt.verb.mod` (control) | Destination listed but disabled: "Audio cannot feed a control input without a conversion" (`txn.bad-wire`) |
 | Direction | input → input | Not offered as a destination |
 | Cycle | `prt.verb.out` → `prt.echo.in` | Offered only with "Feedback (1-block delay, ceiling −6 dB)"; never inferred (`edg.verb-echo-fb`) |
-| Duplicate | Same from/to already wired | Not offered; focus moves to the existing edge |
+| Duplicate | Same from/to already wired | Not offered; focus moves to the existing edge. A drafted duplicate fails validate (`duplicate`) |
 | Observed shortcut | Any port on `nod.ch7` | Node has no ports; label says "observed, not routable" |
 
 ## Node and edge states
