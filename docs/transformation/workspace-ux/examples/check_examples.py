@@ -23,6 +23,7 @@ ALLOWED = {"live": {"accepted", "heldForPickup"}, "structural": {"draftUpdated",
 ASSISTANT_ALLOWED = {"draft.propose", "diagnostics.read"}
 PROVENANCE_TOOLS = {"routingRequest": "none", "diagnostic": "readOnlySnapshotTools"}
 STEP_ORDER = ["validate", "prepare", "reviewAuthorize", "commit", "acknowledge"]
+OUTCOMES = {"stale": "F", "rejected": "F", "prepareFailed": "OF", "awaitingReview": "OO", "committed": "OOOOO"}
 errors = []
 
 
@@ -241,29 +242,25 @@ def check_transactions(hs, graph, history, ports, roles):
     for draft in drafts.values():
         check_provenance(hs, draft, roles)
     for txn in trace["transactions"]:
-        where, draft = txn["id"], drafts[txn["draft"]]
+        where, draft, outcome = txn["id"], drafts[txn["draft"]], txn["outcome"]
         used.add(draft["id"])
         base, steps = draft["baseGraphRevision"], txn["steps"]
-        if not steps:
-            err(where, "transaction has no steps")
-            continue
         names = [s["step"] for s in steps]
-        if names != STEP_ORDER[:len(names)]:
-            err(where, f"steps {names} do not follow {STEP_ORDER}")
-        for i, step in enumerate(steps):
-            if step["seq"] <= last_seq:
-                err(where, f"seq {step['seq']} is not monotonic")
-            last_seq = step["seq"]
-            if step["result"] == "failed" and i != len(steps) - 1:
-                err(where, "steps continue after a failure")
-        validate = steps[0]
-        stale = base != active
-        if stale != (validate.get("code") == "staleBase") or (stale and validate["result"] != "failed"):
+        results = "".join({"ok": "O", "failed": "F"}.get(s["result"], "?") for s in steps)  # O = ok, F = failed
+        if names != STEP_ORDER[:len(names)] or OUTCOMES.get(outcome) != results:
+            err(where, f"steps {names} with results {results!r} do not lead to outcome {outcome}")
+        if txn.get("pending") != ("reviewAuthorize" if outcome == "awaitingReview" else None):
+            err(where, "only awaitingReview is pending, and it is pending reviewAuthorize")
+        validate, stale = (steps or [{}])[0], base != active
+        if not (stale == (outcome == "stale") == (validate.get("code") == "staleBase")):
             err(where, f"base {base} vs active {active}: stale handling inconsistent")
         found = set() if stale else faults(ports, candidate(graph, draft))
         if found and (validate.get("result") != "failed" or validate.get("code") not in found):
             err(where, f"validate must fail with one of {sorted(found)}")
         for step in steps:
+            if step["seq"] <= last_seq:
+                err(where, f"seq {step['seq']} is not monotonic")
+            last_seq = step["seq"]
             if step["step"] == "reviewAuthorize":
                 who = people.get(step.get("authorizedBy"), {})
                 if "activation.authorize" not in roles.get(who.get("role"), []):
@@ -273,10 +270,8 @@ def check_transactions(hs, graph, history, ports, roles):
                         or bound.get("hostEpoch") != hs["hostEpoch"]
                         or not draft.get("diffDigest") or bound.get("diffDigest") != draft["diffDigest"]):
                     err(where, "authorization is not bound to this draft, base, host epoch and diff digest")
-        if txn["outcome"] == "committed":
+        if outcome == "committed":
             commit, ack = (next((s for s in steps if s["step"] == k), {}) for k in ("commit", "acknowledge"))
-            if names != STEP_ORDER or any(s["result"] != "ok" for s in steps):
-                err(where, "committed transactions need every step ok")
             if commit.get("resultGraphRevision") != base + 1:
                 err(where, "commit must produce base + 1")
             active = commit.get("resultGraphRevision", active)
@@ -286,7 +281,7 @@ def check_transactions(hs, graph, history, ports, roles):
                 err(where, "project history does not cite this acknowledgement")
             if active == graph["revision"]:
                 check_ops_applied(graph, draft, where)
-        elif "commit" in names or txn.get("activeGraphRevisionAfter") != active:
+        elif txn.get("activeGraphRevisionAfter") != active:
             err(where, "uncommitted transactions must leave the active revision unchanged")
     for draft in drafts.values():
         if draft["id"] not in used and draft["baseGraphRevision"] == active and (
