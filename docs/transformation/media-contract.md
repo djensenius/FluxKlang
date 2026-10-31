@@ -388,9 +388,10 @@ Coordinator follow-ups (proposed, not done here):
   invariant or default, requires `version: 2` and new examples.
 - Readers preserve unknown optional data under `extensions`. The strict validator rejects unknown fields elsewhere,
   so drift is caught.
-- Examples are synthetic and deterministic, and use stable synthetic IDs (`ex.NN-name`, `trg.N`, `act.name`). Files
-  are canonical JSON: authored key order, two-space indent, and containers inline at 120 columns or one record per
-  line. The checker enforces the canonical form.
+- Examples are synthetic and deterministic, and use stable synthetic IDs (`ex.NN-name`, `trg.N`, `act.name`).
+  Examples and the schema are canonical JSON: authored key order, two-space indent, and a container inline when it
+  fits 120 columns (or is a timeline record), otherwise its members packed into rows of at most 120 columns. The
+  checker enforces the canonical form.
 
 ## 13. Non-goals
 

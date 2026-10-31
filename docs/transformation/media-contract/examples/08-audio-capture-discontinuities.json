@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.08-audio-capture-discontinuities",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.08-audio-capture-discontinuities",
   "title": "Audio capture: overflow padding, clock restart splits the take, disk full leaves a recoverable partial file",
   "covers": ["capture", "clockRestart"],
   "notes": [
@@ -9,8 +7,7 @@
     "No padding spans a clock restart; startOffsetNs aligns segments to the first one, so the take stores no absolute host ticks."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "streams": [{"streamId": "str.take-in", "ordinal": 0, "media": "audio", "direction": "capture"}],

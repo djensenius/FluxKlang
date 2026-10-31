@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.05-source-loss",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.05-source-loss",
   "title": "Source loss and reacquisition: prefetch underrun, pending cue cancelled, stale cue rejected after recovery, fresh cue fires",
   "covers": ["sourceLoss", "noStaleReplay", "prefetch", "cancellation"],
   "notes": [
@@ -9,8 +7,7 @@
     "Reacquiring the source is a new source generation; triggers stamped before the loss never replay."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "streams": [{"streamId": "str.backing", "ordinal": 0, "media": "audio", "direction": "playback"}],
@@ -18,10 +15,7 @@
     {"actionId": "act.backing", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "joinInProgress", "maxLatenessMs": 50}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}
   ],
   "initialGenerations": {
-    "sampleClock/smp.main": 1,
-    "transport/mus.main": 1,
-    "musicalMap/mus.main": 1,
-    "context/ctx.main": 1,
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1,
     "source/src.backing": 1
   },
   "timeline": [

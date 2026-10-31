@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.07-readiness-and-prefetch",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.07-readiness-and-prefetch",
   "title": "Readiness: unprepared and invalidated actions drop and report; nothing loads at fire time",
   "covers": ["readiness", "prefetch"],
   "notes": [
@@ -9,18 +7,14 @@
     "Armed is a derived UI state (ready plus a pending trigger), not a readiness state."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "actions": [
     {"actionId": "act.intro", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "drop"}, "notReady": "dropAndReport", "readiness": "unprepared", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}
   ],
   "initialGenerations": {
-    "sampleClock/smp.main": 1,
-    "transport/mus.main": 1,
-    "musicalMap/mus.main": 1,
-    "context/ctx.main": 1
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
   },
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},

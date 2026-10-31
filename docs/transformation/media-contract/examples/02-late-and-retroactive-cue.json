@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.02-late-and-retroactive-cue",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.02-late-and-retroactive-cue",
   "title": "Late and retroactive cues: join in progress, retroactive window exceeded, bounded fire-late, and drop",
   "covers": ["lateCue", "retroactiveCue"],
   "notes": [
@@ -9,8 +7,7 @@
     "horizonFrame is the earliest frame the scheduler can still affect when the trigger arrives."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "actions": [
@@ -19,10 +16,7 @@
     {"actionId": "act.fx", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "drop"}, "notReady": "dropAndReport", "readiness": "ready"}
   ],
   "initialGenerations": {
-    "sampleClock/smp.main": 1,
-    "transport/mus.main": 1,
-    "musicalMap/mus.main": 1,
-    "context/ctx.main": 1
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
   },
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},

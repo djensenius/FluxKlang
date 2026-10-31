@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.09-midi1-in-ump-capture-export",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.09-midi1-in-ump-capture-export",
   "title": "MIDI 1.0 device captured as UMP: native MIDI 1 words and OS-upconverted MIDI 2 words both keep MIDI 1 fidelity",
   "covers": ["midi1InUmp", "smfExportLossless"],
   "notes": [
@@ -9,8 +7,7 @@
     "Effective fidelity comes from the endpoint protocol property, never from inspecting values."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "streams": [
@@ -18,10 +15,7 @@
     {"streamId": "str.keys-b", "ordinal": 1, "media": "midi", "direction": "capture"}
   ],
   "initialGenerations": {
-    "sampleClock/smp.main": 1,
-    "transport/mus.main": 1,
-    "musicalMap/mus.main": 1,
-    "context/ctx.main": 1
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
   },
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},

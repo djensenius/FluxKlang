@@ -1,7 +1,5 @@
 {
-  "contract": "fluxklang.media",
-  "version": 1,
-  "exampleId": "ex.10-midi2-capture-lossy-smf-export",
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.10-midi2-capture-lossy-smf-export",
   "title": "Genuine MIDI 2.0 capture: native UMP export is lossless; SMF export names every loss",
   "covers": ["midi2Native", "smfExportLossy"],
   "notes": [
@@ -9,8 +7,7 @@
     "str.synth-legacy reads the MIDI 2.0 endpoint through a MIDI 1.0 port: the OS already reduced it to MIDI 1 and it is labelled so. str.synth-unknown reports no endpoint protocol, so SMF export flags its fidelity as unverified."
   ],
   "clocks": {
-    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
-    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
   "streams": [
@@ -19,10 +16,7 @@
     {"streamId": "str.synth-unknown", "ordinal": 2, "media": "midi", "direction": "capture"}
   ],
   "initialGenerations": {
-    "sampleClock/smp.main": 1,
-    "transport/mus.main": 1,
-    "musicalMap/mus.main": 1,
-    "context/ctx.main": 1
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
   },
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},

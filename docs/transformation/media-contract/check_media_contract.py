@@ -34,28 +34,22 @@ UMP_WORDS = {0x0: 1, 0x1: 1, 0x2: 1, 0x3: 2, 0x4: 2, 0x5: 4, 0x6: 1, 0x7: 1, 0x8
 
 
 def canon(value, depth_limit, indent=0, prefix=0):
-    """Deterministic layout: authored key order; a container is inline when it fits WIDTH or sits at depth_limit."""
-    flat = json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+    """Deterministic layout: authored key order; a container is inline when it fits WIDTH or sits at depth_limit,
+    otherwise its members are packed greedily into rows of at most WIDTH, and a multi-line member gets its own rows."""
+    flat = json.dumps(value, ensure_ascii=False, separators=(", ", ": "), allow_nan=False)
     if not isinstance(value, (dict, list)) or not value or indent // 2 >= depth_limit \
             or indent + prefix + len(flat) + 1 <= WIDTH:
         return flat
-    pad = " " * (indent + 2)
-    if isinstance(value, dict):
-        rows = []
-        for key, item in value.items():
-            head = json.dumps(key, ensure_ascii=False) + ": "
-            rows.append(pad + head + canon(item, depth_limit, indent + 2, len(head)))
-        return "{\n" + ",\n".join(rows) + "\n" + " " * indent + "}"
-    if all(not isinstance(item, (dict, list)) for item in value):
-        rows, row = [], ""
-        for item in (json.dumps(v, ensure_ascii=False) for v in value):
-            if row and len(pad) + len(row) + len(item) + 3 > WIDTH:
-                rows.append(row + ",")
-                row = ""
-            row += (", " if row else "") + item
-        return "[\n" + "\n".join(pad + r for r in rows + [row]) + "\n" + " " * indent + "]"
-    rows = [pad + canon(item, depth_limit, indent + 2) for item in value]
-    return "[\n" + ",\n".join(rows) + "\n" + " " * indent + "]"
+    pad, rows, row = " " * (indent + 2), [], ""
+    heads = [json.dumps(k, ensure_ascii=False) + ": " for k in value] if isinstance(value, dict) else [""] * len(value)
+    for head, item in zip(heads, value.values() if isinstance(value, dict) else value):
+        part = head + canon(item, depth_limit, indent + 2, len(head))
+        if row and ("\n" in part + row or len(pad) + len(row) + len(part) + 3 > WIDTH):
+            rows.append(row + ",")
+            row = ""
+        row += (", " if row else "") + part
+    brackets = "{}" if isinstance(value, dict) else "[]"
+    return brackets[0] + "\n" + "\n".join(pad + r for r in rows + [row]) + "\n" + " " * indent + brackets[1]
 
 
 def load_canonical(path, depth_limit, write, errors):
