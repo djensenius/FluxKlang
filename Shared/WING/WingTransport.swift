@@ -77,10 +77,44 @@ enum WingReplyResolver {
     }
 }
 
-enum WingTransportError: Error, Sendable {
+enum WingTransportError: Error, Equatable, Sendable {
     case notStarted
     case notAuthorized
     case unresolvedPeer
+    /// The pre-flight UDP connect to the console failed (see `LocalNetworkProbe`).
+    case localNetworkBlocked(errno: Int32, host: String)
+}
+
+extension WingTransportError: LocalizedError {
+    var errorDescription: String? {
+        guard case .localNetworkBlocked(let code, let host) = self else { return nil }
+        return LocalNetworkAccess.connectFailureReason(errno: code, host: host)
+    }
+}
+
+/// TN3179: connecting a UDP socket is a Local Network-checked operation that
+/// sends no packets, so it reveals a denial before the app claims a link.
+enum LocalNetworkProbe {
+    /// `(ipv4, port) -> errno?`; nil means the connect succeeded.
+    typealias Check = @Sendable (String, UInt16) -> Int32?
+
+    /// Returns the connect errno, or nil when the path is allowed.
+    @Sendable static func connectErrno(ipv4 host: String, port: UInt16) -> Int32? {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return nil }
+        let descriptor = socket(AF_INET, SOCK_DGRAM, 0)
+        guard descriptor >= 0 else { return errno }
+        defer { close(descriptor) }
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0 ? nil : errno
+    }
 }
 
 /// Actor that owns the UDP socket and serialises all access to it.
@@ -96,8 +130,12 @@ actor WingTransport: WingTransporting {
     private(set) var sessionID: UUID?
     private(set) var peerHosts: Set<String> = []
 
-    init(remotePort: UInt16 = WingNetwork.defaultPort) {
+    private let localNetworkProbe: LocalNetworkProbe.Check
+
+    init(remotePort: UInt16 = WingNetwork.defaultPort,
+         localNetworkProbe: @escaping LocalNetworkProbe.Check = LocalNetworkProbe.connectErrno) {
         self.remotePort = remotePort
+        self.localNetworkProbe = localNetworkProbe
         (incoming, continuation) = AsyncStream.makeStream(of: WingIncoming.self)
     }
 
@@ -113,6 +151,12 @@ actor WingTransport: WingTransporting {
         let sessionID = UUID()
         let peers = WingPeerIdentity.ipv4Addresses(for: remoteHost)
         guard broadcast || !peers.isEmpty else { throw WingTransportError.unresolvedPeer }
+        // A manual IP takes the same checked path as discovery: a denial is reported, not bypassed.
+        // The first failing address aborts the connect, even if another address could work.
+        for peer in peers.sorted() where !broadcast {
+            guard let code = localNetworkProbe(peer, remotePort) else { continue }
+            throw WingTransportError.localNetworkBlocked(errno: code, host: peer)
+        }
         let expectedPort = remotePort
         let socket = OSCUDPSocket(
             localPort: localPort,
