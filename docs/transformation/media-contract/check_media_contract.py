@@ -53,20 +53,24 @@ def canon(value, depth_limit, indent=0, prefix=0):
 
 
 def load_canonical(path, depth_limit, write, errors):
-    """Parse strictly (no duplicate keys) and require the file to equal its canonical rendering."""
+    """Parse strictly (no duplicate keys, NaN or Infinity) and require the file to equal its canonical rendering."""
     try:
         text = path.read_text(encoding="utf-8")
-        doc = json.loads(text, object_pairs_hook=no_duplicates)
-    except ValueError as exc:  # includes UnicodeDecodeError
+        doc = json.loads(text, object_pairs_hook=no_duplicates, parse_constant=reject_constant)
+        rendered = canon(doc, depth_limit) + "\n"
+    except ValueError as exc:  # includes UnicodeDecodeError and floats such as 1e999 that overflow to infinity
         errors.append(f"{path.name}: {exc}")
         return None
-    rendered = canon(doc, depth_limit) + "\n"
     if write and rendered != text:
         path.write_text(rendered, encoding="utf-8")
         text = rendered
     if rendered != text or json.loads(rendered) != doc:
         errors.append(f"{path.name}: not canonical; run with --write to normalise")
     return doc
+
+
+def reject_constant(name):
+    raise ValueError(f"{name} is not JSON")
 
 
 def no_duplicates(pairs):
@@ -227,14 +231,14 @@ class Trace:
     def frames_per_tick(self, upq):
         return Fraction(upq, TPQ) * self.rate() / 10**6
 
-    def span(self, t1, t2):
-        total = Fraction(0)
+    def segments(self):
         for i, seg in enumerate(self.map):
             end = self.map[i + 1]["atTicks"] if i + 1 < len(self.map) else None
-            lo, hi = max(seg["atTicks"], t1), t2 if end is None else min(end, t2)
-            if hi > lo:
-                total += (hi - lo) * self.frames_per_tick(seg["microsPerQuarter"])
-        return total
+            yield seg["atTicks"], end, self.frames_per_tick(seg["microsPerQuarter"])
+
+    def span(self, t1, t2):
+        return sum((max((t2 if end is None else min(end, t2)) - max(start, t1), 0) * fpt
+                    for start, end, fpt in self.segments()), Fraction(0))
 
     def musical_ok(self):
         m = self.musical
@@ -246,16 +250,12 @@ class Trace:
         return self.musical["frame"] + (self.span(t0, ticks) if ticks >= t0 else -self.span(ticks, t0))
 
     def ticks_at_frame(self, frame):
-        t, f = Fraction(self.musical["musicalTicks"]), Fraction(self.musical["frame"])
-        for i, seg in enumerate(self.map):
-            end = self.map[i + 1]["atTicks"] if i + 1 < len(self.map) else None
-            if end is not None and end <= t:
-                continue
-            fpt = self.frames_per_tick(seg["microsPerQuarter"])
-            if end is None or f + (end - t) * fpt >= frame:
-                return t + (frame - f) / fpt
-            f, t = f + (end - t) * fpt, Fraction(end)
-        raise AssertionError("unreachable")
+        """Exact inverse of frame_of_ticks, walking from tick 0 so earlier frames cross earlier tempo segments."""
+        f = self.frame_of_ticks(0)
+        for start, end, fpt in self.segments():
+            if end is None or f + (end - start) * fpt > frame:
+                return start + (frame - f) / fpt
+            f += (end - start) * fpt
 
     def run(self):
         records = self.doc["timeline"]
@@ -293,8 +293,17 @@ class Trace:
             self.err(a, f"{a['actionId']}: retroactiveMs needs joinInProgress or fireLate and <= maxLatenessMs")
         if late["policy"] == "nextBoundary" and "gridTicks" not in a["quantize"]:
             self.err(a, f"{a['actionId']}: nextBoundary needs a musical grid")
+        if a["readiness"] == "ready" and not self.stretch_ok(a):
+            self.err(a, f"{a['actionId']}: time-stretch actions need a declared time-stretch adapter")
         if media == "audio" and policy == "fixedRate":
             self.evidence.add("fixedRateDefault")
+
+    def stretch_ok(self, action):
+        return action.get("timePolicy") != "timeStretch" or self.doc.get("adapterCapabilities", {}).get("timeStretch")
+
+    def stream_is(self, stream_id, media, direction):
+        stream = self.streams.get(stream_id)
+        return stream is not None and (stream["media"], stream["direction"]) == (media, direction)
 
     def on_anchor(self, r):
         clock, key = r["sampleClock"], f"sampleClock/{r['sampleClock']}"
@@ -509,8 +518,7 @@ class Trace:
         action = self.actions[aid]
         if r["to"] == "failed" and "reason" not in r:
             self.err(r, "failed readiness states its reason")
-        if r["to"] == "ready" and action.get("timePolicy") == "timeStretch" \
-                and not self.doc.get("adapterCapabilities", {}).get("timeStretch"):
+        if r["to"] == "ready" and not self.stretch_ok(action):
             self.err(r, "time-stretch actions need a declared time-stretch adapter")
         if r["to"] == "failed" and action.get("timePolicy") == "timeStretch":
             self.evidence.add("timeStretchPolicy")
@@ -537,8 +545,7 @@ class Trace:
         self.last_dispatch, self.stream_seq[r["stream"]] = key, r["streamSeq"]
 
     def on_midiCapture(self, r):
-        stream = self.streams.get(r["stream"])
-        if stream is None or (stream["media"], stream["direction"]) != ("midi", "capture"):
+        if not self.stream_is(r["stream"], "midi", "capture"):
             self.err(r, "midiCapture names a declared MIDI capture stream")
         words = [int(w, 16) for w in r["ump"]]
         mt, ep, port = words[0] >> 28, r["endpointProtocol"], r["portProtocol"]
@@ -567,8 +574,9 @@ class Trace:
 
     def on_export(self, r):
         events = [(c, w) for c, w in self.captures if c["stream"] in r["streams"]]
-        if not events or len(set(r["streams"])) != len(r["streams"]):
-            self.err(r, "export names distinct captured streams")
+        if not events or len(set(r["streams"])) != len(r["streams"]) \
+                or not all(self.stream_is(s, "midi", "capture") for s in r["streams"]):
+            self.err(r, "export names distinct, declared MIDI capture streams with captured events")
         losses = Counter()
         if r["format"] == "smf":
             division = r.get("division", 0)
@@ -599,28 +607,34 @@ class Trace:
             self.err(r, "lossless is true exactly when no loss category is reported")
 
     def on_take(self, r):
-        stream, segs = self.streams.get(r["stream"]), r["segments"]
-        if stream is None or (stream["media"], stream["direction"]) != ("audio", "capture"):
+        segs = r["segments"]
+        if not self.stream_is(r["stream"], "audio", "capture"):
             self.err(r, "take names a declared audio capture stream")
         if r["inputLatency"]["measuredFrames"] is not None and "evidence" not in r["inputLatency"]:
             self.err(r, "measured latency cites its evidence; reported latency is not measured latency")
         overflow = [d for d in self.discs if d["type"] == "overflow" and d.get("stream") == r["stream"]]
-        file_frame = 0
+        restarts = {(d["sampleClock"], d["generation"]): d for d in self.discs if d["type"] == "clockRestart"}
+        file_frame, base = 0, None
         for i, seg in enumerate(segs):
-            gen, anchor = seg["generation"], self.first_anchor.get((seg["sampleClock"], seg["generation"]))
-            if i and gen != segs[i - 1]["generation"] + 1:
-                self.err(r, "a take starts a new segment exactly at each sample clock restart")
+            clock, gen, start = seg["sampleClock"], seg["generation"], seg["startFrame"]
+            end, restart = start + seg["frames"], restarts.get((clock, gen + 1), {})
+            if i + 1 < len(segs) and ((segs[i + 1]["sampleClock"], segs[i + 1]["generation"]) != (clock, gen + 1)
+                                      or end != restart.get("previousFrame")
+                                      or segs[i + 1]["startFrame"] != restart.get("frame")):
+                self.err(r, "segments split at each clock restart: ending at its previousFrame, resuming at its frame")
             if seg["fileFrameStart"] != file_frame:
                 self.err(r, "segments are contiguous in the file; no padding across clock restarts")
-            host = None if anchor is None else anchor["hostTicks"] + (seg["startFrame"] - anchor["frame"]) \
-                * Fraction(10**9, self.rates[seg["sampleClock"]]) / self.ns_per_tick
+            anchor = self.first_anchor.get((clock, gen))
+            host = None if anchor is None else anchor["hostTicks"] + (start - anchor["frame"]) \
+                * Fraction(10**9, self.rates[clock]) / self.ns_per_tick
             base = host if i == 0 else base
             if host is None or base is None or rnd((host - base) * self.ns_per_tick) != seg["startOffsetNs"]:
                 self.err(r, "segment startOffsetNs is the ns offset of its anchored start from the first segment's")
-            inside = [d for d in overflow if d["generation"] == gen]
-            if any(not seg["startFrame"] <= d["frame"] < seg["startFrame"] + seg["frames"] for d in inside) \
-                    or seg["paddedFrames"] != sum(d["frames"] for d in inside):
-                self.err(r, "paddedFrames equal the overflow discontinuities inside the segment")
+            inside = [d for d in overflow if (d["sampleClock"], d["generation"]) == (clock, gen)]
+            if any(not start <= d["frame"] <= end - d.get("frames", 0) for d in inside):
+                self.err(r, "every overflow interval lies wholly inside its segment")
+            if seg["paddedFrames"] != sum(d.get("frames", 0) for d in inside):
+                self.err(r, "paddedFrames equal the overflow frames inside the segment")
             file_frame += seg["frames"]
         if r["droppedFrames"] != sum(s["paddedFrames"] for s in segs) or len(overflow) != sum(
                 1 for d in overflow if any(d["generation"] == s["generation"] for s in segs)):
@@ -647,26 +661,45 @@ def check_example(doc, name, schema):
     return trace.errors, set(doc["covers"])
 
 
-# (example, seq, changes, error): each breaks one rule in a valid example and must fail with that rule's error.
+# (example, where, changes, error): each breaks one rule in a valid example and must fail with that rule's error.
+# `where` is a timeline seq or a dotted document path; change keys are dotted paths under it; None deletes.
 MUTATIONS = [
     ("01", 3, {"to": 3}, "advance the current value by exactly one"),
     ("01", 7, {"musicalTicks": 0}, "resumes at the last rendered tick 92160"),
     ("01", 11, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
+    ("01", "actions.0", {"timePolicy": "timeStretch"}, "need a declared time-stretch adapter"),
     ("02", 9, {"result": "fired", "reason": None, "frame": 336000}, "expected dropped assignedFrame=336000"),
     ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
     ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
     ("04", 7, {"assignedFrame": 288000, "frame": 288000}, "expected fired assignedFrame=268800"),
+    ("04", 12, {"musicalTicks": 103680}, "capture musicalTicks must map from frame"),
     ("05", 9, {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
     ("06", 9, {"result": "fired", "reason": None}, "must be rejectedStale"),
     ("07", 3, {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
      "must be dropped with reason notReady"),
+    ("08", 2, {"frame": 959900}, "lies wholly inside its segment"),
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
+    ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
+    ("10", 10, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
     ("10", 11, {"lossless": True, "losses": {}}, "must equal recomputed"),
 ]
+
+
+def mutate(doc, where, changes):
+    base = ["timeline", where - 1] if isinstance(where, int) else where.split(".")
+    for key, value in changes.items():
+        *path, last = base + key.split(".")
+        node = doc
+        for part in path:
+            node = node[int(part)] if isinstance(node, list) else node[part]
+        if value is None:
+            node.pop(last, None)
+        else:
+            node[last] = value
 
 
 def main(argv):
@@ -684,24 +717,24 @@ def main(argv):
             continue
         found, claims = check_example(doc, path.name, schema)
         errors += found
-        covered |= claims if not found else set()
-        docs[path.stem[:2]] = (doc, path.name)
+        if not found:  # only valid examples are mutation fixtures; a missing one reports "record missing"
+            covered |= claims
+            docs[path.stem[:2]] = (doc, path.name)
         print(f"{'ok  ' if not found else 'FAIL'} {path.name}")
     if set(schema["$defs"]["coverage"]["enum"]) - covered:
         errors.append(f"coverage missing: {sorted(set(schema['$defs']['coverage']['enum']) - covered)}")
-    for prefix, seq, changes, expect in MUTATIONS:
-        doc, name = copy.deepcopy(docs.get(prefix, ({"timeline": []}, prefix)))
-        if len(doc["timeline"]) < seq:
-            errors.append(f"mutation {prefix} seq {seq}: record missing")
+    for prefix, where, changes, expect in MUTATIONS:
+        doc, name = copy.deepcopy(docs.get(prefix, ({}, prefix)))
+        label = f"mutation {prefix} {'seq ' * isinstance(where, int)}{where}"
+        try:
+            mutate(doc, where, changes)
+        except (KeyError, IndexError, TypeError, ValueError):
+            errors.append(f"{label}: record missing")
             continue
-        rec = doc["timeline"][seq - 1]
-        rec.update({k: v for k, v in changes.items() if v is not None})
-        for key in [k for k, v in changes.items() if v is None]:
-            rec.pop(key, None)
         caught = any(expect in e for e in check_example(doc, name, schema)[0])
-        print(f"{'ok  ' if caught else 'FAIL'} mutation {prefix} seq {seq} rejected: {expect}")
+        print(f"{'ok  ' if caught else 'FAIL'} {label} rejected: {expect}")
         if not caught:
-            errors.append(f"mutation {prefix} seq {seq} did not fail with '{expect}'")
+            errors.append(f"{label} did not fail with '{expect}'")
     for line in errors:
         print("error:", line)
     print(f"{len(files)} examples, {len(MUTATIONS)} mutations, {len(errors)} errors")

@@ -11,6 +11,7 @@
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
+  "streams": [{"streamId": "str.pads-in", "ordinal": 0, "media": "midi", "direction": "capture"}],
   "actions": [
     {"actionId": "act.drums", "media": "midi", "timePolicy": "tempoFollowing", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"},
     {"actionId": "act.backing", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "joinInProgress", "maxLatenessMs": 50}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}},
@@ -30,6 +31,7 @@
     {"seq": 8, "kind": "readiness", "actionId": "act.stretch", "from": "unprepared", "to": "preparing"},
     {"seq": 9, "kind": "readiness", "actionId": "act.stretch", "from": "preparing", "to": "failed", "reason": "timeStretchUnavailable"},
     {"seq": 10, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.stretch", "originHostTicks": 2500000000, "horizonFrame": 200256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}},
-    {"seq": 11, "kind": "outcome", "triggerId": "trg.3", "result": "dropped", "reason": "notReady", "note": "No silent fallback to fixed rate."}
+    {"seq": 11, "kind": "outcome", "triggerId": "trg.3", "result": "dropped", "reason": "notReady", "note": "No silent fallback to fixed rate."},
+    {"seq": 12, "kind": "midiCapture", "stream": "str.pads-in", "ump": ["0x20903C64"], "hostTicks": 2484000000, "frame": 168000, "musicalTicks": 107520, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1", "note": "Delivered after the seq 6 anchor: frame 168000 maps back across the 120 BPM segment to tick 107520."}
   ]
 }

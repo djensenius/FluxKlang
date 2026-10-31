@@ -113,8 +113,9 @@ device mapping is a `sampleJump` discontinuity.
 - An anchor is valid only while its sample generation (and, for musical fields, its transport generation) is current.
 - `frame(host) = anchor.frame + (host − anchor.host) · (numer/denom) · rate / 10⁹`. The nominal rate is used between
   anchors. Adapters re-anchor at least once per render cycle in which they observe both values.
-- Musical ticks to frames: integrate the musical map from the latest musical anchor. Round half-up
-  (`floor(x + ½)`) only at the final frame.
+- Musical ticks to frames: integrate the musical map from the latest musical anchor. Frames to ticks is the exact
+  inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up (`floor(x + ½)`) only at the
+  final frame or tick.
 - Within one generation, anchors must advance, and each must agree with the frame predicted from the generation's
   **first** anchor at the nominal rate within `(rate + span) / 1000` frames, where `span` is the predicted frame
   count: 1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against the first anchor,
@@ -247,8 +248,9 @@ arrives while its action is not `ready`, or whose action leaves `ready` while it
 | state, transport | none | — |
 
 Persisted audio and MIDI actions always state their `timePolicy`, so a future default change can never alter a saved
-show. `timeStretch` needs an adapter that declares `adapterCapabilities.timeStretch`. Without one, readiness fails
-with `timeStretchUnavailable`, and there is no silent fixed-rate fallback (example 04).
+show. `timeStretch` needs an adapter that declares `adapterCapabilities.timeStretch`. Without one, the action is
+never `ready` (not even initially): readiness fails with `timeStretchUnavailable`, and there is no silent fixed-rate
+fallback (example 04).
 
 ### 8.2 Prefetch (#109)
 
@@ -262,7 +264,9 @@ with `timeStretchUnavailable`, and there is no silent fixed-rate fallback (examp
 - Each consumer gets its own handoff. One tap never feeds two racing SPSC consumers.
 - Overflow never blocks. Dropped frames are padded with silence in the file and recorded as `overflow`. A take's
   `droppedFrames` equals the sum of its padded frames.
-- A sample clock restart starts a new segment, with no padding across restarts. Each segment stores `startOffsetNs`,
+- A sample clock restart starts a new segment, with no padding across restarts: the old segment ends at the
+  restart's `previousFrame`, padded overflow included, and the next starts at the restart's frame. Every overflow
+  interval lies wholly inside its segment. Each segment stores `startOffsetNs`,
   the nanosecond offset of its anchored start from the first segment's, never absolute host ticks (M13).
 - Disk full records `captureStopped` at the end of the last segment and leaves a recoverable partial file
   (example 08).
@@ -321,8 +325,8 @@ Capture never upgrades fidelity: OS-upscaled values keep `effective = midi1`.
 
 ### 9.3 SMF export losses
 
-SMF (RP-001) carries MIDI 1.0 bytes. Export computes and declares every loss. `lossless` is true exactly when
-`losses` is empty.
+SMF (RP-001) carries MIDI 1.0 bytes. Every export selects distinct, declared MIDI capture streams. Export computes
+and declares every loss. `lossless` is true exactly when `losses` is empty.
 
 | Category | Counted when |
 |---|---|
@@ -421,7 +425,7 @@ Coordinator follow-ups (proposed, not done here):
 | [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart, resume position, cancellation, stale-trigger rejection |
 | [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop |
 | [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, same-frame ordering, locate, re-preparation |
-| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo edit re-resolution, fixed-rate default, time-stretch unavailable |
+| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
 | [`05-source-loss`](media-contract/examples/05-source-loss.json) | underrun, source loss and reacquisition, no replay |
 | [`06-stale-trigger-no-replay`](media-contract/examples/06-stale-trigger-no-replay.json) | user cancel, context change, rejection |
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
@@ -439,13 +443,13 @@ python3 docs/transformation/media-contract/check_media_contract.py           # v
 python3 docs/transformation/media-contract/check_media_contract.py --write   # rewrite in canonical form
 ```
 
-The checker parses strictly (invalid UTF-8 and duplicate keys are rejected) and requires each file to round-trip
+The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity` are rejected) and requires each file to round-trip
 byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It then
 replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and
 recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Fourteen mutation self-tests each break one rule (for example a stale trigger fires, a trigger is
-relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A malformed trace reports
-`FAIL`, never a crash.
+evidence in a trace. Nineteen mutation self-tests each break one rule in a valid example (for example a stale
+trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error.
+A malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 
 ## 16. Sources
 
