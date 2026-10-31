@@ -4,9 +4,8 @@
 //
 //  Keeps launch prompt-free: the remembered WING is reconnected at startup only
 //  when the user opted in and this app already reached it after a user action
-//  on this device. The
-//  live connect path records that evidence on success and drops it after a
-//  possibly-denied probe for the same host.
+//  on this device. The live connect path records that evidence on success and
+//  drops it after a possibly-denied probe for the same host.
 //
 
 import Foundation
