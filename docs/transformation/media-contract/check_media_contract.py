@@ -203,11 +203,12 @@ class Trace:
         self.doc, self.name, self.errors, self.evidence = doc, name, [], set()
         self.ns_per_tick = Fraction(clocks["host"]["timebaseNumer"], clocks["host"]["timebaseDenom"])
         self.primary = clocks["sample"][0]["clockId"]
-        self.rates = {c["clockId"]: c["nominalRate"] for c in clocks["sample"]}
-        self.mus_id = clocks["musical"]["clockId"]
-        self.map = clocks["musical"]["musicalMap"]
-        self.loop = clocks["musical"].get("loop")
         self.gens = dict(doc["initialGenerations"])
+        self.rates = {(c["clockId"], self.gens.get(f"sampleClock/{c['clockId']}")): c["nominalRate"]
+                      for c in clocks["sample"]}
+        self.mus_id = clocks["musical"]["clockId"]
+        self.map, self.meter = clocks["musical"]["musicalMap"], clocks["musical"]["meter"]
+        self.loop = clocks["musical"].get("loop")
         self.streams = {s["streamId"]: s for s in doc.get("streams", [])}
         self.actions = {a["actionId"]: a for a in doc.get("actions", [])}
         self.state = {k: a["readiness"] for k, a in self.actions.items()}
@@ -219,14 +220,22 @@ class Trace:
     def err(self, rec, msg):
         self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
 
-    def rate(self):
-        return self.rates[self.primary]
+    def rate(self, clock=None, gen=None):
+        """Nominal rate of a sample clock generation (default: the current generation of the primary clock)."""
+        clock = clock or self.primary
+        return self.rates.get((clock, gen or self.gens.get(f"sampleClock/{clock}")))
+
+    def host_at(self, anchor, frame):
+        rate = self.rate(anchor["sampleClock"], anchor["generation"])
+        return anchor["hostTicks"] + (frame - anchor["frame"]) * Fraction(10**9, rate) / self.ns_per_tick
+
+    def current_anchor(self):
+        a = self.anchor.get(self.primary)
+        return a if a and a["generation"] == self.gens.get(f"sampleClock/{self.primary}") else None
 
     def frame_at_host(self, ticks):
-        a = self.anchor.get(self.primary)
-        if a is None or a["generation"] != self.gens.get(f"sampleClock/{self.primary}"):
-            return None
-        return a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
+        a = self.current_anchor()
+        return None if a is None else a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
 
     def frames_per_tick(self, upq):
         return Fraction(upq, TPQ) * self.rate() / 10**6
@@ -307,8 +316,9 @@ class Trace:
 
     def on_anchor(self, r):
         clock, key = r["sampleClock"], f"sampleClock/{r['sampleClock']}"
-        if clock not in self.rates:
-            self.err(r, "anchor names an undeclared sample clock")
+        rate = self.rate(clock, r["generation"])
+        if rate is None:
+            self.err(r, "anchor names an undeclared sample clock generation")
             return
         if r["generation"] != self.gens.get(key):
             self.err(r, "anchor generation is not current")
@@ -316,9 +326,9 @@ class Trace:
             self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
         prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
         if prev and prev["generation"] == r["generation"]:
-            span = (r["hostTicks"] - first["hostTicks"]) * self.ns_per_tick * self.rates[clock] / 10**9
+            span = (r["hostTicks"] - first["hostTicks"]) * self.ns_per_tick * rate / 10**9
             if r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"] \
-                    or abs(r["frame"] - first["frame"] - span) > (self.rates[clock] + span) / 1000:
+                    or abs(r["frame"] - first["frame"] - span) > (rate + span) / 1000:
                 self.err(r, "anchors advance and stay within (rate + span)/1000 frames of their generation's first")
         self.anchor[clock] = r
         if ("musicalTicks" in r) != ("transport" in r):
@@ -360,20 +370,27 @@ class Trace:
             self.err(r, "generation must advance the current value by exactly one")
         if r["reason"] not in REASONS[kind]:
             self.err(r, f"reason {r['reason']} does not apply to {kind}")
-        if ("musicalMap" in r) != (kind == "musicalMap"):
-            self.err(r, "only musicalMap generations carry (and require) a musicalMap payload")
+        if ("musicalMap" in r) != (kind == "musicalMap") or ("meter" in r and kind != "musicalMap"):
+            self.err(r, "only musicalMap generations carry a musicalMap payload (required) and a meter (optional)")
             return
+        if ("nominalRate" in r and kind != "sampleClock") or (r["reason"] == "rateChange" and "nominalRate" not in r):
+            self.err(r, "nominalRate belongs to sampleClock generations and is required on rateChange")
+        if kind == "sampleClock":
+            clock = counter.split("/", 1)[1]
+            self.rates[(clock, r["to"])] = r.get("nominalRate", self.rate(clock))
+            self.pending_restart.add(clock)
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
-        if kind == "sampleClock":
-            self.pending_restart.add(counter.split("/", 1)[1])
-        elif kind == "transport":
+        if kind == "transport":
             self.musical = None
         elif kind == "musicalMap":
             ticks = [s["atTicks"] for s in r["musicalMap"]]
             if ticks[0] != 0 or ticks != sorted(set(ticks)):
                 self.err(r, "musical map segments start at 0 and strictly increase")
-            self.map = r["musicalMap"]
+            meter = r.get("meter", self.meter)
+            if same(r["musicalMap"], self.map) and same(meter, self.meter):
+                self.err(r, "a musicalMap revision changes the tempo segments or the meter (absent: inherited)")
+            self.map, self.meter = r["musicalMap"], meter
 
     def on_discontinuity(self, r):
         kind, clock = r["type"], r["sampleClock"]
@@ -577,8 +594,16 @@ class Trace:
         if not events or len(set(r["streams"])) != len(r["streams"]) \
                 or not all(self.stream_is(s, "midi", "capture") for s in r["streams"]):
             self.err(r, "export names distinct, declared MIDI capture streams with captured events")
-        losses = Counter()
-        if r["format"] == "smf":
+        losses, native, anchor = Counter(), r["format"] == "nativeUmp", self.current_anchor()
+        if set(r) & ({"division", "smfFormat"} if native else {"startFrame", "offsetsNs"}):
+            self.err(r, "division and smfFormat are SMF-only; startFrame and offsetsNs are native-UMP-only")
+        if native:
+            start = self.host_at(anchor, r["startFrame"]) if anchor and "startFrame" in r else None
+            offsets = None if start is None else [rnd((c["hostTicks"] - start) * self.ns_per_tick) for c, _ in events]
+            if offsets is None or r.get("offsetsNs") != offsets:
+                self.err(r, "native UMP export keeps words verbatim and persists offsetsNs from its startFrame, "
+                            "never absolute host ticks")
+        else:
             division = r.get("division", 0)
             if not division or TPQ % division or r.get("smfFormat") is None:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
@@ -599,8 +624,6 @@ class Trace:
                 if len(groups) > 1 and (words[0] >> 24) & 0xF != min(groups):
                     losses["groupsFlattened"] += 1
             self.evidence.add("smfExportLossless" if r["lossless"] else "smfExportLossy")
-        elif "division" in r or "smfFormat" in r:
-            self.err(r, "native UMP export keeps words and stamps verbatim; SMF fields do not apply")
         if dict(losses) != r["losses"]:
             self.err(r, f"declared losses {r['losses']} must equal recomputed {dict(losses)}")
         if r["lossless"] != (not r["losses"]):
@@ -625,8 +648,7 @@ class Trace:
             if seg["fileFrameStart"] != file_frame:
                 self.err(r, "segments are contiguous in the file; no padding across clock restarts")
             anchor = self.first_anchor.get((clock, gen))
-            host = None if anchor is None else anchor["hostTicks"] + (start - anchor["frame"]) \
-                * Fraction(10**9, self.rates[clock]) / self.ns_per_tick
+            host = None if anchor is None else self.host_at(anchor, start)  # at that generation's own rate
             base = host if i == 0 else base
             if host is None or base is None or rnd((host - base) * self.ns_per_tick) != seg["startOffsetNs"]:
                 self.err(r, "segment startOffsetNs is the ns offset of its anchored start from the first segment's")
@@ -672,6 +694,8 @@ MUTATIONS = [
     ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
     ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
+    ("04", 5, {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}], "meter": None},
+     "changes the tempo segments or the meter"),
     ("04", 7, {"assignedFrame": 288000, "frame": 288000}, "expected fired assignedFrame=268800"),
     ("04", 12, {"musicalTicks": 103680}, "capture musicalTicks must map from frame"),
     ("05", 9, {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1},
@@ -680,11 +704,13 @@ MUTATIONS = [
     ("07", 3, {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
      "must be dropped with reason notReady"),
     ("08", 2, {"frame": 959900}, "lies wholly inside its segment"),
+    ("08", 3, {"nominalRate": None}, "required on rateChange"),
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
     ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("10", 10, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
+    ("10", 10, {"startFrame": 0}, "persists offsetsNs from its startFrame"),
     ("10", 11, {"lossless": True, "losses": {}}, "must equal recomputed"),
 ]
 

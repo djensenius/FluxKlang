@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Synthetic, deterministic trace of media clocks, triggers, readiness, discontinuities and MIDI fidelity. See docs/transformation/media-contract.md.",
+  "description": "Synthetic, deterministic media trace; see docs/transformation/media-contract.md. Timeline records are transient runtime data: their host ticks are never persisted. Take segments and exports show the persisted, anchor-relative shapes (M13).",
   "type": "object", "additionalProperties": false,
   "required": ["contract", "version", "exampleId", "title", "covers", "clocks", "initialGenerations", "timeline"],
   "properties": {
@@ -42,6 +42,13 @@
     },
     "protocol": {"enum": ["midi1", "midi2"]},
     "readinessState": {"enum": ["unprepared", "preparing", "ready", "invalidated", "failed"]},
+    "rate": {"enum": [44100, 48000, 88200, 96000, 176400, 192000]},
+    "meter": {
+      "type": "object", "additionalProperties": false, "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 1, "maximum": 64}, "denominator": {"enum": [1, 2, 4, 8, 16, 32]}
+      }
+    },
     "musicalMap": {
       "type": "array", "minItems": 1,
       "items": {
@@ -63,23 +70,14 @@
           "type": "array", "minItems": 1,
           "items": {
             "type": "object", "additionalProperties": false, "required": ["clockId", "nominalRate"],
-            "properties": {
-              "clockId": {"$ref": "#/$defs/id"}, "nominalRate": {"enum": [44100, 48000, 88200, 96000, 176400, 192000]}
-            }
+            "properties": {"clockId": {"$ref": "#/$defs/id"}, "nominalRate": {"$ref": "#/$defs/rate"}}
           }
         },
         "musical": {
           "type": "object", "additionalProperties": false,
           "required": ["clockId", "ticksPerQuarter", "meter", "musicalMap"],
           "properties": {
-            "clockId": {"$ref": "#/$defs/id"}, "ticksPerQuarter": {"const": 15360},
-            "meter": {
-              "type": "object", "additionalProperties": false, "required": ["numerator", "denominator"],
-              "properties": {
-                "numerator": {"type": "integer", "minimum": 1, "maximum": 64},
-                "denominator": {"enum": [1, 2, 4, 8, 16, 32]}
-              }
-            },
+            "clockId": {"$ref": "#/$defs/id"}, "ticksPerQuarter": {"const": 15360}, "meter": {"$ref": "#/$defs/meter"},
             "musicalMap": {"$ref": "#/$defs/musicalMap"},
             "loop": {
               "type": "object", "additionalProperties": false, "required": ["startTicks", "endTicks"],
@@ -164,7 +162,8 @@
             "tempoEdit", "externalTempo", "sourceLost", "sourceReacquired", "contextChange", "userCancel"
           ]
         },
-        "musicalMap": {"$ref": "#/$defs/musicalMap"}, "note": {"$ref": "#/$defs/note"}
+        "musicalMap": {"$ref": "#/$defs/musicalMap"}, "nominalRate": {"$ref": "#/$defs/rate"},
+        "meter": {"$ref": "#/$defs/meter"}, "note": {"$ref": "#/$defs/note"}
       }
     },
     "triggerRecord": {
@@ -290,6 +289,7 @@
           },
           "additionalProperties": {"$ref": "#/$defs/positive"}
         },
+        "startFrame": {"$ref": "#/$defs/frame"}, "offsetsNs": {"type": "array", "items": {"$ref": "#/$defs/count"}},
         "note": {"$ref": "#/$defs/note"}
       }
     }

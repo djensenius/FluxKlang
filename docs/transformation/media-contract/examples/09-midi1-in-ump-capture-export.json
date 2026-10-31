@@ -25,6 +25,6 @@
     {"seq": 5, "kind": "midiCapture", "stream": "str.keys-b", "ump": ["0x40B00700", "0x80000000"], "hostTicks": 2442000000, "frame": 84000, "musicalTicks": 53760, "endpointProtocol": "midi1", "portProtocol": "midi2", "translatedBy": "os", "effective": "midi1"},
     {"seq": 6, "kind": "midiCapture", "stream": "str.keys-b", "ump": ["0x40803C00", "0x00000000"], "hostTicks": 2448000000, "frame": 96000, "musicalTicks": 61440, "endpointProtocol": "midi1", "portProtocol": "midi2", "translatedBy": "os", "effective": "midi1"},
     {"seq": 7, "kind": "export", "exportId": "exp.smf", "streams": ["str.keys-a", "str.keys-b"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": true, "losses": {}},
-    {"seq": 8, "kind": "export", "exportId": "exp.ump", "streams": ["str.keys-a", "str.keys-b"], "format": "nativeUmp", "lossless": true, "losses": {}}
+    {"seq": 8, "kind": "export", "exportId": "exp.ump", "streams": ["str.keys-a", "str.keys-b"], "format": "nativeUmp", "startFrame": 0, "offsetsNs": [500000000, 1000000000, 1500000000, 1750000000, 2000000000], "lossless": true, "losses": {}}
   ]
 }

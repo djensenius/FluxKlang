@@ -30,10 +30,10 @@ and CoreMIDI stay behind adapters ([§10](#10-adapter-boundary)).
 
 | Term | Meaning |
 |---|---|
-| Sample clock | A device-driven frame counter (`Int64` frames) with an identity (`clockId`), a nominal rate and a generation. It is the render timeline |
+| Sample clock | A device-driven frame counter (`Int64` frames) with an identity (`clockId`) and a generation; each generation has its own nominal rate. It is the render timeline |
 | Host clock | The monotonic process clock in host ticks (`UInt64`) with a timebase `numer/denom` (ns per tick). Process-local; it does not advance during sleep |
 | Musical time | Ticks (`Int64`) at a fixed **15360 ticks per quarter note** (TPQ). A beat is a quarter note. Converted to frames only through the musical map and an anchor |
-| Musical map | Ordered `(atTicks, microsPerQuarter)` segments plus meter. One revision covers both tempo and meter |
+| Musical map | Ordered `(atTicks, microsPerQuarter)` segments plus one meter. One revision covers both; an absent meter is inherited |
 | Console setup | Device selection, routing, buffer size and gain. It is configuration, **not a clock**; changing it may bump the sample clock generation |
 | Anchor | One simultaneous observation of `(sample clock, generation, frame, hostTicks)`, optionally with `(transport generation, musicalTicks, loopIteration)` |
 | Generation | A counter that names an epoch of meaning (see [§5.1](#51-generation-counters)) |
@@ -88,7 +88,7 @@ The checker enforces these invariants on every example. Markers: ✔ checked, �
 | M10 | MIDI fidelity reports what the source actually sent; an unknown endpoint protocol is reported as unverified MIDI 1. Conversion loss and unverifiable fidelity are always declared, never hidden | ✔ |
 | M11 | Native timing objects and engine APIs stay in adapters. The kernel contract has no Foundation or engine types | — |
 | M12 | Fixed-rate audio is the default. Tempo-following MIDI and time-stretched audio are explicit, distinct policies. Stretching never happens silently | ✔ |
-| M13 | Persisted media stores no absolute host ticks. It stores frames, musical ticks and nanosecond offsets relative to a recorded anchor (takes: `startOffsetNs`) | ◐ |
+| M13 | Host-tick stamps are transient runtime data and are never persisted. Persisted media stores frames, musical ticks and nanosecond offsets from a recorded anchor (takes: `startOffsetNs`; native exports: `offsetsNs` from the take start) | ✔ |
 
 ## 5. Generations and mutation policy
 
@@ -98,7 +98,7 @@ Counters are keyed `kind/id` (for example `transport/mus.main`). Owners are in b
 
 | Kind | Bumped by (reason) | Effect on dependants |
 |---|---|---|
-| `sampleClock` [#65, #55] | `deviceRestart`, `rateChange`, `configurationChange`, `wake` | Pending triggers cancelled. Old anchors void. Forces a `transport` bump (`clockRestart`) |
+| `sampleClock` [#65, #55] | `deviceRestart`, `rateChange` (carries the new `nominalRate`; others may, else inherit), `configurationChange`, `wake` | Pending triggers cancelled. Old anchors void. Forces a `transport` bump (`clockRestart`) |
 | `transport` [#84, #55] | `locate`, `clockRestart`, `transportRestart` | Pending musical triggers cancelled. [Owned notes](#2-terminology) released. Musical anchor void until re-anchored |
 | `musicalMap` [#84] | `tempoEdit`, `externalTempo` (rate-limited) | Pending musical targets re-resolve. **Nothing is cancelled** |
 | `source` [#109, #81] | `sourceLost`, `sourceReacquired` | Dependent triggers cancelled. Readiness invalidated |
@@ -111,8 +111,9 @@ device mapping is a `sampleJump` discontinuity.
 ### 5.2 Anchors and conversion
 
 - An anchor is valid only while its sample generation (and, for musical fields, its transport generation) is current.
-- `frame(host) = anchor.frame + (host − anchor.host) · (numer/denom) · rate / 10⁹`. The nominal rate is used between
-  anchors. Adapters re-anchor at least once per render cycle in which they observe both values.
+- `frame(host) = anchor.frame + (host − anchor.host) · (numer/denom) · rate / 10⁹`. `rate` is the nominal rate of the
+  anchor's generation, used between anchors. Adapters re-anchor at least once per render cycle in which they observe
+  both values.
 - Musical ticks to frames: integrate the musical map from the latest musical anchor. Frames to ticks is the exact
   inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up (`floor(x + ½)`) only at the
   final frame or tick.
@@ -150,10 +151,11 @@ iteration. In v1, musical targets must resolve inside `[startTicks, endTicks]` w
 
 ### 5.6 Tempo and meter
 
-A musical-map edit bumps `musicalMap` and carries the whole new map. Committed events keep their frames; pending
-musical targets re-resolve with the new map, and their outcome names the revision used (example 04). External tempo
-(#84) is rate-limited so it cannot cause unbounded re-resolution. Fixed-rate audio keeps its sample length; a tempo
-mismatch is advisory.
+A musical-map edit bumps `musicalMap` and carries the whole new tempo map plus an optional `meter` (inherited when
+absent; in v1 one meter applies to the whole map, and it only labels bars because targets are ticks). Committed events
+keep their frames; pending musical targets re-resolve with the new map, and their outcome names the revision used
+(example 04). External tempo (#84) is rate-limited so it cannot cause unbounded re-resolution. Fixed-rate audio keeps
+its sample length; a tempo mismatch is advisory.
 
 ### 5.7 Source loss
 
@@ -266,8 +268,9 @@ fallback (example 04).
   `droppedFrames` equals the sum of its padded frames.
 - A sample clock restart starts a new segment, with no padding across restarts: the old segment ends at the
   restart's `previousFrame`, padded overflow included, and the next starts at the restart's frame. Every overflow
-  interval lies wholly inside its segment. Each segment stores `startOffsetNs`,
-  the nanosecond offset of its anchored start from the first segment's, never absolute host ticks (M13).
+  interval lies wholly inside its segment. A segment's frames are at its generation's own rate (example 08 goes
+  from 48 to 96 kHz). Each segment stores `startOffsetNs`, the nanosecond offset of its anchored start from the first
+  segment's (the take's anchor), never absolute host ticks (M13).
 - Disk full records `captureStopped` at the end of the last segment and leaves a recoverable partial file
   (example 08).
 
@@ -320,7 +323,9 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 ### 9.2 Native capture
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
-ticks when a transport is anchored, plus the protocol fields above. `nativeUmp` export is lossless by definition.
+ticks when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
+data. `nativeUmp` export is lossless: it keeps the words verbatim and persists timing from its `startFrame` (the take
+start) as `offsetsNs`, from which any Jitter Reduction timestamps it writes derive; it never writes absolute host ticks.
 Capture never upgrades fidelity: OS-upscaled values keep `effective = midi1`.
 
 ### 9.3 SMF export losses
@@ -371,14 +376,14 @@ FFI or plugin code real-time safe (#48).
 | #55 Capability, parameter, transport and command contracts | Owns the production Swift types for [§3](#3-plain-values) and the generation kinds in [§5.1](#51-generation-counters). Command acknowledgements carry the [§6.4](#64-outcomes-and-precedence) outcomes |
 | #62 Activation and engine lease | Owns `context` generations. A lease change is a `contextChange` |
 | #64 Bounded buffers and queues | Provides the bounded, non-lossy outcome channel (M5) and the SPSC rings used by [§8.2](#82-prefetch-109)–[§8.3](#83-capture-109-110) |
-| #65 Interface discovery and lifecycle | Owns `sampleClock` bumps for device restart, rate and configuration change, and wake |
+| #65 Interface discovery and lifecycle | Owns `sampleClock` bumps for device restart, rate and configuration change, and wake, and each generation's `nominalRate` |
 | #81 CoreMIDI I/O, #83 UMP/MIDI 2/MIDI-CI | Move from the legacy `MIDIInputPortCreateWithBlock` (`Shared/MIDI/CoreMIDIInput.swift`) to per-protocol ports. Report `endpointProtocol` (`unknown` when absent), `portProtocol` and `translatedBy`. Emit `formatChange` after MIDI-CI. Verify the derived translation and upscaling rules ([§14](#14-open-questions), question 8) |
 | #84 Musical MIDI clock | Owns `transport` and `musicalMap`, rate-limited external tempo, the restart resume rule ([§5.3](#53-clock-restart)), and with #107 the commit look-ahead ([§2](#2-terminology)) |
 | #107 Preloaded performance actions | Uses triggers, the requires list, `cancelScope`, the late policies and readiness. Decides `notReady` deferral and, with #84, the commit look-ahead |
 | #109 Shared prefetch and capture handoff | Implements [§8.2](#82-prefetch-109)–[§8.3](#83-capture-109-110). Owns `source` generations for files |
 | #110 Bounded I/O and recoverable recording | Implements takes, segments, overflow padding, `captureStopped` and latency evidence |
 | #111 Backing clips, metronome, tuner | Backing clips are `fixedRate` by default and use `joinInProgress`. The metronome is a musical-grid `state` or `midi` action with no audio stretching |
-| #112 MIDI clips with protocol fidelity | Plays clips with `tempoFollowing` by default. Implements native UMP capture and export, and SMF export with declared losses ([§9](#9-midi-fidelity-and-export)) |
+| #112 MIDI clips with protocol fidelity | Plays clips with `tempoFollowing` by default. Implements native UMP capture and export (timing as offsets from the take start), and SMF export with declared losses ([§9](#9-midi-fidelity-and-export)) |
 
 Coordinator follow-ups (proposed, not done here):
 
@@ -417,6 +422,8 @@ Coordinator follow-ups (proposed, not done here):
 8. Whether CoreMIDI converts exactly when endpoint and port protocols differ, and whether its MIDI 1→2
    upconversion is min-centre-max on the shipping OS (#81, #83, #110).
 9. The stopped-transport default (`wait`) (#84, #107).
+10. Meter changes positioned inside a map revision (#84), and whether a take writer continues one file across a rate
+    change by resampling or starts a new file (#110).
 
 ## 15. Examples and validation
 
@@ -425,16 +432,17 @@ Coordinator follow-ups (proposed, not done here):
 | [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart, resume position, cancellation, stale-trigger rejection |
 | [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop |
 | [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, same-frame ordering, locate, re-preparation |
-| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
+| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo and meter edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
 | [`05-source-loss`](media-contract/examples/05-source-loss.json) | underrun, source loss and reacquisition, no replay |
 | [`06-stale-trigger-no-replay`](media-contract/examples/06-stale-trigger-no-replay.json) | user cancel, context change, rejection |
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
-| [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, segment split, disk full |
+| [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full |
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss |
 
-Example constants: 48 kHz, host timebase 125/3 ns per tick (500 ticks per frame), 120 BPM (1.5625 frames per tick;
-a 4/4 bar is 96000 frames).
+Timeline records are transient runtime traces; their host ticks are never persisted. Take segments and export records
+show the persisted, anchor-relative shapes. Example constants: 48 kHz unless a generation says otherwise, host timebase
+125/3 ns per tick (500 ticks per frame), 120 BPM (1.5625 frames per tick; a 4/4 bar is 96000 frames).
 
 Run from the repository root (Python 3.9 or later, standard library only; no app, hardware, network or plugins):
 
@@ -443,13 +451,13 @@ python3 docs/transformation/media-contract/check_media_contract.py           # v
 python3 docs/transformation/media-contract/check_media_contract.py --write   # rewrite in canonical form
 ```
 
-The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity` are rejected) and requires each file to round-trip
-byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It then
-replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and
-recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Nineteen mutation self-tests each break one rule in a valid example (for example a stale
-trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error.
-A malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
+The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity` are rejected) and requires each file to
+round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
+then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
+and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
+evidence in a trace. Twenty-two mutation self-tests each break one rule in a valid example (for example a stale trigger
+fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A malformed
+file or trace reports `FAIL`, never a crash, and is not used for mutations.
 
 ## 16. Sources
 

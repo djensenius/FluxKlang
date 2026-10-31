@@ -1,9 +1,9 @@
 {
   "contract": "fluxklang.media", "version": 1, "exampleId": "ex.04-tempo-mutation",
-  "title": "Tempo edit: musical targets re-resolve without cancellation; fixed-rate audio is the default; unavailable time-stretch fails readiness",
+  "title": "Tempo and meter edit: musical targets re-resolve without cancellation; fixed-rate audio is the default; unavailable time-stretch fails readiness",
   "covers": ["tempoMutation", "fixedRateDefault", "timeStretchPolicy", "readiness"],
   "notes": [
-    "The edit changes tempo to 150 BPM from tick 122880 (1.25 frames per tick); musicalMap revisions never cancel triggers.",
+    "The edit changes tempo to 150 BPM from tick 122880 (1.25 frames per tick) and the meter to 3/4; musicalMap revisions never cancel triggers.",
     "act.backing keeps its sample length after the edit (fixed rate); a tempo mismatch is advisory, not a silent stretch."
   ],
   "adapterCapabilities": {"timeStretch": false},
@@ -25,7 +25,7 @@
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.backing", "originHostTicks": 2400500000, "horizonFrame": 1256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}},
     {"seq": 3, "kind": "outcome", "triggerId": "trg.1", "result": "fired", "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
     {"seq": 4, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.drums", "originHostTicks": 2450000000, "horizonFrame": 100256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "target": {"timeBase": "musical", "atTicks": 184320}, "note": "Bar 4 beat 1 was frame 288000 at the old tempo."},
-    {"seq": 5, "kind": "generation", "counter": "musicalMap/mus.main", "from": 1, "to": 2, "reason": "tempoEdit", "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}, {"atTicks": 122880, "microsPerQuarter": 400000}]},
+    {"seq": 5, "kind": "generation", "counter": "musicalMap/mus.main", "from": 1, "to": 2, "reason": "tempoEdit", "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}, {"atTicks": 122880, "microsPerQuarter": 400000}], "meter": {"numerator": 3, "denominator": 4}},
     {"seq": 6, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 192000, "hostTicks": 2496000000, "transport": 1, "musicalTicks": 122880},
     {"seq": 7, "kind": "outcome", "triggerId": "trg.2", "result": "fired", "assignedFrame": 268800, "frame": 268800, "musicalMap": 2},
     {"seq": 8, "kind": "readiness", "actionId": "act.stretch", "from": "unprepared", "to": "preparing"},
