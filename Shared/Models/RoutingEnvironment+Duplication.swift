@@ -36,8 +36,14 @@
 //  carried over verbatim, except a serial-chain destination, which falls back
 //  to the main as before. Global stores — Home wiring, temporary moves,
 //  presets, fader layout — key on equipment/WING identity and are not
-//  environment-scoped, so they are untouched. Assistant drafts are transient
-//  and bound to the source environment ID, so they never transfer to a copy.
+//  environment-scoped, so they are untouched. Persisted assistant drafts
+//  (assistant-pending-studio-draft.json) are bound to the source environment
+//  ID and rejected for the copy (StudioWiringAdvisor.swift:182).
+//
+//  An owned identity (effect, endpoint, node) is always in the remap; the
+//  `?? UUID()` fallbacks are unreachable and only guarantee that an owned ID
+//  is never reused. Reference fallbacks (`?? id`) implement the verbatim
+//  carry-over of already-dangling references described above.
 //
 
 import Foundation
@@ -82,7 +88,7 @@ struct EnvironmentIdentityRemap: Sendable {
     func chainGraph(_ graph: ChainGraph) -> ChainGraph {
         let nodes = graph.nodes.map { node -> ChainNode in
             var copy = node
-            copy.id = chainNodes[node.id] ?? node.id
+            copy.id = chainNodes[node.id] ?? UUID()
             return copy
         }
         let edges = graph.edges.map { edge -> ChainEdge in
@@ -99,7 +105,7 @@ struct EnvironmentIdentityRemap: Sendable {
         var copy = graph
         copy.nodes = graph.nodes.map { node -> StudioNode in
             var remapped = node
-            remapped.id = studioNodes[node.id] ?? node.id
+            remapped.id = studioNodes[node.id] ?? UUID()
             remapped.kind = studioNodeKind(node.kind)
             return remapped
         }
