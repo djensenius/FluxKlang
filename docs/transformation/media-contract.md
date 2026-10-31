@@ -55,10 +55,9 @@ and CoreMIDI stay behind adapters ([§10](#10-adapter-boundary)).
 
 Kernel values are fixed-size and trivially copyable. They use no strings, Foundation types, reference counting or
 allocation. Identities are dense `UInt32` slots resolved at prepare time. String IDs such as `smp.main` appear only
-in persisted, debug and example forms. These semantics are normative; the field widths below and the ring layout in
+in persisted, debug and example forms. Clock, stream, action, trigger, take and export IDs are unique: a duplicate is
+invalid, never overwritten. These semantics are normative; the field widths below and the ring layout in
 [§8.2](#82-prefetch-109) are advisory for #55, #64 and #109.
-Sample `clockId`, `streamId` and `actionId` values are each unique within their declaration list. Duplicates are
-invalid, not last-declaration-wins; they are rejected before indexing or replay.
 
 | Value | Fields (width) |
 |---|---|
@@ -133,22 +132,16 @@ The policy for a device restart, rate change, configuration change or wake:
 
 1. Bump `sampleClock` and record a `clockRestart` discontinuity before the first anchor of the new generation. It
    carries the new generation's start `hostTicks` and `previousFrame`, the end of the frames rendered in the old one.
+   Each change has its own record and any step-3 bump; changing that clock again before they exist is invalid.
 2. Cancel every pending trigger that required the old generation.
 3. Bump `transport` (`clockRestart`), before or after the `clockRestart` record: exactly once per primary
    `sampleClock` bump when a transport exists, and never otherwise. The transport resumes at the musical
    position of `previousFrame`, the last **rendered** position, converted through the musical anchor and map in force
    at the `sampleClock` bump (so at the old rate; a `previousFrame` at loop end resumes at `startTicks`), with
    `loopIteration` 0. There is no catch-up.
-4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
-
-A second change of the same sample clock is invalid until its preceding `clockRestart` record and, for the primary
-clock, required transport bump are complete. Neither obligation may coalesce across changes. This permits one bounded
-outstanding restart per clock, with either record/bump order.
-
-The first anchor of the restarted generation must not precede its `clockRestart` in host ticks or frames. Its frame
-must agree with that record's `(frame, hostTicks)` at the **new** rate within the same `(rate + span) / 1000` bound as
-§5.2, with `span` measured from the restart. Equality is allowed (example 01); a later first anchor is also allowed
-(example 08). Subsequent anchors remain bounded against that generation's first anchor.
+4. Re-anchor. The first new anchor is not before the restart's `(frame, hostTicks)` and agrees with it at the new
+   rate within the §5.2 bound, `span` measured from the restart (examples 01, 08). Late triggers stamped with the old
+   generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
 
@@ -191,21 +184,15 @@ Both cancel pending triggers and reject late stale ones (example 06).
 ### 6.1 Horizon
 
 The scheduler publishes `horizonFrame`, the earliest frame it can still affect: at least the next render cycle plus
-any adapter latency. `asap` targets initially resolve to the arrival horizon. At outcome, every still-pending target
-is rechecked against the current horizon, not just its arrival horizon; a target before it is **late**.
-
-In traces, the horizon advances monotonically to the maximum of the primary anchors' frames (observed render
-progress) and trigger horizons stamped with the current primary sample generation. Producers must publish render
-progress before outcomes; an anchor's frame is only a lower bound on the scheduler's latency-inclusive horizon.
-Old-sample-generation trigger horizons do not advance it. Only a primary sample-clock generation change resets it,
-not a locate, loop wrap or musical-map edit. A future committed outcome does not advance render progress.
+any adapter latency. A target is **late** if it precedes the horizon at commit, not at arrival; `asap` commits at that
+horizon. Traces lower-bound it by the primary anchor frames and trigger `horizonFrame`s of the current primary sample
+generation; only a primary `sampleClock` change resets it, not a locate, wrap or map edit.
 
 ### 6.2 Quantization
 
-A `musical` target has exactly one of `gridTicks` (the next boundary at or after the origin's musical position) or
-an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither (the schema enforces this). An
-origin exactly on a boundary uses that boundary. When the transport is stopped, the action's stopped policy applies:
-`wait` (default), `immediate` or `startTransport`. This is documented only in v1.
+A `musical` target has exactly one of `gridTicks` (the next boundary at or after the origin, which an exact boundary
+uses) or an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither (schema-enforced). When
+stopped, the action's stopped policy applies: `wait` (default), `immediate` or `startTransport`.
 
 ### 6.3 Late and retroactive cues
 
@@ -214,12 +201,7 @@ origin exactly on a boundary uses that boundary. When the transport is stopped, 
 | `drop` | `dropped`, reason `late` |
 | `fireLate` | If lateness ≤ `maxLatenessMs`: `firedLate` at the horizon. Otherwise `dropped` (`late`) |
 | `joinInProgress` | If lateness ≤ `maxLatenessMs`: `joined` at the horizon with `startOffsetFrames = horizon − assigned`, so the source stays aligned. Otherwise `dropped` (`late`) |
-| `nextBoundary` | `fired` at the first boundary at or after the horizon on the trigger's resolved grid (its `gridTicks`, else the action's). Requires a musical grid |
-
-Every trigger whose target is musical **or whose late policy is `nextBoundary`** requires the transport generation,
-even with a `sample` or `asap` override: a later horizon may require musical fallback. A locate therefore cancels it
-before any retargeting. Fallback requires a current musical anchor and the outcome names the musical-map revision
-actually used, just as a musical target does.
+| `nextBoundary` | `fired` at the first boundary at or after the horizon on the trigger's resolved grid (its `gridTicks`, else the action's). Requires a musical grid and anchor; the outcome names the musical-map revision used. The trigger requires `transport` even with a `sample` or `asap` target, so a locate cancels it |
 
 **Retroactive tolerance.** `retroactiveMs` ranges over 0–120, defaults to 0, must not exceed `maxLatenessMs`, and
 is allowed only with `fireLate` and `joinInProgress`. If the origin is within the tolerance after the previous grid
@@ -251,8 +233,7 @@ Dispatched events are ordered by **(frame, lane, streamOrdinal, streamSeq)**:
 | `content` | 3 | Stream content (notes, clips) in source order |
 
 Source order within a stream is preserved (`streamSeq` strictly increases, across clock restarts too). Frame order
-restarts when the primary sample clock changes generation. Stream ordinals are assigned at prepare time, never at fire
-time.
+restarts when the primary sample clock changes generation. Ordinals are fixed at prepare time.
 
 ## 7. Readiness
 
@@ -297,12 +278,12 @@ fallback (example 04).
 - Each consumer gets its own handoff. One tap never feeds two racing SPSC consumers.
 - Overflow never blocks. Dropped frames are padded with silence in the file and recorded as `overflow`. A take's
   `droppedFrames` equals the sum of its padded frames.
-- A sample clock restart starts a new segment, with no padding across restarts: a segment continuing across it ends
-  at its `previousFrame`, padded overflow included, and the next starts at the restart's frame. No segment, the last
-  included, ends after its generation's `previousFrame`. Every overflow
-  interval lies wholly inside its segment. A segment's frames are at its generation's own rate (example 08 goes
-  from 48 to 96 kHz). Each segment stores `startOffsetNs`, the nanosecond offset of its anchored start from the first
-  segment's (the take's anchor), never absolute host ticks (M13).
+- A sample clock restart starts a new segment, with no padding across restarts: a segment continuing across it ends at
+  its `previousFrame`, padded overflow included, and the next starts at the restart's frame. No segment, the last
+  included, ends after its generation's `previousFrame`. Every overflow interval lies wholly inside its segment. A
+  segment's frames are at its generation's own rate (example 08 goes from 48 to 96 kHz). Each segment stores
+  `startOffsetNs`, the nanosecond offset of its anchored start from the first segment's (the take's anchor), never
+  absolute host ticks (M13).
 - Disk full records `captureStopped` at the end of the last segment and leaves a recoverable partial file
   (example 08).
 - A take owns only the overflow and `captureStopped` records on its stream that touch its own segments (same clock
@@ -360,19 +341,13 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 ### 9.2 Native capture
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
-ticks exactly when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
-data. In v1, delivery across a **sample-clock restart is unsupported**: a `midiCapture` timestamp must be at or after
-the current primary generation's `clockRestart.hostTicks`, checked before rounding frames. Equality belongs to the
-new generation. An older delivery rejects the trace explicitly; it must never be remapped through the new rate or
-anchor. A recorder must report unsupported cross-generation delivery and must not claim a complete/lossless
-capture or export for that affected input. Retained-generation alignment and recovery belong to #110/#112; v1 does
-not silently discard such input. Delayed delivery within a generation (including across loop wraps and tempo
-segments, examples 03/04) remains supported.
-
-For supported captures, `nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its
-`origin` (the take start as clock, generation and frame, bound to that generation's recorded anchor, so a later
-restart changes nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
-Capture never upgrades fidelity: OS-upscaled values keep `effective = midi1`.
+ticks exactly when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient
+runtime data. A capture delivered after a `clockRestart` but stamped before its `hostTicks` is unsupported in v1: it
+is reported, neither remapped through the new anchor nor silently dropped, and nothing containing it claims to
+be lossless (recovery: #110, #112). Delayed delivery within a generation is supported (examples 03, 04). Otherwise
+`nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the take
+start as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes
+nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
 
 ### 9.3 SMF export losses
 
@@ -487,10 +462,9 @@ Coordinator follow-ups (proposed, not done here):
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss, groupless JR Timestamp |
 
-Timeline records are transient runtime traces; their host ticks are never persisted. Take segments and export records
-show the persisted, anchor-relative shapes. Example constants: 48 kHz unless a generation says otherwise, host timebase
-125/3 ns per tick (500 ticks per frame), 120 BPM (1.5625 frames per tick; a 4/4 bar is 96000 frames) except example 09
-(20 BPM).
+Timeline records are transient traces; their host ticks are never persisted. Take segments and export records show the
+persisted, anchor-relative shapes. Constants: 48 kHz unless a generation sets a rate; host timebase 125/3 ns per tick
+(500 per frame); 120 BPM (1.5625 frames per tick, 96000 frames per 4/4 bar), but 20 BPM in example 09.
 
 Run from the repository root (Python 3.9 or later, standard library only; no app, hardware, network or plugins):
 
@@ -499,18 +473,22 @@ python3 docs/transformation/media-contract/check_media_contract.py           # v
 python3 docs/transformation/media-contract/check_media_contract.py --write   # rewrite in canonical form
 ```
 
-The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity` are rejected) and requires each file to
-round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used
+The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity` are rejected) and requires each file
+to round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used
 (`pattern` anchors as in ECMA-262, so `$` never matches before a final newline). It then replays each trace in exact
 rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and recomputing every outcome
-frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace.
-Mutation self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
-`capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls (a user stop at
-the restart boundary, a restart at loop end resuming at loop start, SMF inversion through a delayed capture's own
-anchor) must pass. Paired review regressions also cover sample overrides using musical fallback, advancing commit
-horizons and lateness budgets, unsupported cross-restart capture, duplicate declarations, restart-anchor jitter
-bounds and serialized restart obligations (both record/bump orders). A malformed file or trace reports `FAIL`,
-never a crash, and is not used for mutations.
+frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Mutation
+self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
+`capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls (a user stop at the
+restart boundary, a restart at loop end resuming at loop start, SMF inversion through a delayed capture's own anchor)
+must pass. A malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
+
+**Checker limits.** Not fully checked here; acceptance items for the #55 Swift contract tests or the named owner:
+- lateness and `asap` against the exact latency-inclusive horizon at commit; the checker only lower-bounds it (§6.1);
+- synchronous `capacity` refusal and outcome-slot reservation (M5); the stopped-transport policy (§6.2);
+- owned-note releases at locate, loop wrap, clock restart and stop (§5.1, §6.5);
+- bounded SPSC handoffs, render-thread safety and adapter-only engine types (M8, M11, §10; #64, #109);
+- the recorder's report of cross-restart captures (§9.2; #110, #112); the checker just rejects such traces.
 
 ## 16. Sources
 
