@@ -480,6 +480,11 @@ self-tests each break one rule in a valid example (for example a stale trigger f
 `capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls must pass. A malformed
 file or trace reports `FAIL`, never a crash, and is not used for mutations.
 
+Run the focused trace regressions with
+`python3 -B -m unittest discover -s docs/transformation/media-contract -p 'test_*.py'`.
+They cover declared musical-counter identities, primary render progress despite a stale secondary-clock dependency,
+and loop-bounded `nextBoundary` fallback, including a valid loop-end target. Native Swift coverage remains part of #55.
+
 **Checker limits.** Not fully checked here; acceptance items for the #55 Swift contract tests or the named owner:
 - lateness and `asap` against the exact latency-inclusive horizon at commit; the checker only lower-bounds it (§6.1);
 - synchronous `capacity` refusal and outcome-slot reservation (M5); the stopped-transport policy (§6.2);

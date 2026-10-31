@@ -308,6 +308,11 @@ class Trace:
         return i, b
 
     def run(self):
+        for counter in self.gens:
+            kind, identity = counter.split("/", 1)
+            if kind in ("transport", "musicalMap") and identity != self.mus_id:
+                self.err({}, f"{counter} must name the declared musical clock {self.mus_id}")
+                return
         records = self.doc["timeline"]
         if [r["seq"] for r in records] != list(range(1, len(records) + 1)):
             self.err({}, "timeline seq must be 1..n in order")
@@ -500,7 +505,7 @@ class Trace:
         if any(k.startswith("musicalMap/") for k in req):
             self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
         stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
-        if "sampleClock" not in stale:  # an arrival horizon of the current sample generation is render progress
+        if req[f"sampleClock/{self.primary}"] == self.gens.get(f"sampleClock/{self.primary}"):
             self.horizon = max(self.horizon, r["horizonFrame"])
         info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
                 "invalidated": False, "target": target, "expect": None}
@@ -551,9 +556,18 @@ class Trace:
                 self.err(info["rec"], "nextBoundary needs a current musical anchor")
                 return "dropped", assigned, None, False
             occ = self.boundary(self.position(horizon), grid)
-            while rnd(self.frame_of(occ)) < horizon and occ[0] <= self.position(horizon)[0] + 1:
+            last_pass = self.position(horizon)[0] + 1
+            while True:
+                if self.loop and not self.loop["startTicks"] <= occ[1] <= self.loop["endTicks"]:
+                    self.err(info["rec"], "nextBoundary target must resolve inside the active loop")
+                    return "dropped", assigned, None, True
+                frame = rnd(self.frame_of(occ))
+                if frame >= horizon:
+                    return "fired", frame, frame, True
+                if occ[0] > last_pass:
+                    self.err(info["rec"], "nextBoundary cannot resolve before the current horizon")
+                    return "dropped", assigned, None, True
                 occ = self.boundary(occ, grid, after=True)
-            return "fired", rnd(self.frame_of(occ)), rnd(self.frame_of(occ)), True
         return "dropped", assigned, None, musical
 
     def on_outcome(self, r):
