@@ -119,7 +119,8 @@ def validate(schema, value, defs, path, errors):
         if value < schema.get("minimum", value) or value > schema.get("maximum", value):
             errors.append(f"{path}: {value} out of range")
     if isinstance(value, str):
-        if len(value) < schema.get("minLength", 0) or not re.search(schema.get("pattern", ""), value):
+        pattern = re.sub(r"(?<!\\)\$", r"\\Z", schema.get("pattern", ""))  # ECMA-262 `$` never matches before "\n"
+        if len(value) < schema.get("minLength", 0) or not re.search(pattern, value):
             errors.append(f"{path}: {json.dumps(value)} violates length/pattern")
     if isinstance(value, list):
         if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", len(value)):
@@ -743,6 +744,7 @@ MUTATIONS = [
     ("08", 8, {"stopReason": "user"}, "captureStopped matches its stopReason"),
     ("08", 9, {"reason": "diskFull"}, "captureStopped matches its stopReason"),
     ("08", "clocks.musical", {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}] * 2}, "strictly increase"),
+    ("09", 2, {"ump": ["0x20903C64\n"]}, "violates length/pattern"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
