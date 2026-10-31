@@ -145,6 +145,22 @@ targets:
     dependencies:
       - target: FluxKlang
 
+  FluxKlangMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: FluxKlangMacTests
+        excludes: ["**/.DS_Store"]
+      # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
+      - path: FluxKlangTests/TestSupport.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: FluxKlangMac
+        embed: false
+
 schemes:
   FluxKlang:
     build:
@@ -168,6 +184,11 @@ schemes:
         FluxKlangMac: all
     run:
       config: Debug
+    # Hosted: FluxKlangMac.app is the test host. Execution is gated by #60 (startup isolation #51).
+    test:
+      config: Debug
+      targets:
+        - FluxKlangMacTests
     profile:
       config: Release
     analyze:
