@@ -196,17 +196,19 @@ enum LocalNetworkAccess {
 
 /// Whether launch may reconnect to the remembered WING. A launch-time unicast
 /// while the Local Network privilege is undetermined raises the system prompt
-/// (for example after a backup restore, a first launch on macOS 15+, or a new
-/// signing identity), so production reconnects only with on-device evidence
-/// that this build already reached the network after a user action.
-enum StartupReconnectPolicy {
-    static func shouldReconnect(
-        isTesting: Bool,
-        isUITesting: Bool,
-        isConnected: Bool,
-        hasLastHost: Bool,
-        hasLocalNetworkGrant: Bool
-    ) -> Bool {
-        !isTesting && !isUITesting && !isConnected && hasLastHost && hasLocalNetworkGrant
+/// (for example after a backup restore, Reset Location & Privacy, a first
+/// launch on macOS 15+, or a new signing identity). Launch reconnect is
+/// therefore opt-in (off by default), and even when opted in it still needs
+/// on-device evidence that this app already reached that host after a user action.
+struct StartupReconnectPolicy {
+    var userOptedIn: Bool
+    var isTesting: Bool
+    var isUITesting: Bool
+    var isConnected: Bool
+    var hasLastHost: Bool
+    var hasLocalNetworkGrant: Bool
+
+    var shouldReconnect: Bool {
+        userOptedIn && !isTesting && !isUITesting && !isConnected && hasLastHost && hasLocalNetworkGrant
     }
 }

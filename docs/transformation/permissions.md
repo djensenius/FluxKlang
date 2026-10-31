@@ -24,14 +24,14 @@ signed hardware is marked **Unknown**.
 | --- | --- | --- | --- |
 | Broadcast discovery | `WingDiscovery.scan` → `WingTransport.start(broadcast: true)` + `send` to each IPv4 broadcast address | UDP broadcast send and receive. iOS also requires the multicast entitlement | User taps **Scan for WING** |
 | Unicast connect (including manual IP and `.local` names) | `AppModel.connect(host:)` → `WingController.connect` → `WingTransport.start` + subscribe/GET sends | UDP unicast send; resolving a `.local` name | User picks a console, enters an IP, presses ⌘R, or runs the Connect intent |
-| Startup reconnect | `AppModel.loadStores` → `shouldReconnectOnStartup` → `connect(host: lastHost)` | UDP unicast send at launch | Automatic at launch |
+| Startup reconnect | `AppModel.loadStores` → `allowsStartupReconnect()` → `connect(host: lastHost)` | UDP unicast send at launch | Automatic at launch before this change; now only when the user opts in (see below) |
 
 Before this change, `WingTransport.start` only bound a local UDP socket, and
 binding is not a checked operation. `WingController` therefore showed
 **Connected** before anything had been sent, and later sends failed silently
 (`try?`). A denied manual-IP connect looked like a success.
 
-### Can the startup reconnect prompt at launch? Yes. It is now gated.
+### Can the startup reconnect prompt at launch? Yes. It is now opt-in and gated.
 
 `lastHost` lives in `UserDefaults.standard` (`AppPersistence.defaults`). It is
 not mirrored to iCloud KVS, but backups and device migration restore it. The
@@ -48,11 +48,37 @@ alert in these cases:
 - A Mac build with a different signing identity that shares the same sandbox
   container. TN3179 says the privilege follows the code signature.
 
-The gate is `StartupReconnectPolicy.shouldReconnect`, called through
+**Policy: launch auto-reconnect is opt-in and off by default.**
+
+- Settings › Connection has the toggle **Reconnect to last WING at launch**. It
+  is stored in `AppPersistence.defaults` under `fluxklang.reconnectAtLaunch`,
+  defaults to `false`, and is exposed as `AppModel.reconnectsAtLaunch`. The
+  footnote says: "FluxKlang connects only after you tap Connect. If you turn
+  this on, the app reconnects when it opens; after a privacy reset, the system
+  may ask for Local Network access at launch."
+- With the toggle off (the default), launch performs **no network activity at
+  all**. "No startup prompts" therefore holds in every case above, including
+  after Reset Location & Privacy.
+- One-tap reconnect paths remain: the status card's "Last WING" row,
+  ConnectionView pre-filled with `lastHost` and its **Retry** button, and ⌘R
+  (`toggleConnection`).
+
+`StartupReconnectPolicy.shouldReconnect` is evaluated through
 `AppModel.allowsStartupReconnect(evidence:isTesting:isUITesting:)` in
-`Shared/Views/App/AppModel+Permissions.swift`. Launch reconnects only when
-`LocalNetworkGrantEvidence` shows that **this app** already connected to **this
-host** on **this device** after a user action.
+`Shared/Views/App/AppModel+Permissions.swift`. Launch reconnects only when all
+of these hold:
+
+- the user opted in
+- the app isn't running tests or UI tests
+- it isn't already connected
+- `lastHost` exists
+- `LocalNetworkGrantEvidence` shows that **this app** already connected to
+  **this host** on **this device** after a user action
+
+The evidence gate stays even when opted in, so a restored or migrated device
+still doesn't prompt at launch. Reset Location & Privacy doesn't remove the
+evidence file, so an opted-in user may see the alert at launch after a reset.
+That is the documented, consented case named in the footnote.
 
 - The record is keyed on bundle ID + host only. TN3179 ties the privilege to
   the install and code signature, not to `CFBundleVersion`, so app updates
@@ -66,9 +92,10 @@ host** on **this device** after a user action.
   attempt. "No route" failures (Wi-Fi off) keep it.
 - **Retry**, **Reconnect to …** and ⌘R still work.
 
-**Release note:** the first launch of this build doesn't auto-reconnect,
-because no evidence exists yet. Connect once and later launches reconnect as
-before.
+**Release note:** FluxKlang no longer reconnects to the last WING at launch
+by default. To get it back, turn on Settings › Connection › Reconnect to last
+WING at launch. After that, connect once on this device so the on-device
+evidence exists; later launches then reconnect.
 
 Residual risks (**Unknown**):
 
@@ -180,7 +207,9 @@ purposes" (https://developer.apple.com/app-store/review/guidelines/#2.5.4).
 - `FluxKlangTests/PermissionStateTests` covers:
   - user-facing reasons, the errno mapping, and the exact wording for
     `ENETUNREACH`, `EHOSTUNREACH` and `EACCES`
-  - the iOS discovery gate and the startup reconnect policy
+  - the iOS discovery gate and the startup reconnect policy: opt-in required
+    and off by default, evidence still required when opted in, and test and UI
+    test hosts never reconnect
   - the AppModel startup gate with `isTesting: false` and real evidence files,
     in both directions
   - grant evidence: scoped to bundle ID and host, its directory excluded from
@@ -243,7 +272,10 @@ Security › Local Network. The remove button exists on macOS 27.2 and later.
    1. Turn on FluxKlang under System Settings › Privacy & Security › Local
       Network, then connect.
    2. Expect **Connected** and live values.
-   3. Quit and relaunch. It reconnects without a prompt, because the evidence
+   3. Quit and relaunch with the setting off (the default). It does **not**
+      reconnect, and shows no prompt.
+   4. Turn on Settings › Connection › **Reconnect to last WING at launch**.
+      Quit and relaunch. It reconnects without a prompt, because the evidence
       file now exists.
 7. **M6, entitlements:** `codesign -d --entitlements - FluxKlangMac.app` lists
    `device.audio-input`, `device.microphone`, `network.client` and
@@ -268,11 +300,15 @@ Network privacy, so use a real device.
 5. **I5, allow:**
    1. Turn on Settings › Privacy & Security › Local Network › FluxKlang.
    2. Connect. It succeeds.
-   3. Relaunch. It reconnects without a prompt.
+   3. Relaunch with the setting off (the default). It does **not** reconnect,
+      and shows no prompt.
+   4. Turn on Settings › Connection › **Reconnect to last WING at launch**,
+      then relaunch. It reconnects without a prompt.
 6. **I6, restore:**
    1. Restore a backup made after I5 onto a second device, or erase and restore.
-   2. Launch. `lastHost` is shown, but nothing reconnects and no alert appears
-      until the user taps Connect.
+   2. Turn the setting on if the restore didn't keep it, then launch. `lastHost`
+      is shown, but nothing reconnects (the evidence file isn't restored) and no
+      alert appears until the user taps Connect.
 7. **I7, Shortcut:**
    1. Start from a fresh install, so the privilege is undetermined.
    2. Run the Connect to WING shortcut with the WING's IP address.
@@ -281,8 +317,15 @@ Network privacy, so use a real device.
    3. Tap **Don't Allow**. Expect the shortcut dialog "Couldn't connect to <ip>.
       Can't reach <ip>. …", never "Connected".
 8. **I8, release note:** install this build over an older build that had
-   auto-reconnected. Expect no auto-reconnect on the first launch, then
-   auto-reconnect on later launches after one manual connect.
+   auto-reconnected. Expect no auto-reconnect and no prompt at launch.
+   Auto-reconnect returns only after you turn the setting on and connect once.
+9. **I9, privacy reset:** connect successfully once, then run Settings ›
+   General › Transfer or Reset iPhone › Reset › Reset Location & Privacy.
+   1. With the setting **off**, relaunch. Expect no Local Network alert and no
+      reconnect.
+   2. With the setting **on**, relaunch. A Local Network alert **may** appear at
+      launch. This is the documented, consented case in the footnote. Record
+      whether it appeared.
 
 ## Sources
 

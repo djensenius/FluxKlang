@@ -103,14 +103,15 @@ struct PermissionStateTests {
         #endif
     }
 
-    @Test func startupReconnectRequiresOnDeviceGrantEvidence() {
-        func allowed(testing: Bool = false, uiTesting: Bool = false, connected: Bool = false,
-                     lastHost: Bool = true, grant: Bool = true) -> Bool {
-            StartupReconnectPolicy.shouldReconnect(
-                isTesting: testing, isUITesting: uiTesting, isConnected: connected,
-                hasLastHost: lastHost, hasLocalNetworkGrant: grant)
+    @Test func startupReconnectRequiresOptInAndOnDeviceGrantEvidence() {
+        func allowed(optedIn: Bool = true, testing: Bool = false, uiTesting: Bool = false,
+                     connected: Bool = false, lastHost: Bool = true, grant: Bool = true) -> Bool {
+            StartupReconnectPolicy(
+                userOptedIn: optedIn, isTesting: testing, isUITesting: uiTesting, isConnected: connected,
+                hasLastHost: lastHost, hasLocalNetworkGrant: grant).shouldReconnect
         }
         #expect(allowed())
+        #expect(!allowed(optedIn: false), "Launch reconnect is opt-in")
         #expect(!allowed(grant: false), "A synced/restored host without a grant would prompt at launch")
         #expect(!allowed(testing: true))
         #expect(!allowed(uiTesting: true))
@@ -118,21 +119,35 @@ struct PermissionStateTests {
         #expect(!allowed(lastHost: false))
     }
 
-    @Test func startupGateReadsInjectedEvidenceOutsideTestHosts() throws {
+    @Test func startupGateIsOffByDefaultAndStillNeedsEvidenceWhenOptedIn() throws {
         let evidence = Self.temporaryEvidence()
         defer { try? FileManager.default.removeItem(at: evidence.directory) }
         let model = AppModel(hardware: Self.factories(evidence: evidence))
         let savedHost = model.lastHost
-        defer { model.lastHost = savedHost }
+        let savedOptIn = AppPersistence.defaults.object(forKey: AppModel.reconnectAtLaunchKey)
+        defer {
+            model.lastHost = savedHost
+            AppPersistence.defaults.set(savedOptIn, forKey: AppModel.reconnectAtLaunchKey)
+        }
+        AppPersistence.defaults.removeObject(forKey: AppModel.reconnectAtLaunchKey)
         model.lastHost = Self.host
+        evidence.recordGrant(for: Self.host)
         func allowed() -> Bool { model.allowsStartupReconnect(isTesting: false, isUITesting: false) }
 
-        #expect(!allowed(), "No on-device evidence: launch must not touch the network")
+        #expect(!model.reconnectsAtLaunch, "Default is off")
+        #expect(!allowed(), "Default launch performs no network activity, even with evidence and a last host")
+
+        model.reconnectsAtLaunch = true
+        #expect(AppPersistence.defaults.bool(forKey: "fluxklang.reconnectAtLaunch"))
+        #expect(allowed())
+        evidence.clear()
+        #expect(!allowed(), "Opted in without on-device evidence: launch must not touch the network")
         evidence.recordGrant(for: "192.0.2.99")
         #expect(!allowed(), "Evidence for another host must not count")
         evidence.recordGrant(for: Self.host)
         #expect(allowed())
         #expect(!model.allowsStartupReconnect(isTesting: true, isUITesting: false))
+        #expect(!model.allowsStartupReconnect(isTesting: false, isUITesting: true))
         #expect(!model.allowsStartupReconnect())
     }
 

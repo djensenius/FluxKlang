@@ -3,7 +3,8 @@
 //  FluxKlang
 //
 //  Keeps launch prompt-free: the remembered WING is reconnected at startup only
-//  when this app already reached it after a user action on this device. The
+//  when the user opted in and this app already reached it after a user action
+//  on this device. The
 //  live connect path records that evidence on success and drops it after a
 //  possibly-denied probe for the same host.
 //
@@ -11,19 +12,29 @@
 import Foundation
 
 extension AppModel {
+    static let reconnectAtLaunchKey = "fluxklang.reconnectAtLaunch"
+
+    /// "Reconnect to last WING at launch". Off by default: the default launch
+    /// performs no network activity at all.
+    var reconnectsAtLaunch: Bool {
+        get { AppPersistence.defaults.bool(forKey: Self.reconnectAtLaunchKey) }
+        set { AppPersistence.defaults.set(newValue, forKey: Self.reconnectAtLaunchKey) }
+    }
+
     func allowsStartupReconnect(
         evidence: LocalNetworkGrantEvidence? = nil,
         isTesting: Bool = AppPersistence.isTesting,
         isUITesting: Bool = AcceptanceLaunchConfiguration.isUITesting
     ) -> Bool {
         let evidence = evidence ?? hardware.localNetworkEvidence
-        return StartupReconnectPolicy.shouldReconnect(
+        return StartupReconnectPolicy(
+            userOptedIn: reconnectsAtLaunch,
             isTesting: isTesting,
             isUITesting: isUITesting,
             isConnected: isConnected,
             hasLastHost: lastHost != nil,
             hasLocalNetworkGrant: lastHost.map(evidence.hasGrant(for:)) ?? false
-        )
+        ).shouldReconnect
     }
 
     /// The controller for `connect(host:)`. Its transport runs the Local Network
