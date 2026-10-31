@@ -31,15 +31,11 @@ def err(where, message):
     errors.append(f"{where}: {message}")
 
 
-def walk(value, key=None):
-    if isinstance(value, dict):
-        for k, v in value.items():
-            yield from walk(v, k)
-    elif isinstance(value, list):
-        for item in value:
-            yield from walk(item, key)
-    else:
-        yield key, value
+def walk(value):
+    """(key, leaf) pairs; items of a list keep the list's key."""
+    for obj in objects(value):
+        for k, v in obj.items():
+            yield from ((k, x) for x in (v if isinstance(v, list) else [v]) if not isinstance(x, (dict, list)))
 
 
 def objects(value):

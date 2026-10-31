@@ -66,16 +66,9 @@
     "coordinateSpace": "room-normalized-v0: x -1 (left) to 1 (right), y -1 (rear) to 1 (front)",
     "legacyImport": "x' = 2x - 1, y' = 1 - 2y from the 0...1 rear-growing space; blur, width offset and clamp rescaled (spatial.md)",
     "layouts": [
-      {
-        "id": "lay.quad",
-        "label": "Quad (synthetic)",
-        "speakers": [
-          {"id": "spk.fl", "label": "Front Left", "x": -1, "y": 1},
-          {"id": "spk.fr", "label": "Front Right", "x": 1, "y": 1},
-          {"id": "spk.rl", "label": "Rear Left", "x": -1, "y": -1},
-          {"id": "spk.rr", "label": "Rear Right", "x": 1, "y": -1}
-        ]
-      }
+      {"id": "lay.quad", "label": "Quad (synthetic)", "speakers": [
+        {"id": "spk.fl", "label": "Front Left", "x": -1, "y": 1}, {"id": "spk.fr", "label": "Front Right", "x": 1, "y": 1},
+        {"id": "spk.rl", "label": "Rear Left", "x": -1, "y": -1}, {"id": "spk.rr", "label": "Rear Right", "x": 1, "y": -1}]}
     ],
     "sources": [
       {"id": "src.synth", "port": "prt.space.in", "layout": "lay.quad", "label": "Soft Synth", "x": 0.2, "y": 0.4, "width": 0.5}

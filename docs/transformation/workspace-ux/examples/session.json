@@ -47,16 +47,11 @@
     {"name": "bluetoothMIDI", "state": "notDetermined"}
   ],
   "nodeStatus": [
-    {"node": "nod.keys", "state": "mapped", "route": "rte.keys-in"},
-    {"node": "nod.mic", "state": "mapped", "route": "rte.mic-in"},
-    {"node": "nod.pads", "state": "stale", "route": "rte.pads"},
-    {"node": "nod.synth", "state": "ready"},
-    {"node": "nod.verb", "state": "ready"},
-    {"node": "nod.echo", "state": "missing"},
-    {"node": "nod.mains", "state": "mapped", "route": "rte.mains"},
-    {"node": "nod.space", "state": "lostMuted", "route": "rte.space"},
-    {"node": "nod.cue", "state": "unmapped"},
-    {"node": "nod.ch7", "state": "stale"}
+    {"node": "nod.keys", "state": "mapped", "route": "rte.keys-in"}, {"node": "nod.mic", "state": "mapped", "route": "rte.mic-in"},
+    {"node": "nod.pads", "state": "stale", "route": "rte.pads"}, {"node": "nod.synth", "state": "ready"},
+    {"node": "nod.verb", "state": "ready"}, {"node": "nod.echo", "state": "missing"},
+    {"node": "nod.mains", "state": "mapped", "route": "rte.mains"}, {"node": "nod.space", "state": "lostMuted", "route": "rte.space"},
+    {"node": "nod.cue", "state": "unmapped"}, {"node": "nod.ch7", "state": "stale"}
   ],
   "telemetry": [
     {"target": "rte.mains", "kind": "signalMeter", "source": "measured", "lease": "lse.host-a",

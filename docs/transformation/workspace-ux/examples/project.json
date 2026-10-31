@@ -21,21 +21,9 @@
   ],
   "rolesNote": "Roles are portable, inert intent. Host-local device bindings live only in devices.json (not synced).",
   "patches": [
-    {
-      "id": "pat.verse",
-      "label": "Verse",
-      "graph": "gph.main",
-      "variations": [
-        {
-          "id": "var.verse-wet",
-          "label": "Verse, wetter",
-          "deltas": [
-            {"parameter": "par.verb.mix", "value": 45},
-            {"parameter": "par.space.width", "value": 0.8}
-          ]
-        }
-      ]
-    }
+    {"id": "pat.verse", "label": "Verse", "graph": "gph.main", "variations": [
+      {"id": "var.verse-wet", "label": "Verse, wetter",
+       "deltas": [{"parameter": "par.verb.mix", "value": 45}, {"parameter": "par.space.width", "value": 0.8}]}]}
   ],
   "assets": [
     {"id": "ast.verse-chart", "kind": "userChart", "label": "Verse chart (user-supplied)", "reference": "bookmarkStale"}
