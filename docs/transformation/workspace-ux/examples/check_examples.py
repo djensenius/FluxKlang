@@ -416,8 +416,9 @@ def check_parameters(docs):
     presence = {d["id"]: d["presence"] for d in docs["deviceCapability"]["devices"]}
     control_device = {c["id"]: c["device"] for c in docs["deviceCapability"]["controls"]}
     for p in params.values():
-        if not p["min"] <= p["value"] <= p["max"] or p.get("ceiling", p["max"]) > p["max"]:
-            err(p["id"], "value/ceiling outside range")
+        ceiling = p.get("ceiling", p["max"])
+        if not p["min"] <= ceiling <= p["max"] or not p["min"] <= p["value"] <= ceiling:
+            err(p["id"], f"need min <= value <= ceiling <= max (value {p['value']}, ceiling {ceiling})")
     for b in docs["parameter"]["bindings"]:
         present = presence.get(control_device.get(b["control"])) == "present"
         if (b.get("state") == "active") != present or (not present and b["pickup"]["state"] != "unavailable"):
