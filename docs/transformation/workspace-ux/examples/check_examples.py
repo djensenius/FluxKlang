@@ -151,10 +151,14 @@ def check_graph(graph):
             err("graph", f"{node['id']} capability level differs from the graph level")
     adjacency = {n: set() for n in nodes}
     for edge in graph["edges"]:
-        verdict = compatible(ports, edge["from"], edge["to"], edge.get("conversion"))
+        verdict, fb = compatible(ports, edge["from"], edge["to"], edge.get("conversion")), edge.get("feedback")
+        causal = (isinstance(fb, dict) and fb.get("delay") == "oneBlock"
+                  and type(fb.get("gainCeilingDb")) in (int, float) and fb["gainCeilingDb"] <= 0)
+        if "feedback" in edge and not causal:
+            err("graph", f"{edge['id']} feedback needs a oneBlock delay and gainCeilingDb <= 0")
         if verdict != "ok":
             err("graph", f"{edge['id']} is invalid: {verdict}")
-        elif "feedback" not in edge:
+        elif not causal:
             adjacency[ports[edge["from"]]["node"]].add(ports[edge["to"]]["node"])
     state = {}
 
