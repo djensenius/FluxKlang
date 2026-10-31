@@ -4,7 +4,7 @@
   "covers": ["clockRestart", "noStaleReplay", "cancellation"],
   "notes": [
     "Host timebase 125/3 ns per tick (24 MHz): 500 host ticks per frame at 48 kHz, 250 at 96 kHz.",
-    "previousFrame 144000 converts at generation 1's 48 kHz to tick 92160, the last rendered position; the transport resumes there without catch-up.",
+    "previousFrame 144000 converts at generation 1's 48 kHz to tick 92160, the last rendered position; the transport resumes there without catch-up. The transport bump may precede the clockRestart record: the resume still uses the anchor and map from before the sampleClock bump.",
     "str.bed's frame order restarts with the new generation (frame 100 after frame 120000); its streamSeq keeps increasing."
   ],
   "clocks": {
@@ -23,9 +23,9 @@
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.loop-b", "originHostTicks": 2460000000, "horizonFrame": 120256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Resolves to bar 3 (frame 192000); pending."},
     {"seq": 3, "kind": "dispatch", "frame": 120000, "lane": "content", "stream": "str.bed", "streamSeq": 41, "event": "bed loop block"},
     {"seq": 4, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "rateChange", "nominalRate": 96000},
-    {"seq": 5, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "previousFrame": 144000},
-    {"seq": 6, "kind": "outcome", "triggerId": "trg.1", "result": "cancelled", "reason": "sampleClock", "note": "Never re-targeted onto the new clock."},
-    {"seq": 7, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
+    {"seq": 5, "kind": "outcome", "triggerId": "trg.1", "result": "cancelled", "reason": "sampleClock", "note": "Never re-targeted onto the new clock."},
+    {"seq": 6, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
+    {"seq": 7, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "previousFrame": 144000},
     {"seq": 8, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "transport": 2, "musicalTicks": 92160},
     {"seq": 9, "kind": "dispatch", "frame": 100, "lane": "content", "stream": "str.bed", "streamSeq": 42, "event": "bed loop block"},
     {"seq": 10, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.loop-b", "originHostTicks": 2470000000, "horizonFrame": 12512, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Pressed before the restart, delivered after it."},

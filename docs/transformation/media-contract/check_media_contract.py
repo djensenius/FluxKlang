@@ -216,7 +216,7 @@ class Trace:
         self.anchor, self.first_anchor, self.musical = {}, {}, None
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq = set(), None, {}
-        self.bumps, self.protocols, self.resume = Counter(), {}, None
+        self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, (None, None)
 
     def err(self, rec, msg):
         self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
@@ -386,8 +386,8 @@ class Trace:
             clock = counter.split("/", 1)[1]
             self.rates[(clock, r["to"])] = r.get("nominalRate", self.rate(clock))
             self.pending_restart.add(clock)
-            if clock == self.primary:  # frames restart with the generation; per-stream streamSeq still increases
-                self.last_dispatch = None
+            if clock == self.primary:  # frames restart with the generation; the resume tick uses the old anchor and map
+                self.last_dispatch, self.restart_snap = None, (self.musical, self.map)
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
         if kind == "transport":
@@ -409,8 +409,8 @@ class Trace:
                 self.err(r, "clockRestart without a sample clock generation change")
             if "hostTicks" not in r:
                 self.err(r, "clockRestart records the host ticks at which the new generation starts")
-            elif "previousFrame" in r and self.musical:
-                self.resume = rnd(self.ticks_at_frame(r["previousFrame"]))
+            elif "previousFrame" in r and clock == self.primary and self.restart_snap[0]:
+                self.resume = rnd(self.under(self.restart_snap, self.ticks_at_frame, r["previousFrame"]))
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
@@ -596,13 +596,17 @@ class Trace:
         if r["effective"] == "midi2" and mt == 4:
             self.evidence.add("midi2Native")
 
-    def smf_frame(self, snap, frame, step):
-        """Frame an SMF tick at `step` resolution reconstructs through the capture-time musical anchor and map."""
+    def under(self, snap, fn, *args):
+        """fn against a (musical anchor, map) snapshot: capture time for SMF export, pre-restart for the resume tick."""
         live, (self.musical, self.map) = (self.musical, self.map), snap
         try:
-            return rnd(self.frame_of_ticks(rnd(self.ticks_at_frame(frame) / step) * step))
+            return fn(*args)
         finally:
             self.musical, self.map = live
+
+    def smf_frame(self, snap, frame, step):
+        """Frame an SMF tick at `step` resolution reconstructs through the capture-time musical anchor and map."""
+        return self.under(snap, lambda: rnd(self.frame_of_ticks(rnd(self.ticks_at_frame(frame) / step) * step)))
 
     def on_export(self, r):
         events = [(c, w, snap) for c, w, snap in self.captures if c["stream"] in r["streams"]]

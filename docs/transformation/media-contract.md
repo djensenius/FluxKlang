@@ -131,8 +131,9 @@ The policy for a device restart, rate change, configuration change or wake:
 1. Bump `sampleClock` and record a `clockRestart` discontinuity before the first anchor of the new generation. It
    carries the new generation's start `hostTicks` and `previousFrame`, the end of the frames rendered in the old one.
 2. Cancel every pending trigger that required the old generation.
-3. Bump `transport` (`clockRestart`). The transport resumes at the musical position of `previousFrame`, the last
-   **rendered** position, converted at the old generation's rate, with `loopIteration` 0. There is no catch-up.
+3. Bump `transport` (`clockRestart`), before or after the `clockRestart` record. The transport resumes at the musical
+   position of `previousFrame`, the last **rendered** position, converted through the musical anchor and map in force
+   at the `sampleClock` bump (so at the old rate), with `loopIteration` 0. There is no catch-up.
 4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
@@ -434,7 +435,7 @@ Coordinator follow-ups (proposed, not done here):
 
 | Example | Covers |
 |---|---|
-| [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart at a new rate, resume position, frame order across the restart, cancellation, stale-trigger rejection |
+| [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart at a new rate, resume position with the transport bump first, frame order across the restart, cancellation, stale-trigger rejection |
 | [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop, next boundary on a trigger's grid |
 | [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, same-frame ordering, locate, re-preparation |
 | [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo and meter edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
