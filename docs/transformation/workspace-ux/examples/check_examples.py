@@ -52,38 +52,38 @@ def objects(value):
 
 
 def check_history(where, obj):
-    revs = [h.get("revision") if isinstance(h, dict) else None for h in obj.get("history") or []]
+    hist = obj.get("history")
+    revs = [h.get("revision") if isinstance(h, dict) else None for h in hist] if isinstance(hist, list) else []
     if not revs or any(not isinstance(r, int) for r in revs) or revs != sorted(set(revs)):
         err(where, f"history revisions must be strictly increasing integers: {revs}")
     elif revs[-1] != obj.get("revision"):
         err(where, f"revision {obj.get('revision')} != last history revision {revs[-1]}")
 
 
+def load_file(path, docs):
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        return err(path.name, "top level must be a JSON object")
+    if doc.get("synthetic") is not True:
+        err(path.name, "must declare synthetic: true")
+    for field in ("contract", "schemaVersion", "id", "revision", "history"):
+        if field not in doc:
+            err(path.name, f"missing {field}")
+    for obj in objects(doc):
+        if "history" in obj:
+            check_history(f"{path.name} {obj.get('id', '')}".strip(), obj)
+    name = doc.get("contract")
+    if not isinstance(name, str) or name in docs:
+        return err(path.name, f"contract must be a unique string, got {name!r}"
+                   + (f" (also in {docs[name]['_file']})" if isinstance(name, str) else ""))
+    doc["_file"] = path.name
+    docs[name] = doc
+
+
 def load():
     docs = {}
     for path in sorted(Path(__file__).parent.glob("*.json")):
-        try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            err(path.name, f"invalid JSON: {exc}")
-            continue
-        if not isinstance(doc, dict):
-            err(path.name, "top level must be a JSON object")
-            continue
-        if doc.get("synthetic") is not True:
-            err(path.name, "must declare synthetic: true")
-        for field in ("contract", "schemaVersion", "id", "revision", "history"):
-            if field not in doc:
-                err(path.name, f"missing {field}")
-        for obj in objects(doc):
-            if "history" in obj:
-                check_history(f"{path.name} {obj.get('id', '')}".strip(), obj)
-        name = doc.get("contract")
-        if name in docs:
-            err(path.name, f"duplicate contract {name!r} (also in {docs[name]['_file']})")
-            continue
-        doc["_file"] = path.name
-        docs[name] = doc
+        guarded(path.name, load_file, path, docs)
     missing = EXPECTED - set(docs)
     if missing:
         err("examples", f"missing contracts: {sorted(missing)}")
@@ -446,8 +446,8 @@ def main():
         ports = guarded("graph", check_graph, docs["graph"]) or {}
         roles, forms = guarded("roles", check_roles, docs) or ({}, set())
         sessions = guarded("sessions", host_sessions, docs) or []
-        if not any(p["id"] == s["session"]["host"] and p["formFactor"] == "phone"
-                   for s in sessions for p in s["session"]["participants"]):
+        if not guarded("examples", lambda: any(p["id"] == s["session"]["host"] and p["formFactor"] == "phone"
+                                               for s in sessions for p in s["session"]["participants"])):
             err("examples", "examples must include a phone running as a full host session")
         for hs in sessions:
             guarded(hs["name"], check_authority, hs)
