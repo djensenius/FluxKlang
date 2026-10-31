@@ -1,6 +1,6 @@
 # Perform
 
-Owner: #102 performance-panels (bindings #87, Learn #88, meters #66, shell #99). Examples:
+Owner: #102 performance-panels (bindings #87, Learn #88, meter taps #66, telemetry transport #64, shell #99). Examples:
 `parameters.json`, `project.json` `patches`, `commands.json` `cmd.0001`/`cmd.0005`/`cmd.0008`,
 `session.json` `telemetry`. Contract owner: #55.
 
@@ -19,7 +19,7 @@ Prepared recalls switch patches or variations without rebuilding the graph.
 | Verb Mix              | Room Size             | Mains Level           | Space Width               |
 | 30 %                  | 0.50                  | -8.0 dB  (ceiling 0)  | 0.50                      |
 | [====------]          | [=====-----]          | [=======---]          | [=====-----]              |
-| Knob 1 - engaged      | Learn: awaiting review| Encoder 2 - relative  | Fader 3 - WAITING 0.20    |
+| Knob 1 - STALE (Ctl A)| Learn: awaiting review| Encoder 2 - STALE     | Ctl B Fader 3 WAITING 0.20|
 | Signal: no route      | Signal: no route      | Signal: -14.5 dBFS    | Signal: Unavailable       |
 +-----------------------+-----------------------+-----------------------+---------------------------+
 | Mic Trim (interface setting)  20 dB   Hazardous: changes need authorization     [Set value...]    |
@@ -36,8 +36,9 @@ signal meter (`par.mains.gain` telemetry is `faderTravelOnly` → Unavailable).
 |---|---|---|
 | Label, value, unit | Mains Level, −8.0, dB | "Mains Level, minus 8 decibels, adjustable" |
 | Range and taper | −120…+6, ceiling 0, audio taper | Value hint: "Ceiling 0 dB" |
-| Binding badge | Encoder 2, relative (`bnd.enc2-mains`) | Custom action "Show binding" |
+| Binding badge | Encoder 2 on Controller A: Stale (`bnd.enc2-mains`) | Custom action "Show binding" |
 | Pickup | Waiting: hardware 0.20, value 0.50 (`bnd.fader3-width`) | Announced once: "Fader 3 waiting for pickup" |
+| Controller feedback | Fader 3: unsupported by device; Knob 1: unavailable (stale) | Read in "Show binding" |
 | Meter | Measured value or "Unavailable" with a reason | "Signal unavailable: device missing" |
 | Class | Live / Hazardous | Hazardous adds "requires authorization" |
 
@@ -54,6 +55,14 @@ signal meter (`par.mains.gain` telemetry is `faderTravelOnly` → Unavailable).
 
 Numeric entry clamps to range and ceiling, shows the unit, and says what will happen
 ("Clamped to ceiling 0 dB"). It never silently rounds a typed value.
+
+## Bindings and controller feedback
+
+Bindings are discoverable without touching hardware. "Bindings..." (Command-Shift-B, proposed) opens a list with
+one row per binding: control, device and presence, target, group, pickup mode and state, and feedback
+(`Sends feedback`, `Unsupported by device`, `Unavailable: controller stale`). Each cell's "Show binding" action
+reads the same text. Controller A (`dev.ctl-a`) is stale, so its bindings stay listed as **Stale**, send no
+input and receive no feedback until the device is seen again (`dgn.pads-stale` offers Rescan).
 
 ## Edit versus Perform
 
@@ -84,7 +93,8 @@ partial binding behind.
 
 | State | Trigger (example) | Cell shows | Input result |
 |---|---|---|---|
-| Engaged | `bnd.knob1-mix` | Binding badge | `accepted`, parameter rev +1 (`cmd.0001`) |
+| Engaged | `bnd.fader3-width` after pickup catches | Binding badge | `accepted`, parameter rev +1 |
+| Stale controller | `bnd.knob1-mix`, `bnd.enc2-mains` | "STALE" badge; on-screen control still works | No input from the device; host UI edits accepted (`cmd.0001`) |
 | Waiting for pickup | hardware 0.20 vs value 0.50 | "Waiting 0.20 → 0.50" | `heldForPickup` (`cmd.0005`) |
 | Hazardous | `par.mic.trim` | Lock + "Set value..." | `needsAuthorization` (`cmd.0008`), sheet bound to epoch |
 | No target | Node removed in a draft | "No target in active rev" | Disabled with reason |

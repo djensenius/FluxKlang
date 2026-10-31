@@ -8,7 +8,7 @@
   "revision": 7,
   "history": [
     {"revision": 6, "note": "Rig confirmed on previous launch"},
-    {"revision": 7, "note": "Interface B not found; Controller A not seen since previous session"}
+    {"revision": 7, "note": "Interface B not found; Controller A not seen since previous session; Controller B present"}
   ],
   "devices": [
     {"id": "dev.iface-a", "kind": "audioInterface", "label": "Interface A (synthetic)",
@@ -20,24 +20,26 @@
     {"id": "dev.ctl-a", "kind": "midiController", "label": "Controller A (synthetic)",
      "identity": {"uid": "SYNTHETIC-UID-C", "evidence": ["endpointUID"]},
      "presence": "stale", "lastSeen": "previousSession"},
+    {"id": "dev.ctl-b", "kind": "midiController", "label": "Controller B (synthetic)",
+     "identity": {"uid": "SYNTHETIC-UID-D", "evidence": ["endpointUID"]}, "presence": "present"},
     {"id": "dev.console", "kind": "consoleCompatibility", "label": "Console (Advanced compatibility)",
      "presence": "notLeased", "note": "Console local connector numbers are not interface channel numbers."}
   ],
   "controls": [
     {"id": "ctl.knob-1", "device": "dev.ctl-a", "kind": "knob", "message": "cc", "encoding": "absolute"},
     {"id": "ctl.enc-2", "device": "dev.ctl-a", "kind": "encoder", "message": "cc", "encoding": "twosComplement"},
-    {"id": "ctl.fader-3", "device": "dev.ctl-a", "kind": "fader", "message": "cc", "encoding": "absolute"},
-    {"id": "ctl.fader-4", "device": "dev.ctl-a", "kind": "fader", "message": "cc", "encoding": "absolute"},
-    {"id": "ctl.knob-5", "device": "dev.ctl-a", "kind": "knob", "message": "cc", "encoding": "absolute"}
+    {"id": "ctl.fader-3", "device": "dev.ctl-b", "kind": "fader", "message": "cc", "encoding": "absolute"},
+    {"id": "ctl.fader-4", "device": "dev.ctl-b", "kind": "fader", "message": "cc", "encoding": "absolute"},
+    {"id": "ctl.knob-5", "device": "dev.ctl-b", "kind": "knob", "message": "cc", "encoding": "absolute"}
   ],
   "capabilities": [
-    {"id": "cap.audio-in-3", "label": "At least 3 audio inputs", "providedBy": ["dev.iface-a"], "status": "available"},
-    {"id": "cap.audio-out-2", "label": "At least 2 audio outputs", "providedBy": ["dev.iface-a"], "status": "available"},
-    {"id": "cap.audio-out-4", "label": "4 spatial outputs", "providedBy": ["dev.iface-b"], "status": "unavailable"},
-    {"id": "cap.midi-in", "label": "MIDI controller input", "providedBy": ["dev.ctl-a"], "status": "stale"},
-    {"id": "cap.au-effect", "label": "Audio Unit effect hosting", "providedBy": ["per.host-a"], "status": "available"},
-    {"id": "cap.au-instrument", "label": "Audio Unit instrument hosting", "providedBy": ["per.host-a"], "status": "available"},
-    {"id": "cap.plugin.tape-echo", "label": "Tape Echo plugin (placeholder identity)", "providedBy": [], "status": "missing"}
+    {"capability": "cap.audio-in-3", "providedBy": ["dev.iface-a"], "status": "available"},
+    {"capability": "cap.audio-out-2", "providedBy": ["dev.iface-a"], "status": "available"},
+    {"capability": "cap.audio-out-4", "providedBy": ["dev.iface-b"], "status": "unavailable"},
+    {"capability": "cap.midi-in", "providedBy": ["dev.ctl-a", "dev.ctl-b"], "status": "available"},
+    {"capability": "cap.au-effect", "providedBy": ["per.host-a"], "status": "available"},
+    {"capability": "cap.au-instrument", "providedBy": ["per.host-a"], "status": "available"},
+    {"capability": "cap.plugin.tape-echo", "providedBy": [], "status": "missing"}
   ],
   "routes": [
     {"id": "rte.keys-in", "role": "rol.keys-in", "device": "dev.iface-a", "channels": [0, 1], "binding": "confirmed"},

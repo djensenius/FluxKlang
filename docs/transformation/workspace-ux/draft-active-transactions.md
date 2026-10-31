@@ -1,8 +1,8 @@
 # Draft versus Active Transactions
 
 Owner: #62 host-authority-transactions (draft ops #54, wiring diffs #101, review container #99,
-assistant drafts #37/#119). Examples: `transactions.json`, `commands.json`, `graph.json` and
-`project.json` histories.
+assistant drafts #37/#119). Examples: `transactions.json`, `commands.json`, `phone-host.json` `trace`,
+`graph.json` and `project.json` histories.
 
 ## Lifecycle
 
@@ -36,7 +36,9 @@ stateDiagram-v2
 | acknowledge | Reports the real outcome; persists the project revision | Claims Verified without evidence | `txn.wire-mic` → project rev 12 |
 
 Any change to the draft, the active revision or the host epoch invalidates an authorization. Review
-then starts again from validate.
+then starts again from validate. Each host session authorizes only its own live graph: Host A commits
+`txn.wire-mic`, while `dft.phone-cue` can only be activated by Host B on the phone's graph. Writing either
+back to the shared project file is a coordinated save (#123).
 
 ## Review sheet
 
@@ -72,8 +74,9 @@ then starts again from validate.
 | `txn.old-base` (`dft.old-base`) | stale | "Based on rev 42; active is 43" with [Rebase] |
 | `txn.bad-wire` | rejected at validate | Row error on `prt.verb.mod`; draft kept for editing |
 | `txn.add-verb2` | prepare failed | "Room Verb 2 did not load. Running set unchanged." [Retry] [Edit draft] |
-| `txn.assistant-cue` | awaiting review | Review sheet above; assistant badge |
-| `dft.phone-cue` | draft on phone host | `cmd.0102` → `reviewRequired`: same sheet as any host |
+| `txn.assistant-cue` | awaiting review | Review sheet above; badge "Proposed from your request" (no tools) |
+| `dft.assistant-space` | draft from `dgn.space-lost` | Badge "Proposed from diagnostic" (read-only snapshot tools); no transaction yet |
+| `dft.phone-cue` | draft in the phone's own session | `cmd.0102` → `reviewRequired`: same sheet, authorized by Host B |
 
 ## Policy by command class
 
@@ -82,7 +85,7 @@ then starts again from validate.
 | live | No | Scoped role policy | `cmd.0001` accepted, parameter rev 19 |
 | structural | Yes | Explicit review | `cmd.0101`/`cmd.0102` |
 | hazardous | Single change, reviewed | Explicit, per change | `cmd.0008` `needsAuthorization` |
-| safety | Never | Accepted on the current epoch | `cmd.0006` accepted |
+| safety | Never | Accepted on the current epoch | `cmd.0006` (Host A UI) and `cmd.0104` (phone) accepted |
 | proposal | Creates a draft | Never activates | `cmd.0004` `draftCreated` |
 
 ## Rollback is capability-specific

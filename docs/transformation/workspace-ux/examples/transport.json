@@ -18,10 +18,8 @@
   ],
   "consoleSetup": {"device": "dev.console", "note": "Console setup is configuration, not a clock."},
   "epochs": {
-    "hosts": [
-      {"host": "per.host-a", "hostEpoch": 7},
-      {"host": "per.host-b", "hostEpoch": 2}
-    ],
+    "hosts": [{"host": "per.host-a", "hostEpoch": 7}],
+    "note": "Each host session owns its own clocks and epoch; Host B's are in phone-host.json.",
     "connections": [
       {"id": "con.remote-c", "peer": "per.remote-c", "host": "per.host-a", "connectionEpoch": 4,
        "onReconnect": "dropQueuedIntentAndResnapshot"}

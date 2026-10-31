@@ -1,7 +1,7 @@
 # Library and Inspector
 
 Owner: #99 workspace-navigation-accessibility (containers). Each pane's content belongs to the lane that
-owns the selection: plugins #70, patches #104, rigs #100, graph items #101/#54, parameters #102/#55,
+owns the selection: plugins #70, plugin editors and state #77, patches #104, rigs #100, graph items #101/#54, parameters #102/#55,
 media #53 (reference only). Examples: `devices.json` `capabilities`, `project.json` `patches`/`assets`,
 `graph.json`, `session.json` `diagnostics`.
 
@@ -38,7 +38,8 @@ view. It is the non-drag equivalent of dragging into the canvas.
 | Not scanned | Catalog not yet built (#70) | Scan... (explicit; never on launch without consent) |
 
 Replace with... opens a picker filtered to compatible port layouts. It produces a draft that keeps
-the edges where the ports still match and lists dropped edges in review. It never auto-bypasses.
+the edges where the ports still match and lists dropped edges in review. It never auto-bypasses. The
+replacement's editor and opaque state come from #77; this pane only hosts them.
 
 ## Inspector
 

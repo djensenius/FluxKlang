@@ -10,6 +10,16 @@
     {"revision": 42, "note": "Added Cue output node"},
     {"revision": 43, "note": "Vocal to Mains with explicit mono-to-both conversion", "transaction": "txn.wire-mic"}
   ],
+  "capabilities": [
+    {"id": "cap.audio-in-3", "label": "At least 3 audio inputs"},
+    {"id": "cap.audio-out-2", "label": "At least 2 audio outputs"},
+    {"id": "cap.audio-out-4", "label": "4 spatial outputs"},
+    {"id": "cap.midi-in", "label": "MIDI controller input"},
+    {"id": "cap.au-effect", "label": "Audio Unit effect hosting"},
+    {"id": "cap.au-instrument", "label": "Audio Unit instrument hosting"},
+    {"id": "cap.plugin.tape-echo", "label": "Tape Echo plugin (placeholder identity)"}
+  ],
+  "capabilitiesNote": "Definitions are portable. Each host's rig evaluates them locally. Required blocks activation; advisory degrades to a Missing placeholder.",
   "requiredCapabilities": ["cap.audio-in-3", "cap.audio-out-2", "cap.au-effect", "cap.au-instrument"],
   "advisoryCapabilities": ["cap.audio-out-4", "cap.midi-in", "cap.plugin.tape-echo"],
   "nodes": [
@@ -18,7 +28,7 @@
     {"id": "nod.pads", "kind": "roleInput", "role": "rol.pad-ctl", "label": "Pads"},
     {"id": "nod.synth", "kind": "plugin", "label": "Soft Synth (placeholder)", "requiredCapabilities": ["cap.au-instrument"]},
     {"id": "nod.verb", "kind": "plugin", "label": "Room Verb (placeholder)", "requiredCapabilities": ["cap.au-effect"]},
-    {"id": "nod.echo", "kind": "plugin", "label": "Tape Echo (placeholder)", "requiredCapabilities": ["cap.plugin.tape-echo"],
+    {"id": "nod.echo", "kind": "plugin", "label": "Tape Echo (placeholder)", "advisoryCapabilities": ["cap.plugin.tape-echo"],
      "placeholder": {"keepsPorts": true, "whenMissing": "silent", "autoBypass": false}},
     {"id": "nod.mains", "kind": "roleOutput", "role": "rol.mains", "label": "Mains"},
     {"id": "nod.space", "kind": "spatialBus", "role": "rol.space", "layout": "lay.quad", "label": "Space"},
@@ -54,6 +64,7 @@
   ],
   "spatial": {
     "coordinateSpace": "room-normalized-v0: x -1 (left) to 1 (right), y -1 (rear) to 1 (front)",
+    "legacyImport": "x' = 2x - 1, y' = 1 - 2y from the 0...1 rear-growing space; blur, width offset and clamp rescaled (spatial.md)",
     "layouts": [
       {
         "id": "lay.quad",

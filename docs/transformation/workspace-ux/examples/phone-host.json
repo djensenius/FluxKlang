@@ -1,0 +1,87 @@
+{
+  "contract": "separateHostSession",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "ses.host-b",
+  "host": "per.host-b",
+  "project": "prj.example-set",
+  "projectRevision": 12,
+  "graphRevision": 43,
+  "revision": 2,
+  "history": [
+    {"revision": 1, "note": "Phone opened the project file (project rev 12, graph rev 43) as its own host session"},
+    {"revision": 2, "note": "Drafted Vocal to Cue; proposed mapping Cue to this phone's own outputs"}
+  ],
+  "authorityNote": "Separate host session with its own rig, lease, epoch, command log and drafts. It is not a member of Host A's session, never sees Host A's rig, and is the only authority over its own live graph. Saving back to the shared project file is a coordinated save (#123) that goes stale if another host saved first.",
+  "participants": [{"id": "per.host-b", "label": "Host B", "formFactor": "phone", "role": "host"}],
+  "transport": {"id": "trn.host-b", "hostEpoch": 2, "note": "Own clocks from this phone's devices; independent of trn.host-a"},
+  "windows": [{"id": "win.phone", "surface": "wiring", "host": "per.host-b"}],
+  "lease": {"id": "lse.host-b", "holder": "per.host-b", "project": "prj.example-set", "windows": ["win.phone"], "state": "running"},
+  "osPermissions": [
+    {"name": "microphone", "state": "granted"},
+    {"name": "localNetwork", "state": "denied", "effect": "Peer control unavailable; local manual use unaffected"}
+  ],
+  "rig": {
+    "id": "rig.host-b",
+    "host": "per.host-b",
+    "scope": "hostLocal-notSynced",
+    "revision": 2,
+    "history": [{"revision": 1, "note": "Rig confirmed on this phone"}, {"revision": 2, "note": "Cue route proposed"}],
+    "devices": [
+      {"id": "dev.iface-p", "kind": "audioInterface", "label": "Interface P (synthetic, USB)",
+       "identity": {"uid": "SYNTHETIC-UID-P", "evidence": ["deviceUID", "channelLayout"]}, "presence": "present", "inputs": 4, "outputs": 4},
+      {"id": "dev.phone-audio", "kind": "builtInAudio", "label": "Phone audio (headphones)", "presence": "present", "inputs": 1, "outputs": 2}
+    ],
+    "capabilities": [
+      {"capability": "cap.audio-in-3", "providedBy": ["dev.iface-p"], "status": "available"},
+      {"capability": "cap.audio-out-2", "providedBy": ["dev.iface-p"], "status": "available"},
+      {"capability": "cap.audio-out-4", "providedBy": ["dev.iface-p"], "status": "available"},
+      {"capability": "cap.midi-in", "providedBy": [], "status": "unavailable"},
+      {"capability": "cap.au-effect", "providedBy": ["per.host-b"], "status": "available"},
+      {"capability": "cap.au-instrument", "providedBy": ["per.host-b"], "status": "available"},
+      {"capability": "cap.plugin.tape-echo", "providedBy": [], "status": "missing"}
+    ],
+    "routes": [
+      {"id": "rte.p-keys", "role": "rol.keys-in", "device": "dev.iface-p", "channels": [0, 1], "binding": "confirmed"},
+      {"id": "rte.p-mic", "role": "rol.mic-in", "device": "dev.iface-p", "channels": [2], "binding": "confirmed"},
+      {"id": "rte.p-mains", "role": "rol.mains", "device": "dev.iface-p", "channels": [0, 1], "binding": "confirmed"}
+    ],
+    "proposedRoutes": [
+      {"id": "rte.p-cue", "role": "rol.cue", "device": "dev.phone-audio", "channels": [0, 1], "binding": "proposed",
+       "needs": "device.configure review on this host"}
+    ],
+    "unmappedRoles": ["rol.pad-ctl", "rol.space", "rol.cue"]
+  },
+  "nodeStatus": [
+    {"node": "nod.keys", "state": "mapped", "route": "rte.p-keys"}, {"node": "nod.mic", "state": "mapped", "route": "rte.p-mic"},
+    {"node": "nod.pads", "state": "unmapped"}, {"node": "nod.synth", "state": "ready"}, {"node": "nod.verb", "state": "ready"},
+    {"node": "nod.echo", "state": "missing"}, {"node": "nod.mains", "state": "mapped", "route": "rte.p-mains"},
+    {"node": "nod.space", "state": "unmapped"}, {"node": "nod.cue", "state": "unmapped"}, {"node": "nod.ch7", "state": "stale"}
+  ],
+  "telemetry": [{"target": "rte.p-mains", "kind": "signalMeter", "source": "notMeasured", "display": "Unavailable"}],
+  "commandLog": {
+    "host": "per.host-b",
+    "hostEpoch": 2,
+    "commands": [
+      {"id": "cmd.0101", "seq": 101, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
+       "expectedGraphRevision": 43, "op": {"editDraft": "dft.phone-cue", "connect": {"from": "prt.mic.out", "to": "prt.cue.in"}},
+       "result": {"status": "draftUpdated"}},
+      {"id": "cmd.0102", "seq": 102, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
+       "expectedGraphRevision": 43, "op": {"requestActivation": "dft.phone-cue"},
+       "result": {"status": "reviewRequired", "detail": "Same review sheet and authority as any host."}},
+      {"id": "cmd.0103", "seq": 103, "origin": "per.host-b", "class": "hazardous", "hostEpoch": 2,
+       "op": {"set": "par.mic.trim", "value": 35}, "result": {"status": "needsAuthorization"}},
+      {"id": "cmd.0104", "seq": 104, "origin": "per.host-b", "class": "safety", "hostEpoch": 2,
+       "op": {"safeMute": "ownedOutputs"}, "result": {"status": "accepted"}}
+    ]
+  },
+  "trace": {
+    "authority": "per.host-b",
+    "initialActiveGraphRevision": 43,
+    "drafts": [
+      {"id": "dft.phone-cue", "author": "per.host-b", "host": "per.host-b", "baseGraphRevision": 43,
+       "ops": [{"op": "connect", "from": "prt.mic.out", "to": "prt.cue.in", "conversion": {"kind": "channelMap", "map": [[0], [0]]}}]}
+    ],
+    "transactions": []
+  }
+}

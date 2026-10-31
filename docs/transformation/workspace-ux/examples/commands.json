@@ -6,7 +6,7 @@
   "revision": 2,
   "history": [
     {"revision": 1, "note": "Host A session log"},
-    {"revision": 2, "note": "Added phone host session log"}
+    {"revision": 2, "note": "Host B's log moved to its own session (phone-host.json)"}
   ],
   "classes": [
     {"name": "live", "permission": "live.set", "authorization": "scopedPolicy"},
@@ -35,29 +35,14 @@
         {"id": "cmd.0005", "seq": 5, "origin": "bnd.fader3-width", "class": "live", "hostEpoch": 7,
          "op": {"set": "par.space.width", "value": 0.2},
          "result": {"status": "heldForPickup", "detail": "Hardware 0.20 has not caught parameter 0.50."}},
-        {"id": "cmd.0006", "seq": 6, "origin": "per.remote-c", "class": "safety", "hostEpoch": 7, "connectionEpoch": 4,
+        {"id": "cmd.0006", "seq": 6, "origin": "per.host-a", "class": "safety", "hostEpoch": 7,
          "op": {"safeMute": "ownedOutputs"}, "result": {"status": "accepted"}},
         {"id": "cmd.0007", "seq": 7, "origin": "per.remote-c", "class": "safety", "hostEpoch": 7, "connectionEpoch": 3,
          "op": {"panic": "ownedNotesAndOutputs"},
-         "result": {"status": "rejectedStaleEpoch", "detail": "Remote Panic re-arms on the new epoch; host Panic unaffected."}},
+         "result": {"status": "rejectedStaleEpoch",
+                    "detail": "Freshness is checked first. Whether a remote may trigger Panic at all is open (#94)."}},
         {"id": "cmd.0008", "seq": 8, "origin": "per.host-a", "class": "hazardous", "hostEpoch": 7,
          "op": {"set": "par.mic.trim", "value": 35}, "result": {"status": "needsAuthorization"}}
-      ]
-    },
-    {
-      "host": "per.host-b",
-      "hostEpoch": 2,
-      "commands": [
-        {"id": "cmd.0101", "seq": 101, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
-         "expectedGraphRevision": 43, "op": {"editDraft": "dft.phone-cue", "connect": {"from": "prt.mic.out", "to": "prt.cue.in"}},
-         "result": {"status": "draftUpdated"}},
-        {"id": "cmd.0102", "seq": 102, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
-         "expectedGraphRevision": 43, "op": {"requestActivation": "dft.phone-cue"},
-         "result": {"status": "reviewRequired", "detail": "Same review sheet and authority as any host."}},
-        {"id": "cmd.0103", "seq": 103, "origin": "per.host-b", "class": "hazardous", "hostEpoch": 2,
-         "op": {"set": "par.mic.trim", "value": 35}, "result": {"status": "needsAuthorization"}},
-        {"id": "cmd.0104", "seq": 104, "origin": "per.host-b", "class": "safety", "hostEpoch": 2,
-         "op": {"safeMute": "ownedOutputs"}, "result": {"status": "accepted"}}
       ]
     }
   ]

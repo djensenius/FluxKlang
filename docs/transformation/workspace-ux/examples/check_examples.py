@@ -17,9 +17,12 @@ REV_KEY = re.compile(r"^(?:expected|result|base|initialactive|active)?"
 REV_CONTRACT = {"project": "project", "graph": "graph", "parameter": "parameter",
                 "device": "deviceCapability", "transport": "transport"}
 EXPECTED = {"project", "graph", "parameter", "deviceCapability", "transport", "command",
-            "transactionTrace", "sessionStatus"}
+            "transactionTrace", "sessionStatus", "separateHostSession"}
 ALLOWED = {"live": {"accepted", "heldForPickup"}, "structural": {"draftUpdated", "reviewRequired"},
            "hazardous": {"needsAuthorization"}, "safety": {"accepted"}, "proposal": {"draftCreated"}}
+ASSISTANT_ALLOWED = {"draft.propose", "diagnostics.read"}
+PROVENANCE_TOOLS = {"routingRequest": "none", "diagnostic": "readOnlySnapshotTools"}
+STEP_ORDER = ["validate", "prepare", "reviewAuthorize", "commit", "acknowledge"]
 errors = []
 
 
@@ -48,6 +51,14 @@ def objects(value):
             yield from objects(item)
 
 
+def check_history(where, obj):
+    revs = [h.get("revision") if isinstance(h, dict) else None for h in obj.get("history") or []]
+    if not revs or any(not isinstance(r, int) for r in revs) or revs != sorted(set(revs)):
+        err(where, f"history revisions must be strictly increasing integers: {revs}")
+    elif revs[-1] != obj.get("revision"):
+        err(where, f"revision {obj.get('revision')} != last history revision {revs[-1]}")
+
+
 def load():
     docs = {}
     for path in sorted(Path(__file__).parent.glob("*.json")):
@@ -56,17 +67,23 @@ def load():
         except json.JSONDecodeError as exc:
             err(path.name, f"invalid JSON: {exc}")
             continue
+        if not isinstance(doc, dict):
+            err(path.name, "top level must be a JSON object")
+            continue
         if doc.get("synthetic") is not True:
             err(path.name, "must declare synthetic: true")
         for field in ("contract", "schemaVersion", "id", "revision", "history"):
             if field not in doc:
                 err(path.name, f"missing {field}")
-        revs = [h.get("revision") for h in doc.get("history", [])]
-        if not revs or any(not isinstance(r, int) for r in revs) or revs != sorted(set(revs)):
-            err(path.name, f"history revisions must be strictly increasing integers: {revs}")
-        elif revs[-1] != doc.get("revision"):
-            err(path.name, f"revision {doc.get('revision')} != last history revision {revs[-1]}")
-        docs[doc.get("contract")] = doc
+        for obj in objects(doc):
+            if "history" in obj:
+                check_history(f"{path.name} {obj.get('id', '')}".strip(), obj)
+        name = doc.get("contract")
+        if name in docs:
+            err(path.name, f"duplicate contract {name!r} (also in {docs[name]['_file']})")
+            continue
+        doc["_file"] = path.name
+        docs[name] = doc
     missing = EXPECTED - set(docs)
     if missing:
         err("examples", f"missing contracts: {sorted(missing)}")
@@ -109,24 +126,29 @@ def compatible(ports, src_id, dst_id, conversion):
         return "direction"
     if src["signal"] != dst["signal"]:
         return "signalMismatch"
-    if src.get("channels") != dst.get("channels"):
-        if not conversion or len(conversion.get("map", [])) != dst.get("channels"):
-            return "channelMismatch"
+    if conversion:
+        rows, width = conversion.get("map"), src.get("channels") or 0
+        if (not isinstance(rows, list) or len(rows) != dst.get("channels")
+                or any(not row or any(not isinstance(i, int) or not 0 <= i < width for i in row) for row in rows)):
+            return "badConversion"
+    elif src.get("channels") != dst.get("channels"):
+        return "channelMismatch"
     return "ok"
 
 
-def check_graph(docs):
-    graph = docs["graph"]
+def check_graph(graph):
     ports = {p["id"]: p for p in graph["ports"]}
     nodes = {n["id"]: n for n in graph["nodes"]}
-    declared = set(graph["requiredCapabilities"]) | set(graph["advisoryCapabilities"])
+    defined = {c["id"] for c in graph["capabilities"]}
+    required, advisory = set(graph["requiredCapabilities"]), set(graph["advisoryCapabilities"])
+    if not required | advisory <= defined or required & advisory:
+        err("graph", "graph capabilities must be defined once and be either required or advisory")
     for node in graph["nodes"]:
-        has_ports = any(p["node"] == node["id"] for p in graph["ports"])
-        if node.get("routable") is False and has_ports:
+        if node.get("routable") is False and any(p["node"] == node["id"] for p in graph["ports"]):
             err("graph", f"{node['id']} is non-routable but has ports")
-        for cap in node.get("requiredCapabilities", []):
-            if cap not in declared:
-                err("graph", f"{node['id']} requires {cap} not declared at graph level")
+        if not set(node.get("requiredCapabilities", [])) <= required or \
+                not set(node.get("advisoryCapabilities", [])) <= advisory:
+            err("graph", f"{node['id']} capability level differs from the graph level")
     adjacency = {n: set() for n in nodes}
     for edge in graph["edges"]:
         verdict = compatible(ports, edge["from"], edge["to"], edge.get("conversion"))
@@ -148,14 +170,89 @@ def check_graph(docs):
     return ports
 
 
-def check_transactions(docs, history, ports):
-    trace, graph = docs["transactionTrace"], docs["graph"]
-    roles, people = docs["sessionStatus"]["roles"], {p["id"]: p for p in docs["sessionStatus"]["participants"]}
+def host_sessions(docs):
+    """Each host session: one authority over its own live graph, rig, lease, epoch, logs and drafts."""
+    phone, transport = docs["separateHostSession"], docs["transport"]
+    session_a = docs["sessionStatus"]
+    epochs = {h["host"]: h["hostEpoch"] for h in transport["epochs"]["hosts"]}
+    return [
+        {"name": session_a["id"], "session": session_a, "rig": docs["deviceCapability"],
+         "hostEpoch": epochs.get(session_a["host"]), "logs": docs["command"]["logs"],
+         "connections": {c["id"]: c["connectionEpoch"] for c in transport["epochs"]["connections"]},
+         "trace": docs["transactionTrace"]},
+        {"name": phone["id"], "session": phone, "rig": phone["rig"], "hostEpoch": phone["transport"]["hostEpoch"],
+         "logs": [phone["commandLog"]], "connections": {}, "trace": phone["trace"]},
+    ]
+
+
+def check_authority(hs):
+    session, rig, where = hs["session"], hs["rig"], hs["name"]
+    host = session["host"]
+    hosts = [p["id"] for p in session["participants"] if p["role"] == "host"]
+    owners = {session["lease"]["holder"], rig["host"], hs["trace"]["authority"]} | {log["host"] for log in hs["logs"]}
+    if hosts != [host] or owners != {host}:
+        err(where, f"exactly one host authority expected, found hosts {hosts} and owners {sorted(owners)}")
+    members = {p["id"] for p in session["participants"]}
+    for draft in hs["trace"]["drafts"]:
+        if draft["host"] != host or draft["author"] not in members:
+            err(draft["id"], "drafts belong to the session that holds the live graph")
+    devices = {d["id"] for d in rig["devices"]}
+    for item in rig["routes"] + rig.get("proposedRoutes", []):
+        if item["device"] not in devices:
+            err(item["id"], "routes may only use this host's own rig (rigs are not synced)")
+    for cap in rig["capabilities"]:
+        if not set(cap["providedBy"]) <= devices | {host}:
+            err(where, f"{cap['capability']} is provided by another host's device")
+
+
+def check_ops_applied(graph, draft, where):
+    edges, nodes = graph["edges"], {n["id"] for n in graph["nodes"]}
+    for op in draft["ops"]:
+        kind = op["op"]
+        if kind == "connect":
+            hit = [e for e in edges if e["from"] == op["from"] and e["to"] == op["to"]
+                   and e.get("conversion", {}).get("map") == op.get("conversion", {}).get("map")]
+            if not hit or ("edge" in op and hit[0]["id"] != op["edge"]):
+                err(where, f"committed connect {op['from']} -> {op['to']} is not in the graph")
+        elif kind == "disconnect" and any(e["id"] == op["edge"] for e in edges):
+            err(where, f"committed disconnect left {op['edge']} in the graph")
+        elif kind == "addNode" and op["proposedId"] not in nodes:
+            err(where, f"committed addNode {op['proposedId']} is not in the graph")
+        elif kind not in ("connect", "disconnect", "addNode"):
+            err(where, f"unknown draft op {kind!r}")
+
+
+def check_provenance(hs, draft, roles):
+    people = {p["id"]: p for p in hs["session"]["participants"]}
+    if people.get(draft["author"], {}).get("role") != "assistant":
+        return
+    prov = draft.get("provenance", {})
+    origin = prov.get("origin")
+    if prov.get("kind") != "assistantProposal" or PROVENANCE_TOOLS.get(origin, object()) != prov.get("toolUse"):
+        err(draft["id"], "assistant drafts need provenance whose origin matches its tool use")
+    if origin == "diagnostic":
+        diag = next((d for d in hs["session"].get("diagnostics", []) if d["id"] == prov.get("diagnostic")), {})
+        if diag.get("assistant") != "explainOrProposeDraft" or "diagnostics.read" not in roles["assistant"]:
+            err(draft["id"], "diagnostic-originated drafts must cite a readable diagnostic of this session")
+
+
+def check_transactions(hs, graph, history, ports, roles):
+    trace = hs["trace"]
+    people = {p["id"]: p for p in hs["session"]["participants"]}
     drafts = {d["id"]: d for d in trace["drafts"]}
-    order, active, last_seq = trace["stepOrder"], trace["initialActiveGraphRevision"], 0
+    if trace.get("stepOrder", STEP_ORDER) != STEP_ORDER:
+        err(hs["name"], f"step order must be {STEP_ORDER}")
+    order = STEP_ORDER
+    active, last_seq, used = trace["initialActiveGraphRevision"], 0, set()
+    for draft in drafts.values():
+        check_provenance(hs, draft, roles)
     for txn in trace["transactions"]:
         where, draft = txn["id"], drafts[txn["draft"]]
+        used.add(draft["id"])
         base, steps = draft["baseGraphRevision"], txn["steps"]
+        if not steps:
+            err(where, "transaction has no steps")
+            continue
         names = [s["step"] for s in steps]
         if names != order[:len(names)]:
             err(where, f"steps {names} do not follow {order}")
@@ -170,7 +267,7 @@ def check_transactions(docs, history, ports):
         if stale != (validate.get("code") == "staleBase") or (stale and validate["result"] != "failed"):
             err(where, f"base {base} vs active {active}: stale handling inconsistent")
         verdicts = {compatible(ports, op["from"], op["to"], op.get("conversion"))
-                    for op in draft["ops"] if op["op"] in ("connect", "addEdge")} - {"ok"}
+                    for op in draft["ops"] if op["op"] == "connect"} - {"ok"}
         if not stale and verdicts and validate.get("code") not in verdicts:
             err(where, f"validate should fail with {sorted(verdicts)}")
         for step in steps:
@@ -179,8 +276,10 @@ def check_transactions(docs, history, ports):
                 if "activation.authorize" not in roles.get(who.get("role"), []):
                     err(where, f"{step.get('authorizedBy')} may not authorize activation")
                 bound = step.get("boundTo", {})
-                if bound.get("draft") != txn["draft"] or bound.get("baseGraphRevision") != base:
-                    err(where, "authorization is not bound to this exact draft and base")
+                if (bound.get("draft") != txn["draft"] or bound.get("baseGraphRevision") != base
+                        or bound.get("hostEpoch") != hs["hostEpoch"]
+                        or not draft.get("diffDigest") or bound.get("diffDigest") != draft["diffDigest"]):
+                    err(where, "authorization is not bound to this draft, base, host epoch and diff digest")
         if txn["outcome"] == "committed":
             commit = next((s for s in steps if s["step"] == "commit"), {})
             ack = next((s for s in steps if s["step"] == "acknowledge"), {})
@@ -193,33 +292,39 @@ def check_transactions(docs, history, ports):
                 err(where, f"graph history {active} does not cite this transaction")
             if history["project"].get(ack.get("resultProjectRevision"), {}).get("transaction") != where:
                 err(where, "project history does not cite this acknowledgement")
+            if active == graph["revision"]:
+                check_ops_applied(graph, draft, where)
         elif "commit" in names or txn.get("activeGraphRevisionAfter") != active:
             err(where, "uncommitted transactions must leave the active revision unchanged")
+    for draft in drafts.values():
+        if draft["id"] not in used and draft["baseGraphRevision"] == active:
+            for op in draft["ops"]:
+                if op["op"] == "connect" and compatible(ports, op["from"], op["to"], op.get("conversion")) != "ok":
+                    err(draft["id"], "reviewable draft contains an invalid connection")
     if active != graph["revision"]:
-        err("transactionTrace", f"final active revision {active} != graph revision {graph['revision']}")
+        err(hs["name"], f"final active revision {active} != graph revision {graph['revision']}")
 
 
-def check_commands(docs):
-    session, transport = docs["sessionStatus"], docs["transport"]
-    roles, people = session["roles"], {p["id"]: p for p in session["participants"]}
-    host_epochs = {h["host"]: h["hostEpoch"] for h in transport["epochs"]["hosts"]}
-    conn_epochs = {c["id"]: c["connectionEpoch"] for c in transport["epochs"]["connections"]}
+def check_commands(hs, roles, docs):
+    people = {p["id"]: p for p in hs["session"]["participants"]}
     params = {p["id"]: p for p in docs["parameter"]["parameters"]}
     bindings = {b["id"]: b for b in docs["parameter"]["bindings"]}
     perms = {c["name"]: c["permission"] for c in docs["command"]["classes"]}
-    last_seq = 0
-    for log in docs["command"]["logs"]:
-        if log["hostEpoch"] != host_epochs.get(log["host"]):
-            err(log["host"], "log hostEpoch differs from transport epochs")
+    for log in hs["logs"]:
+        last_seq = 0
+        if log["hostEpoch"] != hs["hostEpoch"]:
+            err(log["host"], "log hostEpoch differs from the session's host epoch")
         for cmd in log["commands"]:
             where, status = cmd["id"], cmd["result"]["status"]
             if cmd["seq"] <= last_seq:
                 err(where, "seq is not monotonic")
             last_seq = cmd["seq"]
+            if cmd["origin"] in bindings and bindings[cmd["origin"]].get("state") != "active":
+                err(where, "commands cannot come from a binding whose device is not present")
             origin = people.get(cmd["origin"]) or people[log["host"]]
             conn = origin.get("connection")
             stale = cmd.get("hostEpoch") != log["hostEpoch"] or (
-                conn is not None and cmd.get("connectionEpoch") != conn_epochs.get(conn))
+                conn is not None and cmd.get("connectionEpoch") != hs["connections"].get(conn))
             if stale:
                 if status != "rejectedStaleEpoch":
                     err(where, "stale epoch must be rejected, whatever the class")
@@ -240,39 +345,42 @@ def check_commands(docs):
                 err(where, "accepted live change must advance parameter revision by one")
 
 
-def check_session(docs):
-    session, devices, graph = docs["sessionStatus"], docs["deviceCapability"], docs["graph"]
+def check_roles(docs):
+    session = docs["sessionStatus"]
     roles = session["roles"]
-    forms = {a["formFactor"] for a in session["layoutAdaptations"]}
+    if not {"safety.panic", "safety.safeMute"} <= set(roles["host"]):
+        err("host", "Panic and Safe Mute must stay reachable in every host UI")
+    if not set(roles["assistant"]) <= ASSISTANT_ALLOWED:
+        err("assistant", f"assistant may only hold {sorted(ASSISTANT_ALLOWED)}")
     for a in session["layoutAdaptations"]:
         if set(a) - {"formFactor", "layout"}:
             err("session", "layout adaptations may not carry permissions or roles")
+    return roles, {a["formFactor"] for a in session["layoutAdaptations"]}
+
+
+def check_session(hs, roles, forms, graph):
+    session, rig, where = hs["session"], hs["rig"], hs["name"]
     for p in session["participants"]:
         if p["role"] not in roles or "permissions" in p:
             err(p["id"], "permissions must come only from a defined role")
         if p["formFactor"] != "none" and p["formFactor"] not in forms:
             err(p["id"], "form factor has no layout adaptation")
-        if p["role"] == "remoteController" and p.get("opensAudioEngine") is not False:
-            err(p["id"], "remote controllers open no audio engine")
-    if not any(p["formFactor"] == "phone" and p["role"] == "host" for p in session["participants"]):
-        err("session", "examples must include a phone host with full host role")
-    for name, granted in roles.items():
-        human = name != "assistant"
-        if human and not {"safety.panic", "safety.safeMute"} <= set(granted):
-            err(name, "panic and safe mute must be reachable for every human role")
-        if not human and any(g.split(".")[0] in ("live", "activation", "hazardous", "safety", "device") for g in granted):
-            err(name, "assistant role must stay review-only")
+        if p["role"] == "remoteController" and (p.get("opensAudioEngine") is not False
+                                                or p.get("opensConsoleWriteSession") is not False):
+            err(p["id"], "remote controllers open no audio engine and no console write session")
     lease = session["lease"]
     host_windows = {w["id"] for w in session["windows"] if w["host"] == lease["holder"]}
     if set(lease["windows"]) != host_windows:
-        err("lease", "one lease must cover every window of the holder")
+        err(where, "one lease must cover every window of the holder")
     for t in session["telemetry"]:
         if t["source"] != "measured" and t["display"] != "Unavailable":
             err(t["target"], "non-measured telemetry must display Unavailable")
         if t["source"] == "measured" and (t.get("lease") != lease["id"] or lease["state"] != "running"):
             err(t["target"], "measured telemetry requires the running engine lease")
-    caps = {c["id"]: c["status"] for c in devices["capabilities"]}
-    routes = {r["role"]: r for r in devices["routes"]}
+    caps = {c["capability"]: c["status"] for c in rig["capabilities"]}
+    if lease["state"] == "running" and any(caps.get(c) != "available" for c in graph["requiredCapabilities"]):
+        err(where, "a running lease needs every required graph capability available")
+    routes = {r["role"]: r for r in rig["routes"]}
     status = {}
     for s in session["nodeStatus"]:
         if s["node"] in status:
@@ -280,39 +388,65 @@ def check_session(docs):
         status[s["node"]] = s["state"]
     for node in graph["nodes"]:
         state, role = status.get(node["id"]), node.get("role")
+        needs = node.get("requiredCapabilities", []) + node.get("advisoryCapabilities", [])
         if state is None:
-            err(node["id"], "missing derived status")
-        if role in devices.get("unmappedRoles", []) and state != "unmapped":
-            err(node["id"], "unmapped role must show Unmapped")
+            err(f"{where} {node['id']}", "missing derived status")
+        if role in rig.get("unmappedRoles", []) and state != "unmapped":
+            err(f"{where} {node['id']}", "unmapped role must show Unmapped")
         if routes.get(role, {}).get("binding") == "deviceMissing" and state != "lostMuted":
-            err(node["id"], "missing device must show Lost/Muted")
-        if any(caps.get(c) == "missing" for c in node.get("requiredCapabilities", [])) and state != "missing":
-            err(node["id"], "missing capability must show Missing")
+            err(f"{where} {node['id']}", "missing device must show Lost/Muted")
+        if any(caps.get(c) == "missing" for c in needs) and state != "missing":
+            err(f"{where} {node['id']}", "missing capability must show Missing")
 
 
 def check_parameters(docs):
     params = {p["id"]: p for p in docs["parameter"]["parameters"]}
+    presence = {d["id"]: d["presence"] for d in docs["deviceCapability"]["devices"]}
+    control_device = {c["id"]: c["device"] for c in docs["deviceCapability"]["controls"]}
     for p in params.values():
         if not p["min"] <= p["value"] <= p["max"] or p.get("ceiling", p["max"]) > p["max"]:
             err(p["id"], "value/ceiling outside range")
+    for b in docs["parameter"]["bindings"]:
+        present = presence.get(control_device.get(b["control"])) == "present"
+        if (b.get("state") == "active") != present or (not present and b["pickup"]["state"] != "unavailable"):
+            err(b["id"], "binding state and pickup must reflect whether its device is present")
     for lrn in docs["parameter"]["learn"]:
         if params[lrn["proposedParameter"]].get("learnExcludedByDefault") and lrn["state"] != "blocked":
             err(lrn["id"], "excluded targets must be blocked from Learn by default")
+        if lrn["state"] != "blocked" and presence.get(control_device.get(lrn["control"])) != "present":
+            err(lrn["id"], "Learn can only hear a present device")
+
+
+def guarded(name, fn, *args):
+    try:
+        return fn(*args)
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError) as exc:
+        err(name, f"malformed input ({type(exc).__name__}: {exc})")
+        return None
 
 
 def main():
     docs = load()
+    defined, sessions = {}, []
     if not errors:
-        defined, history = check_ids_and_revisions(docs)
-        ports = check_graph(docs)
-        check_transactions(docs, history, ports)
-        check_commands(docs)
-        check_session(docs)
-        check_parameters(docs)
+        defined, history = guarded("ids", check_ids_and_revisions, docs) or ({}, {})
+        ports = guarded("graph", check_graph, docs["graph"]) or {}
+        roles, forms = guarded("roles", check_roles, docs) or ({}, set())
+        sessions = guarded("sessions", host_sessions, docs) or []
+        if not any(p["id"] == s["session"]["host"] and p["formFactor"] == "phone"
+                   for s in sessions for p in s["session"]["participants"]):
+            err("examples", "examples must include a phone running as a full host session")
+        for hs in sessions:
+            guarded(hs["name"], check_authority, hs)
+            guarded(hs["name"], check_transactions, hs, docs["graph"], history, ports, roles)
+            guarded(hs["name"], check_commands, hs, roles, docs)
+            guarded(hs["name"], check_session, hs, roles, forms, docs["graph"])
+        guarded("parameters", check_parameters, docs)
     if errors:
         print("\n".join(f"FAIL {e}" for e in errors))
         return 1
-    print(f"OK: {len(docs)} contracts, {len(defined)} synthetic ids, all references and revisions consistent")
+    print(f"OK: {len(docs)} contracts, {len(defined)} synthetic ids, {len(sessions)} host sessions, "
+          "all references and revisions consistent")
     return 0
 
 

@@ -31,12 +31,14 @@
      "min": 0, "max": 60, "default": 20, "curve": "linear", "class": "hazardous", "learnExcludedByDefault": true, "value": 20}
   ],
   "bindings": [
-    {"id": "bnd.knob1-mix", "control": "ctl.knob-1", "parameter": "par.verb.mix",
-     "pickup": {"mode": "catch", "state": "engaged"}},
-    {"id": "bnd.enc2-mains", "control": "ctl.enc-2", "parameter": "par.mains.gain",
-     "encoderProfile": "twosComplement", "stepDb": 0.5, "pickup": {"mode": "relative", "state": "engaged"}},
-    {"id": "bnd.fader3-width", "control": "ctl.fader-3", "parameter": "par.space.width",
-     "pickup": {"mode": "catch", "state": "waiting", "hardwareValue": 0.2, "parameterValue": 0.5}}
+    {"id": "bnd.knob1-mix", "control": "ctl.knob-1", "parameter": "par.verb.mix", "state": "stale",
+     "pickup": {"mode": "catch", "state": "unavailable"}, "feedback": "unavailable"},
+    {"id": "bnd.enc2-mains", "control": "ctl.enc-2", "parameter": "par.mains.gain", "state": "stale",
+     "encoderProfile": "twosComplement", "stepDb": 0.5, "pickup": {"mode": "relative", "state": "unavailable"},
+     "feedback": "unavailable"},
+    {"id": "bnd.fader3-width", "control": "ctl.fader-3", "parameter": "par.space.width", "state": "active",
+     "pickup": {"mode": "catch", "state": "waiting", "hardwareValue": 0.2, "parameterValue": 0.5},
+     "feedback": "unsupported"}
   ],
   "learn": [
     {"id": "lrn.trim", "control": "ctl.fader-4", "proposedParameter": "par.mic.trim", "state": "blocked",

@@ -1,6 +1,6 @@
 # Spatial
 
-Owner: #116 spatial-ui-motion (model adapter #114, compile #66, routes #55/#100). Examples:
+Owner: #116 spatial-ui-motion (model adapter #114, DBAP/masks/calibration signals #115, routes #55/#100). Examples:
 `graph.json` `spatial`, `devices.json` `rte.space`, `parameters.json` `par.space.width`,
 `session.json` (`nod.space` Lost/Muted, `dgn.space-lost`).
 
@@ -43,15 +43,26 @@ speaker list. `x` marks a masked speaker; the text label carries the same state.
 | Snap to speaker | — | "Move to speaker..." picker | Custom action "Move to Front Left" |
 | Mask speaker | Speaker menu | Space on focused speaker row | Custom action "Mute speaker (draft)" |
 | Remap route | — | "Change route..." on the row | Opens the rig picker (#100), review required |
+| Authorize calibration | Sheet buttons | Tab through outputs, max level, duration; Escape cancels; Command-Return authorizes (no default button) | Sheet is a modal container; summary is read first; "Authorize test signal" is the last element |
 
 Source element: *"Soft Synth, slightly right of centre, in front, width 0.5."* Rotors: **Sources**,
 **Speakers**. Positions are always spoken as words plus numbers, never only as coordinates.
 
 ## Masks and survivors
 
-Muting a speaker never raises the others. `renormalizeSurvivors: false` is the default and appears
-as the text "Survivors are not boosted". Turning renormalization on is an explicit structural draft
-that shows its level change in review.
+Muting a speaker never raises the others (#115 renders masks). `renormalizeSurvivors: false` is the default
+and appears as the text "Survivors are not boosted". Turning renormalization on is an explicit structural
+draft, staged under ceilings, that shows its level change in review.
+
+## Legacy coordinate transform
+
+Today `Speaker.position` and `SpatialSource.position` use 0…1 with Front L at (0,0) and y growing toward the
+rear (`SpeakerArray.swift`, `SpatialSource.swift`). The draft space is −1…1 with front = +y. Import maps
+**x′ = 2x − 1, y′ = 1 − 2y**, so the standard quad FL (0,0) → (−1, 1) and RR (1,1) → (1, −1). Distances double,
+so unit-space constants must double too or the existing DBAP golden outputs change: `SpatialPanner.spatialBlur`
+0.15 → 0.30, the `channelPlacements()` width offset `width × 0.25` → `width × 0.5`, and the 0…1 clamp → −1…1.
+The y-flip does not change distances. A legacy stereo source (`left`/`right` `WingNodeRef`) becomes one source
+on a 2-channel port. Its console references are evidence only, and the import stays inert until reviewed.
 
 ## Calibration (staged and authorized)
 
@@ -84,9 +95,9 @@ stateDiagram-v2
 
 ## Timing
 
-UI frames never clock DSP. Motion and automation are rendered against the audio clock (`clk.sample`).
-The display shows positions sampled from telemetry or parameter state at whatever rate it can draw.
-Reduce Motion replaces trails with the current position. Media-synchronized motion is deferred to #53.
+UI frames never clock DSP. This surface defines no timing: automation and gesture arbitration belong to
+#108 and media-synchronized motion to #53. The display shows positions sampled from telemetry or parameter
+state at whatever rate it can draw. Reduce Motion replaces trails with the current position.
 
 ## Contract seams
 

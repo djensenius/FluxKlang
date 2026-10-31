@@ -2,7 +2,8 @@
   "contract": "sessionStatus",
   "schemaVersion": "0.1-draft",
   "synthetic": true,
-  "id": "ses.example",
+  "id": "ses.host-a",
+  "host": "per.host-a",
   "project": "prj.example-set",
   "projectRevision": 12,
   "graphRevision": 43,
@@ -17,15 +18,14 @@
   "roles": {
     "host": ["live.set", "draft.edit", "activation.authorize", "hazardous.authorize", "device.configure",
              "safety.panic", "safety.safeMute"],
-    "remoteController": ["live.set:grp.fx", "live.set:grp.out", "safety.panic", "safety.safeMute"],
-    "observer": ["safety.panic", "safety.safeMute"],
+    "remoteController": ["live.set:grp.fx", "live.set:grp.out"],
+    "observer": ["status.read"],
     "assistant": ["draft.propose", "diagnostics.read"]
   },
   "participants": [
     {"id": "per.host-a", "label": "Host A", "formFactor": "mac", "role": "host"},
-    {"id": "per.host-b", "label": "Host B", "formFactor": "phone", "role": "host"},
     {"id": "per.remote-c", "label": "Remote C", "formFactor": "tablet", "role": "remoteController",
-     "connection": "con.remote-c", "opensAudioEngine": false},
+     "connection": "con.remote-c", "opensAudioEngine": false, "opensConsoleWriteSession": false},
     {"id": "per.assistant", "label": "Local assistant", "formFactor": "none", "role": "assistant",
      "eligibility": "eligible", "cloudFallback": false}
   ],
@@ -42,10 +42,9 @@
             "windows": ["win.wiring", "win.perform"], "state": "running",
             "otherDocuments": "editable and preparable; never render independently"},
   "osPermissions": [
-    {"host": "per.host-a", "name": "microphone", "state": "granted"},
-    {"host": "per.host-a", "name": "localNetwork", "state": "granted"},
-    {"host": "per.host-b", "name": "localNetwork", "state": "denied", "effect": "Peer control unavailable; local manual use unaffected"},
-    {"host": "per.host-b", "name": "bluetoothMIDI", "state": "notDetermined"}
+    {"name": "microphone", "state": "granted"},
+    {"name": "localNetwork", "state": "granted"},
+    {"name": "bluetoothMIDI", "state": "notDetermined"}
   ],
   "nodeStatus": [
     {"node": "nod.keys", "state": "mapped", "route": "rte.keys-in"},
@@ -74,7 +73,7 @@
      "manualActions": ["Locate plugin", "Replace node", "Keep placeholder"], "assistant": "explainOnly"},
     {"id": "dgn.space-lost", "severity": "error", "target": "rte.space",
      "message": "Interface B is missing. Space outputs are muted; survivors are not boosted.",
-     "manualActions": ["Choose another device", "Keep muted"], "assistant": "explainOnly"},
+     "manualActions": ["Choose another device", "Keep muted"], "assistant": "explainOrProposeDraft"},
     {"id": "dgn.cue-unmapped", "severity": "info", "target": "rol.cue",
      "message": "Cue has no device route on this host.",
      "manualActions": ["Map Cue to outputs"], "assistant": "explainOnly"},
@@ -82,5 +81,6 @@
      "message": "Controller A was last seen in a previous session.",
      "manualActions": ["Rescan", "Use on-screen controls"], "assistant": "explainOnly"}
   ],
-  "safety": {"panic": "alwaysVisible", "safeMute": "alwaysVisible", "requiresDraftOrReview": false}
+  "safety": {"panic": "alwaysReachableInHostUI", "safeMute": "alwaysReachableInHostUI", "requiresDraftOrReview": false,
+             "pairedPeers": "Not granted here. Whether remotes or observers may trigger Panic/Safe Mute is open for #94."}
 }

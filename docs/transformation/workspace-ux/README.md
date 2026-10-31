@@ -36,10 +36,13 @@ sends MIDI/OSC or needs a finished renderer.
    screen, but permissions do not change with it (`session.json` → `layoutAdaptations` carries no permissions).
 5. **Draft is not active.** Editing, accepting an assistant draft and activation are separate.
    The assistant only proposes. Manual equivalents never require a model.
-6. **Safety is always reachable.** Panic and Safe Mute appear on every surface, for every human role and in every
-   lifecycle state. They never need a draft or review.
+6. **Safety is always reachable locally.** Panic and Safe Mute appear on every host surface and in every
+   lifecycle state, and never need a draft or review. Paired peers are not granted them here; whether a
+   remote or observer may trigger them is an open policy question for #94.
 7. **Portable is not local.** Project roles (for example "Mains") are portable, inert intent. Device
    routes are confirmed host-local bindings that are not synced. Console connector numbers are not interface channels.
+8. **One authority per live graph.** Each host session (Mac or phone) owns its own rig, lease, epoch,
+   command log and drafts. Two hosts that open the same project file are two sessions, not one.
 
 ## Shared state words
 
@@ -65,9 +68,14 @@ sends MIDI/OSC or needs a finished renderer.
 | `parameters.json` | Parameter | #55 (+#87/#88) | Units/ranges/classes, bindings, encoder profile, pickup waiting, Learn blocked/awaiting review |
 | `devices.json` | Device/Capability | #55 (+#65) | Host-local identity evidence, present/missing/stale, required/advisory capabilities, routes |
 | `transport.json` | Transport | #55 | Distinct sample/host/tempo/MIDI clocks, host and connection epochs; media deferred to #53 |
-| `commands.json` | Command | #55 (+#62) | Classes, stale-epoch rejection, permission rejection, review-only assistant, phone host parity |
-| `transactions.json` | Transaction trace | #62 | Committed, stale, invalid, prepare-failed and awaiting-review transactions |
-| `session.json` | Session/status projection | #99 (+#62/#94) | Roles, one lease across windows, OS permissions, derived node states, telemetry, diagnostics |
+| `commands.json` | Command | #55 (+#62) | Classes, stale-epoch rejection, permission rejection, review-only assistant, binding origins |
+| `transactions.json` | Transaction trace | #62 | Committed, stale, invalid, prepare-failed and awaiting-review transactions; two assistant provenances |
+| `session.json` | Session/status projection | #99 (+#62/#94) | Host A's session: roles, one lease across windows, OS permissions, derived node states, telemetry, diagnostics |
+| `phone-host.json` | Separate host session | #62 (+#99/#101) | A phone as its own full host: own rig, lease, epoch, log and draft over the same project file |
+
+These snapshots are **illustrative, not a production model**. Capability definitions are portable
+(`graph.json`); each host's rig evaluates them locally. Required capabilities block activation; advisory ones
+degrade a node to a silent Missing placeholder.
 
 **IDs** are readable synthetic strings `<prefix>.<slug>` (for example `nod.verb`, `prt.mic.out`).
 Each one is defined once across all files. The checker lists the known prefixes. Real encoding (UUID or
@@ -78,16 +86,19 @@ Run the checker (stdlib Python 3 only; it reads only these files):
 
 ```sh
 python3 docs/transformation/workspace-ux/examples/check_examples.py
-# OK: 8 contracts, 129 synthetic ids, all references and revisions consistent
+# OK: 9 contracts, 142 synthetic ids, 2 host sessions, all references and revisions consistent
 ```
 
-It enforces: well-formed JSON with `synthetic: true`; unique IDs; resolved references; monotonic
-revisions; typed edges (direction, signal, explicit channel conversion); cycles only through explicit
-feedback edges; transaction step order and stale-base detection; failed prepare leaves the active
-revision unchanged; commits advance by one and are cited in history; stale epochs reject every
-command class; permissions come only from roles; the assistant only proposes; a phone participant is a full host;
-every human role keeps Panic and Safe Mute; one lease covers every window of its holder; meters that are not measured show
-Unavailable; node states agree with routes and capabilities; Learn blocks excluded targets.
+It enforces: object-shaped JSON with `synthetic: true` and unique contract names; unique IDs; resolved
+references; monotonic revisions; typed edges (direction, signal, conversion indices within the source's
+channels); cycles only through explicit feedback; one capability level per capability; one host authority per
+session (lease, rig, logs, drafts) using only its own rig; step order, non-empty steps and stale-base detection;
+authorization bound to draft, base, host epoch and diff digest; commits advance by one, are cited in history and
+appear in the graph; stale epochs reject every command class; permissions come only from roles; the assistant
+holds only an allowlist and its drafts carry matching provenance; remotes open no engine or console write session;
+a phone runs as a full host; host roles keep Panic and Safe Mute; stale controllers produce no input; meters that
+are not measured show Unavailable; node states agree with routes and capabilities; Learn blocks excluded
+targets. Malformed input prints `FAIL` lines, never a traceback.
 
 ## Single-owner integration map
 
@@ -108,38 +119,49 @@ Each seam has exactly one owner. Other lanes consume it and do not redefine it. 
 | Media timing, cues, quantization, fidelity | #53 media-clock-fidelity-contracts (**reference only here**) | — | none |
 | Command envelope, classes, results | #55 | — | `commands.json` |
 | Validation, authorization, transactions, engine lease, safety path | #62 host-authority-transactions | #54, #55 | `transactions.json`, `session.json` `lease` |
-| Signal meters and telemetry source | #66 graph-compiler-dsp | #62 lease | `session.json` `telemetry` |
+| Meter taps in the compiled render plan | #66 graph-compiler-dsp | #62 lease | `session.json` `telemetry` `source` |
+| Telemetry transport: bounded buffers and event queues to the UI | #64 render-buffers-queues | #66 | `session.json` `telemetry` |
+| External send/return insert node (legacy `.effect`), loopback compensation | #68 send-return-compensation | #54 | Mapping table below |
+| Timed automation of parameters and spatial motion | #108 automation-gestures | #55, #53 | `spatial.md` Timing |
 | Shell, status projection, Edit/Perform policy, inspector container, Library container, Panic/Safe Mute placement | #99 workspace-navigation-accessibility | #62, #65, #66 | `session.json` |
 | Rig wizard, mapping unmapped roles | #100 interface-rig-wizard | #55, #65 | `devices.json` `routes` |
 | Wiring surface, matrix/list, diffs, phone compact routing | #101 typed-wiring-editor | #54, #62 | `graph.json`, `transactions.json` |
-| Perform panels, meters display | #102 performance-panels | #55, #87, #88, #66 | `parameters.json`, `session.json` |
+| Perform panels, meters display | #102 performance-panels | #55, #87, #88, #64 | `parameters.json`, `session.json` |
 | Spatial model adapter (sources, speakers, routes) | #114 spatial-neutral-adapter | #54, #55 | `graph.json` `spatial`, `devices.json` |
-| Spatial placement/calibration UI | #116 spatial-ui-motion | #114 | `graph.json` `spatial` |
+| Spatial DSP: bounded DBAP, masks without renormalization, calibration signals | #115 spatial-dsp-calibration | #114, #62 | `graph.json` `spatial.masks` |
+| Spatial placement/calibration UI | #116 spatial-ui-motion | #114, #115 | `graph.json` `spatial` |
 | Plugin catalog content shown in Library | #70 plugin-catalog-scan | #55 | `devices.json` `capabilities` |
-| Pairing, trust and scoped permissions | #94 peer-pairing-permissions | #62 | `session.json` `roles` |
+| Plugin editor and opaque state behind Inspector Replace | #77 plugin-editors-snapshots | #70 | `library-inspector.md` |
+| Pairing, trust, scoped permissions, peer safety policy | #94 peer-pairing-permissions | #62 | `session.json` `roles`, `safety` |
 | Peer snapshot and command freshness | #95 peer-contract-sync-commands | #54, #55, #62 | `commands.json` |
 | Remote controller mode | #96 remote-controller-role | #94, #95 | `session.json` |
 | Reconnect and stale-queue drop | #97 peer-reconnect-backpressure | #95 | `transport.json` `connections` |
 | Read-only assistant snapshots and tools | #118 local-ai-snapshot-tools | #54, #55 | `session.json` `diagnostics` |
 | Routing semantics into neutral proposals | #37 semantic-assistant-review | #118, #62 | `transactions.json` `dft.assistant-cue` |
 | Assistant explanation and diff review UI | #119 assistant-review-diagnostics | #37, #99 | `status-diagnostics.md` |
-| Deterministic doubles built from these examples | #58 contract-fixtures | #54, #55 | all |
-| Persisting drafts, provenance and recovery | #122 / #123 | #54 | `project.json` `legacy` |
+| Deterministic doubles; they follow the #54/#55 schemas once frozen, not these drafts | #58 contract-fixtures | #54, #55 | all (illustrative) |
+| Persisting drafts and provenance; versioned legacy migration | #122 versioned-project-storage | #54 | `project.json` `legacy` |
+| Coordinated saves across host sessions, checkpoints, undo, recovery | #123 coordinated-save-recovery | #122, #62 | `phone-host.json` `authorityNote` |
 
 ## Mapping from the current app (compatibility, read-only)
 
 | Current code (main @ 9cfa1ec) | Draft concept |
 |---|---|
-| `StudioGraph` nodes/edges; `StudioPortRef` uses an `Int` port | Graph nodes with stable port IDs; geometry kept as layout data |
+| `StudioPortRef {nodeID, side, port: Int}` | Stable ID `prt.<node>.<in|out><index>`, labelled from `Equipment` jack names. Legacy data has no channel counts, so imported ports stay inert until review confirms counts |
+| `StudioNodeKind.instrument(Equipment.ID)` | `roleInput` node for a portable role; its console input numbers become host-local evidence |
+| `StudioNodeKind.effect(Effect.ID)` (outboard send/return jacks, `Effect.swift:18-30`) | `externalInsert` node with send and return ports; compensation is #68's seam; serial chains become explicit edges |
 | `StudioNodeKind.liveChannel` (not routable) | `observedShortcut`, `routable: false`, state Stale |
-| `StudioEndpoint` `.finalMix/.space/.custom` | `roleOutput` / `spatialBus` nodes that point at portable roles |
-| `StudioRoutingIssue` (missing node, direction, cycle, unfinished branch) | Validate diagnostics; cycles allowed only with explicit feedback |
-| `StudioResourceAllocator` bus pairs, `SpatialRouting` sends | Compile details owned by #66/#114; never in the portable graph |
-| `GlobalStudioConnections` Home + `TemporaryDeviceMove` lifecycle | Portable roles vs confirmed host-local routes; planned/ready/active/returning |
+| `StudioEndpointDestination` `.finalMix/.space/.custom` | `roleOutput` / `spatialBus` nodes that point at portable roles |
+| `StudioEndpoint.outputConnectors: [WingOutputConnector]` | Console evidence on `dev.console` only, never route channels (#48: "WING Local numbers are not USB channels") |
+| `StudioRoutingIssue.Kind` (`missingNode`, `invalidDirection`, `nonroutableLiveChannel`, `missingEndpoint`, `unfinishedBranch`, `cycle`) | Validate diagnostics with the same meanings; a cycle is allowed only with explicit feedback |
+| `StudioResourceAllocator` bus pairs, `SpatialRouting` sends | Compile details (bus pairs #66, spatial sends #114); never in the portable graph |
+| `GlobalStudioConnections` Home + `TemporaryDeviceMove` (`planned`/`readyToApply`/`active`/`readyToReturn`) | Portable roles vs confirmed host-local routes with the same four lifecycle states |
+| `Speaker`/`SpatialSource` positions in 0…1, Front L at (0,0), y toward the rear | x′ = 2x − 1, y′ = 1 − 2y; unit constants rescaled ([spatial.md](spatial.md#legacy-coordinate-transform)) |
+| Stereo `SpatialSource` (`left`/`right` `WingNodeRef`, `width`) | One source on a 2-channel port; both refs become console evidence on its inert input; width kept |
 | `StudioApplyStatusView` "Listen on WING" + verified/partial/failed | Commit + acknowledge with truthful partial outcomes; #62 replaces the UI-only guard |
 | `PendingStudioPatchReviewView` Accept/Replace (no write) | Accepting a draft is still separate from activation |
 | `StudioConnectNodesMenu` | Generalized From/To port pickers ([phone-compact-routing.md](phone-compact-routing.md)) |
-| `MeterView(level: position)` in `FaderStripView` | Fader travel only; signal meter shows Unavailable until #66 telemetry |
+| `MeterView(level: position)` in `FaderStripView` | Fader travel only; signal meter shows Unavailable until measured telemetry arrives (#66 taps, #64 transport) |
 
 ## Open questions for coordinators
 
@@ -154,5 +176,9 @@ Device/parameter (#55): (1) Is there one parameter revision stream per project, 
 class set on the parameter or on the command? (3) Do epochs use host + connection only, or also a lease generation?
 (4) What vocabulary describes identity evidence and Stale versus Missing? (5) Which staleness window turns
 telemetry into Unavailable? (6) Do capability matches work by count ("≥ 3 inputs") or by exact layout? (7) Does pickup
-state belong to bindings (#87) or to the parameter value? (8) Should a stale-epoch remote Panic be rejected
-(as here, following the roadmap) or receive a narrow safety exception?
+state belong to bindings (#87) or to the parameter value?
+
+Authority (#62/#94/#123): (1) May a paired remote or observer trigger Panic/Safe Mute at all, and does the
+freshness rule then apply (`cmd.0007` is rejected as stale here)? Not granted in these examples (#94). (2) When two
+host sessions open the same project file, how does a coordinated save report a stale base (#123)? (3) Is
+`externalInsert` a #54 node kind, with #68 owning only compensation?

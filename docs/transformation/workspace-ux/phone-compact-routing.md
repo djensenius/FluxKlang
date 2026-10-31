@@ -1,12 +1,14 @@
 # Phone Compact Routing
 
 Owner: #101 typed-wiring-editor (shell and Safety placement #99, route mapping #100). Examples:
-`graph.json`, `devices.json` `routes`/`unmappedRoles`, `transactions.json` `dft.phone-cue`,
-`commands.json` `cmd.0101`/`cmd.0102`.
+`graph.json`, `phone-host.json` (`rig.host-b` routes/`unmappedRoles`, `nodeStatus`, `dft.phone-cue`,
+`cmd.0101`/`cmd.0102`).
 
 ## Purpose
 
-`per.host-b` is a phone running as a **full host**. Compact width replaces the canvas with
+`per.host-b` is a phone running as a **full host** in its own host session (`ses.host-b`) over the same
+project file. It has its own rig, lease and epoch, is the only authority over its own live graph, and is
+not a member of Host A's session. Compact width replaces the canvas with
 lists, pickers and sheets. The permissions are the same as on any host, and every edit is the same
 draft operation that the canvas produces.
 
@@ -27,8 +29,8 @@ draft operation that the canvas produces.
 | Keys -> Tape Echo           | | Verb Mod    control         | | ...                         |
 | Room Verb -> Tape Echo  fb  | |   Not available: audio can- | |                             |
 |SOFT SYNTH (MIDI)            | |   not feed a control input  | |                             |
-| Pads -> Soft Synth  Stale   | | Soft Synth  MIDI            | |                             |
-|SPACE (2ch)  Lost/Muted      | |   Not available: audio can- | |                             |
+| Pads -> Soft Synth Unmapped | | Soft Synth  MIDI            | |                             |
+|SPACE (2ch)  Unmapped        | |   Not available: audio can- | |                             |
 | Soft Synth -> Space         | |   not feed a MIDI input     | |                             |
 |CUE (2ch)  Unmapped          | |                             | |1 change - Draft on rev 43   |
 | No connections   [Map...]   | |                             | |           [Review...]       |
@@ -70,15 +72,15 @@ stack label over detail, and the Safety bar stacks its two buttons vertically. S
 `rol.cue` is in `unmappedRoles`. **Map...** opens a route picker (owned by #100):
 
 ```text
-Map Cue (2ch) on this phone
-  Interface A   Out 1-2   in use by Mains
-  Interface A   Out 3-4   available        >
-  Interface A   Out 5-6   available        >
-  Interface B   Out 1-4   Missing (not selectable)
+Map Cue (2ch) on this phone (Host B)
+  Interface P   Out 1-2   in use by Mains
+  Interface P   Out 3-4   available        >
+  Phone audio   Out 1-2   headphones       >
+  Other hosts' devices are never listed (rigs are not synced)
   [Cancel]
 ```
 
-Picking a pair creates a host-local route proposal. It needs host review (`device.configure`), is never
+Picking Phone audio creates the host-local proposal `rte.p-cue`. It needs host review (`device.configure`), is never
 synced to peers, and never changes the portable project role. Console connector numbers are not
 offered as interface channels.
 
@@ -92,4 +94,4 @@ offered as interface channels.
 | Missing node | Heading suffix "Missing" | Locate, Replace, Keep placeholder |
 | Lost/Muted | Heading suffix "Lost/Muted"; meters Unavailable | Choose another device, Keep muted |
 | Stale draft | Banner "Based on rev 42; active is 43" | Rebase |
-| Remote (not host) | Read-only list, "Hosts edit structure" | Safety only |
+| Remote (not host) | Read-only list, "Hosts edit structure" | None; peer Safety is open for #94 |
