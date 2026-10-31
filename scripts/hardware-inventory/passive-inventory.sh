@@ -13,7 +13,7 @@
 #
 # --require-symbols (or FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1) makes the self-check FAIL when its
 # symbol layer does not run fully (no working Swift toolchain, the lister does not compile, or
-# swift-demangle is missing). Without it the self-check warns and falls back to the source layer.
+# swift-demangle is missing or fails). Without it the self-check warns and falls back to the source layer.
 # CI and the Makefile target use it. When collecting, it only makes the pre-listing self-check
 # strict; with no toolchain at all the listing is still skipped with a warning.
 #
@@ -266,8 +266,16 @@ symbol_check() {
     status=1
   fi
 
-  if xcrun --find swift-demangle >/dev/null 2>&1; then
-    grep -E '^_?[$]s' "$work/undefined.txt" | xcrun swift-demangle >"$work/demangled.txt" 2>/dev/null || true
+  grep -E '^_?[$]s' "$work/undefined.txt" >"$work/swift-symbols.txt" || true
+  if ! xcrun --find swift-demangle >/dev/null 2>&1; then
+    printf 'self-check: symbol layer incomplete: swift-demangle not found; Swift-level checks skipped\n' >&2
+    demangled=0
+  elif ! xcrun swift-demangle <"$work/swift-symbols.txt" >"$work/demangled.txt" 2>/dev/null \
+    || (($(wc -l <"$work/swift-symbols.txt") != $(wc -l <"$work/demangled.txt"))); then
+    # swift-demangle emits one line per input line; anything else is partial output.
+    printf 'self-check: symbol layer incomplete: swift-demangle failed or returned partial output; Swift-level checks skipped\n' >&2
+    demangled=0
+  else
     hits="$( (grep -E "$denied_symbol_swift" "$work/demangled.txt" || true; \
       sed -E 's/CoreAudio\.UnsafeMutableAudioBufferListPointer//g' "$work/demangled.txt" \
         | grep -E 'CoreAudio\.' || true) | sort -u)"
@@ -282,9 +290,6 @@ symbol_check() {
       status=1
     done < <(grep -oE '__C\.(Audio|MIDI|kAudio|kMIDI)[A-Za-z0-9_]*' "$work/demangled.txt" \
       | sed 's/^__C\.//' | sort -u || true)
-  else
-    printf 'self-check: symbol layer incomplete: swift-demangle not found; Swift-level checks skipped\n' >&2
-    demangled=0
   fi
 
   rm -rf -- "$work"

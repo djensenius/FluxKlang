@@ -280,7 +280,7 @@ Read these from the console screens and record them in the local evidence folder
        denylists.
 
      The symbol layer counts as not run if there is no working toolchain, the lister does not compile, `nm -u`
-     fails or `swift-demangle` is missing. What happens then depends on the mode:
+     fails, or `swift-demangle` is missing, fails or returns partial output. What happens then depends on the mode:
      - **Strict** (`--require-symbols` or `FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1`): the self-check fails with
        `self-check: FAILED: the symbol layer is required ...`. The `make` target and the CI step use strict
        mode, so a lister that no longer compiles turns CI red.
