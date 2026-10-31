@@ -40,7 +40,12 @@ struct DiscoveryView: View {
                 .buttonStyle(.plain)
             }
 
-            if !appModel.discovery.isScanning && appModel.discovery.responders.isEmpty {
+            if let reason = appModel.discovery.unavailableReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("connection.scanUnavailable")
+            } else if !appModel.discovery.isScanning && appModel.discovery.responders.isEmpty {
                 Text("No consoles found yet. Make sure the WING is on this network, or enter its IP below.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
