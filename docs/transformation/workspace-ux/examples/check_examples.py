@@ -314,6 +314,8 @@ def check_commands(hs, roles, docs):
     params = {p["id"]: p for p in docs["parameter"]["parameters"]}
     bindings = {b["id"]: b for b in docs["parameter"]["bindings"]}
     perms = {c["name"]: c["permission"] for c in docs["command"]["classes"]}
+    controls = {c["id"]: c["device"] for c in hs["rig"].get("controls", [])}
+    present = {d["id"] for d in hs["rig"]["devices"] if d["presence"] == "present"}
     for log in hs["logs"]:
         last_seq = 0
         if log["hostEpoch"] != hs["hostEpoch"]:
@@ -323,9 +325,12 @@ def check_commands(hs, roles, docs):
             if cmd["seq"] <= last_seq:
                 err(where, "seq is not monotonic")
             last_seq = cmd["seq"]
-            if cmd["origin"] in bindings and bindings[cmd["origin"]].get("state") != "active":
-                err(where, "commands cannot come from a binding whose device is not present")
-            origin = people.get(cmd["origin"]) or people[log["host"]]
+            origin, binding = people.get(cmd["origin"]), bindings.get(cmd["origin"], {})
+            if origin is None:
+                if binding.get("state") != "active" or controls.get(binding.get("control")) not in present:
+                    err(where, "origin must be a session member or an active binding on this host's own rig")
+                    continue
+                origin = people[log["host"]]
             conn = origin.get("connection")
             stale = cmd.get("hostEpoch") != log["hostEpoch"] or (
                 conn is not None and cmd.get("connectionEpoch") != hs["connections"].get(conn))
