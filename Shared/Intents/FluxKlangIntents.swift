@@ -40,7 +40,11 @@ struct ConnectToWingIntent: AppIntent {
             return .result(dialog: "No WING host is known yet. Connect once from the app first.")
         }
         await model.connect(host: target)
-        return .result(dialog: model.isConnected ? "Connected to \(target)." : "Couldn't connect to \(target).")
+        if model.isConnected { return .result(dialog: "Connected to \(target).") }
+        guard case .failed(let reason) = model.wing.connection else {
+            return .result(dialog: "Couldn't connect to \(target).")
+        }
+        return .result(dialog: "Couldn't connect to \(target). \(reason)")
     }
 }
 

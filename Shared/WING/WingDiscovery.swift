@@ -103,20 +103,34 @@ final class WingDiscovery {
     /// Whether a scan is currently running.
     private(set) var isScanning = false
 
-    private let port: UInt16
+    /// Why the last scan could not search, so an empty result isn't mistaken for "no consoles".
+    private(set) var unavailableReason: String?
 
-    init(port: UInt16 = WingNetwork.defaultPort) {
+    private let port: UInt16
+    private let broadcastPermission: PermissionState
+
+    init(port: UInt16 = WingNetwork.defaultPort,
+         broadcastPermission: PermissionState = LocalNetworkAccess.currentBroadcastDiscovery) {
         self.port = port
+        self.broadcastPermission = broadcastPermission
     }
 
     /// Broadcasts an info request and collects responders for `duration`.
     func scan(duration: Duration = .seconds(3)) async {
         guard !isScanning else { return }
-        isScanning = true
         responders = []
+        unavailableReason = nil
+        // iOS blocks broadcast without the Apple-gated multicast entitlement; don't send at all.
+        guard broadcastPermission.status != .unsupported else {
+            unavailableReason = broadcastPermission.reason
+            return
+        }
+        isScanning = true
 
         let broadcastHosts = Self.activeIPv4BroadcastHosts()
         guard let firstBroadcastHost = broadcastHosts.first else {
+            unavailableReason = "No Wi-Fi or Ethernet network is active. "
+                + "Join the WING's network or enter its IP address."
             isScanning = false
             return
         }
@@ -124,6 +138,8 @@ final class WingDiscovery {
         do {
             try await transport.start(remoteHost: firstBroadcastHost, localPort: port, broadcast: true)
         } catch {
+            unavailableReason = "Couldn't start a network scan (\(error.localizedDescription)). "
+                + "Enter the WING's IP address instead."
             isScanning = false
             return
         }
@@ -142,10 +158,21 @@ final class WingDiscovery {
             }
         }
 
+        var sent = 0, sendErrnos: [Int32?] = []
         for host in broadcastHosts {
-            try? await transport.send(WingAddress.info, nil, to: host, port: port)
+            do {
+                try await transport.send(WingAddress.info, nil, to: host, port: port)
+                sent += 1
+            } catch {
+                sendErrnos.append(LocalNetworkAccess.errno(in: error))
+            }
         }
-        try? await Task.sleep(for: duration)
+        if sent == 0 {
+            let code = LocalNetworkAccess.dominantErrno(sendErrnos)
+            unavailableReason = LocalNetworkAccess.discoveryFailureReason(errno: code)
+        } else {
+            try? await Task.sleep(for: duration)
+        }
 
         listen.cancel()
         await transport.stop()
