@@ -5,13 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   swiftlint:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6.0.3
-      - name: Install SwiftLint
-        run: brew install swiftlint
+      - name: Install pinned SwiftLint (mise.toml)
+        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        with:
+          version: 2026.10.25
+          install_args: swiftlint
+      - name: Pinned SwiftLint is on PATH
+        run: |
+          want=$(mise current swiftlint); have=$(swiftlint version)
+          echo "swiftlint $have at $(command -v swiftlint); mise.toml pins $want"
+          if [ -z "$want" ] || [ "$have" != "$want" ]; then
+            echo "::error::swiftlint '$have' is not the mise.toml pin '$want'"; exit 1
+          fi
       - name: Lint
         run: swiftlint --strict
       - name: Hardware inventory self-check
