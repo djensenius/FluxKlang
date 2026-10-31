@@ -20,6 +20,7 @@
 		0399161807B93071D2D6086B /* AssistantActionController+Execution.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE19C8B151C387D87190D789 /* AssistantActionController+Execution.swift */; };
 		03E7234D715EDE07A83C0AF9 /* AskFluxKlangIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AAACB6391E9BBECE55BA009 /* AskFluxKlangIntentTests.swift */; };
 		0440007401C6D52B75E7B153 /* StudioCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435B3823839F80D106B8B028 /* StudioCanvasView.swift */; };
+		04C89F0C2F321073A4BAA180 /* ContractCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D26503FA59C0EC9865F721F /* ContractCoding.swift */; };
 		04E82B67C0F39B29F2ED04C0 /* StudioConnectionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7FA9DED44281AD1CF59C06 /* StudioConnectionsStore.swift */; };
 		0775610DB54903A71A18DA5A /* AssistantRoutingPreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C7532EE4562763D33CFA31 /* AssistantRoutingPreparation.swift */; };
 		077BF2B2CAF8BE1E3F34A7C5 /* StudioPhysicalTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90838B90936905F261C36103 /* StudioPhysicalTypes.swift */; };
@@ -199,6 +200,7 @@
 		65E59B34AAD57AB80BEBB0A7 /* WingTransporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */; };
 		66A3152ED63D348EB5D6C74F /* WingController+VerifiedApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = F477A8BA9B7BAC8829F14535 /* WingController+VerifiedApply.swift */; };
 		672536435CE9A0A4FBB95AF6 /* CloudKeyValueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A32BA38DA62552280B7277 /* CloudKeyValueStore.swift */; };
+		69EAFD7DA639E83C7DA4CE53 /* ContractCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D26503FA59C0EC9865F721F /* ContractCoding.swift */; };
 		6AD7AE6E918BED1DC53B3197 /* RoutingEnvironment+Duplication.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE21C84D6F8806DFE98AF46 /* RoutingEnvironment+Duplication.swift */; };
 		6B5C9697F491E3F819E5B8EA /* ExtensionFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAD482DF583CD29F6E56C36 /* ExtensionFields.swift */; };
 		6BE591F3E2A677318792ACA1 /* StudioCanvasUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9C5F66ACB71B33EED04BC87 /* StudioCanvasUITests.swift */; };
@@ -575,6 +577,7 @@
 		7B41203E2877DE096F492901 /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
 		7C7D45D2618BA7418E7F0F12 /* EffectEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectEditor.swift; sourceTree = "<group>"; };
 		7C9566CE71C87CE6ADF12C7B /* StudioConnectorEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectorEditor.swift; sourceTree = "<group>"; };
+		7D26503FA59C0EC9865F721F /* ContractCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractCoding.swift; sourceTree = "<group>"; };
 		7DA94B70ED6A5B914A576414 /* WireLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireLayer.swift; sourceTree = "<group>"; };
 		800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcceptanceLaunchConfiguration.swift; sourceTree = "<group>"; };
 		80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectNodesMenu.swift; sourceTree = "<group>"; };
@@ -872,6 +875,7 @@
 		78333FB6C3E33051916967D8 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				7D26503FA59C0EC9865F721F /* ContractCoding.swift */,
 				70DF305609475BA00086393C /* ContractID.swift */,
 				EDCE4307223DF0D0B3EBCCC4 /* ContractVersion.swift */,
 				DCAD482DF583CD29F6E56C36 /* ExtensionFields.swift */,
@@ -1470,6 +1474,7 @@
 				E657DB325152FABC49728C6F /* CompactTabRoot.swift in Sources */,
 				415461A15964A3A1F0BE8511 /* ConnectionStatusPresentation.swift in Sources */,
 				15CBF0C2B2AE702FADCBF935 /* ConnectionView.swift in Sources */,
+				69EAFD7DA639E83C7DA4CE53 /* ContractCoding.swift in Sources */,
 				EC7181152CB0108099D31C5D /* ContractID.swift in Sources */,
 				809DC1CF6841FCE1985D75FB /* ContractVersion.swift in Sources */,
 				31558E518571C98644774941 /* CopilotAssistantGenerator.swift in Sources */,
@@ -1662,6 +1667,7 @@
 				F74148A5A16B28F03C3B2706 /* CompactTabRoot.swift in Sources */,
 				A6B6918FF8BA3184C69F8267 /* ConnectionStatusPresentation.swift in Sources */,
 				0290F8C59F5396A40C7CE565 /* ConnectionView.swift in Sources */,
+				04C89F0C2F321073A4BAA180 /* ContractCoding.swift in Sources */,
 				2D9254E989BC8F3F64080EC9 /* ContractID.swift in Sources */,
 				B8124A89BBA2D6FB8CFDB809 /* ContractVersion.swift in Sources */,
 				33AD83F15CD9EAEC44272672 /* CopilotAssistantGenerator.swift in Sources */,
