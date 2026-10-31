@@ -309,8 +309,9 @@ def check_commands(hs, roles, docs):
             last_seq = cmd["seq"]
             origin, binding = people.get(cmd["origin"]), bindings.get(cmd["origin"], {})
             if origin is None:
-                if binding.get("state") != "active" or controls.get(binding.get("control")) not in present:
-                    err(where, "origin must be a session member or an active binding on this host's own rig")
+                if (binding.get("state") != "active" or controls.get(binding.get("control")) not in present
+                        or cmd["op"].get("set") != binding.get("parameter")):
+                    err(where, "origin must be a session member or an active binding on this rig setting its target")
                     continue
                 origin = people[log["host"]]
             target = params.get(cmd["op"].get("set"), {})
@@ -332,7 +333,7 @@ def check_commands(hs, roles, docs):
                 err(where, f"status {status} not in {sorted(expected)}")
             if origin["role"] == "assistant" and status not in ("draftCreated", "rejectedPermission"):
                 err(where, "assistant commands may only create review drafts")
-            if status == "heldForPickup" and bindings.get(cmd["origin"], {}).get("pickup", {}).get("state") != "waiting":
+            if status == "heldForPickup" and binding.get("pickup", {}).get("state") != "waiting":
                 err(where, "heldForPickup requires a waiting pickup binding")
             res, exp = cmd["result"].get("resultParameterRevision"), cmd.get("expectedParameterRevision")
             if res is not None and exp is not None and res != exp + 1:
