@@ -329,7 +329,7 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 ### 9.2 Native capture
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
-ticks when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
+ticks exactly when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
 data. `nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the
 take start as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes
 nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
@@ -463,7 +463,7 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
 then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
 and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Thirty-three mutation self-tests each break one rule in a valid example (for example a stale
+evidence in a trace. Thirty-four mutation self-tests each break one rule in a valid example (for example a stale
 trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A
 malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 

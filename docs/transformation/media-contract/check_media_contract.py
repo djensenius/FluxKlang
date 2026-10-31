@@ -593,8 +593,9 @@ class Trace:
         frame = self.frame_at_host(r["hostTicks"])
         if frame is None or rnd(frame) != r["frame"]:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
-        if "musicalTicks" in r and (not self.musical_ok() or rnd(self.ticks_at_frame(r["frame"])) != r["musicalTicks"]):
-            self.err(r, "capture musicalTicks must map from frame through the current musical anchor")
+        has = "musicalTicks" in r
+        if has != self.musical_ok() or has and rnd(self.ticks_at_frame(r["frame"])) != r["musicalTicks"]:
+            self.err(r, "capture musicalTicks map from frame through the current musical anchor, exactly when one is")
         self.captures.append((r, words, (self.musical, self.map)))
         if r["effective"] == ep == "midi1" and mt in (2, 4):
             self.evidence.add("midi1InUmp")
@@ -728,7 +729,7 @@ MUTATIONS = [
     ("04", 5, {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}], "meter": None},
      "changes the tempo segments or the meter"),
     ("04", 7, {"assignedFrame": 288000, "frame": 288000}, "expected fired assignedFrame=268800"),
-    ("04", 12, {"musicalTicks": 103680}, "capture musicalTicks must map from frame"),
+    ("04", 12, {"musicalTicks": 103680}, "capture musicalTicks map from frame"),
     ("05", 9, {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
     ("06", 9, {"result": "fired", "reason": None}, "must be rejectedStale"),
@@ -746,6 +747,7 @@ MUTATIONS = [
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
     ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
+    ("10", "timeline", {"8.musicalTicks": None, "11.losses.syntheticTempoMap": 1}, "exactly when one is"),
     ("10", 8, {"ump": ["0x22903C64"]}, "'groupsFlattened': 1"),
     ("10", 11, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
     ("10", 11, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
