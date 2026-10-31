@@ -8,8 +8,14 @@
 # serials, device UIDs, USB location IDs and personal names: never commit it.
 #
 # Usage:
-#   scripts/hardware-inventory/passive-inventory.sh               # collect
-#   scripts/hardware-inventory/passive-inventory.sh --self-check  # tripwire only
+#   scripts/hardware-inventory/passive-inventory.sh [--require-symbols]               # collect
+#   scripts/hardware-inventory/passive-inventory.sh --self-check [--require-symbols]  # tripwire only
+#
+# --require-symbols (or FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1) makes the self-check FAIL when its
+# symbol layer does not run fully (no working Swift toolchain, the lister does not compile, or
+# swift-demangle is missing). Without it the self-check warns and falls back to the source layer.
+# CI and the Makefile target use it. When collecting, it only makes the pre-listing self-check
+# strict; with no toolchain at all the listing is still skipped with a warning.
 #
 # Output (root overridable with FLUXKLANG_INVENTORY_DIR; refused inside the repo):
 #   ~/.local/state/FluxKlang/transform-passive-hardware-inventory/<UTC stamp>.XXXXXX/
@@ -18,6 +24,7 @@ set -Eeuo pipefail
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 swift_source="$script_dir/passive-inventory.swift"
 out_dir=""
+require_symbols="${FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS:-0}"
 
 on_error() {
   local status=$? line="$1"
@@ -51,7 +58,8 @@ warn() {
 #     network, process, file-write and dynamic-lookup escape hatches, backticks)
 #     must not appear anywhere;
 #   - every import, whatever its attributes or `;` joins, must be allowlisted.
-# Layer 2 (symbols, only with a working Swift toolchain; otherwise a warning):
+# Layer 2 (symbols, only with a working Swift toolchain; if it cannot run, a
+# warning, or a failure with --require-symbols / FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1):
 #   the file is compiled with `swiftc -c` into a temp dir and every undefined
 #   symbol from `nm -u` is checked: Audio*/MIDI* functions must be on
 #   allowed_symbols, kAudio*/kMIDI* data on allowed_identifiers, and C, ObjC and
@@ -214,26 +222,26 @@ source_check() {
   return "$status"
 }
 
-# Layer 2. Returns 0 (pass), 1 (fail) or 2 (unavailable; warning only).
+# Layer 2. Returns 0 (pass), 1 (fail) or 2 (could not run or incomplete; self_check decides).
 symbol_check() {
-  local status=0 work hits name total
+  local status=0 work hits name total demangled=1
   if ! have_swift_toolchain || ! xcrun --find nm >/dev/null 2>&1; then
-    printf 'self-check: WARNING: symbol layer skipped (no working Swift toolchain)\n' >&2
+    printf 'self-check: symbol layer unavailable: no working Swift toolchain (xcode-select -p, xcrun --find)\n' >&2
     return 2
   fi
   if ! work="$(mktemp -d "${TMPDIR:-/tmp}/fluxklang-passive-inventory.XXXXXX")"; then
-    printf 'self-check: WARNING: symbol layer skipped (no temp dir)\n' >&2
+    printf 'self-check: symbol layer unavailable: could not create a temp dir\n' >&2
     return 2
   fi
   if ! xcrun swiftc -c "$swift_source" -module-name PassiveInventory -o "$work/inventory.o" \
     >"$work/swiftc.log" 2>&1; then
-    printf 'self-check: WARNING: symbol layer skipped (swiftc could not compile the lister):\n' >&2
+    printf 'self-check: symbol layer unavailable: swiftc could not compile the lister:\n' >&2
     sed -n '1,20s/^/  /p' "$work/swiftc.log" >&2
     rm -rf -- "$work"
     return 2
   fi
   if ! xcrun nm -u "$work/inventory.o" >"$work/undefined.txt" 2>"$work/nm.log"; then
-    printf 'self-check: WARNING: symbol layer skipped (nm -u failed)\n' >&2
+    printf 'self-check: symbol layer unavailable: nm -u failed\n' >&2
     rm -rf -- "$work"
     return 2
   fi
@@ -275,10 +283,12 @@ symbol_check() {
     done < <(grep -oE '__C\.(Audio|MIDI|kAudio|kMIDI)[A-Za-z0-9_]*' "$work/demangled.txt" \
       | sed 's/^__C\.//' | sort -u || true)
   else
-    printf 'self-check: WARNING: swift-demangle not found; Swift-level symbol checks skipped\n' >&2
+    printf 'self-check: symbol layer incomplete: swift-demangle not found; Swift-level checks skipped\n' >&2
+    demangled=0
   fi
 
   rm -rf -- "$work"
+  if ((status == 0 && demangled == 0)); then return 2; fi
   if ((status == 0)); then printf 'self-check: symbol layer OK (%s undefined symbols checked)\n' "$total"; fi
   return "$status"
 }
@@ -297,7 +307,14 @@ self_check() {
     return 1
   fi
   if ((symbol_status == 2)); then
-    printf 'self-check: PASSED source layer only (symbol layer unavailable); a tripwire, not a proof\n'
+    if [[ "$require_symbols" == 1 ]]; then
+      printf 'self-check: FAILED: the symbol layer is required (--require-symbols or %s) but did not run fully;\n' \
+        'FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1' >&2
+      printf 'self-check: select a working Swift toolchain and make sure the lister compiles\n' >&2
+      return 1
+    fi
+    printf 'self-check: WARNING: symbol layer did not run fully; falling back to the source layer only\n' >&2
+    printf 'self-check: PASSED source layer only; a tripwire, not a proof\n'
   else
     printf 'self-check: PASSED source and symbol layers; a defence-in-depth tripwire, not a proof\n'
   fi
@@ -405,15 +422,35 @@ collect() {
   printf 'Raw files can contain serials, UIDs, location IDs and personal names. Never commit them.\n'
 }
 
-case "${1:-}" in
-  --self-check)
+usage() {
+  printf 'usage: %s [--self-check] [--require-symbols] | --help\n' "$0" >&2
+}
+
+mode=collect
+for arg in "$@"; do
+  case "$arg" in
+    --self-check) mode=self-check ;;
+    --require-symbols) require_symbols=1 ;;
+    -h | --help) mode=help ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+case "$require_symbols" in
+  0 | 1) ;;
+  *)
+    printf 'passive-inventory: FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS must be 0 or 1, not %s\n' "$require_symbols" >&2
+    exit 2
+    ;;
+esac
+
+case "$mode" in
+  self-check)
     if self_check; then exit 0; fi
     exit 1
     ;;
-  "") collect ;;
-  -h | --help) sed -n '2,15p' "${BASH_SOURCE[0]}" ;;
-  *)
-    printf 'usage: %s [--self-check | --help]\n' "$0" >&2
-    exit 2
-    ;;
+  collect) collect ;;
+  help) sed -n '2,21p' "${BASH_SOURCE[0]}" ;;
 esac
