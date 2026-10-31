@@ -1,4 +1,4 @@
-.PHONY: generate build build-mac test lint clean
+.PHONY: generate build build-mac test lint hardware-inventory-self-check clean
 
 # Regenerate the Xcode project from project.yml (local/setup only).
 generate:
@@ -20,6 +20,10 @@ test:
 
 lint:
 	swiftlint --strict
+
+# Defence-in-depth tripwire for the passive hardware inventory lister (#67); runs nothing on hardware.
+hardware-inventory-self-check:
+	bash scripts/hardware-inventory/passive-inventory.sh --self-check
 
 clean:
 	rm -rf build DerivedData
