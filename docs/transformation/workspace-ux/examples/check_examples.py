@@ -209,12 +209,18 @@ def check_authority(hs):
             err(where, f"{cap['capability']} is provided by another host's device")
 
 
+def shape(edge):
+    """What a committed connect must reproduce: endpoints, conversion map, feedback delay and gain ceiling."""
+    fb = edge.get("feedback")
+    return (edge.get("from"), edge.get("to"), (edge.get("conversion") or {}).get("map"),
+            (fb.get("delay"), fb.get("gainCeilingDb")) if isinstance(fb, dict) else fb)
+
+
 def check_ops_applied(graph, draft, where):
     edges, nodes = graph["edges"], {n["id"] for n in graph["nodes"]}
     for op in draft["ops"]:
         kind = op["op"]
-        hit = [e["id"] for e in edges if e["from"] == op.get("from") and e["to"] == op.get("to")
-               and e.get("conversion", {}).get("map") == op.get("conversion", {}).get("map")]
+        hit = [e["id"] for e in edges if shape(e) == shape(op)]
         if ((kind == "connect" and (not hit or op.get("edge", hit[0]) != hit[0]))
                 or (kind == "disconnect" and any(e["id"] == op["edge"] for e in edges))
                 or (kind == "addNode" and op["proposedId"] not in nodes)
