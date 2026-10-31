@@ -145,20 +145,20 @@ The policy for a device restart, rate change, configuration change or wake:
 
 ### 5.4 Seek (locate)
 
-A locate bumps `transport` and records a `locate` discontinuity at the frame where it takes effect. The `release`
-lane then turns off every owned note. Prefetch for affected audio is invalidated and re-prepared. The transport
-re-anchors at the new position with `loopIteration` 0, as every new transport generation does (example 03).
+A locate bumps `transport` and records a `locate` discontinuity at the frame where it takes effect. The `release` lane
+then turns off every owned note, and affected audio prefetch is invalidated and re-prepared. The transport re-anchors
+at the new position with `loopIteration` 0 (example 03), superseding any pending clock-restart resume position.
 
 ### 5.5 Loop
 
-A loop is `[startTicks, endTicks)`. At the wrap frame (exactly `endTicks` through the pass's anchor, rounded as in §5.2)
-the transport records a `loopWrap` discontinuity, re-anchors with `musicalTicks = startTicks` and `loopIteration + 1`,
-and dispatches owned-note releases first ([§6.5](#65-ordering)). A pass anchored past `endTicks` does not wrap. A
-position resolves through the anchor in effect at its frame, so an event before the wrap keeps its pass even when
-delivered after the wrap anchor. A scheduled target is an **occurrence**: the pass holding its origin, plus its ticks. A
-wrap never moves it; musical-map revisions re-resolve it within its pass. A grid boundary equal to `endTicks` is the
-wrap frame, and later ones continue on the next pass's grid (example 03). In v1, musical targets must resolve inside
-`[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
+A loop is `[startTicks, endTicks)`, with `startTicks < endTicks`. At the wrap frame (exactly `endTicks` through the
+pass's anchor, rounded as in §5.2) the transport records a `loopWrap` discontinuity, re-anchors with `musicalTicks =
+startTicks` and `loopIteration + 1`, and dispatches owned-note releases first ([§6.5](#65-ordering)). A pass anchored
+past `endTicks` does not wrap. A position resolves through the anchor in effect at its frame, so an event before the
+wrap keeps its pass even when delivered after the wrap anchor. A scheduled target is an **occurrence**: the pass
+holding its origin, plus its ticks. A wrap never moves it; musical-map revisions re-resolve it within its pass. A grid
+boundary equal to `endTicks` is the wrap frame, and later ones continue on the next pass's grid (example 03). In v1,
+musical targets must resolve inside `[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
 
 ### 5.6 Tempo and meter
 
@@ -214,7 +214,7 @@ The checker evaluates a trigger's outcome in this order:
 
 1. `rejectedStale` if it arrived with a stale required generation.
 2. `cancelled` if a required generation changed while it was pending.
-3. `dropped` (`notReady`) if the action was not continuously `ready`.
+3. `dropped` (`notReady`) if the action was not continuously `ready`; its target need never be resolved.
 4. The timing policy.
 
 `notReady` has one v1 policy, `dropAndReport`; deferral is an open question for #107. `capacity` is not an outcome:
@@ -342,12 +342,12 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
 ticks exactly when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient
-runtime data. A capture delivered after a `clockRestart` but stamped before its `hostTicks` is unsupported in v1: it
-is reported, neither remapped through the new anchor nor silently dropped, and nothing containing it claims to
-be lossless (recovery: #110, #112). Delayed delivery within a generation is supported (examples 03, 04). Otherwise
-`nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the take
-start as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes
-nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
+runtime data. A capture delivered after a `clockRestart` or locate but stamped before it is unsupported in v1: it is
+reported, neither remapped through the new anchor nor silently dropped, and nothing containing it claims to be
+lossless (recovery: #110, #112). Delayed delivery within a generation is supported (examples 03, 04). Otherwise
+`nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the take start
+as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes nothing). Any
+Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
 
 ### 9.3 SMF export losses
 
@@ -407,10 +407,8 @@ FFI or plugin code real-time safe (#48).
 | #111 Backing clips, metronome, tuner | Backing clips are `fixedRate` by default and use `joinInProgress`. The metronome is a musical-grid `state` or `midi` action with no audio stretching |
 | #112 MIDI clips with protocol fidelity | Plays clips with `tempoFollowing` by default. Implements native UMP capture and export (timing as offsets from the take start), and SMF export with declared losses ([§9](#9-midi-fidelity-and-export)) |
 
-Coordinator follow-ups (proposed, not done here):
-
-- Add a CI or Makefile step that runs the checker.
-- Add a `PrivacyInfo.xcprivacy` system-boot-time declaration when adapters first read host time.
+Coordinator follow-ups (proposed, not done here): a CI or Makefile step that runs the checker, and a
+`PrivacyInfo.xcprivacy` system-boot-time declaration when adapters first read host time.
 
 ## 12. Versioning and compatibility
 
@@ -479,16 +477,17 @@ to round-trip byte-for-byte to canonical form. It validates against the schema, 
 rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and recomputing every outcome
 frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Mutation
 self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
-`capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls (a user stop at the
-restart boundary, a restart at loop end resuming at loop start, SMF inversion through a delayed capture's own anchor)
-must pass. A malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
+`capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls must pass. A malformed
+file or trace reports `FAIL`, never a crash, and is not used for mutations.
 
 **Checker limits.** Not fully checked here; acceptance items for the #55 Swift contract tests or the named owner:
 - lateness and `asap` against the exact latency-inclusive horizon at commit; the checker only lower-bounds it (§6.1);
 - synchronous `capacity` refusal and outcome-slot reservation (M5); the stopped-transport policy (§6.2);
 - owned-note releases at locate, loop wrap, clock restart and stop (§5.1, §6.5);
 - bounded SPSC handoffs, render-thread safety and adapter-only engine types (M8, M11, §10; #64, #109);
-- the recorder's report of cross-restart captures (§9.2; #110, #112); the checker just rejects such traces.
+- the recorder's report of cross-restart captures (§9.2; #110, #112); the checker just rejects such traces;
+- rejecting captures stamped before a locate but delivered after it (§9.2); the checker remaps them;
+- readiness invalidation and re-preparation after a `source` bump (§5.1, §5.7); the checker trusts readiness records.
 
 ## 16. Sources
 
