@@ -36,8 +36,11 @@ final class InertLaunchControlXLInput: LaunchControlXLInput {
 struct HardwareServiceFactories: Sendable {
     /// Called on the first non-disabled Launch Control XL restart, not at init.
     var makeLaunchControlXLInput: @MainActor () -> any LaunchControlXLInput
+    /// Reads/requests privacy permissions. Defaults to inert; only production queries the system.
+    var makePermissionProbe: @MainActor () -> any PermissionProbe = { InertPermissionProbe() }
 
-    static let production = HardwareServiceFactories(makeLaunchControlXLInput: { CoreMIDIInput() })
+    static let production = HardwareServiceFactories(
+        makeLaunchControlXLInput: { CoreMIDIInput() }, makePermissionProbe: { SystemPermissionProbe() })
     static let inert = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
 
     /// Selected once, alongside `AppPersistence.storage`.
