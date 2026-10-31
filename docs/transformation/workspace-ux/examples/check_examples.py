@@ -346,13 +346,15 @@ def check_commands(hs, roles, docs):
             granted, need = roles.get(origin["role"], []), perms[cmd["class"]]
             ok = (need in granted or (need == "live.set" and f"live.set:{target.get('group')}" in granted)
                   or (need == "safety" and any(g.startswith("safety.") for g in granted)))
-            expected = ALLOWED[cmd["class"]] if ok else {"rejectedPermission"}
+            expected, pick = ALLOWED[cmd["class"]] if ok else {"rejectedPermission"}, binding.get("pickup", {})
+            if ok and cmd["class"] == "live":  # a waiting catch holds values still on the hardware's side of the target
+                aim = pick.get("parameterValue")
+                hold = pick.get("state") == "waiting" and (value - aim) * (pick["hardwareValue"] - aim) > 0
+                expected = {"heldForPickup"} if hold else {"accepted"}
             if status not in expected:
-                err(where, f"status {status} not in {sorted(expected)}")
+                err(where, f"status {status} not in {sorted(expected)} for this class, permission and pickup")
             if origin["role"] == "assistant" and status not in ("draftCreated", "rejectedPermission"):
                 err(where, "assistant commands may only create review drafts")
-            if status == "heldForPickup" and binding.get("pickup", {}).get("state") != "waiting":
-                err(where, "heldForPickup requires a waiting pickup binding")
             res, exp = cmd["result"].get("resultParameterRevision"), cmd.get("expectedParameterRevision")
             if res is not None and exp is not None and res != exp + 1:
                 err(where, "accepted live change must advance parameter revision by one")
