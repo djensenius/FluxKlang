@@ -40,9 +40,9 @@ and CoreMIDI stay behind adapters ([§10](#10-adapter-boundary)).
 | Owned note | A note started by a transport-synchronised playback stream (clip, sequence or preloaded action) and not yet released. Live-input notes, routed or held notes, and patch tails are **not** owned; their release belongs to #82 and #105 |
 | Trigger | A stamped request to perform a prepared action: origin host time, the horizon at arrival, the generations it requires, and a target |
 | Origin | The host time of the human or remote intent (`originHostTicks`) |
-| Horizon | `horizonFrame`: the earliest frame the scheduler can still affect when the trigger arrives |
-| Assigned frame | The frame the quantized target resolves to. Late if `assignedFrame < horizonFrame` |
-| Pending, committed | A trigger is **pending** until its outcome. A `fired`, `firedLate` or `joined` outcome **commits** it: its frame is final and it goes to the render queue. The scheduler commits no later than when the horizon reaches the assigned frame; any earlier look-ahead is owned by #84 and #107. Only pending targets re-resolve (M6) or are cancelled (M4). A committed event whose generation changes before it renders is discarded, never retargeted |
+| Horizon | The earliest frame the scheduler can still affect. A trigger's `horizonFrame` records it at arrival; it continues advancing while the trigger is pending (§6.1) |
+| Assigned frame | The frame the quantized target resolves to. Late if it precedes the **current** horizon at commit |
+| Pending, committed | A trigger is **pending** until its outcome. A `fired`, `firedLate` or `joined` outcome **commits** it: its frame is final and it goes to the render queue. Before committing, the scheduler rechecks the current horizon and applies the late policy if needed; earlier look-ahead is owned by #84 and #107. Only pending targets re-resolve (M6) or are cancelled (M4). A committed event whose generation changes before it renders is discarded, never retargeted |
 | Outcome | The single terminal result of a trigger: `fired`, `firedLate`, `joined`, `cancelled`, `rejectedStale` or `dropped` |
 | Readiness | The preparation state of an action: `unprepared`, `preparing`, `ready`, `invalidated` or `failed` |
 | Stream | An ordered event or sample source with a prepare-time `ordinal` (`audio`, `midi` or `state`; playback or capture) |
@@ -57,6 +57,8 @@ Kernel values are fixed-size and trivially copyable. They use no strings, Founda
 allocation. Identities are dense `UInt32` slots resolved at prepare time. String IDs such as `smp.main` appear only
 in persisted, debug and example forms. These semantics are normative; the field widths below and the ring layout in
 [§8.2](#82-prefetch-109) are advisory for #55, #64 and #109.
+Sample `clockId`, `streamId` and `actionId` values are each unique within their declaration list. Duplicates are
+invalid, not last-declaration-wins; they are rejected before indexing or replay.
 
 | Value | Fields (width) |
 |---|---|
@@ -99,7 +101,7 @@ Counters are keyed `kind/id` (for example `transport/mus.main`). Owners are in b
 | Kind | Bumped by (reason) | Effect on dependants |
 |---|---|---|
 | `sampleClock` [#65, #55] | `deviceRestart`, `rateChange` (carries the new `nominalRate`; others may, else inherit), `configurationChange`, `wake` | Pending triggers cancelled. Old anchors void. Forces a `transport` bump (`clockRestart`) |
-| `transport` [#84, #55] | `locate`, `clockRestart`, `transportRestart` | Pending musical triggers cancelled. [Owned notes](#2-terminology) released. Musical anchor void until re-anchored |
+| `transport` [#84, #55] | `locate`, `clockRestart`, `transportRestart` | Pending musical triggers, including `nextBoundary` fallback, cancelled. [Owned notes](#2-terminology) released. Musical anchor void until re-anchored |
 | `musicalMap` [#84] | `tempoEdit`, `externalTempo` (rate-limited) | Pending musical targets re-resolve. **Nothing is cancelled** |
 | `source` [#109, #81] | `sourceLost`, `sourceReacquired` | Dependent triggers cancelled. Readiness invalidated |
 | `context` [#62, #55] | `contextChange` (activation or engine lease) | Pending triggers cancelled. Old-context triggers rejected |
@@ -138,6 +140,15 @@ The policy for a device restart, rate change, configuration change or wake:
    at the `sampleClock` bump (so at the old rate; a `previousFrame` at loop end resumes at `startTicks`), with
    `loopIteration` 0. There is no catch-up.
 4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
+
+A second change of the same sample clock is invalid until its preceding `clockRestart` record and, for the primary
+clock, required transport bump are complete. Neither obligation may coalesce across changes. This permits one bounded
+outstanding restart per clock, with either record/bump order.
+
+The first anchor of the restarted generation must not precede its `clockRestart` in host ticks or frames. Its frame
+must agree with that record's `(frame, hostTicks)` at the **new** rate within the same `(rate + span) / 1000` bound as
+§5.2, with `span` measured from the restart. Equality is allowed (example 01); a later first anchor is also allowed
+(example 08). Subsequent anchors remain bounded against that generation's first anchor.
 
 ### 5.4 Seek (locate)
 
@@ -180,7 +191,14 @@ Both cancel pending triggers and reject late stale ones (example 06).
 ### 6.1 Horizon
 
 The scheduler publishes `horizonFrame`, the earliest frame it can still affect: at least the next render cycle plus
-any adapter latency. `asap` targets resolve to the horizon. A target before the horizon is **late**.
+any adapter latency. `asap` targets initially resolve to the arrival horizon. At outcome, every still-pending target
+is rechecked against the current horizon, not just its arrival horizon; a target before it is **late**.
+
+In traces, the horizon advances monotonically to the maximum of the primary anchors' frames (observed render
+progress) and trigger horizons stamped with the current primary sample generation. Producers must publish render
+progress before outcomes; an anchor's frame is only a lower bound on the scheduler's latency-inclusive horizon.
+Old-sample-generation trigger horizons do not advance it. Only a primary sample-clock generation change resets it,
+not a locate, loop wrap or musical-map edit. A future committed outcome does not advance render progress.
 
 ### 6.2 Quantization
 
@@ -191,12 +209,17 @@ origin exactly on a boundary uses that boundary. When the transport is stopped, 
 
 ### 6.3 Late and retroactive cues
 
-| Policy | When late (`assignedFrame < horizonFrame`) |
+| Policy | When late (`assignedFrame < current horizon`) |
 |---|---|
 | `drop` | `dropped`, reason `late` |
 | `fireLate` | If lateness ≤ `maxLatenessMs`: `firedLate` at the horizon. Otherwise `dropped` (`late`) |
 | `joinInProgress` | If lateness ≤ `maxLatenessMs`: `joined` at the horizon with `startOffsetFrames = horizon − assigned`, so the source stays aligned. Otherwise `dropped` (`late`) |
 | `nextBoundary` | `fired` at the first boundary at or after the horizon on the trigger's resolved grid (its `gridTicks`, else the action's). Requires a musical grid |
+
+Every trigger whose target is musical **or whose late policy is `nextBoundary`** requires the transport generation,
+even with a `sample` or `asap` override: a later horizon may require musical fallback. A locate therefore cancels it
+before any retargeting. Fallback requires a current musical anchor and the outcome names the musical-map revision
+actually used, just as a musical target does.
 
 **Retroactive tolerance.** `retroactiveMs` ranges over 0–120, defaults to 0, must not exceed `maxLatenessMs`, and
 is allowed only with `fireLate` and `joinInProgress`. If the origin is within the tolerance after the previous grid
@@ -338,9 +361,17 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
 ticks exactly when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
-data. `nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the
-take start as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes
-nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
+data. In v1, delivery across a **sample-clock restart is unsupported**: a `midiCapture` timestamp must be at or after
+the current primary generation's `clockRestart.hostTicks`, checked before rounding frames. Equality belongs to the
+new generation. An older delivery rejects the trace explicitly; it must never be remapped through the new rate or
+anchor. A recorder must report unsupported cross-generation delivery and must not claim a complete/lossless
+capture or export for that affected input. Retained-generation alignment and recovery belong to #110/#112; v1 does
+not silently discard such input. Delayed delivery within a generation (including across loop wraps and tempo
+segments, examples 03/04) remains supported.
+
+For supported captures, `nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its
+`origin` (the take start as clock, generation and frame, bound to that generation's recorded anchor, so a later
+restart changes nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
 Capture never upgrades fidelity: OS-upscaled values keep `effective = midi1`.
 
 ### 9.3 SMF export losses
@@ -472,11 +503,13 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used
 (`pattern` anchors as in ECMA-262, so `$` never matches before a final newline). It then replays each trace in exact
 rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and recomputing every outcome
-frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Forty-five
-mutation self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
-`capacity`, or an SMF loss is hidden) and must fail with that rule's error; three positive controls (a user stop at
+frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace.
+Mutation self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
+`capacity`, or an SMF loss is hidden) and must fail with that rule's error; positive controls (a user stop at
 the restart boundary, a restart at loop end resuming at loop start, SMF inversion through a delayed capture's own
-anchor) must pass. A malformed file or trace reports `FAIL`,
+anchor) must pass. Paired review regressions also cover sample overrides using musical fallback, advancing commit
+horizons and lateness budgets, unsupported cross-restart capture, duplicate declarations, restart-anchor jitter
+bounds and serialized restart obligations (both record/bump orders). A malformed file or trace reports `FAIL`,
 never a crash, and is not used for mutations.
 
 ## 16. Sources
