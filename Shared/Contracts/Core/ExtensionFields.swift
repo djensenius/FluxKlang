@@ -49,6 +49,10 @@ struct DynamicCodingKey: CodingKey, Hashable, Sendable {
 /// top-level keys for lenient forward compatibility; a strict validator rejects
 /// any document whose stray-key decode is non-empty.
 ///
+/// Keys compare by canonical equivalence and plain `JSONDecoder` keeps only the
+/// first duplicate, so contract documents MUST be decoded with `ContractCoding.decode`,
+/// which rejects duplicates. Encoding never emits them (dictionaries cannot hold them).
+///
 /// Both functions need a keyed (object) container: on a top-level array or
 /// scalar, `decode` throws `DecodingError.typeMismatch`.
 enum ExtensionFields {
@@ -96,21 +100,5 @@ enum ExtensionFields {
 
     private static func names<Keys: CodingKey & CaseIterable>(of keys: Keys.Type) -> Set<String> {
         Set(keys.allCases.map(\.stringValue))
-    }
-}
-
-/// The JSON coders every contract document uses. Output is canonical: sorted
-/// keys and unescaped slashes. Contract coders must keep the default key, date
-/// and data strategies; a key strategy such as `.convertFromSnakeCase` would
-/// rename the stray keys that `ExtensionFields` preserves.
-enum ContractCoding {
-    static func makeEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return encoder
-    }
-
-    static func makeDecoder() -> JSONDecoder {
-        JSONDecoder()
     }
 }

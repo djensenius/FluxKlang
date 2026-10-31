@@ -20,6 +20,10 @@ import Foundation
 /// are equal when they represent the same exact integer (the double is finite,
 /// integral and exactly representable), so `.double(1.0) == .int(1)`. `-0.0`
 /// is normalised to `0`. Encoding a non-finite double throws.
+///
+/// Object keys compare by canonical equivalence (`"\u{E9}"` == `"e\u{301}"`) and plain
+/// `JSONDecoder` keeps only the first duplicate; contract documents MUST be decoded with
+/// `ContractCoding.decode`, which rejects duplicates. Encoding never emits them.
 enum JSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)

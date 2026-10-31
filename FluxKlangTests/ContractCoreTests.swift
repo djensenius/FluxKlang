@@ -84,7 +84,7 @@ private func json(_ text: String) -> Data {
 }
 
 private func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T {
-    try ContractCoding.makeDecoder().decode(type, from: json(text))
+    try ContractCoding.decode(type, from: json(text))
 }
 
 /// Case-exact comparison, since `JSONValue` equality compares numbers by value.
@@ -384,6 +384,44 @@ extension ContractCoreTests {
         func generationRejectsOutOfRange(raw: Int) {
             #expect(throws: RevisionError.outOfRange(raw)) { try Generation(raw) }
             #expect(throws: DecodingError.self) { try decode(Generation.self, String(raw)) }
+        }
+    }
+}
+
+extension ContractCoreTests {
+    struct DuplicateNames {
+        @Test(arguments: [
+            (#"{"x":{"\u00e9":1,"e\u0301":2}}"#, "$.x"),
+            (#"{"list":[{"a":1,"a":2}]}"#, "$.list[0]"),
+            (#"{"\u0041":1,"A":2}"#, "$")
+        ])
+        func duplicateMemberNamesAreRejected(text: String, path: String) {
+            #expect {
+                try decode(JSONValue.self, text)
+            } throws: { error in
+                guard case DecodingError.dataCorrupted(let context) = error else { return false }
+                return context.debugDescription.hasSuffix(" at \(path)")
+            }
+        }
+
+        @Test func strayKeyCollisionIsRejected() {
+            let text = #"{"id":"r.1","\u00e9":1,"e\u0301":2}"#
+            #expect(throws: DecodingError.self) { try decode(SampleRecord.self, text) }
+        }
+
+        @Test func escapedAndSiblingNamesDecode() throws {
+            let text = #"{"\u0041":[{"a":1},{"a":2}],"\ud83d\ude00":{"a":{"a":3}},"q\"k":4}"#
+            #expect(try decode(JSONValue.self, text) == .object([
+                "A": .array([.object(["a": .int(1)]), .object(["a": .int(2)])]),
+                "\u{1F600}": .object(["a": .object(["a": .int(3)])]),
+                "q\"k": .int(4)
+            ]))
+        }
+
+        /// Why `ContractCoding.decode` exists: plain JSONDecoder keeps one of each duplicate.
+        @Test func plainJSONDecoderCollapsesDuplicates() throws {
+            let value = try JSONDecoder().decode(JSONValue.self, from: json(#"{"\u00e9":1,"e\u0301":2,"a":3,"a":4}"#))
+            #expect(value == .object(["\u{E9}": .int(1), "a": .int(3)]))
         }
     }
 }
