@@ -33,7 +33,7 @@ and CoreMIDI stay behind adapters ([§10](#10-adapter-boundary)).
 | Sample clock | A device-driven frame counter (`Int64` frames) with an identity (`clockId`) and a generation; each generation has its own nominal rate. It is the render timeline |
 | Host clock | The monotonic process clock in host ticks (`UInt64`) with a timebase `numer/denom` (ns per tick). Process-local; it does not advance during sleep |
 | Musical time | Ticks (`Int64`) at a fixed **15360 ticks per quarter note** (TPQ). A beat is a quarter note. Converted to frames only through the musical map and an anchor |
-| Musical map | Ordered `(atTicks, microsPerQuarter)` segments plus one meter. One revision covers both; an absent meter is inherited |
+| Musical map | `(atTicks, microsPerQuarter)` segments from tick 0 with strictly increasing `atTicks` (initial map and every revision), plus one meter. One revision covers both; an absent meter is inherited |
 | Console setup | Device selection, routing, buffer size and gain. It is configuration, **not a clock**; changing it may bump the sample clock generation |
 | Anchor | One simultaneous observation of `(sample clock, generation, frame, hostTicks)`, optionally with `(transport generation, musicalTicks, loopIteration)` |
 | Generation | A counter that names an epoch of meaning (see [§5.1](#51-generation-counters)) |
@@ -274,6 +274,9 @@ fallback (example 04).
   segment's (the take's anchor), never absolute host ticks (M13).
 - Disk full records `captureStopped` at the end of the last segment and leaves a recoverable partial file
   (example 08).
+- A take owns only the overflow and `captureStopped` records on its stream that touch its own segments (same clock
+  generation, overlapping frames), so earlier and later takes never count. A `captureStopped` it owns must match its
+  `stopReason`: a `user` stop owns none; any other owns exactly one, at the end of its last segment (example 08 `tk.2`).
 
 ### 8.4 Discontinuity kinds
 
@@ -438,7 +441,7 @@ Coordinator follow-ups (proposed, not done here):
 | [`05-source-loss`](media-contract/examples/05-source-loss.json) | underrun, source loss and reacquisition, no replay |
 | [`06-stale-trigger-no-replay`](media-contract/examples/06-stale-trigger-no-replay.json) | user cancel, context change, rejection |
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
-| [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full |
+| [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full, a later take scoped to its own stop |
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss, groupless JR Timestamp |
 
@@ -458,7 +461,7 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
 then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
 and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Twenty-eight mutation self-tests each break one rule in a valid example (for example a stale
+evidence in a trace. Thirty-one mutation self-tests each break one rule in a valid example (for example a stale
 trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A
 malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 

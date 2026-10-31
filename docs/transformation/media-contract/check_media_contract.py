@@ -273,6 +273,7 @@ class Trace:
             self.err({}, "timeline seq must be 1..n in order")
         for a in self.actions.values():
             self.check_action(a)
+        self.check_map({}, self.map)
         for i, rec in enumerate(records):
             self.prev = records[i - 1] if i else None
             getattr(self, "on_" + rec["kind"])(rec)
@@ -307,6 +308,11 @@ class Trace:
             self.err(a, f"{a['actionId']}: time-stretch actions need a declared time-stretch adapter")
         if media == "audio" and policy == "fixedRate":
             self.evidence.add("fixedRateDefault")
+
+    def check_map(self, rec, segments):
+        ticks = [s["atTicks"] for s in segments]
+        if ticks[0] != 0 or ticks != sorted(set(ticks)):
+            self.err(rec, "musical map segments start at 0 and strictly increase (initial map and every revision)")
 
     def stretch_ok(self, action):
         return action.get("timePolicy") != "timeStretch" or self.doc.get("adapterCapabilities", {}).get("timeStretch")
@@ -387,9 +393,7 @@ class Trace:
         if kind == "transport":
             self.musical = None
         elif kind == "musicalMap":
-            ticks = [s["atTicks"] for s in r["musicalMap"]]
-            if ticks[0] != 0 or ticks != sorted(set(ticks)):
-                self.err(r, "musical map segments start at 0 and strictly increase")
+            self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
             if same(r["musicalMap"], self.map) and same(meter, self.meter):
                 self.err(r, "a musicalMap revision changes the tempo segments or the meter (absent: inherited)")
@@ -647,9 +651,9 @@ class Trace:
             self.err(r, "take names a declared audio capture stream")
         if r["inputLatency"]["measuredFrames"] is not None and "evidence" not in r["inputLatency"]:
             self.err(r, "measured latency cites its evidence; reported latency is not measured latency")
-        overflow = [d for d in self.discs if d["type"] == "overflow" and d.get("stream") == r["stream"]]
+        mine = [d for d in self.discs if d.get("stream") == r["stream"]]  # scoped below to this take's intervals
         restarts = {(d["sampleClock"], d["generation"]): d for d in self.discs if d["type"] == "clockRestart"}
-        file_frame, base = 0, None
+        file_frame, base, stops = 0, None, []
         for i, seg in enumerate(segs):
             clock, gen, start = seg["sampleClock"], seg["generation"], seg["startFrame"]
             end, restart = start + seg["frames"], restarts.get((clock, gen + 1), {})
@@ -664,19 +668,21 @@ class Trace:
             base = host if i == 0 else base
             if host is None or base is None or rnd((host - base) * self.ns_per_tick) != seg["startOffsetNs"]:
                 self.err(r, "segment startOffsetNs is the ns offset of its anchored start from the first segment's")
-            inside = [d for d in overflow if (d["sampleClock"], d["generation"]) == (clock, gen)]
-            if any(not start <= d["frame"] <= end - d.get("frames", 0) for d in inside):
+            here = [(d, d["frame"], d["frame"] + d.get("frames", 0)) for d in mine
+                    if (d["sampleClock"], d["generation"]) == (clock, gen)]
+            inside = [(lo, hi) for d, lo, hi in here if d["type"] == "overflow" and lo < end and hi > start]
+            if any(lo < start or hi > end for lo, hi in inside):
                 self.err(r, "every overflow interval lies wholly inside its segment")
-            if seg["paddedFrames"] != sum(d.get("frames", 0) for d in inside):
+            if seg["paddedFrames"] != sum(hi - lo for lo, hi in inside):
                 self.err(r, "paddedFrames equal the overflow frames inside the segment")
+            stops += [d for d, lo, _ in here if d["type"] == "captureStopped" and start < lo <= end]
             file_frame += seg["frames"]
-        if r["droppedFrames"] != sum(s["paddedFrames"] for s in segs) or len(overflow) != sum(
-                1 for d in overflow if any(d["generation"] == s["generation"] for s in segs)):
-            self.err(r, "droppedFrames equals all padded overflow frames; no silent capture loss")
-        stops = [d for d in self.discs if d["type"] == "captureStopped" and d.get("stream") == r["stream"]]
-        if r["stopReason"] != "user" and (len(stops) != 1 or r["stopReason"] != stops[0].get("reason")
-                                         or stops[0]["frame"] != segs[-1]["startFrame"] + segs[-1]["frames"]):
-            self.err(r, "a non-user stop has one captureStopped discontinuity at the end of the last segment")
+        if r["droppedFrames"] != sum(s["paddedFrames"] for s in segs):
+            self.err(r, "droppedFrames equals the take's padded overflow frames; no silent capture loss")
+        last = (segs[-1]["sampleClock"], segs[-1]["generation"], segs[-1]["startFrame"] + segs[-1]["frames"])
+        if any(d.get("reason") != r["stopReason"] for d in stops) or (r["stopReason"] != "user") != (
+                len(stops) == 1 and (stops[0]["sampleClock"], stops[0]["generation"], stops[0]["frame"]) == last):
+            self.err(r, "a take's captureStopped matches its stopReason: none if user, else one at its last frame")
         self.evidence.add("capture")
 
 
@@ -722,6 +728,9 @@ MUTATIONS = [
     ("08", 3, {"nominalRate": None}, "required on rateChange"),
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
     ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
+    ("08", 8, {"stopReason": "user"}, "captureStopped matches its stopReason"),
+    ("08", 9, {"reason": "diskFull"}, "captureStopped matches its stopReason"),
+    ("08", "clocks.musical", {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}] * 2}, "strictly increase"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),

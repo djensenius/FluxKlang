@@ -1,11 +1,12 @@
 {
   "contract": "fluxklang.media", "version": 1, "exampleId": "ex.08-audio-capture-discontinuities",
-  "title": "Audio capture: overflow padding, a 48 kHz to 96 kHz restart of the same clock splits the take, disk full leaves a recoverable partial file",
+  "title": "Audio capture: overflow padding, a 48 kHz to 96 kHz restart of the same clock splits the take, disk full leaves a recoverable partial file; a later clean take has its own stop",
   "covers": ["capture", "clockRestart"],
   "notes": [
     "Overflow never blocks the render thread: dropped frames are padded with silence in the file and counted.",
     "No padding spans a clock restart; startOffsetNs aligns segments to the first one, so the take stores no absolute host ticks.",
-    "smp.main restarts at 96 kHz (rateChange): generation 2 converts at 96 kHz while segment 1 keeps its 48 kHz alignment."
+    "smp.main restarts at 96 kHz (rateChange): generation 2 converts at 96 kHz while segment 1 keeps its 48 kHz alignment.",
+    "tk.2 records later on the same stream: tk.1's overflow and disk-full stop lie outside its recording interval, and its own deviceLost stop is checked against it alone."
   ],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
@@ -21,6 +22,8 @@
     {"seq": 5, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 96000, "hostTicks": 2924000000},
     {"seq": 6, "kind": "discontinuity", "type": "overflow", "sampleClock": "smp.main", "generation": 2, "frame": 192000, "frames": 512, "stream": "str.take-in"},
     {"seq": 7, "kind": "discontinuity", "type": "captureStopped", "sampleClock": "smp.main", "generation": 2, "frame": 480000, "stream": "str.take-in", "reason": "diskFull", "note": "Writer finalised the partial file."},
-    {"seq": 8, "kind": "take", "takeId": "tk.1", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 1, "startFrame": 0, "startOffsetNs": 0, "fileFrameStart": 0, "frames": 960000, "paddedFrames": 1024}, {"sampleClock": "smp.main", "generation": 2, "startFrame": 0, "startOffsetNs": 20833333333, "fileFrameStart": 960000, "frames": 480000, "paddedFrames": 512}], "droppedFrames": 1536, "stopReason": "diskFull", "note": "Reported latency is not measured latency; no loopback measurement was made."}
+    {"seq": 8, "kind": "take", "takeId": "tk.1", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 1, "startFrame": 0, "startOffsetNs": 0, "fileFrameStart": 0, "frames": 960000, "paddedFrames": 1024}, {"sampleClock": "smp.main", "generation": 2, "startFrame": 0, "startOffsetNs": 20833333333, "fileFrameStart": 960000, "frames": 480000, "paddedFrames": 512}], "droppedFrames": 1536, "stopReason": "diskFull", "note": "Reported latency is not measured latency; no loopback measurement was made."},
+    {"seq": 9, "kind": "discontinuity", "type": "captureStopped", "sampleClock": "smp.main", "generation": 2, "frame": 720000, "stream": "str.take-in", "reason": "deviceLost"},
+    {"seq": 10, "kind": "take", "takeId": "tk.2", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 2, "startFrame": 600000, "startOffsetNs": 0, "fileFrameStart": 0, "frames": 120000, "paddedFrames": 0}], "droppedFrames": 0, "stopReason": "deviceLost"}
   ]
 }
