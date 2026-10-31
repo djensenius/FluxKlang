@@ -331,6 +331,10 @@ def check_commands(hs, roles, docs):
                     err(where, "origin must be a session member or an active binding on this host's own rig")
                     continue
                 origin = people[log["host"]]
+            target = params.get(cmd["op"].get("set"), {})
+            if "set" in cmd["op"] and target.get("class") != cmd["class"]:
+                err(where, f"class {cmd['class']} must match the target's class {target.get('class')}")
+                continue
             conn = origin.get("connection")
             stale = cmd.get("hostEpoch") != log["hostEpoch"] or (
                 conn is not None and cmd.get("connectionEpoch") != hs["connections"].get(conn))
@@ -339,7 +343,6 @@ def check_commands(hs, roles, docs):
                     err(where, "stale epoch must be rejected, whatever the class")
                 continue
             granted, need = roles.get(origin["role"], []), perms[cmd["class"]]
-            target = params.get(cmd["op"].get("set"), {})
             ok = (need in granted or (need == "live.set" and f"live.set:{target.get('group')}" in granted)
                   or (need == "safety" and any(g.startswith("safety.") for g in granted)))
             expected = ALLOWED[cmd["class"]] if ok else {"rejectedPermission"}
