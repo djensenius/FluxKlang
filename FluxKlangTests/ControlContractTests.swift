@@ -303,6 +303,18 @@ extension ControlContractTests {
             }
         }
 
+        @Test func panCatalogUsesTheExistingBipolarControlScale() throws {
+            let pan = try #require(ParameterCatalog.wing[ParameterCatalog.wingPan])
+            for value in [-1.0, -0.5, 0, 0.5, 1] {
+                try pan.check(.init(value: value, unit: .pan))
+            }
+            for value in [-1.01, 1.01, 50] {
+                #expect(throws: ParameterValueError.outOfRange(value, lower: -1, upper: 1)) {
+                    try pan.check(.init(value: value, unit: .pan))
+                }
+            }
+        }
+
         @Test func catalogEnvelopePreservesOptionalFieldsAndRejectsFutureVersion() throws {
             var envelope = try ParameterCatalogDocument(revision: .initial, payload: .wing)
             envelope.unknownFields["future"] = .bool(true)

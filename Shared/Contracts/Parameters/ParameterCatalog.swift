@@ -164,7 +164,7 @@ struct ParameterCatalog: ControlPayload {
                               range: Double(FaderMath.minimumDecibels)...Double(FaderMath.maximumDecibels),
                               curve: .faderTaper, verification: .reported),
                 wingParameter(wingMute, unit: .boolean, range: 0...1, curve: .stepped, verification: .reported),
-                wingParameter(wingPan, unit: .pan, range: -100...100, curve: .linear, verification: .unverified),
+                wingParameter(wingPan, unit: .pan, range: -1...1, curve: .linear, verification: .unverified),
                 wingParameter(wingColour, unit: .index, range: 1...12, curve: .stepped, verification: .unverified),
                 wingParameter(wingSendDecibels, unit: .decibels, range: -90...10,
                               curve: .faderTaper, verification: .unverified)
