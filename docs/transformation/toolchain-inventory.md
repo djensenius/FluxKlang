@@ -3,8 +3,11 @@
 Package `toolchain-api-inventory` for #59 (roadmap #48, gate G-SDK). It feeds #60 (hosted
 native tests), #61 (OS-27 CI) and #74 (native I/O backends and native vs Rust kernels).
 
-- Captured: 2026-10-31 at `main` 9cfa1ec on one Apple-silicon development Mac. Usernames,
-  hostnames, device identifiers and serials are redacted, and home paths are shown as `~`.
+- Captured: 2026-10-31 at `main` 9cfa1ec on one Apple-silicon development Mac. Re-checked the
+  same day after merging `main` 0c97cc6, which adds the FluxKlangMacTests target, the
+  `build-for-testing-mac` and `test-mac` Make targets (#127), and a regenerated project (17a813a).
+  Rows that were not re-run say "pre-merge". Usernames, hostnames, device identifiers and
+  serials are redacted, and home paths are shown as `~`.
 - Deployment policy: iOS and macOS stay at **27.0** (`project.yml:4-6`). This document
   never proposes lowering them. If a host or runner lacks the OS-27 SDKs, that is a **blocker**
   and must not be worked around with a fallback.
@@ -17,14 +20,15 @@ Evidence labels used throughout:
 | --- | --- |
 | **Verified** | Command output or a compile probe run on this machine with the selected Xcode. |
 | **SDK** | Read from an SDK header or `.swiftinterface` at the cited `file:line`, but not compiled. |
-| **Web** | Public source, retrieved 2026-10-31. This can change without notice. |
+| **Web** | Public source, retrieved 2026-10-31 (URLs in §14). This can change without notice. |
 | **Assumption** / **Unknown** | Not verified. It must not be cited as a fact downstream. |
 
 ## 1. Gate summary
 
 1. The selected toolchain, Xcode 27.1 (27A9275) with Swift 6.4 and Apple clang 21, ships the
    iOS 27.1, iOS Simulator 27.1 and macOS 27.0 SDKs. Both apps build unsigned for the
-   iOS Simulator, a generic iOS device and macOS at deployment 27.0, with zero errors (**Verified**).
+   iOS Simulator, a generic iOS device and macOS at deployment 27.0, with zero errors. Both
+   schemes also compile their test bundles with `build-for-testing` (**Verified**).
 2. `xcode-select` on this Mac points at Command Line Tools. Every command must set
    `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`. Without it, `xcodebuild` fails
    (**Verified**, §2).
@@ -70,8 +74,10 @@ SDKs (`xcodebuild -showsdks`, `xcrun --sdk <sdk> --show-sdk-version/--show-sdk-b
 | `macosx` | 27.0 (26A425). `-showsdks` lists `macosx27.0` twice because `MacOSX27.0.sdk` and `MacOSX27.sdk` are symlinks. | 27.0 / 27.0.99 | x86_64, x86_64h, arm64, arm64e, arm64e.x1 |
 | others | DriverKit, tvOS, visionOS and watchOS 27.0 (not used by FluxKlang) | | |
 
-Xcode 27 requires macOS Tahoe 26.6 or later and runs only on Apple silicon (**Web**: Xcode 27
-and 27.1 release notes).
+Xcode 27 requires macOS Tahoe 26.6 or later and runs only on Apple silicon (**Web**:
+[Xcode 27 release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes),
+162138432, and
+[Xcode 27.1 release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-27_1-release-notes)).
 
 ## 3. Destinations, runtimes and architectures
 
@@ -95,7 +101,8 @@ Destinations (`xcodebuild -showdestinations`, run in the slot, **Verified**):
     (arm64e) are ineligible.
   - The Makefile's `name=iPhone 17 Pro` resolves to one iOS 27.0 device locally.
 - **FluxKlangMac:** The eligible destinations are the host Mac (`arm64`) and Any Mac. Every
-  simulator is ineligible.
+  simulator is ineligible. This is unchanged on the merged tree, where the scheme also has a
+  test action for FluxKlangMacTests.
 
 Build settings (`xcodebuild -showBuildSettings -scheme … -sdk … -configuration …`, **Verified**):
 
@@ -109,20 +116,27 @@ Build settings (`xcodebuild -showBuildSettings -scheme … -sdk … -configurati
 Other settings verified: `SWIFT_VERSION = 6`, `ENABLE_USER_SCRIPT_SANDBOXING = YES`, and the
 macOS app has `ENABLE_APP_SANDBOX` and `ENABLE_HARDENED_RUNTIME` set to `YES`.
 
-Products (`lipo -archs`, `vtool -show-build`, **Verified**):
+On the merged tree, all five targets (FluxKlang, FluxKlangTests, FluxKlangUITests,
+FluxKlangMac and FluxKlangMacTests) have an effective deployment target of 27.0 in Debug and
+Release. This was read from `xcodebuild -alltargets -showBuildSettings -json` through
+`DEPLOYMENT_TARGET_SETTING_NAME`, which is the check proposed in §11-C.
+
+Products (`lipo -archs`, `vtool -show-build`, **Verified**; the simulator and Mac rows were
+re-checked on the merged tree):
 
 | Product | Arch | Platform | minos | sdk |
 | --- | --- | --- | --- | --- |
-| iOS Simulator app | arm64 | IOSSIMULATOR | 27.0 | 27.1 |
-| iOS device app | arm64 | IOS | 27.0 | 27.1 |
-| Mac app | arm64 | MACOS | 27.0 | 27.0 |
+| iOS Simulator app, `FluxKlangTests.xctest`, `FluxKlangUITests.xctest` | arm64 | IOSSIMULATOR | 27.0 | 27.1 |
+| iOS device app (pre-merge) | arm64 | IOS | 27.0 | 27.1 |
+| Mac app, `FluxKlangMacTests.xctest` | arm64 | MACOS | 27.0 | 27.0 |
+| `FluxKlangUITests-Runner` (Xcode's prebuilt UI-test runner stub, not built from repo sources) | arm64 | IOSSIMULATOR | 17.0 | 27.0 |
 
 Supported native architectures:
 
 - **macOS** is arm64 only at deployment 27.0. Xcode 27 removed x86_64 from `ARCHS_STANDARD`
   when `MACOSX_DEPLOYMENT_TARGET >= 27.0`; you can add it back explicitly in `ARCHS` (**Web**:
-  Xcode 27 release notes, "Intel Deprecation", 161837535). The SDK still carries x86_64 slices
-  for back-deployment.
+  [Xcode 27 release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes),
+  "Intel Deprecation", 161837535). The SDK still carries x86_64 slices for back-deployment.
 - **iOS device** is arm64.
 - **iOS Simulator** defaults to arm64 plus x86_64. The x86_64 slice cannot run here because
   Rosetta is missing.
@@ -148,28 +162,35 @@ Version pinning today:
 Pinning check: a throwaway `mise.toml` with `xcodegen = "2.46.0"` and `swiftlint = "0.65.1"`
 (proposal A, §11) resolves both tools to the mise installs (`mise ls --current`, `mise which`).
 The check used `MISE_AUTO_INSTALL=0` and `MISE_TRUSTED_CONFIG_PATHS` scoped to one run, so
-nothing was installed or trusted.
+nothing was installed or trusted. A re-check without `MISE_TRUSTED_CONFIG_PATHS` resolved the
+same pins, while `mise trust --show` reported the directory as untrusted. With mise
+2026.10.25, a file containing only `[tools]` therefore does not need trust locally. CI trust is
+covered in §11-B.
 
 ## 5. Existing commands verified
 
 | Command | How it was run | Result |
 | --- | --- | --- |
-| `make lint` (`swiftlint --strict`) | `mise exec swiftlint@0.65.1 -- swiftlint --strict`, and the Homebrew 0.65.1 binary | exit 0, no violations |
-| `make generate` (`xcodegen generate`) | `mise exec xcodegen@2.46.0 -- xcodegen generate` and Homebrew 2.46.0. The output was reverted afterwards. | Succeeds. **Drift:** `project.pbxproj` changes by 4+/4−. |
-| `make build` (iOS Simulator) | `xcodebuild … -scheme FluxKlang -destination "id=<slot simulator>" build-for-testing CODE_SIGNING_ALLOWED=NO` in the fleet slot, with private DerivedData | `TEST BUILD SUCCEEDED` (34.98 s real, 1 warning: AppIntents metadata extraction skipped) |
-| `make build-mac` | `xcodebuild … -scheme FluxKlangMac build CODE_SIGNING_ALLOWED=NO` (slot) | `BUILD SUCCEEDED` (33.95 s real, 0 warnings) |
-| Generic iOS device build | `-destination 'generic/platform=iOS' build CODE_SIGNING_ALLOWED=NO` (slot) | `BUILD SUCCEEDED` (24.65 s real, 0 warnings) |
-| `make test` | Not run, because hosted tests are gated by #60 and this package does not launch apps. | — |
+| `make lint` (`swiftlint --strict`) | `mise exec swiftlint@0.65.1 -- swiftlint --strict`, and the Homebrew 0.65.1 binary. Re-run with Homebrew on the merged tree. | exit 0, no violations |
+| `make generate` (`xcodegen generate`) | `mise exec xcodegen@2.46.0 -- xcodegen generate` and Homebrew 2.46.0 on the merged tree, then `git status --porcelain -- FluxKlang.xcodeproj` | Succeeds. **No drift**: the status is empty for both tools. |
+| iOS Simulator `build-for-testing`, used in place of `make build` | `xcodebuild … -scheme FluxKlang -destination "id=<slot simulator>" build-for-testing CODE_SIGNING_ALLOWED=NO` in the fleet slot, with private DerivedData. `make build` itself runs `build` against `name=iPhone 17 Pro` and was not run. | `TEST BUILD SUCCEEDED` before and after the merge. Merged tree: 32.89 s real, 1 warning (AppIntents metadata extraction skipped). |
+| `make build-mac` (pre-merge) | `xcodebuild … -scheme FluxKlangMac build CODE_SIGNING_ALLOWED=NO` (slot) | `BUILD SUCCEEDED` (33.95 s real, 0 warnings) |
+| `make build-for-testing-mac` (merged tree) | The Make recipe plus a private DerivedData: `-scheme FluxKlangMac -destination 'platform=macOS' build-for-testing CODE_SIGNING_ALLOWED=NO` (slot) | `TEST BUILD SUCCEEDED` (38.30 s real, 0 warnings). FluxKlangMacTests compiles and nothing is launched. |
+| Generic iOS device build (pre-merge) | `-destination 'generic/platform=iOS' build CODE_SIGNING_ALLOWED=NO` (slot) | `BUILD SUCCEEDED` (24.65 s real, 0 warnings) |
+| `make test`, `make test-mac` | Not run. Both launch an app as the test host. Hosted execution is gated by #60, and by #51 for the Mac. | — |
 
-Notes on the drift:
+Project sync history:
 
-- The only change is the object IDs for `StudioPhysicalOverlapTests.swift`. The committed IDs
-  were hand-incremented in commit ba6ab03.
-- Group and target membership are identical, so there is no functional difference.
-- Both tool builds produce exactly the same drift.
+- Before 17a813a, regenerating changed 4 lines of object IDs for
+  `StudioPhysicalOverlapTests.swift`. Those IDs had been hand-edited in ba6ab03. Group and
+  target membership were identical.
+- `main` 17a813a regenerated the project. On the merged tree, both XcodeGen builds reproduce
+  `FluxKlang.xcodeproj` exactly.
+- If an untracked file is added inside `FluxKlang.xcodeproj`, `git diff --exit-code` still
+  passes but `git status --porcelain` reports it. That is why §11-C uses the porcelain check.
 
 The slot simulator's UDID is redacted. DerivedData was kept under the evidence directory, not
-in `/tmp`.
+in `/tmp` or `/var/tmp`, and deleted afterwards.
 
 ## 6. Realtime and lifecycle API inventory
 
@@ -336,10 +357,17 @@ What is missing:
 
 Possible future route (all **Unknown** until probed):
 
-- Upstream LLVM introduced RTSan in Clang 20 (**Web**: LLVM 20.1.0 release notes; the clang
-  RealtimeSanitizer docs mention macOS behavior).
+- Upstream Clang 20.1.0 introduced RTSan behind `-fsanitize=realtime`, and the same release
+  turned on verification of `nonblocking`/`nonallocating` function effects (**Web**:
+  [Clang 20.1.0 release notes](https://releases.llvm.org/20.1.0/tools/clang/docs/ReleaseNotes.html),
+  "Sanitizers").
+- The [Clang RealtimeSanitizer docs](https://clang.llvm.org/docs/RealtimeSanitizer.html)
+  mention macOS only when describing the `abort_on_error` option (**Web**).
 - The `xcode-27` and `macos-26` runner images provide Homebrew `llvm@20` 20.1.8 at
-  `$(brew --prefix llvm@20)/bin/clang` (**Web**).
+  `$(brew --prefix llvm@20)/bin/clang` (**Web**:
+  [xcode-27](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)
+  and [macos-26](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
+  image READMEs).
 - Still unverified: whether upstream Clang 20 builds and links RTSan against the Apple OS-27
   SDKs on arm64, whether that works inside an Xcode target, and anything about iOS or the
   simulator.
@@ -392,14 +420,18 @@ Current repo CI (**Verified**, read only):
   `ci_scripts/`.
 - The generated `FluxKlang.xcodeproj` is committed, so Xcode Cloud does not need XcodeGen.
 
-GitHub-hosted macOS images (**Web**, `actions/runner-images` README and image READMEs, image
-versions from 2026-10-26 to 2026-10-28):
+GitHub-hosted macOS images (**Web**: the
+[`actions/runner-images` README](https://github.com/actions/runner-images#available-images) and
+the [macos-15](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md),
+[macos-26](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
+and [xcode-27](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)
+arm64 image READMEs, image versions 20261028.0489.1, 20261026.0455.2 and 20261026.0314.1):
 
 | Label | Base OS | Xcode (default) | Newest iOS / macOS SDK | Builds at 27.0? |
 | --- | --- | --- | --- | --- |
 | `macos-15` (current lint job), `macos-15-xlarge` | macOS 15.8.2 | 16.4 (also 16.0–16.4, 26.0.1–26.3) | iOS 26.2 / macOS 26.2 | **No** |
 | `macos-latest`, `macos-26`, `macos-26-xlarge` | macOS 26.6.2 | 26.6 (also 26.0.1–26.5) | iOS 26.5 / macOS 26.5 | **No** |
-| `xcode-27`, `xcode-27-xlarge` (**preview**, actions/runner-images#14404) | macOS 27.0.1 | **27.1 (27A9275)**, matching this Mac, at `/Applications/Xcode_27.1.app`; also 27.0 (27A266a) and 27.2 RC (27B48) | iOS 27.0–27.2 / macOS 27.0, 27.2 | **Yes** |
+| `xcode-27`, `xcode-27-xlarge` (**preview**, [actions/runner-images#14404](https://github.com/actions/runner-images/issues/14404)) | macOS 27.0.1 | **27.1 (27A9275)**, matching this Mac, at `/Applications/Xcode_27.1.app`; also 27.0 (27A266a) and 27.2 RC (27B48) | iOS 27.0–27.2 / macOS 27.0, 27.2 | **Yes** |
 
 On the `xcode-27` image:
 
@@ -407,18 +439,20 @@ On the `xcode-27` image:
   iPads.
 - There is **no "iPhone 17 Pro"**, so `make build` and `make test` cannot resolve their
   destination there.
-- XcodeGen, SwiftLint and mise are not listed. SwiftFormat 0.64.3, xcbeautify 3.2.1 and
-  Homebrew 7.0.11 are listed.
-- "Preview" means capacity and queueing can vary and software may be unstable (actions/runner-images#14404).
+- XcodeGen, SwiftLint and mise are not listed. jq 1.8.2, SwiftFormat 0.64.3, xcbeautify 3.2.1
+  and Homebrew 7.0.11 are listed.
+- "Preview" means capacity and queueing can vary and software may be unstable
+  ([actions/runner-images#14404](https://github.com/actions/runner-images/issues/14404)).
 
 Xcode Cloud:
 
-- Apple's public Xcode Cloud release notes were last updated on 2026-02-10. The newest Xcode
-  they mention is 26.2 (17C52) on macOS Tahoe 26.2 (**Web**). Whether Xcode 27.x is available
-  is **Unknown** from public sources.
-- The Xcode Cloud workflow reference says the Environment section lets you choose from
-  available Xcode and macOS versions. Xcode Cloud includes Homebrew for `ci_post_clone.sh`
-  (**Web**).
+- Apple's public [Xcode Cloud release notes](https://developer.apple.com/xcode-cloud/release-notes/)
+  were last updated on 2026-02-10. The newest Xcode they mention is 26.2 (17C52) on macOS
+  Tahoe 26.2 (**Web**). Whether Xcode 27.x is available is **Unknown** from public sources.
+- The [Xcode Cloud workflow reference](https://developer.apple.com/documentation/xcode/xcode-cloud-workflow-reference)
+  says the Environment section lets you choose from available Xcode and macOS versions.
+  [Making dependencies available to Xcode Cloud](https://developer.apple.com/documentation/xcode/making-dependencies-available-to-xcode-cloud)
+  says the build environment includes Homebrew for `ci_post_clone.sh` (**Web**).
 
 Gaps and blockers:
 
@@ -429,7 +463,7 @@ Gaps and blockers:
 | G3 | RTSan is not in Xcode 27.1. Upstream LLVM 20 on OS-27 is unprobed. | Blocker for RTSan claims (#60/#74) | #74 / runtime lanes |
 | G4 | The Makefile simulator name is absent on the `xcode-27` image. | CI breakage | Coordinator (diff D) |
 | G5 | Lint uses an unpinned `brew install swiftlint`. Local pins are inactive. | Drift risk | Coordinator (diffs A, B) |
-| G6 | The committed `project.pbxproj` is not reproducible byte for byte from `project.yml`. | Blocks a "generated project in sync" CI check | Coordinator (diff G) |
+| G6 | ~~The committed `project.pbxproj` is not reproducible byte for byte from `project.yml`.~~ | **Resolved** on `main` by 17a813a. The merged tree has no drift (§5). | Done |
 | G7 | No Rust iOS targets are installed locally. | Gap only if Rust is pursued (#74) | #74 |
 | G8 | `xcode-select` points at the Command Line Tools. | Local trap | Every agent: set `DEVELOPER_DIR` |
 
@@ -442,10 +476,11 @@ Gaps and blockers:
 2. **GitHub Actions (#61):**
    - Add a build job on `runs-on: xcode-27` with
      `DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer`.
-   - The job first runs a fail-fast check that the SDKs are at least 27.0 and the deployment
-     target is unchanged. It installs the pinned tools with `jdx/mise-action`.
-   - It builds macOS and iOS (`build-for-testing`) with signing disabled, using a simulator
-     present on the image (C).
+   - The job first runs fail-fast checks: the SDKs are at least 27.0, the generated project is
+     in sync, and every target's effective deployment target is 27.0. It installs the pinned
+     tools with `jdx/mise-action`, pinned to a commit.
+   - It runs `build-for-testing` for macOS and iOS with signing disabled, using a simulator
+     present on the image, then checks that every built Mach-O has `minos` 27.0 (C).
    - Hosted test execution waits for #60.
    - When an OS-27 image goes GA, switch the label to it. Never fall back to `macos-26` or
      `macos-15` for build jobs.
@@ -454,8 +489,8 @@ Gaps and blockers:
      macOS 27 or Tahoe 26.6+ image.
    - If it cannot, releases are blocked. Do not lower the deployment target and do not add
      Fastlane.
-   - Keep the committed `.xcodeproj` as the Xcode Cloud input. Diff G and CI check C keep it in
-     sync.
+   - Keep the committed `.xcodeproj` as the Xcode Cloud input. It is in sync since 17a813a, and
+     CI check C keeps it that way.
 4. **RTSan (optional, #74):**
    - In a separate non-blocking job or a maintainer-approved local install, compile and run
      the P3 malloc-in-`nonblocking` probe with Homebrew `llvm@20` against the macOS 27 SDK.
@@ -475,23 +510,68 @@ swiftlint = "0.65.1"
 ```
 
 **B. `.github/workflows/apple-lint.yml`:** Pin SwiftLint and keep the runner. Lint needs no
-OS-27 SDK, and SwiftLint parses with its bundled SwiftSyntax. Pin `jdx/mise-action` to a
-commit SHA if the repo adopts SHA pinning; v5.2.5 was the latest release on 2026-10-31.
+OS-27 SDK, and SwiftLint parses with its bundled SwiftSyntax.
+
+- **Prerequisite: diff A.** `install_args: swiftlint` installs the pinned 0.65.1 only when
+  the repo `mise.toml` exists. Without it, mise resolves the latest release. In an empty
+  directory, `mise install --dry-run swiftlint` picks 0.65.1, which is what
+  `mise latest swiftlint` returns today, so the two cases only look the same until SwiftLint's
+  next release.
+- **Pin the action to a commit.** The repo pins exact tags such as `actions/checkout@v6.0.3`,
+  but `@v5` is a floating major tag. The latest release is v5.2.5, published 2026-10-31. Its
+  tag points at commit `6612f0ef07ed2a736cd1e00a94a065522dd41195`, as reported by
+  `gh api repos/jdx/mise-action/git/ref/tags/v5.2.5` and `…/commits/<sha>` ("chore: release
+  v5.2.5"). Use the SHA with a version comment as below. If the repo prefers tags, use at
+  least `@v5.2.5`.
+- **Pin mise itself** with `version: 2026.10.25`, which matches this Mac. Without it, the
+  action installs the newest mise release that is at least 24 hours old.
+- **CI config trust is unverified.** The v5.2.5 source
+  ([`src/index.ts:390-391`](https://github.com/jdx/mise-action/blob/6612f0ef07ed2a736cd1e00a94a065522dd41195/src/index.ts#L390-L391))
+  exports `MISE_TRUSTED_CONFIG_PATHS` set to the working directory and `MISE_YES=1` to later
+  steps, unless they are already set. Locally, a `[tools]`-only `mise.toml` resolves even when
+  it is untrusted (§4). Neither behaviour has been observed on a GitHub runner, and the local
+  `MISE_TRUSTED_CONFIG_PATHS` was scoped to one command.
+- `permissions: contents: read` restricts the default `GITHUB_TOKEN` to reading.
 
 ```diff
+ name: Lint
+
+ on:
+   push:
+     branches: [main]
+   pull_request:
+
++permissions:
++  contents: read
++
+ jobs:
+   swiftlint:
+     runs-on: macos-15
+     steps:
        - uses: actions/checkout@v6.0.3
 -      - name: Install SwiftLint
 -        run: brew install swiftlint
-+      - name: Install pinned SwiftLint
-+        uses: jdx/mise-action@v5
++      - name: Install pinned SwiftLint (mise.toml)
++        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
 +        with:
++          version: 2026.10.25
 +          install_args: swiftlint
        - name: Lint
          run: swiftlint --strict
 ```
 
 **C. New `.github/workflows/apple-build.yml` for #61.** It does build qualification only. Test
-execution follows #60.
+execution follows #60. It depends on diff A, because `xcodegen` comes from `mise.toml`.
+
+- The deployment checks use **effective** values rather than grepping `project.yml`, so they
+  catch per-target `deploymentTarget` overrides and `IPHONEOS_`/`MACOSX_DEPLOYMENT_TARGET`
+  settings.
+  - Before building, it reads each target's `DEPLOYMENT_TARGET_SETTING_NAME` from
+    `-alltargets -showBuildSettings -json` for Debug and Release.
+  - After building, it reads the `minos` of every built Mach-O with `vtool -show-build`.
+- `defaults.run.shell: bash` makes GitHub run steps with `bash -eo pipefail`.
+- **Unverified destination:** `name=iPhone 17,OS=27.0` comes from the `xcode-27` image README
+  (§9). It has not been resolved on a runner, and iPhone 17 Pro is not listed there (§13).
 
 ```yaml
 name: Apple build
@@ -501,6 +581,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     # Preview image; the only GitHub-hosted label with OS-27 SDKs as of 2026-10-31.
@@ -509,8 +596,11 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
       - uses: actions/checkout@v6.0.3
-      - uses: jdx/mise-action@v5
-      - name: Require OS-27 SDKs and unchanged deployment targets
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        with:
+          version: 2026.10.25
+          install_args: xcodegen
+      - name: Require OS-27 SDKs
         run: |
           xcodebuild -version
           for sdk in macosx iphoneos iphonesimulator; do
@@ -518,45 +608,88 @@ jobs:
             echo "$sdk SDK $v"
             [ "${v%%.*}" -ge 27 ] || { echo "::error::$sdk SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
           done
-          [ "$(grep -cE '^ +(iOS|macOS): "27\.0"$' project.yml)" -eq 2 ] \
-            || { echo "::error::project.yml deployment targets changed"; exit 1; }
       - name: Generated project is in sync
-        run: xcodegen generate && git diff --exit-code FluxKlang.xcodeproj
-      - name: Build macOS
+        run: |
+          xcodegen generate
+          git status --porcelain -- FluxKlang.xcodeproj
+          test -z "$(git status --porcelain -- FluxKlang.xcodeproj)"
+      - name: Effective deployment targets are 27.0
+        run: |
+          status=0
+          for cfg in Debug Release; do
+            rows=$(xcodebuild -project FluxKlang.xcodeproj -alltargets -configuration "$cfg" \
+                -showBuildSettings -json \
+              | jq -r '.[] | .buildSettings as $s | $s.DEPLOYMENT_TARGET_SETTING_NAME as $k
+                  | [.target, $k, ($s[$k] // "unset")] | @tsv')
+            [ -n "$rows" ] || { echo "::error::no $cfg build settings"; exit 1; }
+            while IFS=$'\t' read -r target key value; do
+              echo "$cfg $target $key=$value"
+              [ "$value" = "27.0" ] || { echo "::error::$cfg $target $key=$value; deployment must stay 27.0"; status=1; }
+            done <<< "$rows"
+          done
+          exit "$status"
+      - name: Build macOS for testing
         run: >
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMac
-          -derivedDataPath DerivedData build CODE_SIGNING_ALLOWED=NO
+          -destination 'platform=macOS'
+          -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
       - name: Build iOS for testing
         run: >
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlang
           -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0'
           -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
+      - name: Built products target OS 27.0
+        # Skips Xcode's prebuilt UI-test runner stub (minos 17.0); its PlugIns are still checked.
+        run: |
+          status=0; count=0
+          while IFS= read -r -d '' bin; do
+            minos=$(xcrun vtool -show-build "$bin" 2>/dev/null | awk '$1 == "minos" { print $2; exit }') || true
+            [ -n "$minos" ] || continue
+            count=$((count + 1))
+            echo "minos $minos ${bin#DerivedData/Build/Products/}"
+            [ "$minos" = "27.0" ] || { echo "::error::$bin minos $minos; deployment must stay 27.0"; status=1; }
+          done < <(find DerivedData/Build/Products -type f -perm -u+x ! -path '*-Runner.app/*-Runner' -print0)
+          [ "$count" -gt 0 ] || { echo "::error::no Mach-O products found"; exit 1; }
+          exit "$status"
 ```
 
-Checks run on C locally (**Verified**):
+Checks run on C locally. The step scripts were extracted from this block with `yq` and run
+under `bash -eo pipefail`. Commands that call `xcodebuild` ran in the fleet slot.
 
-- The guard step passes with Xcode 27.1. It exits 1 with an `::error::` when an SDK reports
-  26.5, or when `project.yml` is changed to iOS 26.0.
-- `actionlint` 1.7.12 accepts the file except for one finding: it does not know the preview
-  label `xcode-27`. If actionlint is adopted, declare that label in `.github/actionlint.yaml`.
-- The "in sync" step fails until diff G lands.
+| Step | Passes on | Fails (exit 1, `::error::`) on |
+| --- | --- | --- |
+| SDK check | Xcode 27.1 | An SDK that reports 26.5 |
+| Project sync | The merged tree, with mise and Homebrew XcodeGen | An untracked file inside `FluxKlang.xcodeproj`. The earlier `git diff --exit-code` passed it. |
+| Effective deployment | The merged tree: 5 targets × Debug and Release, all 27.0, in 7.3 s | Throwaway copies with `deploymentTarget: "26.0"` on FluxKlangTests, or `MACOSX_DEPLOYMENT_TARGET: "26.0"` in FluxKlangMacTests settings. The earlier `project.yml` grep passed both. |
+| Product `minos` | The merged-tree simulator and Mac products: 9 Mach-O files, all 27.0 | A binary built with `-target arm64-apple-macos26.0`. Before the runner exclusion was added, it also flagged `FluxKlangUITests-Runner` (17.0). |
+
+Static checks: `actionlint` 1.7.12 with shellcheck reports only the unknown preview label
+`xcode-27`. If actionlint is adopted, declare that label in `.github/actionlint.yaml`.
+
+**Not verified:** the workflow has not run on a GitHub runner. That includes the simulator
+destination, mise config trust and the image's tool paths.
 
 **D. `Makefile`:** Make the simulator destination overridable. The local default is unchanged,
 and CI can pass `IOS_SIM_DESTINATION='platform=iOS Simulator,name=iPhone 17,OS=27.0'`.
 Recipe lines must start with a tab, so this is shown as the resulting text rather than as a
-unified diff. `make -n` was run against a throwaway copy, with and without the override. Add
-this after `.PHONY`:
+unified diff. Add this after the `.PHONY` line. On the merged tree that line also lists
+`build-for-testing-mac` and `test-mac`, and it needs no change.
 
 ```make
 IOS_SIM_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
 ```
 
-In both `build` and `test`, replace
+Only `build` and `test` name an iOS simulator. In both, replace
 `-destination 'platform=iOS Simulator,name=iPhone 17 Pro' \` with:
 
 ```make
 	  -destination '$(IOS_SIM_DESTINATION)' \
 ```
+
+`build-mac` has no destination, and `build-for-testing-mac` and `test-mac` use
+`platform=macOS`, so those three are unchanged. This was checked with `make -n` on a throwaway
+copy of the merged Makefile. Without an override, `build` and `test` still use iPhone 17 Pro.
+With the override, both use it, and the three Mac targets print the same commands as before.
 
 **E. `README.md` (Develop section):**
 
@@ -581,22 +714,22 @@ Pair this with an explicit `CA_REALTIME_API` (or `[[clang::nonblocking]]`) on ev
 IO block literal and callback (§7.1). Do not add `-fsanitize=realtime`, because Xcode 27.1
 rejects it.
 
-**G. `chore: regenerate Xcode project`:** Run
-`DEVELOPER_DIR=… mise exec -- xcodegen generate` and commit the resulting 4+/4− `project.pbxproj`
-ID change for `StudioPhysicalOverlapTests.swift`. This must land before the sync check in C is
-enabled.
+**G. Regenerate the Xcode project: obsolete.** `main` 17a813a regenerated the project, and the
+merged tree has no XcodeGen drift (§5). There is nothing to apply. The letter is kept so the
+references to A–F stay stable.
 
 ## 12. Follow-ups for other packages
 
 - **#61:**
-  - Adopt C and D; A and B come first.
+  - Land A first, because B and C depend on it. Then adopt B, C and D.
   - Track the `xcode-27` preview-to-GA status and switch the label when an OS-27 GA image
     exists.
-  - Keep the fail-fast SDK and deployment guard.
+  - Keep the fail-fast SDK check, the effective-deployment check and the product `minos` check.
   - Record the image version per run (`ImageVersion` in the job log).
 - **#60:**
-  - Hosted tests stay gated.
-  - `build-for-testing` already succeeds on the slot simulator.
+  - Hosted tests stay gated. That covers `make test` and `make test-mac`.
+  - `build-for-testing` already succeeds for the slot simulator and for
+    `make build-for-testing-mac`.
   - On `xcode-27`, use `iPhone 17` (iOS 27.0) or create a device explicitly.
 - **#74 and runtime lanes:**
   - Put the realtime core in a C, Objective-C or C++ (or Rust C-ABI) target with F.
@@ -619,7 +752,34 @@ enabled.
 - Upstream LLVM 20 RTSan on Darwin arm64 with OS-27 SDKs, and RTSan on iOS or the simulator:
   **Unknown**.
 - The `xcode-27` image's simulator list is from its README. Devices not listed there, such as
-  iPhone 17 Pro, might be creatable with `simctl create`, but that is unverified.
+  iPhone 17 Pro, might be creatable with `simctl create`, but that is unverified. The C
+  destination `name=iPhone 17,OS=27.0` has not been resolved on a runner either.
+- No proposed workflow (B or C) has run on GitHub Actions. Whether mise trusts the repo config
+  there is unverified. The `MISE_TRUSTED_CONFIG_PATHS` export comes from reading the action's
+  source, not from running it.
 - Measured build times are single-run figures from a shared machine with a private
   DerivedData. They are not benchmarks.
 - No hardware, audio, MIDI or latency results are claimed here.
+
+## 14. Sources (Web)
+
+Each URL below was fetched on 2026-10-31 with `web_fetch` or `curl`, and each one resolved.
+Apple's documentation pages are rendered by JavaScript. For those, the quoted text was checked
+against the matching JSON at `developer.apple.com/tutorials/data/documentation/….json`.
+
+| Claim | Source |
+| --- | --- |
+| Xcode 27 requires Tahoe 26.6+ and Apple silicon (162138432); x86_64 left out of `ARCHS_STANDARD` at macOS 27.0 (161837535) | <https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes> |
+| Xcode 27.1 requires Tahoe 26.6+ | <https://developer.apple.com/documentation/xcode-release-notes/xcode-27_1-release-notes> |
+| Xcode Cloud: newest listed Xcode is 26.2 (17C52); last update 2026-02-10 | <https://developer.apple.com/xcode-cloud/release-notes/> |
+| Xcode Cloud: the Environment section selects the Xcode and macOS versions | <https://developer.apple.com/documentation/xcode/xcode-cloud-workflow-reference> |
+| Xcode Cloud: Homebrew is available to `ci_post_clone.sh` | <https://developer.apple.com/documentation/xcode/making-dependencies-available-to-xcode-cloud> |
+| Runner labels and images | <https://github.com/actions/runner-images#available-images> |
+| `macos-15` (arm64) contents | <https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md> |
+| `macos-26` (arm64) contents, `llvm@20` | <https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md> |
+| `xcode-27` contents: Xcode, simulators, jq, `llvm@20` | <https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md> |
+| `xcode-27` is a preview image | <https://github.com/actions/runner-images/issues/14404> |
+| Clang 20.1.0 introduced RTSan and function-effect verification | <https://releases.llvm.org/20.1.0/tools/clang/docs/ReleaseNotes.html> |
+| RTSan options (`abort_on_error` mentions macOS) | <https://clang.llvm.org/docs/RealtimeSanitizer.html> |
+| `jdx/mise-action` v5.2.5 release, and the commit its tag points at | <https://github.com/jdx/mise-action/releases/tag/v5.2.5> |
+| mise-action exports `MISE_TRUSTED_CONFIG_PATHS` and `MISE_YES` | <https://github.com/jdx/mise-action/blob/6612f0ef07ed2a736cd1e00a94a065522dd41195/src/index.ts#L390-L391> |
