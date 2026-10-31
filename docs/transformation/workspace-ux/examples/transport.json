@@ -1,0 +1,29 @@
+{
+  "contract": "transport",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "trn.host-a",
+  "host": "per.host-a",
+  "revision": 5,
+  "history": [
+    {"revision": 4, "note": "Tempo set to 96"},
+    {"revision": 5, "note": "Host restarted; host epoch advanced; remote reconnected"}
+  ],
+  "clocks": [
+    {"id": "clk.sample", "kind": "audioSampleClock", "device": "dev.iface-a", "state": "running",
+     "nominalRate": 48000, "actualRate": null, "note": "Actual rate is reported only from measurement"},
+    {"id": "clk.host", "kind": "monotonicHostTime", "state": "available"},
+    {"id": "clk.tempo", "kind": "musicalTempo", "source": "internal", "bpm": 96, "meter": "4/4", "state": "stopped"},
+    {"id": "clk.midi", "kind": "midiClock", "role": "off", "state": "off"}
+  ],
+  "consoleSetup": {"device": "dev.console", "note": "Console setup is configuration, not a clock."},
+  "epochs": {
+    "hosts": [{"host": "per.host-a", "hostEpoch": 7}],
+    "note": "Each host session owns its own clocks and epoch; Host B's are in phone-host.json.",
+    "connections": [
+      {"id": "con.remote-c", "peer": "per.remote-c", "host": "per.host-a", "connectionEpoch": 4,
+       "onReconnect": "dropQueuedIntentAndResnapshot"}
+    ]
+  },
+  "media": {"owner": "#53", "note": "Media clock stamps, cue timing and quantization are defined by G-MEDIA, not here."}
+}

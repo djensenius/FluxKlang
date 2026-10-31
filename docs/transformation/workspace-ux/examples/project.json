@@ -1,0 +1,34 @@
+{
+  "contract": "project",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "prj.example-set",
+  "revision": 12,
+  "history": [
+    {"revision": 10, "note": "Imported legacy Studio graph; migrated authority invalidated, review required"},
+    {"revision": 11, "note": "Added portable Cue role"},
+    {"revision": 12, "note": "Persisted after acknowledged activation", "transaction": "txn.wire-mic"}
+  ],
+  "name": "Example Set (synthetic)",
+  "graphs": [{"graph": "gph.main", "graphRevision": 43}],
+  "roles": [
+    {"id": "rol.keys-in", "label": "Keys In", "direction": "input", "signal": "audio", "channels": 2},
+    {"id": "rol.mic-in", "label": "Vocal Mic In", "direction": "input", "signal": "audio", "channels": 1},
+    {"id": "rol.pad-ctl", "label": "Pad Controller", "direction": "input", "signal": "midi"},
+    {"id": "rol.mains", "label": "Mains", "direction": "output", "signal": "audio", "channels": 2},
+    {"id": "rol.space", "label": "Space (4 speakers)", "direction": "output", "signal": "audio", "channels": 4},
+    {"id": "rol.cue", "label": "Cue", "direction": "output", "signal": "audio", "channels": 2}
+  ],
+  "rolesNote": "Roles are portable, inert intent. Host-local device bindings live only in devices.json (not synced).",
+  "patches": [
+    {"id": "pat.verse", "label": "Verse", "graph": "gph.main", "variations": [
+      {"id": "var.verse-wet", "label": "Verse, wetter",
+       "deltas": [{"parameter": "par.verb.mix", "value": 45}, {"parameter": "par.space.width", "value": 0.8}]}]}
+  ],
+  "assets": [
+    {"id": "ast.verse-chart", "kind": "userChart", "label": "Verse chart (user-supplied)", "reference": "bookmarkStale"}
+  ],
+  "media": {"owner": "#53", "note": "Media timing, prefetch and fidelity fields are intentionally absent until G-MEDIA is accepted."},
+  "legacy": {"source": "StudioGraph", "authority": "invalidated", "reviewRequired": true},
+  "unknownFields": {"x-future-extension": {"preservedVerbatim": true}}
+}

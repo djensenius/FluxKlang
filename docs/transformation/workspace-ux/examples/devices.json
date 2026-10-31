@@ -1,0 +1,53 @@
+{
+  "contract": "deviceCapability",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "rig.host-a",
+  "host": "per.host-a",
+  "scope": "hostLocal-notSynced",
+  "revision": 7,
+  "history": [
+    {"revision": 6, "note": "Rig confirmed on previous launch"},
+    {"revision": 7, "note": "Interface B not found; Controller A not seen since previous session; Controller B present"}
+  ],
+  "devices": [
+    {"id": "dev.iface-a", "kind": "audioInterface", "label": "Interface A (synthetic)",
+     "identity": {"uid": "SYNTHETIC-UID-A", "evidence": ["deviceUID", "transport", "channelLayout"]},
+     "presence": "present", "inputs": 4, "outputs": 6, "nominalRate": 48000, "actualRate": null},
+    {"id": "dev.iface-b", "kind": "audioInterface", "label": "Interface B (synthetic)",
+     "identity": {"uid": "SYNTHETIC-UID-B", "evidence": ["deviceUID"]},
+     "presence": "missing", "outputs": 4},
+    {"id": "dev.ctl-a", "kind": "midiController", "label": "Controller A (synthetic)",
+     "identity": {"uid": "SYNTHETIC-UID-C", "evidence": ["endpointUID"]},
+     "presence": "stale", "lastSeen": "previousSession"},
+    {"id": "dev.ctl-b", "kind": "midiController", "label": "Controller B (synthetic)",
+     "identity": {"uid": "SYNTHETIC-UID-D", "evidence": ["endpointUID"]}, "presence": "present"},
+    {"id": "dev.console", "kind": "consoleCompatibility", "label": "Console (Advanced compatibility)",
+     "presence": "notLeased", "note": "Console local connector numbers are not interface channel numbers."}
+  ],
+  "controls": [
+    {"id": "ctl.knob-1", "device": "dev.ctl-a", "kind": "knob", "message": "cc", "encoding": "absolute"},
+    {"id": "ctl.enc-2", "device": "dev.ctl-a", "kind": "encoder", "message": "cc", "encoding": "twosComplement"},
+    {"id": "ctl.fader-3", "device": "dev.ctl-b", "kind": "fader", "message": "cc", "encoding": "absolute"},
+    {"id": "ctl.fader-4", "device": "dev.ctl-b", "kind": "fader", "message": "cc", "encoding": "absolute"},
+    {"id": "ctl.knob-5", "device": "dev.ctl-b", "kind": "knob", "message": "cc", "encoding": "absolute"}
+  ],
+  "capabilities": [
+    {"capability": "cap.audio-in-3", "providedBy": ["dev.iface-a"], "status": "available"},
+    {"capability": "cap.audio-out-2", "providedBy": ["dev.iface-a"], "status": "available"},
+    {"capability": "cap.audio-out-4", "providedBy": ["dev.iface-b"], "status": "unavailable"},
+    {"capability": "cap.midi-in", "providedBy": ["dev.ctl-a", "dev.ctl-b"], "status": "available"},
+    {"capability": "cap.au-effect", "providedBy": ["per.host-a"], "status": "available"},
+    {"capability": "cap.au-instrument", "providedBy": ["per.host-a"], "status": "available"},
+    {"capability": "cap.plugin.tape-echo", "providedBy": [], "status": "missing"}
+  ],
+  "routes": [
+    {"id": "rte.keys-in", "role": "rol.keys-in", "device": "dev.iface-a", "channels": [0, 1], "binding": "confirmed"},
+    {"id": "rte.mic-in", "role": "rol.mic-in", "device": "dev.iface-a", "channels": [2], "binding": "confirmed"},
+    {"id": "rte.pads", "role": "rol.pad-ctl", "device": "dev.ctl-a", "binding": "stale"},
+    {"id": "rte.mains", "role": "rol.mains", "device": "dev.iface-a", "channels": [0, 1], "binding": "confirmed"},
+    {"id": "rte.space", "role": "rol.space", "device": "dev.iface-b", "channels": [0, 1, 2, 3],
+     "speakers": ["spk.fl", "spk.fr", "spk.rl", "spk.rr"], "binding": "deviceMissing"}
+  ],
+  "unmappedRoles": ["rol.cue"]
+}
