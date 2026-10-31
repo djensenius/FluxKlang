@@ -301,6 +301,11 @@ def check_transactions(hs, graph, history, ports, roles):
         err(hs["name"], f"final active revision {active} != graph revision {graph['revision']}")
 
 
+def within(param, value):
+    """A settable value is a number from min up to the ceiling (max when no ceiling is set)."""
+    return type(value) in (int, float) and param["min"] <= value <= param.get("ceiling", param["max"])
+
+
 def check_commands(hs, roles, docs):
     people = {p["id"]: p for p in hs["session"]["participants"]}
     params = {p["id"]: p for p in docs["parameter"]["parameters"]}
@@ -328,6 +333,9 @@ def check_commands(hs, roles, docs):
             if "set" in cmd["op"] and target.get("class") != cmd["class"]:
                 err(where, f"class {cmd['class']} must match the target's class {target.get('class')}")
                 continue
+            value = cmd["op"].get("value")
+            if "set" in cmd["op"] and not status.startswith("rejected") and not within(target, value):
+                err(where, f"value {value!r} is outside {target['id']} min..ceiling, so it cannot be {status}")
             conn = origin.get("connection")
             stale = cmd.get("hostEpoch") != log["hostEpoch"] or (
                 conn is not None and cmd.get("connectionEpoch") != hs["connections"].get(conn))
@@ -409,9 +417,8 @@ def check_parameters(docs):
     presence = {d["id"]: d["presence"] for d in docs["deviceCapability"]["devices"]}
     control_device = {c["id"]: c["device"] for c in docs["deviceCapability"]["controls"]}
     for p in params.values():
-        ceiling = p.get("ceiling", p["max"])
-        if not p["min"] <= ceiling <= p["max"] or not p["min"] <= p["value"] <= ceiling:
-            err(p["id"], f"need min <= value <= ceiling <= max (value {p['value']}, ceiling {ceiling})")
+        if not (p["min"] <= p.get("ceiling", p["max"]) <= p["max"] and within(p, p["value"])):
+            err(p["id"], f"need min <= value <= ceiling <= max (value {p['value']!r}, ceiling {p.get('ceiling')})")
     for b in docs["parameter"]["bindings"]:
         present = presence.get(control_device.get(b["control"])) == "present"
         if (b.get("state") == "active") != present or (not present and b["pickup"]["state"] != "unavailable"):
