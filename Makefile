@@ -35,8 +35,9 @@ lint:
 	swiftlint --strict
 
 # Defence-in-depth tripwire for the passive hardware inventory lister (#67); runs nothing on hardware.
+# --require-symbols: fail if the lister cannot be compiled and symbol-checked (needs a Swift toolchain).
 hardware-inventory-self-check:
-	bash scripts/hardware-inventory/passive-inventory.sh --self-check
+	bash scripts/hardware-inventory/passive-inventory.sh --self-check --require-symbols
 
 clean:
 	rm -rf build DerivedData
