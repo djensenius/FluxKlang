@@ -89,38 +89,4 @@ struct RoutingEnvironment: Identifiable, Codable, Hashable, Sendable {
         studioEndpoints = try container.decodeIfPresent([StudioEndpoint].self, forKey: .studioEndpoints) ?? []
         studioSetup = try container.decodeIfPresent(StudioSetup.self, forKey: .studioSetup) ?? StudioSetup()
     }
-
-    /// A deep copy under a new identity, with fresh effect IDs so the duplicate's
-    /// internal serial-chain links keep pointing inside the copy rather than at
-    /// the original's effects. Effect-return placements are remapped onto the new
-    /// effect IDs; source placements (keyed by equipment) carry over unchanged.
-    /// The canvas graph is copied verbatim — its nodes reference gear and WING
-    /// endpoints, not effects, so it needs no remapping.
-    func duplicated(named newName: String) -> RoutingEnvironment {
-        var remap: [Effect.ID: Effect.ID] = [:]
-        for effect in effects {
-            remap[effect.id] = UUID()
-        }
-        let copies = effects.map { effect -> Effect in
-            var copy = effect
-            copy.id = remap[effect.id] ?? UUID()
-            if let destination = effect.destinationEffectID {
-                copy.destinationEffectID = remap[destination]
-            }
-            return copy
-        }
-        var copiedPlacements: [String: VoicePlacement] = [:]
-        for (key, placement) in placements {
-            copiedPlacements[EnvironmentVoice.remap(voiceID: key, effects: remap)] = placement
-        }
-        return RoutingEnvironment(
-            name: newName,
-            effects: copies,
-            placements: copiedPlacements,
-            graph: graph,
-            studioGraph: studioGraph,
-            studioEndpoints: studioEndpoints,
-            studioSetup: studioSetup
-        )
-    }
 }
