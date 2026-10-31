@@ -82,6 +82,19 @@ struct PermissionStateTests {
         #expect(LocalNetworkAccess.discoveryFailureReason(errno: ECONNREFUSED).contains("IP address"))
     }
 
+    @Test func discoveryGuidanceDoesNotDependOnInterfaceOrder() {
+        let status = { (codes: [Int32?]) in
+            LocalNetworkAccess.dominantErrno(codes).map(LocalNetworkAccess.status(afterConnectErrno:))
+        }
+        for codes: [Int32?] in [[ECONNREFUSED, EHOSTUNREACH], [nil, ENETUNREACH, EPERM], [EPERM, ECONNREFUSED]] {
+            #expect(status(codes) == .possiblyDenied)
+            #expect(status(codes.reversed()) == .possiblyDenied)
+        }
+        #expect(LocalNetworkAccess.dominantErrno([ECONNREFUSED, ENETUNREACH]) == ENETUNREACH)
+        #expect(LocalNetworkAccess.dominantErrno([nil, ECONNREFUSED]) == ECONNREFUSED)
+        #expect(LocalNetworkAccess.dominantErrno([nil, nil]) == nil)
+    }
+
     @Test func socketErrorsYieldTheirErrno() {
         #expect(LocalNetworkAccess.errno(in: POSIXError(.EHOSTUNREACH)) == EHOSTUNREACH)
         #expect(LocalNetworkAccess.errno(in: NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM))) == EPERM)

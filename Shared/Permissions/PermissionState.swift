@@ -132,6 +132,16 @@ enum LocalNetworkAccess {
         }
     }
 
+    /// The errno that best explains a scan whose sends all failed, independent of
+    /// interface order: a possible denial wins, then a missing route, then any
+    /// other recorded errno.
+    static func dominantErrno(_ codes: [Int32?]) -> Int32? {
+        let recorded = codes.compactMap { $0 }
+        return recorded.first { status(afterConnectErrno: $0) == .possiblyDenied }
+            ?? recorded.first { status(afterConnectErrno: $0) == .unreachable }
+            ?? recorded.first
+    }
+
     /// User-facing text for a broadcast scan that couldn't send. Uses the same
     /// errno vocabulary as `connectFailureReason`. A possible denial never
     /// suggests manual IP entry: that path is checked the same way and would

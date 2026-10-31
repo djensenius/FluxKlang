@@ -158,17 +158,18 @@ final class WingDiscovery {
             }
         }
 
-        var sent = 0, sendErrno: Int32?
+        var sent = 0, sendErrnos: [Int32?] = []
         for host in broadcastHosts {
             do {
                 try await transport.send(WingAddress.info, nil, to: host, port: port)
                 sent += 1
             } catch {
-                sendErrno = sendErrno ?? LocalNetworkAccess.errno(in: error)
+                sendErrnos.append(LocalNetworkAccess.errno(in: error))
             }
         }
         if sent == 0 {
-            unavailableReason = LocalNetworkAccess.discoveryFailureReason(errno: sendErrno)
+            let code = LocalNetworkAccess.dominantErrno(sendErrnos)
+            unavailableReason = LocalNetworkAccess.discoveryFailureReason(errno: code)
         } else {
             try? await Task.sleep(for: duration)
         }
