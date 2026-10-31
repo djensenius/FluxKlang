@@ -236,6 +236,10 @@ Read these from the console screens and record them in the local evidence folder
       network.
 - [ ] The WING is in normal operation, not an update or disk mode (see [Disk-mode safety](#disk-mode-safety)).
 - [ ] Current monitoring/safe-level state, recorded only, as the restoration baseline for a future active step.
+- [ ] **Hardened collector re-run (operator present):** run `scripts/hardware-inventory/passive-inventory.sh` on the
+      connected rig (see [Re-running](#re-running-on-another-machine)) with monitoring at the safe level. Confirm that there is no audible output, no tone and no console-side
+      change. Check that the HAL and CoreMIDI listings match runs 1–2 except for object IDs. Static checks
+      cannot prove that driver side effects are absent, so this run is that proof.
 
 ## Re-running on another machine
 
