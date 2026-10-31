@@ -131,7 +131,8 @@ The policy for a device restart, rate change, configuration change or wake:
 1. Bump `sampleClock` and record a `clockRestart` discontinuity before the first anchor of the new generation. It
    carries the new generation's start `hostTicks` and `previousFrame`, the end of the frames rendered in the old one.
 2. Cancel every pending trigger that required the old generation.
-3. Bump `transport` (`clockRestart`), before or after the `clockRestart` record. The transport resumes at the musical
+3. Bump `transport` (`clockRestart`), before or after the `clockRestart` record: exactly once per primary
+   `sampleClock` bump when a transport exists, and never otherwise. The transport resumes at the musical
    position of `previousFrame`, the last **rendered** position, converted through the musical anchor and map in force
    at the `sampleClock` bump (so at the old rate), with `loopIteration` 0. There is no catch-up.
 4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
@@ -462,7 +463,7 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
 then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
 and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Thirty-one mutation self-tests each break one rule in a valid example (for example a stale
+evidence in a trace. Thirty-three mutation self-tests each break one rule in a valid example (for example a stale
 trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A
 malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 

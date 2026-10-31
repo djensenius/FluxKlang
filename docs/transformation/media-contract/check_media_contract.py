@@ -215,7 +215,7 @@ class Trace:
         self.state = {k: a["readiness"] for k, a in self.actions.items()}
         self.anchor, self.first_anchor, self.musical = {}, {}, None
         self.triggers, self.captures, self.discs = {}, [], []
-        self.pending_restart, self.last_dispatch, self.stream_seq = set(), None, {}
+        self.pending_restart, self.last_dispatch, self.stream_seq, self.transport_due = set(), None, {}, False
         self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, (None, None)
 
     def err(self, rec, msg):
@@ -280,6 +280,8 @@ class Trace:
         for tid, info in self.triggers.items():
             if not info.get("done"):
                 self.err(info["rec"], f"trigger {tid} has no terminal outcome")
+        if self.transport_due:
+            self.err({}, "each primary sampleClock bump forces one transport bump with reason clockRestart")
         for key in sorted(self.pending_restart):
             self.err({}, f"{key} changed generation without a clockRestart discontinuity")
         for kind, reason in (("locate", "locate"), ("sourceLost", "sourceLost"), ("sourceRestored", "sourceReacquired")):
@@ -388,10 +390,13 @@ class Trace:
             self.pending_restart.add(clock)
             if clock == self.primary:  # frames restart with the generation; the resume tick uses the old anchor and map
                 self.last_dispatch, self.restart_snap = None, (self.musical, self.map)
+                self.transport_due = f"transport/{self.mus_id}" in self.gens
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
         if kind == "transport":
-            self.musical = None
+            if r["reason"] == "clockRestart" and not self.transport_due:
+                self.err(r, "each primary sampleClock bump forces one transport bump with reason clockRestart")
+            self.musical, self.transport_due = None, self.transport_due and r["reason"] != "clockRestart"
         elif kind == "musicalMap":
             self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
@@ -711,11 +716,13 @@ MUTATIONS = [
     ("01", 4, {"to": 3}, "advance the current value by exactly one"),
     ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
     ("01", 9, {"streamSeq": 41}, "stream order is preserved within a stream"),
+    ("01", 6, {"reason": "transportRestart"}, "forces one transport bump with reason clockRestart"),
     ("01", 13, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
     ("01", "actions.0", {"timePolicy": "timeStretch"}, "need a declared time-stretch adapter"),
     ("02", 9, {"result": "fired", "reason": None, "frame": 336000}, "expected dropped assignedFrame=336000"),
     ("02", 11, {"assignedFrame": 360000, "frame": 360000}, "expected fired assignedFrame=384000"),
     ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
+    ("03", 8, {"reason": "clockRestart"}, "forces one transport bump with reason clockRestart"),
     ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
     ("04", 5, {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}], "meter": None},
