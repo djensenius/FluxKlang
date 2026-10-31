@@ -26,6 +26,10 @@
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>FluxKlang uses the local network to connect to and control your WING console. It connects only when you choose a console, or to reconnect to one you already connected to on this device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>FluxKlang uses audio input only when you turn on a feature that listens to a microphone or audio interface input.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
