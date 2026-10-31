@@ -424,6 +424,19 @@ extension ContractCoreTests {
             #expect(value == .object(["\u{E9}": .int(1), "a": .int(3)]))
         }
 
+        /// Probed on this SDK: JSONDecoder accepts trailing commas (`{"b":1,}`, `[1,]`), so they get the
+        /// verify error; it rejects nesting beyond 512 levels itself, so that rethrows its own error.
+        @Test func documentsWithIncompleteScansNeverDecode() {
+            #expect {
+                try decode(JSONValue.self, #"{"x":{"b":1,},"c":1,"c":2}"#)
+            } throws: { error in
+                guard case DecodingError.dataCorrupted(let context) = error else { return false }
+                return context.debugDescription == "Could not verify member-name uniqueness (malformed JSON, at $.x)"
+            }
+            let deep = #"{"d":"# + String(repeating: "[", count: 513) + String(repeating: "]", count: 513)
+            #expect(throws: DecodingError.self) { try decode(JSONValue.self, deep + #","c":1,"c":2}"#) }
+        }
+
         @Test(arguments: [
             encoded(#"{"a":1,"a":2}"#, width: 1, bigEndian: false, bom: true),
             encoded(#"{"a":1}"#, width: 1, bigEndian: false, bom: true),

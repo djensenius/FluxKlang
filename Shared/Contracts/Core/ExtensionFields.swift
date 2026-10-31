@@ -51,8 +51,8 @@ struct DynamicCodingKey: CodingKey, Hashable, Sendable {
 ///
 /// Keys compare by canonical equivalence and plain `JSONDecoder` keeps only the
 /// first duplicate, so contract documents MUST be decoded with `ContractCoding.decode`,
-/// which rejects duplicates and non-UTF-8 or BOM-prefixed input. Encoding never
-/// emits duplicates (dictionaries cannot hold them).
+/// which decodes only after a complete duplicate-name scan of BOM-less UTF-8.
+/// Encoding never emits duplicates (dictionaries cannot hold them).
 ///
 /// Both functions need a keyed (object) container: on a top-level array or
 /// scalar, `decode` throws `DecodingError.typeMismatch`.

@@ -2,10 +2,9 @@
 //  ContractCoding.swift
 //  FluxKlang
 //
-//  The JSON coders for contract documents. Documents follow I-JSON (RFC 7493):
-//  UTF-8 without a byte order mark, and member names unique by Swift `String`
-//  equality (Unicode canonical equivalence); `JSONDecoder` alone silently keeps
-//  one duplicate.
+//  The JSON coders for contract documents, which follow I-JSON (RFC 7493): BOM-less
+//  UTF-8, and member names unique by Swift `String` equality (canonical equivalence);
+//  `JSONDecoder` alone silently keeps one duplicate.
 //
 
 import Foundation
@@ -24,11 +23,12 @@ enum ContractCoding {
         JSONDecoder()
     }
 
-    /// Decodes a contract document. Throws `DecodingError.dataCorrupted` first if
-    /// the data is not BOM-less UTF-8 (a leading EF BB BF, FE FF or FF FE, or any
-    /// NUL byte, which UTF-16/32 JSON always contains; nothing is transcoded), then
-    /// if any object at any depth has duplicate member names. Malformed JSON is
-    /// left for `JSONDecoder` to report.
+    /// Decodes a contract document only after a complete uniqueness scan. Throws
+    /// `DecodingError.dataCorrupted` if the data is not BOM-less UTF-8 (a leading
+    /// EF BB BF, FE FF or FF FE, or any NUL byte, as in all UTF-16/32 JSON; nothing is
+    /// transcoded) or any object has duplicate member names. If the scan stops early
+    /// (malformed input, nesting beyond 512 levels), `JSONDecoder`'s error is rethrown;
+    /// input it would still accept (e.g. a trailing comma) is rejected as unverified.
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let byteOrderMarks: [[UInt8]] = [[0xEF, 0xBB, 0xBF], [0xFE, 0xFF], [0xFF, 0xFE]]
         if byteOrderMarks.contains(where: { data.starts(with: $0) }) || data.contains(0) {
@@ -38,25 +38,41 @@ enum ContractCoding {
             ))
         }
         var scanner = DuplicateNameScanner(bytes: [UInt8](data))
-        do {
-            try scanner.scanValue(depth: 0)
-        } catch .duplicate(let name, let path) {
-            throw DecodingError.dataCorrupted(DecodingError.Context(
-                codingPath: [],
-                debugDescription: "Duplicate member name \"\(name)\" at \(path)"
-            ))
-        } catch .malformed {}  // Fall through: JSONDecoder reports the precise error.
-        return try makeDecoder().decode(type, from: data)
+        let problem: String
+        switch scanner.scan() {
+        case .complete:
+            return try makeDecoder().decode(type, from: data)
+        case .duplicate(let name, let path):
+            problem = "Duplicate member name \"\(name)\" at \(path)"
+        case .incomplete(let reason, let path):
+            _ = try makeDecoder().decode(type, from: data)  // Surfaces Foundation's diagnostics.
+            problem = "Could not verify member-name uniqueness (\(reason), at \(path))"
+        }
+        throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: problem))
     }
 }
 
-/// A single-pass structural walk over JSON bytes that tracks member names per
-/// object. Every step consumes input or stops, and nesting is bounded, so it
-/// cannot crash or loop on malformed input.
+/// A single-pass walk over JSON bytes tracking member names per object. It is
+/// iterative (no thread-stack growth), every step consumes input or stops, and
+/// nesting is bounded, so it cannot crash or loop on malformed input.
 private struct DuplicateNameScanner {
-    enum Failure: Error {
+    enum Failure: Error, Equatable {
         case malformed
+        case tooDeep
         case duplicate(String, path: String)
+    }
+
+    enum Outcome {
+        case complete
+        case duplicate(String, path: String)
+        case incomplete(reason: String, path: String)
+    }
+
+    /// An open object (with its member names so far) or array (with its count).
+    private struct Container {
+        let isObject: Bool
+        var names = Set<String>()
+        var count = 0
     }
 
     private static let maximumDepth = 512
@@ -64,16 +80,59 @@ private struct DuplicateNameScanner {
     let bytes: [UInt8]
     var index = 0
     var path: [String] = []
+    private var stack: [Container] = []
 
-    mutating func scanValue(depth: Int) throws(Failure) {
-        guard depth < Self.maximumDepth else { throw .malformed }
+    /// Scans the whole document; anything short of a complete pass is `.incomplete`.
+    mutating func scan() -> Outcome {
+        do throws(Failure) {
+            try scanDocument()
+            skipWhitespace()
+            guard index == bytes.count else { throw .malformed }
+            return .complete
+        } catch .duplicate(let name, let path) {
+            return .duplicate(name, path: path)
+        } catch {
+            let reason = error == .tooDeep ? "nesting deeper than \(Self.maximumDepth) levels" : "malformed JSON"
+            return .incomplete(reason: reason, path: "$" + path.joined())
+        }
+    }
+
+    /// Scans one top-level value. `path` holds one entry per member being scanned.
+    private mutating func scanDocument() throws(Failure) {
+        var needsValue = true
+        while needsValue || !stack.isEmpty {
+            if needsValue {
+                needsValue = try scanValueStart()
+            } else {
+                path.removeLast()  // The member's value is complete.
+                if try consume(UInt8(ascii: ",")) {
+                    try beginMember()
+                    needsValue = true
+                } else if try consume(stack[stack.count - 1].isObject ? UInt8(ascii: "}") : UInt8(ascii: "]")) {
+                    stack.removeLast()
+                } else {
+                    throw .malformed
+                }
+            }
+        }
+    }
+
+    /// Scans a scalar or opens a container; returns whether a member value follows.
+    private mutating func scanValueStart() throws(Failure) -> Bool {
         skipWhitespace()
         guard index < bytes.count else { throw .malformed }
-        switch bytes[index] {
-        case UInt8(ascii: "{"):
-            try scanObject(depth: depth)
-        case UInt8(ascii: "["):
-            try scanArray(depth: depth)
+        let byte = bytes[index]
+        switch byte {
+        case UInt8(ascii: "{"), UInt8(ascii: "["):
+            guard stack.count < Self.maximumDepth else { throw .tooDeep }
+            index += 1
+            stack.append(Container(isObject: byte == UInt8(ascii: "{")))
+            if try consume(byte + 2) {  // `{`+2 is `}`, `[`+2 is `]`.
+                stack.removeLast()
+                return false
+            }
+            try beginMember()
+            return true
         case UInt8(ascii: "\""):
             _ = try scanString(decoding: false)
         default:
@@ -81,38 +140,25 @@ private struct DuplicateNameScanner {
             while index < bytes.count, !Self.isDelimiter(bytes[index]) { index += 1 }
             guard index > start else { throw .malformed }
         }
+        return false
     }
 
-    private mutating func scanObject(depth: Int) throws(Failure) {
-        index += 1
-        var names = Set<String>()
-        if try consume(UInt8(ascii: "}")) { return }
-        repeat {
-            skipWhitespace()
-            guard index < bytes.count, bytes[index] == UInt8(ascii: "\"") else { throw .malformed }
-            let name = try scanString(decoding: true)
-            guard names.insert(name).inserted else {
-                throw .duplicate(name, path: "$" + path.joined())
-            }
-            guard try consume(UInt8(ascii: ":")) else { throw .malformed }
-            path.append("." + name)
-            try scanValue(depth: depth + 1)
-            path.removeLast()
-        } while try consume(UInt8(ascii: ","))
-        guard try consume(UInt8(ascii: "}")) else { throw .malformed }
-    }
-
-    private mutating func scanArray(depth: Int) throws(Failure) {
-        index += 1
-        if try consume(UInt8(ascii: "]")) { return }
-        var element = 0
-        repeat {
-            path.append("[\(element)]")
-            try scanValue(depth: depth + 1)
-            path.removeLast()
-            element += 1
-        } while try consume(UInt8(ascii: ","))
-        guard try consume(UInt8(ascii: "]")) else { throw .malformed }
+    /// Reads a unique member name and colon, or counts an element; pushes its path.
+    private mutating func beginMember() throws(Failure) {
+        let top = stack.count - 1
+        guard stack[top].isObject else {
+            path.append("[\(stack[top].count)]")
+            stack[top].count += 1
+            return
+        }
+        skipWhitespace()
+        guard index < bytes.count, bytes[index] == UInt8(ascii: "\"") else { throw .malformed }
+        let name = try scanString(decoding: true)
+        guard stack[top].names.insert(name).inserted else {
+            throw .duplicate(name, path: "$" + path.joined())
+        }
+        guard try consume(UInt8(ascii: ":")) else { throw .malformed }
+        path.append("." + name)
     }
 
     /// Scans a string starting at its opening quote; returns its decoded value
