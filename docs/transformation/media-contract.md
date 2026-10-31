@@ -339,14 +339,14 @@ and declares every loss. `lossless` is true exactly when `losses` is empty.
 |---|---|
 | `timingQuantized` | The event's exact capture position, rounded half-up to `division`, maps back through its capture-time anchor and map to a different frame (rounded `musicalTicks` can hide this). `division` must divide 15360 |
 | `syntheticTempoMap` | An event has no musical stamp, so export must invent a tempo map |
-| `velocityDownscaled` | A genuine MIDI 2.0 note velocity is not the min-centre-max upscale of its top 7 bits |
+| `velocityDownscaled` | A genuine MIDI 2.0 note velocity is not the min-centre-max upscale of its top 7 bits (independent of the remap below: `0x0100` counts in both) |
 | `noteOnVelocityRemapped` | A genuine MIDI 2.0 Note On's 7-bit velocity is 0, so it is sent as 1 (not Note Off) |
 | `valueDownscaled` | A genuine 32-bit value (poly pressure, CC, channel pressure, RPN/NRPN data, pitch bend) does not survive reduction to 7 or 14 bits |
 | `attributeDropped` | A Note On or Off has an attribute type ≠ 0 |
 | `perNoteDropped` | Per-note controllers, per-note pitch bend or per-note management (no MIDI 1.0 equivalent) |
 | `umpOnlyDropped` | Messages v1 export does not map (MT 0, 1, 5 and higher, and relative controllers). Some have SMF equivalents, such as Flex Data tempo, meter, key and text; mapping them is deferred to #112 |
 | `fidelityUnverified` | An MT4 event from an `unknown` endpoint, whose loss export cannot rule out |
-| `groupsFlattened` | Events from more than one UMP group are merged into 16 channels |
+| `groupsFlattened` | Messages that carry a Group (MT 0x1–0x5 and 0xD; MT 0x0 and 0xF have none, M2-104-UM §2.1.2) span more than one group: each one outside the lowest counts. Groupless messages never add a group (example 10) |
 
 Rules:
 
@@ -440,7 +440,7 @@ Coordinator follow-ups (proposed, not done here):
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
 | [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full |
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
-| [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss |
+| [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss, groupless JR Timestamp |
 
 Timeline records are transient runtime traces; their host ticks are never persisted. Take segments and export records
 show the persisted, anchor-relative shapes. Example constants: 48 kHz unless a generation says otherwise, host timebase
@@ -458,7 +458,7 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
 then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
 and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Twenty-seven mutation self-tests each break one rule in a valid example (for example a stale
+evidence in a trace. Twenty-eight mutation self-tests each break one rule in a valid example (for example a stale
 trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A
 malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 

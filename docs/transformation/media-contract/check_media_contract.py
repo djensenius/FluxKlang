@@ -31,6 +31,7 @@ LANES = {"release": 0, "transport": 1, "state": 2, "content": 3}
 VALUE_BITS = {0xA: 7, 0xB: 7, 0xD: 7, 0x2: 14, 0x3: 14, 0xE: 14}
 UMP_WORDS = {0x0: 1, 0x1: 1, 0x2: 1, 0x3: 2, 0x4: 2, 0x5: 4, 0x6: 1, 0x7: 1, 0x8: 2, 0x9: 2, 0xA: 2, 0xB: 3,
              0xC: 3, 0xD: 4, 0xE: 4, 0xF: 4}
+GROUPED = {0x1, 0x2, 0x3, 0x4, 0x5, 0xD}  # M2-104-UM v1.1 §2.1.2: MT 0x0 and 0xF have no Group; reserved MTs undefined
 
 
 def canon(value, depth_limit, indent=0, prefix=0):
@@ -182,7 +183,7 @@ def midi2_losses(words):
         velocity = words[1] >> 16
         if opcode == 0x9 and velocity >> 9 == 0:
             out["noteOnVelocityRemapped"] += 1
-        elif scale_up(velocity >> 9, 7, 16) != velocity:
+        if scale_up(velocity >> 9, 7, 16) != velocity:  # independent of the remap: 0x0100 is both
             out["velocityDownscaled"] += 1
         if words[0] & 0xFF:
             out["attributeDropped"] += 1
@@ -619,7 +620,7 @@ class Trace:
             if not division or TPQ % division or r.get("smfFormat") is None:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
                 return
-            groups = {(w[0] >> 24) & 0xF for _, w, _ in events}
+            groups = {(w[0] >> 24) & 0xF for _, w, _ in events if w[0] >> 28 in GROUPED}
             for c, words, snap in events:
                 mt = words[0] >> 28
                 if "musicalTicks" not in c:
@@ -632,7 +633,7 @@ class Trace:
                     losses["fidelityUnverified"] += 1
                 elif mt not in (2, 3, 4):
                     losses["umpOnlyDropped"] += 1
-                if len(groups) > 1 and (words[0] >> 24) & 0xF != min(groups):
+                if mt in GROUPED and len(groups) > 1 and (words[0] >> 24) & 0xF != min(groups):
                     losses["groupsFlattened"] += 1
             self.evidence.add("smfExportLossless" if r["lossless"] else "smfExportLossy")
         if dict(losses) != r["losses"]:
@@ -725,9 +726,10 @@ MUTATIONS = [
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
     ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
-    ("10", 10, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
-    ("10", 10, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
-    ("10", 11, {"lossless": True, "losses": {}}, "must equal recomputed"),
+    ("10", 8, {"ump": ["0x22903C64"]}, "'groupsFlattened': 1"),
+    ("10", 11, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
+    ("10", 11, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
+    ("10", 12, {"lossless": True, "losses": {}}, "must equal recomputed"),
 ]
 
 
