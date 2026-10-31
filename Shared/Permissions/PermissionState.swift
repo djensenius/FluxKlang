@@ -33,7 +33,13 @@ enum PermissionCapability: String, CaseIterable, Sendable {
 
 enum PermissionStatus: String, Sendable {
     case notDetermined
+    /// Confirmed by the OS (for example microphone TCC). Never inferred from a socket error.
     case denied
+    /// A local-network probe failed with an errno that a denial *or* an ordinary
+    /// network fault can produce. iOS offers no API to tell them apart (TN3179).
+    case possiblyDenied
+    /// No interface or route can reach the host: not a permission problem.
+    case unreachable
     case restricted
     case granted
     /// The OS offers no query for this capability, or no evidence exists yet.
@@ -57,15 +63,21 @@ struct PermissionState: Equatable, Sendable {
             return "\(name) access is allowed."
         case (.localNetwork, .notDetermined), (.localNetwork, .unknown):
             return "FluxKlang asks for Local Network access the first time you connect to a WING."
-        case (.localNetwork, .denied):
-            return "Local Network access is off for FluxKlang, or the access prompt hasn't been answered. "
-                + "Allow FluxKlang under Privacy & Security › Local Network in Settings, then try again."
+        case (.localNetwork, .possiblyDenied):
+            return "Can't reach the WING. Check that this device is on the WING's network. If it is, "
+                + "Local Network access may be off for FluxKlang: allow it in "
+                + "\(LocalNetworkAccess.settingsPath), then try again."
+        case (.localNetwork, .unreachable):
+            return "This device isn't connected to a network that can reach the WING. "
+                + "Join the WING's network and try again."
         case (.multicast, .unsupported):
             return "Automatic WING discovery isn't available in this build. Enter the WING's IP address instead."
         case (_, .unsupported):
             return "\(name) isn't used by this version of FluxKlang."
         case (_, .notDetermined):
             return "FluxKlang asks for \(name) access only when you turn on a feature that needs it."
+        case (_, .unreachable), (_, .possiblyDenied):
+            return "\(name) couldn't be used right now. Check the connection and try again."
         case (_, .denied):
             return "\(name) access is off for FluxKlang. You can allow it under Privacy & Security in Settings."
         case (_, .restricted):
@@ -79,14 +91,45 @@ struct PermissionState: Equatable, Sendable {
 /// The Local Network privilege has no query API (TN3179), so its status is
 /// inferred only from the outcome of a user-initiated operation.
 enum LocalNetworkAccess {
-    /// errno values a connect to a local address may return when the privilege
-    /// is denied or still undetermined. Apple does not document the exact code
-    /// (Unknown; covered by the operator checklist), so the set is conservative.
-    static let denialErrnos: Set<Int32> = [EHOSTUNREACH, ENETUNREACH, EPERM, EACCES]
+    /// errnos meaning no interface or route reaches the host (Wi-Fi off, not
+    /// joined yet). These are reported as a network problem, never a denial.
+    static let unreachableErrnos: Set<Int32> = [ENETUNREACH, ENETDOWN, EADDRNOTAVAIL]
+    /// errnos a denied or undetermined privilege may produce, but that also have
+    /// ordinary causes: EHOSTUNREACH (reject route, interface going down),
+    /// EACCES (a broadcast address without SO_BROADCAST), EPERM (packet or
+    /// content filter). Which one a denial returns is undocumented (Unknown).
+    static let possibleDenialErrnos: Set<Int32> = [EHOSTUNREACH, EPERM, EACCES]
 
+    /// A successful connect only shows the path wasn't blocked; for a routed
+    /// (non-local) host the privilege doesn't apply, so `.granted` is evidence,
+    /// not confirmation.
     static func status(afterConnectErrno code: Int32?) -> PermissionStatus {
         guard let code else { return .granted }
-        return denialErrnos.contains(code) ? .denied : .unknown
+        if unreachableErrnos.contains(code) { return .unreachable }
+        return possibleDenialErrnos.contains(code) ? .possiblyDenied : .unknown
+    }
+
+    static var settingsPath: String {
+        #if os(macOS)
+        "System Settings › Privacy & Security › Local Network"
+        #else
+        "Settings › Privacy & Security › Local Network"
+        #endif
+    }
+
+    /// User-facing text for a failed pre-flight connect to `host`. Names every
+    /// plausible cause; never claims the Local Network toggle is the cause.
+    static func connectFailureReason(errno code: Int32, host: String) -> String {
+        switch status(afterConnectErrno: code) {
+        case .unreachable:
+            return "This device isn't connected to a network that can reach \(host). "
+                + "Join the WING's network and try again."
+        case .possiblyDenied:
+            return "Can't reach \(host). Check that this device is on the WING's network. If it is, "
+                + "Local Network access may be off for FluxKlang: allow it in \(settingsPath), then try again."
+        default:
+            return "Couldn't open a network path to \(host) (\(String(cString: strerror(code))))."
+        }
     }
 
     /// Flip only together with project.yml once Apple grants
