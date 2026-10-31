@@ -64,7 +64,8 @@
     "hostEpoch": 2,
     "commands": [
       {"id": "cmd.0101", "seq": 101, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
-       "expectedGraphRevision": 43, "op": {"editDraft": "dft.phone-cue", "connect": {"from": "prt.mic.out", "to": "prt.cue.in"}},
+       "expectedGraphRevision": 43, "op": {"editDraft": "dft.phone-cue", "connect": {"from": "prt.mic.out", "to": "prt.cue.in",
+         "conversion": {"kind": "channelMap", "map": [[0], [0]], "label": "Mono to both sides"}}},
        "result": {"status": "draftUpdated"}},
       {"id": "cmd.0102", "seq": 102, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
        "expectedGraphRevision": 43, "op": {"requestActivation": "dft.phone-cue"},

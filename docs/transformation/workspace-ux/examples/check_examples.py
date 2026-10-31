@@ -310,6 +310,7 @@ def check_commands(hs, roles, docs):
     perms = {c["name"]: c["permission"] for c in docs["command"]["classes"]}
     controls = {c["id"]: c["device"] for c in hs["rig"].get("controls", [])}
     present = {d["id"] for d in hs["rig"]["devices"] if d["presence"] == "present"}
+    drafts = {d["id"]: d for d in hs["trace"]["drafts"]}
     for log in hs["logs"]:
         last_seq = 0
         if log["hostEpoch"] != hs["hostEpoch"]:
@@ -331,6 +332,11 @@ def check_commands(hs, roles, docs):
             if len(kinds) != 1 or None in kinds or (want := kinds.pop())[0] != cmd["class"]:
                 err(where, f"class {cmd['class']} does not fit operation {sorted(op)} (class policy table)")
                 continue
+            draft = drafts.get(op.get("editDraft") or op.get("requestActivation") or op.get("proposeDraft"))
+            if want[0] in ("structural", "proposal") and not status.startswith("rejected") and (
+                    not draft or ("connect" in op and shape(op["connect"]) not in map(shape, draft["ops"]))
+                    or ("proposeDraft" in op and draft["author"] != cmd["origin"])):
+                err(where, "a draft command names this session's draft (a proposal, its own) and matches its ops")
             value = op.get("value")
             if "set" in op and not status.startswith("rejected") and not within(target, value):
                 err(where, f"value {value!r} is outside {target['id']} min..ceiling, so it cannot be {status}")
