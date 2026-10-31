@@ -1,0 +1,4 @@
+# Developer tool pins; select Xcode separately via DEVELOPER_DIR (Xcode 27.1+).
+[tools]
+xcodegen = "2.46.0"
+swiftlint = "0.65.1"

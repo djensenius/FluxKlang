@@ -13,10 +13,12 @@ struct SettingsContentView: View {
     @Environment(AppModel.self) private var appModel
     @State private var isShowingStudioConnections = false
     @State private var copilotToken = ""
+    @AppStorage(AppModel.reconnectAtLaunchKey, store: AppPersistence.defaults)
+    private var reconnectsAtLaunch = false
 
     var body: some View {
         Form {
-            Section("Connection") {
+            Section {
                 LabeledContent("Status", value: appModel.wing.connection.statusLabel)
                 if let host = appModel.wing.host {
                     LabeledContent("Host", value: host)
@@ -25,6 +27,13 @@ struct SettingsContentView: View {
                 if let last = appModel.lastHost {
                     LabeledContent("Last WING", value: last)
                 }
+                Toggle("Reconnect to last WING at launch", isOn: $reconnectsAtLaunch)
+                    .accessibilityIdentifier("settings-reconnect-at-launch")
+            } header: {
+                Text("Connection")
+            } footer: {
+                Text("FluxKlang connects only after you tap Connect. If you turn this on, the app reconnects "
+                    + "when it opens; after a privacy reset, the system may ask for Local Network access at launch.")
             }
 
             Section("Studio") {
