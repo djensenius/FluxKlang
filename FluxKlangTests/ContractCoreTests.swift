@@ -423,5 +423,35 @@ extension ContractCoreTests {
             let value = try JSONDecoder().decode(JSONValue.self, from: json(#"{"\u00e9":1,"e\u0301":2,"a":3,"a":4}"#))
             #expect(value == .object(["\u{E9}": .int(1), "a": .int(3)]))
         }
+
+        @Test(arguments: [
+            encoded(#"{"a":1,"a":2}"#, width: 1, bigEndian: false, bom: true),
+            encoded(#"{"a":1}"#, width: 1, bigEndian: false, bom: true),
+            encoded(#"{"a":1,"a":2}"#, width: 2, bigEndian: false, bom: false),
+            encoded(#"{"a":1,"a":2}"#, width: 2, bigEndian: false, bom: true),
+            encoded(#"{"a":1,"a":2}"#, width: 2, bigEndian: true, bom: false),
+            encoded(#"{"a":1,"a":2}"#, width: 2, bigEndian: true, bom: true),
+            encoded(#"{"a":1}"#, width: 4, bigEndian: false, bom: true),
+            encoded(#"{"a":1}"#, width: 4, bigEndian: true, bom: false)
+        ])
+        func nonUTF8OrByteOrderMarkIsRejected(bytes: [UInt8]) {
+            #expect {
+                try ContractCoding.decode(JSONValue.self, from: Data(bytes))
+            } throws: { error in
+                guard case DecodingError.dataCorrupted(let context) = error else { return false }
+                return context.debugDescription == "Contract documents must be UTF-8 without a byte order mark"
+            }
+        }
+    }
+}
+
+/// `text` as UTF-8 (`width` 1), UTF-16 (2) or UTF-32 (4), optionally with a BOM.
+private func encoded(_ text: String, width: Int, bigEndian: Bool, bom: Bool) -> [UInt8] {
+    if width == 1 { return (bom ? [0xEF, 0xBB, 0xBF] : []) + Array(text.utf8) }
+    let body: [UInt32] = width == 2 ? text.utf16.map(UInt32.init) : text.unicodeScalars.map(\.value)
+    let units: [UInt32] = (bom ? [0xFEFF] : []) + body
+    return units.flatMap { unit -> [UInt8] in
+        let little = (0..<width).map { UInt8(truncatingIfNeeded: unit >> (8 * $0)) }
+        return bigEndian ? little.reversed() : little
     }
 }

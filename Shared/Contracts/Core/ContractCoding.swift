@@ -2,9 +2,10 @@
 //  ContractCoding.swift
 //  FluxKlang
 //
-//  The JSON coders for contract documents. Documents follow the I-JSON rule
-//  (RFC 7493) that member names are unique by Swift `String` equality (Unicode
-//  canonical equivalence); `JSONDecoder` alone silently keeps one duplicate.
+//  The JSON coders for contract documents. Documents follow I-JSON (RFC 7493):
+//  UTF-8 without a byte order mark, and member names unique by Swift `String`
+//  equality (Unicode canonical equivalence); `JSONDecoder` alone silently keeps
+//  one duplicate.
 //
 
 import Foundation
@@ -23,10 +24,19 @@ enum ContractCoding {
         JSONDecoder()
     }
 
-    /// Decodes a contract document, first rejecting any object (at any depth)
-    /// with duplicate member names via `DecodingError.dataCorrupted`. Malformed
-    /// JSON is left for `JSONDecoder` to report.
+    /// Decodes a contract document. Throws `DecodingError.dataCorrupted` first if
+    /// the data is not BOM-less UTF-8 (a leading EF BB BF, FE FF or FF FE, or any
+    /// NUL byte, which UTF-16/32 JSON always contains; nothing is transcoded), then
+    /// if any object at any depth has duplicate member names. Malformed JSON is
+    /// left for `JSONDecoder` to report.
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        let byteOrderMarks: [[UInt8]] = [[0xEF, 0xBB, 0xBF], [0xFE, 0xFF], [0xFF, 0xFE]]
+        if byteOrderMarks.contains(where: { data.starts(with: $0) }) || data.contains(0) {
+            throw DecodingError.dataCorrupted(DecodingError.Context(
+                codingPath: [],
+                debugDescription: "Contract documents must be UTF-8 without a byte order mark"
+            ))
+        }
         var scanner = DuplicateNameScanner(bytes: [UInt8](data))
         do {
             try scanner.scanValue(depth: 0)

@@ -23,7 +23,8 @@ import Foundation
 ///
 /// Object keys compare by canonical equivalence (`"\u{E9}"` == `"e\u{301}"`) and plain
 /// `JSONDecoder` keeps only the first duplicate; contract documents MUST be decoded with
-/// `ContractCoding.decode`, which rejects duplicates. Encoding never emits them.
+/// `ContractCoding.decode`, which rejects duplicates and non-UTF-8 or BOM-prefixed
+/// input. Encoding never emits duplicates.
 enum JSONValue: Codable, Hashable, Sendable {
     case null
     case bool(Bool)
