@@ -85,9 +85,8 @@ def load():
     docs = {}
     for path in sorted(Path(__file__).parent.glob("*.json")):
         guarded(path.name, load_file, path, docs)
-    missing = EXPECTED - set(docs)
-    if missing:
-        err("examples", f"missing contracts: {sorted(missing)}")
+    if EXPECTED - set(docs):
+        err("examples", f"missing contracts: {sorted(EXPECTED - set(docs))}")
     return docs
 
 
@@ -190,8 +189,7 @@ def host_sessions(docs):
 
 
 def check_authority(hs):
-    session, rig, where = hs["session"], hs["rig"], hs["name"]
-    host = session["host"]
+    session, rig, where, host = hs["session"], hs["rig"], hs["name"], hs["session"]["host"]
     hosts = [p["id"] for p in session["participants"] if p["role"] == "host"]
     owners = {session["lease"]["holder"], rig["host"], hs["trace"]["authority"]} | {log["host"] for log in hs["logs"]}
     if hosts != [host] or owners != {host}:
@@ -209,8 +207,7 @@ def check_authority(hs):
             err(where, f"{cap['capability']} is provided by another host's device")
 
 
-def shape(edge):
-    """What a committed connect must reproduce: endpoints, conversion map, feedback delay and gain ceiling."""
+def shape(edge):  # what a committed connect must reproduce: endpoints, conversion map, feedback delay and ceiling
     fb = edge.get("feedback")
     return (edge.get("from"), edge.get("to"), (edge.get("conversion") or {}).get("map"),
             (fb.get("delay"), fb.get("gainCeilingDb")) if isinstance(fb, dict) else fb)
@@ -232,8 +229,7 @@ def check_provenance(hs, draft, roles):
     people = {p["id"]: p for p in hs["session"]["participants"]}
     if people.get(draft["author"], {}).get("role") != "assistant":
         return
-    prov = draft.get("provenance", {})
-    origin = prov.get("origin")
+    origin = (prov := draft.get("provenance", {})).get("origin")
     if prov.get("kind") != "assistantProposal" or PROVENANCE_TOOLS.get(origin, object()) != prov.get("toolUse"):
         err(draft["id"], "assistant drafts need provenance whose origin matches its tool use")
     if origin == "diagnostic":
@@ -243,8 +239,7 @@ def check_provenance(hs, draft, roles):
 
 
 def check_transactions(hs, graph, history, ports, roles):
-    trace = hs["trace"]
-    people = {p["id"]: p for p in hs["session"]["participants"]}
+    trace, people = hs["trace"], {p["id"]: p for p in hs["session"]["participants"]}
     drafts = {d["id"]: d for d in trace["drafts"]}
     if trace.get("stepOrder", STEP_ORDER) != STEP_ORDER:
         err(hs["name"], f"step order must be {STEP_ORDER}")
@@ -361,8 +356,7 @@ def check_commands(hs, roles, docs):
 
 
 def check_roles(docs):
-    session = docs["sessionStatus"]
-    roles = session["roles"]
+    session, roles = docs["sessionStatus"], docs["sessionStatus"]["roles"]
     if not {"safety.panic", "safety.safeMute"} <= set(roles["host"]):
         err("host", "Panic and Safe Mute must stay reachable in every host UI")
     if not set(roles["assistant"]) <= ASSISTANT_ALLOWED:
@@ -396,11 +390,9 @@ def check_session(hs, roles, forms, graph):
     if lease["state"] == "running" and any(caps.get(c) != "available" for c in graph["requiredCapabilities"]):
         err(where, "a running lease needs every required graph capability available")
     routes = {r["role"]: r for r in rig["routes"]}
-    status = {}
-    for s in session["nodeStatus"]:
-        if s["node"] in status:
-            err(s["node"], "duplicate node status")
-        status[s["node"]] = s["state"]
+    status = {s["node"]: s["state"] for s in session["nodeStatus"]}
+    if len(status) != len(session["nodeStatus"]):
+        err(where, "duplicate node status")
     for node in graph["nodes"]:
         state, role = status.get(node["id"]), node.get("role")
         needs = node.get("requiredCapabilities", []) + node.get("advisoryCapabilities", [])
