@@ -13,26 +13,49 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
+@Suite(.serialized)
 struct PermissionStateTests {
-    @Test func onlyGrantedStatesAreUsableAndDenialsExplainTheFix() {
-        let denied = PermissionState(capability: .localNetwork, status: .denied)
-        #expect(!denied.isUsable)
-        #expect(denied.reason.contains("Privacy & Security › Local Network"))
+    private static let host = "192.0.2.10"
+
+    @Test func onlyGrantedStatesAreUsableAndNoStateClaimsMoreThanIsKnown() {
         #expect(PermissionState(capability: .microphone, status: .granted).isUsable)
-        for status in [PermissionStatus.notDetermined, .denied, .restricted, .unknown, .unsupported] {
+        let statuses: [PermissionStatus] = [.notDetermined, .denied, .possiblyDenied, .unreachable,
+                                            .restricted, .unknown, .unsupported]
+        for status in statuses {
             for capability in PermissionCapability.allCases {
                 let state = PermissionState(capability: capability, status: status)
                 #expect(!state.isUsable)
                 #expect(!state.reason.contains("allowed."), "\(capability) \(status) must not claim access")
             }
         }
+        let possible = PermissionState(capability: .localNetwork, status: .possiblyDenied).reason
+        #expect(possible.contains("may be off") && possible.contains("WING's network"))
+        #expect(!PermissionState(capability: .localNetwork, status: .unreachable).reason.contains("Local Network"))
     }
 
-    @Test func connectErrnoMapsToInferredLocalNetworkStatus() {
+    @Test func connectErrnoNeverInfersAConfirmedDenial() {
         #expect(LocalNetworkAccess.status(afterConnectErrno: nil) == .granted)
-        #expect(LocalNetworkAccess.status(afterConnectErrno: EHOSTUNREACH) == .denied)
-        #expect(LocalNetworkAccess.status(afterConnectErrno: EPERM) == .denied)
+        #expect(LocalNetworkAccess.status(afterConnectErrno: ENETUNREACH) == .unreachable)
+        for code in [EHOSTUNREACH, EPERM, EACCES] {
+            #expect(LocalNetworkAccess.status(afterConnectErrno: code) == .possiblyDenied)
+        }
         #expect(LocalNetworkAccess.status(afterConnectErrno: ECONNREFUSED) == .unknown)
+    }
+
+    @Test func probeFailureWordingNamesEveryPlausibleCause() {
+        let settings = LocalNetworkAccess.settingsPath
+        #if os(macOS)
+        #expect(settings == "System Settings › Privacy & Security › Local Network")
+        #else
+        #expect(settings == "Settings › Privacy & Security › Local Network")
+        #endif
+        #expect(LocalNetworkAccess.connectFailureReason(errno: ENETUNREACH, host: Self.host)
+            == "This device isn't connected to a network that can reach 192.0.2.10. "
+            + "Join the WING's network and try again.")
+        let possible = "Can't reach 192.0.2.10. Check that this device is on the WING's network. If it is, "
+            + "Local Network access may be off for FluxKlang: allow it in \(settings), then try again."
+        #expect(LocalNetworkAccess.connectFailureReason(errno: EHOSTUNREACH, host: Self.host) == possible)
+        #expect(LocalNetworkAccess.connectFailureReason(errno: EACCES, host: Self.host) == possible)
     }
 
     @Test func iOSBroadcastDiscoveryIsUnsupportedWithoutTheMulticastEntitlement() {
@@ -61,27 +84,47 @@ struct PermissionStateTests {
         #expect(!allowed(uiTesting: true))
         #expect(!allowed(connected: true))
         #expect(!allowed(lastHost: false))
-        #expect(!AppModel(hardware: .inert).allowsStartupReconnect)
     }
 
-    @Test func grantEvidenceIsHostAndBuildScopedAndExcludedFromBackup() throws {
-        let directory = AppPersistence.directory.appendingPathComponent("permission-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("local-network-grant")
-        let evidence = LocalNetworkGrantEvidence(fileURL: file, buildFingerprint: "1.0-7")
+    @Test func startupGateReadsInjectedEvidenceOutsideTestHosts() throws {
+        let evidence = Self.temporaryEvidence()
+        defer { try? FileManager.default.removeItem(at: evidence.directory) }
+        let model = AppModel(hardware: Self.factories(evidence: evidence))
+        let savedHost = model.lastHost
+        defer { model.lastHost = savedHost }
+        model.lastHost = Self.host
+        func allowed() -> Bool { model.allowsStartupReconnect(isTesting: false, isUITesting: false) }
+
+        #expect(!allowed(), "No on-device evidence: launch must not touch the network")
+        evidence.recordGrant(for: "192.0.2.99")
+        #expect(!allowed(), "Evidence for another host must not count")
+        evidence.recordGrant(for: Self.host)
+        #expect(allowed())
+        #expect(!model.allowsStartupReconnect(isTesting: true, isUITesting: false))
+        #expect(!model.allowsStartupReconnect())
+    }
+
+    @Test func grantEvidenceIsHostAndBundleScopedAndExcludedFromBackup() throws {
+        let evidence = Self.temporaryEvidence()
+        defer { try? FileManager.default.removeItem(at: evidence.directory) }
         #expect(!evidence.hasGrant)
-        #expect(!evidence.hasGrant(for: "192.0.2.10"))
 
-        evidence.recordGrant(for: "192.0.2.10")
+        evidence.recordGrant(for: Self.host)
 
-        #expect(evidence.hasGrant)
-        #expect(evidence.hasGrant(for: "192.0.2.10"))
+        #expect(evidence.hasGrant(for: Self.host))
         #expect(!evidence.hasGrant(for: "192.0.2.11"))
-        let newBuild = LocalNetworkGrantEvidence(fileURL: file, buildFingerprint: "1.0-8")
-        #expect(!newBuild.hasGrant(for: "192.0.2.10"))
-        #expect(try file.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+        let otherApp = LocalNetworkGrantEvidence(directory: evidence.directory, bundleID: "org.example.other")
+        #expect(!otherApp.hasGrant(for: Self.host))
+        let excluded = try evidence.directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        #expect(excluded.isExcludedFromBackup == true)
+        let identity = try evidence.fileURL.resourceValues(forKeys: [.fileResourceIdentifierKey])
+        evidence.recordGrant(for: Self.host)
+        let unchanged = try evidence.fileURL.resourceValues(forKeys: [.fileResourceIdentifierKey])
+        #expect(identity.fileResourceIdentifier?.isEqual(unchanged.fileResourceIdentifier) == true)
 
-        evidence.clear()
+        evidence.clear(host: "192.0.2.11")
+        #expect(evidence.hasGrant(for: Self.host), "Clearing another host keeps this record")
+        evidence.clear(host: Self.host)
         #expect(!evidence.hasGrant)
     }
 
@@ -89,24 +132,25 @@ struct PermissionStateTests {
         let transport = WingTransport(localNetworkProbe: { _, _ in EHOSTUNREACH })
         let controller = WingController(transport: transport)
 
-        await controller.connect(host: "192.0.2.10")
+        await controller.connect(host: Self.host)
 
         guard case .failed(let reason) = controller.connection else {
             Issue.record("Expected a truthful failure, got \(controller.connection)")
             return
         }
-        #expect(reason == PermissionState(capability: .localNetwork, status: .denied).reason)
+        #expect(reason == LocalNetworkAccess.connectFailureReason(errno: EHOSTUNREACH, host: Self.host))
         #expect(controller.transportWriteCount == 0)
         #expect(await transport.sessionID == nil, "No socket may open after a blocked probe")
     }
 
     @Test func blockedProbeThrowsBeforeAnySocketOpens() async {
         let transport = WingTransport(localNetworkProbe: { _, _ in ECONNREFUSED })
-        await #expect(throws: WingTransportError.localNetworkBlocked(errno: ECONNREFUSED)) {
-            try await transport.start(remoteHost: "192.0.2.10", localPort: nil, broadcast: false)
+        await #expect(throws: WingTransportError.localNetworkBlocked(errno: ECONNREFUSED, host: Self.host)) {
+            try await transport.start(remoteHost: Self.host, localPort: nil, broadcast: false)
         }
-        let message = WingTransportError.localNetworkBlocked(errno: ECONNREFUSED).localizedDescription
-        #expect(message.hasPrefix("Couldn't open a network path to the WING"))
+        let message = WingTransportError.localNetworkBlocked(errno: ECONNREFUSED, host: Self.host)
+            .localizedDescription
+        #expect(message.hasPrefix("Couldn't open a network path to 192.0.2.10"))
     }
 
     @Test func unentitledDiscoveryExplainsItselfWithoutScanning() async {
@@ -129,5 +173,59 @@ struct PermissionStateTests {
         let inert = InertPermissionProbe()
         _ = await inert.request(.microphone)
         #expect(inert.requests == [.microphone])
+    }
+
+    @Test func failedProbesOnTheAppConnectPathRecordNoEvidence() async {
+        let evidence = Self.temporaryEvidence()
+        defer { try? FileManager.default.removeItem(at: evidence.directory) }
+        for (code, keepsStaleRecord) in [(EHOSTUNREACH, false), (ENETUNREACH, true)] {
+            evidence.recordGrant(for: Self.host)
+            let model = AppModel(hardware: Self.factories(evidence: evidence, probe: { _, _ in code }))
+            let savedHost = model.lastHost
+
+            await model.connect(host: Self.host)
+
+            #expect(!model.isConnected)
+            #expect(evidence.hasGrant(for: Self.host) == keepsStaleRecord,
+                    "Only a possible denial (\(code)) clears the startup evidence")
+            #expect(model.lastHost == savedHost)
+            evidence.clear()
+            await model.connect(host: Self.host)
+            #expect(!evidence.hasGrant, "A failed connect never records evidence")
+        }
+    }
+
+    @Test func successfulAppConnectRecordsEvidenceForThatHost() async {
+        let evidence = Self.temporaryEvidence()
+        defer { try? FileManager.default.removeItem(at: evidence.directory) }
+        var factories = Self.factories(evidence: evidence)
+        factories.makeWingTransport = { _, _ in AssistantRecordingWingTransport() }
+        let model = AppModel(assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
+                             hardware: factories)
+        let savedHost = model.lastHost
+        defer { model.lastHost = savedHost }
+
+        await model.connect(host: Self.host)
+
+        #expect(model.isConnected)
+        #expect(evidence.hasGrant(for: Self.host))
+        #expect(model.lastHost == Self.host)
+        await model.wing.disconnect()
+    }
+
+    private static func temporaryEvidence() -> LocalNetworkGrantEvidence {
+        LocalNetworkGrantEvidence(
+            directory: AppPersistence.directory.appendingPathComponent("permission-\(UUID().uuidString)"),
+            bundleID: "org.davidjensenius.FluxKlang.tests")
+    }
+
+    private static func factories(
+        evidence: LocalNetworkGrantEvidence,
+        probe: @escaping LocalNetworkProbe.Check = { _, _ in ENETUNREACH }
+    ) -> HardwareServiceFactories {
+        var factories = HardwareServiceFactories.inert
+        factories.localNetworkEvidence = evidence
+        factories.localNetworkProbe = probe
+        return factories
     }
 }
