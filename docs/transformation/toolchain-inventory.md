@@ -172,7 +172,7 @@ covered in §11-B.
 | Command | How it was run | Result |
 | --- | --- | --- |
 | `make lint` (`swiftlint --strict`) | `mise exec swiftlint@0.65.1 -- swiftlint --strict`, and the Homebrew 0.65.1 binary. Re-run with Homebrew on the merged tree. | exit 0, no violations |
-| `make generate` (`xcodegen generate`) | `mise exec xcodegen@2.46.0 -- xcodegen generate` and Homebrew 2.46.0 on the merged tree, then `git status --porcelain -- FluxKlang.xcodeproj` | Succeeds. **No drift**: the status is empty for both tools. |
+| `make generate` (`xcodegen generate`) | `mise exec xcodegen@2.46.0 -- xcodegen generate` and Homebrew 2.46.0 on the merged tree, then `git status --porcelain -- FluxKlang.xcodeproj` (rechecked on the whole tree, including the generated plists and entitlements) | Succeeds. **No drift**: the status is empty for both tools. |
 | iOS Simulator `build-for-testing`, used in place of `make build` | `xcodebuild … -scheme FluxKlang -destination "id=<slot simulator>" build-for-testing CODE_SIGNING_ALLOWED=NO` in the fleet slot, with private DerivedData. `make build` itself runs `build` against `name=iPhone 17 Pro` and was not run. | `TEST BUILD SUCCEEDED` before and after the merge. Merged tree: 32.89 s real, 1 warning (AppIntents metadata extraction skipped). |
 | `make build-mac` (pre-merge) | `xcodebuild … -scheme FluxKlangMac build CODE_SIGNING_ALLOWED=NO` (slot) | `BUILD SUCCEEDED` (33.95 s real, 0 warnings) |
 | `make build-for-testing-mac` (merged tree) | The Make recipe plus a private DerivedData: `-scheme FluxKlangMac -destination 'platform=macOS' build-for-testing CODE_SIGNING_ALLOWED=NO` (slot) | `TEST BUILD SUCCEEDED` (38.30 s real, 0 warnings). FluxKlangMacTests compiles and nothing is launched. |
@@ -188,6 +188,12 @@ Project sync history:
   `FluxKlang.xcodeproj` exactly.
 - If an untracked file is added inside `FluxKlang.xcodeproj`, `git diff --exit-code` still
   passes but `git status --porcelain` reports it. That is why §11-C uses the porcelain check.
+- XcodeGen also writes `FluxKlang/Info.plist`, `FluxKlangMac/Info.plist` and both
+  `.entitlements` files from `project.yml`. If an `info.properties` value changes and the
+  regenerated plist isn't committed, a project-only check passes: Actions builds the new
+  plist while Xcode Cloud builds the stale one. §11-C therefore checks the whole working tree.
+  Probe: adding an `info.properties` key, then regenerating, leaves the project-only status
+  empty, while the whole-tree status reports ` M FluxKlang/Info.plist`.
 
 The slot simulator's UDID is redacted. DerivedData was kept under the evidence directory, not
 in `/tmp` or `/var/tmp`, and deleted afterwards.
@@ -630,10 +636,11 @@ jobs:
             [ "${v%%.*}" -ge 27 ] || { echo "::error::$sdk SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
           done
       - name: Generated project is in sync
+        # Whole tree: XcodeGen also rewrites both apps' Info.plist and .entitlements files.
         run: |
           xcodegen generate
-          git status --porcelain -- FluxKlang.xcodeproj
-          test -z "$(git status --porcelain -- FluxKlang.xcodeproj)"
+          git status --porcelain --untracked-files=all
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Effective deployment targets are 27.0
         run: |
           status=0
