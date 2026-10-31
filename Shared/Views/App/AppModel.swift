@@ -106,10 +106,12 @@ final class AppModel {
         assistant: AssistantCoordinator = AssistantCoordinator(),
         assistantProviderSettings: AssistantProviderSettings = AssistantProviderSettings(),
         wing: WingController = WingController(),
-        hardware: HardwareServiceFactories = .current
+        hardware: HardwareServiceFactories = .current,
+        launchControlXLStore: JSONFileStore = .shared
     ) {
         self.wing = wing
-        launchControlXL = LaunchControlXLController(makeMIDIInput: hardware.makeLaunchControlXLInput)
+        launchControlXL = LaunchControlXLController(
+            fileStore: launchControlXLStore, makeMIDIInput: hardware.makeLaunchControlXLInput)
         self.assistant = assistant
         self.assistantProviderSettings = assistantProviderSettings
         let fallback = AssistantFallbackGenerator(coordinator: assistant)
@@ -132,10 +134,7 @@ final class AppModel {
     /// Loads all persisted stores. Call once when the app launches.
     func loadStores() async {
         await faderLayout.load()
-        launchControlXL.setActionHandler { [weak self] action in
-            await self?.handleLaunchControlXL(action)
-        }
-        await launchControlXL.load()
+        await loadLaunchControlXL()
         await equipment.load()
         await environments.load()
         environments.migrateEffectEquipmentLinks(using: equipment.items)
