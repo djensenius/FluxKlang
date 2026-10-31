@@ -64,6 +64,7 @@
 		1C79FC5F6E4018C85424A1FF /* SiriAppIntentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33C53C69E74C297B6FB6160 /* SiriAppIntentsTests.swift */; };
 		1CD80DBB77B6C51ADE393C9A /* WingDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229036D3A7082A2B82C03FF7 /* WingDiscovery.swift */; };
 		1D4F414874D5C320A451DD5A /* SpeakerArray.swift in Sources */ = {isa = PBXBuildFile; fileRef = F633746B37339595DD5625A6 /* SpeakerArray.swift */; };
+		1D81C96EF85A7C03C89CDBFC /* MacPureModelSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A564DDAFF777BA1FB0A0B93 /* MacPureModelSmokeTests.swift */; };
 		1E36996C49F9F51C6848A0DB /* WingMixerWriteAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA92A010B2A7153D7B0AFFB9 /* WingMixerWriteAuthorization.swift */; };
 		1E3A3FBEBF25544F8E145DF5 /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		1E894AE5530A130BEE1FB205 /* AssistantRoutingOutputResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C89456A19B66239EF672C0D /* AssistantRoutingOutputResolver.swift */; };
@@ -265,6 +266,7 @@
 		9E4EF35688F6288FE4F44F50 /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43EBFB69DD1868A35638780 /* Preset.swift */; };
 		9F83B6C75FF0724B207B9B79 /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		9FF6DFBEAAB2BD4C6E6008D3 /* StudioCanvasNodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00B197D31B1C77FB7FB99BBC /* StudioCanvasNodeCard.swift */; };
+		9FFC72671F265A0F3C5F44B9 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11CF5F3C9CDE69281FF4772 /* TestSupport.swift */; };
 		A06828AD7B651A480F2E1AEC /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2BBDA94BA3DF57C8A6B4C92 /* AdvancedView.swift */; };
 		A06E2D69977F3597D1C7F797 /* RoutingTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8762531BC7A63F213F735232 /* RoutingTranslator.swift */; };
 		A1B6D921177F8CDAC1F59CBC /* AssistantMixerIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B2E29600A374AC43BA18F92 /* AssistantMixerIntent.swift */; };
@@ -414,6 +416,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		0E9653BB1C90A9318AB91B4B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 896DFA31F09CDC90A39D56AC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 49BB944437C0767B9D0A3A05;
+			remoteInfo = FluxKlangMac;
+		};
 		82C97D600A27ED8B806A2B97 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 896DFA31F09CDC90A39D56AC /* Project object */;
@@ -455,6 +464,7 @@
 		18CBFF232577ADAD65C0E69A /* AssistantDraftIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantDraftIntent.swift; sourceTree = "<group>"; };
 		198A5087722F3FEB5AAB083A /* FoundationModelActionInterpreterLiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationModelActionInterpreterLiveTests.swift; sourceTree = "<group>"; };
 		1A9CE21781DB88EDDE90462D /* SpeakersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakersView.swift; sourceTree = "<group>"; };
+		1AE3975E39CD27F24D7E7945 /* FluxKlangMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluxKlangMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1C89456A19B66239EF672C0D /* AssistantRoutingOutputResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantRoutingOutputResolver.swift; sourceTree = "<group>"; };
 		1DFCE8AA440C3D6E84D343A6 /* AssistantLiveWingContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantLiveWingContextTests.swift; sourceTree = "<group>"; };
 		201D1AC5DDC73E345FD61126 /* WingValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingValue.swift; sourceTree = "<group>"; };
@@ -540,6 +550,7 @@
 		774063B2171CEFC6FB1EB76B /* AssistantActionInterpretationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionInterpretationTests.swift; sourceTree = "<group>"; };
 		7829A1C698F339C5D662010C /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
 		7A200ECD87AC2A275857AD7F /* RoutingEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingEnvironment.swift; sourceTree = "<group>"; };
+		7A564DDAFF777BA1FB0A0B93 /* MacPureModelSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPureModelSmokeTests.swift; sourceTree = "<group>"; };
 		7A7FA9DED44281AD1CF59C06 /* StudioConnectionsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionsStore.swift; sourceTree = "<group>"; };
 		7B2E29600A374AC43BA18F92 /* AssistantMixerIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMixerIntent.swift; sourceTree = "<group>"; };
 		7B41203E2877DE096F492901 /* PresetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetStore.swift; sourceTree = "<group>"; };
@@ -917,6 +928,14 @@
 			path = Routing;
 			sourceTree = "<group>";
 		};
+		8C0C439E78CB9DF363A51CB6 /* FluxKlangMacTests */ = {
+			isa = PBXGroup;
+			children = (
+				7A564DDAFF777BA1FB0A0B93 /* MacPureModelSmokeTests.swift */,
+			);
+			path = FluxKlangMacTests;
+			sourceTree = "<group>";
+		};
 		8F55ADAB0544A6EAB2D1608E /* Spatial */ = {
 			isa = PBXGroup;
 			children = (
@@ -933,6 +952,7 @@
 			children = (
 				FE008189B554CBD9741C6447 /* FluxKlang.app */,
 				F6A9D3C98A40647A4A274B2B /* FluxKlangMac.app */,
+				1AE3975E39CD27F24D7E7945 /* FluxKlangMacTests.xctest */,
 				62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */,
 				64F9C059141C94DBA062BECD /* FluxKlangUITests.xctest */,
 			);
@@ -961,6 +981,7 @@
 			children = (
 				A80BA078CC003CB37AB8BCDD /* FluxKlang */,
 				B28C528452DB08DE9FE39AFB /* FluxKlangMac */,
+				8C0C439E78CB9DF363A51CB6 /* FluxKlangMacTests */,
 				F6624B8D5BBDF1615714D3EB /* FluxKlangTests */,
 				25E746857563BA9FA7B5B237 /* FluxKlangUITests */,
 				AE944FB5A90EF0D8678BE47C /* Shared */,
@@ -1252,6 +1273,24 @@
 			productReference = 62D6F275F5A38E1681B100FB /* FluxKlangTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		A19DE93F784D28895584976F /* FluxKlangMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E2FA30ED7A18E3FE7910E3C7 /* Build configuration list for PBXNativeTarget "FluxKlangMacTests" */;
+			buildPhases = (
+				B8EF3D1450080DCFF79CF521 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4E257EAB61EB1C3A680C466D /* PBXTargetDependency */,
+			);
+			name = FluxKlangMacTests;
+			packageProductDependencies = (
+			);
+			productName = FluxKlangMacTests;
+			productReference = 1AE3975E39CD27F24D7E7945 /* FluxKlangMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1274,6 +1313,9 @@
 						TestTargetID = 6621E26C78C356F2D938664A;
 					};
 					9EBB5F6520C9812DFFD5FA08 = {
+						DevelopmentTeam = 9JALHNGRBQ;
+					};
+					A19DE93F784D28895584976F = {
 						DevelopmentTeam = 9JALHNGRBQ;
 					};
 				};
@@ -1299,6 +1341,7 @@
 				49BB944437C0767B9D0A3A05 /* FluxKlangMac */,
 				9EBB5F6520C9812DFFD5FA08 /* FluxKlangTests */,
 				685F749B6184D449C86793DC /* FluxKlangUITests */,
+				A19DE93F784D28895584976F /* FluxKlangMacTests */,
 			);
 		};
 /* End PBXProject section */
@@ -1687,6 +1730,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B8EF3D1450080DCFF79CF521 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D81C96EF85A7C03C89CDBFC /* MacPureModelSmokeTests.swift in Sources */,
+				9FFC72671F265A0F3C5F44B9 /* TestSupport.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F49F8A4D10FC61659A2589CA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1758,6 +1810,11 @@
 			isa = PBXTargetDependency;
 			target = 6621E26C78C356F2D938664A /* FluxKlang */;
 			targetProxy = 8AA3AF5C05973D2CC373DF02 /* PBXContainerItemProxy */;
+		};
+		4E257EAB61EB1C3A680C466D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 49BB944437C0767B9D0A3A05 /* FluxKlangMac */;
+			targetProxy = 0E9653BB1C90A9318AB91B4B /* PBXContainerItemProxy */;
 		};
 		FF767C30E345CFF21CC45C6F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1851,6 +1908,23 @@
 				SDKROOT = macosx;
 			};
 			name = Release;
+		};
+		63F87B94D2CF2CA9F9464000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.mactests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxKlangMac.app/Contents/MacOS/FluxKlangMac";
+			};
+			name = Debug;
 		};
 		72BD07538E8917A26A9CB849 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -2016,6 +2090,23 @@
 			};
 			name = Debug;
 		};
+		F10A1ECB23E2E7ABD7DCE8BF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.davidjensenius.FluxKlang.mactests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluxKlangMac.app/Contents/MacOS/FluxKlangMac";
+			};
+			name = Release;
+		};
 		F49B32995DEA558DE4E415DC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2098,6 +2189,15 @@
 			buildConfigurations = (
 				EC6EF494BA3F15695BC27631 /* Debug */,
 				C4875A761E1BD9227CE7DCD7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E2FA30ED7A18E3FE7910E3C7 /* Build configuration list for PBXNativeTarget "FluxKlangMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				63F87B94D2CF2CA9F9464000 /* Debug */,
+				F10A1ECB23E2E7ABD7DCE8BF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
