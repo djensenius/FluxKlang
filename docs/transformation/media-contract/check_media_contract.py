@@ -200,11 +200,12 @@ def midi2_losses(words):
 
 class Trace:
     def __init__(self, doc, name):
-        clocks = doc["clocks"]
+        clocks, tl = doc["clocks"], doc["timeline"]
         self.doc, self.name, self.errors, self.evidence = doc, name, [], set()
         for key, items in (("streamId", doc.get("streams", [])), ("actionId", doc.get("actions", [])),
-                           ("clockId", clocks["sample"])):
-            if len({x[key] for x in items}) < len(items):
+                           ("clockId", clocks["sample"]), ("takeId", tl), ("exportId", tl)):
+            ids = [x[key] for x in items if key in x]
+            if len(set(ids)) < len(ids):
                 self.err({}, f"duplicate {key}: declared IDs are unique, never overwritten")
         self.ns_per_tick = Fraction(clocks["host"]["timebaseNumer"], clocks["host"]["timebaseDenom"])
         self.primary = clocks["sample"][0]["clockId"]
@@ -382,8 +383,8 @@ class Trace:
         ref = restart if first is r and restart.get("generation") == r["generation"] else first
         if ref is not r:
             span = (r["hostTicks"] - ref["hostTicks"]) * self.ns_per_tick * rate / 10**9
-            if span < 0 or ref is first and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]) \
-                    or abs(r["frame"] - ref["frame"] - span) > (rate + span) / 1000:
+            if min(span, r["frame"] - ref["frame"]) < 0 or abs(r["frame"] - ref["frame"] - span) * 1000 > rate + span \
+                    or ref is first and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]):
                 self.err(r, "anchors advance and stay within (rate + span)/1000 frames of "
                          + ("their clockRestart stamp" if ref is restart else "their generation's first"))
         self.anchor[clock] = r
@@ -872,9 +873,10 @@ MUTATIONS = [
                         "6.frame": 192000, "6.musicalMap": 1}, "current musicalMap revision"),
     ("04", 6, {"frame": 280000, "hostTicks": 2540000000, "musicalTicks": 193280}, "fired assignedFrame=288000"),
     ("09", "timeline", {"10": {"seq": 11, "kind": "midiCapture", "stream": "str.keys-a", "ump": ["0x20903C64"],
-                               "hostTicks": 2489999999, "frame": 0, "endpointProtocol": "midi1",
-                               "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1"}},
-     "capture timestamp predates clockRestart"),
+     "hostTicks": 2489999999, "frame": 0, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none",
+     "effective": "midi1"}}, "capture timestamp predates clockRestart"),
+    ("08", 10, {"takeId": "tk.1"}, "duplicate takeId"),
+    ("01", 8, {"frame": -1}, "their clockRestart stamp"),  # not before the restart even within jitter
 ]
 
 
