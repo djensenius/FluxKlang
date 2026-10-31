@@ -126,7 +126,7 @@ def compatible(ports, edge):
                                    and type(fb.get("gainCeilingDb")) in (int, float) and fb["gainCeilingDb"] <= 0):
         return "feedbackNeedsOneBlockDelayAndGainCeilingDb<=0"
     if not src or not dst or src["dir"] != "out" or dst["dir"] != "in":
-        return "direction"
+        return "direction" if src and dst else "portNotInGraph"
     if src["signal"] != dst["signal"]:
         return "signalMismatch"
     if conversion:
@@ -155,7 +155,11 @@ def candidate(graph, draft):
 
 
 def check_graph(graph):
-    ports = {p["id"]: p for p in graph["ports"]}
+    nodes = {n["id"] for n in graph["nodes"]}
+    for port in graph["ports"]:
+        if port["node"] not in nodes:
+            err("graph", f"{port['id']} belongs to {port['node']}, which is not a node of this graph")
+    ports = {p["id"]: p for p in graph["ports"] if p["node"] in nodes}  # edge and cycle code see only these
     defined = {c["id"] for c in graph["capabilities"]}
     required, advisory = set(graph["requiredCapabilities"]), set(graph["advisoryCapabilities"])
     if not required | advisory <= defined or required & advisory:
