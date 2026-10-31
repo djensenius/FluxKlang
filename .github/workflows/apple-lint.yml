@@ -15,4 +15,4 @@ jobs:
       - name: Lint
         run: swiftlint --strict
       - name: Hardware inventory self-check
-        run: bash scripts/hardware-inventory/passive-inventory.sh --self-check
+        run: bash scripts/hardware-inventory/passive-inventory.sh --self-check --require-symbols
