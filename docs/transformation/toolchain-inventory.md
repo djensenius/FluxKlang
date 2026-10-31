@@ -478,7 +478,9 @@ Gaps and blockers:
 1. **Local:** Keep Xcode 27.1 (27A9275) at `/Applications/Xcode.app` and always export
    `DEVELOPER_DIR`. Optionally run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`;
    that is the maintainer's choice and was not applied. Adopt the repo `mise.toml` (A) and run
-   `mise install`. Both pinned versions are already present on this Mac.
+   `mise install`. Both pinned versions are already present on this Mac. Run Make through the
+   pins with `mise exec -- make …`, or with mise activated or its shims first on PATH (E);
+   `mise install` alone does not change PATH.
 2. **GitHub Actions (#61):**
    - Add a build job on `runs-on: xcode-27` with
      `DEVELOPER_DIR=/Applications/Xcode_27.1.app/Contents/Developer`.
@@ -736,10 +738,26 @@ With the override, both use it, and the three Mac targets print the same command
 
 ```diff
 -brew install xcodegen swiftlint   # if not already installed
-+mise install                      # pinned xcodegen + swiftlint (mise.toml); or: brew install xcodegen swiftlint
+-make generate                     # xcodegen generate
++mise install                      # pinned xcodegen + swiftlint (mise.toml)
 +export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # Xcode 27.1+; needed if xcode-select points at CLT
- make generate                     # xcodegen generate
++mise exec -- make generate        # pinned xcodegen, even when Homebrew has another on PATH
+ open FluxKlang.xcodeproj
 ```
+
+In the Validate block, add one line before the `make` commands:
+
+```diff
++# Run these through the pins: prefix with `mise exec --`, or activate mise / put its shims first on PATH.
+ make lint                   # swiftlint --strict
+```
+
+`mise install` only installs; it does not put the pins on PATH. A bare `make` in a shell without
+mise activation or shims runs whatever `xcodegen`/`swiftlint` comes first. On this Mac that is
+Homebrew's (`/opt/homebrew/bin/xcodegen`), so the pin would be bypassed silently. Checked in a
+clean `env -i` shell with Homebrew on PATH and a throwaway `mise.toml`: `mise exec -- xcodegen`
+resolved `~/.local/share/mise/installs/xcodegen/2.46.0`, and `mise exec -- make generate`
+and `mise exec -- make lint` both exited 0 with no drift.
 
 **F. Future native realtime target** (#60/#74/runtime lanes; for when a C, Objective-C or C++
 RT target exists). This goes in `project.yml` target settings and applies only to that target:
