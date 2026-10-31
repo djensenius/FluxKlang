@@ -165,7 +165,7 @@ final class AppModel {
     }
 
     private var shouldReconnectOnStartup: Bool {
-        !AppPersistence.isTesting && !AcceptanceLaunchConfiguration.isUITesting && !isConnected
+        allowsStartupReconnect
     }
 
     /// Re-reads every persisted store, used when iCloud syncs new state.
@@ -393,7 +393,7 @@ final class AppModel {
         wing = live
         await live.connect(host: host)
         if live.connection.isConnected {
-            lastHost = host
+            rememberConnectedHost(host)
             await verifyTemporaryMovesAfterReconnect()
         }
     }
