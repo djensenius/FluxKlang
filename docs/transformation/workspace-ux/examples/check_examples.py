@@ -124,10 +124,11 @@ def compatible(ports, edge):
         return "direction" if src and dst else "portNotInGraph"
     if src["signal"] != dst["signal"]:
         return "signalMismatch"
-    if conversion:
+    if conversion:  # a row per destination channel; an empty row is silent, but some row must carry signal
         rows, width = conversion.get("map"), src.get("channels") or 0
-        if (not isinstance(rows, list) or len(rows) != dst.get("channels")
-                or any(not row or any(not isinstance(i, int) or not 0 <= i < width for i in row) for row in rows)):
+        if (not isinstance(rows, list) or len(rows) != dst.get("channels") or not any(rows)
+                or any(not isinstance(row, list) or any(type(i) is not int or not 0 <= i < width for i in row)
+                       for row in rows)):
             return "badConversion"
     elif src.get("channels") != dst.get("channels"):
         return "channelMismatch"

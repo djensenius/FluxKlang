@@ -48,7 +48,7 @@ text. The Safety bar is pinned outside the scrolling list.
 |---|---|---|
 | 1 From | Outputs grouped by node, with signal and channel count | Observed shortcuts (`nod.ch7`) are listed as "observed, not routable" and disabled |
 | 2 To | Inputs of every node | Incompatible or duplicate entries stay **visible but disabled** with a reason ("Already connected"); a cycle is offered only as "Add as feedback..." |
-| 3 Conversion | Only when the channel counts differ | No preselected up-mix; the user picks "Mono to both sides", "Left only" and so on |
+| 3 Conversion | Only when the channel counts differ | No preselected up-mix; the user picks "Mono to both sides" (`[[0], [0]]`), "Left only" (`[[0], []]`, right silent) and so on |
 | 4 Result | Draft row with a Draft badge | `cmd.0101` → `draftUpdated`; the review bar shows the count |
 
 Review opens the standard sheet ([draft-active-transactions.md](draft-active-transactions.md)) as a
