@@ -1,0 +1,86 @@
+{
+  "contract": "sessionStatus",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "ses.example",
+  "project": "prj.example-set",
+  "projectRevision": 12,
+  "graphRevision": 43,
+  "deviceRevision": 7,
+  "transportRevision": 5,
+  "revision": 3,
+  "history": [
+    {"revision": 1, "note": "Host A opened project"},
+    {"revision": 2, "note": "Remote C paired and connected"},
+    {"revision": 3, "note": "Remote C reconnected on a new epoch"}
+  ],
+  "roles": {
+    "host": ["live.set", "draft.edit", "activation.authorize", "hazardous.authorize", "device.configure",
+             "safety.panic", "safety.safeMute"],
+    "remoteController": ["live.set:grp.fx", "live.set:grp.out", "safety.panic", "safety.safeMute"],
+    "observer": ["safety.panic", "safety.safeMute"],
+    "assistant": ["draft.propose", "diagnostics.read"]
+  },
+  "participants": [
+    {"id": "per.host-a", "label": "Host A", "formFactor": "mac", "role": "host"},
+    {"id": "per.host-b", "label": "Host B", "formFactor": "phone", "role": "host"},
+    {"id": "per.remote-c", "label": "Remote C", "formFactor": "tablet", "role": "remoteController",
+     "connection": "con.remote-c", "opensAudioEngine": false},
+    {"id": "per.assistant", "label": "Local assistant", "formFactor": "none", "role": "assistant",
+     "eligibility": "eligible", "cloudFallback": false}
+  ],
+  "layoutAdaptations": [
+    {"formFactor": "mac", "layout": "sidebar + canvas + inspector"},
+    {"formFactor": "tablet", "layout": "sidebar + canvas + inspector (regular width)"},
+    {"formFactor": "phone", "layout": "compact lists, pickers and sheets"}
+  ],
+  "windows": [
+    {"id": "win.wiring", "surface": "wiring", "host": "per.host-a"},
+    {"id": "win.perform", "surface": "perform", "host": "per.host-a"}
+  ],
+  "lease": {"id": "lse.host-a", "holder": "per.host-a", "project": "prj.example-set",
+            "windows": ["win.wiring", "win.perform"], "state": "running",
+            "otherDocuments": "editable and preparable; never render independently"},
+  "osPermissions": [
+    {"host": "per.host-a", "name": "microphone", "state": "granted"},
+    {"host": "per.host-a", "name": "localNetwork", "state": "granted"},
+    {"host": "per.host-b", "name": "localNetwork", "state": "denied", "effect": "Peer control unavailable; local manual use unaffected"},
+    {"host": "per.host-b", "name": "bluetoothMIDI", "state": "notDetermined"}
+  ],
+  "nodeStatus": [
+    {"node": "nod.keys", "state": "mapped", "route": "rte.keys-in"},
+    {"node": "nod.mic", "state": "mapped", "route": "rte.mic-in"},
+    {"node": "nod.pads", "state": "stale", "route": "rte.pads"},
+    {"node": "nod.synth", "state": "ready"},
+    {"node": "nod.verb", "state": "ready"},
+    {"node": "nod.echo", "state": "missing"},
+    {"node": "nod.mains", "state": "mapped", "route": "rte.mains"},
+    {"node": "nod.space", "state": "lostMuted", "route": "rte.space"},
+    {"node": "nod.cue", "state": "unmapped"},
+    {"node": "nod.ch7", "state": "stale"}
+  ],
+  "telemetry": [
+    {"target": "rte.mains", "kind": "signalMeter", "source": "measured", "lease": "lse.host-a",
+     "peakDbfs": -14.5, "display": "-14.5 dBFS (synthetic sample)"},
+    {"target": "rte.mic-in", "kind": "signalMeter", "source": "measured", "lease": "lse.host-a",
+     "peakDbfs": -22, "display": "-22.0 dBFS (synthetic sample)"},
+    {"target": "rte.space", "kind": "signalMeter", "source": "deviceMissing", "display": "Unavailable"},
+    {"target": "nod.cue", "kind": "signalMeter", "source": "unmapped", "display": "Unavailable"},
+    {"target": "par.mains.gain", "kind": "signalMeter", "source": "faderTravelOnly", "display": "Unavailable"}
+  ],
+  "diagnostics": [
+    {"id": "dgn.echo-missing", "severity": "warning", "target": "nod.echo",
+     "message": "Tape Echo is not installed. Its branch is silent; it is not bypassed.",
+     "manualActions": ["Locate plugin", "Replace node", "Keep placeholder"], "assistant": "explainOnly"},
+    {"id": "dgn.space-lost", "severity": "error", "target": "rte.space",
+     "message": "Interface B is missing. Space outputs are muted; survivors are not boosted.",
+     "manualActions": ["Choose another device", "Keep muted"], "assistant": "explainOnly"},
+    {"id": "dgn.cue-unmapped", "severity": "info", "target": "rol.cue",
+     "message": "Cue has no device route on this host.",
+     "manualActions": ["Map Cue to outputs"], "assistant": "explainOnly"},
+    {"id": "dgn.pads-stale", "severity": "warning", "target": "dev.ctl-a",
+     "message": "Controller A was last seen in a previous session.",
+     "manualActions": ["Rescan", "Use on-screen controls"], "assistant": "explainOnly"}
+  ],
+  "safety": {"panic": "alwaysVisible", "safeMute": "alwaysVisible", "requiresDraftOrReview": false}
+}

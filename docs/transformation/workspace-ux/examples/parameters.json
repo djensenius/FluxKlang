@@ -1,0 +1,46 @@
+{
+  "contract": "parameter",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "pst.main",
+  "graph": "gph.main",
+  "graphRevision": 43,
+  "revision": 19,
+  "history": [
+    {"revision": 17, "note": "Recalled pat.verse"},
+    {"revision": 18, "note": "Mains level changed on host"},
+    {"revision": 19, "note": "Verb mix set from host UI", "command": "cmd.0001"}
+  ],
+  "groups": [
+    {"id": "grp.fx", "label": "Effects"},
+    {"id": "grp.out", "label": "Outputs"},
+    {"id": "grp.input", "label": "Input setup"}
+  ],
+  "parameters": [
+    {"id": "par.verb.mix", "node": "nod.verb", "group": "grp.fx", "label": "Verb Mix", "unit": "percent",
+     "min": 0, "max": 100, "default": 25, "curve": "linear", "class": "live", "value": 30},
+    {"id": "par.verb.size", "node": "nod.verb", "group": "grp.fx", "label": "Room Size", "unit": "normalized",
+     "min": 0, "max": 1, "default": 0.5, "curve": "linear", "class": "live", "rampMs": 50, "value": 0.5},
+    {"id": "par.mains.gain", "node": "nod.mains", "group": "grp.out", "label": "Mains Level", "unit": "dB",
+     "min": -120, "max": 6, "default": -12, "ceiling": 0, "curve": "audioTaper", "class": "live", "value": -8},
+    {"id": "par.cue.gain", "node": "nod.cue", "group": "grp.out", "label": "Cue Level", "unit": "dB",
+     "min": -120, "max": 6, "default": -20, "curve": "audioTaper", "class": "live", "value": -20},
+    {"id": "par.space.width", "node": "nod.space", "group": "grp.fx", "label": "Space Width", "unit": "normalized",
+     "min": 0, "max": 1, "default": 0.5, "curve": "linear", "class": "live", "value": 0.5},
+    {"id": "par.mic.trim", "node": "nod.mic", "group": "grp.input", "label": "Mic Trim (interface setting)", "unit": "dB",
+     "min": 0, "max": 60, "default": 20, "curve": "linear", "class": "hazardous", "learnExcludedByDefault": true, "value": 20}
+  ],
+  "bindings": [
+    {"id": "bnd.knob1-mix", "control": "ctl.knob-1", "parameter": "par.verb.mix",
+     "pickup": {"mode": "catch", "state": "engaged"}},
+    {"id": "bnd.enc2-mains", "control": "ctl.enc-2", "parameter": "par.mains.gain",
+     "encoderProfile": "twosComplement", "stepDb": 0.5, "pickup": {"mode": "relative", "state": "engaged"}},
+    {"id": "bnd.fader3-width", "control": "ctl.fader-3", "parameter": "par.space.width",
+     "pickup": {"mode": "catch", "state": "waiting", "hardwareValue": 0.2, "parameterValue": 0.5}}
+  ],
+  "learn": [
+    {"id": "lrn.trim", "control": "ctl.fader-4", "proposedParameter": "par.mic.trim", "state": "blocked",
+     "reason": "Hazardous targets are excluded from Learn unless explicitly included in review."},
+    {"id": "lrn.size", "control": "ctl.knob-5", "proposedParameter": "par.verb.size", "state": "awaitingReview"}
+  ]
+}

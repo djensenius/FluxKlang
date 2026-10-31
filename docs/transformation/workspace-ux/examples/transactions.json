@@ -1,0 +1,57 @@
+{
+  "contract": "transactionTrace",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "trc.example",
+  "graph": "gph.main",
+  "revision": 1,
+  "history": [{"revision": 1, "note": "Initial synthetic trace"}],
+  "stepOrder": ["validate", "prepare", "reviewAuthorize", "commit", "acknowledge"],
+  "initialActiveGraphRevision": 42,
+  "drafts": [
+    {"id": "dft.wire-mic", "author": "per.host-a", "host": "per.host-a", "baseGraphRevision": 42,
+     "ops": [{"op": "addEdge", "edge": "edg.mic-mains", "from": "prt.mic.out", "to": "prt.mains.in",
+              "conversion": {"kind": "channelMap", "map": [[0], [0]]}}]},
+    {"id": "dft.old-base", "author": "per.host-a", "host": "per.host-a", "baseGraphRevision": 42,
+     "ops": [{"op": "removeEdge", "edge": "edg.keys-echo"}], "note": "Opened in a second window before rev 43"},
+    {"id": "dft.bad-wire", "author": "per.host-a", "host": "per.host-a", "baseGraphRevision": 43,
+     "ops": [{"op": "connect", "from": "prt.mic.out", "to": "prt.verb.mod"}]},
+    {"id": "dft.add-verb2", "author": "per.host-a", "host": "per.host-a", "baseGraphRevision": 43,
+     "ops": [{"op": "addNode", "proposedId": "nod.verb2", "kind": "plugin", "label": "Room Verb 2 (placeholder)",
+              "requiredCapabilities": ["cap.au-effect"]}]},
+    {"id": "dft.assistant-cue", "author": "per.assistant", "host": "per.host-a", "baseGraphRevision": 43,
+     "provenance": {"kind": "assistantProposal", "request": "current text only", "toolUse": "none"},
+     "ops": [{"op": "connect", "from": "prt.mic.out", "to": "prt.cue.in", "conversion": {"kind": "channelMap", "map": [[0], [0]]}}]},
+    {"id": "dft.phone-cue", "author": "per.host-b", "host": "per.host-b", "baseGraphRevision": 43,
+     "ops": [{"op": "connect", "from": "prt.mic.out", "to": "prt.cue.in", "conversion": {"kind": "channelMap", "map": [[0], [0]]}}]}
+  ],
+  "transactions": [
+    {"id": "txn.wire-mic", "draft": "dft.wire-mic", "outcome": "committed", "steps": [
+      {"seq": 1, "step": "validate", "result": "ok"},
+      {"seq": 2, "step": "prepare", "result": "ok", "detail": "Prepared off-render on inactive instances"},
+      {"seq": 3, "step": "reviewAuthorize", "result": "ok", "authorizedBy": "per.host-a", "scope": "singleUse",
+       "boundTo": {"draft": "dft.wire-mic", "baseGraphRevision": 42, "hostEpoch": 7, "diffDigest": "synthetic-digest-1"}},
+      {"seq": 4, "step": "commit", "result": "ok", "at": "renderBoundary", "resultGraphRevision": 43},
+      {"seq": 5, "step": "acknowledge", "result": "ok", "resultProjectRevision": 12, "persisted": true}
+    ]},
+    {"id": "txn.old-base", "draft": "dft.old-base", "outcome": "stale", "activeGraphRevisionAfter": 43, "steps": [
+      {"seq": 6, "step": "validate", "result": "failed", "code": "staleBase",
+       "detail": "Draft is based on rev 42; active is rev 43. Rebase and review again."}
+    ]},
+    {"id": "txn.bad-wire", "draft": "dft.bad-wire", "outcome": "rejected", "activeGraphRevisionAfter": 43, "steps": [
+      {"seq": 7, "step": "validate", "result": "failed", "code": "signalMismatch", "port": "prt.verb.mod",
+       "detail": "Audio cannot feed a control input without an explicit conversion."}
+    ]},
+    {"id": "txn.add-verb2", "draft": "dft.add-verb2", "outcome": "prepareFailed", "activeGraphRevisionAfter": 43,
+     "runningState": "preserved", "steps": [
+      {"seq": 8, "step": "validate", "result": "ok"},
+      {"seq": 9, "step": "prepare", "result": "failed", "code": "instanceLoadFailed",
+       "detail": "Synthetic fault: plugin instance did not load within budget. Running graph untouched."}
+    ]},
+    {"id": "txn.assistant-cue", "draft": "dft.assistant-cue", "outcome": "awaitingReview", "activeGraphRevisionAfter": 43,
+     "pending": "reviewAuthorize", "steps": [
+      {"seq": 10, "step": "validate", "result": "ok"},
+      {"seq": 11, "step": "prepare", "result": "ok", "detail": "Assistant cannot authorize; a host user reviews the full diff."}
+    ]}
+  ]
+}

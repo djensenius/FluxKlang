@@ -1,0 +1,64 @@
+{
+  "contract": "command",
+  "schemaVersion": "0.1-draft",
+  "synthetic": true,
+  "id": "clog.example",
+  "revision": 2,
+  "history": [
+    {"revision": 1, "note": "Host A session log"},
+    {"revision": 2, "note": "Added phone host session log"}
+  ],
+  "classes": [
+    {"name": "live", "permission": "live.set", "authorization": "scopedPolicy"},
+    {"name": "structural", "permission": "draft.edit", "authorization": "explicitReview"},
+    {"name": "hazardous", "permission": "hazardous.authorize", "authorization": "explicitReview"},
+    {"name": "safety", "permission": "safety", "authorization": "alwaysAcceptedOnCurrentEpoch"},
+    {"name": "proposal", "permission": "draft.propose", "authorization": "neverActivates"}
+  ],
+  "logs": [
+    {
+      "host": "per.host-a",
+      "hostEpoch": 7,
+      "commands": [
+        {"id": "cmd.0001", "seq": 1, "origin": "per.host-a", "class": "live", "hostEpoch": 7,
+         "expectedParameterRevision": 18, "op": {"set": "par.verb.mix", "value": 30},
+         "result": {"status": "accepted", "resultParameterRevision": 19}},
+        {"id": "cmd.0002", "seq": 2, "origin": "per.remote-c", "class": "live", "hostEpoch": 7, "connectionEpoch": 3,
+         "op": {"set": "par.mains.gain", "value": -6},
+         "result": {"status": "rejectedStaleEpoch", "detail": "Absolute setters are rejected too; remote resnapshots."}},
+        {"id": "cmd.0003", "seq": 3, "origin": "per.remote-c", "class": "structural", "hostEpoch": 7, "connectionEpoch": 4,
+         "expectedGraphRevision": 43, "op": {"connect": {"from": "prt.mic.out", "to": "prt.cue.in"}},
+         "result": {"status": "rejectedPermission", "detail": "Remote controller role cannot edit structure."}},
+        {"id": "cmd.0004", "seq": 4, "origin": "per.assistant", "class": "proposal", "hostEpoch": 7,
+         "expectedGraphRevision": 43, "op": {"proposeDraft": "dft.assistant-cue"},
+         "result": {"status": "draftCreated", "detail": "Review-only; accepting a draft is not activation."}},
+        {"id": "cmd.0005", "seq": 5, "origin": "bnd.fader3-width", "class": "live", "hostEpoch": 7,
+         "op": {"set": "par.space.width", "value": 0.2},
+         "result": {"status": "heldForPickup", "detail": "Hardware 0.20 has not caught parameter 0.50."}},
+        {"id": "cmd.0006", "seq": 6, "origin": "per.remote-c", "class": "safety", "hostEpoch": 7, "connectionEpoch": 4,
+         "op": {"safeMute": "ownedOutputs"}, "result": {"status": "accepted"}},
+        {"id": "cmd.0007", "seq": 7, "origin": "per.remote-c", "class": "safety", "hostEpoch": 7, "connectionEpoch": 3,
+         "op": {"panic": "ownedNotesAndOutputs"},
+         "result": {"status": "rejectedStaleEpoch", "detail": "Remote Panic re-arms on the new epoch; host Panic unaffected."}},
+        {"id": "cmd.0008", "seq": 8, "origin": "per.host-a", "class": "hazardous", "hostEpoch": 7,
+         "op": {"set": "par.mic.trim", "value": 35}, "result": {"status": "needsAuthorization"}}
+      ]
+    },
+    {
+      "host": "per.host-b",
+      "hostEpoch": 2,
+      "commands": [
+        {"id": "cmd.0101", "seq": 101, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
+         "expectedGraphRevision": 43, "op": {"editDraft": "dft.phone-cue", "connect": {"from": "prt.mic.out", "to": "prt.cue.in"}},
+         "result": {"status": "draftUpdated"}},
+        {"id": "cmd.0102", "seq": 102, "origin": "per.host-b", "class": "structural", "hostEpoch": 2,
+         "expectedGraphRevision": 43, "op": {"requestActivation": "dft.phone-cue"},
+         "result": {"status": "reviewRequired", "detail": "Same review sheet and authority as any host."}},
+        {"id": "cmd.0103", "seq": 103, "origin": "per.host-b", "class": "hazardous", "hostEpoch": 2,
+         "op": {"set": "par.mic.trim", "value": 35}, "result": {"status": "needsAuthorization"}},
+        {"id": "cmd.0104", "seq": 104, "origin": "per.host-b", "class": "safety", "hostEpoch": 2,
+         "op": {"safeMute": "ownedOutputs"}, "result": {"status": "accepted"}}
+      ]
+    }
+  ]
+}
