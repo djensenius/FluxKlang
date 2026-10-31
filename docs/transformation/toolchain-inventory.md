@@ -467,8 +467,8 @@ Gaps and blockers:
 | G1 | No GA GitHub-hosted image has OS-27 SDKs. Only the preview `xcode-27` label does. | Blocker for #61 on GA runners. Preview risk otherwise. | #61 / coordinator |
 | G2 | Xcode Cloud availability of Xcode 27.x is unverified. | **Release blocker** until it is confirmed in App Store Connect. | Maintainer |
 | G3 | RTSan is not in Xcode 27.1. Upstream LLVM 20 on OS-27 is unprobed. | Blocker for RTSan claims (#60/#74) | #74 / runtime lanes |
-| G4 | The Makefile simulator name is absent on the `xcode-27` image. | CI breakage | Coordinator (diff D) |
-| G5 | Lint uses an unpinned `brew install swiftlint`. Local pins are inactive. | Drift risk | Coordinator (diffs A, B) |
+| G4 | ~~The Makefile simulator name is absent on the `xcode-27` image.~~ | **Resolved:** `IOS_SIM_DESTINATION` is overridable (diff D applied). | Done |
+| G5 | ~~Lint uses an unpinned `brew install swiftlint`. Local pins are inactive.~~ | **Resolved:** `mise.toml` plus a pinned, PATH-asserted lint job (diffs A, B applied). | Done |
 | G6 | ~~The committed `project.pbxproj` is not reproducible byte for byte from `project.yml`.~~ | **Resolved** on `main` by 17a813a. The merged tree has no drift (§5). | Done |
 | G7 | No Rust iOS targets are installed locally. | Gap only if Rust is pursued (#74) | #74 |
 | G8 | `xcode-select` points at the Command Line Tools. | Local trap | Every agent: set `DEVELOPER_DIR` |
@@ -506,7 +506,10 @@ Gaps and blockers:
 5. **Rust (conditional, #74):** If the Rust lane proceeds, `rustup target add aarch64-apple-ios
    aarch64-apple-ios-sim` and pin the toolchain in the Rust package. This was not done here.
 
-## 11. Proposed coordinator diffs (not applied)
+## 11. Proposed coordinator diffs
+
+Status: A, B, D and E are applied on `main` by the coordinator follow-up to #59. C stays with
+#61 and F with the runtime lanes.
 
 **A. New `mise.toml`** at the repo root. It was validated in a throwaway directory (§4).
 
