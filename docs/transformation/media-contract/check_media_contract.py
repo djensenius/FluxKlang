@@ -202,13 +202,10 @@ class Trace:
     def __init__(self, doc, name):
         clocks = doc["clocks"]
         self.doc, self.name, self.errors, self.evidence = doc, name, [], set()
-        for field, entries in (("streamId", doc.get("streams", [])), ("actionId", doc.get("actions", [])),
-                               ("clockId", clocks["sample"])):
-            ids = [entry[field] for entry in entries]
-            if len(ids) != len(set(ids)):
-                self.err({}, f"duplicate {field} declarations are not allowed")
-        if self.errors:
-            return
+        for key, items in (("streamId", doc.get("streams", [])), ("actionId", doc.get("actions", [])),
+                           ("clockId", clocks["sample"])):
+            if len({x[key] for x in items}) < len(items):
+                self.err({}, f"duplicate {key}: declared IDs are unique, never overwritten")
         self.ns_per_tick = Fraction(clocks["host"]["timebaseNumer"], clocks["host"]["timebaseDenom"])
         self.primary = clocks["sample"][0]["clockId"]
         self.gens = dict(doc["initialGenerations"])
@@ -224,7 +221,7 @@ class Trace:
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq, self.transport_due = set(), None, {}, False
         self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, ([], None)
-        self.horizon, self.restarts = None, {}
+        self.horizon, self.restarts = -math.inf, {}  # horizon: render progress in this primary sample generation
         self.passes = (0, 0)  # (passes begun by locate or transportRestart, loop passes before the last clock restart)
 
     @property
@@ -247,9 +244,6 @@ class Trace:
         a = self.anchor.get(self.primary)
         if a and a["generation"] == self.gens.get(f"sampleClock/{self.primary}"):
             return a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
-
-    def advance_horizon(self, frame):
-        self.horizon = frame if self.horizon is None else max(self.horizon, frame)
 
     def frames_per_tick(self, upq):  # at the musical anchor's generation rate, which a restart has not yet replaced
         return Fraction(upq, TPQ) * self.rate(self.primary, self.musical and self.musical["generation"]) / 10**6
@@ -318,8 +312,6 @@ class Trace:
         return i, b
 
     def run(self):
-        if self.errors:
-            return
         records = self.doc["timeline"]
         if [r["seq"] for r in records] != list(range(1, len(records) + 1)):
             self.err({}, "timeline seq must be 1..n in order")
@@ -385,23 +377,18 @@ class Trace:
             self.err(r, "anchor generation is not current")
         if clock in self.pending_restart:
             self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
-        prev, first = self.anchor.get(clock), self.first_anchor.get((clock, r["generation"]))
-        restart = self.restarts.get(clock)
-        if first is None and restart and restart["generation"] == r["generation"]:
-            span = (r["hostTicks"] - restart["hostTicks"]) * self.ns_per_tick * rate / 10**9
-            if span < 0 or r["frame"] < restart["frame"] \
-                    or abs(r["frame"] - restart["frame"] - span) > (rate + span) / 1000:
-                self.err(r, "first anchor must agree with its clockRestart within (rate + span)/1000 frames "
-                            "and not precede it in host ticks or frames")
-        first = self.first_anchor.setdefault((clock, r["generation"]), r)
-        if prev and prev["generation"] == r["generation"]:
-            span = (r["hostTicks"] - first["hostTicks"]) * self.ns_per_tick * rate / 10**9
-            if r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"] \
-                    or abs(r["frame"] - first["frame"] - span) > (rate + span) / 1000:
-                self.err(r, "anchors advance and stay within (rate + span)/1000 frames of their generation's first")
+        prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
+        restart = self.restarts.get(clock, {})  # a restarted generation's first anchor is bounded against the restart
+        ref = restart if first is r and restart.get("generation") == r["generation"] else first
+        if ref is not r:
+            span = (r["hostTicks"] - ref["hostTicks"]) * self.ns_per_tick * rate / 10**9
+            if span < 0 or ref is first and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]) \
+                    or abs(r["frame"] - ref["frame"] - span) > (rate + span) / 1000:
+                self.err(r, "anchors advance and stay within (rate + span)/1000 frames of "
+                         + ("their clockRestart stamp" if ref is restart else "their generation's first"))
         self.anchor[clock] = r
         if clock == self.primary and r["generation"] == self.gens.get(key):
-            self.advance_horizon(r["frame"])
+            self.horizon = max(self.horizon, r["frame"])
         if ("musicalTicks" in r) != ("transport" in r):
             self.err(r, "musical anchors carry both transport and musicalTicks")
         if "musicalTicks" not in r or clock != self.primary:
@@ -444,14 +431,12 @@ class Trace:
         if kind == "sampleClock":
             clock = counter.split("/", 1)[1]
             if clock in self.pending_restart or clock == self.primary and self.transport_due:
-                self.err(r, "previous sampleClock change must complete its clockRestart and required transport bump "
-                            "before the next change")
+                self.err(r, "each sampleClock change completes its clockRestart (and transport bump) before the next")
                 return
             self.rates[(clock, r["to"])] = r.get("nominalRate", self.rate(clock))
             self.pending_restart.add(clock)
             if clock == self.primary:  # frames restart with the generation; the resume tick uses the old anchor and map
-                self.last_dispatch, self.restart_snap = None, (self.hist, self.map)
-                self.horizon = None
+                self.last_dispatch, self.restart_snap, self.horizon = None, (self.hist, self.map), -math.inf
                 self.transport_due = f"transport/{self.mus_id}" in self.gens
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
@@ -516,8 +501,8 @@ class Trace:
         if any(k.startswith("musicalMap/") for k in req):
             self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
         stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
-        if req[f"sampleClock/{self.primary}"] == self.gens.get(f"sampleClock/{self.primary}"):
-            self.advance_horizon(r["horizonFrame"])
+        if "sampleClock" not in stale:  # an arrival horizon of the current sample generation is render progress
+            self.horizon = max(self.horizon, r["horizonFrame"])
         info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
                 "invalidated": False, "target": target, "expect": None}
         self.triggers[tid] = info
@@ -551,10 +536,10 @@ class Trace:
         return choice
 
     def expected(self, info):
-        e, late, horizon = info["expect"], info["action"]["late"], info["rec"]["horizonFrame"]
-        horizon = max(horizon, self.horizon) if self.horizon is not None else horizon
-        musical = e["occ"] is not None
-        assigned = e["frame"] if e["occ"] is None else rnd(self.frame_of(e["occ"]))
+        e, late, horizon = info["expect"], info["action"]["late"], max(info["rec"]["horizonFrame"], self.horizon)
+        musical = e["occ"] is not None  # lateness is judged at the commit-time horizon; asap commits at it
+        assigned = horizon if info["target"]["timeBase"] == "asap" else rnd(self.frame_of(e["occ"])) if musical \
+            else e["frame"]
         if assigned >= horizon:
             return "fired", assigned, assigned, musical
         within = (horizon - assigned) * 1000 <= late.get("maxLatenessMs", 0) * self.rate()
@@ -654,10 +639,8 @@ class Trace:
     def on_midiCapture(self, r):
         if not self.stream_is(r["stream"], "midi", "capture"):
             self.err(r, "midiCapture names a declared MIDI capture stream")
-        restart = self.restarts.get(self.primary)
-        if restart and r["hostTicks"] < restart["hostTicks"]:
-            self.err(r, "capture timestamp predates clockRestart: v1 rejects cross-generation delivery, "
-                        "never remaps it through the current anchor or claims a lossless capture")
+        if r["hostTicks"] < self.restarts.get(self.primary, {}).get("hostTicks", 0):
+            self.err(r, "capture timestamp predates clockRestart: v1 rejects it, never remapping it (§9.2)")
             return
         words = [int(w, 16) for w in r["ump"]]
         mt, ep, port = words[0] >> 28, r["endpointProtocol"], r["portProtocol"]
@@ -812,7 +795,7 @@ def check_example(doc, name, schema):
 MUTATIONS = [
     ("01", 4, {"to": 3}, "advance the current value by exactly one"),
     ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
-    ("01", 7, {"hostTicks": 2490000001}, "first anchor must agree with its clockRestart"),
+    ("01", 7, {"hostTicks": 2490000001}, "their clockRestart stamp"),
     ("01", 9, {"streamSeq": 41}, "stream order is preserved within a stream"),
     ("01", 10, {"horizonFrame": 9000000}, None),  # a stale sample generation cannot advance the live horizon
     ("01", 6, {"reason": "transportRestart"}, "forces one transport bump with reason clockRestart"),
@@ -848,9 +831,9 @@ MUTATIONS = [
     ("07", 8, {"reason": None}, "failed and invalidated readiness states carry a reason"),
     ("08", 2, {"frame": 959900}, "lies wholly inside its segment"),
     ("08", 3, {"nominalRate": None}, "required on rateChange"),
-    ("08", 4, {"hostTicks": 2800000000}, "first anchor must agree with its clockRestart"),
+    ("08", 4, {"hostTicks": 2800000000}, "their clockRestart stamp"),
     ("08", 4, {"hostTicks": 2900047750}, None),  # 191 frames of jitter; bound = 191.809 frames
-    ("08", 4, {"hostTicks": 2900048000}, "first anchor must agree with its clockRestart"),
+    ("08", 4, {"hostTicks": 2900048000}, "their clockRestart stamp"),
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
     ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
     ("08", 8, {"stopReason": "user"}, "captureStopped matches its stopReason"),
@@ -878,110 +861,21 @@ MUTATIONS = [
     ("10", 11, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
     ("10", 11, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
     ("10", 12, {"lossless": True, "losses": {}}, "must equal recomputed"),
+    ("09", "streams.1", {"streamId": "str.keys-a"}, "duplicate streamId"),
+    ("04", "actions.1", {"actionId": "act.drums"}, "duplicate actionId"),
+    ("01", 6, {"counter": "sampleClock/smp.main", "from": 2, "to": 3, "reason": "wake"}, "before the next"),
+    ("04", 4, {"target": {"timeBase": "sample", "atFrame": 100000}, "requires": {
+        "sampleClock/smp.main": 1, "context/ctx.main": 1}}, "for musical targets or nextBoundary"),
+    ("04", "timeline", {"3.target": {"timeBase": "sample", "atFrame": 100000}, "6.assignedFrame": 192000,
+                        "6.frame": 192000}, None),  # a sample target falls back to the musical grid when late
+    ("04", "timeline", {"3.target": {"timeBase": "sample", "atFrame": 100000}, "6.assignedFrame": 192000,
+                        "6.frame": 192000, "6.musicalMap": 1}, "current musicalMap revision"),
+    ("04", 6, {"frame": 280000, "hostTicks": 2540000000, "musicalTicks": 193280}, "fired assignedFrame=288000"),
+    ("09", "timeline", {"10": {"seq": 11, "kind": "midiCapture", "stream": "str.keys-a", "ump": ["0x20903C64"],
+                               "hostTicks": 2489999999, "frame": 0, "endpointProtocol": "midi1",
+                               "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1"}},
+     "capture timestamp predates clockRestart"),
 ]
-
-
-def review_cases(docs):
-    """Paired traces for dependencies, advancing deadlines, capture epochs, identities and restart obligations."""
-    if not {"01", "03", "04"} <= docs.keys():
-        return
-
-    def fixture(prefix):
-        return copy.deepcopy(docs[prefix][0])
-
-    def case(label, prefix, doc, error=None):
-        doc = copy.deepcopy(doc)
-        for i, rec in enumerate(doc["timeline"], 1):
-            rec["seq"] = i
-        return label, prefix, "", doc, error
-
-    doc = fixture("03")
-    records = doc["timeline"]
-    doc["covers"], doc["timeline"] = ["seek"], [records[i] for i in (0, 10, 11, 12, 16, 13)]
-    trigger, outcome = doc["timeline"][1], doc["timeline"][-1]
-    trigger["target"] = {"timeBase": "sample", "atFrame": 200000}
-    del trigger["requires"]["transport/mus.main"]
-    outcome.update(result="fired", assignedFrame=210000, frame=210000, musicalMap=1)
-    del outcome["reason"]
-    yield case("sample override omits transport before locate", "03", doc, "musical targets or nextBoundary")
-    trigger["requires"]["transport/mus.main"] = 1
-    yield case("sample override cannot fire after locate", "03", doc, "changed while pending: must be cancelled")
-    doc["timeline"][-1] = dict(seq=6, kind="outcome", triggerId="trg.2", result="cancelled", reason="transport")
-    yield case("sample override cancels after locate", "03", doc)
-
-    doc = fixture("04")
-    doc["timeline"][3]["target"] = {"timeBase": "sample", "atFrame": 100000}
-    doc["timeline"][6].update(assignedFrame=192000, frame=192000)
-    yield case("sample fallback resolves through the current musical map", "04", doc)
-    doc["timeline"][6]["musicalMap"] = 1
-    yield case("sample fallback reports the map it used", "04", doc, "current musicalMap revision")
-
-    doc = fixture("04")
-    doc["timeline"].insert(6, dict(seq=7, kind="anchor", sampleClock="smp.main", generation=1, frame=280000,
-                                   hostTicks=2540000000, transport=1, musicalTicks=193280))
-    outcome = doc["timeline"][7]
-    yield case("pending cue cannot commit behind render progress", "04", doc,
-               "expected fired assignedFrame=288000 frame=288000")
-    outcome.update(assignedFrame=288000, frame=288000)
-    yield case("pending cue advances to the current next boundary", "04", doc)
-    for policy, result in (("fireLate", "firedLate"), ("joinInProgress", "joined")):
-        doc["actions"][0]["late"] = {"policy": policy, "maxLatenessMs": 250}
-        outcome.update(result=result, assignedFrame=268800, frame=280000)
-        if result == "joined":
-            outcome["startOffsetFrames"] = 11200
-        yield case(f"pending {policy} uses the current horizon", "04", doc)
-    doc["actions"][0]["late"]["maxLatenessMs"] = 50
-    doc["covers"].remove("tempoMutation")
-    doc["timeline"][7] = dict(seq=8, kind="outcome", triggerId="trg.2", result="dropped", reason="late",
-                               assignedFrame=268800)
-    yield case("pending cue exceeds current lateness budget", "04", doc)
-    doc["timeline"][3]["target"] = {"timeBase": "sample", "atFrame": 268800}
-    del doc["timeline"][3]["requires"]["transport/mus.main"]
-    yield case("nonmusical late policy needs no transport dependency", "04", doc)
-
-    doc = fixture("01")
-    doc["streams"].append(dict(streamId="str.keys", ordinal=1, media="midi", direction="capture"))
-    capture = dict(seq=14, kind="midiCapture", stream="str.keys", ump=["0x20903C64"], hostTicks=2471900000,
-                   frame=-72400, musicalTicks=68992, endpointProtocol="midi1", portProtocol="midi1",
-                   translatedBy="none", effective="midi1")
-    export = dict(seq=15, kind="export", exportId="exp.ump", streams=["str.keys"], format="nativeUmp",
-                  origin={"sampleClock": "smp.main", "generation": 1, "frame": 0},
-                  offsetsNs=[2995833333], lossless=True, losses={})
-    doc["timeline"] += [capture, export]
-    yield case("old capture cannot use the restarted rate", "01", doc, "capture timestamp predates clockRestart")
-    capture.update(hostTicks=2489999999, frame=0, musicalTicks=92160)
-    export["offsetsNs"] = [3749999958]
-    yield case("capture epoch check precedes frame rounding", "01", doc, "capture timestamp predates clockRestart")
-    capture["hostTicks"], export["offsetsNs"] = 2490000000, [3750000000]
-    yield case("capture at the restart boundary is current", "01", doc)
-
-    for path, field, invalid in (("streams", "streamId", {"media": "midi", "direction": "capture"}),
-                                 ("actions", "actionId", {"timePolicy": "timeStretch"}),
-                                 ("clocks.sample", "clockId", {"nominalRate": 96000})):
-        doc = fixture("01")
-        entries = doc["clocks"]["sample"] if path == "clocks.sample" else doc[path]
-        entries.insert(0, dict(entries[0], **invalid))
-        yield case(f"duplicate {field} cannot hide a declaration", "01", doc, f"duplicate {field}")
-
-    doc = fixture("01")
-    records = doc["timeline"]
-    bump = dict(records[3], **{"from": 2, "to": 3})
-    restart, anchor = dict(records[6], generation=3), dict(records[7], generation=3)
-    doc["covers"] = ["clockRestart"]
-    doc["timeline"] = [records[0], records[3], bump, records[5], restart, anchor]
-    yield case("consecutive sample changes cannot coalesce", "01", doc, "previous sampleClock change must complete")
-    doc["timeline"] = [records[0], records[3], records[6], bump, restart, records[5], anchor]
-    yield case("restart record alone does not discharge transport", "01", doc,
-               "previous sampleClock change must complete")
-    doc["timeline"] = [records[0], records[3], records[5], bump, restart,
-                       dict(records[5], **{"from": 2, "to": 3}), dict(anchor, transport=3)]
-    yield case("transport bump alone does not discharge restart", "01", doc,
-               "previous sampleClock change must complete")
-    restart.update(hostTicks=2492400000, previousFrame=9600)
-    anchor.update(hostTicks=2492400000, transport=3, musicalTicks=95232)
-    doc["timeline"] = [records[i] for i in (0, 3, 5, 6, 7)] + [
-        bump, restart, dict(records[5], **{"from": 2, "to": 3}), anchor]
-    yield case("completed restarts work in either obligation order", "01", doc)
 
 
 def mutate(doc, where, changes):
@@ -1019,11 +913,9 @@ def main(argv):
         print(f"{'ok  ' if not found else 'FAIL'} {path.name}")
     if set(schema["$defs"]["coverage"]["enum"]) - covered:
         errors.append(f"coverage missing: {sorted(set(schema['$defs']['coverage']['enum']) - covered)}")
-    mutations = [(f"mutation {prefix} {'seq ' * isinstance(where, int)}{where or 'root'}",
-                  prefix, where, changes, expect) for prefix, where, changes, expect in MUTATIONS]
-    mutations += list(review_cases(docs))
-    for label, prefix, where, changes, expect in mutations:
+    for prefix, where, changes, expect in MUTATIONS:
         doc, name = copy.deepcopy(docs.get(prefix, ({}, prefix)))
+        label = f"mutation {prefix} {'seq ' * isinstance(where, int)}{where or 'root'}"
         try:
             mutate(doc, where, changes)
         except (KeyError, IndexError, TypeError, ValueError):
@@ -1036,7 +928,7 @@ def main(argv):
             errors.append(f"{label} did not {'pass: ' + str(found[:1]) if expect is None else 'fail with ' + expect}")
     for line in errors:
         print("error:", line)
-    print(f"{len(files)} examples, {len(mutations)} mutations, {len(errors)} errors")
+    print(f"{len(files)} examples, {len(MUTATIONS)} mutations, {len(errors)} errors")
     return 1 if errors or not files else 0
 
 
