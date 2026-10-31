@@ -224,34 +224,158 @@ struct EnvironmentDuplicationTests {
         #expect(migrated.home.inputs.contains { $0.connector == 11 && $0.equipmentID == fixture.reverbBox.id })
     }
 
+    // MARK: - Already-dangling references
+
+    @Test func alreadyDanglingReferencesFollowTheDocumentedPolicy() {
+        let tank = Equipment(name: "Spring Tank")
+        let missingEffect = UUID()
+        let missingEndpoint = UUID()
+        let missingNode = UUID()
+        let effectNode = StudioNode(kind: .effect(missingEffect), title: "Gone effect")
+        let endpointNode = StudioNode(kind: .endpoint(missingEndpoint), title: "Gone endpoint")
+        let chainNode = ChainNode(kind: .wingBus(1), title: "Bus 1", position: .zero)
+        let device = StudioDeviceRef.effect(tank.id)
+        let original = RoutingEnvironment(
+            name: "Dangling",
+            effects: [Effect(name: "Orphan", destinationEffectID: missingEffect)],
+            graph: ChainGraph(nodes: [chainNode], edges: [ChainEdge(
+                from: ChainPortRef(nodeID: chainNode.id, side: .output, port: 0),
+                to: ChainPortRef(nodeID: missingNode, side: .input, port: 0)
+            )]),
+            studioGraph: StudioGraph(
+                nodes: [effectNode, endpointNode],
+                edges: [StudioEdge(from: Fixture.out(effectNode.id), to: Fixture.into(missingNode))]
+            ),
+            studioSetup: StudioSetup(devices: [StudioDeviceProfile(
+                device: device,
+                name: "Unmatched Profile",
+                role: .outboardEffect,
+                patches: [StudioPortPatch(
+                    device: device, side: .output, port: 0,
+                    connector: .wingInput(WingSource(group: .local, index: 5))
+                )]
+            )])
+        )
+
+        let copy = original.duplicated(named: "Dangling Copy")
+
+        // A dangling serial-chain destination falls back to the main.
+        #expect(copy.effects[0].destinationEffectID == nil)
+        // Dangling studio node references are carried over verbatim on fresh nodes.
+        #expect(copy.studioGraph.nodes.map(\.kind) == [.effect(missingEffect), .endpoint(missingEndpoint)])
+        #expect(copy.studioGraph.nodes[0].id != effectNode.id)
+        // Wires keep their remapped local end and the missing end verbatim.
+        #expect(copy.studioGraph.edges.map(\.from.nodeID) == [copy.studioGraph.nodes[0].id])
+        #expect(copy.studioGraph.edges.map(\.to.nodeID) == [missingNode])
+        #expect(copy.graph.edges.map(\.from.nodeID) == [copy.graph.nodes[0].id])
+        #expect(copy.graph.edges.map(\.to.nodeID) == [missingNode])
+        // A setup `.effect` that is really an equipment ID is copied verbatim and
+        // still resolves through the migration's equipment fallback.
+        #expect(copy.studioSetup.devices[0].device == device)
+        #expect(copy.studioSetup.devices[0].patches[0].device == device)
+        let migrated = GlobalStudioConnections.migratingLegacy(
+            environments: [copy], activeID: copy.id, equipment: [tank]
+        )
+        #expect(migrated.migrationIssues.isEmpty)
+        #expect(migrated.home.inputs.contains { $0.connector == 5 && $0.equipmentID == tank.id })
+    }
+
+    /// Legacy effects may share their ID with an Equipment item while still
+    /// unlinked. The real flow is the second half: `AppModel.loadStores` runs
+    /// `migrateEffectEquipmentLinks` (→ `migratingEquipmentLink`) right after
+    /// loading environments and before any UI can duplicate, so the copy keeps
+    /// the explicit link and resolves. The first half pins the accepted
+    /// regression for the unreachable order (duplicate before linking): the
+    /// copy's fresh effect ID no longer equals the equipment ID, so migration
+    /// reports an issue rather than guessing.
+    @Test func unlinkedEffectSharingAnEquipmentIDResolvesOnceLinked() {
+        let tank = Equipment(name: "Spring Tank")
+        let device = StudioDeviceRef.effect(tank.id)
+        let legacy = RoutingEnvironment(
+            name: "Legacy",
+            effects: [Effect(id: tank.id, name: "Wet")],
+            studioSetup: StudioSetup(devices: [StudioDeviceProfile(
+                device: device,
+                name: "Old Profile",
+                role: .outboardEffect,
+                patches: [StudioPortPatch(
+                    device: device, side: .output, port: 0,
+                    connector: .wingInput(WingSource(group: .local, index: 9))
+                )]
+            )])
+        )
+        func migrate(_ environment: RoutingEnvironment) -> GlobalStudioConnections {
+            .migratingLegacy(environments: [environment], activeID: environment.id, equipment: [tank])
+        }
+
+        let early = migrate(legacy.duplicated(named: "Early Copy"))
+        #expect(early.migrationIssues.count == 1)
+        #expect(early.home.inputs.isEmpty)
+
+        var linked = legacy
+        linked.effects = linked.effects.map { $0.migratingEquipmentLink(in: [tank]) }
+        #expect(linked.effects[0].equipmentID == tank.id)
+        let copy = linked.duplicated(named: "Copy")
+        #expect(copy.effects[0].id != tank.id)
+        let migrated = migrate(copy)
+        #expect(migrated.migrationIssues.isEmpty)
+        #expect(migrated.home.inputs.contains { $0.connector == 9 && $0.equipmentID == tank.id })
+    }
+
     // MARK: - Independence
 
-    @Test func editsToCopyAndOriginalStayIndependent() throws {
-        var original = Fixture().environment
-        let snapshot = original
-        var copy = original.duplicated(named: "Song Copy")
-        let copySnapshot = copy
+    @MainActor
+    @Test func storeEditsToCopyAndOriginalStayIndependent() throws {
+        // Test hosts give EnvironmentStore an isolated temporary JSONFileStore.
+        let store = EnvironmentStore()
+        let originalID = store.addEnvironment(named: "Song")
+        let reverb = Effect(name: "Hall")
+        store.add(reverb)
+        store.add(Effect(name: "Echo", destinationEffectID: reverb.id))
+        let endpoint = StudioEndpoint(name: "Desk", destination: .custom)
+        store.addStudioEndpointNode(endpoint, position: .zero)
+        let effectNode = StudioNode(kind: .effect(reverb.id), title: "Hall")
+        store.addStudioNode(effectNode)
+        let endpointNode = try #require(store.activeStudioGraph.nodes.first { $0.kind == .endpoint(endpoint.id) })
+        store.connectStudio(from: Fixture.out(effectNode.id), to: Fixture.into(endpointNode.id))
+        let original = try #require(store.active)
+        #expect(original.studioGraph.edges.count == 1)
+
+        let copyID = try #require(store.duplicateActive())
+        #expect(store.activeID == copyID)
+        let copy = try #require(store.active)
+        let copyEffectNode = try #require(copy.studioGraph.nodes.first { $0.kind == .effect(copy.effects[0].id) })
+        let copyEndpointNode = try #require(copy.studioGraph.nodes.first {
+            if case .endpoint = $0.kind { true } else { false }
+        })
 
         // ID-addressed edits against the copy never resolve in the original.
-        let copyNode = try #require(copy.studioGraph.nodes.first { if case .effect = $0.kind { true } else { false } })
         var probe = original.studioGraph
-        probe.removeNode(copyNode.id)
-        probe.moveNode(copyNode.id, to: CGPoint(x: 99, y: 99))
+        probe.removeNode(copyEffectNode.id)
+        probe.moveNode(copyEffectNode.id, to: CGPoint(x: 99, y: 99))
         #expect(probe == original.studioGraph)
 
-        copy.studioGraph.removeNode(copyNode.id)
-        copy.graph.removeEdge(try #require(copy.graph.edges.first).id)
-        copy.effects[0].name = "Plate"
-        copy.studioEndpoints[0].placement = VoicePlacement(width: 0.9)
-        #expect(original == snapshot)
+        // Edit the active copy through the store, including an edit addressed
+        // by an original effect ID, which must not resolve in the copy.
+        var renamed = copy.effects[0]
+        renamed.name = "Plate"
+        store.update(renamed)
+        store.update(Effect(id: reverb.id, name: "Ghost"))
+        store.moveStudioNode(copyEffectNode.id, to: CGPoint(x: 50, y: 50))
+        store.removeStudioNode(copyEndpointNode.id)
+        #expect(store.activeStudioEndpoints.isEmpty)
 
-        original.studioGraph.removeNode(try #require(original.studioGraph.nodes.last).id)
-        original.effects[1].destinationEffectID = nil
-        original.studioSetup.devices.removeAll()
-        #expect(copy.effects[1].destinationEffectID == copy.effects[0].id)
-        #expect(copy.studioSetup == copySnapshot.studioSetup)
-        #expect(copy.studioGraph.nodes.count == copySnapshot.studioGraph.nodes.count - 1)
-        #expect(danglingReferences(in: copy).isEmpty)
+        store.setActive(originalID)
+        #expect(store.active == original)
+
+        // Edit the original; the copy keeps its own state.
+        store.removeStudioNode(effectNode.id)
+        store.setActive(copyID)
+        let editedCopy = try #require(store.active)
+        #expect(editedCopy.effects.map(\.name) == ["Plate", "Echo"])
+        #expect(editedCopy.effects[1].destinationEffectID == editedCopy.effects[0].id)
+        #expect(editedCopy.studioGraph.node(copyEffectNode.id)?.position == CGPoint(x: 50, y: 50))
+        #expect(danglingReferences(in: editedCopy).isEmpty)
     }
 
     @Test func duplicatingTwiceYieldsDistinctLocalIdentities() {
