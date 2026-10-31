@@ -243,11 +243,11 @@ Read these from the console screens and record them in the local evidence folder
    The runner looks for a working one with `xcode-select -p` and `xcrun --find`, because the `/usr/bin/swift`
    stub exists even without developer tools. Without one, the CoreAudio/CoreMIDI listing is skipped and the
    OS descriptors are still collected.
-2. Run the self-check, either directly or with `make hardware-inventory-self-check`. CI runs the same command
+2. Run the self-check, either directly or with `make hardware-inventory-self-check`. CI runs the strict form
    in the Lint workflow.
 
    ```sh
-   scripts/hardware-inventory/passive-inventory.sh --self-check
+   scripts/hardware-inventory/passive-inventory.sh --self-check --require-symbols
    # self-check: source layer OK (.../passive-inventory.swift)
    # self-check: symbol layer OK (N undefined symbols checked)
    # self-check: PASSED source and symbol layers; a defence-in-depth tripwire, not a proof
@@ -279,8 +279,14 @@ Read these from the console screens and record them in the local evidence folder
      - C symbols, Objective-C classes and selectors, and demangled Swift symbols must not match the
        denylists.
 
-     If there is no toolchain or the compile fails, the layer prints a warning and the source layer's result
-     stands.
+     The symbol layer counts as not run if there is no working toolchain, the lister does not compile, `nm -u`
+     fails or `swift-demangle` is missing. What happens then depends on the mode:
+     - **Strict** (`--require-symbols` or `FLUXKLANG_INVENTORY_REQUIRE_SYMBOLS=1`): the self-check fails with
+       `self-check: FAILED: the symbol layer is required ...`. The `make` target and the CI step use strict
+       mode, so a lister that no longer compiles turns CI red.
+     - **Default** (plain `--self-check`, for local hosts without developer tools): the self-check prints a
+       warning and falls back to the source layer
+       (`self-check: PASSED source layer only; a tripwire, not a proof`).
 
    A manual cross-check of the identifier allowlist:
 
@@ -300,7 +306,8 @@ Read these from the console screens and record them in the local evidence folder
    What the collector does:
    - It writes `os.txt`, `system_profiler.json` and both `ioreg` listings first.
    - Only if a working toolchain is present and the self-check passes (saved as `self-check.txt`) does it run
-     the lister with `xcrun swift`.
+     the lister with `xcrun swift`. Adding `--require-symbols` makes that self-check strict. It does not make a
+     missing toolchain fatal: without one, the listing is still skipped with a warning.
    - Warnings go to `warnings.txt`, for example a missing USB data type, an empty IOUSB plane or a skipped
      listing.
    - Each run gets a new private folder, `<UTC stamp>.XXXXXX`, created with `mktemp` and `umask 077`.
