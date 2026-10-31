@@ -1,0 +1,46 @@
+{
+  "contract": "fluxklang.media",
+  "version": 1,
+  "exampleId": "ex.05-source-loss",
+  "title": "Source loss and reacquisition: prefetch underrun, pending cue cancelled, stale cue rejected after recovery, fresh cue fires",
+  "covers": ["sourceLoss", "noStaleReplay", "prefetch", "cancellation"],
+  "notes": [
+    "An underrun outputs silence and skips the missing source frames so the voice stays aligned.",
+    "Reacquiring the source is a new source generation; triggers stamped before the loss never replay."
+  ],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
+    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
+  },
+  "streams": [{"streamId": "str.backing", "ordinal": 0, "media": "audio", "direction": "playback"}],
+  "actions": [
+    {"actionId": "act.backing", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "joinInProgress", "maxLatenessMs": 50}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}
+  ],
+  "initialGenerations": {
+    "sampleClock/smp.main": 1,
+    "transport/mus.main": 1,
+    "musicalMap/mus.main": 1,
+    "context/ctx.main": 1,
+    "source/src.backing": 1
+  },
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
+    {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.backing", "originHostTicks": 2400500000, "horizonFrame": 1256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "source/src.backing": 1}},
+    {"seq": 3, "kind": "outcome", "triggerId": "trg.1", "result": "fired", "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
+    {"seq": 4, "kind": "discontinuity", "type": "underrun", "sampleClock": "smp.main", "generation": 1, "frame": 150000, "frames": 512, "stream": "str.backing"},
+    {"seq": 5, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.backing", "originHostTicks": 2485000000, "horizonFrame": 170256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "source/src.backing": 1}, "note": "Resolves to frame 192000; pending."},
+    {"seq": 6, "kind": "generation", "counter": "source/src.backing", "from": 1, "to": 2, "reason": "sourceLost"},
+    {"seq": 7, "kind": "discontinuity", "type": "sourceLost", "sampleClock": "smp.main", "generation": 1, "frame": 180000, "stream": "str.backing", "reason": "volume unmounted"},
+    {"seq": 8, "kind": "readiness", "actionId": "act.backing", "from": "ready", "to": "invalidated", "reason": "sourceLost"},
+    {"seq": 9, "kind": "outcome", "triggerId": "trg.2", "result": "cancelled", "reason": "source"},
+    {"seq": 10, "kind": "generation", "counter": "source/src.backing", "from": 2, "to": 3, "reason": "sourceReacquired"},
+    {"seq": 11, "kind": "discontinuity", "type": "sourceRestored", "sampleClock": "smp.main", "generation": 1, "frame": 230000, "stream": "str.backing"},
+    {"seq": 12, "kind": "readiness", "actionId": "act.backing", "from": "invalidated", "to": "preparing"},
+    {"seq": 13, "kind": "readiness", "actionId": "act.backing", "from": "preparing", "to": "ready"},
+    {"seq": 14, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.backing", "originHostTicks": 2487500000, "horizonFrame": 235256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "source/src.backing": 1}, "note": "Queued before the loss and delivered after recovery."},
+    {"seq": 15, "kind": "outcome", "triggerId": "trg.3", "result": "rejectedStale", "reason": "source"},
+    {"seq": 16, "kind": "trigger", "triggerId": "trg.4", "actionId": "act.backing", "originHostTicks": 2520000000, "horizonFrame": 240256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "source/src.backing": 3}},
+    {"seq": 17, "kind": "outcome", "triggerId": "trg.4", "result": "fired", "assignedFrame": 288000, "frame": 288000, "musicalMap": 1}
+  ]
+}

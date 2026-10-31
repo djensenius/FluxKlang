@@ -1,0 +1,695 @@
+#!/usr/bin/env python3
+"""Check the G-MEDIA contract v1 examples: schema, canonical round trip, invariants and mutations.
+
+Standard library only; needs no app bootstrap, hardware, network or plugins.
+Usage: python3 docs/transformation/media-contract/check_media_contract.py [--write]
+"""
+import copy
+import json
+import math
+import re
+import sys
+from collections import Counter
+from fractions import Fraction
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+SCHEMA_PATH = ROOT / "media-contract-v1.schema.json"
+EXAMPLES = ROOT / "examples"
+WIDTH = 120
+TPQ = 15360
+SUPPORTED = {"$ref", "type", "enum", "const", "properties", "required", "additionalProperties", "propertyNames",
+             "items", "minItems", "maxItems", "minimum", "maximum", "minLength", "pattern", "oneOf", "minProperties"}
+ANNOTATIONS = {"$schema", "$id", "$defs", "$comment", "title", "description"}
+REASONS = {"sampleClock": {"deviceRestart", "rateChange", "configurationChange", "wake"},
+           "transport": {"locate", "clockRestart", "transportRestart"}, "musicalMap": {"tempoEdit", "externalTempo"},
+           "source": {"sourceLost", "sourceReacquired"}, "context": {"contextChange"}, "cancelScope": {"userCancel"}}
+READINESS = {"unprepared": {"preparing"}, "preparing": {"ready", "failed", "unprepared"},
+             "ready": {"invalidated", "unprepared"}, "invalidated": {"preparing", "unprepared"},
+             "failed": {"preparing", "unprepared"}}
+LANES = {"release": 0, "transport": 1, "state": 2, "content": 3}
+VALUE_BITS = {0xA: 7, 0xB: 7, 0xD: 7, 0x2: 14, 0x3: 14, 0xE: 14}
+UMP_WORDS = {0x0: 1, 0x1: 1, 0x2: 1, 0x3: 2, 0x4: 2, 0x5: 4, 0x6: 1, 0x7: 1, 0x8: 2, 0x9: 2, 0xA: 2, 0xB: 3,
+             0xC: 3, 0xD: 4, 0xE: 4, 0xF: 4}
+REQUIRED_COVERAGE = {"clockRestart", "lateCue", "retroactiveCue", "seek", "loop", "tempoMutation", "sourceLoss",
+                     "noStaleReplay", "cancellation", "readiness", "prefetch", "ordering", "capture",
+                     "fixedRateDefault", "timeStretchPolicy", "midi1InUmp", "midi2Native", "smfExportLossy",
+                     "smfExportLossless"}
+
+
+def canon(value, depth_limit, indent=0, prefix=0):
+    """Deterministic layout: authored key order; a container is inline when it fits WIDTH or sits at depth_limit."""
+    flat = json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+    if not isinstance(value, (dict, list)) or not value or indent // 2 >= depth_limit \
+            or indent + prefix + len(flat) + 1 <= WIDTH:
+        return flat
+    pad = " " * (indent + 2)
+    if isinstance(value, dict):
+        rows = []
+        for key, item in value.items():
+            head = json.dumps(key, ensure_ascii=False) + ": "
+            rows.append(pad + head + canon(item, depth_limit, indent + 2, len(head)))
+        return "{\n" + ",\n".join(rows) + "\n" + " " * indent + "}"
+    if all(not isinstance(item, (dict, list)) for item in value):
+        rows, row = [], ""
+        for item in (json.dumps(v, ensure_ascii=False) for v in value):
+            if row and len(pad) + len(row) + len(item) + 3 > WIDTH:
+                rows.append(row + ",")
+                row = ""
+            row += (", " if row else "") + item
+        return "[\n" + "\n".join(pad + r for r in rows + [row]) + "\n" + " " * indent + "]"
+    rows = [pad + canon(item, depth_limit, indent + 2) for item in value]
+    return "[\n" + ",\n".join(rows) + "\n" + " " * indent + "]"
+
+
+def load_canonical(path, depth_limit, write, errors):
+    """Parse strictly (no duplicate keys) and require the file to equal its canonical rendering."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        doc = json.loads(text, object_pairs_hook=no_duplicates)
+    except ValueError as exc:
+        errors.append(f"{path.name}: {exc}")
+        return None
+    rendered = canon(doc, depth_limit) + "\n"
+    if write and rendered != text:
+        path.write_text(rendered, encoding="utf-8")
+        text = rendered
+    if rendered != text or json.loads(rendered) != doc:
+        errors.append(f"{path.name}: not canonical; run with --write to normalise")
+    return doc
+
+
+def no_duplicates(pairs):
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"duplicate keys {sorted(k for k in set(keys) if keys.count(k) > 1)}")
+    return dict(pairs)
+
+
+def check_keywords(node, path="schema"):
+    if isinstance(node, dict):
+        for key in node:
+            if key not in SUPPORTED | ANNOTATIONS:
+                raise SystemExit(f"{path}: unsupported schema keyword {key}")
+        subs = list(node.get("$defs", {}).items()) + list(node.get("properties", {}).items())
+        subs += [(k, node[k]) for k in ("items", "additionalProperties", "propertyNames") if isinstance(node.get(k), dict)]
+        subs += [(f"oneOf[{i}]", s) for i, s in enumerate(node.get("oneOf", []))]
+        for name, sub in subs:
+            check_keywords(sub, f"{path}/{name}")
+
+
+def same(a, b):
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def type_ok(name, value):
+    if name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, {"object": dict, "array": list, "string": str, "boolean": bool, "null": type(None)}[name])
+
+
+def validate(schema, value, defs, path, errors):
+    if "$ref" in schema:
+        validate(defs[schema["$ref"].split("/")[-1]], value, defs, path, errors)
+    if "type" in schema:
+        names = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
+        if not any(type_ok(n, value) for n in names):
+            errors.append(f"{path}: expected {'|'.join(names)}")
+            return
+    if "const" in schema and not same(value, schema["const"]):
+        errors.append(f"{path}: must be {json.dumps(schema['const'])}")
+    if "enum" in schema and not any(same(value, e) for e in schema["enum"]):
+        errors.append(f"{path}: {json.dumps(value)} not in enum")
+    if type_ok("integer", value):
+        if value < schema.get("minimum", value) or value > schema.get("maximum", value):
+            errors.append(f"{path}: {value} out of range")
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0) or not re.search(schema.get("pattern", ""), value):
+            errors.append(f"{path}: {json.dumps(value)} violates length/pattern")
+    if isinstance(value, list):
+        if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", len(value)):
+            errors.append(f"{path}: item count {len(value)} out of range")
+        for i, item in enumerate(value):
+            if "items" in schema:
+                validate(schema["items"], item, defs, f"{path}[{i}]", errors)
+    if isinstance(value, dict):
+        if len(value) < schema.get("minProperties", 0):
+            errors.append(f"{path}: too few properties")
+        errors.extend(f"{path}: missing {k}" for k in schema.get("required", []) if k not in value)
+        for key, item in value.items():
+            if "propertyNames" in schema:
+                validate(schema["propertyNames"], key, defs, f"{path}.<{key}>", errors)
+            if key in schema.get("properties", {}):
+                validate(schema["properties"][key], item, defs, f"{path}.{key}", errors)
+            elif schema.get("additionalProperties") is False:
+                errors.append(f"{path}: unknown property {key}")
+            elif isinstance(schema.get("additionalProperties"), dict):
+                validate(schema["additionalProperties"], item, defs, f"{path}.{key}", errors)
+    if "oneOf" in schema:
+        results = []
+        for branch in schema["oneOf"]:
+            branch_errors = []
+            validate(branch, value, defs, path, branch_errors)
+            results.append((defs.get(branch.get("$ref", "").split("/")[-1], branch), branch_errors))
+        passing = [e for _, e in results if not e]
+        if len(passing) > 1:
+            errors.append(f"{path}: matches {len(passing)} oneOf branches")
+        elif not passing:
+            kind = value.get("kind") if isinstance(value, dict) else None
+            match = [e for b, e in results if b.get("properties", {}).get("kind", {}).get("const") == kind]
+            errors.extend(match[0] if match else [f"{path}: matches no oneOf branch"])
+
+
+def rnd(x):
+    return math.floor(x + Fraction(1, 2))
+
+
+def scale_up(value, src_bits, dst_bits):
+    """MIDI 2.0 min-center-max upscaling (MIDI Association bit-scaling recommended practice)."""
+    if value == 0:
+        return 0
+    scale_bits = dst_bits - src_bits
+    shifted = value << scale_bits
+    if value <= 1 << (src_bits - 1):
+        return shifted
+    repeat_bits = src_bits - 1
+    repeat = value & ((1 << repeat_bits) - 1)
+    repeat = repeat << (scale_bits - repeat_bits) if scale_bits > repeat_bits else repeat >> (repeat_bits - scale_bits)
+    while repeat:
+        shifted |= repeat
+        repeat >>= repeat_bits
+    return shifted
+
+
+def midi2_losses(words):
+    """Loss categories for converting one genuine MIDI 2.0 channel voice message to MIDI 1.0 SMF bytes."""
+    opcode, out = (words[0] >> 20) & 0xF, Counter()
+    if opcode in (0x8, 0x9):
+        velocity = words[1] >> 16
+        if opcode == 0x9 and velocity >> 9 == 0:
+            out["noteOnVelocityRemapped"] += 1
+        elif scale_up(velocity >> 9, 7, 16) != velocity:
+            out["velocityDownscaled"] += 1
+        if words[0] & 0xFF:
+            out["attributeDropped"] += 1
+    elif opcode in VALUE_BITS:
+        bits = VALUE_BITS[opcode]
+        if scale_up(words[1] >> (32 - bits), bits, 32) != words[1]:
+            out["valueDownscaled"] += 1
+    elif opcode in (0x0, 0x1, 0x6, 0xF):
+        out["perNoteDropped"] += 1
+    elif opcode != 0xC:
+        out["umpOnlyDropped"] += 1
+    return out
+
+
+class Trace:
+    def __init__(self, doc, name):
+        clocks = doc["clocks"]
+        self.doc, self.name, self.errors, self.evidence = doc, name, [], set()
+        self.ns_per_tick = Fraction(clocks["host"]["timebaseNumer"], clocks["host"]["timebaseDenom"])
+        self.primary = clocks["sample"][0]["clockId"]
+        self.rates = {c["clockId"]: c["nominalRate"] for c in clocks["sample"]}
+        self.mus_id = clocks["musical"]["clockId"]
+        self.map = clocks["musical"]["musicalMap"]
+        self.loop = clocks["musical"].get("loop")
+        self.gens = dict(doc["initialGenerations"])
+        self.streams = {s["streamId"]: s for s in doc.get("streams", [])}
+        self.actions = {a["actionId"]: a for a in doc.get("actions", [])}
+        self.state = {k: a["readiness"] for k, a in self.actions.items()}
+        self.anchor, self.first_anchor, self.musical = {}, {}, None
+        self.triggers, self.captures, self.discs = {}, [], []
+        self.pending_restart, self.last_dispatch, self.stream_seq = set(), None, {}
+        self.bumps = Counter()
+
+    def err(self, rec, msg):
+        self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
+
+    def rate(self):
+        return self.rates[self.primary]
+
+    def frame_at_host(self, ticks):
+        a = self.anchor.get(self.primary)
+        if a is None or a["generation"] != self.gens.get(f"sampleClock/{self.primary}"):
+            return None
+        return a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
+
+    def frames_per_tick(self, upq):
+        return Fraction(upq, TPQ) * self.rate() / 10**6
+
+    def span(self, t1, t2):
+        total = Fraction(0)
+        for i, seg in enumerate(self.map):
+            end = self.map[i + 1]["atTicks"] if i + 1 < len(self.map) else None
+            lo, hi = max(seg["atTicks"], t1), t2 if end is None else min(end, t2)
+            if hi > lo:
+                total += (hi - lo) * self.frames_per_tick(seg["microsPerQuarter"])
+        return total
+
+    def musical_ok(self):
+        m = self.musical
+        return m is not None and m["generation"] == self.gens.get(f"sampleClock/{self.primary}") \
+            and m["transport"] == self.gens.get(f"transport/{self.mus_id}")
+
+    def frame_of_ticks(self, ticks):
+        t0 = self.musical["musicalTicks"]
+        return self.musical["frame"] + (self.span(t0, ticks) if ticks >= t0 else -self.span(ticks, t0))
+
+    def ticks_at_frame(self, frame):
+        t, f = Fraction(self.musical["musicalTicks"]), Fraction(self.musical["frame"])
+        for i, seg in enumerate(self.map):
+            end = self.map[i + 1]["atTicks"] if i + 1 < len(self.map) else None
+            if end is not None and end <= t:
+                continue
+            fpt = self.frames_per_tick(seg["microsPerQuarter"])
+            if end is None or f + (end - t) * fpt >= frame:
+                return t + (frame - f) / fpt
+            f, t = f + (end - t) * fpt, Fraction(end)
+        raise AssertionError("unreachable")
+
+    def run(self):
+        records = self.doc["timeline"]
+        if [r["seq"] for r in records] != list(range(1, len(records) + 1)):
+            self.err({}, "timeline seq must be 1..n in order")
+        for a in self.actions.values():
+            self.check_action(a)
+        for i, rec in enumerate(records):
+            self.prev = records[i - 1] if i else None
+            getattr(self, "on_" + rec["kind"])(rec)
+        for tid, info in self.triggers.items():
+            if not info.get("done"):
+                self.err(info["rec"], f"trigger {tid} has no terminal outcome")
+        for key in sorted(self.pending_restart):
+            self.err({}, f"{key} changed generation without a clockRestart discontinuity")
+        for kind, reason in (("locate", "locate"), ("sourceLost", "sourceLost"), ("sourceRestored", "sourceReacquired")):
+            if sum(d["type"] == kind for d in self.discs) != self.bumps[reason]:
+                self.err({}, f"{kind} discontinuities must match {reason} generation changes one-to-one")
+        for claim in self.doc["covers"]:
+            if claim not in self.evidence:
+                self.err({}, f"covers {claim} but the timeline has no evidence for it")
+
+    def check_action(self, a):
+        media, policy, late = a["media"], a.get("timePolicy"), a["late"]
+        allowed = {"audio": {"fixedRate", "timeStretch"}, "midi": {"fixedRate", "tempoFollowing"}}.get(media, {None})
+        if policy not in allowed:
+            self.err(a, f"{a['actionId']}: {media} actions allow timePolicy {sorted(map(str, allowed))}")
+        if media == "audio" and "prefetch" not in a:
+            self.err(a, f"{a['actionId']}: audio actions declare a bounded prefetch")
+        pf = a.get("prefetch")
+        if pf and pf["blockFrames"] * pf["blockCount"] < pf["headFrames"]:
+            self.err(a, f"{a['actionId']}: prefetch pool smaller than the declared head")
+        if late.get("retroactiveMs") and late["policy"] not in ("joinInProgress", "fireLate"):
+            self.err(a, f"{a['actionId']}: retroactiveMs needs joinInProgress or fireLate")
+        if late["policy"] == "nextBoundary" and "gridTicks" not in a["quantize"]:
+            self.err(a, f"{a['actionId']}: nextBoundary needs a musical grid")
+        if media == "audio" and policy == "fixedRate":
+            self.evidence.add("fixedRateDefault")
+
+    def on_anchor(self, r):
+        clock, key = r["sampleClock"], f"sampleClock/{r['sampleClock']}"
+        if r["generation"] != self.gens.get(key):
+            self.err(r, "anchor generation is not current")
+        if clock in self.pending_restart:
+            self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
+        prev = self.anchor.get(clock)
+        if prev and prev["generation"] == r["generation"]:
+            frames, ns = r["frame"] - prev["frame"], (r["hostTicks"] - prev["hostTicks"]) * self.ns_per_tick
+            expected = ns * self.rates[clock] / 10**9
+            if frames <= 0 or ns <= 0 or abs(frames - expected) > expected / 1000 + 1:
+                self.err(r, "anchor must advance and agree with the nominal rate within 0.1%")
+        self.anchor[clock] = r
+        self.first_anchor.setdefault((clock, r["generation"]), r)
+        if ("musicalTicks" in r) != ("transport" in r):
+            self.err(r, "musical anchors carry both transport and musicalTicks")
+        if "musicalTicks" not in r or clock != self.primary:
+            return
+        if r["transport"] != self.gens.get(f"transport/{self.mus_id}"):
+            self.err(r, "anchor transport generation is not current")
+        m, it = self.musical, r.get("loopIteration", 0)
+        if m and m["transport"] == r["transport"]:
+            if m["generation"] != r["generation"]:
+                self.err(r, "a sample clock restart must re-anchor with a new transport generation")
+            elif it == m.get("loopIteration", 0):
+                if abs(self.ticks_at_frame(r["frame"]) - r["musicalTicks"]) > 1:
+                    self.err(r, "musical position jumped without locate or loop wrap")
+            elif it == m.get("loopIteration", 0) + 1:
+                wrap = self.prev
+                ok = wrap and wrap["kind"] == "discontinuity" and wrap["type"] == "loopWrap" and wrap["frame"] == r["frame"]
+                if not ok or not self.loop or r["musicalTicks"] != self.loop["startTicks"] \
+                        or abs(self.ticks_at_frame(r["frame"]) - self.loop["endTicks"]) > 1:
+                    self.err(r, "loop iteration must follow a loopWrap at loop end and restart at loop start")
+                else:
+                    self.evidence.add("loop")
+            else:
+                self.err(r, "loopIteration advances by exactly one per wrap")
+        self.musical = r
+
+    def on_generation(self, r):
+        counter, kind = r["counter"], r["counter"].split("/")[0]
+        if counter not in self.gens:
+            self.err(r, f"{counter} is not declared in initialGenerations")
+            return
+        if r["from"] != self.gens[counter] or r["to"] != r["from"] + 1:
+            self.err(r, "generation must advance the current value by exactly one")
+        if r["reason"] not in REASONS[kind]:
+            self.err(r, f"reason {r['reason']} does not apply to {kind}")
+        if ("musicalMap" in r) != (kind == "musicalMap"):
+            self.err(r, "only musicalMap generations carry (and require) a musicalMap payload")
+        self.gens[counter] = r["to"]
+        self.bumps[r["reason"]] += 1
+        if kind == "sampleClock":
+            self.pending_restart.add(counter.split("/", 1)[1])
+        elif kind == "transport":
+            self.musical = None
+        elif kind == "musicalMap":
+            ticks = [s["atTicks"] for s in r["musicalMap"]]
+            if ticks[0] != 0 or ticks != sorted(set(ticks)):
+                self.err(r, "musical map segments start at 0 and strictly increase")
+            self.map = r["musicalMap"]
+
+    def on_discontinuity(self, r):
+        kind, clock = r["type"], r["sampleClock"]
+        self.discs.append(r)
+        if r["generation"] != self.gens.get(f"sampleClock/{clock}"):
+            self.err(r, "discontinuity generation is not current")
+        if kind == "clockRestart":
+            if clock not in self.pending_restart:
+                self.err(r, "clockRestart without a sample clock generation change")
+            self.pending_restart.discard(clock)
+            self.evidence.add("clockRestart")
+        direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
+        stream = self.streams.get(r.get("stream"))
+        if kind in ("underrun", "overflow", "sourceLost", "sourceRestored", "captureStopped") and stream is None:
+            self.err(r, f"{kind} names a declared stream")
+        if direction and (stream is None or stream["direction"] != direction or "frames" not in r):
+            self.err(r, f"{kind} needs a {direction} stream and a frame count")
+        if kind == "captureStopped" and "reason" not in r:
+            self.err(r, "captureStopped states its reason")
+        self.evidence.update({"locate": {"seek"}, "sourceLost": {"sourceLoss"}, "underrun": {"prefetch"}}.get(kind, set()))
+
+    def on_trigger(self, r):
+        tid, action = r["triggerId"], self.actions.get(r["actionId"])
+        if tid in self.triggers or action is None:
+            self.err(r, "trigger ids are unique and reference a declared action")
+            return
+        req = r["requires"]
+        target = r.get("target", action["quantize"])
+        needed = [f"sampleClock/{self.primary}"] + ([f"transport/{self.mus_id}"] if target["timeBase"] == "musical" else [])
+        if any(k not in req for k in needed) or not any(k.startswith("context/") for k in req):
+            self.err(r, "trigger captures the sample clock, context and (for musical targets) transport generations")
+        if any(k.startswith("musicalMap/") for k in req):
+            self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
+        stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
+        info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
+                "invalidated": False, "target": target, "expect": None}
+        self.triggers[tid] = info
+        if not stale:
+            info["expect"] = self.resolve(r, action, target)
+
+    def resolve(self, r, action, target):
+        origin, horizon = self.frame_at_host(r["originHostTicks"]), r["horizonFrame"]
+        if origin is None or origin > horizon:
+            self.err(r, "origin needs a current anchor and must not be after the horizon")
+            return None
+        if target["timeBase"] == "asap":
+            return {"frame": horizon, "ticks": None, "retro": False}
+        if target["timeBase"] == "sample":
+            return {"frame": target["atFrame"], "ticks": None, "retro": False}
+        if not self.musical_ok():
+            self.err(r, "musical target without a current musical anchor")
+            return None
+        if "atTicks" in target:
+            choice = {"frame": None, "ticks": target["atTicks"], "retro": False}
+        else:
+            grid, t = target["gridTicks"], self.ticks_at_frame(origin)
+            prev, nxt = math.floor(t / grid) * grid, math.ceil(t / grid) * grid
+            retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
+            choice = {"frame": None, "ticks": nxt, "retro": False}
+            if prev != nxt and retro > 0 and origin - self.frame_of_ticks(prev) <= retro:
+                choice = {"frame": None, "ticks": prev, "retro": True}
+        if self.loop and not self.loop["startTicks"] <= choice["ticks"] <= self.loop["endTicks"]:
+            self.err(r, "v1 resolves musical targets inside the active loop; loop end is the wrap frame")
+        return choice
+
+    def expected(self, info):
+        e, late, horizon = info["expect"], info["action"]["late"], info["rec"]["horizonFrame"]
+        assigned = e["frame"] if e["ticks"] is None else rnd(self.frame_of_ticks(e["ticks"]))
+        if assigned >= horizon:
+            return "fired", assigned, assigned
+        within = (horizon - assigned) * 1000 <= late.get("maxLatenessMs", 0) * self.rate()
+        policy = late["policy"]
+        if policy in ("fireLate", "joinInProgress") and within:
+            return ("firedLate" if policy == "fireLate" else "joined"), assigned, horizon
+        if policy == "nextBoundary":
+            grid = info["action"]["quantize"]["gridTicks"]
+            ticks = math.ceil(self.ticks_at_frame(horizon) / grid) * grid
+            while rnd(self.frame_of_ticks(ticks)) < horizon:
+                ticks += grid
+            return "fired", rnd(self.frame_of_ticks(ticks)), rnd(self.frame_of_ticks(ticks))
+        return "dropped", assigned, None
+
+    def on_outcome(self, r):
+        info = self.triggers.get(r["triggerId"])
+        if info is None or info.get("done"):
+            self.err(r, "outcome needs exactly one earlier trigger; a second terminal outcome is a replay")
+            return
+        info["done"] = True
+        result, reason, trig = r["result"], r.get("reason"), info["rec"]
+        stale_now = {k.split("/")[0] for k, v in trig["requires"].items() if self.gens.get(k) != v}
+        if info["stale"]:
+            if result != "rejectedStale" or reason not in info["stale"]:
+                self.err(r, f"arrived with stale {info['stale']}: must be rejectedStale naming one of them")
+            self.evidence.add("noStaleReplay")
+            return
+        if stale_now:
+            if result != "cancelled" or reason not in stale_now:
+                self.err(r, f"generations {sorted(stale_now)} changed while pending: must be cancelled, never fired")
+            self.evidence.add("cancellation")
+            return
+        if result in ("cancelled", "rejectedStale"):
+            self.err(r, "cancellation and staleness require a generation change")
+            return
+        if not info["ready"] or info["invalidated"] or self.state[trig["actionId"]] != "ready":
+            if (result, reason) != ("dropped", "notReady"):
+                self.err(r, "action was not continuously ready: must be dropped with reason notReady")
+            self.evidence.add("readiness")
+            return
+        if info["expect"] is None or (result, reason) == ("dropped", "capacity"):
+            return
+        want, assigned, frame = self.expected(info)
+        if result != want or r.get("assignedFrame") != assigned or r.get("frame") != frame:
+            self.err(r, f"expected {want} assignedFrame={assigned} frame={frame}")
+        if result == "dropped" and reason != "late":
+            self.err(r, "a timing drop names reason late")
+        if result == "joined" and r.get("startOffsetFrames") != frame - assigned:
+            self.err(r, "joined outcome starts the source at frame - assignedFrame")
+        if info["expect"]["ticks"] is not None and result != "dropped":
+            if r.get("musicalMap") != self.gens.get(f"musicalMap/{self.mus_id}"):
+                self.err(r, "musical outcome resolves with the current musicalMap revision")
+            elif r["musicalMap"] > 1:
+                self.evidence.add("tempoMutation")
+        if result in ("firedLate", "joined") or (result == "dropped" and reason == "late"):
+            self.evidence.add("lateCue")
+        if result == "joined" and info["expect"]["retro"]:
+            self.evidence.add("retroactiveCue")
+
+    def on_readiness(self, r):
+        aid, cur = r["actionId"], self.state.get(r["actionId"])
+        if cur is None or r["from"] != cur or r["to"] not in READINESS[cur]:
+            self.err(r, f"illegal readiness transition {r['from']} -> {r['to']} (current {cur})")
+            return
+        action = self.actions[aid]
+        if r["to"] == "failed" and "reason" not in r:
+            self.err(r, "failed readiness states its reason")
+        if r["to"] == "ready" and action.get("timePolicy") == "timeStretch" \
+                and not self.doc.get("adapterCapabilities", {}).get("timeStretch"):
+            self.err(r, "time-stretch actions need a declared time-stretch adapter")
+        if r["to"] == "failed" and action.get("timePolicy") == "timeStretch":
+            self.evidence.add("timeStretchPolicy")
+        if r["to"] == "ready" and "prefetch" in action:
+            self.evidence.add("prefetch")
+        if cur == "ready":
+            for info in self.triggers.values():
+                if info["rec"]["actionId"] == aid and not info.get("done"):
+                    info["invalidated"] = True
+        self.state[aid] = r["to"]
+
+    def on_dispatch(self, r):
+        stream = self.streams.get(r["stream"])
+        if stream is None:
+            self.err(r, "dispatch names a declared stream")
+            return
+        key = (r["frame"], LANES[r["lane"]], stream["ordinal"], r["streamSeq"])
+        if self.last_dispatch and key < self.last_dispatch:
+            self.err(r, "dispatch order must follow (frame, lane, streamOrdinal, streamSeq)")
+        if self.last_dispatch and key[0] == self.last_dispatch[0]:
+            self.evidence.add("ordering")
+        if r["streamSeq"] <= self.stream_seq.get(r["stream"], 0):
+            self.err(r, "stream order is preserved within a stream")
+        self.last_dispatch, self.stream_seq[r["stream"]] = key, r["streamSeq"]
+
+    def on_midiCapture(self, r):
+        stream = self.streams.get(r["stream"])
+        if stream is None or (stream["media"], stream["direction"]) != ("midi", "capture"):
+            self.err(r, "midiCapture names a declared MIDI capture stream")
+        words = [int(w, 16) for w in r["ump"]]
+        mt, ep = words[0] >> 28, r["endpointProtocol"]
+        if len(words) != UMP_WORDS[mt]:
+            self.err(r, f"UMP message type {mt:X} has {UMP_WORDS[mt]} words")
+        if r["translatedBy"] != ("os" if ep != r["portProtocol"] else "none"):
+            self.err(r, "translatedBy must reflect endpoint versus port protocol")
+        if mt in (2, 4) and r["effective"] != ("midi2" if mt == 4 and ep == "midi2" else "midi1"):
+            self.err(r, "effective fidelity is what the endpoint sent, never the container's resolution")
+        frame = self.frame_at_host(r["hostTicks"])
+        if frame is None or rnd(frame) != r["frame"]:
+            self.err(r, "capture frame must map from hostTicks through the current anchor")
+        if "musicalTicks" in r and (not self.musical_ok() or rnd(self.ticks_at_frame(r["frame"])) != r["musicalTicks"]):
+            self.err(r, "capture musicalTicks must map from frame through the current musical anchor")
+        self.captures.append((r, words))
+        if r["effective"] == ep == "midi1" and mt in (2, 4):
+            self.evidence.add("midi1InUmp")
+        if r["effective"] == "midi2" and mt == 4:
+            self.evidence.add("midi2Native")
+
+    def on_export(self, r):
+        events = [(c, w) for c, w in self.captures if c["stream"] in r["streams"]]
+        if not events or len(set(r["streams"])) != len(r["streams"]):
+            self.err(r, "export names distinct captured streams")
+        losses = Counter()
+        if r["format"] == "smf":
+            division = r.get("division", 0)
+            if not division or TPQ % division or r.get("smfFormat") is None:
+                self.err(r, "SMF export declares smfFormat and a division that divides 15360")
+                return
+            groups = {(w[0] >> 24) & 0xF for _, w in events}
+            for c, words in events:
+                mt = words[0] >> 28
+                if "musicalTicks" not in c:
+                    losses["syntheticTempoMap"] += 1
+                elif c["musicalTicks"] % (TPQ // division):
+                    losses["timingQuantized"] += 1
+                if mt == 4 and c["effective"] == "midi2":
+                    losses.update(midi2_losses(words))
+                elif mt not in (2, 3, 4):
+                    losses["umpOnlyDropped"] += 1
+                if len(groups) > 1 and (words[0] >> 24) & 0xF != min(groups):
+                    losses["groupsFlattened"] += 1
+            self.evidence.add("smfExportLossless" if r["lossless"] else "smfExportLossy")
+        elif "division" in r or "smfFormat" in r:
+            self.err(r, "native UMP export keeps words and stamps verbatim; SMF fields do not apply")
+        if dict(losses) != r["losses"]:
+            self.err(r, f"declared losses {r['losses']} must equal recomputed {dict(losses)}")
+        if r["lossless"] != (not r["losses"]):
+            self.err(r, "lossless is true exactly when no loss category is reported")
+
+    def on_take(self, r):
+        stream, segs = self.streams.get(r["stream"]), r["segments"]
+        if stream is None or (stream["media"], stream["direction"]) != ("audio", "capture"):
+            self.err(r, "take names a declared audio capture stream")
+        if r["inputLatency"]["measuredFrames"] is not None and "evidence" not in r["inputLatency"]:
+            self.err(r, "measured latency cites its evidence; reported latency is not measured latency")
+        overflow = [d for d in self.discs if d["type"] == "overflow" and d.get("stream") == r["stream"]]
+        file_frame = 0
+        for i, seg in enumerate(segs):
+            gen, anchor = seg["generation"], self.first_anchor.get((seg["sampleClock"], seg["generation"]))
+            if i and gen != segs[i - 1]["generation"] + 1:
+                self.err(r, "a take starts a new segment exactly at each sample clock restart")
+            if seg["fileFrameStart"] != file_frame:
+                self.err(r, "segments are contiguous in the file; no padding across clock restarts")
+            host = None if anchor is None else anchor["hostTicks"] + (seg["startFrame"] - anchor["frame"]) \
+                * Fraction(10**9, self.rates[seg["sampleClock"]]) / self.ns_per_tick
+            if host is None or rnd(host) != seg["startHostTicks"]:
+                self.err(r, "segment startHostTicks must map from its generation's anchor")
+            inside = [d for d in overflow if d["generation"] == gen]
+            if any(not seg["startFrame"] <= d["frame"] < seg["startFrame"] + seg["frames"] for d in inside) \
+                    or seg["paddedFrames"] != sum(d["frames"] for d in inside):
+                self.err(r, "paddedFrames equal the overflow discontinuities inside the segment")
+            file_frame += seg["frames"]
+        if r["droppedFrames"] != sum(s["paddedFrames"] for s in segs) or len(overflow) != sum(
+                1 for d in overflow if any(d["generation"] == s["generation"] for s in segs)):
+            self.err(r, "droppedFrames equals all padded overflow frames; no silent capture loss")
+        stops = [d for d in self.discs if d["type"] == "captureStopped" and d.get("stream") == r["stream"]]
+        if r["stopReason"] != "user" and (len(stops) != 1 or r["stopReason"] not in stops[0]["reason"]
+                                         or stops[0]["frame"] != segs[-1]["startFrame"] + segs[-1]["frames"]):
+            self.err(r, "a non-user stop has one captureStopped discontinuity at the end of the last segment")
+        self.evidence.add("capture")
+
+
+def check_example(doc, name, schema):
+    errors = []
+    validate(schema, doc, schema["$defs"], "$", errors)
+    if errors:
+        return [f"{name}: {e}" for e in errors], set()
+    if doc["exampleId"] != "ex." + Path(name).stem:
+        return [f"{name}: exampleId must be ex.<file stem>"], set()
+    trace = Trace(doc, name)
+    trace.run()
+    return trace.errors, set(doc["covers"])
+
+
+def mutate(doc, match, changes):
+    rec = next(r for r in doc["timeline"] if all(r.get(k) == v for k, v in match.items()))
+    for key, value in changes.items():
+        if value is None:
+            rec.pop(key, None)
+        else:
+            rec[key] = value
+
+
+# Each mutation breaks one contract rule in a valid example; the checker must reject every one.
+MUTATIONS = [
+    ("stale trigger fires", "06", {"kind": "outcome", "result": "rejectedStale"}, {"result": "fired", "reason": None}),
+    ("pending trigger survives locate", "03", {"kind": "outcome", "result": "cancelled"},
+     {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1}),
+    ("lost-source trigger replayed", "05", {"kind": "outcome", "reason": "source"},
+     {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1}),
+    ("generation skips", "01", {"kind": "generation"}, {"to": 3}),
+    ("late cue fires on time", "02", {"kind": "outcome", "result": "dropped"},
+     {"result": "fired", "reason": None, "frame": 336000}),
+    ("tempo edit ignored", "04", {"kind": "outcome", "musicalMap": 2}, {"assignedFrame": 288000, "frame": 288000}),
+    ("unready action fires", "07", {"kind": "outcome", "reason": "notReady"},
+     {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1}),
+    ("silent capture drop", "08", {"kind": "take"}, {"droppedFrames": 0}),
+    ("converted MIDI 1 claims MIDI 2", "09", {"kind": "midiCapture", "translatedBy": "os"}, {"effective": "midi2"}),
+    ("hidden SMF loss", "10", {"kind": "export", "format": "smf"}, {"lossless": True, "losses": {}}),
+    ("loop wrap without discontinuity", "03", {"kind": "discontinuity", "type": "loopWrap"}, {"type": "sampleJump"}),
+]
+
+
+def main(argv):
+    errors, covered, docs = [], set(), {}
+    schema = load_canonical(SCHEMA_PATH, 99, "--write" in argv, errors)
+    if schema is None:
+        print("error:", errors[0])
+        return 1
+    check_keywords(schema)
+    files = sorted(EXAMPLES.glob("*.json"))
+    for path in files:
+        doc = load_canonical(path, 2, "--write" in argv, errors)
+        if doc is None:
+            continue
+        found, claims = check_example(doc, path.name, schema)
+        errors += found
+        covered |= claims if not found else set()
+        docs[path.stem[:2]] = (doc, path.name)
+        print(f"{'ok  ' if not found else 'FAIL'} {path.name}")
+    if REQUIRED_COVERAGE - covered:
+        errors.append(f"coverage missing: {sorted(REQUIRED_COVERAGE - covered)}")
+    for label, prefix, match, changes in MUTATIONS:
+        if prefix not in docs:
+            errors.append(f"mutation '{label}': example {prefix} missing")
+            continue
+        doc, name = copy.deepcopy(docs[prefix][0]), docs[prefix][1]
+        mutate(doc, match, changes)
+        caught = check_example(doc, name, schema)[0]
+        print(f"{'ok  ' if caught else 'FAIL'} mutation rejected: {label}")
+        if not caught:
+            errors.append(f"mutation '{label}' was not detected")
+    for line in errors:
+        print("error:", line)
+    print(f"{len(files)} examples, {len(MUTATIONS)} mutations, {len(errors)} errors")
+    return 1 if errors or not files else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

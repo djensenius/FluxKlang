@@ -1,0 +1,38 @@
+{
+  "contract": "fluxklang.media",
+  "version": 1,
+  "exampleId": "ex.10-midi2-capture-lossy-smf-export",
+  "title": "Genuine MIDI 2.0 capture: native UMP export is lossless; SMF export names every loss",
+  "covers": ["midi2Native", "smfExportLossy"],
+  "notes": [
+    "Losses: off-grid timing at division 960, 16-bit velocity, pitch attribute, per-note pitch bend, 32-bit CC74, velocity 0x0100 remapped to 1.",
+    "str.synth-legacy reads the MIDI 2.0 endpoint through a MIDI 1.0 port: the OS already reduced it to MIDI 1 and it is labelled so."
+  ],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
+    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
+  },
+  "streams": [
+    {"streamId": "str.synth", "ordinal": 0, "media": "midi", "direction": "capture"},
+    {"streamId": "str.synth-legacy", "ordinal": 1, "media": "midi", "direction": "capture"}
+  ],
+  "initialGenerations": {
+    "sampleClock/smp.main": 1,
+    "transport/mus.main": 1,
+    "musicalMap/mus.main": 1,
+    "context/ctx.main": 1
+  },
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
+    {"seq": 2, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40903C03", "0xC9251E00"], "hostTicks": 2412002500, "frame": 24005, "musicalTicks": 15363, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 3, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40603C00", "0x80400000"], "hostTicks": 2418000000, "frame": 36000, "musicalTicks": 23040, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 4, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40B04A00", "0x9A3C5E71"], "hostTicks": 2424000000, "frame": 48000, "musicalTicks": 30720, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 5, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40904000", "0x01000000"], "hostTicks": 2430000000, "frame": 60000, "musicalTicks": 38400, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 6, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40803C00", "0x00000000"], "hostTicks": 2436000000, "frame": 72000, "musicalTicks": 46080, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 7, "kind": "midiCapture", "stream": "str.synth", "ump": ["0x40804000", "0x00000000"], "hostTicks": 2442000000, "frame": 84000, "musicalTicks": 53760, "endpointProtocol": "midi2", "portProtocol": "midi2", "translatedBy": "none", "effective": "midi2"},
+    {"seq": 8, "kind": "midiCapture", "stream": "str.synth-legacy", "ump": ["0x20903C64"], "hostTicks": 2448000000, "frame": 96000, "musicalTicks": 61440, "endpointProtocol": "midi2", "portProtocol": "midi1", "translatedBy": "os", "effective": "midi1"},
+    {"seq": 9, "kind": "export", "exportId": "exp.ump", "streams": ["str.synth"], "format": "nativeUmp", "lossless": true, "losses": {}},
+    {"seq": 10, "kind": "export", "exportId": "exp.smf", "streams": ["str.synth", "str.synth-legacy"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": false, "losses": {"timingQuantized": 1, "velocityDownscaled": 1, "attributeDropped": 1, "perNoteDropped": 1, "valueDownscaled": 1, "noteOnVelocityRemapped": 1}}
+  ]
+}

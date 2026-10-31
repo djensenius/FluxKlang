@@ -1,0 +1,28 @@
+{
+  "contract": "fluxklang.media",
+  "version": 1,
+  "exampleId": "ex.08-audio-capture-discontinuities",
+  "title": "Audio capture: overflow padding, clock restart splits the take, disk full leaves a recoverable partial file",
+  "covers": ["capture", "clockRestart"],
+  "notes": [
+    "Overflow never blocks the render thread: dropped frames are padded with silence in the file and counted.",
+    "No padding spans a clock restart; segments are aligned by their host anchors. Persisted takes store host time only relative to the first anchor."
+  ],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3},
+    "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
+  },
+  "streams": [{"streamId": "str.take-in", "ordinal": 0, "media": "audio", "direction": "capture"}],
+  "initialGenerations": {"sampleClock/smp.main": 1, "context/ctx.main": 1},
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000},
+    {"seq": 2, "kind": "discontinuity", "type": "overflow", "sampleClock": "smp.main", "generation": 1, "frame": 480000, "frames": 1024, "stream": "str.take-in"},
+    {"seq": 3, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "deviceRestart"},
+    {"seq": 4, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2900000000},
+    {"seq": 5, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2900000000},
+    {"seq": 6, "kind": "discontinuity", "type": "overflow", "sampleClock": "smp.main", "generation": 2, "frame": 96000, "frames": 256, "stream": "str.take-in"},
+    {"seq": 7, "kind": "discontinuity", "type": "captureStopped", "sampleClock": "smp.main", "generation": 2, "frame": 480000, "stream": "str.take-in", "reason": "diskFull: writer finalised the partial file"},
+    {"seq": 8, "kind": "take", "takeId": "tk.1", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 1, "startFrame": 0, "startHostTicks": 2400000000, "fileFrameStart": 0, "frames": 960000, "paddedFrames": 1024}, {"sampleClock": "smp.main", "generation": 2, "startFrame": 0, "startHostTicks": 2900000000, "fileFrameStart": 960000, "frames": 480000, "paddedFrames": 256}], "droppedFrames": 1280, "stopReason": "diskFull", "note": "Reported latency is not measured latency; no loopback measurement was made."}
+  ]
+}
