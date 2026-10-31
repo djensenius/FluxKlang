@@ -81,13 +81,13 @@ back to the shared project file is a coordinated save (#123).
 
 ## Policy by command class
 
-| Class | Draft? | Authorization | Example |
+| Class | Draft? | Authorization | Operations → result (examples) |
 |---|---|---|---|
-| live | No | Scoped role policy | `cmd.0001` accepted, parameter rev 19 |
-| structural | Yes | Explicit review | `cmd.0101`/`cmd.0102` |
-| hazardous | Single change, reviewed | Explicit, per change | `cmd.0008` `needsAuthorization` |
-| safety | Never | Accepted on the current epoch | `cmd.0006` (Host A UI) and `cmd.0104` (phone) accepted |
-| proposal | Creates a draft | Never activates | `cmd.0004` `draftCreated` |
+| live | No | Scoped role policy | `set` on a live parameter → accepted or held for pickup (`cmd.0001`, parameter rev 19) |
+| structural | Yes | Explicit review | `connect`/`disconnect`/`addNode`/`removeNode`/`editDraft` → `draftUpdated` (`cmd.0101`, payload equal to the draft's op); `requestActivation` → `reviewRequired` (`cmd.0102`) |
+| hazardous | Single change, reviewed | Explicit, per change | `set` on a hazardous parameter → `needsAuthorization` (`cmd.0008`) |
+| safety | Never | Accepted on the current epoch | `panic`/`safeMute` → accepted (`cmd.0006` Host A UI, `cmd.0104` phone) |
+| proposal | Creates a draft | Never activates | `proposeDraft` of the proposer's own draft → `draftCreated` (`cmd.0004`) |
 
 ## Rollback is capability-specific
 

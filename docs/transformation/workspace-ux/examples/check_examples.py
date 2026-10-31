@@ -18,8 +18,10 @@ REV_CONTRACT = {"project": "project", "graph": "graph", "parameter": "parameter"
                 "device": "deviceCapability", "transport": "transport"}
 EXPECTED = {"project", "graph", "parameter", "deviceCapability", "transport", "command",
             "transactionTrace", "sessionStatus", "separateHostSession"}
-ALLOWED = {"live": {"accepted", "heldForPickup"}, "structural": {"draftUpdated", "reviewRequired"},
-           "hazardous": {"needsAuthorization"}, "safety": {"accepted"}, "proposal": {"draftCreated"}}
+OPS = {**dict.fromkeys(("connect", "disconnect", "addNode", "removeNode", "editDraft"), ("structural", "draftUpdated")),
+       "requestActivation": ("structural", "reviewRequired"), "proposeDraft": ("proposal", "draftCreated"),
+       "panic": ("safety", "accepted"), "safeMute": ("safety", "accepted"),
+       "set:live": ("live", "accepted heldForPickup"), "set:hazardous": ("hazardous", "needsAuthorization")}
 ASSISTANT_ALLOWED = {"draft.propose", "diagnostics.read"}
 PROVENANCE_TOOLS = {"routingRequest": "none", "diagnostic": "readOnlySnapshotTools"}
 STEP_ORDER = ["validate", "prepare", "reviewAuthorize", "commit", "acknowledge"]
@@ -313,23 +315,24 @@ def check_commands(hs, roles, docs):
         if log["hostEpoch"] != hs["hostEpoch"]:
             err(log["host"], "log hostEpoch differs from the session's host epoch")
         for cmd in log["commands"]:
-            where, status = cmd["id"], cmd["result"]["status"]
+            where, status, op = cmd["id"], cmd["result"]["status"], cmd["op"]
             if cmd["seq"] <= last_seq:
                 err(where, "seq is not monotonic")
             last_seq = cmd["seq"]
             origin, binding = people.get(cmd["origin"]), bindings.get(cmd["origin"], {})
             if origin is None:
                 if (binding.get("state") != "active" or controls.get(binding.get("control")) not in present
-                        or cmd["op"].get("set") != binding.get("parameter")):
+                        or op.get("set") != binding.get("parameter")):
                     err(where, "origin must be a session member or an active binding on this rig setting its target")
                     continue
                 origin = people[log["host"]]
-            target = params.get(cmd["op"].get("set"), {})
-            if "set" in cmd["op"] and target.get("class") != cmd["class"]:
-                err(where, f"class {cmd['class']} must match the target's class {target.get('class')}")
+            target = params.get(op.get("set"), {})
+            kinds = {OPS.get(f"set:{target.get('class')}" if k == "set" else k) for k in op if k != "value"}
+            if len(kinds) != 1 or None in kinds or (want := kinds.pop())[0] != cmd["class"]:
+                err(where, f"class {cmd['class']} does not fit operation {sorted(op)} (class policy table)")
                 continue
-            value = cmd["op"].get("value")
-            if "set" in cmd["op"] and not status.startswith("rejected") and not within(target, value):
+            value = op.get("value")
+            if "set" in op and not status.startswith("rejected") and not within(target, value):
                 err(where, f"value {value!r} is outside {target['id']} min..ceiling, so it cannot be {status}")
             conn = origin.get("connection")
             stale = cmd.get("hostEpoch") != log["hostEpoch"] or (
@@ -341,7 +344,7 @@ def check_commands(hs, roles, docs):
             granted, need = roles.get(origin["role"], []), perms[cmd["class"]]
             ok = (need in granted or (need == "live.set" and f"live.set:{target.get('group')}" in granted)
                   or (need == "safety" and any(g.startswith("safety.") for g in granted)))
-            expected, pick = ALLOWED[cmd["class"]] if ok else {"rejectedPermission"}, binding.get("pickup", {})
+            expected, pick = set(want[1].split()) if ok else {"rejectedPermission"}, binding.get("pickup", {})
             if ok and cmd["class"] == "live":  # a waiting catch holds values still on the hardware's side of the target
                 aim = pick.get("parameterValue")
                 hold = pick.get("state") == "waiting" and (value - aim) * (pick["hardwareValue"] - aim) > 0
