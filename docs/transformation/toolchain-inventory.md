@@ -532,6 +532,13 @@ OS-27 SDK, and SwiftLint parses with its bundled SwiftSyntax.
   it is untrusted (§4). Neither behaviour has been observed on a GitHub runner, and the local
   `MISE_TRUSTED_CONFIG_PATHS` was scoped to one command.
 - `permissions: contents: read` restricts the default `GITHUB_TOKEN` to reading.
+- **PATH activation is asserted, not assumed.** By default the action prepends its shims
+  directory (`add_shims_to_path`) and the paths `mise env --paths` manages
+  ([`src/index.ts:275-300, 393-396`](https://github.com/jdx/mise-action/blob/6612f0ef07ed2a736cd1e00a94a065522dd41195/src/index.ts#L275-L300)).
+  An image-provided or Homebrew SwiftLint/XcodeGen could still shadow the pin, or a missing
+  shim could fail late. So B and C each add a step that compares the tool on `PATH` with
+  `mise current <tool>` and fails on a mismatch. Locally, both comparisons hold in a directory
+  with diff A's `mise.toml` (`0.65.1`; `Version: 2.46.0`).
 
 ```diff
  name: Lint
@@ -556,6 +563,13 @@ OS-27 SDK, and SwiftLint parses with its bundled SwiftSyntax.
 +        with:
 +          version: 2026.10.25
 +          install_args: swiftlint
++      - name: Pinned SwiftLint is on PATH
++        run: |
++          want=$(mise current swiftlint); have=$(swiftlint version)
++          echo "swiftlint $have at $(command -v swiftlint); mise.toml pins $want"
++          if [ -z "$want" ] || [ "$have" != "$want" ]; then
++            echo "::error::swiftlint '$have' is not the mise.toml pin '$want'"; exit 1
++          fi
        - name: Lint
          run: swiftlint --strict
 ```
@@ -600,6 +614,13 @@ jobs:
         with:
           version: 2026.10.25
           install_args: xcodegen
+      - name: Pinned XcodeGen is on PATH
+        run: |
+          want=$(mise current xcodegen); have=$(xcodegen --version)
+          echo "$have at $(command -v xcodegen); mise.toml pins $want"
+          if [ -z "$want" ] || [ "$have" != "Version: $want" ]; then
+            echo "::error::xcodegen '$have' is not the mise.toml pin '$want'"; exit 1
+          fi
       - name: Require OS-27 SDKs
         run: |
           xcodebuild -version
