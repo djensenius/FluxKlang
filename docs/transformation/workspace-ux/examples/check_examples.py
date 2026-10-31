@@ -147,12 +147,12 @@ def faults(ports, edges):
     return {compatible(ports, e) for e in edges} - {"ok"} | ({"cycle"} if links else set())
 
 
-def candidate(graph, draft):
-    """Live edges with a draft's ops applied; non-stale drafts sit on the active base."""
-    owner = {p["id"]: p["node"] for p in graph["ports"]}
+def candidate(ports, graph, draft):
+    """Ports and edges after a draft's ops; removed nodes take their ports, so connects to them dangle."""
     cut = {op.get("edge") or op.get("node") for op in draft["ops"] if op["op"] in ("disconnect", "removeNode")}
-    keep = [e for e in graph["edges"] if not {e["id"], owner.get(e["from"]), owner.get(e["to"])} & cut]
-    return keep + [op for op in draft["ops"] if op["op"] == "connect"]
+    left = {k: p for k, p in ports.items() if p["node"] not in cut}
+    keep = [e for e in graph["edges"] if e["id"] not in cut and e["from"] in left and e["to"] in left]
+    return left, keep + [op for op in draft["ops"] if op["op"] == "connect"]
 
 
 def check_graph(graph):
@@ -262,7 +262,7 @@ def check_transactions(hs, graph, history, ports, roles):
         validate, stale = (steps or [{}])[0], base != active
         if not (stale == (outcome == "stale") == (validate.get("code") == "staleBase")):
             err(where, f"base {base} vs active {active}: stale handling inconsistent")
-        found = set() if stale else faults(ports, candidate(graph, draft))
+        found = set() if stale else faults(*candidate(ports, graph, draft))
         if found and (validate.get("result") != "failed" or validate.get("code") not in found):
             err(where, f"validate must fail with one of {sorted(found)}")
         for step in steps:
@@ -293,7 +293,7 @@ def check_transactions(hs, graph, history, ports, roles):
             err(where, "uncommitted transactions must leave the active revision unchanged")
     for draft in drafts.values():
         if draft["id"] not in used and draft["baseGraphRevision"] == active and (
-                found := faults(ports, candidate(graph, draft))):
+                found := faults(*candidate(ports, graph, draft))):
             err(draft["id"], f"reviewable draft fails validation: {sorted(found)}")
     if active != graph["revision"]:
         err(hs["name"], f"final active revision {active} != graph revision {graph['revision']}")
