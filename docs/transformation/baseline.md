@@ -109,7 +109,12 @@ retarget it to neutral contracts; **replace** = a new subsystem supersedes it;
 
 `applyStudio()` is **not** the only path from the graph or the models to hardware. The
 authority migration (#62) must audit every direct WING write path, all of which bypass
-`applyStudio()`:
+`applyStudio()`. The tables below list every call site outside `Shared/WING/` that
+writes through `WingController` (`apply*`, `set*`, `hardPanPair`). The list was produced
+with a static grep for the controller's write methods on any receiver. Re-run that grep
+during #62 rather than treating this snapshot as final.
+
+**Model entry points**
 
 | Location | Path | Owner |
 |---|---|---|
@@ -121,6 +126,24 @@ authority migration (#62) must audit every direct WING write path, all of which 
 | `Shared/Views/App/AppModel.swift:421`, `:427` | `applyVoicePlacement(_:)` / `applyAllPlacements()` → `wing.apply` (spatial) | #62 / #114 |
 | `Shared/Views/App/AppModel.swift:435`, `:442`; `Shared/Views/App/LaunchControlXLAppModel.swift:19-41` | live fader/mute/pan setters (UI and Launch Control XL) | #87 / #62 (live-parameter policy) |
 | `Shared/Views/App/AppModel+AssistantMixer.swift:126` | reviewed assistant mixer write (`setConfirmedMixerValue`) | #62 / #117 (assistant parent) |
+| `Shared/Assistant/AssistantActionController+Execution.swift:147` | assistant action execution → `plan.wing.setConfirmedMixerValue` | #62 / #117 (assistant parent) |
+
+**Direct controller callers outside `AppModel`** (Shortcuts and views call
+`WingController` directly)
+
+| Location | Path | Owner |
+|---|---|---|
+| `Shared/Intents/FluxKlangIntents.swift:64` | App Intent (Shortcuts/Siri) → `model.wing.setFader` | #62 / #87 |
+| `Shared/Views/Mac/MenuBarMixer.swift:84` | Mac menu-bar fader → `setFader` | #87 / #62 |
+| `Shared/Views/Mac/InspectorView.swift:82` | Mac inspector mute → `setMutePair` | #87 / #62 |
+| `Shared/Views/Mixer/FaderStripView.swift:103`, `:140` | mixer strip mute / fader → `setMutePair` / `setFaderPair` | #87 / #62 |
+| `Shared/Views/Mixer/FadersView.swift:122`, `:199` | hard pan / rename → `hardPanPair` / `setNamePair` | #87 / #62 |
+| `Shared/Views/Studio/StudioInspectorViews.swift:193`, `:207`, `:214` | Studio inspector mute / fader → `setMutePair` / `setFaderPair` | #87 / #62 |
+| `Shared/Views/Patchbay/InputPatchbayGrid.swift:106` | input patch → `setChannelSource` | #62 / #76 |
+| `Shared/Views/Patchbay/OutputPatchbayGrid.swift:135` | output patch → `setOutputSource` | #62 / #76 |
+| `Shared/Views/Routing/InputPatchView.swift:47`, `:54` | input patch clear / set → `setChannelSource` | #62 / #76 |
+| `Shared/Views/Routing/OutputRoutingView.swift:66`, `:75`, `:84` | main assign / bus send / send level → `setMainAssign` / `setSend` / `setSendLevel` | #62 / #76 |
+| `Shared/Views/Routing/PatchMatrixView.swift:49` | bus send toggle → `setSend` | #62 / #76 |
 
 ### Assistant (reuse review, cancellation and stale fences)
 
