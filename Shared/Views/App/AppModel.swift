@@ -28,7 +28,7 @@ final class AppModel {
     let faderLayout = FaderLayoutStore()
 
     /// USB MIDI integration for the Novation Launch Control XL 3.
-    let launchControlXL = LaunchControlXLController()
+    let launchControlXL: LaunchControlXLController
 
     /// User-editable equipment library for the chain builder.
     let equipment = EquipmentStore()
@@ -105,9 +105,11 @@ final class AppModel {
     init(
         assistant: AssistantCoordinator = AssistantCoordinator(),
         assistantProviderSettings: AssistantProviderSettings = AssistantProviderSettings(),
-        wing: WingController = WingController()
+        wing: WingController = WingController(),
+        hardware: HardwareServiceFactories = .current
     ) {
         self.wing = wing
+        launchControlXL = LaunchControlXLController(makeMIDIInput: hardware.makeLaunchControlXLInput)
         self.assistant = assistant
         self.assistantProviderSettings = assistantProviderSettings
         let fallback = AssistantFallbackGenerator(coordinator: assistant)
@@ -164,9 +166,7 @@ final class AppModel {
     }
 
     private var shouldReconnectOnStartup: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
-            && !AcceptanceLaunchConfiguration.isUITesting
-            && !isConnected
+        !AppPersistence.isTesting && !AcceptanceLaunchConfiguration.isUITesting && !isConnected
     }
 
     /// Re-reads every persisted store, used when iCloud syncs new state.

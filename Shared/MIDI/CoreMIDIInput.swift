@@ -7,7 +7,7 @@
 import Foundation
 
 @MainActor
-final class CoreMIDIInput {
+final class CoreMIDIInput: LaunchControlXLInput {
     private var client = MIDIClientRef()
     private var inputPort = MIDIPortRef()
     private var connectedSources: [MIDIEndpointRef: String] = [:]
