@@ -28,7 +28,9 @@
     {"id": "dft.assistant-space", "author": "per.assistant", "host": "per.host-a", "baseGraphRevision": 43,
      "provenance": {"kind": "assistantProposal", "origin": "diagnostic", "diagnostic": "dgn.space-lost",
                     "toolUse": "readOnlySnapshotTools", "snapshot": {"graphRevision": 43, "deviceRevision": 7}},
-     "ops": [{"op": "connect", "from": "prt.synth.out", "to": "prt.mains.in"}], "note": "Draft only; no transaction yet"}
+     "ops": [{"op": "connect", "from": "prt.synth.out", "to": "prt.mains.in"}], "note": "Draft only; no transaction yet"},
+    {"id": "dft.remove-verb", "author": "per.host-a", "host": "per.host-a", "baseGraphRevision": 43,
+     "ops": [{"op": "removeNode", "node": "nod.verb"}], "note": "Draft only; its Perform controls stay live"}
   ],
   "transactions": [
     {"id": "txn.wire-mic", "draft": "dft.wire-mic", "outcome": "committed", "steps": [

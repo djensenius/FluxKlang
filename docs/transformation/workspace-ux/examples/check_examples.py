@@ -149,8 +149,10 @@ def faults(ports, edges):
 
 def candidate(graph, draft):
     """Live edges with a draft's ops applied; non-stale drafts sit on the active base."""
-    gone = {op.get("edge") for op in draft["ops"] if op["op"] == "disconnect"}
-    return [e for e in graph["edges"] if e["id"] not in gone] + [op for op in draft["ops"] if op["op"] == "connect"]
+    owner = {p["id"]: p["node"] for p in graph["ports"]}
+    cut = {op.get("edge") or op.get("node") for op in draft["ops"] if op["op"] in ("disconnect", "removeNode")}
+    keep = [e for e in graph["edges"] if not {e["id"], owner.get(e["from"]), owner.get(e["to"])} & cut]
+    return keep + [op for op in draft["ops"] if op["op"] == "connect"]
 
 
 def check_graph(graph):
@@ -221,8 +223,9 @@ def check_ops_applied(graph, draft, where):
         if ((kind == "connect" and (not hit or op.get("edge", hit[0]) != hit[0]))
                 or (kind == "disconnect" and any(e["id"] == op["edge"] for e in edges))
                 or (kind == "addNode" and op["proposedId"] not in nodes)
-                or kind not in ("connect", "disconnect", "addNode")):
-            err(where, f"committed {kind} {op.get('edge') or op.get('proposedId') or op.get('to')} is not in the graph")
+                or (kind == "removeNode" and op["node"] in nodes)
+                or kind not in ("connect", "disconnect", "addNode", "removeNode")):
+            err(where, f"committed op is not reflected in the graph: {op}")
 
 
 def check_provenance(hs, draft, roles):
@@ -410,9 +413,16 @@ def check_parameters(docs):
     params = {p["id"]: p for p in docs["parameter"]["parameters"]}
     presence = {d["id"]: d["presence"] for d in docs["deviceCapability"]["devices"]}
     control_device = {c["id"]: c["device"] for c in docs["deviceCapability"]["controls"]}
+    nodes = {n["id"] for n in docs["graph"]["nodes"]}
+    removals = {(d["id"], op.get("node")) for t in (docs["transactionTrace"], docs["separateHostSession"]["trace"])
+                for d in t["drafts"] for op in d["ops"] if op["op"] == "removeNode"}
     for p in params.values():
         if not (p["min"] <= p.get("ceiling", p["max"]) <= p["max"] and within(p, p["value"])):
             err(p["id"], f"need min <= value <= ceiling <= max (value {p['value']!r}, ceiling {p.get('ceiling')})")
+        if (p.get("control") == "noTarget") != (p["node"] not in nodes):
+            err(p["id"], "a control has no target only once its node leaves the active graph, never for a draft")
+        if "pendingRemoval" in p and ((p["pendingRemoval"], p["node"]) not in removals or p["node"] not in nodes):
+            err(p["id"], "a pending-removal hint must cite a draft removing this live parameter's node")
     for b in docs["parameter"]["bindings"]:
         present = presence.get(control_device.get(b["control"])) == "present"
         if (b.get("state") == "active") != present or (not present and b["pickup"]["state"] != "unavailable"):

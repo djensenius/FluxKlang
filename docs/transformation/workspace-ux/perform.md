@@ -97,7 +97,8 @@ partial binding behind.
 | Stale controller | `bnd.knob1-mix`, `bnd.enc2-mains` | "STALE" badge; on-screen control still works | No input from the device; host UI edits accepted (`cmd.0001`) |
 | Waiting for pickup | hardware 0.20 vs value 0.50 | "Waiting 0.20 → 0.50" | `heldForPickup` (`cmd.0005`) |
 | Hazardous | `par.mic.trim` | Lock + "Set value..." | `needsAuthorization` (`cmd.0008`), sheet bound to epoch |
-| No target | Node removed in a draft | "No target in active rev" | Disabled with reason |
+| Pending removal | `nod.verb` removed only in `dft.remove-verb` | Hint "Pending removal in draft" | Still live (`cmd.0001` accepted); discard or a failed prepare changes nothing |
+| No target | Removal committed to the active graph | "No target in rev N" | Disabled with reason |
 | Not permitted here | Remote outside `grp.fx`/`grp.out` | Value read-only + "Not in your permissions" | `rejectedPermission` |
 | Resyncing | New epoch on a remote | "Resyncing..." | Input queued nowhere; stale intent dropped |
 | Missing plugin | A control on `nod.echo` (Missing) | "Plugin missing: value kept" | Edits stored, nothing rendered |

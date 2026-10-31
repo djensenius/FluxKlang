@@ -76,6 +76,7 @@ back to the shared project file is a coordinated save (#123).
 | `txn.add-verb2` | prepare failed | "Room Verb 2 did not load. Running set unchanged." [Retry] [Edit draft] |
 | `txn.assistant-cue` | awaiting review | Review sheet above; badge "Proposed from your request" (no tools) |
 | `dft.assistant-space` | draft from `dgn.space-lost` | Badge "Proposed from diagnostic" (read-only snapshot tools); no transaction yet |
+| `dft.remove-verb` | draft only | Wiring strikes `nod.verb` through; its Perform controls stay live with a "Pending removal in draft" hint |
 | `dft.phone-cue` | draft in the phone's own session | `cmd.0102` → `reviewRequired`: same sheet, authorized by Host B |
 
 ## Policy by command class

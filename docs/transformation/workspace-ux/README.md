@@ -86,21 +86,22 @@ Run the checker (stdlib Python 3 only; it reads only these files):
 
 ```sh
 python3 docs/transformation/workspace-ux/examples/check_examples.py
-# OK: 9 contracts, 142 synthetic ids, 2 host sessions, all references and revisions consistent
+# OK: 9 contracts, 143 synthetic ids, 2 host sessions, all references and revisions consistent
 ```
 
 It enforces: object-shaped JSON with `synthetic: true` and unique contract names; unique IDs; resolved
-references; integer, monotonic revisions; typed edges (direction, signal, conversion indices within the source's
-channels); cycles only through explicit causal feedback, in the graph and in each draft's candidate graph; one
-capability level per capability; one host authority per session (lease, rig, logs, drafts) using only its own
-rig; step order, outcomes that match their step results (only `awaitingReview` is pending) and stale-base
-detection; authorization bound to draft, base, host epoch and diff digest; commits advance by one, are cited in
-history and appear in the graph; stale epochs reject every command class; permissions come only from roles, and
-a controller binding may set only its own parameter; the assistant holds only an allowlist and its drafts carry
-matching provenance; remotes open no engine or console write session; a phone runs as a full host; host roles
-keep Panic and Safe Mute; stale controllers produce no input; meters that are not measured show Unavailable;
-node states agree with routes and capabilities; Learn blocks excluded targets. Malformed input prints `FAIL`
-lines, never a traceback.
+references; integer, monotonic revisions; ports owned by graph nodes; typed edges (direction, signal, conversion
+indices within the source's channels); cycles only through explicit causal feedback, in the graph and in each
+draft's candidate graph; one capability level per capability; one host authority per session (lease, rig, logs,
+drafts) using only its own rig; step order, outcomes that match their step results (only `awaitingReview` is
+pending) and stale-base detection; authorization bound to draft, base, host epoch and diff digest; commits
+advance by one, are cited in history and appear in the graph with the same feedback; stale epochs reject every
+command class; permissions come only from roles; a controller binding sets only its own parameter, held or
+accepted per its pickup; setter values stay within range and ceiling; the assistant holds only an allowlist and
+its drafts carry matching provenance; remotes open no engine or console write session; a phone runs as a full
+host; host roles keep Panic and Safe Mute; stale controllers produce no input; drafts never disable a Perform
+control; unmeasured meters show Unavailable; node states agree with routes and capabilities; Learn blocks
+excluded targets. Malformed input prints `FAIL` lines, never a traceback.
 
 ## Single-owner integration map
 

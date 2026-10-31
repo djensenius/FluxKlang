@@ -73,5 +73,5 @@ Rotors: **Ports**, **Connections**, **Needs attention**. Edge label: *"Keys to R
 ## Contract seams
 
 Reads: graph nodes/ports/edges, node status, capabilities, diagnostics. Writes: **draft ops only**
-(`connect`, `disconnect`, `addNode`). The surface never writes active graph revisions,
+(`connect`, `disconnect`, `addNode`, `removeNode`). The surface never writes active graph revisions,
 device routes or engine state.
