@@ -33,38 +33,32 @@ struct StartupHardwareIsolationTests {
         #expect(spy.inputsMade == 1)
     }
 
-    @Test func appModelConstructionInvokesNoHardwareFactories() {
-        let spy = HardwareFactorySpy()
-
-        let model = AppModel(wing: .preview(), hardware: spy.factories)
-
-        #expect(spy.inputsMade == 0)
-        #expect(model.launchControlXL.status == .disabled)
-    }
-
-    @Test func appModelStartupInTestConfigurationInvokesNoProductionFactories() async {
+    @Test func appModelWiresInjectedFactoriesLazilyIntoLaunchControlXLStartup() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .monitor)
+        defer { fixture.cleanUp() }
+        await fixture.seed()
         let spy = HardwareFactorySpy()
         let wing = WingController.preview()
-        let hardware = HardwareServiceFactories.select(
-            isTesting: AppPersistence.isTesting,
-            production: spy.factories
-        )
-        let model = AppModel(
-            assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
-            wing: wing,
-            hardware: hardware
-        )
         let writesBefore = wing.transportWriteCount
+        let model = AppModel(wing: wing, hardware: spy.factories, launchControlXLStore: fixture.store)
+        #expect(spy.inputsMade == 0, "Construction must not create a MIDI input")
 
-        await model.loadStores()
+        await model.loadLaunchControlXL()
 
-        #expect(spy.inputsMade == 0)
-        #expect(spy.input.starts.isEmpty)
-        #expect(model.wing === wing, "Startup must not reconnect to a live WING")
-        #expect(wing.transportWriteCount == writesBefore)
-        if case .connected = model.launchControlXL.status {
-            Issue.record("Inert input must not report connected MIDI sources")
-        }
+        #expect(model.launchControlXL.configuration.mode == .monitor)
+        #expect(spy.inputsMade == 1)
+        #expect(spy.input.starts == [fixture.configuration.mapping.sourceNameContains])
+        #expect(model.launchControlXL.status == .waiting)
+
+        let fader = MIDIControlChange(channel: 16, controller: 5, value: 127)
+        spy.input.send([fader])
+        try await waitUntil { model.launchControlXL.lastAction != nil }
+        // Awaiting receive directly lets any (regressed) dispatch finish before the write check.
+        await model.launchControlXL.receive([fader])
+
+        #expect(model.launchControlXL.lastAction == .fader(slot: 0, value: 1))
+        #expect(model.wing === wing, "Startup must not replace the WING controller")
+        #expect(wing.transportWriteCount == writesBefore, "Monitor mode must not write to the WING")
     }
 
     @Test func disabledLoadNeverCreatesMIDIInputAndRestartsReuseOneInput() async throws {
@@ -159,10 +153,17 @@ private struct LaunchControlXLFixture {
     let directory = URL.temporaryDirectory.appendingPathComponent("lcxl-\(UUID().uuidString)", isDirectory: true)
     let configuration: LaunchControlXLConfiguration
 
+    var store: JSONFileStore { JSONFileStore(directory: directory, cloud: nil) }
+
     init(mode: LaunchControlXLMode) throws {
         var configuration = try #require(LaunchControlXLConfiguration.bundled())
         configuration.mode = mode
         self.configuration = configuration
+    }
+
+    /// Saves the fixture mode where `AppModel`'s controller loads it, overriding the bundled default.
+    func seed() async {
+        await store.save(configuration, to: "launch-control-xl.json")
     }
 
     @MainActor
@@ -170,7 +171,7 @@ private struct LaunchControlXLFixture {
         makeMIDIInput: @escaping @MainActor () -> any LaunchControlXLInput
     ) -> LaunchControlXLController {
         LaunchControlXLController(
-            fileStore: JSONFileStore(directory: directory, cloud: nil),
+            fileStore: store,
             defaultConfiguration: configuration,
             makeMIDIInput: makeMIDIInput
         )
