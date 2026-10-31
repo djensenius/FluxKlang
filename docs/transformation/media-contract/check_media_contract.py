@@ -821,9 +821,9 @@ MUTATIONS = [
                 "timeline.9.musicalTicks": 640, "timeline.10": {  # the restart continues loop pass 1
         "seq": 11, "kind": "midiCapture", "stream": "str.keys-a", "ump": ["0x20903E64"], "hostTicks": 2493000000,
         "frame": 6000, "musicalTicks": 1280, "endpointProtocol": "midi1", "portProtocol": "midi1",
-        "translatedBy": "none", "effective": "midi1"}, "timeline.11": {"seq": 12, "kind": "export", "exportId": "exp.smf",
-        "streams": ["str.keys-a", "str.keys-b"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": False,
-        "losses": {"passesOverlaid": 1}}}, "'passesOverlaid': 2"),
+        "translatedBy": "none", "effective": "midi1"}, "timeline.11": {"seq": 12, "kind": "export", "exportId": "exp.s",
+        "streams": ["str.keys-a"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": True, "losses": {}}},
+     "'passesOverlaid': 1"),
     ("10", "timeline", {"8.musicalTicks": None, "11.losses.syntheticTempoMap": 1}, "exactly when one is"),
     ("10", 2, {"portProtocol": "midi1", "translatedBy": "os"}, "MT 0x4 on a midi2 port"),
     ("10", 8, {"ump": ["0x22903C64"]}, "'groupsFlattened': 1"),
