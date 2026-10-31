@@ -52,6 +52,7 @@ Shared/
 FluxKlang/      iOS @main
 FluxKlangMac/   macOS @main (WindowGroup + Settings + Commands + MenuBarExtra)
 FluxKlangTests/ unit tests
+FluxKlangMacTests/ native macOS unit tests (hosted by FluxKlangMac)
 ```
 
 A demo simulator (`DemoWingTransport`) sits behind the same `WingTransporting`
@@ -144,10 +145,12 @@ open FluxKlang.xcodeproj
 ## Validate
 
 ```sh
-make lint        # swiftlint --strict
-make build       # iOS simulator build
-make build-mac   # native macOS build
-make test        # unit tests
+make lint                   # swiftlint --strict
+make build                  # iOS simulator build
+make build-mac              # native macOS build
+make build-for-testing-mac  # compile Mac app + FluxKlangMacTests (no launch)
+make test                   # unit tests
+make test-mac               # hosted Mac tests; gated by #60 (startup isolation #51)
 ```
 
 ## Final acceptance status — September 10, 2026

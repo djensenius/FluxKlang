@@ -30,16 +30,21 @@ final class LaunchControlXLController {
 
     private let fileStore: JSONFileStore
     private let fileName: String
-    private let midiInput = CoreMIDIInput()
+    private let makeMIDIInput: @MainActor () -> any LaunchControlXLInput
+    /// Created on the first non-disabled restart, so construction opens no MIDI client.
+    @ObservationIgnored private var midiInput: (any LaunchControlXLInput)?
     private var actionHandler: ((LaunchControlXLAction) async -> Void)?
 
     init(
         fileStore: JSONFileStore = .shared,
         fileName: String = "launch-control-xl.json",
-        defaultConfiguration: LaunchControlXLConfiguration? = .bundled()
+        defaultConfiguration: LaunchControlXLConfiguration? = .bundled(),
+        makeMIDIInput: @escaping @MainActor () -> any LaunchControlXLInput
+            = HardwareServiceFactories.current.makeLaunchControlXLInput
     ) {
         self.fileStore = fileStore
         self.fileName = fileName
+        self.makeMIDIInput = makeMIDIInput
         configuration = defaultConfiguration ?? LaunchControlXLConfiguration(
             version: 1,
             mode: .disabled,
@@ -85,12 +90,14 @@ final class LaunchControlXLController {
     }
 
     private func restart() {
-        midiInput.stop()
+        midiInput?.stop()
         guard configuration.mode != .disabled else {
             status = .disabled
             return
         }
         status = .waiting
+        let midiInput = midiInput ?? makeMIDIInput()
+        self.midiInput = midiInput
         midiInput.start(
             sourceNameContains: configuration.mapping.sourceNameContains,
             onMessages: { [weak self] messages in
