@@ -1,0 +1,44 @@
+{
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.03-seek-and-loop",
+  "title": "Loop wrap and locate: a cue and a capture across the wrap keep their pass, same-frame ordering, owned-note release, pending cue cancelled by locate, re-prepared audio",
+  "covers": ["seek", "loop", "ordering", "cancellation"],
+  "notes": [
+    "Loop is two bars [0, 122880) = 192000 frames. A wrap increments loopIteration; it is not a generation.",
+    "Ordering key is (frame, lane, streamOrdinal, streamSeq) with lanes release < transport < state < content.",
+    "trg.1 and the frame-191000 capture belong to iteration 0 although they complete after the wrap anchor: the cue's missed loop end advances to bar 2 of iteration 1, and the capture keeps tick 122240. SMF export overlays three passes (iterations 0 and 1, then the post-locate pass) on one tick line and declares the two later-pass events (passesOverlaid)."],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}], "loop": {"startTicks": 0, "endTicks": 122880}}},
+  "streams": [
+    {"streamId": "str.state", "ordinal": 0, "media": "state", "direction": "playback"},
+    {"streamId": "str.verse", "ordinal": 1, "media": "midi", "direction": "playback"},
+    {"streamId": "str.keys-in", "ordinal": 2, "media": "midi", "direction": "capture"}],
+  "actions": [
+    {"actionId": "act.verse", "media": "midi", "timePolicy": "tempoFollowing", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"},
+    {"actionId": "act.backing", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "joinInProgress", "maxLatenessMs": 50}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}],
+  "initialGenerations": {
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1},
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0, "loopIteration": 0},
+    {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.verse", "originHostTicks": 2495500000, "horizonFrame": 192256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Resolves to the loop end of iteration 0 (the wrap frame 192000), already behind the horizon."},
+    {"seq": 3, "kind": "discontinuity", "type": "loopWrap", "sampleClock": "smp.main", "generation": 1, "frame": 192000},
+    {"seq": 4, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 192000, "hostTicks": 2496000000, "transport": 1, "musicalTicks": 0, "loopIteration": 1},
+    {"seq": 5, "kind": "dispatch", "frame": 192000, "lane": "release", "stream": "str.verse", "streamSeq": 41, "event": "noteOff 60 (owned note, releaseAtWrap)"},
+    {"seq": 6, "kind": "dispatch", "frame": 192000, "lane": "state", "stream": "str.state", "streamSeq": 7, "event": "program 12 (prepared state recall)"},
+    {"seq": 7, "kind": "dispatch", "frame": 192000, "lane": "content", "stream": "str.verse", "streamSeq": 42, "event": "noteOn 60"},
+    {"seq": 8, "kind": "outcome", "triggerId": "trg.1", "result": "fired", "assignedFrame": 288000, "frame": 288000, "musicalMap": 1, "note": "The wrap does not move the resolved target; nextBoundary advances it to bar 2 of iteration 1."},
+    {"seq": 9, "kind": "midiCapture", "stream": "str.keys-in", "ump": ["0x20903C64"], "hostTicks": 2495500000, "frame": 191000, "musicalTicks": 122240, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1", "note": "Event before the wrap, delivered after it: it resolves through iteration 0's anchor."},
+    {"seq": 10, "kind": "midiCapture", "stream": "str.keys-in", "ump": ["0x20803C00"], "hostTicks": 2496500000, "frame": 193000, "musicalTicks": 640, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1"},
+    {"seq": 11, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.verse", "originHostTicks": 2500000000, "horizonFrame": 200256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Resolves to bar 2 of iteration 1 (frame 288000); pending."},
+    {"seq": 12, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "locate"},
+    {"seq": 13, "kind": "discontinuity", "type": "locate", "sampleClock": "smp.main", "generation": 1, "frame": 210000},
+    {"seq": 14, "kind": "outcome", "triggerId": "trg.2", "result": "cancelled", "reason": "transport"},
+    {"seq": 15, "kind": "dispatch", "frame": 210000, "lane": "release", "stream": "str.verse", "streamSeq": 43, "event": "all owned notes off (locate)"},
+    {"seq": 16, "kind": "readiness", "actionId": "act.backing", "from": "ready", "to": "invalidated", "reason": "locate moved the prefetch head"},
+    {"seq": 17, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 210000, "hostTicks": 2505000000, "transport": 2, "musicalTicks": 61440, "loopIteration": 0},
+    {"seq": 18, "kind": "readiness", "actionId": "act.backing", "from": "invalidated", "to": "preparing"},
+    {"seq": 19, "kind": "readiness", "actionId": "act.backing", "from": "preparing", "to": "ready"},
+    {"seq": 20, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.backing", "originHostTicks": 2506000000, "horizonFrame": 212256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 2, "context/ctx.main": 1}, "note": "Next bar is the loop end, so it resolves to the wrap frame."},
+    {"seq": 21, "kind": "outcome", "triggerId": "trg.3", "result": "fired", "assignedFrame": 306000, "frame": 306000, "musicalMap": 1},
+    {"seq": 22, "kind": "midiCapture", "stream": "str.keys-in", "ump": ["0x20903E64"], "hostTicks": 2505500000, "frame": 211000, "musicalTicks": 62080, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1"},
+    {"seq": 23, "kind": "export", "exportId": "exp.smf", "streams": ["str.keys-in"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": false, "losses": {"passesOverlaid": 2}}]}
