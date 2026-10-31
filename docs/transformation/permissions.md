@@ -48,20 +48,36 @@ alert in these cases:
 - A Mac build with a different signing identity that shares the same sandbox
   container. TN3179 says the privilege follows the code signature.
 
-The gate is `StartupReconnectPolicy.shouldReconnect`, called from
+The gate is `StartupReconnectPolicy.shouldReconnect`, called through
+`AppModel.allowsStartupReconnect(evidence:isTesting:isUITesting:)` in
 `Shared/Views/App/AppModel+Permissions.swift`. Launch reconnects only when
-`LocalNetworkGrantEvidence` shows that **this build** already connected to
-**this host** on **this device** after a user action. The evidence is a file in
-`AppPersistence.directory` marked `isExcludedFromBackup`, so a restore cannot
-carry it to another device. It is keyed to
-`CFBundleShortVersionString-CFBundleVersion`, so after each update the first
-connect waits for the user. That UX cost is deliberate. **Retry**,
-**Reconnect to …** and ⌘R still work. Two cases remain **Unknown**:
+`LocalNetworkGrantEvidence` shows that **this app** already connected to **this
+host** on **this device** after a user action.
 
+- The record is keyed on bundle ID + host only. TN3179 ties the privilege to
+  the install and code signature, not to `CFBundleVersion`, so app updates
+  (including every TestFlight build) keep auto-reconnect.
+- It lives in `AppPersistence.directory/LocalNetwork/`. That directory is marked
+  `isExcludedFromBackup` before the first write, so the file is never written
+  outside an excluded location and a restore can't carry it to another device.
+  An unchanged record isn't rewritten.
+- A connect whose pre-flight returns a *possible denial* (below) for that host
+  clears the record. A stale record therefore costs at most one failed startup
+  attempt. "No route" failures (Wi-Fi off) keep it.
+- **Retry**, **Reconnect to …** and ⌘R still work.
+
+**Release note:** the first launch of this build doesn't auto-reconnect,
+because no evidence exists yet. Connect once and later launches reconnect as
+before.
+
+Residual risks (**Unknown**):
+
+- On macOS, a build with a different signature that shares the sandbox container
+  (for example a developer build next to a TestFlight build) sees the other
+  build's record. Its first launch may raise the alert once; a possible denial
+  then clears the record.
 - macOS Migration Assistant or Time Machine may copy the container, including
-  the evidence. Whether the privilege comes with it is not known.
-- A build with the same version but a different signature that shares the
-  container.
+  the record. Whether the privilege comes with it is not known.
 
 ### Truthful denial on connect, including manual IP
 
@@ -69,23 +85,42 @@ connect waits for the user. That UX cost is deliberate. **Retry**,
 probe calls `connect()` on a UDP socket, which is a checked operation that sends
 no packets (TN3179, "Local network operations" table and "Trigger the local
 network alert"). If it fails, `start` throws
-`WingTransportError.localNetworkBlocked(errno:)` before any OSC socket opens.
-`WingController` then shows **Connection failed — Local Network access is off
-for FluxKlang, or the access prompt hasn't been answered. Allow FluxKlang under
-Privacy & Security › Local Network in Settings, then try again.** It never shows
-Connected and never hangs.
+`WingTransportError.localNetworkBlocked(errno:host:)` before any OSC socket
+opens, and `WingController` shows **Connection failed** with the reason below.
+It never shows Connected and never hangs. The Connect to WING intent's
+"Couldn't connect" dialog now includes the same reason.
 
-TN3179 notes that while the alert is on screen, the system "may deny the
-operation immediately, before the user has responded". The message covers that
-case, and the user retries after answering.
+There is no API that confirms a Local Network denial on iOS (TN3179), and every
+errno a denial might produce also has ordinary causes. The model therefore never
+reports `.denied` for Local Network from a socket error:
 
-TN3179 does not say which errno a denied `connect` returns. FluxKlang treats
-`EHOSTUNREACH`, `ENETUNREACH`, `EPERM` and `EACCES` as a denial and reports any
-other errno as a generic path failure. This is **Unknown** until operator checks
-M2 and I2 run. If a signed build shows that `connect` succeeds even when access
-is denied, the fallback is to classify the first subscribe send instead.
+| errno | Status | Message (iOS; macOS says "System Settings") |
+| --- | --- | --- |
+| `ENETUNREACH`, `ENETDOWN`, `EADDRNOTAVAIL` (Wi-Fi off, no interface or route) | `.unreachable` | "This device isn't connected to a network that can reach 192.0.2.10. Join the WING's network and try again." |
+| `EHOSTUNREACH` (also reject routes, interface going down), `EACCES` (also a typed x.x.x.255 broadcast address), `EPERM` (also packet or content filters) | `.possiblyDenied` | "Can't reach 192.0.2.10. Check that this device is on the WING's network. If it is, Local Network access may be off for FluxKlang: allow it in Settings › Privacy & Security › Local Network, then try again." |
+| anything else | `.unknown` | "Couldn't open a network path to 192.0.2.10 (strerror)." |
+
+Which errno a real denial returns is **Unknown** until operator checks M2 and I2
+run. If a signed build shows that `connect` succeeds even when access is denied,
+the fallback is to classify the first subscribe send instead.
 `WingController.swift` is at the 500-line lint limit, so that change needs its
 own package.
+
+Other behaviour to know:
+
+- **Multi-address hostnames:** the probe checks each resolved IPv4 address in
+  sorted order, and the first failing address aborts the connect, even if
+  another address would have worked.
+- **Alert still on screen:** TN3179 notes that the system "may deny the
+  operation immediately, before the user has responded" to the alert. The first
+  connect can therefore fail with the possible-denial message while the alert is
+  showing. The user answers the alert and taps **Retry**. There is deliberately
+  no automatic retry. Follow-up: consider one delayed retry after the alert is
+  answered, once signed checks show the real behaviour.
+- **`.granted` is evidence, not confirmation.** A successful probe, and
+  `SystemPermissionProbe.status(of: .localNetwork)`, mean only that a past
+  connect wasn't blocked. A routed (non-local) host isn't subject to the
+  privilege at all. No production code path reads that status today.
 
 ### Discovery
 
@@ -123,8 +158,10 @@ purposes" (https://developer.apple.com/app-store/review/guidelines/#2.5.4).
   foreground, the current reconnect UX applies.
 - TN3179: if an iOS app in the background uses the local network while its
   privilege is undetermined, the system denies the operation *without* showing
-  the alert. A Connect intent or Siri action run in the background therefore
-  fails with a truthful message instead of prompting.
+  the alert. The Connect to WING intent sets `openAppWhenRun = true`, so it
+  brings the app to the foreground first and the alert can appear there. That is
+  expected, because the user started the action. Any future background-only
+  network action would instead get a silent possible-denial failure.
 - When the mobile audio engine lands (G-LAT/G-HW), that package must add the
   `audio` background mode together with real background audio use.
 - macOS has no Background Modes capability ("isn't available for macOS apps").
@@ -132,11 +169,21 @@ purposes" (https://developer.apple.com/app-store/review/guidelines/#2.5.4).
 ## Validation
 
 - `FluxKlangTests/PermissionStateTests` covers:
-  - user-facing reasons and the errno mapping
+  - user-facing reasons, the errno mapping, and the exact wording for
+    `ENETUNREACH`, `EHOSTUNREACH` and `EACCES`
   - the iOS discovery gate and the startup reconnect policy
-  - grant evidence: scoped to host and build, and excluded from backup
+  - the AppModel startup gate with `isTesting: false` and real evidence files,
+    in both directions
+  - grant evidence: scoped to bundle ID and host, its directory excluded from
+    backup, and not rewritten when unchanged
+  - the AppModel connect path: possible-denial and no-route probes record no
+    evidence (only a possible denial clears a stale record), and a successful
+    connect records it
   - a denied manual-IP connect, which opens no socket and makes no writes
   - inert probes in test hosts
+- A mutation check confirmed these tests catch broken wiring. Hard-coding the
+  grant to `true`, dropping the record on success, and dropping the clear on
+  possible denial each made a test fail.
 - The Mac entitlements were checked by ad-hoc signing a throwaway copy of the
   build and reading them back with `codesign -d --entitlements -`. The app was
   never launched.
@@ -169,20 +216,25 @@ Security › Local Network. The remove button exists on macOS 27.2 and later.
 2. **M2, deny through manual IP:**
    1. Open Connection, enter the WING's IP address and click Connect.
    2. When the alert appears, click **Don't Allow**.
-   3. Expect **Connection failed — Local Network access is off…**. It must never
-      show **Connected**, and it must not hang for more than about 1 s.
+   3. Expect **Connection failed** with "Can't reach <ip>. … Local Network
+      access may be off for FluxKlang: allow it in System Settings › …". It
+      must never show **Connected**, and it must not hang for more than about
+      1 s. If the alert is still on screen, answer it and click Retry.
    4. Record the errno, for example with a debugger breakpoint on
       `localNetworkBlocked`.
 3. **M3, app stays usable:** Demo Mode, editing a preset and Settings all work.
 4. **M4, scan while denied:** run Scan for WING. Expect the "scan couldn't
    send…" reason or an empty list, never a console that isn't there.
-5. **M5, allow:**
+5. **M4b, no network:** turn Wi-Fi off and connect. Expect "This device isn't
+   connected to a network that can reach <ip>…", with no mention of Local
+   Network.
+6. **M5, allow:**
    1. Turn on FluxKlang under System Settings › Privacy & Security › Local
       Network, then connect.
    2. Expect **Connected** and live values.
    3. Quit and relaunch. It reconnects without a prompt, because the evidence
       file now exists.
-6. **M6, entitlements:** `codesign -d --entitlements - FluxKlangMac.app` lists
+7. **M6, entitlements:** `codesign -d --entitlements - FluxKlangMac.app` lists
    `device.audio-input`, `device.microphone`, `network.client` and
    `network.server`, and no multicast or Bluetooth entitlement.
 
@@ -195,7 +247,8 @@ Network privacy, so use a real device.
    sound.
 2. **I2, deny through manual IP:**
    1. Enter the WING's IP address, tap Connect, then tap **Don't Allow**.
-   2. Expect the Local Network failure message, never **Connected**.
+   2. Expect the "Can't reach <ip>. … may be off …" message, never
+      **Connected**.
    3. Tap Retry. It is still denied, with no second alert.
    4. Record the errno.
 3. **I3, app stays usable:** Demo Mode, presets and the assistant review UI work.
@@ -209,10 +262,16 @@ Network privacy, so use a real device.
    1. Restore a backup made after I5 onto a second device, or erase and restore.
    2. Launch. `lastHost` is shown, but nothing reconnects and no alert appears
       until the user taps Connect.
-7. **I7, background:**
+7. **I7, Shortcut:**
    1. Start from a fresh install, so the privilege is undetermined.
-   2. Run the Connect to WING shortcut while the app is in the background.
-   3. Expect a truthful failure and no alert.
+   2. Run the Connect to WING shortcut with the WING's IP address.
+      `ConnectToWingIntent.openAppWhenRun` is `true`, so the app comes to the
+      foreground and the Local Network alert is **expected** here.
+   3. Tap **Don't Allow**. Expect the shortcut dialog "Couldn't connect to <ip>.
+      Can't reach <ip>. …", never "Connected".
+8. **I8, release note:** install this build over an older build that had
+   auto-reconnected. Expect no auto-reconnect on the first launch, then
+   auto-reconnect on later launches after one manual connect.
 
 ## Sources
 
@@ -232,7 +291,7 @@ Network privacy, so use a real device.
 ## Unknowns
 
 - Which errno a denied UDP `connect` returns on iOS 27 and macOS 27 (operator
-  checks M2 and I2).
+  checks M2 and I2), and whether `connect` fails at all while denied.
 - Whether `AVAudioApplication.recordPermission` reports the macOS microphone
   (TCC) state the same way it does on iOS. Launch never calls
   `SystemPermissionProbe`, so this cannot affect startup.
