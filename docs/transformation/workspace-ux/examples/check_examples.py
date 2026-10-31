@@ -150,12 +150,12 @@ def faults(ports, edges):
             | ({"duplicate"} if len(set(keys)) < len(keys) else set()))
 
 
-def candidate(ports, graph, draft):
+def candidate(ports, graph, draft, replay=False):
     """Ports and edges after a draft's ops; removed nodes take their ports, so connects to them dangle."""
     cut = {op.get("edge") or op.get("node") for op in draft["ops"] if op["op"] in ("disconnect", "removeNode")}
     left = {k: p for k, p in ports.items() if p["node"] not in cut}
     keep = [e for e in graph["edges"] if e["id"] not in cut and e["from"] in left and e["to"] in left]
-    kept = {e["id"]: shape(e) for e in keep}  # a committed connect identical to its live edge is that edge, not a copy
+    kept = {e["id"]: shape(e) for e in keep if replay}  # only a history-cited commit may re-state its live edge
     return left, keep + [op for op in draft["ops"] if op["op"] == "connect" and kept.get(op.get("edge")) != shape(op)]
 
 
@@ -268,10 +268,13 @@ def check_transactions(hs, graph, history, ports, roles):
             err(where, f"steps {names} with results {results!r} do not lead to outcome {outcome}")
         if txn.get("pending") != ("reviewAuthorize" if outcome == "awaitingReview" else None):
             err(where, "only awaitingReview is pending, and it is pending reviewAuthorize")
+        commit, ack = (next((s for s in steps if s["step"] == k), {}) for k in ("commit", "acknowledge"))
+        made = commit.get("resultGraphRevision")
+        cited = outcome == "committed" and history["graph"].get(made, {}).get("transaction") == where
         validate, stale = (steps or [{}])[0], base != active
         if not (stale == (outcome == "stale") == (validate.get("code") == "staleBase")):
             err(where, f"base {base} vs active {active}: stale handling inconsistent")
-        found = set() if stale else faults(*candidate(ports, graph, draft))
+        found = set() if stale else faults(*candidate(ports, graph, draft, cited))
         if found and (validate.get("result") != "failed" or validate.get("code") not in found):
             err(where, f"validate must fail with one of {sorted(found)}")
         for step in steps:
@@ -288,12 +291,9 @@ def check_transactions(hs, graph, history, ports, roles):
                         or not draft.get("diffDigest") or bound.get("diffDigest") != draft["diffDigest"]):
                     err(where, "authorization is not bound to this draft, base, host epoch and diff digest")
         if outcome == "committed":
-            commit, ack = (next((s for s in steps if s["step"] == k), {}) for k in ("commit", "acknowledge"))
-            if commit.get("resultGraphRevision") != base + 1:
-                err(where, "commit must produce base + 1")
+            if made != base + 1 or not cited:
+                err(where, f"commit must produce base + 1 and graph history {made} must cite this transaction")
             active = commit.get("resultGraphRevision", active)
-            if history["graph"].get(active, {}).get("transaction") != where:
-                err(where, f"graph history {active} does not cite this transaction")
             if history["project"].get(ack.get("resultProjectRevision"), {}).get("transaction") != where:
                 err(where, "project history does not cite this acknowledgement")
             if active == graph["revision"]:
