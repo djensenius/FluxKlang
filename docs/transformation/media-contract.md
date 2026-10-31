@@ -88,7 +88,7 @@ The checker enforces these invariants on every example. Markers: ✔ checked, �
 | M10 | MIDI fidelity reports what the source actually sent; an unknown endpoint protocol is reported as unverified MIDI 1. Conversion loss and unverifiable fidelity are always declared, never hidden | ✔ |
 | M11 | Native timing objects and engine APIs stay in adapters. The kernel contract has no Foundation or engine types | — |
 | M12 | Fixed-rate audio is the default. Tempo-following MIDI and time-stretched audio are explicit, distinct policies. Stretching never happens silently | ✔ |
-| M13 | Host-tick stamps are transient runtime data and are never persisted. Persisted media stores frames, musical ticks and nanosecond offsets from a recorded anchor (takes: `startOffsetNs`; native exports: `offsetsNs` from the take start) | ✔ |
+| M13 | Host-tick stamps are transient runtime data and are never persisted. Persisted media stores frames, musical ticks and nanosecond offsets from a recorded anchor (takes: `startOffsetNs`; native exports: `offsetsNs` from their `origin`) | ✔ |
 
 ## 5. Generations and mutation policy
 
@@ -132,8 +132,8 @@ The policy for a device restart, rate change, configuration change or wake:
    carries the new generation's start `hostTicks` and `previousFrame`, the end of the frames rendered in the old one.
 2. Cancel every pending trigger that required the old generation.
 3. Bump `transport` (`clockRestart`). The transport resumes at the musical position of `previousFrame`, the last
-   **rendered** position, with `loopIteration` 0. There is no catch-up for the gap.
-4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01).
+   **rendered** position, converted at the old generation's rate, with `loopIteration` 0. There is no catch-up.
+4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
 
@@ -189,7 +189,7 @@ origin exactly on a boundary uses that boundary. When the transport is stopped, 
 | `drop` | `dropped`, reason `late` |
 | `fireLate` | If lateness ≤ `maxLatenessMs`: `firedLate` at the horizon. Otherwise `dropped` (`late`) |
 | `joinInProgress` | If lateness ≤ `maxLatenessMs`: `joined` at the horizon with `startOffsetFrames = horizon − assigned`, so the source stays aligned. Otherwise `dropped` (`late`) |
-| `nextBoundary` | `fired` at the first grid boundary at or after the horizon. Requires a musical grid |
+| `nextBoundary` | `fired` at the first boundary at or after the horizon on the trigger's resolved grid (its `gridTicks`, else the action's). Requires a musical grid |
 
 **Retroactive tolerance.** `retroactiveMs` ranges over 0–120, defaults to 0, must not exceed `maxLatenessMs`, and
 is allowed only with `fireLate` and `joinInProgress`. If the origin is within the tolerance after the previous grid
@@ -220,8 +220,9 @@ Dispatched events are ordered by **(frame, lane, streamOrdinal, streamSeq)**:
 | `state` | 2 | Prepared parameter, program and recall changes |
 | `content` | 3 | Stream content (notes, clips) in source order |
 
-Source order within a stream is preserved (`streamSeq` strictly increases). Stream ordinals are assigned at prepare
-time, never at fire time.
+Source order within a stream is preserved (`streamSeq` strictly increases, across clock restarts too). Frame order
+restarts when the primary sample clock changes generation. Stream ordinals are assigned at prepare time, never at fire
+time.
 
 ## 7. Readiness
 
@@ -324,8 +325,9 @@ documented as a UMP-native property that can change after MIDI-CI negotiation. R
 
 Capture stores the UMP words verbatim, plus host ticks, the derived frame (through the current anchor) and musical
 ticks when a transport is anchored, plus the protocol fields above. These host-tick stamps are transient runtime
-data. `nativeUmp` export is lossless: it keeps the words verbatim and persists timing from its `startFrame` (the take
-start) as `offsetsNs`, from which any Jitter Reduction timestamps it writes derive; it never writes absolute host ticks.
+data. `nativeUmp` export is lossless: it keeps the words verbatim and persists `offsetsNs` from its `origin` (the
+take start as clock, generation and frame, bound to that generation's recorded anchor, so a later restart changes
+nothing). Any Jitter Reduction timestamps it writes derive from them; it never writes absolute host ticks.
 Capture never upgrades fidelity: OS-upscaled values keep `effective = midi1`.
 
 ### 9.3 SMF export losses
@@ -335,7 +337,7 @@ and declares every loss. `lossless` is true exactly when `losses` is empty.
 
 | Category | Counted when |
 |---|---|
-| `timingQuantized` | An event's musical tick is not a multiple of `15360 / division`. `division` must divide 15360 |
+| `timingQuantized` | The event's exact capture position, rounded half-up to `division`, maps back through its capture-time anchor and map to a different frame (rounded `musicalTicks` can hide this). `division` must divide 15360 |
 | `syntheticTempoMap` | An event has no musical stamp, so export must invent a tempo map |
 | `velocityDownscaled` | A genuine MIDI 2.0 note velocity is not the min-centre-max upscale of its top 7 bits |
 | `noteOnVelocityRemapped` | A genuine MIDI 2.0 Note On's 7-bit velocity is 0, so it is sent as 1 (not Note Off) |
@@ -429,20 +431,21 @@ Coordinator follow-ups (proposed, not done here):
 
 | Example | Covers |
 |---|---|
-| [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart, resume position, cancellation, stale-trigger rejection |
-| [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop |
+| [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart at a new rate, resume position, frame order across the restart, cancellation, stale-trigger rejection |
+| [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop, next boundary on a trigger's grid |
 | [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, same-frame ordering, locate, re-preparation |
 | [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo and meter edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
 | [`05-source-loss`](media-contract/examples/05-source-loss.json) | underrun, source loss and reacquisition, no replay |
 | [`06-stale-trigger-no-replay`](media-contract/examples/06-stale-trigger-no-replay.json) | user cancel, context change, rejection |
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
 | [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full |
-| [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF |
+| [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss |
 
 Timeline records are transient runtime traces; their host ticks are never persisted. Take segments and export records
 show the persisted, anchor-relative shapes. Example constants: 48 kHz unless a generation says otherwise, host timebase
-125/3 ns per tick (500 ticks per frame), 120 BPM (1.5625 frames per tick; a 4/4 bar is 96000 frames).
+125/3 ns per tick (500 ticks per frame), 120 BPM (1.5625 frames per tick; a 4/4 bar is 96000 frames) except example 09
+(20 BPM).
 
 Run from the repository root (Python 3.9 or later, standard library only; no app, hardware, network or plugins):
 
@@ -455,9 +458,9 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used. It
 then replays each trace in exact rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export)
 and recomputing every outcome frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by
-evidence in a trace. Twenty-two mutation self-tests each break one rule in a valid example (for example a stale trigger
-fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A malformed
-file or trace reports `FAIL`, never a crash, and is not used for mutations.
+evidence in a trace. Twenty-seven mutation self-tests each break one rule in a valid example (for example a stale
+trigger fires, a trigger is relabelled `capacity`, or an SMF loss is hidden) and must fail with that rule's error. A
+malformed file or trace reports `FAIL`, never a crash, and is not used for mutations.
 
 ## 16. Sources
 

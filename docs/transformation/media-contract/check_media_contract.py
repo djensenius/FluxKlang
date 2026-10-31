@@ -237,8 +237,8 @@ class Trace:
         a = self.current_anchor()
         return None if a is None else a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
 
-    def frames_per_tick(self, upq):
-        return Fraction(upq, TPQ) * self.rate() / 10**6
+    def frames_per_tick(self, upq):  # at the musical anchor's generation rate, which a restart has not yet replaced
+        return Fraction(upq, TPQ) * self.rate(self.primary, self.musical and self.musical["generation"]) / 10**6
 
     def segments(self):
         for i, seg in enumerate(self.map):
@@ -379,6 +379,8 @@ class Trace:
             clock = counter.split("/", 1)[1]
             self.rates[(clock, r["to"])] = r.get("nominalRate", self.rate(clock))
             self.pending_restart.add(clock)
+            if clock == self.primary:  # frames restart with the generation; per-stream streamSeq still increases
+                self.last_dispatch = None
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
         if kind == "transport":
@@ -474,7 +476,7 @@ class Trace:
         policy = late["policy"]
         if policy in ("fireLate", "joinInProgress") and within:
             return ("firedLate" if policy == "fireLate" else "joined"), assigned, horizon
-        grid = info["action"]["quantize"].get("gridTicks")
+        grid = info["target"].get("gridTicks") or info["action"]["quantize"].get("gridTicks")
         if policy == "nextBoundary" and grid:
             ticks = math.ceil(self.ticks_at_frame(horizon) / grid) * grid
             while rnd(self.frame_of_ticks(ticks)) < horizon:
@@ -533,8 +535,8 @@ class Trace:
             self.err(r, f"illegal readiness transition {r['from']} -> {r['to']} (current {cur})")
             return
         action = self.actions[aid]
-        if r["to"] == "failed" and "reason" not in r:
-            self.err(r, "failed readiness states its reason")
+        if r["to"] in ("failed", "invalidated") and "reason" not in r:
+            self.err(r, "failed and invalidated readiness states carry a reason")
         if r["to"] == "ready" and not self.stretch_ok(action):
             self.err(r, "time-stretch actions need a declared time-stretch adapter")
         if r["to"] == "failed" and action.get("timePolicy") == "timeStretch":
@@ -583,37 +585,46 @@ class Trace:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
         if "musicalTicks" in r and (not self.musical_ok() or rnd(self.ticks_at_frame(r["frame"])) != r["musicalTicks"]):
             self.err(r, "capture musicalTicks must map from frame through the current musical anchor")
-        self.captures.append((r, words))
+        self.captures.append((r, words, (self.musical, self.map)))
         if r["effective"] == ep == "midi1" and mt in (2, 4):
             self.evidence.add("midi1InUmp")
         if r["effective"] == "midi2" and mt == 4:
             self.evidence.add("midi2Native")
 
+    def smf_frame(self, snap, frame, step):
+        """Frame an SMF tick at `step` resolution reconstructs through the capture-time musical anchor and map."""
+        live, (self.musical, self.map) = (self.musical, self.map), snap
+        try:
+            return rnd(self.frame_of_ticks(rnd(self.ticks_at_frame(frame) / step) * step))
+        finally:
+            self.musical, self.map = live
+
     def on_export(self, r):
-        events = [(c, w) for c, w in self.captures if c["stream"] in r["streams"]]
+        events = [(c, w, snap) for c, w, snap in self.captures if c["stream"] in r["streams"]]
         if not events or len(set(r["streams"])) != len(r["streams"]) \
                 or not all(self.stream_is(s, "midi", "capture") for s in r["streams"]):
             self.err(r, "export names distinct, declared MIDI capture streams with captured events")
-        losses, native, anchor = Counter(), r["format"] == "nativeUmp", self.current_anchor()
-        if set(r) & ({"division", "smfFormat"} if native else {"startFrame", "offsetsNs"}):
-            self.err(r, "division and smfFormat are SMF-only; startFrame and offsetsNs are native-UMP-only")
+        losses, native, origin = Counter(), r["format"] == "nativeUmp", r.get("origin", {})
+        if set(r) & ({"division", "smfFormat"} if native else {"origin", "offsetsNs"}):
+            self.err(r, "division and smfFormat are SMF-only; origin and offsetsNs are native-UMP-only")
         if native:
-            start = self.host_at(anchor, r["startFrame"]) if anchor and "startFrame" in r else None
-            offsets = None if start is None else [rnd((c["hostTicks"] - start) * self.ns_per_tick) for c, _ in events]
-            if offsets is None or r.get("offsetsNs") != offsets:
-                self.err(r, "native UMP export keeps words verbatim and persists offsetsNs from its startFrame, "
-                            "never absolute host ticks")
+            anchor = self.first_anchor.get((origin.get("sampleClock"), origin.get("generation")))
+            start = self.host_at(anchor, origin["frame"]) if anchor else None
+            offsets = start is not None and [rnd((c["hostTicks"] - start) * self.ns_per_tick) for c, _, _ in events]
+            if r.get("offsetsNs") != offsets:  # False (no recorded anchor) never matches
+                self.err(r, "native UMP export keeps words verbatim and persists offsetsNs from its origin's recorded "
+                            "anchor, never absolute host ticks")
         else:
             division = r.get("division", 0)
             if not division or TPQ % division or r.get("smfFormat") is None:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
                 return
-            groups = {(w[0] >> 24) & 0xF for _, w in events}
-            for c, words in events:
+            groups = {(w[0] >> 24) & 0xF for _, w, _ in events}
+            for c, words, snap in events:
                 mt = words[0] >> 28
                 if "musicalTicks" not in c:
                     losses["syntheticTempoMap"] += 1
-                elif c["musicalTicks"] % (TPQ // division):
+                elif self.smf_frame(snap, c["frame"], TPQ // division) != c["frame"]:
                     losses["timingQuantized"] += 1
                 if mt == 4 and c["effective"] == "midi2":
                     losses.update(midi2_losses(words))
@@ -686,11 +697,13 @@ def check_example(doc, name, schema):
 # (example, where, changes, error): each breaks one rule in a valid example and must fail with that rule's error.
 # `where` is a timeline seq or a dotted document path; change keys are dotted paths under it; None deletes.
 MUTATIONS = [
-    ("01", 3, {"to": 3}, "advance the current value by exactly one"),
-    ("01", 7, {"musicalTicks": 0}, "resumes at the last rendered tick 92160"),
-    ("01", 11, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
+    ("01", 4, {"to": 3}, "advance the current value by exactly one"),
+    ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
+    ("01", 9, {"streamSeq": 41}, "stream order is preserved within a stream"),
+    ("01", 13, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
     ("01", "actions.0", {"timePolicy": "timeStretch"}, "need a declared time-stretch adapter"),
     ("02", 9, {"result": "fired", "reason": None, "frame": 336000}, "expected dropped assignedFrame=336000"),
+    ("02", 11, {"assignedFrame": 360000, "frame": 360000}, "expected fired assignedFrame=384000"),
     ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
     ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
@@ -703,14 +716,17 @@ MUTATIONS = [
     ("06", 9, {"result": "fired", "reason": None}, "must be rejectedStale"),
     ("07", 3, {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
      "must be dropped with reason notReady"),
+    ("07", 8, {"reason": None}, "failed and invalidated readiness states carry a reason"),
     ("08", 2, {"frame": 959900}, "lies wholly inside its segment"),
     ("08", 3, {"nominalRate": None}, "required on rateChange"),
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
     ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
     ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
+    ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
+    ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
     ("10", 10, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
-    ("10", 10, {"startFrame": 0}, "persists offsetsNs from its startFrame"),
+    ("10", 10, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
     ("10", 11, {"lossless": True, "losses": {}}, "must equal recomputed"),
 ]
 

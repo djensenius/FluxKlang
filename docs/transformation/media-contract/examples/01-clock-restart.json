@@ -1,15 +1,17 @@
 {
   "contract": "fluxklang.media", "version": 1, "exampleId": "ex.01-clock-restart",
-  "title": "Audio device restart: new sample clock and transport generations; pending cue cancelled, stale cue rejected, fresh cue fires",
+  "title": "Audio device restart at a new rate (48 to 96 kHz): new sample clock and transport generations; pending cue cancelled, stale cue rejected, fresh cue fires",
   "covers": ["clockRestart", "noStaleReplay", "cancellation"],
   "notes": [
-    "Host timebase 125/3 ns per tick (24 MHz): 500 host ticks per frame at 48 kHz.",
-    "clockRestart.previousFrame 144000 (tick 92160) is the last rendered position; the transport resumes there without catch-up."
+    "Host timebase 125/3 ns per tick (24 MHz): 500 host ticks per frame at 48 kHz, 250 at 96 kHz.",
+    "previousFrame 144000 converts at generation 1's 48 kHz to tick 92160, the last rendered position; the transport resumes there without catch-up.",
+    "str.bed's frame order restarts with the new generation (frame 100 after frame 120000); its streamSeq keeps increasing."
   ],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
     "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
   },
+  "streams": [{"streamId": "str.bed", "ordinal": 0, "media": "audio", "direction": "playback"}],
   "actions": [
     {"actionId": "act.loop-b", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}
   ],
@@ -19,14 +21,16 @@
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.loop-b", "originHostTicks": 2460000000, "horizonFrame": 120256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Resolves to bar 3 (frame 192000); pending."},
-    {"seq": 3, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "deviceRestart"},
-    {"seq": 4, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "previousFrame": 144000},
-    {"seq": 5, "kind": "outcome", "triggerId": "trg.1", "result": "cancelled", "reason": "sampleClock", "note": "Never re-targeted onto the new clock."},
-    {"seq": 6, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
-    {"seq": 7, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "transport": 2, "musicalTicks": 92160},
-    {"seq": 8, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.loop-b", "originHostTicks": 2470000000, "horizonFrame": 6256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Pressed before the restart, delivered after it."},
-    {"seq": 9, "kind": "outcome", "triggerId": "trg.2", "result": "rejectedStale", "reason": "sampleClock"},
-    {"seq": 10, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.loop-b", "originHostTicks": 2496000000, "horizonFrame": 12256, "requires": {"sampleClock/smp.main": 2, "transport/mus.main": 2, "context/ctx.main": 1}},
-    {"seq": 11, "kind": "outcome", "triggerId": "trg.3", "result": "fired", "assignedFrame": 48000, "frame": 48000, "musicalMap": 1}
+    {"seq": 3, "kind": "dispatch", "frame": 120000, "lane": "content", "stream": "str.bed", "streamSeq": 41, "event": "bed loop block"},
+    {"seq": 4, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "rateChange", "nominalRate": 96000},
+    {"seq": 5, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "previousFrame": 144000},
+    {"seq": 6, "kind": "outcome", "triggerId": "trg.1", "result": "cancelled", "reason": "sampleClock", "note": "Never re-targeted onto the new clock."},
+    {"seq": 7, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
+    {"seq": 8, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "transport": 2, "musicalTicks": 92160},
+    {"seq": 9, "kind": "dispatch", "frame": 100, "lane": "content", "stream": "str.bed", "streamSeq": 42, "event": "bed loop block"},
+    {"seq": 10, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.loop-b", "originHostTicks": 2470000000, "horizonFrame": 12512, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Pressed before the restart, delivered after it."},
+    {"seq": 11, "kind": "outcome", "triggerId": "trg.2", "result": "rejectedStale", "reason": "sampleClock"},
+    {"seq": 12, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.loop-b", "originHostTicks": 2496000000, "horizonFrame": 24512, "requires": {"sampleClock/smp.main": 2, "transport/mus.main": 2, "context/ctx.main": 1}},
+    {"seq": 13, "kind": "outcome", "triggerId": "trg.3", "result": "fired", "assignedFrame": 96000, "frame": 96000, "musicalMap": 1}
   ]
 }

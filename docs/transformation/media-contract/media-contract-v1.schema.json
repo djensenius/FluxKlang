@@ -289,8 +289,14 @@
           },
           "additionalProperties": {"$ref": "#/$defs/positive"}
         },
-        "startFrame": {"$ref": "#/$defs/frame"}, "offsetsNs": {"type": "array", "items": {"$ref": "#/$defs/count"}},
-        "note": {"$ref": "#/$defs/note"}
+        "origin": {
+          "type": "object", "additionalProperties": false, "required": ["sampleClock", "generation", "frame"],
+          "properties": {
+            "sampleClock": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/generation"},
+            "frame": {"$ref": "#/$defs/frame"}
+          }
+        },
+        "offsetsNs": {"type": "array", "items": {"$ref": "#/$defs/count"}}, "note": {"$ref": "#/$defs/note"}
       }
     }
   }
