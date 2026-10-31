@@ -643,11 +643,14 @@ jobs:
         run: |
           status=0; count=0
           while IFS= read -r -d '' bin; do
-            minos=$(xcrun vtool -show-build "$bin" 2>/dev/null | awk '$1 == "minos" { print $2; exit }') || true
-            [ -n "$minos" ] || continue
+            # Universal binaries report one minos per slice; check every slice.
+            slices=$(xcrun vtool -show-build "$bin" 2>/dev/null | awk '$1 == "minos" { print $2 }') || true
+            [ -n "$slices" ] || continue
             count=$((count + 1))
-            echo "minos $minos ${bin#DerivedData/Build/Products/}"
-            [ "$minos" = "27.0" ] || { echo "::error::$bin minos $minos; deployment must stay 27.0"; status=1; }
+            for minos in $slices; do
+              echo "minos $minos ${bin#DerivedData/Build/Products/}"
+              [ "$minos" = "27.0" ] || { echo "::error::$bin minos $minos; deployment must stay 27.0"; status=1; }
+            done
           done < <(find DerivedData/Build/Products -type f -perm -u+x ! -path '*-Runner.app/*-Runner' -print0)
           [ "$count" -gt 0 ] || { echo "::error::no Mach-O products found"; exit 1; }
           exit "$status"
@@ -661,7 +664,7 @@ under `bash -eo pipefail`. Commands that call `xcodebuild` ran in the fleet slot
 | SDK check | Xcode 27.1 | An SDK that reports 26.5 |
 | Project sync | The merged tree, with mise and Homebrew XcodeGen | An untracked file inside `FluxKlang.xcodeproj`. The earlier `git diff --exit-code` passed it. |
 | Effective deployment | The merged tree: 5 targets × Debug and Release, all 27.0, in 7.3 s | Throwaway copies with `deploymentTarget: "26.0"` on FluxKlangTests, or `MACOSX_DEPLOYMENT_TARGET: "26.0"` in FluxKlangMacTests settings. The earlier `project.yml` grep passed both. |
-| Product `minos` | The merged-tree simulator and Mac products: 9 Mach-O files, all 27.0 | A binary built with `-target arm64-apple-macos26.0`. Before the runner exclusion was added, it also flagged `FluxKlangUITests-Runner` (17.0). |
+| Product `minos` | The merged-tree simulator and Mac products: 9 Mach-O files, all 27.0 | A binary built with `-target arm64-apple-macos26.0`, and a universal binary whose arm64 slice is 27.0 but whose x86_64 slice is 26.0 (every slice is checked). Before the runner exclusion was added, it also flagged `FluxKlangUITests-Runner` (17.0). |
 
 Static checks: `actionlint` 1.7.12 with shellcheck reports only the unknown preview label
 `xcode-27`. If actionlint is adopted, declare that label in `.github/actionlint.yaml`.
