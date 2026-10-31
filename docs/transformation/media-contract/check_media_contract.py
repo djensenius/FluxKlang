@@ -232,8 +232,7 @@ class Trace:
     def err(self, rec, msg):
         self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
 
-    def rate(self, clock=None, gen=None):
-        """Nominal rate of a sample clock generation (default: the current generation of the primary clock)."""
+    def rate(self, clock=None, gen=None):  # nominal rate of a clock generation (default: the primary's current one)
         clock = clock or self.primary
         return self.rates.get((clock, gen or self.gens.get(f"sampleClock/{clock}")))
 
@@ -288,25 +287,21 @@ class Trace:
         it = a.get("loopIteration", 0) + 1 + k
         return {"frame": end + k * length, "musicalTicks": lp["startTicks"], "loopIteration": it}
 
-    def at(self, frame):
-        """The anchor in effect at a frame: the latest at or before it (else the first), or its virtual later pass."""
+    def at(self, frame):  # anchor in effect at a frame: latest at or before it (else the first), or a virtual pass
         return self.ahead(([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1], frame)
 
-    def position(self, frame):
-        """(loopIteration, ticks) at a frame, through the anchor in effect there."""
+    def position(self, frame):  # (loopIteration, ticks) at a frame, through the anchor in effect there
         a = self.at(frame)
         return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
 
-    def frame_of(self, occ):
-        """Frame of (pass, ticks) via that pass's latest anchor or a virtual one; loop end starts the next pass."""
+    def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one; loop end starts the next
         (i, t), lp = occ, self.loop
         if lp and t == lp["endTicks"]:
             i, t = i + 1, lp["startTicks"]
         mine, last = [x for x in self.hist if x.get("loopIteration", 0) == i], self.musical
         return self.frame_of_ticks(t, mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1))
 
-    def boundary(self, occ, grid, after=False):
-        """First grid occurrence at (or strictly after) occ; past loop end it is the next pass's first boundary."""
+    def boundary(self, occ, grid, after=False):  # first grid occurrence at (or after) occ; past loop end, next pass's
         i, b = occ[0], (math.floor(occ[1] / grid) + 1 if after else math.ceil(occ[1] / grid)) * grid
         if self.loop and occ[1] <= self.loop["endTicks"] < b:
             i, b = i + 1, math.ceil(self.loop["startTicks"] / grid) * grid
@@ -319,6 +314,8 @@ class Trace:
         for a in self.actions.values():
             self.check_action(a)
         self.check_map({}, self.map)
+        if self.loop and self.loop["endTicks"] <= self.loop["startTicks"]:
+            self.loop = self.err({}, "a loop needs startTicks < endTicks")
         for i, rec in enumerate(records):
             self.prev = records[i - 1] if i else None
             getattr(self, "on_" + rec["kind"])(rec)
@@ -445,7 +442,8 @@ class Trace:
             if r["reason"] == "clockRestart" and not self.transport_due:
                 self.err(r, "each primary sampleClock bump forces one transport bump with reason clockRestart")
             self.hist, self.transport_due = [], self.transport_due and r["reason"] != "clockRestart"
-            self.passes = self.passes if r["reason"] == "clockRestart" else (self.passes[0] + 1, 0)
+            if r["reason"] != "clockRestart":  # a locate or transport restart supersedes a pending restart resume
+                self.passes, self.resume, self.restart_snap = (self.passes[0] + 1, 0), None, ([], None)
         elif kind == "musicalMap":
             self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
@@ -507,7 +505,7 @@ class Trace:
         info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
                 "invalidated": False, "target": target, "expect": None}
         self.triggers[tid] = info
-        if not stale:
+        if not stale and info["ready"]:  # notReady takes precedence: an unready action's target is never resolved
             info["expect"] = self.resolve(r, action, target)
 
     def resolve(self, r, action, target):
@@ -862,6 +860,9 @@ MUTATIONS = [
     ("10", 11, {"streams": ["str.synth", "str.missing"]}, "declared MIDI capture streams"),
     ("10", 11, {"origin.frame": 0}, "offsetsNs from its origin's recorded anchor"),
     ("10", 12, {"lossless": True, "losses": {}}, "must equal recomputed"),
+    ("03", "clocks.musical.loop", {"startTicks": 122880}, "a loop needs startTicks < endTicks"),
+    ("07", "timeline", {"0.transport": None, "0.musicalTicks": None, "5.target": {"timeBase": "sample",
+                        "atFrame": 96000}, "6.musicalMap": None}, None),  # unready trg.1 drops, never resolved
     ("09", "streams.1", {"streamId": "str.keys-a"}, "duplicate streamId"),
     ("04", "actions.1", {"actionId": "act.drums"}, "duplicate actionId"),
     ("01", 6, {"counter": "sampleClock/smp.main", "from": 2, "to": 3, "reason": "wake"}, "before the next"),
