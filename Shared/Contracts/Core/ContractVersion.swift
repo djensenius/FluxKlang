@@ -18,9 +18,6 @@ enum ContractVersionError: Error, Equatable, Sendable {
     case unsupportedVersion(found: Int, supported: Int)
     /// The version is not a positive integer.
     case invalidVersion(found: Int)
-    /// The version is a positive integer below the supported major version. Older
-    /// majors need an explicit migration, which the owning contract must provide.
-    case olderVersion(found: Int, supported: Int)
 }
 
 /// The `{contract, version}` envelope of a versioned contract document.
@@ -37,11 +34,15 @@ struct ContractVersion: Codable, Hashable, Sendable {
         /// The document has no version (it predates versioning); read it through
         /// the owner's legacy adapter.
         case legacyUnversioned
+        /// The document is an older major version; the owning contract must
+        /// migrate it from `from` to the supported version before reading.
+        case needsMigration(from: Int)
     }
 
     /// Applies the policy to a decoded envelope. A missing `version` is legacy
     /// (the contract name may be missing or must match); otherwise the contract
-    /// must match and the version must equal `supported.version`.
+    /// must match; a version above `supported.version` is unsupported and one
+    /// below it needs migration.
     static func check(
         contract: String?,
         version: Int?,
@@ -59,7 +60,7 @@ struct ContractVersion: Codable, Hashable, Sendable {
             throw .unsupportedVersion(found: version, supported: supported.version)
         }
         if version < supported.version {
-            throw .olderVersion(found: version, supported: supported.version)
+            return .needsMigration(from: version)
         }
         return .current
     }

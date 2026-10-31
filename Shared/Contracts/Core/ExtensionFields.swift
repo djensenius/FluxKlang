@@ -32,15 +32,25 @@ struct DynamicCodingKey: CodingKey, Hashable, Sendable {
 /// Collects and re-emits the keys a contract type does not model.
 ///
 /// Usage, in a type with `CodingKeys: CaseIterable` and an
-/// `extensions: [String: JSONValue]` property:
+/// `unknownFields: [String: JSONValue]` property:
 ///
-///     extensions = try ExtensionFields.decode(from: decoder, knownKeys: CodingKeys.self)
+///     unknownFields = try ExtensionFields.decode(from: decoder, knownKeys: CodingKeys.self)
 ///     ...encode known keys...
-///     try ExtensionFields.encode(extensions, to: encoder, knownKeys: CodingKeys.self)
+///     try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: CodingKeys.self)
 ///
-/// Known keys always win: decoding never puts a known key into the extensions,
-/// and encoding skips any extension whose key is known, so a stray entry cannot
-/// overwrite or duplicate a modelled field.
+/// Known keys always win: decoding never puts a known key into `unknownFields`,
+/// and encoding skips any entry whose key is known, so a stray entry cannot
+/// overwrite or duplicate a modelled field. Encoding writes entries in sorted
+/// key order.
+///
+/// Two bags, two purposes. A wire member named `extensions` (the explicit
+/// extension bag of the G-MEDIA contract §12) is a real `CodingKey` modelled as
+/// `extensions: [String: JSONValue]`. `unknownFields` instead holds stray
+/// top-level keys for lenient forward compatibility; a strict validator rejects
+/// any document whose stray-key decode is non-empty.
+///
+/// Both functions need a keyed (object) container: on a top-level array or
+/// scalar, `decode` throws `DecodingError.typeMismatch`.
 enum ExtensionFields {
     /// Every key in `decoder`'s keyed container that is not in `knownKeys`.
     static func decode(
@@ -48,11 +58,11 @@ enum ExtensionFields {
         knownKeys: Set<String>
     ) throws -> [String: JSONValue] {
         let container = try decoder.container(keyedBy: DynamicCodingKey.self)
-        var extensions: [String: JSONValue] = [:]
+        var unknownFields: [String: JSONValue] = [:]
         for key in container.allKeys where !knownKeys.contains(key.stringValue) {
-            extensions[key.stringValue] = try container.decode(JSONValue.self, forKey: key)
+            unknownFields[key.stringValue] = try container.decode(JSONValue.self, forKey: key)
         }
-        return extensions
+        return unknownFields
     }
 
     /// Every unknown key, with the known set taken from a `CaseIterable` key type.
@@ -63,28 +73,44 @@ enum ExtensionFields {
         try decode(from: decoder, knownKeys: names(of: knownKeys))
     }
 
-    /// Writes `extensions` into `encoder`'s keyed container, skipping known keys.
+    /// Writes `unknownFields` into `encoder`'s keyed container, skipping known keys.
     static func encode(
-        _ extensions: [String: JSONValue],
+        _ unknownFields: [String: JSONValue],
         to encoder: any Encoder,
         knownKeys: Set<String>
     ) throws {
         var container = encoder.container(keyedBy: DynamicCodingKey.self)
-        for (key, value) in extensions where !knownKeys.contains(key) {
-            try container.encode(value, forKey: DynamicCodingKey(key))
+        for key in unknownFields.keys.sorted() where !knownKeys.contains(key) {
+            try container.encode(unknownFields[key] ?? .null, forKey: DynamicCodingKey(key))
         }
     }
 
-    /// Writes `extensions`, with the known set taken from a `CaseIterable` key type.
+    /// Writes `unknownFields`, with the known set taken from a `CaseIterable` key type.
     static func encode<Keys: CodingKey & CaseIterable>(
-        _ extensions: [String: JSONValue],
+        _ unknownFields: [String: JSONValue],
         to encoder: any Encoder,
         knownKeys: Keys.Type
     ) throws {
-        try encode(extensions, to: encoder, knownKeys: names(of: knownKeys))
+        try encode(unknownFields, to: encoder, knownKeys: names(of: knownKeys))
     }
 
     private static func names<Keys: CodingKey & CaseIterable>(of keys: Keys.Type) -> Set<String> {
         Set(keys.allCases.map(\.stringValue))
+    }
+}
+
+/// The JSON coders every contract document uses. Output is canonical: sorted
+/// keys and unescaped slashes. Contract coders must keep the default key, date
+/// and data strategies; a key strategy such as `.convertFromSnakeCase` would
+/// rename the stray keys that `ExtensionFields` preserves.
+enum ContractCoding {
+    static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+
+    static func makeDecoder() -> JSONDecoder {
+        JSONDecoder()
     }
 }
