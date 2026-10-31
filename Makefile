@@ -1,12 +1,14 @@
 .PHONY: generate build build-mac build-for-testing-mac test test-mac lint hardware-inventory-self-check clean
 
+IOS_SIM_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
+
 # Regenerate the Xcode project from project.yml (local/setup only).
 generate:
 	xcodegen generate
 
 build:
 	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlang \
-	  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+	  -destination '$(IOS_SIM_DESTINATION)' \
 	  build CODE_SIGNING_ALLOWED=NO
 
 build-mac:
@@ -15,7 +17,7 @@ build-mac:
 
 test:
 	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlang \
-	  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+	  -destination '$(IOS_SIM_DESTINATION)' \
 	  test CODE_SIGNING_ALLOWED=NO
 
 # Compile-only: builds FluxKlangMac and FluxKlangMacTests without launching anything.

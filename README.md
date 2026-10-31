@@ -137,14 +137,16 @@ previews.
 ## Develop
 
 ```sh
-brew install xcodegen swiftlint   # if not already installed
-make generate                     # xcodegen generate
+mise install                      # pinned xcodegen + swiftlint (mise.toml)
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # Xcode 27.1+; needed if xcode-select points at CLT
+mise exec -- make generate        # pinned xcodegen, even when Homebrew has another on PATH
 open FluxKlang.xcodeproj
 ```
 
 ## Validate
 
 ```sh
+# Run these through the pins: prefix with `mise exec --`, or activate mise / put its shims first on PATH.
 make lint                   # swiftlint --strict
 make build                  # iOS simulator build
 make build-mac              # native macOS build
