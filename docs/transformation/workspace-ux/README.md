@@ -106,7 +106,8 @@ engine or console write session; a phone runs as a full host; host roles keep Pa
 controllers produce no input; drafts never disable a Perform control; node states follow the Wiring state table
 from the host's own rig, and status, meters and diagnostics cite only that rig; measured meters need the running
 lease and, on a route, a confirmed binding, else show Unavailable; Learn blocks excluded targets. Malformed input
-prints `FAIL` lines, never a traceback.
+prints `FAIL` lines, never a traceback. Left to the typed #54/#55 contract tests: device channel bounds and
+role channel counts on routes, and op-for-op matching of non-connect draft edits (disconnect, add/remove node).
 
 ## Single-owner integration map
 
