@@ -34,30 +34,33 @@ UMP_WORDS = {0x0: 1, 0x1: 1, 0x2: 1, 0x3: 2, 0x4: 2, 0x5: 4, 0x6: 1, 0x7: 1, 0x8
 GROUPED = {0x1, 0x2, 0x3, 0x4, 0x5, 0xD}  # M2-104-UM v1.1 §2.1.2: MT 0x0 and 0xF have no Group; reserved MTs undefined
 
 
-def canon(value, depth_limit, indent=0, prefix=0):
-    """Deterministic layout: authored key order; a container is inline when it fits WIDTH or sits at depth_limit,
-    otherwise its members are packed greedily into rows of at most WIDTH, and a multi-line member gets its own rows."""
+def canon(value, depth_limit, indent=0, prefix=0, tail=0):
+    """Deterministic layout: authored key order; a container is inline when it fits WIDTH (with the `tail` characters
+    after it) or sits at depth_limit, otherwise its members are packed greedily into rows of at most WIDTH, a
+    multi-line member gets its own rows, and the closing bracket ends the last row."""
     flat = json.dumps(value, ensure_ascii=False, separators=(", ", ": "), allow_nan=False)
     if not isinstance(value, (dict, list)) or not value or indent // 2 >= depth_limit \
-            or indent + prefix + len(flat) + 1 <= WIDTH:
+            or indent + prefix + len(flat) + tail <= WIDTH:
         return flat
     pad, rows, row = " " * (indent + 2), [], ""
-    heads = [json.dumps(k, ensure_ascii=False) + ": " for k in value] if isinstance(value, dict) else [""] * len(value)
-    for head, item in zip(heads, value.values() if isinstance(value, dict) else value):
-        part = head + canon(item, depth_limit, indent + 2, len(head))
-        if row and ("\n" in part + row or len(pad) + len(row) + len(part) + 3 > WIDTH):
+    items = list(value.items()) if isinstance(value, dict) else [(None, item) for item in value]
+    for n, (key, item) in enumerate(items):
+        head = "" if key is None else json.dumps(key, ensure_ascii=False) + ": "
+        after = tail + 1 if n == len(items) - 1 else 1  # closing brackets after the last member, else a comma
+        part = head + canon(item, depth_limit, indent + 2, len(head), after)
+        if row and ("\n" in part + row or len(pad) + len(row) + len(part) + 2 + after > WIDTH):
             rows.append(row + ",")
             row = ""
         row += (", " if row else "") + part
     brackets = "{}" if isinstance(value, dict) else "[]"
-    return brackets[0] + "\n" + "\n".join(pad + r for r in rows + [row]) + "\n" + " " * indent + brackets[1]
+    return brackets[0] + "\n" + "\n".join(pad + r for r in rows + [row + brackets[1]])
 
 
 def load_canonical(path, depth_limit, write, errors):
     """Parse strictly (no duplicate keys, NaN or Infinity) and require the file to equal its canonical rendering."""
     try:
         text = path.read_text(encoding="utf-8")
-        doc = json.loads(text, object_pairs_hook=no_duplicates, parse_constant=reject_constant)
+        doc = json.loads(text, object_pairs_hook=no_duplicates, parse_constant=int)  # int() rejects NaN and Infinity
         rendered = canon(doc, depth_limit) + "\n"
     except ValueError as exc:  # includes UnicodeDecodeError and floats such as 1e999 that overflow to infinity
         errors.append(f"{path.name}: {exc}")
@@ -68,10 +71,6 @@ def load_canonical(path, depth_limit, write, errors):
     if rendered != text or json.loads(rendered) != doc:
         errors.append(f"{path.name}: not canonical; run with --write to normalise")
     return doc
-
-
-def reject_constant(name):
-    raise ValueError(f"{name} is not JSON")
 
 
 def no_duplicates(pairs):
@@ -214,10 +213,15 @@ class Trace:
         self.streams = {s["streamId"]: s for s in doc.get("streams", [])}
         self.actions = {a["actionId"]: a for a in doc.get("actions", [])}
         self.state = {k: a["readiness"] for k, a in self.actions.items()}
-        self.anchor, self.first_anchor, self.musical = {}, {}, None
+        self.anchor, self.first_anchor, self.hist = {}, {}, []  # hist: this transport generation's musical anchors
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq, self.transport_due = set(), None, {}, False
-        self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, (None, None)
+        self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, ([], None)
+        self.passes = (0, 0)  # (passes begun by locate or transportRestart, loop passes before the last clock restart)
+
+    @property
+    def musical(self):
+        return self.hist[-1] if self.hist else None
 
     def err(self, rec, msg):
         self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
@@ -231,13 +235,10 @@ class Trace:
         rate = self.rate(anchor["sampleClock"], anchor["generation"])
         return anchor["hostTicks"] + (frame - anchor["frame"]) * Fraction(10**9, rate) / self.ns_per_tick
 
-    def current_anchor(self):
+    def frame_at_host(self, ticks):  # through the current primary anchor, else None
         a = self.anchor.get(self.primary)
-        return a if a and a["generation"] == self.gens.get(f"sampleClock/{self.primary}") else None
-
-    def frame_at_host(self, ticks):
-        a = self.current_anchor()
-        return None if a is None else a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
+        if a and a["generation"] == self.gens.get(f"sampleClock/{self.primary}"):
+            return a["frame"] + (ticks - a["hostTicks"]) * self.ns_per_tick * self.rate() / 10**9
 
     def frames_per_tick(self, upq):  # at the musical anchor's generation rate, which a restart has not yet replaced
         return Fraction(upq, TPQ) * self.rate(self.primary, self.musical and self.musical["generation"]) / 10**6
@@ -256,17 +257,54 @@ class Trace:
         return m is not None and m["generation"] == self.gens.get(f"sampleClock/{self.primary}") \
             and m["transport"] == self.gens.get(f"transport/{self.mus_id}")
 
-    def frame_of_ticks(self, ticks):
-        t0 = self.musical["musicalTicks"]
-        return self.musical["frame"] + (self.span(t0, ticks) if ticks >= t0 else -self.span(ticks, t0))
+    def frame_of_ticks(self, ticks, a=None):
+        a = a or self.musical
+        t0 = a["musicalTicks"]
+        return a["frame"] + (self.span(t0, ticks) if ticks >= t0 else -self.span(ticks, t0))
 
-    def ticks_at_frame(self, frame):
+    def ticks_at_frame(self, frame, a=None):
         """Exact inverse of frame_of_ticks, walking from tick 0 so earlier frames cross earlier tempo segments."""
-        f = self.frame_of_ticks(0)
+        f = self.frame_of_ticks(0, a)
         for start, end, fpt in self.segments():
             if end is None or f + (end - start) * fpt > frame:
                 return start + (frame - f) / fpt
             f += (end - start) * fpt
+
+    def ahead(self, a, frame=None, k=0):
+        """a, or a virtual anchor for an unanchored later loop pass (the k-th after a's, or the one holding `frame`)."""
+        lp = self.loop
+        if not lp or a["musicalTicks"] > lp["endTicks"]:  # only a pass anchored inside the loop wraps
+            return a
+        end, length = rnd(self.frame_of_ticks(lp["endTicks"], a)), self.span(lp["startTicks"], lp["endTicks"])
+        if frame is not None and frame < end:
+            return a
+        k = k if frame is None else (frame - end) // length
+        it = a.get("loopIteration", 0) + 1 + k
+        return {"frame": end + k * length, "musicalTicks": lp["startTicks"], "loopIteration": it}
+
+    def at(self, frame):
+        """The anchor in effect at a frame: the latest at or before it (else the first), or its virtual later pass."""
+        return self.ahead(([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1], frame)
+
+    def position(self, frame):
+        """(loopIteration, ticks) at a frame, through the anchor in effect there."""
+        a = self.at(frame)
+        return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
+
+    def frame_of(self, occ):
+        """Frame of (pass, ticks) via that pass's latest anchor or a virtual one; loop end starts the next pass."""
+        (i, t), lp = occ, self.loop
+        if lp and t == lp["endTicks"]:
+            i, t = i + 1, lp["startTicks"]
+        mine, last = [x for x in self.hist if x.get("loopIteration", 0) == i], self.musical
+        return self.frame_of_ticks(t, mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1))
+
+    def boundary(self, occ, grid, after=False):
+        """First grid occurrence at (or strictly after) occ; past loop end it is the next pass's first boundary."""
+        i, b = occ[0], (math.floor(occ[1] / grid) + 1 if after else math.ceil(occ[1] / grid)) * grid
+        if self.loop and occ[1] <= self.loop["endTicks"] < b:
+            i, b = i + 1, math.ceil(self.loop["startTicks"] / grid) * grid
+        return i, b
 
     def run(self):
         records = self.doc["timeline"]
@@ -347,7 +385,7 @@ class Trace:
             return
         if r["transport"] != self.gens.get(f"transport/{self.mus_id}"):
             self.err(r, "anchor transport generation is not current")
-        m, it = self.musical, r.get("loopIteration", 0)
+        m, it, wrap = self.musical, r.get("loopIteration", 0), self.prev or {}
         if (not m or m["transport"] != r["transport"]) and it:
             self.err(r, "a new transport generation (start, locate or restart) begins at loopIteration 0")
         if self.resume is not None and r["musicalTicks"] != self.resume:
@@ -356,20 +394,15 @@ class Trace:
         if m and m["transport"] == r["transport"]:
             if m["generation"] != r["generation"]:
                 self.err(r, "a sample clock restart must re-anchor with a new transport generation")
-            elif it == m.get("loopIteration", 0):
-                if abs(self.ticks_at_frame(r["frame"]) - r["musicalTicks"]) > 1:
-                    self.err(r, "musical position jumped without locate or loop wrap")
-            elif it == m.get("loopIteration", 0) + 1:
-                wrap = self.prev
-                ok = wrap and wrap["kind"] == "discontinuity" and wrap["type"] == "loopWrap" and wrap["frame"] == r["frame"]
-                if not ok or not self.loop or r["musicalTicks"] != self.loop["startTicks"] \
-                        or abs(self.ticks_at_frame(r["frame"]) - self.loop["endTicks"]) > 1:
-                    self.err(r, "loop iteration must follow a loopWrap at loop end and restart at loop start")
+            elif self.position(r["frame"])[0] != it or abs(self.position(r["frame"])[1] - r["musicalTicks"]) > 1:
+                self.err(r, "musical position jumped without locate or loop wrap (one loopIteration per wrap)")
+            elif it != m.get("loopIteration", 0):
+                if (wrap.get("type"), wrap.get("frame")) != ("loopWrap", r["frame"]) \
+                        or r["musicalTicks"] != self.loop["startTicks"]:
+                    self.err(r, "loop iteration must follow a loopWrap at its frame and restart at loop start")
                 else:
                     self.evidence.add("loop")
-            else:
-                self.err(r, "loopIteration advances by exactly one per wrap")
-        self.musical = r
+        self.hist = (self.hist if m and m["transport"] == r["transport"] else []) + [r]
 
     def on_generation(self, r):
         counter, kind = r["counter"], r["counter"].split("/")[0]
@@ -390,14 +423,15 @@ class Trace:
             self.rates[(clock, r["to"])] = r.get("nominalRate", self.rate(clock))
             self.pending_restart.add(clock)
             if clock == self.primary:  # frames restart with the generation; the resume tick uses the old anchor and map
-                self.last_dispatch, self.restart_snap = None, (self.musical, self.map)
+                self.last_dispatch, self.restart_snap = None, (self.hist, self.map)
                 self.transport_due = f"transport/{self.mus_id}" in self.gens
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
         if kind == "transport":
             if r["reason"] == "clockRestart" and not self.transport_due:
                 self.err(r, "each primary sampleClock bump forces one transport bump with reason clockRestart")
-            self.musical, self.transport_due = None, self.transport_due and r["reason"] != "clockRestart"
+            self.hist, self.transport_due = [], self.transport_due and r["reason"] != "clockRestart"
+            self.passes = self.passes if r["reason"] == "clockRestart" else (self.passes[0] + 1, 0)
         elif kind == "musicalMap":
             self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
@@ -416,9 +450,13 @@ class Trace:
             if "hostTicks" not in r:
                 self.err(r, "clockRestart records the host ticks at which the new generation starts")
             elif "previousFrame" in r and clock == self.primary and self.restart_snap[0]:
-                self.resume = rnd(self.under(self.restart_snap, self.ticks_at_frame, r["previousFrame"]))
+                i, t = self.under(self.restart_snap, self.position, r["previousFrame"])
+                self.resume, self.passes = rnd(t), (self.passes[0], self.passes[1] + i)  # it continues pass i
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
+        wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
+        if kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
+            self.err(r, "a loopWrap falls exactly at the loop end of the anchored pass")  # a virtual next-pass anchor
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
         stream = self.streams.get(r.get("stream"))
         if kind in ("underrun", "overflow", "sourceLost", "sourceRestored", "captureStopped", "formatChange") \
@@ -459,28 +497,29 @@ class Trace:
             self.err(r, "origin needs a current anchor and must not be after the horizon")
             return None
         if target["timeBase"] == "asap":
-            return {"frame": horizon, "ticks": None, "retro": False}
+            return {"frame": horizon, "occ": None, "retro": False}
         if target["timeBase"] == "sample":
-            return {"frame": target["atFrame"], "ticks": None, "retro": False}
+            return {"frame": target["atFrame"], "occ": None, "retro": False}
         if not self.musical_ok():
             self.err(r, "musical target without a current musical anchor")
             return None
+        i, t = self.position(origin)  # the target is an occurrence in the pass holding the origin
         if "atTicks" in target:
-            choice = {"frame": None, "ticks": target["atTicks"], "retro": False}
+            choice = {"occ": (i, target["atTicks"]), "retro": False}
         else:
-            grid, t = target["gridTicks"], self.ticks_at_frame(origin)
-            prev, nxt = math.floor(t / grid) * grid, math.ceil(t / grid) * grid
+            grid = target["gridTicks"]
+            prev, nxt = (i, math.floor(t / grid) * grid), self.boundary((i, t), grid)
             retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-            choice = {"frame": None, "ticks": nxt, "retro": False}
-            if prev != nxt and retro > 0 and origin - self.frame_of_ticks(prev) <= retro:
-                choice = {"frame": None, "ticks": prev, "retro": True}
-        if self.loop and not self.loop["startTicks"] <= choice["ticks"] <= self.loop["endTicks"]:
+            choice = {"occ": nxt, "retro": False}
+            if prev != nxt and retro > 0 and origin - self.frame_of(prev) <= retro:
+                choice = {"occ": prev, "retro": True}
+        if self.loop and not self.loop["startTicks"] <= choice["occ"][1] <= self.loop["endTicks"]:
             self.err(r, "v1 resolves musical targets inside the active loop; loop end is the wrap frame")
         return choice
 
     def expected(self, info):
         e, late, horizon = info["expect"], info["action"]["late"], info["rec"]["horizonFrame"]
-        assigned = e["frame"] if e["ticks"] is None else rnd(self.frame_of_ticks(e["ticks"]))
+        assigned = e["frame"] if e["occ"] is None else rnd(self.frame_of(e["occ"]))
         if assigned >= horizon:
             return "fired", assigned, assigned
         within = (horizon - assigned) * 1000 <= late.get("maxLatenessMs", 0) * self.rate()
@@ -489,10 +528,10 @@ class Trace:
             return ("firedLate" if policy == "fireLate" else "joined"), assigned, horizon
         grid = info["target"].get("gridTicks") or info["action"]["quantize"].get("gridTicks")
         if policy == "nextBoundary" and grid:
-            ticks = math.ceil(self.ticks_at_frame(horizon) / grid) * grid
-            while rnd(self.frame_of_ticks(ticks)) < horizon:
-                ticks += grid
-            return "fired", rnd(self.frame_of_ticks(ticks)), rnd(self.frame_of_ticks(ticks))
+            occ = self.boundary(self.position(horizon), grid)
+            while rnd(self.frame_of(occ)) < horizon and occ[0] <= self.position(horizon)[0] + 1:
+                occ = self.boundary(occ, grid, after=True)
+            return "fired", rnd(self.frame_of(occ)), rnd(self.frame_of(occ))
         return "dropped", assigned, None
 
     def on_outcome(self, r):
@@ -530,7 +569,7 @@ class Trace:
             self.err(r, "a timing drop names reason late")
         if result == "joined" and r.get("startOffsetFrames") != frame - assigned:
             self.err(r, "joined outcome starts the source at frame - assignedFrame")
-        if info["expect"]["ticks"] is not None and result != "dropped":
+        if info["expect"]["occ"] is not None and result != "dropped":
             if r.get("musicalMap") != self.gens.get(f"musicalMap/{self.mus_id}"):
                 self.err(r, "musical outcome resolves with the current musicalMap revision")
             elif r["musicalMap"] > 1:
@@ -598,9 +637,9 @@ class Trace:
         if frame is None or rnd(frame) != r["frame"]:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
         has = "musicalTicks" in r
-        if has != self.musical_ok() or has and rnd(self.ticks_at_frame(r["frame"])) != r["musicalTicks"]:
+        if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
             self.err(r, "capture musicalTicks map from frame through the current musical anchor, exactly when one is")
-        self.captures.append((r, words, (self.musical, self.map)))
+        self.captures.append((r, words, (self.hist, self.map), self.passes))
         if r["effective"] == ep == "midi1" and mt in (2, 4):
             self.evidence.add("midi1InUmp")
         if r["effective"] == "midi2" and mt == 4:
@@ -608,18 +647,21 @@ class Trace:
 
     def under(self, snap, fn, *args):
         """fn against a (musical anchor, map) snapshot: capture time for SMF export, pre-restart for the resume tick."""
-        live, (self.musical, self.map) = (self.musical, self.map), snap
+        live, (self.hist, self.map) = (self.hist, self.map), snap
         try:
             return fn(*args)
         finally:
-            self.musical, self.map = live
+            self.hist, self.map = live
 
-    def smf_frame(self, snap, frame, step):
-        """Frame an SMF tick at `step` resolution reconstructs through the capture-time musical anchor and map."""
-        return self.under(snap, lambda: rnd(self.frame_of_ticks(rnd(self.ticks_at_frame(frame) / step) * step)))
+    def smf_frame(self, snap, frame, step, base):
+        """(Pass key, frame) an SMF tick at `step` resolution reconstructs through the capture-time anchor and map."""
+        def rebuild(a):
+            tick = rnd(self.ticks_at_frame(frame, a) / step) * step
+            return (base[0], base[1] + a.get("loopIteration", 0)), rnd(self.frame_of_ticks(tick, a))
+        return self.under(snap, lambda: rebuild(self.at(frame)))
 
     def on_export(self, r):
-        events = [(c, w, snap) for c, w, snap in self.captures if c["stream"] in r["streams"]]
+        events = [e for e in self.captures if e[0]["stream"] in r["streams"]]
         if not events or len(set(r["streams"])) != len(r["streams"]) \
                 or not all(self.stream_is(s, "midi", "capture") for s in r["streams"]):
             self.err(r, "export names distinct, declared MIDI capture streams with captured events")
@@ -629,7 +671,7 @@ class Trace:
         if native:
             anchor = self.first_anchor.get((origin.get("sampleClock"), origin.get("generation")))
             start = self.host_at(anchor, origin["frame"]) if anchor else None
-            offsets = start is not None and [rnd((c["hostTicks"] - start) * self.ns_per_tick) for c, _, _ in events]
+            offsets = start is not None and [rnd((e[0]["hostTicks"] - start) * self.ns_per_tick) for e in events]
             if r.get("offsetsNs") != offsets:  # False (no recorded anchor) never matches
                 self.err(r, "native UMP export keeps words verbatim and persists offsetsNs from its origin's recorded "
                             "anchor, never absolute host ticks")
@@ -638,13 +680,18 @@ class Trace:
             if not division or TPQ % division or r.get("smfFormat") is None:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
                 return
-            groups = {(w[0] >> 24) & 0xF for _, w, _ in events if w[0] >> 28 in GROUPED}
-            for c, words, snap in events:
+            groups = {(e[1][0] >> 24) & 0xF for e in events if e[1][0] >> 28 in GROUPED}
+            timing = [self.smf_frame(snap, c["frame"], TPQ // division, base) if "musicalTicks" in c else (None, None)
+                      for c, _, snap, base in events]
+            first = min((p for p, _ in timing if p), default=None)
+            for (c, words, _, _), (key, frame) in zip(events, timing):
                 mt = words[0] >> 28
                 if "musicalTicks" not in c:
                     losses["syntheticTempoMap"] += 1
-                elif self.smf_frame(snap, c["frame"], TPQ // division) != c["frame"]:
+                elif frame != c["frame"]:
                     losses["timingQuantized"] += 1
+                if key and key > first:
+                    losses["passesOverlaid"] += 1
                 if mt == 4 and c["effective"] == "midi2":
                     losses.update(midi2_losses(words))
                 elif mt == 4 and c["endpointProtocol"] == "unknown":
@@ -671,10 +718,11 @@ class Trace:
         for i, seg in enumerate(segs):
             clock, gen, start = seg["sampleClock"], seg["generation"], seg["startFrame"]
             end, restart = start + seg["frames"], restarts.get((clock, gen + 1), {})
-            if i + 1 < len(segs) and ((segs[i + 1]["sampleClock"], segs[i + 1]["generation"]) != (clock, gen + 1)
-                                      or end != restart.get("previousFrame")
-                                      or segs[i + 1]["startFrame"] != restart.get("frame")):
-                self.err(r, "segments split at each clock restart: ending at its previousFrame, resuming at its frame")
+            if end > restart.get("previousFrame", end) or i + 1 < len(segs) and (
+                    (segs[i + 1]["sampleClock"], segs[i + 1]["generation"]) != (clock, gen + 1)
+                    or end != restart.get("previousFrame") or segs[i + 1]["startFrame"] != restart.get("frame")):
+                self.err(r, "segments split at each clock restart: ending at its previousFrame (no segment, the last "
+                            "included, ends after it), resuming at its frame")
             if seg["fileFrameStart"] != file_frame:
                 self.err(r, "segments are contiguous in the file; no padding across clock restarts")
             anchor = self.first_anchor.get((clock, gen))
@@ -715,8 +763,9 @@ def check_example(doc, name, schema):
     return trace.errors, set(doc["covers"])
 
 
-# (example, where, changes, error): each breaks one rule in a valid example and must fail with that rule's error.
-# `where` is a timeline seq or a dotted document path; change keys are dotted paths under it; None deletes.
+# (example, where, changes, error): each breaks one rule in a valid example and must fail with that rule's error;
+# error None marks a positive control that must still pass. `where` is a timeline seq or a dotted document path ("" is
+# the root); change keys are dotted paths under it; None deletes.
 MUTATIONS = [
     ("01", 4, {"to": 3}, "advance the current value by exactly one"),
     ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
@@ -724,16 +773,28 @@ MUTATIONS = [
     ("01", 6, {"reason": "transportRestart"}, "forces one transport bump with reason clockRestart"),
     ("01", 13, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
     ("01", "actions.0", {"timePolicy": "timeStretch"}, "need a declared time-stretch adapter"),
+    ("01", "clocks.musical", {"loop": {"startTicks": 0, "endTicks": 92160}}, "resumes at the last rendered tick 0"),
+    ("01", "", {"clocks.musical.loop": {"startTicks": 0, "endTicks": 92160}, "timeline.7.musicalTicks": 0,
+                "timeline.12.assignedFrame": 192000, "timeline.12.frame": 192000}, None),
     ("02", 9, {"result": "fired", "reason": None, "frame": 336000}, "expected dropped assignedFrame=336000"),
     ("02", 11, {"assignedFrame": 360000, "frame": 360000}, "expected fired assignedFrame=384000"),
-    ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
-    ("03", 8, {"reason": "clockRestart"}, "forces one transport bump with reason clockRestart"),
-    ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
+    ("02", "", {"clocks.musical.loop": {"startTicks": 0, "endTicks": 230400}, "timeline.9.horizonFrame": 335999,
+                "timeline.8": {"seq": 9, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 340000,
+                               "hostTicks": 2570000000, "transport": 1, "musicalTicks": 217601}},
+     "expected fired assignedFrame=359998"),  # a later anchor moves the boundary behind the horizon: step past loop end
+    ("03", 3, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
+    ("03", 3, {"frame": 191999}, "a loopWrap falls exactly at the loop end"),
+    ("03", 8, {"assignedFrame": 384000, "frame": 384000}, "expected fired assignedFrame=288000"),
+    ("03", 9, {"musicalTicks": 121600}, "capture musicalTicks map from frame"),
+    ("03", 12, {"reason": "clockRestart"}, "forces one transport bump with reason clockRestart"),
+    ("03", 14, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
+    ("03", 23, {"lossless": True, "losses": {}}, "'passesOverlaid': 2"),
     ("04", 5, {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}], "meter": None},
      "changes the tempo segments or the meter"),
     ("04", 7, {"assignedFrame": 288000, "frame": 288000}, "expected fired assignedFrame=268800"),
     ("04", 12, {"musicalTicks": 103680}, "capture musicalTicks map from frame"),
+    ("04", "timeline", {"5.musicalTicks": 122881, "6.assignedFrame": 268799, "6.frame": 268799}, None),  # SMF inverts
     ("05", 9, {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1},
      "changed while pending: must be cancelled"),
     ("06", 9, {"result": "fired", "reason": None}, "must be rejectedStale"),
@@ -745,6 +806,9 @@ MUTATIONS = [
     ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
     ("08", 8, {"segments.0.frames": 912000, "segments.1.fileFrameStart": 912000}, "ending at its previousFrame"),
     ("08", 8, {"stopReason": "user"}, "captureStopped matches its stopReason"),
+    ("08", 8, {"segments.1": None, "segments.0.frames": 960001, "droppedFrames": 1024, "stopReason": "user"},
+     "no segment, the last included, ends after it"),
+    ("08", 8, {"segments.1": None, "segments.0.frames": 960000, "droppedFrames": 1024, "stopReason": "user"}, None),
     ("08", 9, {"reason": "diskFull"}, "captureStopped matches its stopReason"),
     ("08", "clocks.musical", {"musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}] * 2}, "strictly increase"),
     ("09", 2, {"ump": ["0x20903C64\n"]}, "violates length/pattern"),
@@ -753,6 +817,13 @@ MUTATIONS = [
     ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
     ("09", 6, {"frame": 144001, "hostTicks": 2472000500}, "recomputed {'timingQuantized': 1}"),
     ("09", 12, {"origin.generation": 2}, "offsetsNs from its origin's recorded anchor"),
+    ("09", "", {"clocks.musical.loop": {"startTicks": 0, "endTicks": 15360}, "timeline.5.musicalTicks": 0,
+                "timeline.9.musicalTicks": 640, "timeline.10": {  # the restart continues loop pass 1
+        "seq": 11, "kind": "midiCapture", "stream": "str.keys-a", "ump": ["0x20903E64"], "hostTicks": 2493000000,
+        "frame": 6000, "musicalTicks": 1280, "endpointProtocol": "midi1", "portProtocol": "midi1",
+        "translatedBy": "none", "effective": "midi1"}, "timeline.11": {"seq": 12, "kind": "export", "exportId": "exp.smf",
+        "streams": ["str.keys-a", "str.keys-b"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": False,
+        "losses": {"passesOverlaid": 1}}}, "'passesOverlaid': 2"),
     ("10", "timeline", {"8.musicalTicks": None, "11.losses.syntheticTempoMap": 1}, "exactly when one is"),
     ("10", 2, {"portProtocol": "midi1", "translatedBy": "os"}, "MT 0x4 on a midi2 port"),
     ("10", 8, {"ump": ["0x22903C64"]}, "'groupsFlattened': 1"),
@@ -763,14 +834,15 @@ MUTATIONS = [
 
 
 def mutate(doc, where, changes):
-    base = ["timeline", where - 1] if isinstance(where, int) else where.split(".")
+    base = ["timeline", where - 1] if isinstance(where, int) else [p for p in where.split(".") if p]
     for key, value in changes.items():
         *path, last = base + key.split(".")
         node = doc
         for part in path:
             node = node[int(part)] if isinstance(node, list) else node[part]
+        last = int(last) if isinstance(node, list) else last
         if value is None:
-            node.pop(last, None)
+            node.pop(last) if isinstance(node, list) else node.pop(last, None)
         else:
             node[last] = value
 
@@ -798,16 +870,17 @@ def main(argv):
         errors.append(f"coverage missing: {sorted(set(schema['$defs']['coverage']['enum']) - covered)}")
     for prefix, where, changes, expect in MUTATIONS:
         doc, name = copy.deepcopy(docs.get(prefix, ({}, prefix)))
-        label = f"mutation {prefix} {'seq ' * isinstance(where, int)}{where}"
+        label = f"mutation {prefix} {'seq ' * isinstance(where, int)}{where or 'root'}"
         try:
             mutate(doc, where, changes)
         except (KeyError, IndexError, TypeError, ValueError):
             errors.append(f"{label}: record missing")
             continue
-        caught = any(expect in e for e in check_example(doc, name, schema)[0])
-        print(f"{'ok  ' if caught else 'FAIL'} {label} rejected: {expect}")
+        found = check_example(doc, name, schema)[0]
+        caught = not found if expect is None else any(expect in e for e in found)
+        print(f"{'ok  ' if caught else 'FAIL'} {label} {'accepted' if expect is None else 'rejected: ' + expect}")
         if not caught:
-            errors.append(f"{label} did not fail with '{expect}'")
+            errors.append(f"{label} did not {'pass: ' + str(found[:1]) if expect is None else 'fail with ' + expect}")
     for line in errors:
         print("error:", line)
     print(f"{len(files)} examples, {len(MUTATIONS)} mutations, {len(errors)} errors")

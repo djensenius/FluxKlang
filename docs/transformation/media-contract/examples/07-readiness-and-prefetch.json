@@ -4,18 +4,14 @@
   "covers": ["readiness", "prefetch"],
   "notes": [
     "Ready means the bounded prefetch head (48000 frames in 16 x 4096-frame pool blocks) is resident.",
-    "Armed is a derived UI state (ready plus a pending trigger), not a readiness state."
-  ],
+    "Armed is a derived UI state (ready plus a pending trigger), not a readiness state."],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
-    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
-  },
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}},
   "actions": [
-    {"actionId": "act.intro", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "drop"}, "notReady": "dropAndReport", "readiness": "unprepared", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}
-  ],
+    {"actionId": "act.intro", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "drop"}, "notReady": "dropAndReport", "readiness": "unprepared", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}}],
   "initialGenerations": {
-    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
-  },
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1},
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.intro", "originHostTicks": 2400500000, "horizonFrame": 1256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}},
@@ -28,6 +24,4 @@
     {"seq": 9, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.intro", "originHostTicks": 2465000000, "horizonFrame": 130256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}},
     {"seq": 10, "kind": "outcome", "triggerId": "trg.3", "result": "dropped", "reason": "notReady"},
     {"seq": 11, "kind": "readiness", "actionId": "act.intro", "from": "invalidated", "to": "preparing"},
-    {"seq": 12, "kind": "readiness", "actionId": "act.intro", "from": "preparing", "to": "failed", "reason": "assetChanged"}
-  ]
-}
+    {"seq": 12, "kind": "readiness", "actionId": "act.intro", "from": "preparing", "to": "failed", "reason": "assetChanged"}]}

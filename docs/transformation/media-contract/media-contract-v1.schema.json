@@ -10,14 +10,12 @@
     "covers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/coverage"}},
     "notes": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "adapterCapabilities": {
-      "type": "object", "additionalProperties": false, "properties": {"timeStretch": {"type": "boolean"}}
-    },
+      "type": "object", "additionalProperties": false, "properties": {"timeStretch": {"type": "boolean"}}},
     "clocks": {"$ref": "#/$defs/clocks"}, "streams": {"type": "array", "items": {"$ref": "#/$defs/stream"}},
     "actions": {"type": "array", "items": {"$ref": "#/$defs/action"}},
     "initialGenerations": {"$ref": "#/$defs/generationMap"},
     "timeline": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/record"}},
-    "extensions": {"type": "object", "description": "Unknown optional data; readers must preserve it unchanged."}
-  },
+    "extensions": {"type": "object", "description": "Unknown optional data; readers must preserve it unchanged."}},
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*\\.[a-z0-9.-]+$"}, "seq": {"type": "integer", "minimum": 1},
     "count": {"type": "integer", "minimum": 0}, "positive": {"type": "integer", "minimum": 1},
@@ -27,52 +25,40 @@
     "note": {"type": "string", "minLength": 1},
     "counter": {
       "type": "string",
-      "pattern": "^(sampleClock|transport|musicalMap|source|context|cancelScope)/[a-z][a-z0-9-]*\\.[a-z0-9.-]+$"
-    },
+      "pattern": "^(sampleClock|transport|musicalMap|source|context|cancelScope)/[a-z][a-z0-9-]*\\.[a-z0-9.-]+$"},
     "generationMap": {
       "type": "object", "minProperties": 1, "propertyNames": {"$ref": "#/$defs/counter"},
-      "additionalProperties": {"$ref": "#/$defs/generation"}
-    },
+      "additionalProperties": {"$ref": "#/$defs/generation"}},
     "coverage": {
       "enum": [
         "clockRestart", "lateCue", "retroactiveCue", "seek", "loop", "tempoMutation", "sourceLoss", "noStaleReplay",
         "cancellation", "readiness", "prefetch", "ordering", "capture", "fixedRateDefault", "timeStretchPolicy",
-        "midi1InUmp", "midi2Native", "smfExportLossy", "smfExportLossless"
-      ]
-    },
+        "midi1InUmp", "midi2Native", "smfExportLossy", "smfExportLossless"]},
     "protocol": {"enum": ["midi1", "midi2"]},
     "readinessState": {"enum": ["unprepared", "preparing", "ready", "invalidated", "failed"]},
     "rate": {"enum": [44100, 48000, 88200, 96000, 176400, 192000]},
     "meter": {
       "type": "object", "additionalProperties": false, "required": ["numerator", "denominator"],
       "properties": {
-        "numerator": {"type": "integer", "minimum": 1, "maximum": 64}, "denominator": {"enum": [1, 2, 4, 8, 16, 32]}
-      }
-    },
+        "numerator": {"type": "integer", "minimum": 1, "maximum": 64}, "denominator": {"enum": [1, 2, 4, 8, 16, 32]}}},
     "musicalMap": {
       "type": "array", "minItems": 1,
       "items": {
         "type": "object", "additionalProperties": false, "required": ["atTicks", "microsPerQuarter"],
         "properties": {
           "atTicks": {"$ref": "#/$defs/count"},
-          "microsPerQuarter": {"type": "integer", "minimum": 60000, "maximum": 3000000}
-        }
-      }
-    },
+          "microsPerQuarter": {"type": "integer", "minimum": 60000, "maximum": 3000000}}}},
     "clocks": {
       "type": "object", "additionalProperties": false, "required": ["host", "sample", "musical"],
       "properties": {
         "host": {
           "type": "object", "additionalProperties": false, "required": ["timebaseNumer", "timebaseDenom"],
-          "properties": {"timebaseNumer": {"$ref": "#/$defs/positive"}, "timebaseDenom": {"$ref": "#/$defs/positive"}}
-        },
+          "properties": {"timebaseNumer": {"$ref": "#/$defs/positive"}, "timebaseDenom": {"$ref": "#/$defs/positive"}}},
         "sample": {
           "type": "array", "minItems": 1,
           "items": {
             "type": "object", "additionalProperties": false, "required": ["clockId", "nominalRate"],
-            "properties": {"clockId": {"$ref": "#/$defs/id"}, "nominalRate": {"$ref": "#/$defs/rate"}}
-          }
-        },
+            "properties": {"clockId": {"$ref": "#/$defs/id"}, "nominalRate": {"$ref": "#/$defs/rate"}}}},
         "musical": {
           "type": "object", "additionalProperties": false,
           "required": ["clockId", "ticksPerQuarter", "meter", "musicalMap"],
@@ -81,19 +67,12 @@
             "musicalMap": {"$ref": "#/$defs/musicalMap"},
             "loop": {
               "type": "object", "additionalProperties": false, "required": ["startTicks", "endTicks"],
-              "properties": {"startTicks": {"$ref": "#/$defs/count"}, "endTicks": {"$ref": "#/$defs/positive"}}
-            }
-          }
-        }
-      }
-    },
+              "properties": {"startTicks": {"$ref": "#/$defs/count"}, "endTicks": {"$ref": "#/$defs/positive"}}}}}}},
     "stream": {
       "type": "object", "additionalProperties": false, "required": ["streamId", "ordinal", "media", "direction"],
       "properties": {
         "streamId": {"$ref": "#/$defs/id"}, "ordinal": {"$ref": "#/$defs/count"},
-        "media": {"enum": ["audio", "midi", "state"]}, "direction": {"enum": ["playback", "capture"]}
-      }
-    },
+        "media": {"enum": ["audio", "midi", "state"]}, "direction": {"enum": ["playback", "capture"]}}},
     "action": {
       "type": "object", "additionalProperties": false,
       "required": ["actionId", "media", "quantize", "late", "notReady", "readiness"],
@@ -105,41 +84,30 @@
           "properties": {
             "policy": {"enum": ["drop", "fireLate", "joinInProgress", "nextBoundary"]},
             "maxLatenessMs": {"type": "integer", "minimum": 0, "maximum": 1000},
-            "retroactiveMs": {"type": "integer", "minimum": 0, "maximum": 120}
-          }
-        },
+            "retroactiveMs": {"type": "integer", "minimum": 0, "maximum": 120}}},
         "notReady": {"const": "dropAndReport"}, "readiness": {"$ref": "#/$defs/readinessState"},
         "prefetch": {
           "type": "object", "additionalProperties": false, "required": ["blockFrames", "blockCount", "headFrames"],
           "properties": {
             "blockFrames": {"type": "integer", "minimum": 64, "maximum": 65536},
             "blockCount": {"type": "integer", "minimum": 2, "maximum": 1024},
-            "headFrames": {"$ref": "#/$defs/positive"}
-          }
-        }
-      }
-    },
+            "headFrames": {"$ref": "#/$defs/positive"}}}}},
     "target": {
       "type": "object", "additionalProperties": false, "required": ["timeBase"],
       "properties": {
         "timeBase": {"enum": ["musical", "sample", "asap"]}, "gridTicks": {"$ref": "#/$defs/positive"},
-        "atTicks": {"$ref": "#/$defs/count"}, "atFrame": {"$ref": "#/$defs/frame"}
-      },
+        "atTicks": {"$ref": "#/$defs/count"}, "atFrame": {"$ref": "#/$defs/frame"}},
       "oneOf": [
         {"maxProperties": 2, "required": ["gridTicks"], "properties": {"timeBase": {"const": "musical"}}},
         {"maxProperties": 2, "required": ["atTicks"], "properties": {"timeBase": {"const": "musical"}}},
         {"maxProperties": 2, "required": ["atFrame"], "properties": {"timeBase": {"const": "sample"}}},
-        {"maxProperties": 1, "properties": {"timeBase": {"const": "asap"}}}
-      ]
-    },
+        {"maxProperties": 1, "properties": {"timeBase": {"const": "asap"}}}]},
     "record": {
       "oneOf": [
         {"$ref": "#/$defs/anchorRecord"}, {"$ref": "#/$defs/generationRecord"}, {"$ref": "#/$defs/triggerRecord"},
         {"$ref": "#/$defs/outcomeRecord"}, {"$ref": "#/$defs/readinessRecord"}, {"$ref": "#/$defs/discontinuityRecord"},
         {"$ref": "#/$defs/dispatchRecord"}, {"$ref": "#/$defs/midiCaptureRecord"}, {"$ref": "#/$defs/takeRecord"},
-        {"$ref": "#/$defs/exportRecord"}
-      ]
-    },
+        {"$ref": "#/$defs/exportRecord"}]},
     "anchorRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "sampleClock", "generation", "frame", "hostTicks"],
@@ -148,9 +116,7 @@
         "generation": {"$ref": "#/$defs/generation"}, "frame": {"$ref": "#/$defs/frame"},
         "hostTicks": {"$ref": "#/$defs/hostTicks"}, "transport": {"$ref": "#/$defs/generation"},
         "musicalTicks": {"$ref": "#/$defs/count"}, "loopIteration": {"$ref": "#/$defs/count"},
-        "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "note": {"$ref": "#/$defs/note"}}},
     "generationRecord": {
       "type": "object", "additionalProperties": false, "required": ["seq", "kind", "counter", "from", "to", "reason"],
       "properties": {
@@ -159,13 +125,9 @@
         "reason": {
           "enum": [
             "deviceRestart", "rateChange", "configurationChange", "wake", "locate", "clockRestart", "transportRestart",
-            "tempoEdit", "externalTempo", "sourceLost", "sourceReacquired", "contextChange", "userCancel"
-          ]
-        },
+            "tempoEdit", "externalTempo", "sourceLost", "sourceReacquired", "contextChange", "userCancel"]},
         "musicalMap": {"$ref": "#/$defs/musicalMap"}, "nominalRate": {"$ref": "#/$defs/rate"},
-        "meter": {"$ref": "#/$defs/meter"}, "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "meter": {"$ref": "#/$defs/meter"}, "note": {"$ref": "#/$defs/note"}}},
     "triggerRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "triggerId", "actionId", "originHostTicks", "horizonFrame", "requires"],
@@ -173,9 +135,7 @@
         "seq": {"$ref": "#/$defs/seq"}, "kind": {"const": "trigger"}, "triggerId": {"$ref": "#/$defs/id"},
         "actionId": {"$ref": "#/$defs/id"}, "originHostTicks": {"$ref": "#/$defs/hostTicks"},
         "horizonFrame": {"$ref": "#/$defs/frame"}, "requires": {"$ref": "#/$defs/generationMap", "maxProperties": 8},
-        "target": {"$ref": "#/$defs/target"}, "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "target": {"$ref": "#/$defs/target"}, "note": {"$ref": "#/$defs/note"}}},
     "outcomeRecord": {
       "type": "object", "additionalProperties": false, "required": ["seq", "kind", "triggerId", "result"],
       "properties": {
@@ -184,17 +144,13 @@
         "assignedFrame": {"$ref": "#/$defs/frame"}, "frame": {"$ref": "#/$defs/frame"},
         "startOffsetFrames": {"$ref": "#/$defs/count"}, "musicalMap": {"$ref": "#/$defs/generation"},
         "reason": {"enum": ["sampleClock", "transport", "source", "context", "cancelScope", "late", "notReady"]},
-        "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "note": {"$ref": "#/$defs/note"}}},
     "readinessRecord": {
       "type": "object", "additionalProperties": false, "required": ["seq", "kind", "actionId", "from", "to"],
       "properties": {
         "seq": {"$ref": "#/$defs/seq"}, "kind": {"const": "readiness"}, "actionId": {"$ref": "#/$defs/id"},
         "from": {"$ref": "#/$defs/readinessState"}, "to": {"$ref": "#/$defs/readinessState"},
-        "reason": {"$ref": "#/$defs/note"}, "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "reason": {"$ref": "#/$defs/note"}, "note": {"$ref": "#/$defs/note"}}},
     "discontinuityRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "type", "sampleClock", "generation", "frame"],
@@ -203,42 +159,33 @@
         "type": {
           "enum": [
             "clockRestart", "sampleJump", "underrun", "overflow", "sourceLost", "sourceRestored", "locate", "loopWrap",
-            "formatChange", "captureStopped"
-          ]
-        },
+            "formatChange", "captureStopped"]},
         "sampleClock": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/generation"},
         "frame": {"$ref": "#/$defs/frame"}, "frames": {"type": "integer", "minimum": 1, "maximum": 4294967295},
         "hostTicks": {"$ref": "#/$defs/hostTicks"}, "previousFrame": {"$ref": "#/$defs/frame"},
         "stream": {"$ref": "#/$defs/id"}, "reason": {"enum": ["diskFull", "deviceLost"]},
-        "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "note": {"$ref": "#/$defs/note"}}},
     "dispatchRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "frame", "lane", "stream", "streamSeq", "event"],
       "properties": {
         "seq": {"$ref": "#/$defs/seq"}, "kind": {"const": "dispatch"}, "frame": {"$ref": "#/$defs/frame"},
         "lane": {"enum": ["release", "transport", "state", "content"]}, "stream": {"$ref": "#/$defs/id"},
-        "streamSeq": {"$ref": "#/$defs/positive"}, "event": {"$ref": "#/$defs/note"}, "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "streamSeq": {"$ref": "#/$defs/positive"}, "event": {"$ref": "#/$defs/note"},
+        "note": {"$ref": "#/$defs/note"}}},
     "midiCaptureRecord": {
       "type": "object", "additionalProperties": false,
       "required": [
         "seq", "kind", "stream", "ump", "hostTicks", "frame", "endpointProtocol", "portProtocol", "translatedBy",
-        "effective"
-      ],
+        "effective"],
       "properties": {
         "seq": {"$ref": "#/$defs/seq"}, "kind": {"const": "midiCapture"}, "stream": {"$ref": "#/$defs/id"},
         "ump": {
-          "type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "pattern": "^0x[0-9A-F]{8}$"}
-        },
+          "type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "pattern": "^0x[0-9A-F]{8}$"}},
         "hostTicks": {"$ref": "#/$defs/hostTicks"}, "frame": {"$ref": "#/$defs/frame"},
         "musicalTicks": {"$ref": "#/$defs/count"}, "endpointProtocol": {"enum": ["midi1", "midi2", "unknown"]},
         "portProtocol": {"$ref": "#/$defs/protocol"}, "translatedBy": {"enum": ["none", "os"]},
-        "effective": {"$ref": "#/$defs/protocol"}, "verified": {"type": "boolean"}, "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "effective": {"$ref": "#/$defs/protocol"}, "verified": {"type": "boolean"}, "note": {"$ref": "#/$defs/note"}}},
     "takeRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "takeId", "stream", "inputLatency", "segments", "droppedFrames", "stopReason"],
@@ -249,28 +196,20 @@
           "type": "object", "additionalProperties": false, "required": ["reportedFrames", "measuredFrames"],
           "properties": {
             "reportedFrames": {"$ref": "#/$defs/count"}, "measuredFrames": {"type": ["integer", "null"], "minimum": 0},
-            "evidence": {"$ref": "#/$defs/note"}
-          }
-        },
+            "evidence": {"$ref": "#/$defs/note"}}},
         "segments": {
           "type": "array", "minItems": 1,
           "items": {
             "type": "object", "additionalProperties": false,
             "required": [
-              "sampleClock", "generation", "startFrame", "startOffsetNs", "fileFrameStart", "frames", "paddedFrames"
-            ],
+              "sampleClock", "generation", "startFrame", "startOffsetNs", "fileFrameStart", "frames", "paddedFrames"],
             "properties": {
               "sampleClock": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/generation"},
               "startFrame": {"$ref": "#/$defs/frame"}, "startOffsetNs": {"$ref": "#/$defs/count"},
               "fileFrameStart": {"$ref": "#/$defs/count"}, "frames": {"$ref": "#/$defs/positive"},
-              "paddedFrames": {"$ref": "#/$defs/count"}
-            }
-          }
-        },
+              "paddedFrames": {"$ref": "#/$defs/count"}}}},
         "droppedFrames": {"$ref": "#/$defs/count"}, "stopReason": {"enum": ["user", "diskFull", "deviceLost"]},
-        "note": {"$ref": "#/$defs/note"}
-      }
-    },
+        "note": {"$ref": "#/$defs/note"}}},
     "exportRecord": {
       "type": "object", "additionalProperties": false,
       "required": ["seq", "kind", "exportId", "streams", "format", "lossless", "losses"],
@@ -284,20 +223,12 @@
           "propertyNames": {
             "enum": [
               "timingQuantized", "syntheticTempoMap", "velocityDownscaled", "noteOnVelocityRemapped", "valueDownscaled",
-              "perNoteDropped", "attributeDropped", "groupsFlattened", "umpOnlyDropped", "fidelityUnverified"
-            ]
-          },
-          "additionalProperties": {"$ref": "#/$defs/positive"}
-        },
+              "perNoteDropped", "attributeDropped", "groupsFlattened", "umpOnlyDropped", "fidelityUnverified",
+              "passesOverlaid"]},
+          "additionalProperties": {"$ref": "#/$defs/positive"}},
         "origin": {
           "type": "object", "additionalProperties": false, "required": ["sampleClock", "generation", "frame"],
           "properties": {
             "sampleClock": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/generation"},
-            "frame": {"$ref": "#/$defs/frame"}
-          }
-        },
-        "offsetsNs": {"type": "array", "items": {"$ref": "#/$defs/count"}}, "note": {"$ref": "#/$defs/note"}
-      }
-    }
-  }
-}
+            "frame": {"$ref": "#/$defs/frame"}}},
+        "offsetsNs": {"type": "array", "items": {"$ref": "#/$defs/count"}}, "note": {"$ref": "#/$defs/note"}}}}}

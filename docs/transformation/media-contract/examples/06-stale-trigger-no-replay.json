@@ -3,20 +3,16 @@
   "title": "User cancel and context change: pending cues cancelled; an old-context trigger is rejected, never replayed",
   "covers": ["noStaleReplay", "cancellation"],
   "notes": [
-    "Every trigger receives exactly one terminal outcome; cancelled and rejected triggers need a fresh trigger to act."
-  ],
+    "Every trigger receives exactly one terminal outcome; cancelled and rejected triggers need a fresh trigger to act."],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
-    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
-  },
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}},
   "actions": [
     {"actionId": "act.clip", "media": "midi", "timePolicy": "tempoFollowing", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"},
-    {"actionId": "act.scene", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"}
-  ],
+    {"actionId": "act.scene", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"}],
   "initialGenerations": {
     "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1,
-    "cancelScope/set.verse": 1
-  },
+    "cancelScope/set.verse": 1},
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.clip", "originHostTicks": 2405000000, "horizonFrame": 10256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "cancelScope/set.verse": 1}},
@@ -28,6 +24,4 @@
     {"seq": 8, "kind": "trigger", "triggerId": "trg.3", "actionId": "act.clip", "originHostTicks": 2405000000, "horizonFrame": 20256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "cancelScope/set.verse": 1}, "note": "A retry of trg.1 with its original stamps."},
     {"seq": 9, "kind": "outcome", "triggerId": "trg.3", "result": "rejectedStale", "reason": "context"},
     {"seq": 10, "kind": "trigger", "triggerId": "trg.4", "actionId": "act.clip", "originHostTicks": 2410000000, "horizonFrame": 20256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 2, "cancelScope/set.verse": 2}},
-    {"seq": 11, "kind": "outcome", "triggerId": "trg.4", "result": "fired", "assignedFrame": 96000, "frame": 96000, "musicalMap": 1}
-  ]
-}
+    {"seq": 11, "kind": "outcome", "triggerId": "trg.4", "result": "fired", "assignedFrame": 96000, "frame": 96000, "musicalMap": 1}]}

@@ -5,21 +5,17 @@
   "notes": [
     "120 BPM at 48 kHz: 1.5625 frames per tick, beat = 24000 frames, 4/4 bar = 96000 frames.",
     "horizonFrame is the earliest frame the scheduler can still affect when the trigger arrives.",
-    "trg.5 overrides act.scene's beat grid with a half-note grid, so nextBoundary moves its missed boundary (336000) to the next half note (384000), not the next beat (360000)."
-  ],
+    "trg.5 overrides act.scene's beat grid with a half-note grid, so nextBoundary moves its missed boundary (336000) to the next half note (384000), not the next beat (360000)."],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
-    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}
-  },
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}},
   "actions": [
     {"actionId": "act.loop-a", "media": "audio", "timePolicy": "fixedRate", "quantize": {"timeBase": "musical", "gridTicks": 61440}, "late": {"policy": "joinInProgress", "maxLatenessMs": 50, "retroactiveMs": 40}, "notReady": "dropAndReport", "readiness": "ready", "prefetch": {"blockFrames": 4096, "blockCount": 16, "headFrames": 48000}},
     {"actionId": "act.stab", "media": "midi", "timePolicy": "tempoFollowing", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "fireLate", "maxLatenessMs": 10}, "notReady": "dropAndReport", "readiness": "ready"},
     {"actionId": "act.fx", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "drop"}, "notReady": "dropAndReport", "readiness": "ready"},
-    {"actionId": "act.scene", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"}
-  ],
+    {"actionId": "act.scene", "media": "state", "quantize": {"timeBase": "musical", "gridTicks": 15360}, "late": {"policy": "nextBoundary"}, "notReady": "dropAndReport", "readiness": "ready"}],
   "initialGenerations": {
-    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
-  },
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1},
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.loop-a", "originHostTicks": 2448240000, "horizonFrame": 96736, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Pressed 10 ms after bar 2: inside the 40 ms retroactive window."},
@@ -31,6 +27,4 @@
     {"seq": 8, "kind": "trigger", "triggerId": "trg.4", "actionId": "act.fx", "originHostTicks": 2567976000, "horizonFrame": 336208, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}},
     {"seq": 9, "kind": "outcome", "triggerId": "trg.4", "result": "dropped", "reason": "late", "assignedFrame": 336000},
     {"seq": 10, "kind": "trigger", "triggerId": "trg.5", "actionId": "act.scene", "originHostTicks": 2567976000, "horizonFrame": 336208, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "target": {"timeBase": "musical", "gridTicks": 30720}},
-    {"seq": 11, "kind": "outcome", "triggerId": "trg.5", "result": "fired", "assignedFrame": 384000, "frame": 384000, "musicalMap": 1}
-  ]
-}
+    {"seq": 11, "kind": "outcome", "triggerId": "trg.5", "result": "fired", "assignedFrame": 384000, "frame": 384000, "musicalMap": 1}]}

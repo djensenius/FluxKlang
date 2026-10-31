@@ -6,19 +6,15 @@
     "str.keys-b reads the same MIDI 1.0 endpoint through a MIDI 2.0 port: velocity 0xC924 is assumed to be the OS upscale of 100 (open question 8), not 16-bit data.",
     "Effective fidelity comes from the endpoint protocol property, never from inspecting values.",
     "At 20 BPM (9.375 frames per tick) every capture sits on division 960's 150-frame grid, so SMF export is lossless; frame 144001 would still round to tick 15360 but would be counted as timingQuantized.",
-    "The device restarts before export: the native export's origin keeps generation 1's recorded anchor, so its offsets do not change."
-  ],
+    "The device restarts before export: the native export's origin keeps generation 1's recorded anchor, so its offsets do not change."],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
-    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 3000000}]}
-  },
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 3000000}]}},
   "streams": [
     {"streamId": "str.keys-a", "ordinal": 0, "media": "midi", "direction": "capture"},
-    {"streamId": "str.keys-b", "ordinal": 1, "media": "midi", "direction": "capture"}
-  ],
+    {"streamId": "str.keys-b", "ordinal": 1, "media": "midi", "direction": "capture"}],
   "initialGenerations": {
-    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1
-  },
+    "sampleClock/smp.main": 1, "transport/mus.main": 1, "musicalMap/mus.main": 1, "context/ctx.main": 1},
   "timeline": [
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "midiCapture", "stream": "str.keys-a", "ump": ["0x20903C64"], "hostTicks": 2412000000, "frame": 24000, "musicalTicks": 2560, "endpointProtocol": "midi1", "portProtocol": "midi1", "translatedBy": "none", "effective": "midi1"},
@@ -31,6 +27,4 @@
     {"seq": 9, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
     {"seq": 10, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "transport": 2, "musicalTicks": 16000},
     {"seq": 11, "kind": "export", "exportId": "exp.smf", "streams": ["str.keys-a", "str.keys-b"], "format": "smf", "smfFormat": 1, "division": 960, "lossless": true, "losses": {}},
-    {"seq": 12, "kind": "export", "exportId": "exp.ump", "streams": ["str.keys-a", "str.keys-b"], "format": "nativeUmp", "origin": {"sampleClock": "smp.main", "generation": 1, "frame": 0}, "offsetsNs": [500000000, 1000000000, 1500000000, 1750000000, 3000000000], "lossless": true, "losses": {}}
-  ]
-}
+    {"seq": 12, "kind": "export", "exportId": "exp.ump", "streams": ["str.keys-a", "str.keys-b"], "format": "nativeUmp", "origin": {"sampleClock": "smp.main", "generation": 1, "frame": 0}, "offsetsNs": [500000000, 1000000000, 1500000000, 1750000000, 3000000000], "lossless": true, "losses": {}}]}

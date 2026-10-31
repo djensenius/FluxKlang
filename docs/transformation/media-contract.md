@@ -114,9 +114,10 @@ device mapping is a `sampleJump` discontinuity.
 - `frame(host) = anchor.frame + (host − anchor.host) · (numer/denom) · rate / 10⁹`. `rate` is the nominal rate of the
   anchor's generation, used between anchors. Adapters re-anchor at least once per render cycle in which they observe
   both values.
-- Musical ticks to frames: integrate the musical map from the latest musical anchor. Frames to ticks is the exact
-  inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up (`floor(x + ½)`) only at the
-  final frame or tick.
+- Musical ticks to frames: integrate the musical map from the anchor in effect: for a frame, the latest musical anchor
+  at or before it (else the first); for a target, the latest anchor of its loop pass ([§5.5](#55-loop)). Frames to
+  ticks is the exact inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up
+  (`floor(x + ½)`) only at the final frame or tick.
 - Within one generation, anchors must advance, and each must agree with the frame predicted from the generation's
   **first** anchor at the nominal rate within `(rate + span) / 1000` frames, where `span` is the predicted frame
   count: 1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against the first anchor,
@@ -134,7 +135,8 @@ The policy for a device restart, rate change, configuration change or wake:
 3. Bump `transport` (`clockRestart`), before or after the `clockRestart` record: exactly once per primary
    `sampleClock` bump when a transport exists, and never otherwise. The transport resumes at the musical
    position of `previousFrame`, the last **rendered** position, converted through the musical anchor and map in force
-   at the `sampleClock` bump (so at the old rate), with `loopIteration` 0. There is no catch-up.
+   at the `sampleClock` bump (so at the old rate; a `previousFrame` at loop end resumes at `startTicks`), with
+   `loopIteration` 0. There is no catch-up.
 4. Re-anchor. Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
@@ -147,9 +149,12 @@ re-anchors at the new position with `loopIteration` 0, as every new transport ge
 
 A loop is `[startTicks, endTicks)`. At the wrap frame the transport records a `loopWrap` discontinuity, re-anchors
 with `musicalTicks = startTicks` and `loopIteration + 1`, and dispatches owned-note releases first
-([§6.5](#65-ordering)). A grid boundary equal to `endTicks` resolves to the wrap frame, the start of the next
-iteration. In v1, musical targets must resolve inside `[startTicks, endTicks]` while a loop is active
-([§14](#14-open-questions)).
+([§6.5](#65-ordering)). A pass anchored past `endTicks` does not wrap. A position resolves through the anchor in
+effect at its frame, so an event before the wrap keeps its pass even when delivered after the wrap anchor. A scheduled
+target is an **occurrence**: the pass holding its origin, plus its ticks. A wrap never moves it; musical-map revisions
+re-resolve it within its pass. A grid boundary equal to `endTicks` is the wrap frame, the next pass's start, and later
+boundaries continue on that pass's grid (example 03). In v1, musical targets must resolve inside
+`[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
 
 ### 5.6 Tempo and meter
 
@@ -269,8 +274,9 @@ fallback (example 04).
 - Each consumer gets its own handoff. One tap never feeds two racing SPSC consumers.
 - Overflow never blocks. Dropped frames are padded with silence in the file and recorded as `overflow`. A take's
   `droppedFrames` equals the sum of its padded frames.
-- A sample clock restart starts a new segment, with no padding across restarts: the old segment ends at the
-  restart's `previousFrame`, padded overflow included, and the next starts at the restart's frame. Every overflow
+- A sample clock restart starts a new segment, with no padding across restarts: a segment continuing across it ends
+  at its `previousFrame`, padded overflow included, and the next starts at the restart's frame. No segment, the last
+  included, ends after its generation's `previousFrame`. Every overflow
   interval lies wholly inside its segment. A segment's frames are at its generation's own rate (example 08 goes
   from 48 to 96 kHz). Each segment stores `startOffsetNs`, the nanosecond offset of its anchored start from the first
   segment's (the take's anchor), never absolute host ticks (M13).
@@ -344,7 +350,7 @@ and declares every loss. `lossless` is true exactly when `losses` is empty.
 
 | Category | Counted when |
 |---|---|
-| `timingQuantized` | The event's exact capture position, rounded half-up to `division`, maps back through its capture-time anchor and map to a different frame (rounded `musicalTicks` can hide this). `division` must divide 15360 |
+| `timingQuantized` | The event's exact capture position, rounded half-up to `division`, maps back through the same capture-time anchor ([§5.2](#52-anchors-and-conversion)) and map to a different frame (rounded `musicalTicks` can hide this). `division` must divide 15360 |
 | `syntheticTempoMap` | An event has no musical stamp, so export must invent a tempo map |
 | `velocityDownscaled` | A genuine MIDI 2.0 note velocity is not the min-centre-max upscale of its top 7 bits (independent of the remap below: `0x0100` counts in both) |
 | `noteOnVelocityRemapped` | A genuine MIDI 2.0 Note On's 7-bit velocity is 0, so it is sent as 1 (not Note Off) |
@@ -353,6 +359,7 @@ and declares every loss. `lossless` is true exactly when `losses` is empty.
 | `perNoteDropped` | Per-note controllers, per-note pitch bend or per-note management (no MIDI 1.0 equivalent) |
 | `umpOnlyDropped` | Messages v1 export does not map (MT 0, 1, 5 and higher, and relative controllers). Some have SMF equivalents, such as Flex Data tempo, meter, key and text; mapping them is deferred to #112 |
 | `fidelityUnverified` | An MT4 event from an `unknown` endpoint, whose loss export cannot rule out |
+| `passesOverlaid` | Events from more than one transport pass share one tick line: a pass is a loop iteration, or the span after a locate or transport restart (a clock restart continues its pass). Each event outside the earliest pass counts; unrolling is deferred to #112 (example 03) |
 | `groupsFlattened` | Messages that carry a Group (MT 0x1–0x5 and 0xD; MT 0x0 and 0xF have none, M2-104-UM §2.1.2) span more than one group: each one outside the lowest counts. Groupless messages never add a group (example 10) |
 
 Rules:
@@ -408,8 +415,8 @@ Coordinator follow-ups (proposed, not done here):
   so drift is caught.
 - Examples are synthetic and deterministic, and use stable synthetic IDs (`ex.NN-name`, `trg.N`, `act.name`).
   Examples and the schema are canonical JSON: authored key order, two-space indent, and a container inline when it
-  fits 120 columns (or is a timeline record), otherwise its members packed into rows of at most 120 columns. The
-  checker enforces the canonical form.
+  fits 120 columns (or is a timeline record), otherwise its members packed into rows of at most 120 columns, with
+  closing brackets ending the last row. The checker enforces the canonical form.
 
 ## 13. Non-goals
 
@@ -440,8 +447,8 @@ Coordinator follow-ups (proposed, not done here):
 |---|---|
 | [`01-clock-restart`](media-contract/examples/01-clock-restart.json) | clock restart at a new rate, resume position with the transport bump first, frame order across the restart, cancellation, stale-trigger rejection |
 | [`02-late-and-retroactive-cue`](media-contract/examples/02-late-and-retroactive-cue.json) | join in progress, retroactive window, fire late, drop, next boundary on a trigger's grid |
-| [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, same-frame ordering, locate, re-preparation |
-| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo and meter edit re-resolution, delayed capture across tempo segments, fixed-rate default, time-stretch unavailable |
+| [`03-seek-and-loop`](media-contract/examples/03-seek-and-loop.json) | loop wrap, a cue and a delayed capture across the wrap (occurrences), same-frame ordering, locate, re-preparation, SMF pass overlay |
+| [`04-tempo-mutation`](media-contract/examples/04-tempo-mutation.json) | tempo and meter edit re-resolution, delayed capture across tempo segments and its lossless SMF export, fixed-rate default, time-stretch unavailable |
 | [`05-source-loss`](media-contract/examples/05-source-loss.json) | underrun, source loss and reacquisition, no replay |
 | [`06-stale-trigger-no-replay`](media-contract/examples/06-stale-trigger-no-replay.json) | user cancel, context change, rejection |
 | [`07-readiness-and-prefetch`](media-contract/examples/07-readiness-and-prefetch.json) | readiness transitions, `notReady` drops |
@@ -465,9 +472,11 @@ The checker parses strictly (invalid UTF-8, duplicate keys, `NaN` and `Infinity`
 round-trip byte-for-byte to canonical form. It validates against the schema, implementing exactly the keywords used
 (`pattern` anchors as in ECMA-262, so `$` never matches before a final newline). It then replays each trace in exact
 rational arithmetic, enforcing [§4](#4-invariants)–[§9](#9-midi-fidelity-and-export) and recomputing every outcome
-frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Thirty-seven
+frame, resume position, take offset and SMF loss. Every `covers` tag must be backed by evidence in a trace. Forty-five
 mutation self-tests each break one rule in a valid example (for example a stale trigger fires, a trigger is relabelled
-`capacity`, or an SMF loss is hidden) and must fail with that rule's error. A malformed file or trace reports `FAIL`,
+`capacity`, or an SMF loss is hidden) and must fail with that rule's error; three positive controls (a user stop at
+the restart boundary, a restart at loop end resuming at loop start, SMF inversion through a delayed capture's own
+anchor) must pass. A malformed file or trace reports `FAIL`,
 never a crash, and is not used for mutations.
 
 ## 16. Sources
