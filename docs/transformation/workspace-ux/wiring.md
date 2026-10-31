@@ -62,10 +62,10 @@ Rotors: **Ports**, **Connections**, **Needs attention**. Edge label: *"Keys to R
 
 | State | Source of truth | Badge text | Allowed edits |
 |---|---|---|---|
-| Ready / Mapped | `session.json` `nodeStatus` | none, or the route name | All |
+| Ready / Mapped | `session.json` `nodeStatus`, derived from this host's own rig | none, or the route name | All |
 | Unmapped (`nod.cue`) | role in `devices.json` `unmappedRoles` | "Unmapped on this host" | All; "Map..." opens the rig flow (#100) |
 | Missing (`nod.echo`) | capability `missing` | "Missing plugin: branch silent" | Locate, Replace, Keep placeholder; no auto-bypass |
-| Stale (`nod.pads`) | device `stale` | "Last seen previous session" | All; Rescan |
+| Stale (`nod.pads`, `nod.ch7`) | route `stale` (device stale), or an observed shortcut | "Last seen previous session" | All; Rescan |
 | Lost/Muted (`nod.space`) | route `deviceMissing` while running | "Lost: outputs muted" | All; changes stay draft |
 | Draft-added / Draft-removed | draft ops | "Draft" / struck-through + "Will remove" | Undo, Remove from draft |
 | Stale draft (`dft.old-base`) | base ≠ active | "Based on rev 42; active is 43" | Rebase, then review again |

@@ -22,6 +22,8 @@ OPS = {**dict.fromkeys(("connect", "disconnect", "addNode", "removeNode", "editD
        "requestActivation": ("structural", "reviewRequired"), "proposeDraft": ("proposal", "draftCreated"),
        "panic": ("safety", "accepted"), "safeMute": ("safety", "accepted"),
        "set:live": ("live", "accepted heldForPickup"), "set:hazardous": ("hazardous", "needsAuthorization")}
+BINDING = {"present": "confirmed", "missing": "deviceMissing", "stale": "stale"}  # device presence -> route binding
+ROUTE_STATE = {"confirmed": "mapped", "deviceMissing": "lostMuted", "stale": "stale"}  # route binding -> node state
 ASSISTANT_ALLOWED = {"draft.propose", "diagnostics.read"}
 PROVENANCE_TOOLS = {"routingRequest": "none", "diagnostic": "readOnlySnapshotTools"}
 STEP_ORDER = ["validate", "prepare", "reviewAuthorize", "commit", "acknowledge"]
@@ -199,13 +201,18 @@ def check_authority(hs):
     for draft in hs["trace"]["drafts"]:
         if draft["host"] != host or draft["author"] not in members:
             err(draft["id"], "drafts belong to the session that holds the live graph")
-    devices = {d["id"] for d in rig["devices"]}
+    presence = {d["id"]: d["presence"] for d in rig["devices"]}
     for item in rig["routes"] + rig.get("proposedRoutes", []):
-        if item["device"] not in devices:
-            err(item["id"], "routes may only use this host's own rig (rigs are not synced)")
+        want = "proposed" if item in rig.get("proposedRoutes", []) else BINDING.get(presence.get(item["device"]))
+        if item["device"] not in presence or item["binding"] != want:
+            err(item["id"], "routes use only this host's own rig (rigs are not synced), bound per device presence")
+    routed = [r["role"] for r in rig["routes"]]
+    if len(set(routed)) < len(routed) or set(routed) & set(rig.get("unmappedRoles", [])):
+        err(where, "each role has at most one route and is either routed or unmapped")
     for cap in rig["capabilities"]:
-        if not set(cap["providedBy"]) <= devices | {host}:
-            err(where, f"{cap['capability']} is provided by another host's device")
+        live = any(p == host or presence.get(p) == "present" for p in cap["providedBy"])
+        if not set(cap["providedBy"]) <= set(presence) | {host} or live != (cap["status"] == "available"):
+            err(where, f"{cap['capability']} needs this rig's providers and is available only while one is present")
 
 
 def shape(edge):  # what a committed connect must reproduce: endpoints, conversion map, feedback delay and ceiling
@@ -390,29 +397,33 @@ def check_session(hs, roles, forms, graph):
     host_windows = {w["id"] for w in session["windows"] if w["host"] == lease["holder"]}
     if set(lease["windows"]) != host_windows:
         err(where, "one lease must cover every window of the holder")
+    own = {x["id"] for k in ("routes", "proposedRoutes", "devices", "controls") for x in rig.get(k, [])}
+    for key, value in walk([session.get(k) for k in ("nodeStatus", "telemetry", "diagnostics")]):
+        if str(value).split(".")[0] in ("rte", "dev", "ctl") and value not in own:
+            err(where, f"{key} {value} is not in this host's own rig")
+    local = {r["id"]: r["binding"] for r in rig["routes"] + rig.get("proposedRoutes", [])}
     for t in session["telemetry"]:
         if t["source"] != "measured" and t["display"] != "Unavailable":
             err(t["target"], "non-measured telemetry must display Unavailable")
-        if t["source"] == "measured" and (t.get("lease") != lease["id"] or lease["state"] != "running"):
-            err(t["target"], "measured telemetry requires the running engine lease")
+        if t["source"] == "measured" and (t.get("lease") != lease["id"] or lease["state"] != "running"
+                                          or local.get(t["target"], "confirmed") != "confirmed"):
+            err(t["target"], "measured telemetry requires the running engine lease and a confirmed route")
     caps = {c["capability"]: c["status"] for c in rig["capabilities"]}
     if lease["state"] == "running" and any(caps.get(c) != "available" for c in graph["requiredCapabilities"]):
         err(where, "a running lease needs every required graph capability available")
-    routes = {r["role"]: r for r in rig["routes"]}
-    status = {s["node"]: s["state"] for s in session["nodeStatus"]}
-    if len(status) != len(session["nodeStatus"]):
-        err(where, "duplicate node status")
-    for node in graph["nodes"]:
-        state, role = status.get(node["id"]), node.get("role")
-        needs = node.get("requiredCapabilities", []) + node.get("advisoryCapabilities", [])
-        if state is None:
-            err(f"{where} {node['id']}", "missing derived status")
-        if role in rig.get("unmappedRoles", []) and state != "unmapped":
-            err(f"{where} {node['id']}", "unmapped role must show Unmapped")
-        if routes.get(role, {}).get("binding") == "deviceMissing" and state != "lostMuted":
-            err(f"{where} {node['id']}", "missing device must show Lost/Muted")
-        if any(caps.get(c) == "missing" for c in needs) and state != "missing":
-            err(f"{where} {node['id']}", "missing capability must show Missing")
+    routes, unmapped = {r["role"]: r for r in rig["routes"]}, rig.get("unmappedRoles", [])
+    status = {s["node"]: s for s in session["nodeStatus"]}
+    if len(status) != len(session["nodeStatus"]) or set(status) != {n["id"] for n in graph["nodes"]}:
+        err(where, "exactly one status per active graph node")
+    for node in graph["nodes"]:  # Wiring's state table, derived from this host's rig and capabilities
+        role, needs = node.get("role"), node.get("requiredCapabilities", []) + node.get("advisoryCapabilities", [])
+        route = None if role in unmapped else routes.get(role)
+        want = ("unmapped" if role in unmapped else ROUTE_STATE.get(route["binding"]) if route else None if role
+                else "missing" if any(caps.get(c) == "missing" for c in needs)
+                else "stale" if node.get("routable") is False else "ready")
+        got = status.get(node["id"], {})
+        if want is None or (got.get("state"), got.get("route")) != (want, route and route["id"]):
+            err(f"{where} {node['id']}", f"status must be {want or 'routed or unmapped'} via {route and route['id']}")
 
 
 def check_parameters(docs):
