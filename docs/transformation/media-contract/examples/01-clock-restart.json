@@ -6,7 +6,7 @@
   "covers": ["clockRestart", "noStaleReplay", "cancellation"],
   "notes": [
     "Host timebase 125/3 ns per tick (24 MHz): 500 host ticks per frame at 48 kHz.",
-    "The device stopped rendering at frame 144000 (musical tick 92160); the transport resumes there without catch-up."
+    "clockRestart.previousFrame 144000 (tick 92160) is the last rendered position; the transport resumes there without catch-up."
   ],
   "clocks": {
     "host": {"timebaseNumer": 125, "timebaseDenom": 3},
@@ -26,7 +26,7 @@
     {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 0, "hostTicks": 2400000000, "transport": 1, "musicalTicks": 0},
     {"seq": 2, "kind": "trigger", "triggerId": "trg.1", "actionId": "act.loop-b", "originHostTicks": 2460000000, "horizonFrame": 120256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1}, "note": "Resolves to bar 3 (frame 192000); pending."},
     {"seq": 3, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "deviceRestart"},
-    {"seq": 4, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000},
+    {"seq": 4, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "previousFrame": 144000},
     {"seq": 5, "kind": "outcome", "triggerId": "trg.1", "result": "cancelled", "reason": "sampleClock", "note": "Never re-targeted onto the new clock."},
     {"seq": 6, "kind": "generation", "counter": "transport/mus.main", "from": 1, "to": 2, "reason": "clockRestart"},
     {"seq": 7, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 0, "hostTicks": 2490000000, "transport": 2, "musicalTicks": 92160},

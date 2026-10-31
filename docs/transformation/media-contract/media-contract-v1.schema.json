@@ -1,7 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/djensenius/FluxKlang/docs/transformation/media-contract/media-contract-v1.schema.json",
-  "title": "FluxKlang G-MEDIA contract v1 example trace",
   "description": "Synthetic, deterministic trace of media clocks, triggers, readiness, discontinuities and MIDI fidelity. See docs/transformation/media-contract.md.",
   "type": "object",
   "additionalProperties": false,
@@ -34,7 +32,6 @@
     "hostTicks": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
     "generation": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
     "note": {"type": "string", "minLength": 1},
-    "counterKind": {"enum": ["sampleClock", "transport", "musicalMap", "source", "context", "cancelScope"]},
     "counter": {
       "type": "string",
       "pattern": "^(sampleClock|transport|musicalMap|source|context|cancelScope)/[a-z][a-z0-9-]*\\.[a-z0-9.-]+$"
@@ -171,7 +168,13 @@
         "gridTicks": {"$ref": "#/$defs/positive"},
         "atTicks": {"$ref": "#/$defs/count"},
         "atFrame": {"$ref": "#/$defs/frame"}
-      }
+      },
+      "oneOf": [
+        {"maxProperties": 2, "required": ["gridTicks"], "properties": {"timeBase": {"const": "musical"}}},
+        {"maxProperties": 2, "required": ["atTicks"], "properties": {"timeBase": {"const": "musical"}}},
+        {"maxProperties": 2, "required": ["atFrame"], "properties": {"timeBase": {"const": "sample"}}},
+        {"maxProperties": 1, "properties": {"timeBase": {"const": "asap"}}}
+      ]
     },
     "record": {
       "oneOf": [
@@ -235,7 +238,7 @@
         "actionId": {"$ref": "#/$defs/id"},
         "originHostTicks": {"$ref": "#/$defs/hostTicks"},
         "horizonFrame": {"$ref": "#/$defs/frame"},
-        "requires": {"$ref": "#/$defs/generationMap"},
+        "requires": {"$ref": "#/$defs/generationMap", "maxProperties": 8},
         "target": {"$ref": "#/$defs/target"},
         "note": {"$ref": "#/$defs/note"}
       }
@@ -253,9 +256,7 @@
         "frame": {"$ref": "#/$defs/frame"},
         "startOffsetFrames": {"$ref": "#/$defs/count"},
         "musicalMap": {"$ref": "#/$defs/generation"},
-        "reason": {
-          "enum": ["sampleClock", "transport", "source", "context", "cancelScope", "late", "notReady", "capacity"]
-        },
+        "reason": {"enum": ["sampleClock", "transport", "source", "context", "cancelScope", "late", "notReady"]},
         "note": {"$ref": "#/$defs/note"}
       }
     },
@@ -289,10 +290,11 @@
         "sampleClock": {"$ref": "#/$defs/id"},
         "generation": {"$ref": "#/$defs/generation"},
         "frame": {"$ref": "#/$defs/frame"},
-        "frames": {"$ref": "#/$defs/positive"},
+        "frames": {"type": "integer", "minimum": 1, "maximum": 4294967295},
         "hostTicks": {"$ref": "#/$defs/hostTicks"},
+        "previousFrame": {"$ref": "#/$defs/frame"},
         "stream": {"$ref": "#/$defs/id"},
-        "reason": {"$ref": "#/$defs/note"},
+        "reason": {"enum": ["diskFull", "deviceLost"]},
         "note": {"$ref": "#/$defs/note"}
       }
     },
@@ -331,10 +333,11 @@
         "hostTicks": {"$ref": "#/$defs/hostTicks"},
         "frame": {"$ref": "#/$defs/frame"},
         "musicalTicks": {"$ref": "#/$defs/count"},
-        "endpointProtocol": {"$ref": "#/$defs/protocol"},
+        "endpointProtocol": {"enum": ["midi1", "midi2", "unknown"]},
         "portProtocol": {"$ref": "#/$defs/protocol"},
         "translatedBy": {"enum": ["none", "os"]},
         "effective": {"$ref": "#/$defs/protocol"},
+        "verified": {"type": "boolean"},
         "note": {"$ref": "#/$defs/note"}
       }
     },
@@ -364,13 +367,13 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "sampleClock", "generation", "startFrame", "startHostTicks", "fileFrameStart", "frames", "paddedFrames"
+              "sampleClock", "generation", "startFrame", "startOffsetNs", "fileFrameStart", "frames", "paddedFrames"
             ],
             "properties": {
               "sampleClock": {"$ref": "#/$defs/id"},
               "generation": {"$ref": "#/$defs/generation"},
               "startFrame": {"$ref": "#/$defs/frame"},
-              "startHostTicks": {"$ref": "#/$defs/hostTicks"},
+              "startOffsetNs": {"$ref": "#/$defs/count"},
               "fileFrameStart": {"$ref": "#/$defs/count"},
               "frames": {"$ref": "#/$defs/positive"},
               "paddedFrames": {"$ref": "#/$defs/count"}
@@ -400,7 +403,7 @@
           "propertyNames": {
             "enum": [
               "timingQuantized", "syntheticTempoMap", "velocityDownscaled", "noteOnVelocityRemapped", "valueDownscaled",
-              "perNoteDropped", "attributeDropped", "groupsFlattened", "umpOnlyDropped"
+              "perNoteDropped", "attributeDropped", "groupsFlattened", "umpOnlyDropped", "fidelityUnverified"
             ]
           },
           "additionalProperties": {"$ref": "#/$defs/positive"}

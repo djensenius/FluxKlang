@@ -31,7 +31,7 @@
     {"seq": 4, "kind": "discontinuity", "type": "underrun", "sampleClock": "smp.main", "generation": 1, "frame": 150000, "frames": 512, "stream": "str.backing"},
     {"seq": 5, "kind": "trigger", "triggerId": "trg.2", "actionId": "act.backing", "originHostTicks": 2485000000, "horizonFrame": 170256, "requires": {"sampleClock/smp.main": 1, "transport/mus.main": 1, "context/ctx.main": 1, "source/src.backing": 1}, "note": "Resolves to frame 192000; pending."},
     {"seq": 6, "kind": "generation", "counter": "source/src.backing", "from": 1, "to": 2, "reason": "sourceLost"},
-    {"seq": 7, "kind": "discontinuity", "type": "sourceLost", "sampleClock": "smp.main", "generation": 1, "frame": 180000, "stream": "str.backing", "reason": "volume unmounted"},
+    {"seq": 7, "kind": "discontinuity", "type": "sourceLost", "sampleClock": "smp.main", "generation": 1, "frame": 180000, "stream": "str.backing", "note": "volume unmounted"},
     {"seq": 8, "kind": "readiness", "actionId": "act.backing", "from": "ready", "to": "invalidated", "reason": "sourceLost"},
     {"seq": 9, "kind": "outcome", "triggerId": "trg.2", "result": "cancelled", "reason": "source"},
     {"seq": 10, "kind": "generation", "counter": "source/src.backing", "from": 2, "to": 3, "reason": "sourceReacquired"},

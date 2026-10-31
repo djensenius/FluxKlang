@@ -5,7 +5,7 @@
   "title": "MIDI 1.0 device captured as UMP: native MIDI 1 words and OS-upconverted MIDI 2 words both keep MIDI 1 fidelity",
   "covers": ["midi1InUmp", "smfExportLossless"],
   "notes": [
-    "str.keys-b reads the same MIDI 1.0 endpoint through a MIDI 2.0 port: velocity 0xC924 is the OS upscale of 100, not 16-bit data.",
+    "str.keys-b reads the same MIDI 1.0 endpoint through a MIDI 2.0 port: velocity 0xC924 is assumed to be the OS upscale of 100 (open question 8), not 16-bit data.",
     "Effective fidelity comes from the endpoint protocol property, never from inspecting values."
   ],
   "clocks": {

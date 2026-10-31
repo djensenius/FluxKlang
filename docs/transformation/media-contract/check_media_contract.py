@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Check the G-MEDIA contract v1 examples: schema, canonical round trip, invariants and mutations.
+"""Check G-MEDIA contract v1 examples: schema, canonical round trip, trace invariants and paired mutations.
 
-Standard library only; needs no app bootstrap, hardware, network or plugins.
-Usage: python3 docs/transformation/media-contract/check_media_contract.py [--write]
+Standard library only; no app, hardware, network or plugins. Usage: python3 check_media_contract.py [--write]
 """
 import copy
 import json
@@ -19,7 +18,8 @@ EXAMPLES = ROOT / "examples"
 WIDTH = 120
 TPQ = 15360
 SUPPORTED = {"$ref", "type", "enum", "const", "properties", "required", "additionalProperties", "propertyNames",
-             "items", "minItems", "maxItems", "minimum", "maximum", "minLength", "pattern", "oneOf", "minProperties"}
+             "items", "minItems", "maxItems", "minimum", "maximum", "minLength", "pattern", "oneOf", "minProperties",
+             "maxProperties"}
 ANNOTATIONS = {"$schema", "$id", "$defs", "$comment", "title", "description"}
 REASONS = {"sampleClock": {"deviceRestart", "rateChange", "configurationChange", "wake"},
            "transport": {"locate", "clockRestart", "transportRestart"}, "musicalMap": {"tempoEdit", "externalTempo"},
@@ -31,10 +31,6 @@ LANES = {"release": 0, "transport": 1, "state": 2, "content": 3}
 VALUE_BITS = {0xA: 7, 0xB: 7, 0xD: 7, 0x2: 14, 0x3: 14, 0xE: 14}
 UMP_WORDS = {0x0: 1, 0x1: 1, 0x2: 1, 0x3: 2, 0x4: 2, 0x5: 4, 0x6: 1, 0x7: 1, 0x8: 2, 0x9: 2, 0xA: 2, 0xB: 3,
              0xC: 3, 0xD: 4, 0xE: 4, 0xF: 4}
-REQUIRED_COVERAGE = {"clockRestart", "lateCue", "retroactiveCue", "seek", "loop", "tempoMutation", "sourceLoss",
-                     "noStaleReplay", "cancellation", "readiness", "prefetch", "ordering", "capture",
-                     "fixedRateDefault", "timeStretchPolicy", "midi1InUmp", "midi2Native", "smfExportLossy",
-                     "smfExportLossless"}
 
 
 def canon(value, depth_limit, indent=0, prefix=0):
@@ -64,10 +60,10 @@ def canon(value, depth_limit, indent=0, prefix=0):
 
 def load_canonical(path, depth_limit, write, errors):
     """Parse strictly (no duplicate keys) and require the file to equal its canonical rendering."""
-    text = path.read_text(encoding="utf-8")
     try:
+        text = path.read_text(encoding="utf-8")
         doc = json.loads(text, object_pairs_hook=no_duplicates)
-    except ValueError as exc:
+    except ValueError as exc:  # includes UnicodeDecodeError
         errors.append(f"{path.name}: {exc}")
         return None
     rendered = canon(doc, depth_limit) + "\n"
@@ -133,8 +129,8 @@ def validate(schema, value, defs, path, errors):
             if "items" in schema:
                 validate(schema["items"], item, defs, f"{path}[{i}]", errors)
     if isinstance(value, dict):
-        if len(value) < schema.get("minProperties", 0):
-            errors.append(f"{path}: too few properties")
+        if not schema.get("minProperties", 0) <= len(value) <= schema.get("maxProperties", len(value)):
+            errors.append(f"{path}: property count {len(value)} out of range")
         errors.extend(f"{path}: missing {k}" for k in schema.get("required", []) if k not in value)
         for key, item in value.items():
             if "propertyNames" in schema:
@@ -156,7 +152,7 @@ def validate(schema, value, defs, path, errors):
             errors.append(f"{path}: matches {len(passing)} oneOf branches")
         elif not passing:
             kind = value.get("kind") if isinstance(value, dict) else None
-            match = [e for b, e in results if b.get("properties", {}).get("kind", {}).get("const") == kind]
+            match = [e for b, e in results if kind and b.get("properties", {}).get("kind", {}).get("const") == kind]
             errors.extend(match[0] if match else [f"{path}: matches no oneOf branch"])
 
 
@@ -220,7 +216,7 @@ class Trace:
         self.anchor, self.first_anchor, self.musical = {}, {}, None
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq = set(), None, {}
-        self.bumps = Counter()
+        self.bumps, self.protocols, self.resume = Counter(), {}, None
 
     def err(self, rec, msg):
         self.errors.append(f"{self.name} seq {rec.get('seq', '-')}: {msg}")
@@ -298,8 +294,9 @@ class Trace:
         pf = a.get("prefetch")
         if pf and pf["blockFrames"] * pf["blockCount"] < pf["headFrames"]:
             self.err(a, f"{a['actionId']}: prefetch pool smaller than the declared head")
-        if late.get("retroactiveMs") and late["policy"] not in ("joinInProgress", "fireLate"):
-            self.err(a, f"{a['actionId']}: retroactiveMs needs joinInProgress or fireLate")
+        retro = late.get("retroactiveMs", 0)
+        if retro and (late["policy"] not in ("joinInProgress", "fireLate") or retro > late.get("maxLatenessMs", 0)):
+            self.err(a, f"{a['actionId']}: retroactiveMs needs joinInProgress or fireLate and <= maxLatenessMs")
         if late["policy"] == "nextBoundary" and "gridTicks" not in a["quantize"]:
             self.err(a, f"{a['actionId']}: nextBoundary needs a musical grid")
         if media == "audio" and policy == "fixedRate":
@@ -307,18 +304,20 @@ class Trace:
 
     def on_anchor(self, r):
         clock, key = r["sampleClock"], f"sampleClock/{r['sampleClock']}"
+        if clock not in self.rates:
+            self.err(r, "anchor names an undeclared sample clock")
+            return
         if r["generation"] != self.gens.get(key):
             self.err(r, "anchor generation is not current")
         if clock in self.pending_restart:
             self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
-        prev = self.anchor.get(clock)
+        prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
         if prev and prev["generation"] == r["generation"]:
-            frames, ns = r["frame"] - prev["frame"], (r["hostTicks"] - prev["hostTicks"]) * self.ns_per_tick
-            expected = ns * self.rates[clock] / 10**9
-            if frames <= 0 or ns <= 0 or abs(frames - expected) > expected / 1000 + 1:
-                self.err(r, "anchor must advance and agree with the nominal rate within 0.1%")
+            span = (r["hostTicks"] - first["hostTicks"]) * self.ns_per_tick * self.rates[clock] / 10**9
+            if r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"] \
+                    or abs(r["frame"] - first["frame"] - span) > (self.rates[clock] + span) / 1000:
+                self.err(r, "anchors advance and stay within (rate + span)/1000 frames of their generation's first")
         self.anchor[clock] = r
-        self.first_anchor.setdefault((clock, r["generation"]), r)
         if ("musicalTicks" in r) != ("transport" in r):
             self.err(r, "musical anchors carry both transport and musicalTicks")
         if "musicalTicks" not in r or clock != self.primary:
@@ -326,6 +325,11 @@ class Trace:
         if r["transport"] != self.gens.get(f"transport/{self.mus_id}"):
             self.err(r, "anchor transport generation is not current")
         m, it = self.musical, r.get("loopIteration", 0)
+        if (not m or m["transport"] != r["transport"]) and it:
+            self.err(r, "a new transport generation (start, locate or restart) begins at loopIteration 0")
+        if self.resume is not None and r["musicalTicks"] != self.resume:
+            self.err(r, f"after a clock restart the transport resumes at the last rendered tick {self.resume}")
+        self.resume = None
         if m and m["transport"] == r["transport"]:
             if m["generation"] != r["generation"]:
                 self.err(r, "a sample clock restart must re-anchor with a new transport generation")
@@ -355,6 +359,7 @@ class Trace:
             self.err(r, f"reason {r['reason']} does not apply to {kind}")
         if ("musicalMap" in r) != (kind == "musicalMap"):
             self.err(r, "only musicalMap generations carry (and require) a musicalMap payload")
+            return
         self.gens[counter] = r["to"]
         self.bumps[r["reason"]] += 1
         if kind == "sampleClock":
@@ -375,16 +380,24 @@ class Trace:
         if kind == "clockRestart":
             if clock not in self.pending_restart:
                 self.err(r, "clockRestart without a sample clock generation change")
+            if "hostTicks" not in r:
+                self.err(r, "clockRestart records the host ticks at which the new generation starts")
+            elif "previousFrame" in r and self.musical:
+                self.resume = rnd(self.ticks_at_frame(r["previousFrame"]))
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
         stream = self.streams.get(r.get("stream"))
-        if kind in ("underrun", "overflow", "sourceLost", "sourceRestored", "captureStopped") and stream is None:
+        if kind in ("underrun", "overflow", "sourceLost", "sourceRestored", "captureStopped", "formatChange") \
+                and stream is None:
             self.err(r, f"{kind} names a declared stream")
         if direction and (stream is None or stream["direction"] != direction or "frames" not in r):
             self.err(r, f"{kind} needs a {direction} stream and a frame count")
-        if kind == "captureStopped" and "reason" not in r:
-            self.err(r, "captureStopped states its reason")
+        for field, owner in (("previousFrame", "clockRestart"), ("reason", "captureStopped")):
+            if (field in r) != (kind == owner):
+                self.err(r, f"{field} is required on {owner} discontinuities and only there")
+        if kind == "formatChange":
+            self.protocols.pop(r.get("stream"), None)
         self.evidence.update({"locate": {"seek"}, "sourceLost": {"sourceLoss"}, "underrun": {"prefetch"}}.get(kind, set()))
 
     def on_trigger(self, r):
@@ -397,6 +410,7 @@ class Trace:
         needed = [f"sampleClock/{self.primary}"] + ([f"transport/{self.mus_id}"] if target["timeBase"] == "musical" else [])
         if any(k not in req for k in needed) or not any(k.startswith("context/") for k in req):
             self.err(r, "trigger captures the sample clock, context and (for musical targets) transport generations")
+            return
         if any(k.startswith("musicalMap/") for k in req):
             self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
         stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
@@ -440,8 +454,8 @@ class Trace:
         policy = late["policy"]
         if policy in ("fireLate", "joinInProgress") and within:
             return ("firedLate" if policy == "fireLate" else "joined"), assigned, horizon
-        if policy == "nextBoundary":
-            grid = info["action"]["quantize"]["gridTicks"]
+        grid = info["action"]["quantize"].get("gridTicks")
+        if policy == "nextBoundary" and grid:
             ticks = math.ceil(self.ticks_at_frame(horizon) / grid) * grid
             while rnd(self.frame_of_ticks(ticks)) < horizon:
                 ticks += grid
@@ -474,7 +488,7 @@ class Trace:
                 self.err(r, "action was not continuously ready: must be dropped with reason notReady")
             self.evidence.add("readiness")
             return
-        if info["expect"] is None or (result, reason) == ("dropped", "capacity"):
+        if info["expect"] is None:
             return
         want, assigned, frame = self.expected(info)
         if result != want or r.get("assignedFrame") != assigned or r.get("frame") != frame:
@@ -533,11 +547,17 @@ class Trace:
         if stream is None or (stream["media"], stream["direction"]) != ("midi", "capture"):
             self.err(r, "midiCapture names a declared MIDI capture stream")
         words = [int(w, 16) for w in r["ump"]]
-        mt, ep = words[0] >> 28, r["endpointProtocol"]
+        mt, ep, port = words[0] >> 28, r["endpointProtocol"], r["portProtocol"]
         if len(words) != UMP_WORDS[mt]:
             self.err(r, f"UMP message type {mt:X} has {UMP_WORDS[mt]} words")
-        if r["translatedBy"] != ("os" if ep != r["portProtocol"] else "none"):
-            self.err(r, "translatedBy must reflect endpoint versus port protocol")
+            return
+        if r["translatedBy"] != ("os" if {"unknown": "midi1"}.get(ep, ep) != port else "none"):
+            self.err(r, "translatedBy must reflect endpoint versus port protocol (an unknown endpoint counts as midi1)")
+        if r.get("verified", True) != (ep != "unknown"):
+            self.err(r, "verified is false exactly when the endpoint protocol is unknown")
+        if self.protocols.setdefault(r["stream"], (ep, port)) != (ep, port):
+            self.err(r, "a protocol change on a stream needs a formatChange discontinuity before the next capture")
+        self.protocols[r["stream"]] = (ep, port)
         if mt in (2, 4) and r["effective"] != ("midi2" if mt == 4 and ep == "midi2" else "midi1"):
             self.err(r, "effective fidelity is what the endpoint sent, never the container's resolution")
         frame = self.frame_at_host(r["hostTicks"])
@@ -570,6 +590,8 @@ class Trace:
                     losses["timingQuantized"] += 1
                 if mt == 4 and c["effective"] == "midi2":
                     losses.update(midi2_losses(words))
+                elif mt == 4 and c["endpointProtocol"] == "unknown":
+                    losses["fidelityUnverified"] += 1
                 elif mt not in (2, 3, 4):
                     losses["umpOnlyDropped"] += 1
                 if len(groups) > 1 and (words[0] >> 24) & 0xF != min(groups):
@@ -598,8 +620,9 @@ class Trace:
                 self.err(r, "segments are contiguous in the file; no padding across clock restarts")
             host = None if anchor is None else anchor["hostTicks"] + (seg["startFrame"] - anchor["frame"]) \
                 * Fraction(10**9, self.rates[seg["sampleClock"]]) / self.ns_per_tick
-            if host is None or rnd(host) != seg["startHostTicks"]:
-                self.err(r, "segment startHostTicks must map from its generation's anchor")
+            base = host if i == 0 else base
+            if host is None or base is None or rnd((host - base) * self.ns_per_tick) != seg["startOffsetNs"]:
+                self.err(r, "segment startOffsetNs is the ns offset of its anchored start from the first segment's")
             inside = [d for d in overflow if d["generation"] == gen]
             if any(not seg["startFrame"] <= d["frame"] < seg["startFrame"] + seg["frames"] for d in inside) \
                     or seg["paddedFrames"] != sum(d["frames"] for d in inside):
@@ -609,7 +632,7 @@ class Trace:
                 1 for d in overflow if any(d["generation"] == s["generation"] for s in segs)):
             self.err(r, "droppedFrames equals all padded overflow frames; no silent capture loss")
         stops = [d for d in self.discs if d["type"] == "captureStopped" and d.get("stream") == r["stream"]]
-        if r["stopReason"] != "user" and (len(stops) != 1 or r["stopReason"] not in stops[0]["reason"]
+        if r["stopReason"] != "user" and (len(stops) != 1 or r["stopReason"] != stops[0].get("reason")
                                          or stops[0]["frame"] != segs[-1]["startFrame"] + segs[-1]["frames"]):
             self.err(r, "a non-user stop has one captureStopped discontinuity at the end of the last segment")
         self.evidence.add("capture")
@@ -623,36 +646,32 @@ def check_example(doc, name, schema):
     if doc["exampleId"] != "ex." + Path(name).stem:
         return [f"{name}: exampleId must be ex.<file stem>"], set()
     trace = Trace(doc, name)
-    trace.run()
+    try:
+        trace.run()
+    except Exception as exc:  # a malformed trace must report FAIL, never crash the checker
+        trace.err({}, f"replay aborted: {type(exc).__name__}: {exc}")
     return trace.errors, set(doc["covers"])
 
 
-def mutate(doc, match, changes):
-    rec = next(r for r in doc["timeline"] if all(r.get(k) == v for k, v in match.items()))
-    for key, value in changes.items():
-        if value is None:
-            rec.pop(key, None)
-        else:
-            rec[key] = value
-
-
-# Each mutation breaks one contract rule in a valid example; the checker must reject every one.
+# (example, seq, changes, error): each breaks one rule in a valid example and must fail with that rule's error.
 MUTATIONS = [
-    ("stale trigger fires", "06", {"kind": "outcome", "result": "rejectedStale"}, {"result": "fired", "reason": None}),
-    ("pending trigger survives locate", "03", {"kind": "outcome", "result": "cancelled"},
-     {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1}),
-    ("lost-source trigger replayed", "05", {"kind": "outcome", "reason": "source"},
-     {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1}),
-    ("generation skips", "01", {"kind": "generation"}, {"to": 3}),
-    ("late cue fires on time", "02", {"kind": "outcome", "result": "dropped"},
-     {"result": "fired", "reason": None, "frame": 336000}),
-    ("tempo edit ignored", "04", {"kind": "outcome", "musicalMap": 2}, {"assignedFrame": 288000, "frame": 288000}),
-    ("unready action fires", "07", {"kind": "outcome", "reason": "notReady"},
-     {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1}),
-    ("silent capture drop", "08", {"kind": "take"}, {"droppedFrames": 0}),
-    ("converted MIDI 1 claims MIDI 2", "09", {"kind": "midiCapture", "translatedBy": "os"}, {"effective": "midi2"}),
-    ("hidden SMF loss", "10", {"kind": "export", "format": "smf"}, {"lossless": True, "losses": {}}),
-    ("loop wrap without discontinuity", "03", {"kind": "discontinuity", "type": "loopWrap"}, {"type": "sampleJump"}),
+    ("01", 3, {"to": 3}, "advance the current value by exactly one"),
+    ("01", 7, {"musicalTicks": 0}, "resumes at the last rendered tick 92160"),
+    ("01", 11, {"result": "dropped", "reason": "capacity"}, '.reason: "capacity" not in enum'),
+    ("02", 9, {"result": "fired", "reason": None, "frame": 336000}, "expected dropped assignedFrame=336000"),
+    ("03", 2, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
+    ("03", 10, {"result": "fired", "reason": None, "assignedFrame": 288000, "frame": 288000, "musicalMap": 1},
+     "changed while pending: must be cancelled"),
+    ("04", 7, {"assignedFrame": 288000, "frame": 288000}, "expected fired assignedFrame=268800"),
+    ("05", 9, {"result": "fired", "reason": None, "assignedFrame": 192000, "frame": 192000, "musicalMap": 1},
+     "changed while pending: must be cancelled"),
+    ("06", 9, {"result": "fired", "reason": None}, "must be rejectedStale"),
+    ("07", 3, {"result": "fired", "reason": None, "assignedFrame": 96000, "frame": 96000, "musicalMap": 1},
+     "must be dropped with reason notReady"),
+    ("08", 8, {"droppedFrames": 0}, "no silent capture loss"),
+    ("09", 4, {"effective": "midi2"}, "never the container's resolution"),
+    ("09", 6, {"endpointProtocol": "midi2", "translatedBy": "none", "effective": "midi2"}, "needs a formatChange"),
+    ("10", 11, {"lossless": True, "losses": {}}, "must equal recomputed"),
 ]
 
 
@@ -667,24 +686,28 @@ def main(argv):
     for path in files:
         doc = load_canonical(path, 2, "--write" in argv, errors)
         if doc is None:
+            print(f"FAIL {path.name}")
             continue
         found, claims = check_example(doc, path.name, schema)
         errors += found
         covered |= claims if not found else set()
         docs[path.stem[:2]] = (doc, path.name)
         print(f"{'ok  ' if not found else 'FAIL'} {path.name}")
-    if REQUIRED_COVERAGE - covered:
-        errors.append(f"coverage missing: {sorted(REQUIRED_COVERAGE - covered)}")
-    for label, prefix, match, changes in MUTATIONS:
-        if prefix not in docs:
-            errors.append(f"mutation '{label}': example {prefix} missing")
+    if set(schema["$defs"]["coverage"]["enum"]) - covered:
+        errors.append(f"coverage missing: {sorted(set(schema['$defs']['coverage']['enum']) - covered)}")
+    for prefix, seq, changes, expect in MUTATIONS:
+        doc, name = copy.deepcopy(docs.get(prefix, ({"timeline": []}, prefix)))
+        if len(doc["timeline"]) < seq:
+            errors.append(f"mutation {prefix} seq {seq}: record missing")
             continue
-        doc, name = copy.deepcopy(docs[prefix][0]), docs[prefix][1]
-        mutate(doc, match, changes)
-        caught = check_example(doc, name, schema)[0]
-        print(f"{'ok  ' if caught else 'FAIL'} mutation rejected: {label}")
+        rec = doc["timeline"][seq - 1]
+        rec.update({k: v for k, v in changes.items() if v is not None})
+        for key in [k for k, v in changes.items() if v is None]:
+            rec.pop(key, None)
+        caught = any(expect in e for e in check_example(doc, name, schema)[0])
+        print(f"{'ok  ' if caught else 'FAIL'} mutation {prefix} seq {seq} rejected: {expect}")
         if not caught:
-            errors.append(f"mutation '{label}' was not detected")
+            errors.append(f"mutation {prefix} seq {seq} did not fail with '{expect}'")
     for line in errors:
         print("error:", line)
     print(f"{len(files)} examples, {len(MUTATIONS)} mutations, {len(errors)} errors")
