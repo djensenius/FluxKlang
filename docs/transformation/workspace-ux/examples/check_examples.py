@@ -105,18 +105,15 @@ def check_ids_and_revisions(docs):
     history = {n: {h["revision"]: h for h in d.get("history", [])} for n, d in docs.items()}
     for name, doc in docs.items():
         for key, value in walk(doc):
-            if key in ("id", "proposedId"):
-                continue
-            if isinstance(value, str) and ID_RE.match(value) and value not in defined:
+            ref = value.split(":")[-1] if isinstance(value, str) and key not in ("id", "proposedId") else ""
+            if ID_RE.match(ref) and ref not in defined:
                 err(name, f"{key} references undefined id {value}")
-            if isinstance(value, str) and ":" in value and value.split(":")[-1] not in defined:
-                if ID_RE.match(value.split(":")[-1]):
-                    err(name, f"scoped reference {value} names an undefined id")
-            match = REV_KEY.match(key or "")
-            if match and isinstance(value, int):
-                contract = REV_CONTRACT[match.group(1).lower()]
-                if value not in history.get(contract, {}):
-                    err(name, f"{key}={value} is not a revision in {contract} history")
+        for obj in objects(doc):
+            for key, value in obj.items():
+                match = REV_KEY.match(key)
+                contract = match and REV_CONTRACT[match.group(1).lower()]
+                if match and (type(value) is not int or value not in history.get(contract, {})):
+                    err(name, f"{key}={value!r} must be an integer revision in {contract} history")
     return defined, history
 
 
