@@ -40,9 +40,14 @@ extension RealtimeHandoffTests {
         }
 
         static func seed(_ latch: FaultLatch, generation: UInt64, count: UInt64, claim: UInt64,
-                         kind: FaultKind = .noPlan, frame: Int64 = 0) {
+                         kind: FaultKind = .noPlan, frame: Int64 = 0, scope: FaultScope = scope) {
             let state = FaultLatch.TestState(generation: generation, count: count, claimGeneration: claim)
             #expect(latch.seedForTesting(scope, state, kind: kind, frame: frame))
+        }
+
+        /// Observe, (recover), acknowledge: the caller protocol with nothing raised in between.
+        static func acknowledge(_ latch: FaultLatch, _ scope: FaultScope) -> FaultRecord? {
+            latch.observe(scope).flatMap(latch.acknowledge)
         }
 
         @Test func raiseIsVisibleUntilAcknowledged() throws {
@@ -59,7 +64,7 @@ extension RealtimeHandoffTests {
                         #expect(Self.pendingRecords(latch) == [expected])
                     }
                     Self.expectInvariant(latch)
-                    #expect(latch.acknowledge(Self.scope) == expected)
+                    #expect(Self.acknowledge(latch, Self.scope) == expected)
                     #expect(!latch.isLatched(Self.scope))
                     #expect(Self.pendingRecords(latch).isEmpty)
                     Self.expectInvariant(latch)
@@ -81,11 +86,13 @@ extension RealtimeHandoffTests {
                     }
                     let expected = FaultRecord(scope: Self.scope, kind: kind, count: count, firstFrame: first)
                     #expect(Self.pendingRecords(latch) == [expected])
-                    #expect(latch.acknowledge(Self.scope) == expected)
+                    #expect(Self.acknowledge(latch, Self.scope) == expected)
                 }
             }
             let cap = FaultLatch.countCap
             #expect(cap == 1 << 39)
+            #expect(FaultLatch.countBits == 40 && FaultLatch.countMask == (1 << 40) - 1)
+            #expect(FaultLatch.generationMask == (1 << 24) - 1 && FaultLatch.unknownCap == .max / 2)
             let latch = try FaultLatch(scopes: Self.scopes)
             Self.seed(latch, generation: 9, count: cap - 1, claim: 9, kind: .staleClock, frame: .min)
             let saturated = FaultRecord(scope: Self.scope, kind: .staleClock, count: cap, firstFrame: .min)
@@ -100,10 +107,10 @@ extension RealtimeHandoffTests {
             #expect(latch.raise(Self.scope, .noPlan, frame: 0) == .ok)
             #expect(latch.stateForTesting(Self.scope) == .init(generation: 9, count: cap + 5, claimGeneration: 9))
             #expect(Self.pendingRecords(latch) == [saturated])
-            #expect(latch.acknowledge(Self.scope) == saturated)
-            #expect(latch.raise(Self.scope, .noPlan, frame: .max) == .ok)
-            #expect(latch.acknowledge(Self.scope)
-                    == FaultRecord(scope: Self.scope, kind: .noPlan, count: 1, firstFrame: .max))
+            // A saturated scope fails closed (see `saturatedOrExhaustedObservationsFailClosed`).
+            #expect(latch.observe(Self.scope)?.record == saturated)
+            #expect(Self.acknowledge(latch, Self.scope) == nil)
+            #expect(latch.isLatched(Self.scope))
         }
 
         @Test func unknownScopeIsCountedNotDropped() throws {
@@ -119,7 +126,7 @@ extension RealtimeHandoffTests {
                     #expect(latch.unknownScopeFaults == expected)
                 }
                 #expect(!latch.isLatched(scope))
-                #expect(latch.acknowledge(scope) == nil)
+                #expect(Self.acknowledge(latch, scope) == nil)
             }
             #expect(Self.scopes.allSatisfy { !latch.isLatched($0) })
             #expect(Self.pendingRecords(latch).isEmpty)
@@ -135,7 +142,7 @@ extension RealtimeHandoffTests {
 
         @Test func acknowledgeReturnsRecordAndRearmsOnce() throws {
             let latch = try FaultLatch(scopes: Self.scopes)
-            #expect(latch.acknowledge(Self.scope) == nil)
+            #expect(Self.acknowledge(latch, Self.scope) == nil)
             var generation = 0
             for kind in FaultKind.allCases {
                 for frame in Root.adversarialFrames {
@@ -145,8 +152,8 @@ extension RealtimeHandoffTests {
                     }
                     let record = FaultRecord(scope: Self.scope, kind: kind, count: UInt64(generation),
                                              firstFrame: frame)
-                    #expect(latch.acknowledge(Self.scope) == record)
-                    #expect(latch.acknowledge(Self.scope) == nil)
+                    #expect(Self.acknowledge(latch, Self.scope) == record)
+                    #expect(Self.acknowledge(latch, Self.scope) == nil)
                     #expect(!latch.isLatched(Self.scope))
                     #expect(Self.pendingRecords(latch).isEmpty)
                     Self.expectInvariant(latch)
@@ -164,7 +171,7 @@ extension RealtimeHandoffTests {
                 #expect(latch.isLatched(Self.scope))
                 let record = FaultRecord(scope: Self.scope, kind: kind, count: 1, firstFrame: Int64(round))
                 #expect(Self.pendingRecords(latch) == [record])
-                #expect(latch.acknowledge(Self.scope) == record)
+                #expect(Self.acknowledge(latch, Self.scope) == record)
                 #expect(latch.stateForTesting(Self.scope)?.generation == UInt64(round))
                 Self.expectInvariant(latch)
             }
@@ -183,13 +190,13 @@ extension RealtimeHandoffTests {
                 Self.seed(latch, generation: generation, count: 3, claim: previous, kind: .sysexOverflow, frame: 7)
                 #expect(latch.isLatched(Self.scope))
                 #expect(Self.pendingRecords(latch).isEmpty)
-                #expect(latch.acknowledge(Self.scope) == nil)
+                #expect(Self.acknowledge(latch, Self.scope) == nil)
                 #expect(latch.stateForTesting(Self.scope)
                         == .init(generation: generation, count: 3, claimGeneration: previous))
                 Self.seed(latch, generation: generation, count: 3, claim: generation, kind: .noPlan, frame: 99)
                 let record = FaultRecord(scope: Self.scope, kind: .noPlan, count: 3, firstFrame: 99)
                 #expect(Self.pendingRecords(latch) == [record])
-                #expect(latch.acknowledge(Self.scope) == record)
+                #expect(Self.acknowledge(latch, Self.scope) == record)
                 #expect(!latch.isLatched(Self.scope))
             }
         }
@@ -204,10 +211,10 @@ extension RealtimeHandoffTests {
                 let record = FaultRecord(scope: raised, kind: .sysexOverflow, count: 1, firstFrame: 42)
                 #expect(Self.pendingRecords(latch) == [record])
                 for scope in Self.scopes where scope != raised {
-                    #expect(latch.acknowledge(scope) == nil)
+                    #expect(Self.acknowledge(latch, scope) == nil)
                 }
                 #expect(latch.isLatched(raised))
-                #expect(latch.acknowledge(raised) == record)
+                #expect(Self.acknowledge(latch, raised) == record)
             }
             // Every scope latched at once still reports each record against its own scope.
             let latch = try FaultLatch(scopes: Self.scopes.reversed())
@@ -241,42 +248,185 @@ extension RealtimeHandoffTests {
             #expect(Self.preparationError(full + [full[0]]) == .tooManyScopes(4_097))
         }
 
-        @Test func commitAfterARaiseKeepsTheRaise() throws {
+        /// A raise after the observation (that is, during recovery) refuses the acknowledge and stays latched, so
+        /// the caller must re-observe and recover again; the stale observation never succeeds later.
+        @Test func raiseAfterObservationRefusesTheAcknowledge() throws {
             for kind in FaultKind.allCases {
                 for frame in Root.adversarialFrames {
                     let latch = try FaultLatch(scopes: Self.scopes)
                     #expect(latch.raise(Self.scope, kind, frame: frame) == .ok)
-                    let snapshot = try #require(latch.snapshotForTesting(Self.scope))
-                    // A raise lands between the snapshot and the compare-exchange: the commit retries and keeps it.
+                    let stale = try #require(latch.observe(Self.scope))
+                    #expect(stale.isAcknowledgeable)
+                    #expect(stale.record == FaultRecord(scope: Self.scope, kind: kind, count: 1, firstFrame: frame))
                     #expect(latch.raise(Self.scope, .noPlan, frame: 1) == .ok)
+                    #expect(latch.acknowledge(stale) == nil)
+                    #expect(latch.isLatched(Self.scope))
+                    #expect(latch.stateForTesting(Self.scope) == .init(generation: 0, count: 2, claimGeneration: 0))
+                    let fresh = try #require(latch.observe(Self.scope))
                     let record = FaultRecord(scope: Self.scope, kind: kind, count: 2, firstFrame: frame)
-                    #expect(latch.commitForTesting(snapshot) == record)
+                    #expect(fresh.record == record)
+                    #expect(latch.acknowledge(fresh) == record)
+                    #expect(latch.acknowledge(fresh) == nil)
+                    #expect(latch.acknowledge(stale) == nil)
                     #expect(!latch.isLatched(Self.scope))
-                    #expect(latch.acknowledge(Self.scope) == nil)
                     Self.expectInvariant(latch)
                 }
             }
         }
 
-        /// Two snapshots of one generation (only possible through the seam; `acknowledge` holds the control lock):
-        /// the second commit returns `nil` and leaves the next generation, including across the wrap, untouched.
-        @Test func staleCommitLeavesTheNextGenerationAlone() throws {
+        /// Two observations of one generation: the second is stale once the first is acknowledged, including when
+        /// the packed generation later wraps back to exactly the tally and claim it saw (seeded: 2^24 real
+        /// acknowledges are too slow for a unit test); the per-scope epoch refuses it.
+        @Test func staleObservationCannotClearALaterGenerationAcrossWrap() throws {
             let latch = try FaultLatch(scopes: Self.scopes)
             for generation in [UInt64(0), 5, Self.lastGeneration] {
                 let next = (generation &+ 1) & Self.lastGeneration
                 Self.seed(latch, generation: generation, count: 2, claim: generation, kind: .noPlan, frame: 7)
-                let snapshots = (0..<3).compactMap { _ in latch.snapshotForTesting(Self.scope) }
-                try #require(snapshots.count == 3)
+                let first = try #require(latch.observe(Self.scope))
+                let second = try #require(latch.observe(Self.scope))
                 let record = FaultRecord(scope: Self.scope, kind: .noPlan, count: 2, firstFrame: 7)
-                #expect(latch.commitForTesting(snapshots[0]) == record)
-                #expect(latch.commitForTesting(snapshots[1]) == nil)
+                #expect(second.record == record)
+                #expect(latch.acknowledge(first) == record)
+                #expect(latch.acknowledge(second) == nil)
                 #expect(latch.stateForTesting(Self.scope)
                         == .init(generation: next, count: 0, claimGeneration: generation))
                 #expect(latch.raise(Self.scope, .staleClock, frame: 8) == .ok)
-                #expect(latch.commitForTesting(snapshots[2]) == nil)
+                #expect(latch.acknowledge(second) == nil)
                 #expect(latch.stateForTesting(Self.scope) == .init(generation: next, count: 1, claimGeneration: next))
-                #expect(latch.acknowledge(Self.scope)
-                        == FaultRecord(scope: Self.scope, kind: .staleClock, count: 1, firstFrame: 8))
+                // The generation wraps back to the stale observation's exact tally and claim.
+                Self.seed(latch, generation: generation, count: 2, claim: generation, kind: .noPlan, frame: 7)
+                #expect(latch.acknowledge(second) == nil)
+                #expect(latch.acknowledge(first) == nil)
+                #expect(latch.stateForTesting(Self.scope)
+                        == .init(generation: generation, count: 2, claimGeneration: generation))
+                #expect(Self.acknowledge(latch, Self.scope) == record)
+            }
+        }
+
+        /// A refused acknowledge makes one compare-exchange attempt, leaves its scope latched and does not block
+        /// other scopes.
+        @Test func failedAcknowledgeTriesOnceAndOtherScopesProgress() throws {
+            let latch = try FaultLatch(scopes: Self.scopes)
+            let other = FaultScope(handoff: 7, target: 3)
+            #expect(latch.raise(Self.scope, .noPlan, frame: 1) == .ok)
+            #expect(latch.raise(other, .sysexAborted, frame: 2) == .ok)
+            let refused = try #require(latch.observe(Self.scope))
+            let accepted = try #require(latch.observe(other))
+            #expect(latch.raise(Self.scope, .staleClock, frame: 3) == .ok)
+            #expect(latch.acknowledge(refused) == nil)
+            #expect(latch.stateForTesting(Self.scope) == .init(generation: 0, count: 2, claimGeneration: 0))
+            #expect(latch.acknowledge(accepted) == FaultRecord(scope: other, kind: .sysexAborted, count: 1,
+                                                               firstFrame: 2))
+            #expect(!latch.isLatched(other))
+            #expect(latch.isLatched(Self.scope))
+            #expect(Self.acknowledge(latch, Self.scope)
+                    == FaultRecord(scope: Self.scope, kind: .noPlan, count: 2, firstFrame: 1))
+        }
+
+        /// An observation is bound to the latch that made it, even when another latch holds an identical scope
+        /// state or fewer scopes than the observation's index.
+        @Test func foreignObservationIsRefused() throws {
+            let owner = try FaultLatch(scopes: Self.scopes)
+            let twin = try FaultLatch(scopes: Self.scopes)
+            let small = try FaultLatch(scopes: [Self.scope])
+            let last = FaultScope(handoff: .max, target: .max)
+            for latch in [owner, twin, small] {
+                #expect(latch.raise(Self.scope, .noPlan, frame: 5) == .ok)
+            }
+            #expect(owner.raise(last, .noPlan, frame: 5) == .ok)
+            let observation = try #require(owner.observe(Self.scope))
+            let lastObservation = try #require(owner.observe(last))
+            for foreign in [twin, small] {
+                #expect(foreign.acknowledge(observation) == nil)
+                #expect(foreign.acknowledge(lastObservation) == nil)
+                #expect(foreign.stateForTesting(Self.scope) == .init(generation: 0, count: 1, claimGeneration: 0))
+            }
+            let record = FaultRecord(scope: Self.scope, kind: .noPlan, count: 1, firstFrame: 5)
+            #expect(owner.acknowledge(observation) == record)
+            #expect(owner.acknowledge(lastObservation) == FaultRecord(scope: last, kind: .noPlan, count: 1,
+                                                                      firstFrame: 5))
+            #expect(Self.acknowledge(twin, Self.scope) == record)
+        }
+
+        /// A saturated count cannot prove that no raise was dropped since the observation, and an exhausted epoch
+        /// cannot step without wrapping: both fail closed, latched until the latch is replaced while quiescent.
+        @Test func saturatedOrExhaustedObservationsFailClosed() throws {
+            let latch = try FaultLatch(scopes: Self.scopes)
+            for count in [FaultLatch.countCap, FaultLatch.countCap + 5] {
+                Self.seed(latch, generation: 3, count: count, claim: 3, kind: .staleClock, frame: .min)
+                let observation = try #require(latch.observe(Self.scope))
+                #expect(!observation.isAcknowledgeable)
+                #expect(observation.record.count == FaultLatch.countCap)
+                #expect(latch.acknowledge(observation) == nil)
+                #expect(latch.raise(Self.scope, .noPlan, frame: 0) == .ok)
+                #expect(latch.stateForTesting(Self.scope) == .init(generation: 3, count: count, claimGeneration: 3))
+            }
+            Self.seed(latch, generation: 3, count: FaultLatch.countCap - 1, claim: 3)
+            let belowCap = try #require(latch.observe(Self.scope))
+            #expect(belowCap.isAcknowledgeable)
+            for limit in [UInt64(0), 1, 2] {
+                let limited = try FaultLatch(scopes: Self.scopes, epochLimit: limit)
+                for cycle in 0...limit {
+                    #expect(limited.raise(Self.scope, .noPlan, frame: Int64(cycle)) == .ok)
+                    let observation = try #require(limited.observe(Self.scope))
+                    #expect(observation.isAcknowledgeable == (cycle < limit))
+                    let record = FaultRecord(scope: Self.scope, kind: .noPlan, count: 1, firstFrame: Int64(cycle))
+                    #expect(limited.acknowledge(observation) == (cycle < limit ? record : nil))
+                }
+                for _ in 0..<3 {
+                    #expect(Self.acknowledge(limited, Self.scope) == nil)
+                    #expect(limited.isLatched(Self.scope))
+                }
+                #expect(limited.stateForTesting(Self.scope)?.generation == limit)
+                #expect(Self.acknowledge(limited, FaultScope(handoff: 0, target: 0)) == nil)
+                #expect(limited.raise(FaultScope(handoff: 0, target: 0), .noPlan, frame: 1) == .ok)
+                let otherRecord = Self.acknowledge(limited, FaultScope(handoff: 0, target: 0))
+                #expect((otherRecord != nil) == (limit > 0))
+            }
+        }
+
+        /// `kind` is only the first kind raised: an observation's count covers every kind raised before it, so
+        /// recovery must cover the whole scope, not just `kind`.
+        @Test func observationCoversEveryKindRaised() throws {
+            let latch = try FaultLatch(scopes: Self.scopes)
+            for (frame, kind) in FaultKind.allCases.reversed().enumerated() {
+                #expect(latch.raise(Self.scope, kind, frame: Int64(frame)) == .ok)
+            }
+            let observation = try #require(latch.observe(Self.scope))
+            #expect(observation.record == FaultRecord(scope: Self.scope, kind: .staleClock, count: 8, firstFrame: 0))
+            #expect(latch.acknowledge(observation) == observation.record)
+        }
+
+        /// `seedForTesting` is a quiescent test utility that steps the scope's epoch under the control lock: an
+        /// observation made before a seed is refused even when the seed restores the exact tally and claim it saw
+        /// (same-epoch replay), and at the epoch limit a seed is refused without changing any state.
+        @Test func seedInvalidatesObservationsAndFailsClosedAtTheLimit() throws {
+            let latch = try FaultLatch(scopes: Self.scopes)
+            #expect(latch.raise(Self.scope, .noPlan, frame: 4) == .ok)
+            let replayed = try #require(latch.observe(Self.scope))
+            #expect(latch.raise(Self.scope, .staleClock, frame: 5) == .ok)
+            Self.seed(latch, generation: 0, count: 1, claim: 0, kind: .noPlan, frame: 4)
+            #expect(latch.observe(Self.scope)?.record == replayed.record)
+            #expect(latch.acknowledge(replayed) == nil)
+            #expect(latch.stateForTesting(Self.scope) == .init(generation: 0, count: 1, claimGeneration: 0))
+            #expect(Self.acknowledge(latch, Self.scope) == replayed.record)
+            for limit in [UInt64(0), 1] {
+                let limited = try FaultLatch(scopes: Self.scopes, epochLimit: limit)
+                #expect(limited.raise(Self.scope, .noPlan, frame: 4) == .ok)
+                let observation = try #require(limited.observe(Self.scope))
+                let seeded = FaultLatch.TestState(generation: 7, count: 2, claimGeneration: 7)
+                #expect(limited.seedForTesting(Self.scope, seeded, kind: .staleClock, frame: 9) == (limit > 0))
+                #expect(limited.acknowledge(observation) == nil)
+                let expected: FaultLatch.TestState = limit > 0 ? seeded : .init(generation: 0, count: 1,
+                                                                                 claimGeneration: 0)
+                let refused = FaultLatch.TestState(generation: 3, count: 5, claimGeneration: 3)
+                #expect(!limited.seedForTesting(Self.scope, refused, kind: .sysexAborted, frame: 1))
+                #expect(limited.stateForTesting(Self.scope) == expected)
+                let exhausted = try #require(limited.observe(Self.scope))
+                #expect(!exhausted.isAcknowledgeable)
+                #expect(exhausted.record.kind == (limit > 0 ? .staleClock : .noPlan))
+                #expect(limited.acknowledge(exhausted) == nil)
+                #expect(limited.isLatched(Self.scope))
             }
         }
 

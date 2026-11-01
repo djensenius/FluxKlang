@@ -155,18 +155,20 @@ extension RealtimeHandoffTests {
             try Self.raiseWhileAcknowledging(scopes, acknowledgers: 1)
         }
 
-        /// Two control threads contend for one scope's acknowledges (serialized by the control lock).
+        /// Two control threads contend for one scope's acknowledges: the control lock serializes them and the
+        /// per-scope epoch refuses whichever observation went stale.
         @Test(.timeLimit(.minutes(1))) func twoAcknowledgersNeverDuplicateOrLose() throws {
             try Self.raiseWhileAcknowledging([FaultScope(handoff: 4, target: 0)], acknowledgers: 2)
         }
 
-        /// A delayed reader across the wrap: while a snapshot of generation 2^24 − 1 is held under the control
-        /// lock, a concurrent `acknowledge` and `pending` wait, so no generation step can intervene before the
-        /// commit. Afterwards the waiting `acknowledge` finds nothing and the scope re-arms at generation 0.
-        /// The commit waits until both threads are blocked in the kernel (Mach `TH_STATE_WAITING`, stable over
-        /// consecutive samples) after they arrived; the only blocking point left in `acknowledge`/`pending` is the
-        /// control lock. With the lock that state is always reached, so the test cannot fail; without it
-        /// (`S-*-no-lock`) a thread cannot block there, runs to completion and `exited == 0` fails before the commit.
+        /// A delayed control call across the wrap: while the control lock is held, an `acknowledge` of an
+        /// observation of generation 2^24 − 1 and a concurrent `observe` and `pending` wait for it, so nothing else
+        /// can touch the scope's epoch or generation in between. After the lock is released the acknowledge re-arms
+        /// the scope at generation 0. The lock is released only once all three threads are blocked in the kernel
+        /// (Mach `TH_STATE_WAITING`, stable over consecutive samples) after they arrived; the only blocking point
+        /// left in `acknowledge`/`observe`/`pending` is the control lock. With the lock that state is always
+        /// reached, so the test cannot fail; without it (`S-*-no-lock`) a thread cannot block there, runs to
+        /// completion and `exited == 0` fails while the lock is held.
         @Test(.timeLimit(.minutes(1))) func controlWaitsForTheLockAcrossWrap() throws {
             let scope = FaultScope(handoff: 5, target: 0)
             let latch = try FaultLatch(scopes: [scope])
@@ -174,36 +176,44 @@ extension RealtimeHandoffTests {
             let held = FaultLatch.TestState(generation: last, count: 2, claimGeneration: last)
             #expect(latch.seedForTesting(scope, held, kind: .noPlan, frame: 7))
             let probe = StressState()
-            var committed: FaultRecord?
+            let observation = try #require(latch.observe(scope))
             latch.withControlLockForTesting {
-                let snapshot = latch.snapshotForTesting(scope)
                 Thread {
                     Self.arrive(probe)
-                    if latch.acknowledge(scope) == nil { probe.nilAcknowledges.add(1, ordering: .relaxed) }
+                    if let record = latch.acknowledge(observation) {
+                        Self.note(record, probe)
+                    } else {
+                        probe.nilAcknowledges.add(1, ordering: .relaxed)
+                    }
                     probe.exited.add(1, ordering: .releasing)
                 }.start()
-                Thread {
-                    Self.arrive(probe)
-                    _ = latch.pending { _ in }
-                    probe.exited.add(1, ordering: .releasing)
-                }.start()
-                // Ends as soon as a thread returns (no lock: fails below) or both are blocked on the lock.
+                let readers: [@Sendable () -> Void] = [{ _ = latch.observe(scope) }, { _ = latch.pending { _ in } }]
+                for read in readers {
+                    Thread {
+                        Self.arrive(probe)
+                        read()
+                        probe.exited.add(1, ordering: .releasing)
+                    }.start()
+                }
+                // Ends as soon as a thread returns (no lock: fails below) or all are blocked on the lock.
                 let settled = Self.poll {
-                    probe.exited.load(ordering: .acquiring) > 0 || Self.bothBlocked(probe)
+                    probe.exited.load(ordering: .acquiring) > 0 || Self.allBlocked(probe, threads: 3)
                 }
                 if !settled { Issue.record("control calls neither blocked nor returned within \(Self.deadline)") }
                 #expect(probe.exited.load(ordering: .acquiring) == 0)
                 #expect(latch.stateForTesting(scope) == held)
-                committed = snapshot.flatMap(latch.commitForTesting)
             }
-            #expect(committed == FaultRecord(scope: scope, kind: .noPlan, count: 2, firstFrame: 7))
-            let returned = Self.poll { probe.exited.load(ordering: .acquiring) == 2 }
+            let returned = Self.poll { probe.exited.load(ordering: .acquiring) == 3 }
             if !returned { Issue.record("control calls did not return within \(Self.deadline)") }
             guard returned else { return }
-            #expect(probe.nilAcknowledges.load(ordering: .relaxed) == 1)
+            #expect(probe.nilAcknowledges.load(ordering: .relaxed) == 0)
+            #expect(probe.frames.withLock { $0 } == [7])
+            #expect(probe.reported.load(ordering: .relaxed) == 2)
             #expect(latch.stateForTesting(scope) == .init(generation: 0, count: 0, claimGeneration: last))
+            #expect(latch.acknowledge(observation) == nil)
             #expect(latch.raise(scope, .sysexAborted, frame: 9) == .ok)
-            #expect(latch.acknowledge(scope) == FaultRecord(scope: scope, kind: .sysexAborted, count: 1, firstFrame: 9))
+            #expect(latch.observe(scope).flatMap(latch.acknowledge)
+                    == FaultRecord(scope: scope, kind: .sysexAborted, count: 1, firstFrame: 9))
             probe.waiters.withLock { $0.forEach { _ = mach_port_deallocate(mach_task_self_, $0) } }
         }
 
@@ -214,10 +224,10 @@ extension RealtimeHandoffTests {
             probe.arrived.add(1, ordering: .releasing)
         }
 
-        /// Both waiting threads arrived and are blocked in the kernel in 5 samples 1 ms apart, so a brief
+        /// All `threads` waiting threads arrived and are blocked in the kernel in 5 samples 1 ms apart, so a brief
         /// non-lock wait (such as a page fault) cannot pass for blocking on the lock.
-        fileprivate static func bothBlocked(_ probe: StressState) -> Bool {
-            guard probe.arrived.load(ordering: .acquiring) == 2 else { return false }
+        fileprivate static func allBlocked(_ probe: StressState, threads: Int) -> Bool {
+            guard probe.arrived.load(ordering: .acquiring) == threads else { return false }
             let ports = probe.waiters.withLock { $0 }
             return (0..<5).allSatisfy { _ in
                 defer { Thread.sleep(forTimeInterval: 0.001) }
@@ -252,7 +262,8 @@ extension RealtimeHandoffTests {
         /// waits (bounded, cancellable) until an acknowledge has returned a record; that acknowledge opens the gate
         /// (with one or two acknowledgers, whichever returns a record first) and the raisers raise their second
         /// half. A record always exists for it (first-half raises, drained only by acknowledges that also open the
-        /// gate), and no raiser can finish before the gate opens, so at least one acknowledge returning a record
+        /// gate) and, once every raiser waits, nothing is raised between an observation and its acknowledge, so
+        /// one succeeds. No raiser can finish before the gate opens, so at least one acknowledge returning a record
         /// provably precedes half of every raiser's raises; `finishedAtRelease == 0` checks it.
         static func raiseWhileAcknowledging(_ scopes: [FaultScope], acknowledgers: Int) throws {
             let latch = try FaultLatch(scopes: scopes)
@@ -268,7 +279,10 @@ extension RealtimeHandoffTests {
                 // Each poll acknowledges every scope; bounded and cancellable like every worker wait.
                 _ = Self.spin(state) {
                     for scope in scopes {
-                        guard let record = latch.acknowledge(scope) else { continue }
+                        // Observe, recover (nothing to do here), acknowledge; a raise in between refuses the
+                        // acknowledge and the scope is re-observed on the next poll.
+                        guard let observation = latch.observe(scope),
+                              let record = latch.acknowledge(observation) else { continue }
                         Self.note(record, state)
                         if state.finishedAtRelease.compareExchange(
                             expected: -1, desired: state.finishedRaisers.load(ordering: .acquiring),
