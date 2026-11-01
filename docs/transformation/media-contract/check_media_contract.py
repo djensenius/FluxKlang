@@ -299,12 +299,16 @@ class Trace:
         a = self.at(frame)
         return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
 
-    def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one; loop end starts the next
-        (i, t), lp = occ, self.loop
-        if lp and t == lp["endTicks"]:
-            i, t = i + 1, lp["startTicks"]
+    def pass_anchor(self, i):
         mine, last = [x for x in self.hist if x.get("loopIteration", 0) == i], self.musical
-        return self.frame_of_ticks(t, mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1))
+        return mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1)
+
+    def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one
+        (i, t), lp = occ, self.loop
+        a = self.pass_anchor(i)
+        if lp and t == lp["endTicks"] and a["musicalTicks"] <= lp["endTicks"]:
+            a, t = self.pass_anchor(i + 1), lp["startTicks"]
+        return self.frame_of_ticks(t, a)
 
     def boundary(self, occ, grid, after=False):  # first grid occurrence at (or after) occ; past loop end, next pass's
         i, b = occ[0], (math.floor(Fraction(occ[1], grid)) + 1 if after else math.ceil(Fraction(occ[1], grid))) * grid
@@ -395,6 +399,13 @@ class Trace:
             self.err(r, "anchor generation is not current")
         if clock in self.pending_restart:
             self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
+        m, position = self.musical, None
+        if "musicalTicks" in r and clock == self.primary and m and m["transport"] == r.get("transport") \
+                and m["generation"] == r["generation"]:
+            try:
+                position = self.position(r["frame"])
+            except ValueError as exc:
+                return self.err(r, str(exc))
         prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
         restart = self.restarts.get(clock, {})  # a restarted generation's first anchor is bounded against the restart
         ref = restart if first is r and restart.get("generation") == r["generation"] else first
@@ -413,7 +424,7 @@ class Trace:
             return
         if r["transport"] != self.gens.get(f"transport/{self.mus_id}"):
             self.err(r, "anchor transport generation is not current")
-        m, it, wrap = self.musical, r.get("loopIteration", 0), self.prev or {}
+        it, wrap = r.get("loopIteration", 0), self.prev or {}
         if (not m or m["transport"] != r["transport"]) and it:
             self.err(r, "a new transport generation (start, locate or restart) begins at loopIteration 0")
         if self.resume is not None and r["musicalTicks"] != self.resume:
@@ -422,7 +433,7 @@ class Trace:
         if m and m["transport"] == r["transport"]:
             if m["generation"] != r["generation"]:
                 self.err(r, "a sample clock restart must re-anchor with a new transport generation")
-            elif self.position(r["frame"])[0] != it or abs(self.position(r["frame"])[1] - r["musicalTicks"]) > 1:
+            elif position[0] != it or abs(position[1] - r["musicalTicks"]) > 1:
                 self.err(r, "musical position jumped without locate or loop wrap (one loopIteration per wrap)")
             elif it != m.get("loopIteration", 0):
                 if (wrap.get("type"), wrap.get("frame")) != ("loopWrap", r["frame"]) \
@@ -473,6 +484,14 @@ class Trace:
 
     def on_discontinuity(self, r):
         kind, clock = r["type"], r["sampleClock"]
+        resume = None
+        try:
+            if kind == "clockRestart" and "hostTicks" in r and "previousFrame" in r \
+                    and clock == self.primary and self.restart_snap[0]:
+                resume = self.under(self.restart_snap, self.position, r["previousFrame"])
+            wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
+        except ValueError as exc:
+            return self.err(r, str(exc))
         self.discs.append(r)
         if r["generation"] != self.gens.get(f"sampleClock/{clock}"):
             self.err(r, "discontinuity generation is not current")
@@ -483,12 +502,11 @@ class Trace:
                 self.err(r, "clockRestart records the host ticks at which the new generation starts")
             else:
                 self.restarts[clock] = r
-                if "previousFrame" in r and clock == self.primary and self.restart_snap[0]:
-                    i, t = self.under(self.restart_snap, self.position, r["previousFrame"])
+                if resume is not None:
+                    i, t = resume
                     self.resume, self.passes = rnd(t), (self.passes[0], self.passes[1] + i)  # it continues pass i
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
-        wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
         if kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
             self.err(r, "a loopWrap falls exactly at the loop end of the anchored pass")  # a virtual next-pass anchor
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
@@ -541,13 +559,16 @@ class Trace:
             self.err(r, "musical target without a current musical anchor")
             return None
         try:
-            i, t = self.position(origin)  # the target is an occurrence in the pass holding the origin
+            a = self.at(origin)  # retain the exact origin's pass, before rounding to a sample frame
+            i, t = a.get("loopIteration", 0), self.ticks_at_frame(origin, a)
         except ValueError as exc:
             return self.err(r, str(exc))
         if "atTicks" in target:
             choice = {"occ": (i, target["atTicks"]), "retro": False}
         else:
             grid = target["gridTicks"]
+            if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
+                t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
             prev, nxt = self.previous_boundary((i, t), grid), self.boundary((i, t), grid)
             retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
             choice = {"occ": nxt, "retro": False}
@@ -678,6 +699,13 @@ class Trace:
         if r["hostTicks"] < self.restarts.get(self.primary, {}).get("hostTicks", 0):
             self.err(r, "capture timestamp predates clockRestart: v1 rejects it, never remapping it (§9.2)")
             return
+        has = "musicalTicks" in r
+        try:
+            if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
+                return self.err(r, "capture musicalTicks map from frame through the current musical anchor, "
+                                "exactly when one is")
+        except ValueError as exc:
+            return self.err(r, str(exc))
         words = [int(w, 16) for w in r["ump"]]
         mt, ep, port = words[0] >> 28, r["endpointProtocol"], r["portProtocol"]
         if len(words) != UMP_WORDS[mt]:
@@ -698,9 +726,6 @@ class Trace:
         frame = self.frame_at_host(r["hostTicks"])
         if frame is None or rnd(frame) != r["frame"]:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
-        has = "musicalTicks" in r
-        if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
-            self.err(r, "capture musicalTicks map from frame through the current musical anchor, exactly when one is")
         self.captures.append((r, words, (self.hist, self.map), self.passes))
         if r["effective"] == ep == "midi1" and mt in (2, 4):
             self.evidence.add("midi1InUmp")
@@ -743,8 +768,11 @@ class Trace:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
                 return
             groups = {(e[1][0] >> 24) & 0xF for e in events if e[1][0] >> 28 in GROUPED}
-            timing = [self.smf_frame(snap, c["frame"], TPQ // division, base) if "musicalTicks" in c else (None, None)
-                      for c, _, snap, base in events]
+            try:
+                timing = [self.smf_frame(snap, c["frame"], TPQ // division, base) if "musicalTicks" in c else (None, None)
+                          for c, _, snap, base in events]
+            except ValueError as exc:
+                return self.err(r, str(exc))
             first = min((p for p, _ in timing if p), default=None)
             for (c, words, _, _), (key, frame) in zip(events, timing):
                 mt = words[0] >> 28

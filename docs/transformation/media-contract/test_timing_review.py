@@ -2,6 +2,7 @@
 import copy
 import json
 import unittest
+from fractions import Fraction
 from pathlib import Path
 
 import check_media_contract as checker
@@ -46,6 +47,27 @@ def document(records, loop=(0, 3), grid=2, late=None, tempo=500000):
     doc["actions"][0]["late"] = late or dict(policy="nextBoundary")
     doc["timeline"] = [dict(record, seq=index + 1) for index, record in enumerate(records)]
     return doc
+
+
+def unrepresentable_records(kind):
+    records = [anchor(0, 0)]
+    if kind == "anchor":
+        records.append(anchor(1, 0))
+    elif kind == "loopWrap":
+        records.append(dict(kind="discontinuity", type=kind, sampleClock="smp.main", generation=1, frame=1))
+    elif kind == "midiCapture":
+        capture = copy.deepcopy(next(r for r in BASE["timeline"] if r["kind"] == kind))
+        capture.update(frame=1, hostTicks=500, musicalTicks=0)
+        records.append(capture)
+    else:
+        assert kind == "clockRestart"
+        records += [
+            dict(kind="generation", counter="sampleClock/smp.main", **{"from": 1, "to": 2}, reason="deviceRestart"),
+            dict(kind="generation", counter="transport/mus.main", **{"from": 1, "to": 2}, reason="clockRestart"),
+            dict(kind="discontinuity", type=kind, sampleClock="smp.main", generation=2, frame=0,
+                 hostTicks=1000, previousFrame=1)
+        ]
+    return records
 
 
 class TimingReviewTests(unittest.TestCase):
@@ -161,6 +183,84 @@ class TimingReviewTests(unittest.TestCase):
         self.assertEqual(trace.boundary((0, start + 1), 2, after=True), (0, start + 3))
         self.assertEqual(trace.boundary((0, end), 2, after=True), (1, start + 1))
         self.assertEqual(trace.previous_boundary((1, start), 2), (0, end - 1))
+
+    def test_loop_end_does_not_alias_a_pass_anchored_beyond_the_loop(self):
+        records = [anchor(0, 3000), trigger(0, 0, dict(timeBase="musical", atTicks=2000)),
+                   outcome(checker.rnd(Fraction(-3125, 2)), 0, "firedLate")]
+        doc = document(records, loop=(100, 2000), grid=960,
+                       late=dict(policy="fireLate", maxLatenessMs=100))
+        self.assertEqual(self.check(doc), [])
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.frame_of((0, 2000)), Fraction(-3125, 2))
+
+    def test_fractional_origin_before_rounded_wrap_keeps_the_upcoming_boundary(self):
+        for origin, horizon in [(2400, 5), (4900, 10)]:
+            for grid in (1, 2):
+                for retro in (0, 1):
+                    with self.subTest(origin=origin, grid=grid, retro=retro):
+                        cue = trigger(0, horizon, dict(timeBase="musical", gridTicks=grid))
+                        cue["originHostTicks"] = origin
+                        assigned = horizon - 2 if grid == 2 and retro else horizon
+                        result = "firedLate" if assigned < horizon else "fired"
+                        doc = document([anchor(0, 0), cue, outcome(assigned, horizon, result)], grid=grid,
+                                       late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))
+                        self.assertEqual(self.check(doc), [])
+
+    def test_unrepresentable_records_do_not_abort_later_sample_or_asap_checks(self):
+        for kind in ("anchor", "loopWrap", "midiCapture", "clockRestart"):
+            for target in (dict(timeBase="asap"), dict(timeBase="sample", atFrame=4)):
+                with self.subTest(kind=kind, target=target):
+                    records = unrepresentable_records(kind)
+                    cue = trigger(0, 2, target)
+                    if kind == "clockRestart":
+                        records += [dict(records[-1], previousFrame=0),
+                                    dict(kind="anchor", sampleClock="smp.main", generation=2, frame=0, hostTicks=1000)]
+                        cue["originHostTicks"] = 1000
+                        cue["requires"].update({"sampleClock/smp.main": 2, "transport/mus.main": 2})
+                    records += [cue, outcome(99, 99)]
+                    errors = self.check(document(records, loop=(0, 1), grid=1, tempo=60000,
+                                                 late=dict(policy="fireLate", maxLatenessMs=100)))
+                    self.assertTrue(any("nextBoundary cannot resolve" in e for e in errors), errors)
+                    self.assertFalse(any("replay aborted" in e for e in errors), errors)
+                    assigned = 2 if target["timeBase"] == "asap" else 4
+                    self.assertTrue(any(f"expected fired assignedFrame={assigned}" in e for e in errors), errors)
+
+    def test_unrepresentable_records_do_not_publish_partial_timing_state(self):
+        for kind in ("anchor", "loopWrap", "midiCapture", "clockRestart"):
+            with self.subTest(kind=kind):
+                trace = checker.Trace(document(unrepresentable_records(kind), loop=(0, 1), grid=1, tempo=60000),
+                                      "11-review-timing.json")
+                trace.run()
+                self.assertTrue(any("nextBoundary cannot resolve" in e for e in trace.errors), trace.errors)
+                self.assertEqual(trace.anchor["smp.main"]["frame"], 0)
+                self.assertEqual(trace.hist, [] if kind == "clockRestart" else [trace.anchor["smp.main"]])
+                self.assertEqual(trace.discs, [])
+                self.assertEqual(trace.captures, [])
+                self.assertEqual(trace.protocols, {})
+                self.assertEqual(trace.restarts, {})
+                self.assertIsNone(trace.resume)
+                self.assertEqual(trace.passes, (0, 0))
+                self.assertEqual(trace.pending_restart, {"smp.main"} if kind == "clockRestart" else set())
+
+    def test_export_position_failure_does_not_abort_later_diagnostics(self):
+        capture = copy.deepcopy(next(r for r in BASE["timeline"] if r["kind"] == "midiCapture"))
+        capture.update(frame=1, hostTicks=125, musicalTicks=0)
+        export = copy.deepcopy(next(r for r in BASE["timeline"]
+                                    if r["kind"] == "export" and r["format"] != "nativeUmp"))
+        export.update(streams=[capture["stream"]], division=15360, lossless=True, losses={})
+        records = [anchor(0, 0), capture,
+                   dict(kind="generation", counter="sampleClock/smp.main", **{"from": 1, "to": 1},
+                        reason="rateChange", nominalRate=44100),
+                   export, dict(kind="discontinuity", type="sourceLost", sampleClock="smp.main",
+                                generation=1, frame=2, stream="str.missing")]
+        doc = document(records, loop=(0, 1), grid=1, tempo=60000)
+        doc["clocks"]["sample"][0]["nominalRate"] = 192000
+        errors = self.check(doc)
+        self.assertTrue(any("advance the current value by exactly one" in e for e in errors), errors)
+        self.assertTrue(any("nextBoundary cannot resolve" in e for e in errors), errors)
+        self.assertTrue(any("sourceLost names a declared stream" in e for e in errors), errors)
+        self.assertFalse(any("replay aborted" in e for e in errors), errors)
 
 
 if __name__ == "__main__":

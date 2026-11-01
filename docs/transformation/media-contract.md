@@ -164,11 +164,16 @@ Virtual future passes use the same per-wrap rounding as recorded wraps: full pas
 loop duration, not an accumulated unrounded duration. A zero-rounded duration still permits representable
 current-pass and first-wrap boundaries; a search requiring a later frame fails explicitly rather than
 dividing by zero, walking passes indefinitely or narrowing valid loop bounds. Grid arithmetic stays exact
-through the full declared tick range.
+through the full declared tick range. An unrepresentable musical observation is diagnosed before publishing
+its timing state; replay continues checking later independent sample/ASAP records.
 
-For frame projection only, `(pass, endTicks)` aliases `(pass + 1, startTicks)`, as in the reference checker.
-This deterministic boundary alias does not change the stored occurrence or substitute the currently running
-pass for a historical one.
+For frame projection only, `(pass, endTicks)` aliases `(pass + 1, startTicks)` when the selected pass anchor is
+at or before `endTicks`. A pass anchored past the end does not wrap or alias. This deterministic boundary alias
+does not change the stored occurrence or substitute the currently running pass for a historical one.
+
+Quantized origins retain their exact frame fraction until pass classification and grid selection. The interval
+after an unrounded loop end but before its rounded wrap still belongs to the original pass: its upcoming wrap
+boundary is considered before retroactive selection, never mistaken for a past boundary.
 
 ### 5.6 Tempo and meter
 
