@@ -201,7 +201,7 @@ struct TriggerScheduler: Sendable {
                 outcome = try resolve(entry.stamp, at: point)
             }
         }
-        try publishTerminal(handle, outcome: outcome, music: entry.music, clock: nextClock)
+        try publishTerminals([(handle, outcome)], clock: nextClock)
         return disposition
     }
 
@@ -211,57 +211,45 @@ struct TriggerScheduler: Sendable {
     /// is unreachable: a cancelled outcome is always well-formed and every pending pin is releasable.
     @discardableResult
     mutating func cancelStale(ledger: GenerationLedger) throws -> [TriggerHandle] {
-        var nextSession = session
-        var nextMusical = musical
-        var cancelled: [TriggerHandle] = []
-        for entry in pending.values.sorted(by: { $0.order < $1.order }) {
-            guard let stale = entry.stamp.requires.first(where: { !ledger.isCurrent($0) }) else { continue }
-            let outcome = TriggerOutcome(trigger: entry.handle.trigger, result: .cancelled,
-                                         stale: .generation(stale.key))
-            try Self.stageTerminal(entry.handle, outcome: outcome, music: entry.music,
-                                   session: &nextSession, musical: &nextMusical)
-            cancelled.append(entry.handle)
+        let batch = pending.values.sorted { $0.order < $1.order }.compactMap { entry in
+            entry.stamp.requires.first { !ledger.isCurrent($0) }.map {
+                (entry.handle, TriggerOutcome(trigger: entry.handle.trigger, result: .cancelled,
+                                              stale: .generation($0.key)))
+            }
         }
-        session = nextSession
-        musical = nextMusical
-        for handle in cancelled { pending.removeValue(forKey: handle.trigger) }
-        return cancelled
+        guard !batch.isEmpty else { return [] }
+        try publishTerminals(batch, clock: clock)
+        return batch.map(\.0)
     }
 
     #if DEBUG
-    /// DEBUG-only test seam for the shared terminal transaction: a prepared (possibly malformed)
-    /// outcome meets the REAL session validator. Never called from production.
-    mutating func completeForTesting(_ handle: TriggerHandle, preparedOutcome outcome: TriggerOutcome) throws {
-        guard handle.session == session.currentToken else { throw TriggerSessionError.staleSession }
-        guard let entry = pending[handle.trigger] else { throw TriggerSessionError.notPending }
-        try publishTerminal(handle, outcome: outcome, music: entry.music, clock: clock)
+    /// DEBUG-only test seam for the shared terminal transaction: prepared (possibly malformed)
+    /// outcomes meet the REAL session validator. Never called from production.
+    mutating func completeForTesting(_ batch: [(TriggerHandle, TriggerOutcome)]) throws {
+        try publishTerminals(batch, clock: clock)
     }
     #endif
 
-    /// The shared terminal transaction: pin release is staged with the enqueue, never published
-    /// first. Any failure keeps the reservation, pin and all clock/pending state.
-    private mutating func publishTerminal(_ handle: TriggerHandle, outcome: TriggerOutcome,
-                                          music: SchedulerMusicalAdmission?, clock nextClock: SchedulerClock) throws {
+    /// The shared terminal transaction for one commit or a cancellation batch: each enqueue is staged
+    /// on ONE session copy first (so stale/duplicate handle identity errors win), then its pin release
+    /// in place on ONE musical copy (O(n) copying per batch: argued, not timing-tested). Publication
+    /// follows only if every stage succeeds; any failure keeps every pin, queued outcome and clock/pending state.
+    private mutating func publishTerminals(_ batch: [(TriggerHandle, TriggerOutcome)],
+                                           clock nextClock: SchedulerClock) throws {
         var nextSession = session
         var nextMusical = musical
-        try Self.stageTerminal(handle, outcome: outcome, music: music, session: &nextSession, musical: &nextMusical)
+        for (handle, outcome) in batch {
+            if outcome.reason == .invalidTiming || outcome.reason == .outsideLoop {
+                try nextSession.completeDiagnostic(handle, outcome: outcome)
+            } else {
+                try nextSession.complete(handle, outcome: outcome)
+            }
+            try nextMusical.release(pending[handle.trigger]?.music)
+        }
         session = nextSession
-        pending.removeValue(forKey: handle.trigger)
+        for (handle, _) in batch { pending.removeValue(forKey: handle.trigger) }
         clock = nextClock
         musical = nextMusical
-    }
-
-    /// Stages one pin release and enqueue on the caller's copies; both diagnostics route to
-    /// completeDiagnostic. The caller publishes only after every stage succeeds.
-    private static func stageTerminal(_ handle: TriggerHandle, outcome: TriggerOutcome,
-                                      music: SchedulerMusicalAdmission?, session: inout TriggerSession,
-                                      musical: inout SchedulerMusicalState) throws {
-        try musical.release(music)
-        if outcome.reason == .invalidTiming || outcome.reason == .outsideLoop {
-            try session.completeDiagnostic(handle, outcome: outcome)
-        } else {
-            try session.complete(handle, outcome: outcome)
-        }
     }
 
     mutating func drain() -> [SessionOutcome] {

@@ -33,9 +33,7 @@ extension ControlContractTests {
             ]
             for (outcome, error) in malformed {
                 // The REAL session validator rejects the prepared candidate; nothing is published.
-                #expect(throws: error) {
-                    try fixture.scheduler.completeForTesting(handle, preparedOutcome: outcome)
-                }
+                #expect(throws: error) { try fixture.scheduler.completeForTesting([(handle, outcome)]) }
                 #expect(try fixture.admissionState() == before)
                 #expect(fixture.scheduler.pendingMusic(handle) == Self.occurrence)
             }
@@ -46,6 +44,16 @@ extension ControlContractTests {
             #expect(queued.first?.outcome.frame == 100)
             #expect(queued.last?.outcome == (try Self.fired(handle, fixture)))
             #expect(fixture.scheduler.musicalSummary?.pinCount == 0)
+            // Session identity errors win over pin lookup: a reused trigger ID after rotation, then a duplicate.
+            try fixture.scheduler.rotateSession(expected: fixture.scheduler.currentToken)
+            let reused = try Self.pin(&fixture, "trg.pinned"), after = try fixture.admissionState()
+            let stale = [(handle, TriggerOutcome(trigger: handle.trigger, result: .fired))]
+            #expect(throws: TriggerSessionError.staleSession) { try fixture.scheduler.completeForTesting(stale) }
+            #expect(throws: TriggerSessionError.notPending) {
+                try fixture.scheduler.completeForTesting([(reused, try Self.fired(reused, fixture)),
+                                                          (reused, try Self.fired(reused, fixture))])
+            }
+            #expect(try fixture.admissionState() == after && fixture.scheduler.pendingMusic(reused) == Self.occurrence)
         }
 
         @Test func diagnosticCompletionFailurePreservesPreparedPinRelease() throws {
@@ -60,7 +68,7 @@ extension ControlContractTests {
                 TriggerOutcome(trigger: trigger, result: .dropped, reason: .invalidTiming, musicalMap: .initial)
             ] {
                 #expect(throws: TriggerSessionError.invalidCompletion) {
-                    try fixture.scheduler.completeForTesting(handle, preparedOutcome: outcome)
+                    try fixture.scheduler.completeForTesting([(handle, outcome)])
                 }
                 // Both diagnostics route to completeDiagnostic; the staged pin release is discarded.
                 #expect(try fixture.admissionState() == before)
@@ -134,6 +142,44 @@ extension ControlContractTests {
             #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
             #expect(try fixture.drainOne(kept) == TriggerOutcome(
                 trigger: kept.trigger, result: .cancelled, stale: .generation(fixture.ledger.primaryClock)))
+        }
+
+        /// A full pin budget of stale pins with scrambled IDs cancels in admission order, releasing every pin.
+        @Test func staleBatchAtThePinBudgetCancelsCompletelyInAdmissionOrder() throws {
+            var fixture = try SchedulerFixture(capacity: 64)
+            try fixture.prepareMusical(0)
+            let base = fixture.stamp("trg.base", .musical(atTicks: 960), requiring: [SchedulerFixture.source])
+            let handles = try (0..<64).map { index in
+                try fixture.submitMusical(TriggerStamp(
+                    id: TriggerID("trg.\(index * 37 % 64)"), action: base.action, originHost: base.originHost,
+                    horizonFrame: 0, requires: base.requires, target: base.target, latePolicy: base.latePolicy))
+            }
+            #expect(fixture.scheduler.musicalSummary?.pinCount == 64)
+            try fixture.ledger.bump(SchedulerFixture.source, reason: .sourceLost)
+            #expect(try fixture.scheduler.cancelStale(ledger: fixture.ledger) == handles)
+            #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
+            #expect(fixture.scheduler.drain().map(\.handle) == handles)
+        }
+
+        /// A batch whose LAST enqueue fails publishes nothing: earlier staged releases/enqueues are discarded.
+        @Test func batchFailureMidwayPublishesNothing() throws {
+            var fixture = try SchedulerFixture(capacity: 4)
+            try fixture.prepareMusical(0)
+            let unrelated = try fixture.submit(fixture.stamp("trg.unrelated"))
+            try fixture.commit(unrelated, at: 100)
+            let pins = try (["trg.b", "trg.a", "trg.c"] as [StaticString]).map { try Self.pin(&fixture, $0) }
+            let before = try fixture.admissionState()
+            let cancel = { (handle: TriggerHandle) in
+                TriggerOutcome(trigger: handle.trigger, result: .cancelled, stale: .generation(SchedulerFixture.source))
+            }
+            let batch = [(pins[0], cancel(pins[0])), (pins[1], cancel(pins[1])),
+                         (pins[2], TriggerOutcome(trigger: pins[2].trigger, result: .fired))]
+            #expect(throws: TriggerSessionError.invalidCompletion) { try fixture.scheduler.completeForTesting(batch) }
+            #expect(try fixture.admissionState() == before && before.music?.pinCount == 3)
+            #expect(pins.allSatisfy { fixture.scheduler.pendingMusic($0) == Self.occurrence })
+            try fixture.scheduler.completeForTesting(pins.map { ($0, cancel($0)) })
+            #expect(fixture.scheduler.drain().map(\.handle) == [unrelated] + pins)
+            #expect(fixture.scheduler.musicalSummary?.pinCount == 0)
         }
 
         @Test func identityRotationPreservesMusicalHistorySequenceAndHorizon() throws {
