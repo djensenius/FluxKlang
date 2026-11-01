@@ -30,7 +30,7 @@ targets:
       - path: FluxKlang
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
     info:
       path: FluxKlang/Info.plist
       properties:
@@ -82,7 +82,7 @@ targets:
       - path: FluxKlangMac
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
     info:
       path: FluxKlangMac/Info.plist
       properties:
