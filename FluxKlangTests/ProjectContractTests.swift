@@ -80,6 +80,141 @@ struct ProjectContractTests {
         #expect(ordinary.validationErrors(graphs: supplied) == [duplicate])
     }
 
+    @Test func duplicateGraphReferencesValidateEachRevisionOnce() {
+        var (project, graphs) = Self.sample()
+        let main = graphs[0].id
+        let missingRole = RoleID(validated: "rol.missing")
+        graphs[0].requiresReview = true
+        graphs[0].nodes[0].role = missingRole
+        project.graphs.insert(project.graphs[0], at: 1)
+        project.graphs[1].extensions = ["note": .string("same revision")]
+        project.graphs[1].unknownFields = ["futureReference": .bool(true)]
+        #expect(project.validationErrors(graphs: graphs) == [
+            .duplicateGraph(main), .graph(main, .reviewRequired),
+            .missingRole(main, node: graphs[0].nodes[0].id, missingRole)
+        ])
+    }
+
+    @Test func duplicateGraphReferencesKeepDistinctRevisionFailures() throws {
+        var (project, graphs) = Self.sample()
+        let main = graphs[0].id
+        let next = try ContractRevision(44)
+        let later = try ContractRevision(45)
+        let nextReference = ProjectGraphReference(graph: main, revision: next)
+        project.graphs = [
+            project.graphs[0], nextReference, nextReference,
+            ProjectGraphReference(graph: main, revision: later), project.graphs[1]
+        ]
+        let duplicates = Array(repeating: ProjectValidationError.duplicateGraph(main), count: 3)
+        #expect(project.validationErrors(graphs: graphs) == duplicates + [
+            .graphNotSupplied(main, revision: next), .graphNotSupplied(main, revision: later)
+        ])
+
+        var suppliedNext = graphs[0]
+        suppliedNext.revision = next
+        suppliedNext.requiresReview = true
+        graphs.append(suppliedNext)
+        #expect(project.validationErrors(graphs: graphs) == duplicates + [
+            .graph(main, .reviewRequired), .graphNotSupplied(main, revision: later)
+        ])
+    }
+
+    @Test func suppliedGraphIndexKeepsFirstRevisionMatchAndDiagnosticOrder() {
+        let (project, original) = Self.sample()
+        var graphs = original
+        var duplicate = graphs[0]
+        duplicate.requiresReview = true
+        graphs.append(duplicate)
+        let error = ProjectValidationError.duplicateSuppliedGraph(duplicate.id, revision: duplicate.revision)
+        #expect(project.validationErrors(graphs: graphs) == [error])
+        graphs.swapAt(0, graphs.count - 1)
+        #expect(project.validationErrors(graphs: graphs) == [error, .graph(duplicate.id, .reviewRequired)])
+    }
+
+    @Test func referenceIndexesKeepFirstRoleAndAssetAndDuplicateDiagnostics() throws {
+        var (project, graphs) = Self.sample()
+        var conflictingRole = project.roles[0]
+        conflictingRole.channels = 1
+        project.roles.append(conflictingRole)
+        var conflictingAsset = project.assets[0]
+        conflictingAsset.media = .midi
+        project.assets.append(conflictingAsset)
+        project.actions = [ProjectMediaAction(
+            id: ActionID(validated: "act.first"), asset: conflictingAsset.id,
+            policy: try ActionPolicy(media: .audio, timePolicy: .fixedRate, latePolicy: .drop)
+        )]
+        let duplicates: [ProjectValidationError] = [
+            .duplicateRole(conflictingRole.id), .duplicateAsset(conflictingAsset.id)
+        ]
+        #expect(project.validationErrors(graphs: graphs) == duplicates)
+        project.roles.swapAt(0, project.roles.count - 1)
+        #expect(project.validationErrors(graphs: graphs) == duplicates + [
+            .roleMismatch(graphs[0].id, node: graphs[0].nodes[0].id, conflictingRole.id)
+        ])
+        project.assets.swapAt(0, project.assets.count - 1)
+        let player = try #require(graphs[0].nodes.first { $0.kind == .mediaPlayer })
+        #expect(project.validationErrors(graphs: graphs) == duplicates + [
+            .actionMediaMismatch(project.actions[0].id),
+            .roleMismatch(graphs[0].id, node: graphs[0].nodes[0].id, conflictingRole.id),
+            .assetMediaMismatch(graphs[0].id, node: player.id, conflictingAsset.id)
+        ])
+    }
+
+    @Test(arguments: [
+        (AssetMedia.document, PortSignal.audio), (.document, .midi), (.audio, .midi), (.midi, .audio)
+    ])
+    func mediaPlayersRejectUnplayableOrIncompatibleAssets(media: AssetMedia, signal: PortSignal) throws {
+        var (project, graphs) = Self.sample()
+        project.assets[0].media = media
+        project.assets[0].timePolicy = media == .document ? nil : .fixedRate
+        project.assets[0].timing = media == .document ? nil : AssetTiming(startFrame: 0)
+        let player = try #require(graphs[0].nodes.firstIndex { $0.kind == .mediaPlayer })
+        graphs[0].nodes[player].ports = [
+            GraphContractTests.port("out", .output, signal, channels: signal == .audio ? 2 : nil)
+        ]
+        try graphs[0].validate(strict: true)
+        var recordsOnly = project
+        recordsOnly.graphs = []
+        recordsOnly.patches = []
+        try recordsOnly.validate(graphs: [], strict: true)
+        #expect(throws: ProjectValidationError.self) { try project.validate(graphs: graphs) }
+        let mismatch = ProjectValidationError.assetMediaMismatch(
+            graphs[0].id, node: graphs[0].nodes[player].id, project.assets[0].id
+        )
+        #expect(project.validationErrors(graphs: graphs) == [mismatch])
+        if media == .document {
+            graphs[0].nodes[player].ports = []
+            #expect(project.validationErrors(graphs: graphs) == [mismatch])
+        }
+    }
+
+    @Test(arguments: [AssetMedia.audio, .midi])
+    func mediaPlayersMatchEveryMediaOutputWithoutRestrictingAuxiliaryPorts(media: AssetMedia) throws {
+        var (project, graphs) = Self.sample()
+        project.assets[0].media = media
+        let player = try #require(graphs[0].nodes.firstIndex { $0.kind == .mediaPlayer })
+        let signal: PortSignal = media == .audio ? .audio : .midi
+        let ports = [
+            GraphContractTests.port("out", .output, signal, channels: signal == .audio ? 2 : nil),
+            GraphContractTests.port("trigger", .input, .control),
+            GraphContractTests.port("clock-in", .input, .clock),
+            GraphContractTests.port("status", .output, .control),
+            GraphContractTests.port("clock-out", .output, .clock)
+        ]
+        graphs[0].nodes[player].ports = ports
+        try project.validate(graphs: graphs, strict: true)
+        graphs[0].nodes[player].ports = []
+        try project.validate(graphs: graphs, strict: true)
+        let incompatible: PortSignal = signal == .audio ? .midi : .audio
+        graphs[0].nodes[player].ports = ports + [
+            GraphContractTests.port("other", .output, incompatible, channels: incompatible == .audio ? 2 : nil)
+        ]
+        #expect(throws: ProjectValidationError.self) { try project.validate(graphs: graphs) }
+        #expect(project.validationErrors(graphs: graphs) == [
+            .assetMediaMismatch(graphs[0].id, node: graphs[0].nodes[player].id, project.assets[0].id)
+        ])
+    }
+
     @Test func projectCollectionsAreBoundedBeforeReferenceValidation() {
         var (project, graphs) = Self.sample()
         project.graphs = Array(repeating: project.graphs[0], count: ProjectGraphLimits.projectRecords + 1)

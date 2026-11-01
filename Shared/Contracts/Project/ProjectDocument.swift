@@ -121,6 +121,8 @@ enum ProjectValidationError: Error, Hashable, Sendable {
     case missingRole(GraphID, node: NodeID, RoleID)
     case roleMismatch(GraphID, node: NodeID, RoleID)
     case missingAsset(GraphID, node: NodeID, AssetID)
+    /// A media player needs audio/MIDI media matching its audio/MIDI output ports.
+    case assetMediaMismatch(GraphID, node: NodeID, AssetID)
     case missingSharedGraph(GraphID, node: NodeID, GraphID)
     case unknownFields(path: String)
 }
@@ -134,16 +136,24 @@ extension ProjectDocument {
                 supplied.count, maximum: ProjectGraphLimits.projectRecords, path: "$supplied"
             )
         } catch { return [.bounds(error)] }
-        var errors = recordErrors(strict: strict)
-        var seen: [GraphID: Set<ContractRevision>] = [:]
-        for graph in supplied where !seen[graph.id, default: []].insert(graph.revision).inserted {
-            errors.append(.duplicateSuppliedGraph(graph.id, revision: graph.revision))
+        // Preserve first-occurrence lookup semantics; diagnostics still follow document order.
+        let rolesByID = Dictionary(roles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let assetsByID = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var errors = recordErrors(assetsByID: assetsByID, strict: strict)
+        var suppliedByRevision: [GraphID: [ContractRevision: GraphDocument]] = [:]
+        for graph in supplied {
+            if suppliedByRevision[graph.id]?[graph.revision] != nil {
+                errors.append(.duplicateSuppliedGraph(graph.id, revision: graph.revision))
+            } else {
+                suppliedByRevision[graph.id, default: [:]][graph.revision] = graph
+            }
         }
         let referenced = Set(graphs.map(\.graph))
+        var validated: [GraphID: Set<ContractRevision>] = [:]
         var sharedLinks: [(GraphID, GraphID)] = []
         for reference in graphs {
-            guard let graph = supplied.first(where: { $0.id == reference.graph && $0.revision == reference.revision })
-            else {
+            guard validated[reference.graph, default: []].insert(reference.revision).inserted else { continue }
+            guard let graph = suppliedByRevision[reference.graph]?[reference.revision] else {
                 errors.append(.graphNotSupplied(reference.graph, revision: reference.revision))
                 continue
             }
@@ -153,7 +163,9 @@ extension ProjectDocument {
             }
             errors += graph.validationErrors(strict: strict).map { .graph(graph.id, $0) }
             for node in graph.nodes {
-                errors += referenceErrors(node, in: graph.id, graphs: referenced)
+                errors += referenceErrors(
+                    node, in: graph.id, graphs: referenced, rolesByID: rolesByID, assetsByID: assetsByID
+                )
                 if node.kind == .sharedGraph, let shared = node.graph { sharedLinks.append((graph.id, shared)) }
             }
         }
@@ -174,14 +186,14 @@ extension ProjectDocument {
         if let first = validationErrors(graphs: graphs, strict: strict).first { throw first }
     }
 
-    private func recordErrors(strict: Bool) -> [ProjectValidationError] {
+    private func recordErrors(assetsByID: [AssetID: ProjectAsset], strict: Bool) -> [ProjectValidationError] {
         var errors: [ProjectValidationError] = []
         errors += duplicates(roles.map(\.id)).map(ProjectValidationError.duplicateRole)
         errors += duplicates(graphs.map(\.graph)).map(ProjectValidationError.duplicateGraph)
         errors += duplicates(patches.map(\.id)).map(ProjectValidationError.duplicatePatch)
         errors += duplicates(assets.map(\.id)).map(ProjectValidationError.duplicateAsset)
         errors += duplicates(actions.map(\.id)).map(ProjectValidationError.duplicateAction)
-        errors += actionErrors()
+        errors += actionErrors(assetsByID: assetsByID)
         errors += assetErrors()
         for role in roles {
             let valid = role.signal == .audio
@@ -196,10 +208,10 @@ extension ProjectDocument {
         return errors
     }
 
-    private func actionErrors() -> [ProjectValidationError] {
+    private func actionErrors(assetsByID: [AssetID: ProjectAsset]) -> [ProjectValidationError] {
         var errors: [ProjectValidationError] = []
         for action in actions {
-            guard let asset = assets.first(where: { $0.id == action.asset }) else {
+            guard let asset = assetsByID[action.asset] else {
                 errors.append(.missingActionAsset(action.id, action.asset))
                 continue
             }
@@ -229,11 +241,12 @@ extension ProjectDocument {
     }
 
     private func referenceErrors(
-        _ node: GraphNode, in graphID: GraphID, graphs referenced: Set<GraphID>
+        _ node: GraphNode, in graphID: GraphID, graphs referenced: Set<GraphID>,
+        rolesByID: [RoleID: ProjectRole], assetsByID: [AssetID: ProjectAsset]
     ) -> [ProjectValidationError] {
         var errors: [ProjectValidationError] = []
         if node.kind.requiresRole, let roleID = node.role {
-            if let role = roles.first(where: { $0.id == roleID }) {
+            if let role = rolesByID[roleID] {
                 let direction: PortDirection = node.kind == .roleInput ? .input : .output
                 // A role input feeds the graph through output ports, and vice versa.
                 let matches = role.direction == direction && node.ports.allSatisfy {
@@ -244,13 +257,28 @@ extension ProjectDocument {
                 errors.append(.missingRole(graphID, node: node.id, roleID))
             }
         }
-        if node.kind == .mediaPlayer, let assetID = node.asset, !assets.contains(where: { $0.id == assetID }) {
-            errors.append(.missingAsset(graphID, node: node.id, assetID))
-        }
+        errors += mediaPlayerErrors(node, in: graphID, assetsByID: assetsByID)
         if node.kind == .sharedGraph, let shared = node.graph, !referenced.contains(shared) || shared == graphID {
             errors.append(.missingSharedGraph(graphID, node: node.id, shared))
         }
         return errors
+    }
+
+    private func mediaPlayerErrors(
+        _ node: GraphNode, in graphID: GraphID, assetsByID: [AssetID: ProjectAsset]
+    ) -> [ProjectValidationError] {
+        guard node.kind == .mediaPlayer, let assetID = node.asset else { return [] }
+        guard let asset = assetsByID[assetID] else { return [.missingAsset(graphID, node: node.id, assetID)] }
+        let expected: PortSignal
+        switch asset.media {
+        case .audio: expected = .audio
+        case .midi: expected = .midi
+        case .document: return [.assetMediaMismatch(graphID, node: node.id, assetID)]
+        }
+        let incompatible = node.ports.contains { port in
+            port.direction == .output && (port.signal == .audio || port.signal == .midi) && port.signal != expected
+        }
+        return incompatible ? [.assetMediaMismatch(graphID, node: node.id, assetID)] : []
     }
 
     private func unknownFieldErrors() -> [ProjectValidationError] {
