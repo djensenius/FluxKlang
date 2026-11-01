@@ -38,13 +38,34 @@ enum LeaseStep: Hashable, Sendable, CustomTestStringConvertible {
     }
 }
 
-private let interleavings: [[LeaseStep]] = [
-    [.acquire(0), .acquire(2), .attach(1), .acquire(2), .transfer(2), .attach(0), .release(0)],
-    [.acquire(2), .acquire(0), .attach(1), .transfer(0), .attach(2), .detach(0), .acquire(2)],
-    [.acquire(0), .attach(1), .detach(0), .detach(1), .acquire(2), .release(1), .acquire(2)],
-    [.acquire(0), .transfer(2), .attach(0), .attach(1), .transfer(1), .attach(2), .release(2)],
-    [.acquire(1), .release(1), .acquire(2), .attach(0), .transfer(0), .transfer(2), .acquire(0)],
-    [.attach(0), .detach(2), .acquire(0), .acquire(1), .attach(1), .transfer(2), .release(1)]
+/// A step and the refusal the registry must return for it, or nil when it must succeed.
+struct ScriptedStep: Hashable, Sendable, CustomTestStringConvertible {
+    let step: LeaseStep
+    let refusal: EngineLeaseError?
+
+    static func succeeds(_ step: LeaseStep) -> Self { Self(step: step, refusal: nil) }
+    static func refused(_ step: LeaseStep, _ refusal: EngineLeaseError) -> Self { Self(step: step, refusal: refusal) }
+
+    var testDescription: String { "\(step.testDescription)\(refusal.map { "!\($0)" } ?? "")" }
+}
+
+private let heldByA = EngineLeaseError.heldByOtherProject(projectA)
+private let heldByB = EngineLeaseError.heldByOtherProject(projectB)
+
+private let interleavings: [[ScriptedStep]] = [
+    [.succeeds(.acquire(0)), .refused(.acquire(2), heldByA), .succeeds(.attach(1)), .refused(.acquire(2), heldByA),
+     .succeeds(.transfer(2)), .refused(.attach(0), heldByB), .refused(.release(0), .staleToken)],
+    [.succeeds(.acquire(2)), .refused(.acquire(0), heldByB), .refused(.attach(1), heldByB), .succeeds(.transfer(0)),
+     .refused(.attach(2), heldByA), .succeeds(.detach(0)), .refused(.acquire(2), heldByA)],
+    [.succeeds(.acquire(0)), .succeeds(.attach(1)), .succeeds(.detach(0)), .succeeds(.detach(1)),
+     .refused(.acquire(2), heldByA), .succeeds(.release(1)), .succeeds(.acquire(2))],
+    [.succeeds(.acquire(0)), .succeeds(.transfer(2)), .refused(.attach(0), heldByB), .refused(.attach(1), heldByB),
+     .succeeds(.transfer(1)), .refused(.attach(2), heldByA), .refused(.release(2), .staleToken)],
+    [.succeeds(.acquire(1)), .succeeds(.release(1)), .succeeds(.acquire(2)), .refused(.attach(0), heldByB),
+     .succeeds(.transfer(0)), .succeeds(.transfer(2)), .refused(.acquire(0), heldByB)],
+    [.refused(.attach(0), .notHeld), .refused(.detach(2), .notHeld), .succeeds(.acquire(0)),
+     .refused(.acquire(1), .alreadyHeld), .succeeds(.attach(1)), .succeeds(.transfer(2)),
+     .refused(.release(1), .staleToken)]
 ]
 
 struct EngineLeaseTests {
@@ -91,17 +112,22 @@ struct EngineLeaseTests {
     }
 
     @Test(arguments: interleavings)
-    func atMostOneProjectRendersAcrossInterleavings(_ steps: [LeaseStep]) throws {
+    func atMostOneProjectRendersAcrossInterleavings(_ script: [ScriptedStep]) throws {
         var unrelated = EngineLeaseRegistry()
         let ghost = try unrelated.acquire(project: projectA, window: windowA1).snapshot.token
         var registry = EngineLeaseRegistry()
         var seen: [EngineLeaseToken] = [ghost, ghost, ghost]
         var issued: [EngineLeaseToken] = []
-        for step in steps {
+        for scripted in script {
             let before = registry.snapshot
             let issuedBefore = registry.lastIssued
-            do {
-                if try perform(step, on: &registry, seen: &seen) {
+            let result = Result { () throws(EngineLeaseError) -> Bool in
+                try perform(scripted.step, on: &registry, seen: &seen)
+            }
+            switch result {
+            case .success(let issues):
+                #expect(scripted.refusal == nil, "\(scripted.step) succeeded")
+                if issues {
                     let snapshot = try #require(registry.snapshot)
                     let expected = try issuedBefore?.next() ?? .initial
                     #expect(registry.lastIssued == expected && snapshot.generation == expected)
@@ -110,7 +136,8 @@ struct EngineLeaseTests {
                 } else {
                     #expect(registry.lastIssued == issuedBefore)
                 }
-            } catch is EngineLeaseError {
+            case .failure(let error):
+                #expect(error == scripted.refusal, "\(scripted.step) refused")
                 #expect(registry.snapshot == before && registry.lastIssued == issuedBefore)
             }
             #expect(renderingProjects(registry).count <= 1)
@@ -123,35 +150,34 @@ struct EngineLeaseTests {
         }
     }
 
-    /// Issues `step` with the token its window last saw (attach and transfer use the newest token any window saw).
-    /// Returns whether the step issues a new lease.
+    /// Issues `step` with the token its window last saw. Attach and transfer use the live token when any window
+    /// observed it, else the window's own. Returns whether the step issues a new lease.
     private func perform(
         _ step: LeaseStep, on registry: inout EngineLeaseRegistry, seen: inout [EngineLeaseToken]
     ) throws(EngineLeaseError) -> Bool {
+        func observed(_ index: Int) -> EngineLeaseToken {
+            seen.first { $0 == registry.snapshot?.token } ?? seen[index]
+        }
         switch step {
         case .acquire(let index):
             seen[index] = try registry.acquire(project: allWindows[index].1, window: allWindows[index].0).snapshot.token
             return true
         case .attach(let index):
             let (window, project) = allWindows[index]
-            seen[index] = try registry.attach(window, project: project, expected: seen.max(by: newer) ?? seen[index])
-                .token
+            let token = observed(index)
+            seen[index] = try registry.attach(window, project: project, expected: token).token
         case .detach(let index):
             try registry.detach(allWindows[index].0, expected: seen[index])
         case .release(let index):
             _ = try registry.release(expected: seen[index])
         case .transfer(let index):
-            let token = seen.max(by: newer) ?? seen[index]
+            let token = observed(index)
             seen[index] = try registry.transfer(
                 to: allWindows[index].1, window: allWindows[index].0, expected: token
             ).snapshot.token
             return true
         }
         return false
-    }
-
-    private func newer(_ lhs: EngineLeaseToken, _ rhs: EngineLeaseToken) -> Bool {
-        lhs.generation.value < rhs.generation.value
     }
 
     @Test func staleTokenCannotAttachDetachReleaseOrTransfer() throws {
