@@ -159,6 +159,9 @@ targets:
         excludes: ["**/.DS_Store"]
       # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
       - path: FluxKlangTests/TestSupport.swift
+      - path: FluxKlangTests/ProjectPackagePathTests.swift
+      - path: FluxKlangTests/ProjectPackageAdmissionTests.swift
+      - path: FluxKlangTests/ProjectPackageStreamTests.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
     settings:
       base:
