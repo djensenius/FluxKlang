@@ -41,7 +41,10 @@ def document(records, loop=(0, 3), grid=2, late=None, tempo=500000):
     doc = copy.deepcopy(BASE)
     doc.update(exampleId="ex.11-review-timing", title="Focused scheduling review regression",
                covers=["fixedRateDefault"], notes=[])
-    doc["clocks"]["musical"]["loop"] = dict(startTicks=loop[0], endTicks=loop[1])
+    if loop is None:
+        doc["clocks"]["musical"].pop("loop", None)
+    else:
+        doc["clocks"]["musical"]["loop"] = dict(startTicks=loop[0], endTicks=loop[1])
     doc["clocks"]["musical"]["musicalMap"] = [dict(atTicks=0, microsPerQuarter=tempo)]
     doc["actions"][0]["quantize"] = dict(timeBase="musical", gridTicks=grid)
     doc["actions"][0]["late"] = late or dict(policy="nextBoundary")
@@ -184,6 +187,53 @@ class TimingReviewTests(unittest.TestCase):
         self.assertEqual(trace.boundary((0, end), 2, after=True), (1, start + 1))
         self.assertEqual(trace.previous_boundary((1, start), 2), (0, end - 1))
 
+    def test_unrepresentable_grid_tick_does_not_abort_independent_records(self):
+        for fallback in (False, True):
+            for independent in (dict(timeBase="asap"), dict(timeBase="sample", atFrame=4)):
+                with self.subTest(fallback=fallback, independent=independent):
+                    target = dict(timeBase="sample", atFrame=-1) if fallback else dict(timeBase="musical", gridTicks=2)
+                    later = dict(trigger(0, 0, independent), triggerId="trg.later")
+                    wrong = dict(outcome(99, 99), triggerId="trg.later")
+                    doc = document([anchor(0, 2**63 - 1), trigger(0, 0, target), outcome(2, 2), later, wrong],
+                                   loop=None, grid=2)
+                    errors = self.check(doc)
+                    self.assertTrue(any("Int64 tick range" in e for e in errors), errors)
+                    self.assertFalse(any("replay aborted" in e for e in errors), errors)
+                    assigned = 0 if independent["timeBase"] == "asap" else 4
+                    self.assertTrue(any(f"expected fired assignedFrame={assigned}" in e for e in errors), errors)
+
+    def test_maximum_representable_grid_tick_remains_valid(self):
+        for grid in (1, 2**63 - 1):
+            with self.subTest(grid=grid):
+                doc = document([anchor(0, 2**63 - 1), trigger(0, 0, dict(timeBase="musical", gridTicks=grid)),
+                                outcome(0, 0)], loop=None, grid=grid)
+                self.assertEqual(self.check(doc), [])
+        doc = document([anchor(0, 2**63 - 1), trigger(0, 0, dict(timeBase="musical", gridTicks=2)),
+                        outcome(-2, 0, "firedLate")], loop=None, grid=2,
+                       late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=1))
+        self.assertEqual(self.check(doc), [])
+        for grid, assigned in ((1, 0), (2, -2)):
+            with self.subTest(grid=grid, origin=2):
+                doc = document([anchor(0, 2**63 - 1), trigger(2, 2, dict(timeBase="musical", gridTicks=grid)),
+                                outcome(assigned, 2, "firedLate")], loop=None, grid=grid,
+                               late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=1))
+                self.assertEqual(self.check(doc), [])
+
+    def test_past_end_anchor_can_select_the_last_admissible_retroactive_boundary(self):
+        for retro in (0, 35, 36, 50):
+            with self.subTest(retro=retro):
+                records = [anchor(0, 3000), trigger(0, 0, dict(timeBase="musical", gridTicks=960)),
+                           outcome(-1687, 0, "firedLate")]
+                doc = document(records, loop=(100, 2000), grid=960,
+                               late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))
+                errors = self.check(doc)
+                if retro >= 36:
+                    self.assertEqual(errors, [])
+                else:
+                    self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors),
+                                    errors)
+                    self.assertFalse(any("replay aborted" in e for e in errors), errors)
+
     def test_loop_end_does_not_alias_a_pass_anchored_beyond_the_loop(self):
         records = [anchor(0, 3000), trigger(0, 0, dict(timeBase="musical", atTicks=2000)),
                    outcome(checker.rnd(Fraction(-3125, 2)), 0, "firedLate")]
@@ -194,14 +244,14 @@ class TimingReviewTests(unittest.TestCase):
         trace.run()
         self.assertEqual(trace.frame_of((0, 2000)), Fraction(-3125, 2))
 
-    def test_fractional_origin_before_rounded_wrap_keeps_the_upcoming_boundary(self):
+    def test_fractional_origin_before_rounded_wrap_keeps_distinct_retroactive_choice(self):
         for origin, horizon in [(2400, 5), (4900, 10)]:
             for grid in (1, 2):
                 for retro in (0, 1):
                     with self.subTest(origin=origin, grid=grid, retro=retro):
                         cue = trigger(0, horizon, dict(timeBase="musical", gridTicks=grid))
                         cue["originHostTicks"] = origin
-                        assigned = horizon - 2 if grid == 2 and retro else horizon
+                        assigned = horizon - 2 if retro else horizon
                         result = "firedLate" if assigned < horizon else "fired"
                         doc = document([anchor(0, 0), cue, outcome(assigned, horizon, result)], grid=grid,
                                        late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))

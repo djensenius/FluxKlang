@@ -174,6 +174,9 @@ does not change the stored occurrence or substitute the currently running pass f
 Quantized origins retain their exact frame fraction until pass classification and grid selection. The interval
 after an unrounded loop end but before its rounded wrap still belongs to the original pass: its upcoming wrap
 boundary is considered before retroactive selection, never mistaken for a past boundary.
+When that upcoming end is on-grid, retroactivity tests the preceding admissible boundary instead. A past-end
+anchor's previous-boundary search starts at the loop end. An unrepresentable `Int64` boundary is a controlled
+resolution failure, not a wider tick domain; it does not prevent an otherwise valid retroactive choice.
 
 ### 5.6 Tempo and meter
 

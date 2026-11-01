@@ -314,17 +314,20 @@ class Trace:
         i, b = occ[0], (math.floor(Fraction(occ[1], grid)) + 1 if after else math.ceil(Fraction(occ[1], grid))) * grid
         if self.loop and occ[1] <= self.loop["endTicks"] < b:
             i, b = i + 1, math.ceil(Fraction(self.loop["startTicks"], grid)) * grid
+        if not 0 <= b < 2**63:
+            raise ValueError("musical boundary is outside the Int64 tick range")
         return i, b
 
     def previous_boundary(self, occ, grid):
         """Last admissible grid occurrence at or before occ, including the preceding pass's loop end."""
-        i, b = occ[0], math.floor(Fraction(occ[1], grid)) * grid
+        ticks = min(occ[1], self.loop["endTicks"] if self.loop else 2**63 - 1)
+        i, b = occ[0], math.floor(Fraction(ticks, grid)) * grid
         if self.loop:
             if b < self.loop["startTicks"]:
                 i, b = i - 1, (self.loop["endTicks"] // grid) * grid
             if i < 0 or not self.loop["startTicks"] <= b <= self.loop["endTicks"]:
                 return None
-        return i, b
+        return (i, b) if i >= 0 and 0 <= b < 2**63 else None
 
     def run(self):
         for counter in self.gens:
@@ -561,19 +564,23 @@ class Trace:
         try:
             a = self.at(origin)  # retain the exact origin's pass, before rounding to a sample frame
             i, t = a.get("loopIteration", 0), self.ticks_at_frame(origin, a)
+            if "atTicks" in target:
+                choice = {"occ": (i, target["atTicks"]), "retro": False}
+            else:
+                grid = target["gridTicks"]
+                if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
+                    t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
+                prev = self.previous_boundary((i, t), grid)
+                if self.loop and prev is not None and prev[1] == self.loop["endTicks"] \
+                        and self.frame_of(prev) > origin:
+                    prev = self.previous_boundary((prev[0], prev[1] - 1), grid)
+                retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
+                if prev is not None and prev != (i, t) and retro > 0 and 0 <= origin - self.frame_of(prev) <= retro:
+                    choice = {"occ": prev, "retro": True}
+                else:
+                    choice = {"occ": self.boundary((i, t), grid), "retro": False}
         except ValueError as exc:
             return self.err(r, str(exc))
-        if "atTicks" in target:
-            choice = {"occ": (i, target["atTicks"]), "retro": False}
-        else:
-            grid = target["gridTicks"]
-            if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
-                t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
-            prev, nxt = self.previous_boundary((i, t), grid), self.boundary((i, t), grid)
-            retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-            choice = {"occ": nxt, "retro": False}
-            if prev is not None and prev != nxt and retro > 0 and 0 <= origin - self.frame_of(prev) <= retro:
-                choice = {"occ": prev, "retro": True}
         if self.loop and not self.loop["startTicks"] <= choice["occ"][1] <= self.loop["endTicks"]:
             self.err(r, "v1 resolves musical targets inside the active loop; loop end is the wrap frame")
         return choice
@@ -596,22 +603,22 @@ class Trace:
                 return "dropped", assigned, None, False
             try:
                 position = self.position(horizon)
+                occ = self.boundary(position, grid)
+                last_pass = position[0] + 1
+                while True:
+                    if self.loop and not self.loop["startTicks"] <= occ[1] <= self.loop["endTicks"]:
+                        self.err(info["rec"], "nextBoundary target must resolve inside the active loop")
+                        return "dropped", assigned, None, True
+                    frame = rnd(self.frame_of(occ))
+                    if frame >= horizon:
+                        return "fired", frame, frame, True
+                    if occ[0] > last_pass:
+                        self.err(info["rec"], "nextBoundary cannot resolve before the current horizon")
+                        return "dropped", assigned, None, True
+                    occ = self.boundary(occ, grid, after=True)
             except ValueError as exc:
                 self.err(info["rec"], str(exc))
                 return "dropped", assigned, None, True
-            occ = self.boundary(position, grid)
-            last_pass = position[0] + 1
-            while True:
-                if self.loop and not self.loop["startTicks"] <= occ[1] <= self.loop["endTicks"]:
-                    self.err(info["rec"], "nextBoundary target must resolve inside the active loop")
-                    return "dropped", assigned, None, True
-                frame = rnd(self.frame_of(occ))
-                if frame >= horizon:
-                    return "fired", frame, frame, True
-                if occ[0] > last_pass:
-                    self.err(info["rec"], "nextBoundary cannot resolve before the current horizon")
-                    return "dropped", assigned, None, True
-                occ = self.boundary(occ, grid, after=True)
         return "dropped", assigned, None, musical
 
     def on_outcome(self, r):
