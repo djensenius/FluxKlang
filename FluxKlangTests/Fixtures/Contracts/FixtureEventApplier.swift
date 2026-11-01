@@ -31,11 +31,13 @@ enum FixtureEventApplier {
     /// A bump invalidates every ready action that depends on its counter. A restart
     /// record and an accepted anchor make nothing stale.
     ///
-    /// Anchors follow a fixture policy for the *first* anchor of a generation only:
-    /// it must be on the primary clock's current generation, and if that generation
-    /// began with a clock restart, `GenerationLedger.acceptsFirstAnchor` must accept it
-    /// at the event's `nominalRate`. There are no ordering, drift or declared-rate checks
-    /// for later anchors, and none at all on the starting generation; that is
+    /// Anchors follow a fixture policy written for a generation's *first* anchor. The
+    /// applier is stateless, so it checks every anchor event independently as such a
+    /// first-anchor candidate: the anchor must be on the primary clock's current generation,
+    /// and if that generation began with a clock restart, `GenerationLedger.acceptsFirstAnchor`
+    /// must accept it at the event's `nominalRate`. Later observations are not modelled
+    /// separately: there are no ordering, drift or declared-rate checks against earlier
+    /// anchors, and no rate check on the starting generation. That is
     /// `SchedulerClock.observe`'s job, left for the scheduler fixtures (F8).
     @discardableResult
     static func apply(

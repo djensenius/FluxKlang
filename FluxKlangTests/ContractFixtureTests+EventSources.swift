@@ -214,6 +214,15 @@ extension ContractFixtureTests {
             #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.overflow) }
             #expect(throws: ScriptedEventSourceError.nothingToSwap) { try source.inject(.swapNext) }
             #expect(source == empty)
+
+            // One pending event with earlier loss and delivery history: the swap is refused and nothing changes.
+            var single = try ScriptedEventSource(capacity: 3, events: [bump, first, duplicate])
+            try single.inject(.drop)
+            _ = single.next()
+            let singleton = single
+            #expect(throws: ScriptedEventSourceError.nothingToSwap) { try single.inject(.swapNext) }
+            #expect(single == singleton && single.pending == [duplicate] && single.deliveredCount == 1)
+            #expect(single.droppedCount == 1 && single.overflowCount == 0 && single.lost.entries == [bump])
         }
 
         @Test func duplicateIsDeliveredNextToItsOriginal() throws {
