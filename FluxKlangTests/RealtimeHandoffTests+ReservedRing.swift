@@ -42,9 +42,7 @@ private func record(_ faults: FaultLatch) -> FaultRecord? {
 }
 
 private func drain(_ ring: ReservedCapacityRing<UInt64>) -> [UInt64] {
-    var values: [UInt64] = []
-    while let value = ring.tryPop() { values.append(value) }
-    return values
+    Array(sequence(state: ring) { $0.tryPop() })
 }
 
 /// A small deterministic generator so model runs are reproducible.
@@ -95,9 +93,7 @@ extension RealtimeHandoffTests {
             for occupancy in 0...20 {
                 let faults = try makeLatch()
                 let ring = try makeRing(faults)
-                for value in 0..<occupancy {
-                    #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok)
-                }
+                for value in 0..<occupancy { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
                 #expect(ring.producerOccupancy == occupancy)
                 let admitted = occupancy < 4
                 #expect(ring.tryPush(99, class: .general, frame: 0) == (admitted ? .ok : .refused(.full)))
@@ -113,8 +109,7 @@ extension RealtimeHandoffTests {
             for value in 0..<4 { #expect(ring.tryPush(UInt64(value), class: .general, frame: 0) == .ok) }
             #expect(ring.tryPush(4, class: .general, frame: 0) == .refused(.full))
             for value in 5..<21 { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
-            #expect(ring.producerOccupancy == 20)
-            #expect(!faults.isLatched(ringScope) && ring.refusedCriticalCount == 0)
+            #expect(ring.producerOccupancy == 20 && !faults.isLatched(ringScope) && ring.refusedCriticalCount == 0)
             #expect(drain(ring) == [0, 1, 2, 3] + (5..<21).map(UInt64.init))
         }
 
@@ -122,8 +117,7 @@ extension RealtimeHandoffTests {
             let faults = try makeLatch()
             let ring = try makeRing(faults)
             for value in 0..<20 { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
-            #expect(ring.tryPush(98, class: .general, frame: 7) == .refused(.full))
-            #expect(!faults.isLatched(ringScope))
+            #expect(ring.tryPush(98, class: .general, frame: 7) == .refused(.full) && !faults.isLatched(ringScope))
             #expect(ring.tryPush(99, class: .critical, frame: 1_234) == .refused(.criticalExhausted))
             #expect(faults.isLatched(ringScope) && !faults.isLatched(neighbourScope))
             #expect(record(faults) == FaultRecord(scope: ringScope, kind: .criticalExhausted, count: 1,
@@ -207,6 +201,24 @@ extension RealtimeHandoffTests {
             } == 4)
             #expect(seen == [0, 1, 2, 1_003, 4, 1_005, 6, 1_007, 8, 1_009])
             #expect(ring.popAll(limit: .max) { _ in } == 0 && ring.producerOccupancy == 0)
+        }
+
+        /// Per-pop capacity release: each element is handed back before `body` runs, so a push from inside `body`
+        /// sees exactly one freed slot. Critical takes it; general stays refused, as the ring is full again.
+        @Test func popAllReleasesEachSlotBeforeBodyForReentrantPush() throws {
+            let faults = try makeLatch()
+            let ring = try makeRing(faults)
+            for value in 0..<20 { #expect(ring.tryPush(UInt64(value), class: .critical, frame: 0) == .ok) }
+            var seen: [UInt64] = []
+            let count = ring.popAll(limit: .max) { value in
+                seen.append(value)
+                #expect(ring.tryPush(value + 100, class: .critical, frame: 0) == .ok)
+                #expect(ring.tryPush(value + 200, class: .general, frame: 0) == .refused(.full))
+                #expect(ring.producerOccupancy == 20)
+            }
+            #expect(count == 20 && seen == (0..<20).map(UInt64.init))
+            #expect(ring.refusedGeneralCount == 20 && ring.refusedCriticalCount == 0 && !faults.isLatched(ringScope))
+            #expect(drain(ring) == (100..<120).map(UInt64.init) && ring.producerOccupancy == 0)
         }
 
         @Test func refusalCountersSaturate() throws {
@@ -307,6 +319,7 @@ private struct ProducerSide: Sendable {
     var wrongStatus = 0
     var maxGeneralOccupancy = 0
     var maxOccupancy = 0
+    var paced = (events: 0, refused: 0, waits: 0)
     var finished = false
 }
 
@@ -341,6 +354,26 @@ private final class RingStressState: Sendable {
     }
 }
 
+private func sleepWhile(until deadline: ContinuousClock.Instant, _ condition: () -> Bool) {
+    while condition(), ContinuousClock.now < deadline { Thread.sleep(forTimeInterval: 0.002) }
+}
+
+/// Three 1,024-event blocks in four are paced: the producer waits (bounded) until its conservative occupancy is below
+/// the class limit, so the push must be admitted and only consumer pops let it continue. Every fourth block is a
+/// burst that pushes without waiting, so refusals, the reserve and the fault stay exercised.
+private func isPaced(_ index: Int) -> Bool { (index >> 10) & 3 != 0 }
+
+private func awaitRoom(_ ring: ReservedCapacityRing<Stamp>, _ eventClass: EventClass, _ state: RingStressState,
+                       _ side: inout ProducerSide) -> Bool {
+    var spins = 0
+    while ring.producerOccupancy >= (eventClass == .critical ? ring.capacity : ring.generalLimit) {
+        spins += 1
+        if spins & 63 == 0, state.shouldStop { return false }
+    }
+    side.paced = (side.paced.events + 1, side.paced.refused, side.paced.waits + (spins == 0 ? 0 : 1))
+    return true
+}
+
 private func produce(_ ring: ReservedCapacityRing<Stamp>, total: Int, _ state: RingStressState) -> ProducerSide {
     var side = ProducerSide()
     side.accepted = Array(repeating: false, count: total)
@@ -349,7 +382,9 @@ private func produce(_ ring: ReservedCapacityRing<Stamp>, total: Int, _ state: R
         if index & 1_023 == 0, state.shouldStop { return side }
         let sequence = UInt64(index)
         let eventClass = Stamp.eventClass(sequence)
+        if isPaced(index), !awaitRoom(ring, eventClass, state, &side) { return side }
         let status = ring.tryPush(Stamp(sequence), class: eventClass, frame: Int64(index))
+        side.paced.refused += isPaced(index) && status != .ok ? 1 : 0
         switch (status, eventClass) {
         case (.ok, _):
             side.accepted[index] = true
@@ -391,14 +426,11 @@ private func consume(_ ring: ReservedCapacityRing<Stamp>, total: Int, _ state: R
         // Acquire `producerDone` before draining: an empty drain after it means every push has been seen.
         let done = state.producerDone.load(ordering: .acquiring)
         round += 1
-        var drained = 0
-        if round % 2 == 0, let value = ring.tryPop() {
-            receive(value)
-            drained = 1
-        } else {
-            drained = ring.popAll(limit: 5, receive)
-        }
-        if drained == 0, done {
+        let single = round % 2 == 0 ? ring.tryPop() : nil
+        if let value = single { receive(value) }
+        let drained = single == nil ? ring.popAll(limit: 5, receive) : 1
+        if drained > 0 { continue }
+        if done {
             side.finished = true
             break
         }
@@ -428,33 +460,25 @@ extension RealtimeHandoffTests {
                 state.consumer.withLock { $0 = side }
                 state.exited.add(1, ordering: .releasing)
             }.start()
-            while state.arrived.load(ordering: .acquiring) < 2, ContinuousClock.now < state.deadline {
-                Thread.sleep(forTimeInterval: 0.001)
-            }
+            sleepWhile(until: state.deadline) { state.arrived.load(ordering: .acquiring) < 2 }
             state.started.store(true, ordering: .releasing)
-            while state.exited.load(ordering: .acquiring) < 2, ContinuousClock.now < state.deadline {
-                Thread.sleep(forTimeInterval: 0.005)
-            }
+            sleepWhile(until: state.deadline) { state.exited.load(ordering: .acquiring) < 2 }
             if state.exited.load(ordering: .acquiring) < 2 {
                 state.cancelled.store(true, ordering: .releasing)
                 Issue.record("reserved ring stress timed out; workers cancelled")
-                let grace = ContinuousClock.now + .seconds(5)
-                while state.exited.load(ordering: .acquiring) < 2, ContinuousClock.now < grace {
-                    Thread.sleep(forTimeInterval: 0.005)
-                }
-                // A worker that never exited may still touch the ring: skip the post-run state checks.
-                guard state.exited.load(ordering: .acquiring) == 2 else { return }
+                sleepWhile(until: .now + .seconds(5)) { state.exited.load(ordering: .acquiring) < 2 }
             }
+            // A worker that never exited may still touch the ring: stop before any post-run state check.
+            try #require(state.exited.load(ordering: .acquiring) == 2, "a stress worker never exited")
             let producer = state.producer.withLock { $0 }
             let consumer = state.consumer.withLock { $0 }
-            #expect(producer.finished && consumer.finished)
-            guard producer.finished, consumer.finished else { return }
-            let refused = producer.refused.general + producer.refused.critical
-            print("ReservedRingStress refused general \(producer.refused.general), critical "
-                  + "\(producer.refused.critical); max occupancy \(producer.maxOccupancy), "
-                  + "max after general \(producer.maxGeneralOccupancy)")
+            try #require(producer.finished && consumer.finished, "a stress worker stopped early")
+            print("ReservedRingStress paced \(producer.paced) of \(total); burst refused \(producer.refused); "
+                  + "max occupancy \(producer.maxOccupancy), after general \(producer.maxGeneralOccupancy)")
+            // Deterministic, not timing: a paced push is admitted once the producer saw room for its class.
+            #expect(producer.paced.events == (0..<total).count(where: isPaced) && producer.paced.refused == 0)
             #expect(producer.wrongStatus == 0 && consumer.torn == 0 && consumer.outOfOrder == 0)
-            #expect(UInt64(total) - refused == consumer.count)
+            #expect(UInt64(total) - producer.refused.general - producer.refused.critical == consumer.count)
             #expect(producer.accepted == consumer.popped)
             #expect(producer.maxGeneralOccupancy <= ring.generalLimit && producer.maxOccupancy <= ring.capacity)
             #expect(ring.refusedGeneralCount == producer.refused.general)

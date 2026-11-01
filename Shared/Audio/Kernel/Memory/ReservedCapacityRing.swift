@@ -27,15 +27,23 @@ import Synchronization
 /// So when the producer reads `popped = P`, the inner ring's head store of `P` happens before the inner
 /// `tryPush`'s own acquiring head load, which by coherence sees at least `P`. Hence "this check admits" implies
 /// "the inner full check admits", and the boundaries never disagree. With relaxed ordering the inner load could
-/// still see an older head than `P`; the inner ring would refuse where this check admitted, turning a free
-/// reserve slot into a spurious `.criticalExhausted` fault. Slot reuse is ordered by the inner ring's head
-/// protocol and, redundantly, by this pair (`popped` trails the inner head, so an admitted slot's last read
-/// happens before its rewrite). Only the inner tail's release/acquire publishes elements to the consumer.
-/// Sequential consistency is not needed.
+/// still see an older head than `P`; the inner ring could then refuse where this check admitted. That refusal
+/// would still be conservative (it reflects a racy, stale view of a slot the consumer is freeing, never an
+/// over-admission), but a critical one would latch `.criticalExhausted` although a reserve slot was already
+/// free. Slot reuse is ordered by the inner ring's head protocol and, redundantly, by this pair (`popped`
+/// trails the inner head, so an admitted slot's last read happens before its rewrite). Only the inner tail's
+/// release/acquire publishes elements to the consumer. Sequential consistency is not needed.
 ///
 /// Progress. `tryPush`, `tryPop` and `producerOccupancy` are wait-free: no retry loops, one acquiring load of
 /// `popped`, one inner operation (itself wait-free), relaxed counter updates and, on critical exhaustion, one
 /// wait-free `FaultLatch.raise`. `popAll` is bounded by `limit` and `capacity`. Nothing allocates after `init`.
+///
+/// Reference counting. `ring` and `faults` are strong `let`s that own the inner ring and the latch for this
+/// object's lifetime. Hot-path calls go through unretained copies (`ringRef`, `faultsRef`) with
+/// `_withUnsafeGuaranteedRef`, so they perform no retain or release: every call runs inside a method of `self`,
+/// which the caller keeps alive, and `self` keeps both objects alive through the strong `let`s, which are never
+/// reassigned. Evidence today is a scratch `@_noAllocation @_noLocks` compile probe of these entry points (not
+/// part of this repository); X1 is to enforce such a probe in CI. Neither is an RT certification.
 ///
 /// `@unchecked Sendable`: `pushed` is touched only by the producer and the inner ring is safe only under SPSC
 /// use, which R2 validation in `init` declares.
@@ -66,8 +74,13 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     /// `capacity − reserved`: the occupancy at which general events are refused.
     let generalLimit: Int
 
+    /// Owns the inner ring; hot paths use `ringRef`.
     private let ring: SPSCRing<Element>
+    /// Keeps the latch alive; hot paths use `faultsRef`.
     private let faults: FaultLatch
+    /// Unretained views of `ring` and `faults`, valid while `self` is alive (see Reference counting).
+    private let ringRef: Unmanaged<SPSCRing<Element>>
+    private let faultsRef: Unmanaged<FaultLatch>
     private let scope: FaultScope
     private let generalAdmission: UInt64
     private let criticalAdmission: UInt64
@@ -101,17 +114,21 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         case .overwriteLatest: throw .unsupportedPolicy(.overwriteLatest)
         }
         guard reserved >= KernelLimits.minimumCriticalReserve else { throw .reserveBelowMinimum(reserved) }
-        let inner = HandoffPolicy(
+        let innerPolicy = HandoffPolicy(
             purpose: policy.purpose, producer: policy.producer, producers: policy.producers,
             consumer: policy.consumer, consumers: policy.consumers, capacity: policy.capacity,
             ordering: policy.ordering, deadline: policy.deadline, overflow: .refuseProducer, lifetime: policy.lifetime)
+        let inner: SPSCRing<Element>
         do {
-            ring = try SPSCRing<Element>(policy: inner, startingIndex: startingIndex)
+            inner = try SPSCRing<Element>(policy: innerPolicy, startingIndex: startingIndex)
         } catch {
             throw .innerRing(error)
         }
+        ring = inner
+        ringRef = .passUnretained(inner)
         self.policy = policy
         self.faults = faults
+        faultsRef = .passUnretained(faults)
         self.scope = scope
         self.reserved = reserved
         capacity = policy.capacity
@@ -135,15 +152,19 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         case .critical:
             guard occupancy < criticalAdmission else { return refuse(eventClass, frame: frame) }
         }
-        // Defensive: unreachable, because the inner ring's occupancy never exceeds `occupancy` (see Ordering).
-        guard ring.tryPush(value) == .ok else { return refuse(eventClass, frame: frame) }
+        // Defensive. Unreachable only while the `popped` release/acquire pair is intact (see Ordering): it makes
+        // the inner ring's occupancy at most `occupancy`. Should that pairing ever be weakened, the inner ring
+        // refuses here and this maps it to the same conservative class refusal, never an over-admission.
+        guard ringRef._withUnsafeGuaranteedRef({ $0.tryPush(value) }) == .ok else {
+            return refuse(eventClass, frame: frame)
+        }
         pushed &+= 1
         return .ok
     }
 
     /// Consumer only; wait-free. Removes and returns the oldest element, or `nil` without side effects.
     func tryPop() -> Element? {
-        guard let value = ring.tryPop() else { return nil }
+        guard let value = ringRef._withUnsafeGuaranteedRef({ $0.tryPop() }) else { return nil }
         notePopped()
         return value
     }
@@ -153,14 +174,19 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     /// (see `SPSCRing.popAll`).
     @discardableResult
     func popAll(limit: Int, _ body: (Element) -> Void) -> Int {
-        ring.popAll(limit: limit) { value in
-            notePopped()
-            body(value)
+        // The closures capture an unretained `self` rather than `self`, so building their contexts retains nothing.
+        let unretainedSelf = Unmanaged.passUnretained(self)
+        return ringRef._withUnsafeGuaranteedRef { inner in
+            inner.popAll(limit: limit) { value in
+                unretainedSelf._withUnsafeGuaranteedRef { $0.notePopped() }
+                body(value)
+            }
         }
     }
 
     /// Producer only; wait-free. The producer's conservative occupancy, `0...capacity`: at least the true
-    /// occupancy, because the consumer's count may be stale.
+    /// occupancy, because the consumer's count may be stale. It reads the producer-local, non-atomic `pushed`,
+    /// so it is not safe from control, UI or the consumer; it is not a telemetry source.
     var producerOccupancy: Int { Int(truncatingIfNeeded: pushed &- popped.load(ordering: .acquiring)) }
 
     /// General refusals since `init`; saturates at `UInt64.max`.
@@ -179,12 +205,13 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     private func refuse(_ eventClass: EventClass, frame: Int64) -> KernelStatus {
         switch eventClass {
         case .general:
-            Self.bump(refusedGeneral)
+            bump(refusedGeneral)
             return .refused(.full)
         case .critical:
-            Self.bump(refusedCritical)
+            bump(refusedCritical)
             // A refused raise (unprepared scope) is still visible through `unknownScopeFaults`.
-            _ = faults.raise(scope, .criticalExhausted, frame: frame)
+            let scope = scope  // A local copy, so the closure does not capture (and retain) `self`.
+            _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, .criticalExhausted, frame: frame) }
             return .refused(.criticalExhausted)
         }
     }
@@ -194,8 +221,9 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         popped.store(popped.load(ordering: .relaxed) &+ 1, ordering: .releasing)
     }
 
-    /// Single-writer saturating increment.
-    private static func bump(_ counter: borrowing Atomic<UInt64>) {
+    /// Single-writer saturating increment. An instance method, not `Self.bump`: class `Self` access on a render
+    /// path can need metadata, which `@_noAllocation @_noLocks` rejects (M3's rule).
+    private func bump(_ counter: borrowing Atomic<UInt64>) {
         let count = counter.load(ordering: .relaxed)
         if count != .max { counter.store(count &+ 1, ordering: .relaxed) }
     }
