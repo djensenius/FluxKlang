@@ -49,7 +49,9 @@ extension HostAuthorityTests {
             let queued = try #require(await authority.snapshot().restoring)
             let token = try await Bench.leaseToken(authority)
             #expect(!queued.delivered && queued.token == token)
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, queued.token)])
+            #expect(await engine.drain(authority) == [
+                .restore(queued.attempt, .initial, Bench.runningPlan, queued.token)
+            ])
             #expect(await authority.snapshot().restoring?.delivered == true)
         }
 
@@ -64,9 +66,11 @@ extension HostAuthorityTests {
             let newLease = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
             let newToken = newLease.token
             #expect(newToken != oldToken)
+            let queuedRestore = try #require(await authority.snapshot().restoring)
             let commands = await engine.drain(authority)
-            #expect(commands == [.restore(.initial, Bench.runningPlan, newToken), .discard(failedPlan)])
-            #expect(engine.pendingRestores == [ScriptedRestore(revision: .initial,
+            #expect(commands == [.restore(queuedRestore.attempt, .initial, Bench.runningPlan, newToken),
+                                 .discard(failedPlan)])
+            #expect(engine.pendingRestores == [ScriptedRestore(attempt: queuedRestore.attempt, revision: .initial,
                                                                prepared: Bench.runningPlan, token: newToken)])
             let restoring = try #require(await authority.snapshot().restoring)
             #expect(restoring.project == Bench.projectA && restoring.token == newToken && restoring.delivered)
@@ -79,7 +83,10 @@ extension HostAuthorityTests {
             _ = try await authority.leaseLost(originalToken).get()
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
             let firstNewToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await authority.snapshot().queue.pending == [.restore(.initial, Bench.runningPlan, firstNewToken)])
+            let firstRestore = try #require(await authority.snapshot().restoring)
+            #expect(await authority.snapshot().queue.pending == [
+                .restore(firstRestore.attempt, .initial, Bench.runningPlan, firstNewToken)
+            ])
 
             _ = try await authority.leaseLost(firstNewToken).get()
             let lost = await authority.snapshot()
@@ -89,7 +96,10 @@ extension HostAuthorityTests {
 
             let latestToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             #expect(latestToken != firstNewToken)
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, latestToken)])
+            let latestRestore = try #require(await authority.snapshot().restoring)
+            #expect(await engine.drain(authority) == [
+                .restore(latestRestore.attempt, .initial, Bench.runningPlan, latestToken)
+            ])
             #expect(await authority.snapshot().restoring?.token == latestToken)
         }
 
@@ -102,11 +112,13 @@ extension HostAuthorityTests {
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let queued = try #require(await authority.snapshot().restoring)
 
-            let undelivered = await authority.restoreCompleted(revision: queued.revision,
+            let undelivered = await authority.restoreCompleted(attempt: queued.attempt, revision: queued.revision,
                                                                prepared: queued.prepared, token: token)
             #expect(Bench.refusal(undelivered) == .staleRestore)
             #expect(await authority.snapshot().restoring?.delivered == false)
-            #expect(await engine.drain(authority) == [.restore(queued.revision, queued.prepared, token)])
+            #expect(await engine.drain(authority) == [
+                .restore(queued.attempt, queued.revision, queued.prepared, token)
+            ])
             let delivered = await authority.snapshot()
             let otherPlan = PreparedActivationID(validated: "prep.other")
             for (revision, prepared, suppliedToken) in [
@@ -114,8 +126,8 @@ extension HostAuthorityTests {
                 (queued.revision, otherPlan, token),
                 (queued.revision, queued.prepared, oldToken)
             ] {
-                let refused = await authority.restoreCompleted(revision: revision, prepared: prepared,
-                                                               token: suppliedToken)
+                let refused = await authority.restoreCompleted(attempt: queued.attempt, revision: revision,
+                                                               prepared: prepared, token: suppliedToken)
                 #expect(Bench.refusal(refused) == .staleRestore)
                 #expect(await authority.snapshot() == delivered)
             }
@@ -123,7 +135,7 @@ extension HostAuthorityTests {
             try await authority.release(project: Bench.projectA).get()
             let released = await authority.snapshot()
             #expect(released.restoring == nil)
-            let afterRelease = await authority.restoreCompleted(revision: queued.revision,
+            let afterRelease = await authority.restoreCompleted(attempt: queued.attempt, revision: queued.revision,
                                                                 prepared: queued.prepared, token: token)
             #expect(Bench.refusal(afterRelease) == .staleRestore)
             #expect(await authority.snapshot() == released)
@@ -137,8 +149,11 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let granted = await authority.snapshot()
+            let restore = try #require(granted.restoring)
             #expect(granted.outputsMuted && granted.pendingOutput == nil)
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, token)])
+            #expect(await engine.drain(authority) == [
+                .restore(restore.attempt, .initial, Bench.runningPlan, token)
+            ])
             #expect(await authority.nextEngineCommand() == nil)
             #expect(await authority.snapshot().outputsMuted)
 
@@ -147,8 +162,8 @@ extension HostAuthorityTests {
             let acknowledged = await authority.snapshot()
             #expect(acknowledged.outputsMuted == false && acknowledged.pendingOutput == false)
             #expect(Bench.context(acknowledged) == Bench.context(beforeAck))
-            let duplicate = await authority.restoreCompleted(revision: .initial, prepared: Bench.runningPlan,
-                                                               token: token)
+            let duplicate = await authority.restoreCompleted(attempt: restore.attempt, revision: .initial,
+                                                             prepared: Bench.runningPlan, token: token)
             #expect(Bench.refusal(duplicate) == .staleRestore)
             #expect(await authority.snapshot() == acknowledged)
             #expect(await authority.nextEngineCommand() == .setOutputsMuted(false))
@@ -162,7 +177,8 @@ extension HostAuthorityTests {
             _ = try await authority.leaseLost(oldToken).get()
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, token)])
+            let restore = try #require(await authority.snapshot().restoring)
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, Bench.runningPlan, token)])
             #expect(await engine.completeRestore(authority) == .success(.running))
             #expect(await authority.snapshot().pendingOutput == false)
 
@@ -182,7 +198,8 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
 
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, token)])
+            let restore = try #require(await authority.snapshot().restoring)
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, Bench.runningPlan, token)])
             _ = try await Bench.review(authority, &engine)
             #expect(await engine.completeRestore(authority) == .success(.running))
             let acknowledged = await authority.snapshot()
@@ -210,17 +227,20 @@ extension HostAuthorityTests {
             _ = try await authority.leaseLost(firstToken).get()
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
             let secondToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await authority.snapshot().restoring?.token == secondToken)
-            #expect(await authority.snapshot().restoring?.discardAfterRestore == [failedPlan])
+            let secondRestore = try #require(await authority.snapshot().restoring)
+            #expect(secondRestore.token == secondToken)
+            #expect(secondRestore.discardAfterRestore == [failedPlan])
             #expect(await authority.snapshot().queue.pending == [
-                .restore(.initial, Bench.runningPlan, secondToken), .discard(failedPlan)
+                .restore(secondRestore.attempt, .initial, Bench.runningPlan, secondToken), .discard(failedPlan)
             ])
 
             _ = try await authority.leaseLost(secondToken).get()
             let lost = await authority.snapshot()
             #expect(lost.restoring == nil)
             #expect(lost.deferredRestoreDiscards == [Bench.projectA: [failedPlan]])
-            #expect(lost.queue.pending == [.restore(.initial, Bench.runningPlan, secondToken)])
+            #expect(lost.queue.pending == [
+                .restore(secondRestore.attempt, .initial, Bench.runningPlan, secondToken)
+            ])
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
             #expect(!engine.commands.contains(.discard(failedPlan)))
 
@@ -229,16 +249,18 @@ extension HostAuthorityTests {
                 return
             }
             let thirdToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let thirdRestore = try #require(await authority.snapshot().restoring)
             #expect(thirdToken != secondToken)
             #expect(await authority.snapshot().deferredRestoreDiscards.isEmpty)
             #expect(await engine.drain(authority) == [
-                .restore(.initial, Bench.runningPlan, thirdToken), .discard(failedPlan)
+                .restore(thirdRestore.attempt, .initial, Bench.runningPlan, thirdToken), .discard(failedPlan)
             ])
             #expect(engine.commands.suffix(2) == [
-                .restore(.initial, Bench.runningPlan, thirdToken), .discard(failedPlan)
+                .restore(thirdRestore.attempt, .initial, Bench.runningPlan, thirdToken), .discard(failedPlan)
             ])
             #expect(engine.commands.suffix(3) == [
-                .setOutputsMuted(true), .restore(.initial, Bench.runningPlan, thirdToken), .discard(failedPlan)
+                .setOutputsMuted(true), .restore(thirdRestore.attempt, .initial, Bench.runningPlan, thirdToken),
+                .discard(failedPlan)
             ])
         }
 
@@ -281,8 +303,9 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().deferredRestoreDiscards == [Bench.projectA: [failedPlan]])
 
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let restore = try #require(await authority.snapshot().restoring)
             #expect(await engine.drain(authority) == [
-                .restore(.initial, Bench.runningPlan, token), .discard(failedPlan)
+                .restore(restore.attempt, .initial, Bench.runningPlan, token), .discard(failedPlan)
             ])
             #expect(engine.discarded == [failedPlan])
         }
@@ -297,8 +320,9 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
 
             let secondToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let secondRestore = try #require(await authority.snapshot().restoring)
             #expect(await engine.drain(authority) == [
-                .restore(.initial, Bench.runningPlan, secondToken), .discard(failedPlan)
+                .restore(secondRestore.attempt, .initial, Bench.runningPlan, secondToken), .discard(failedPlan)
             ])
             #expect(await authority.snapshot().restoring?.discardAfterRestore.isEmpty == true)
 
@@ -318,8 +342,11 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(true), .discard(failedPlan)])
 
             let thirdToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await authority.snapshot().restoring?.discardAfterRestore.isEmpty == true)
-            #expect(await engine.drain(authority) == [.restore(.initial, Bench.runningPlan, thirdToken)])
+            let thirdRestore = try #require(await authority.snapshot().restoring)
+            #expect(thirdRestore.discardAfterRestore.isEmpty)
+            #expect(await engine.drain(authority) == [
+                .restore(thirdRestore.attempt, .initial, Bench.runningPlan, thirdToken)
+            ])
             #expect(engine.discarded == [failedPlan, failedPlan])
         }
 
@@ -370,8 +397,10 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
 
             let nextToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let restore = try #require(await authority.snapshot().restoring)
             let commands = await engine.drain(authority)
-            #expect(commands == [.restore(.initial, Bench.runningPlan, nextToken), .discard(failedPlan)])
+            #expect(commands == [.restore(restore.attempt, .initial, Bench.runningPlan, nextToken),
+                                 .discard(failedPlan)])
             #expect(!commands.contains { if case .keepActivePartial = $0 { true } else { false } })
             #expect(!commands.contains { if case .placeholders = $0 { true } else { false } })
             #expect(await engine.completeRestore(authority) == .success(.running))
@@ -392,7 +421,9 @@ extension HostAuthorityTests {
             let queued = await authority.snapshot()
             #expect(queued.outputsMuted && queued.pendingOutput == true)
             let commands = await engine.drain(authority)
-            #expect(commands == [.setOutputsMuted(true), .restore(.initial, Bench.runningPlan, newToken),
+            let restore = try #require(queued.restoring)
+            #expect(commands == [.setOutputsMuted(true), .restore(restore.attempt, .initial,
+                                                                  Bench.runningPlan, newToken),
                                  .discard(partialPlan)])
             #expect(!commands.contains { if case .keepActivePartial = $0 { true } else { false } })
             #expect(!commands.contains { if case .placeholders = $0 { true } else { false } })

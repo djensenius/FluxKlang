@@ -128,11 +128,12 @@ actor HostAuthority {
         book.resolveRecovery(project: project)
     }
 
-    /// `HostAuthorityBook.restoreCompleted(revision:prepared:token:)`.
+    /// `HostAuthorityBook.restoreCompleted(attempt:revision:prepared:token:)`.
     func restoreCompleted(
-        revision: ContractRevision, prepared: PreparedActivationID?, token: EngineLeaseToken
+        attempt: RestoreAttemptID, revision: ContractRevision, prepared: PreparedActivationID?,
+        token: EngineLeaseToken
     ) -> Result<EngineLifecycle, HostAuthorityRefusal> {
-        book.restoreCompleted(revision: revision, prepared: prepared, token: token)
+        book.restoreCompleted(attempt: attempt, revision: revision, prepared: prepared, token: token)
     }
 
     /// `HostAuthorityBook.commitReported(_:)`.

@@ -39,6 +39,7 @@ struct ScriptedCommitReport: Sendable {
 
 /// One delivered restore that the engine has not acknowledged.
 struct ScriptedRestore: Hashable, Sendable {
+    let attempt: RestoreAttemptID
     let revision: ContractRevision
     let prepared: PreparedActivationID?
     let token: EngineLeaseToken
@@ -92,8 +93,9 @@ struct ScriptedActivationEngine: Sendable {
                 preparingNodes[attempt] = Set(graph.nodes.map(\.id))
             case .commit(let prepared, let attempt, let token):
                 pendingCommits.append(ScriptedCommit(prepared: prepared, attempt: attempt, token: token))
-            case .restore(let revision, let prepared, let token):
-                pendingRestores.append(ScriptedRestore(revision: revision, prepared: prepared, token: token))
+            case .restore(let attempt, let revision, let prepared, let token):
+                pendingRestores.append(ScriptedRestore(attempt: attempt, revision: revision,
+                                                       prepared: prepared, token: token))
             default: break
             }
             taken.append(command)
@@ -159,7 +161,7 @@ struct ScriptedActivationEngine: Sendable {
     -> Result<EngineLifecycle, HostAuthorityRefusal>? {
         guard !pendingRestores.isEmpty else { return nil }
         let restore = pendingRestores.removeFirst()
-        return await authority.restoreCompleted(revision: restore.revision, prepared: restore.prepared,
-                                                token: restore.token)
+        return await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
+                                                prepared: restore.prepared, token: restore.token)
     }
 }

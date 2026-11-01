@@ -165,13 +165,15 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().authorizedWindows.isEmpty)
             let reacquired = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
             let held = await authority.snapshot()
+            let restore = try #require(held.restoring)
             let refused = await authority.commit(project: Bench.projectA, authorization: authorization)
             #expect(Bench.refusal(refused) == .lifecycleRejectsChanges(.recovering))
             #expect(await authority.snapshot() == held)
             // The reviewed plan stays live and can still be withdrawn.
             try await authority.cancel(project: Bench.projectA).get()
             #expect(await engine.drain(authority) == [
-                .setOutputsMuted(true), .restore(.initial, Bench.runningPlan, reacquired.token), .discard(reviewed)
+                .setOutputsMuted(true), .restore(restore.attempt, .initial, Bench.runningPlan, reacquired.token),
+                .discard(reviewed)
             ])
         }
 

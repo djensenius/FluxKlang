@@ -15,8 +15,9 @@ enum EngineCommand: Hashable, Sendable {
     case commit(PreparedActivationID, CommitAttemptID, EngineLeaseToken)
     /// Release a prepared plan the engine holds.
     case discard(PreparedActivationID)
-    /// Return to the running graph's prepared plan at this revision, under this lease token.
-    case restore(ContractRevision, PreparedActivationID?, EngineLeaseToken)
+    /// Return to the running graph at this revision under this lease token; acknowledge
+    /// only with this restore attempt's identity.
+    case restore(RestoreAttemptID, ContractRevision, PreparedActivationID?, EngineLeaseToken)
     /// Keep the partly applied plan active as the running graph.
     case keepActivePartial(PreparedActivationID)
     /// Keep these nodes silent placeholders (not bypassed) and raise diagnostics.
@@ -45,6 +46,8 @@ enum EngineCommandQueueRefusal: Error, Hashable, Sendable {
     /// kept partial plan with no running plan to name, or a kept/restored plan that
     /// the same step discards (`running` was the pre-step graph).
     case runningMismatch
+    /// A restore decision must carry the book-issued identity of its admitted attempt.
+    case restoreAttemptRequired
 }
 
 /// A bounded FIFO of engine commands. A batch (one transition's effects, or one
@@ -104,7 +107,8 @@ struct EngineCommandQueue: Hashable, Sendable {
     /// The step's transition already happened and is not undone: call
     /// `canAccept(maxRecoveryStepSlots)` before it, or treat `.full` as fail-closed.
     mutating func enqueue(
-        _ step: ActivationRecoveryStep, running: RunningGraph, lease: EngineLeaseToken?
+        _ step: ActivationRecoveryStep, running: RunningGraph, lease: EngineLeaseToken?,
+        restoreAttempt: RestoreAttemptID? = nil
     ) -> Result<Void, EngineCommandQueueRefusal> {
         var commands: [EngineCommand] = []
         var run: [NodeID] = []
@@ -114,7 +118,8 @@ struct EngineCommandQueue: Hashable, Sendable {
                 continue
             }
             Self.flush(&run, into: &commands)
-            switch Self.command(for: decision, running: running, lease: lease, discarding: step.effects) {
+            switch Self.command(for: decision, running: running, lease: lease,
+                                restoreAttempt: restoreAttempt, discarding: step.effects) {
             case .success(let command): commands.append(command)
             case .failure(let refusal): return .failure(refusal)
             }
@@ -157,7 +162,7 @@ struct EngineCommandQueue: Hashable, Sendable {
     /// Checks run in order: revision and named plan (not discarded by `effects`), then lease.
     private static func command(
         for decision: RecoveryDecision, running: RunningGraph, lease: EngineLeaseToken?,
-        discarding effects: [ActivationEffect]
+        restoreAttempt: RestoreAttemptID?, discarding effects: [ActivationEffect]
     ) -> Result<EngineCommand, EngineCommandQueueRefusal> {
         switch decision {
         case .restorePrevious(let revision):
@@ -166,7 +171,8 @@ struct EngineCommandQueue: Hashable, Sendable {
                 return .failure(.runningMismatch)
             }
             guard let lease else { return .failure(.leaseRequired) }
-            return .success(.restore(revision, running.prepared, lease))
+            guard let restoreAttempt else { return .failure(.restoreAttemptRequired) }
+            return .success(.restore(restoreAttempt, revision, running.prepared, lease))
         case .keepActivePartial:
             guard let prepared = running.prepared, !effects.contains(.discard(prepared)) else {
                 return .failure(.runningMismatch)

@@ -13,6 +13,11 @@ private struct HostRecoveryPlan {
     let failClosed: Bool
 }
 
+private struct RestoreAdmission {
+    let attempt: RestoreAttemptID
+    let record: RestoreRecord
+}
+
 extension HostAuthorityBook {
     /// Resolves `project`'s recovery under its held lease.
     /// Checks, in order: project open; lease held by this project; no restore or
@@ -36,42 +41,68 @@ extension HostAuthorityBook {
                                             lease: EngineLeaseSnapshot)
     -> Result<RecoveryResolution, HostAuthorityRefusal> {
         let deferredDiscards = deferredRestoreDiscards[project] ?? []
-        if case .restoring = plan.resolution, !queue.canAccept(
-            EngineCommandQueue.maxRecoveryStepSlots + deferredDiscards.count
-        ) {
+        let admission = makeRestoreAdmission(for: plan, project: project, lease: lease,
+                                              deferredDiscards: deferredDiscards)
+        guard let stagedQueue = stagedRecoveryQueue(for: plan, lease: lease, admission: admission,
+                                                    deferredDiscards: deferredDiscards) else {
             return .failure(.queueFull)
-        }
-        var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue(plan.step, running: plan.state.transaction.running,
-                                                   lease: lease.token) else { return .failure(.queueFull) }
-        if case .restoring = plan.resolution, !deferredDiscards.isEmpty {
-            guard case .success = stagedQueue.enqueue(effects: deferredDiscards.map(ActivationEffect.discard)) else {
-                return .failure(.queueFull)
-            }
         }
         queue = stagedQueue
         projects[project] = plan.state
         if plan.failClosed { failClosedMute() }
-        if case .restoring(let revision) = plan.resolution {
-            let stepDiscards = plan.step.effects.compactMap { effect -> PreparedActivationID? in
-                if case .discard(let prepared) = effect { return prepared }
-                return nil
-            }
-            restoring = RestoreRecord(project: project, revision: revision,
-                                       prepared: plan.state.transaction.running.prepared,
-                                       token: lease.token, delivered: false,
-                                       discardAfterRestore: stepDiscards + deferredDiscards)
+        if let admission {
+            restoring = admission.record
             deferredRestoreDiscards[project] = nil
         }
         return .success(plan.resolution)
     }
 
+    private func makeRestoreAdmission(
+        for plan: HostRecoveryPlan, project: ProjectID, lease: EngineLeaseSnapshot,
+        deferredDiscards: [PreparedActivationID]
+    ) -> RestoreAdmission? {
+        guard case .restoring(let revision) = plan.resolution else { return nil }
+        let attempt = RestoreAttemptID()
+        let stepDiscards = plan.step.effects.compactMap { effect -> PreparedActivationID? in
+            if case .discard(let prepared) = effect { return prepared }
+            return nil
+        }
+        let record = RestoreRecord(attempt: attempt, project: project, revision: revision,
+                                   prepared: plan.state.transaction.running.prepared,
+                                   token: lease.token, delivered: false,
+                                   discardAfterRestore: stepDiscards + deferredDiscards)
+        return RestoreAdmission(attempt: attempt, record: record)
+    }
+
+    private func stagedRecoveryQueue(
+        for plan: HostRecoveryPlan, lease: EngineLeaseSnapshot, admission: RestoreAdmission?,
+        deferredDiscards: [PreparedActivationID]
+    ) -> EngineCommandQueue? {
+        if admission != nil, !queue.canAccept(EngineCommandQueue.maxRecoveryStepSlots + deferredDiscards.count) {
+            return nil
+        }
+        var stagedQueue = queue
+        guard case .success = stagedQueue.enqueue(plan.step, running: plan.state.transaction.running,
+                                                   lease: lease.token, restoreAttempt: admission?.attempt) else {
+            return nil
+        }
+        if admission != nil, !deferredDiscards.isEmpty {
+            guard case .success = stagedQueue.enqueue(effects: deferredDiscards.map(ActivationEffect.discard)) else {
+                return nil
+            }
+        }
+        return stagedQueue
+    }
+
     /// Completes only the exact restore admitted to the engine under the current lease.
     /// Success clears the record, updates a recovering lifecycle, and owes an unmute
     /// only if the engine was muted; it never bumps the host context.
-    mutating func restoreCompleted(revision: ContractRevision, prepared: PreparedActivationID?,
-                                   token: EngineLeaseToken) -> Result<EngineLifecycle, HostAuthorityRefusal> {
+    mutating func restoreCompleted(
+        attempt: RestoreAttemptID, revision: ContractRevision, prepared: PreparedActivationID?,
+        token: EngineLeaseToken
+    ) -> Result<EngineLifecycle, HostAuthorityRefusal> {
         guard let record = restoring, record.delivered,
+              record.attempt == attempt,
               record.revision == revision, record.prepared == prepared, record.token == token,
               let held = registry.snapshot, held.project == record.project, held.token == token,
               var state = projects[record.project] else {
@@ -122,8 +153,9 @@ extension HostAuthorityBook {
 
     /// Marks only an exact, undelivered restore under the current lease as delivered.
     mutating func admitRestore(_ command: EngineCommand) -> Bool {
-        guard case .restore(let revision, let prepared, let token) = command,
+        guard case .restore(let attempt, let revision, let prepared, let token) = command,
               var record = restoring, !record.delivered,
+              record.attempt == attempt,
               record.revision == revision, record.prepared == prepared, record.token == token,
               let held = registry.snapshot, held.project == record.project, held.token == token else {
             return false
@@ -186,6 +218,9 @@ extension HostAuthorityBook {
             }
         } else {
             step = firstStep
+        }
+        if !failClosed, step.decisions.contains(.keepActivePartial), state.lifecycle == .stopped {
+            state.lifecycle = .running
         }
         let resolution: RecoveryResolution
         if step.decisions.contains(where: Self.requestsRestore) {

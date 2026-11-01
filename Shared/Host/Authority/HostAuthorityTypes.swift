@@ -43,7 +43,7 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
     /// Callers may only abandon a commit as `.outcomeUnknown`; the actor alone
     /// abandons for a lost lease, and revision overflow is refused at `begin`.
     case abandonmentReserved(CommitAbandonment)
-    /// `restoreCompleted` did not match a delivered restore under the current lease.
+    /// `restoreCompleted` did not match the identified delivered restore under the current lease.
     case staleRestore
 }
 
@@ -164,14 +164,30 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     let pendingOutput: Bool?
     /// Whether the engine's outputs are muted (engine-global: one engine per host).
     let outputsMuted: Bool
-    /// The one restore queued or delivered under the current lease.
+    /// The one uniquely identified restore queued or delivered under the current lease.
     let restoring: RestoreRecord?
     /// Discards held until their project's next current-token restore is queued.
     let deferredRestoreDiscards: [ProjectID: [PreparedActivationID]]
 }
 
+/// One attempt to restore the running graph. Its retained object identity cannot
+/// be reset or reused while an engine can still hold an acknowledgement.
+struct RestoreAttemptID: Hashable, Sendable {
+    private final class Identity: Sendable {}
+    private let identity = Identity()
+
+    init() {}
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.identity === rhs.identity }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(identity))
+    }
+}
+
 /// One restore queued or delivered for the current lease. No API accepts a record.
 struct RestoreRecord: Hashable, Sendable {
+    let attempt: RestoreAttemptID
     let project: ProjectID
     let revision: ContractRevision
     let prepared: PreparedActivationID?
