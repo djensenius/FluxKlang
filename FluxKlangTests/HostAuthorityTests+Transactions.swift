@@ -53,8 +53,9 @@ private func request(permission granted: PermissionFingerprint) -> ActivationReq
 }
 
 private func report(applied: Set<NodeID> = Set(nodes), unapplied: Set<NodeID> = [],
-                    prepared: PreparedActivationID = planID) -> ActivationCommitReport {
-    ActivationCommitReport(prepared: prepared, applied: applied, unapplied: unapplied)
+                    outcome: ActivationCommitOutcome = .succeeded,
+                    prepared: PreparedActivationID = planID) -> CommitReportDraft {
+    CommitReportDraft(prepared: prepared, outcome: outcome, applied: applied, unapplied: unapplied)
 }
 
 private func failure<Success>(_ result: Result<Success, ActivationRefusal>) -> ActivationRefusal? {
@@ -62,8 +63,10 @@ private func failure<Success>(_ result: Result<Success, ActivationRefusal>) -> A
     return nil
 }
 
+private typealias Bench = TransactionBench
+
 /// One host: a lease registry, its ledger and one project's transaction.
-private struct Bench {
+struct TransactionBench {
     var registry = EngineLeaseRegistry()
     var ledger: GenerationLedger
     var transaction: ActivationTransaction
@@ -267,7 +270,7 @@ extension HostAuthorityTests {
             #expect(host.transaction == reviewing && host.transaction.authorizer.lastNonce == nil)
             let own = try host.authorize()
             #expect(own.nonce == .initial)
-            #expect(try host.commit(own).get() == [.commit(planID, try #require(host.registry.snapshot).token)])
+            #expect(try host.commit(own).get() == (try host.committed(planID)))
             #expect(host.transaction.phase == .committing)
         }
 
@@ -333,8 +336,7 @@ extension HostAuthorityTests {
             let reviewing = changed.transaction
             #expect(failure(try changed.commit(stale)) == .authorizationInvalid(expected))
             #expect(changed.transaction == reviewing)
-            let token = try #require(changed.registry.snapshot).token
-            #expect(try changed.commit(current).get() == [.commit(planID, token)])
+            #expect(try changed.commit(current).get() == (try changed.committed(planID)))
         }
 
         @Test(arguments: [CommandOrigin.assistant, .controller])
@@ -372,8 +374,7 @@ extension HostAuthorityTests {
             // The current lease for this project lets the same authorization through.
             var owner = try Bench()
             try owner.reviewing()
-            let token = try #require(owner.registry.snapshot).token
-            #expect(try owner.commit(try owner.authorize()).get() == [.commit(planID, token)])
+            #expect(try owner.commit(try owner.authorize()).get() == (try owner.committed(planID)))
         }
 
         @Test func acknowledgeAdvancesRevisionByOne() throws {
@@ -393,7 +394,7 @@ extension HostAuthorityTests {
         @Test func partialCommitListsUnapplied() throws {
             var host = try Bench()
             try host.committing()
-            let partial = report(applied: [nodes[0]], unapplied: [nodes[1], nodes[2]])
+            let partial = report(applied: [nodes[0]], unapplied: [nodes[1], nodes[2]], outcome: .partial)
             #expect(try host.transaction.acknowledged(partial).get().isEmpty)
             #expect(host.transaction.phase == .partial(planID, applied: [nodes[0]], unapplied: [nodes[1], nodes[2]]))
             #expect(host.transaction.running == RunningGraph(revision: .initial, prepared: runningPlan))
@@ -401,18 +402,12 @@ extension HostAuthorityTests {
             let live = try host.live
             #expect(host.refusal { $0.begin(request(), candidate: candidate(), in: live) }
                 == .unexpectedPhase(host.transaction.phase))
-            // Nothing applied is still partial, and still leaves the running graph alone.
-            var failed = try Bench()
-            try failed.committing()
-            _ = try failed.transaction.acknowledged(report(applied: [], unapplied: Set(nodes))).get()
-            #expect(failed.transaction.phase == .partial(planID, applied: [], unapplied: Set(nodes)))
-            #expect(failed.transaction.running.revision == .initial)
         }
 
         @Test(arguments: [report(applied: [], unapplied: []), report(applied: [nodes[0]], unapplied: [nodes[1]]),
                           report(applied: [nodes[0]], unapplied: [nodes[0], nodes[1], nodes[2]]),
                           report(applied: Set(nodes).union([NodeID(validated: "node.extra")]))])
-        func commitReportMustAccountForEveryPlannedNode(mismatched: ActivationCommitReport) throws {
+        func commitReportMustAccountForEveryPlannedNode(mismatched: CommitReportDraft) throws {
             var host = try Bench()
             try host.committing()
             #expect(host.refusal { $0.acknowledged(mismatched) } == .reportMismatch)
