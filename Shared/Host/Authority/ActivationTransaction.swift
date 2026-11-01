@@ -119,8 +119,9 @@ enum ActivationPhase: Hashable, Sendable {
     case commitFailed(PreparedActivationID)
     case prepareFailed(PrepareFailure)
     /// The named plan's commit was abandoned (outcome unknown, revision overflow
-    /// or lease lost) and outputs are muted; `resolveRecovery` restores the running graph.
-    case recovering(PreparedActivationID)
+    /// or lease lost) and outputs are muted; `resolveRecovery` restores the running
+    /// graph, reporting `cause` (the event that started the recovery).
+    case recovering(PreparedActivationID, cause: RecoveryEvent)
 }
 
 /// What the engine is running. Changes only when a commit is fully acknowledged
@@ -383,7 +384,7 @@ struct ActivationTransaction: Hashable, Sendable {
             return .failure(.unexpectedPhase(phase))
         }
         plan = nil
-        phase = .recovering(prepared)
+        phase = .recovering(prepared, cause: reason.event)
         return .success(ActivationRecovery.enterRecovery(reason.event, running: running))
     }
 
@@ -391,7 +392,8 @@ struct ActivationTransaction: Hashable, Sendable {
     /// Checks: phase, then the failing attempt (`lastAttempt`, else `staleReport`).
     /// A failed or abandoned plan is discarded and the running graph restored
     /// (`.idle`) only under this project's lease (any token, so reacquiring
-    /// unblocks it), else `leaseNotHeld` / `leaseHeldByOtherProject`. A partial plan is
+    /// unblocks it), else `leaseNotHeld` / `leaseHeldByOtherProject`; the step's
+    /// `cause` is `.commitFailed` or the recovery's own cause. A partial plan is
     /// kept as the next revision with its unapplied nodes as placeholders
     /// (`.acknowledged`) only while `lease` is still the commit's lease, and the
     /// revision can advance; otherwise it fails closed into muted `.recovering`,
@@ -400,10 +402,12 @@ struct ActivationTransaction: Hashable, Sendable {
         _ attempt: CommitAttemptID, lease: EngineLeaseSnapshot?
     ) -> Result<ActivationRecoveryStep, ActivationRefusal> {
         let prepared: PreparedActivationID
-        var unapplied: Set<NodeID>?
+        let unapplied: Set<NodeID>?
+        let cause: RecoveryEvent
         switch phase {
-        case .commitFailed(let id), .recovering(let id): prepared = id
-        case .partial(let id, _, let missing): (prepared, unapplied) = (id, missing)
+        case .commitFailed(let id): (prepared, unapplied, cause) = (id, nil, .commitFailed)
+        case .recovering(let id, let event): (prepared, unapplied, cause) = (id, nil, event)
+        case .partial(let id, _, let missing): (prepared, unapplied, cause) = (id, missing, .partialCommit)
         default: return .failure(.unexpectedPhase(phase))
         }
         guard attempt == lastAttempt else { return .failure(.staleReport) }
@@ -411,14 +415,14 @@ struct ActivationTransaction: Hashable, Sendable {
             guard let lease else { return .failure(.leaseNotHeld) }
             guard lease.project == project else { return .failure(.leaseHeldByOtherProject(lease.project)) }
             phase = .idle
-            return .success(ActivationRecovery.restore(running, discarding: prepared))
+            return .success(ActivationRecovery.restore(running, discarding: prepared, cause: cause))
         }
         guard let lease, lease.project == project, lease.token == commitLease else {
-            phase = .recovering(prepared)
+            phase = .recovering(prepared, cause: .leaseLost)
             return .success(ActivationRecovery.enterRecovery(.leaseLost, running: running))
         }
         guard let revision = try? running.revision.next() else {
-            phase = .recovering(prepared)
+            phase = .recovering(prepared, cause: .revisionOverflow)
             return .success(ActivationRecovery.enterRecovery(.revisionOverflow, running: running))
         }
         let step = ActivationRecovery.keepPartial(unapplied: unapplied, replacing: running)

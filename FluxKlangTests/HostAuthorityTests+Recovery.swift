@@ -18,14 +18,18 @@ private let nodes = [NodeID(validated: "node.fx"), NodeID(validated: "node.eq"),
 private let liveParameter = ParameterID(validated: "parameter.live")
 private let draftID = DraftID(validated: "draft.main")
 
-/// One case per `EngineLifecycle` case; `init(_:)` has no `default`, so a new lifecycle fails to compile here.
+/// One case per `EngineLifecycle` case, and per `RunningSetState` while preparing; `init(_:)` has
+/// no `default`, so a new lifecycle or running-set state fails to compile here.
 private enum LifecycleKind: CaseIterable {
-    case stopped, preparing, running, degraded, recovering, heldByOther
+    case stopped, preparingFirst, preparingOverRunning, preparingOverDegraded, running, degraded, recovering
+    case heldByOther
 
     init(_ lifecycle: EngineLifecycle) {
         switch lifecycle {
         case .stopped: self = .stopped
-        case .preparing: self = .preparing
+        case .preparing(_, over: .absent): self = .preparingFirst
+        case .preparing(_, over: .running): self = .preparingOverRunning
+        case .preparing(_, over: .degraded): self = .preparingOverDegraded
         case .running: self = .running
         case .degraded: self = .degraded
         case .recovering: self = .recovering
@@ -36,7 +40,9 @@ private enum LifecycleKind: CaseIterable {
     var lifecycle: EngineLifecycle {
         switch self {
         case .stopped: .stopped
-        case .preparing: .preparing(.initial)
+        case .preparingFirst: .preparing(.initial, over: .absent)
+        case .preparingOverRunning: .preparing(.initial, over: .running)
+        case .preparingOverDegraded: .preparing(.initial, over: .degraded([audio]))
         case .running: .running
         case .degraded: .degraded([audio])
         case .recovering: .recovering
@@ -98,8 +104,8 @@ private func report(_ outcome: ActivationCommitOutcome, applied: Set<NodeID> = S
 
 private let partial = report(.partial, applied: [nodes[0]], unapplied: [nodes[1], nodes[2]])
 
-private func restore(_ revision: ContractRevision) -> ActivationRecoveryStep {
-    ActivationRecoveryStep(cause: .commitFailed, decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
+private func restore(_ revision: ContractRevision, cause: RecoveryEvent = .commitFailed) -> ActivationRecoveryStep {
+    ActivationRecoveryStep(cause: cause, decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
 }
 
 private func mutedRecovery(_ cause: RecoveryEvent) -> ActivationRecoveryStep {
@@ -281,19 +287,20 @@ extension HostAuthorityTests {
                 == .unexpectedPhase(.committing))
             let before = host.transaction
             #expect(try host.transaction.abandonCommit(attempt, reason: reason).get() == mutedRecovery(reason.event))
-            host.expectSettled(.recovering(planID), running: before.running, since: before)
+            let recovering = ActivationPhase.recovering(planID, cause: reason.event)
+            host.expectSettled(recovering, running: before.running, since: before)
             let lifecycle = EngineLifecycle.running.after(reason.event)
             #expect(lifecycle == .recovering && lifecycle.outputsMuted)
             // Never assumed successful: a late report is ignored and nothing new begins.
-            #expect(host.refusal { $0.acknowledged(report(.succeeded)) } == .unexpectedPhase(.recovering(planID)))
-            #expect(host.refusal { $0.abandonCommit(attempt, reason: reason) } == .unexpectedPhase(.recovering(planID)))
+            #expect(host.refusal { $0.acknowledged(report(.succeeded)) } == .unexpectedPhase(recovering))
+            #expect(host.refusal { $0.abandonCommit(attempt, reason: reason) } == .unexpectedPhase(recovering))
             let live = try host.live
             #expect(host.refusal { $0.begin(request(), candidate: candidate(), in: live) }
-                == .unexpectedPhase(.recovering(planID)))
+                == .unexpectedPhase(recovering))
             #expect(host.refusal { $0.resolveRecovery(foreign, lease: nil) } == .staleReport)
             try host.expectRestoreNeedsLease(attempt)
             #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
-                == restore(.initial))
+                == restore(.initial, cause: reason.event))
             host.expectSettled(.idle, running: before.running, since: before)
         }
 
@@ -313,8 +320,10 @@ extension HostAuthorityTests {
                 #expect(try host.transaction.abandonCommit(attempt, reason: .revisionOverflow).get()
                     == mutedRecovery(.revisionOverflow))
             }
-            #expect(host.transaction.phase == .recovering(planID) && host.transaction.validated == nil)
-            #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get() == restore(last))
+            #expect(host.transaction.phase == .recovering(planID, cause: .revisionOverflow))
+            #expect(host.transaction.validated == nil)
+            #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
+                == restore(last, cause: .revisionOverflow))
             #expect(host.transaction.phase == .idle)
             #expect(host.transaction.running == RunningGraph(revision: last, prepared: runningPlan))
         }
@@ -445,7 +454,23 @@ extension HostAuthorityTests {
             _ = try registry.release(expected: try #require(registry.snapshot).token)
             let stopped = EngineLifecycle.observed(by: windowB, of: projectB, in: registry, engine: .running)
             #expect(stopped == .stopped && !stopped.rendersOutput)
-            #expect(lifecycles.filter(\.rendersOutput) == [.preparing(.initial), .running, .degraded([audio])])
+            #expect(lifecycles.filter(\.rendersOutput)
+                == [.preparing(.initial, over: .running), .preparing(.initial, over: .degraded([audio])), .running,
+                    .degraded([audio])])
+        }
+
+        @Test func releasedLeaseKeepsUnresolvedRecoveryMutedAndGated() throws {
+            var registry = EngineLeaseRegistry()
+            _ = try registry.acquire(project: projectA, window: windowA)
+            let engine = EngineLifecycle.running.after(.leaseLost)
+            _ = try registry.release(expected: try #require(registry.snapshot).token)
+            let observed = EngineLifecycle.observed(by: windowA, of: projectA, in: registry, engine: engine)
+            #expect(observed == .recovering && observed.outputsMuted && !observed.acceptsRunningSetChanges)
+            #expect(try gate(.set, in: observed) == .unavailable(.recovering))
+            try expectGate(in: observed)
+            _ = try registry.acquire(project: projectB, window: windowB)
+            #expect(EngineLifecycle.observed(by: windowA, of: projectA, in: registry, engine: engine)
+                == .heldByOther(projectB))
         }
     }
 }

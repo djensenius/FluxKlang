@@ -11,8 +11,8 @@ private let partial = CommitReportDraft(prepared: planID, outcome: .partial, app
                                         unapplied: [nodes[1], nodes[2]])
 private let failed = CommitReportDraft(prepared: planID, outcome: .failed, applied: [], unapplied: Set(nodes))
 
-private func restore(_ revision: ContractRevision) -> ActivationRecoveryStep {
-    ActivationRecoveryStep(cause: .commitFailed, decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
+private func restore(_ revision: ContractRevision, cause: RecoveryEvent) -> ActivationRecoveryStep {
+    ActivationRecoveryStep(cause: cause, decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
 }
 
 private func mutedRecovery(_ cause: RecoveryEvent) -> ActivationRecoveryStep {
@@ -41,13 +41,13 @@ extension HostAuthorityTests.Recovery {
         // No install and no discard of the running plan: muted recovery over the old running graph.
         #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
             == mutedRecovery(.leaseLost))
-        host.expectSettled(.recovering(planID), running: running, since: before)
+        host.expectSettled(.recovering(planID, cause: .leaseLost), running: running, since: before)
         if let held = host.registry.snapshot, held.project != projectA {
             _ = try host.registry.release(expected: held.token)
         }
         if host.registry.snapshot == nil { try host.acquire(projectA) }  // Any token of this project restores.
         #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
-            == restore(.initial))
+            == restore(.initial, cause: .leaseLost))
         host.expectSettled(.idle, running: running, since: before)
     }
 
@@ -64,10 +64,10 @@ extension HostAuthorityTests.Recovery {
         #expect(host.refusal { $0.abandonCommit(foreign, reason: .leaseLost) } == .staleReport)
         let before = host.transaction
         #expect(try host.transaction.abandonCommit(attempt, reason: .leaseLost).get() == mutedRecovery(.leaseLost))
-        host.expectSettled(.recovering(planID), running: before.running, since: before)
+        host.expectSettled(.recovering(planID, cause: .leaseLost), running: before.running, since: before)
         try host.expectRestoreNeedsLease(attempt)
         #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
-            == restore(.initial))
+            == restore(.initial, cause: .leaseLost))
         host.expectSettled(.idle, running: before.running, since: before)
     }
 
@@ -78,6 +78,6 @@ extension HostAuthorityTests.Recovery {
         _ = try host.transaction.acknowledged(partial).get()
         _ = try host.registry.release(expected: try #require(host.registry.snapshot).token)
         #expect(try host.transaction.resolveRecovery(attempt, lease: nil).get() == mutedRecovery(.leaseLost))
-        #expect(host.transaction.phase == .recovering(planID))
+        #expect(host.transaction.phase == .recovering(planID, cause: .leaseLost))
     }
 }

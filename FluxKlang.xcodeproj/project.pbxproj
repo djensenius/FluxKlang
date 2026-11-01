@@ -529,6 +529,7 @@
 		F74148A5A16B28F03C3B2706 /* CompactTabRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF05FDC33A3C36DCBA6CACD8 /* CompactTabRoot.swift */; };
 		F74F8D6436C909B81C525670 /* EquipmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C78F5B15B50724D01C422C4 /* EquipmentStore.swift */; };
 		F7567ED6DC5C3CADD9F69166 /* RoutingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F2C93B849BC7C3AB2B7BE0 /* RoutingView.swift */; };
+		F76684AC369580D1894E576D /* HostAuthorityTests+RecoveryLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D521C0B9BEF6772C0767E6EC /* HostAuthorityTests+RecoveryLifecycle.swift */; };
 		F77EF836EB77B5C6915479FB /* AssistantChatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D4AE9445F93B75EC985FE5 /* AssistantChatController.swift */; };
 		F9E9DFBFE1FD2871FFAF5B42 /* EngineLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DF85C7F6D6688609170E51D /* EngineLease.swift */; };
 		FC14DCCD6C6FB3F109DB5354 /* AssistantActionUITestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 095D8653AA01B2E67981CCF2 /* AssistantActionUITestFixtures.swift */; };
@@ -829,6 +830,7 @@
 		D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSetup.swift; sourceTree = "<group>"; };
 		D31B6A889015506D2A5AFACE /* TriggerScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerScheduler.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
+		D521C0B9BEF6772C0767E6EC /* HostAuthorityTests+RecoveryLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityTests+RecoveryLifecycle.swift"; sourceTree = "<group>"; };
 		D64BD7BCB392D3013AF8EF17 /* AssistantActionPlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionPlanningTests.swift; sourceTree = "<group>"; };
 		D77E7718C94E0A74F0E2D651 /* ControlContractTests+Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+Media.swift"; sourceTree = "<group>"; };
 		D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchControlXLController.swift; sourceTree = "<group>"; };
@@ -1497,6 +1499,7 @@
 				880CCB258FEC3EAD7C30102A /* HostAuthorityTests+EngineCommands.swift */,
 				EEA20BD9178D8D887AFCF665 /* HostAuthorityTests+Recovery.swift */,
 				3FE25D79411C01400D7F80B6 /* HostAuthorityTests+RecoveryLease.swift */,
+				D521C0B9BEF6772C0767E6EC /* HostAuthorityTests+RecoveryLifecycle.swift */,
 				BB4EA2EE8C25913D63AFF216 /* HostAuthorityTests+Transactions.swift */,
 				7294340E57AE5853033DDEDC /* InAppAssistantTests.swift */,
 				28A399B42F80EAC357C07DC4 /* LaunchControlXLTests.swift */,
@@ -2267,6 +2270,7 @@
 				F273C54B1BCFA5EBC442D177 /* HostAuthorityTests+EngineCommands.swift in Sources */,
 				BDC24B9E3EF6DBF95A3228C5 /* HostAuthorityTests+Recovery.swift in Sources */,
 				5674C911140C8F2469FDF02D /* HostAuthorityTests+RecoveryLease.swift in Sources */,
+				F76684AC369580D1894E576D /* HostAuthorityTests+RecoveryLifecycle.swift in Sources */,
 				4838BB1CA47BB09F59468420 /* HostAuthorityTests+Transactions.swift in Sources */,
 				BF3F0B317BA89994CA65B3FE /* HostAuthorityTests.swift in Sources */,
 				206DC299352A6D46CBFCE2FE /* InAppAssistantTests.swift in Sources */,

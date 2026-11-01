@@ -8,10 +8,21 @@
 //  performs nothing itself.
 //
 
+/// What keeps rendering while a revision is prepared ("the running set, if any").
+enum RunningSetState: Hashable, Sendable {
+    /// No running set yet, as in a first activation: nothing renders.
+    case absent
+    case running
+    /// Rendering with these capabilities lost, as in `EngineLifecycle.degraded`.
+    case degraded([CapabilityID])
+}
+
 /// What the engine is doing, as one window of one project observes it.
 enum EngineLifecycle: Hashable, Sendable {
     case stopped
-    case preparing(ContractRevision)
+    /// Preparing a revision; `over` is what renders meanwhile and what the
+    /// lifecycle returns to on cancel or failure (`endingPreparation`).
+    case preparing(ContractRevision, over: RunningSetState)
     case running
     /// Running with these capabilities lost; affected nodes are silent placeholders.
     /// Which nodes are affected, and leaving `degraded` when a capability
@@ -22,10 +33,11 @@ enum EngineLifecycle: Hashable, Sendable {
     /// Another project, or another window, holds the engine lease: edit and prepare only.
     case heldByOther(ProjectID)
 
-    /// Whether this window's engine produces sound. Preparing keeps rendering the running set.
+    /// Whether this window's engine produces sound. Preparing keeps rendering the running set, if any.
     var rendersOutput: Bool {
         switch self {
-        case .preparing, .running, .degraded: true
+        case .preparing(_, over: let base): base != .absent
+        case .running, .degraded: true
         case .stopped, .recovering, .heldByOther: false
         }
     }
@@ -51,8 +63,11 @@ enum EngineLifecycle: Hashable, Sendable {
         case .capabilityLost(let capability):
             switch self {
             case .running: return .degraded([capability])
-            case .degraded(let lost): return lost.contains(capability) ? self : .degraded(lost + [capability])
-            default: return self
+            case .degraded(let lost): return .degraded(Self.adding(capability, to: lost))
+            case .preparing(let revision, over: .running): return .preparing(revision, over: .degraded([capability]))
+            case .preparing(let revision, over: .degraded(let lost)):
+                return .preparing(revision, over: .degraded(Self.adding(capability, to: lost)))
+            case .preparing(_, over: .absent), .stopped, .recovering, .heldByOther: return self
             }
         case .commitFailed, .partialCommit, .processorCrashed:
             return self
@@ -61,13 +76,43 @@ enum EngineLifecycle: Hashable, Sendable {
 
     /// The lifecycle `window` of `project` observes: the holder's `engine`
     /// lifecycle when the window is on the lease, otherwise held or stopped.
+    /// Unresolved recovery outlives the lease: with no holder, or in this
+    /// project's windows off the lease, a recovering engine stays `.recovering`
+    /// (muted, running-set changes rejected). Other projects see `.heldByOther`.
     static func observed(by window: WindowID, of project: ProjectID, in registry: EngineLeaseRegistry,
                          engine: EngineLifecycle) -> EngineLifecycle {
         switch registry.role(of: window, project: project) {
         case .renders: engine
-        case .editAndPrepareOnly(let holder): .heldByOther(holder)
-        case .stopped: .stopped
+        case .editAndPrepareOnly(let holder):
+            holder == project && engine == .recovering ? .recovering : .heldByOther(holder)
+        case .stopped: engine == .recovering ? .recovering : .stopped
         }
+    }
+
+    /// Starts preparing `revision` over what renders now, keeping the lost capabilities.
+    /// A recovering or other-held lifecycle is returned unchanged.
+    func startingPreparation(of revision: ContractRevision) -> EngineLifecycle {
+        switch self {
+        case .stopped: .preparing(revision, over: .absent)
+        case .running: .preparing(revision, over: .running)
+        case .degraded(let lost): .preparing(revision, over: .degraded(lost))
+        case .preparing(_, over: let base): .preparing(revision, over: base)
+        case .recovering, .heldByOther: self
+        }
+    }
+
+    /// Leaves preparation without a commit (cancelled, failed or abandoned): back to what renders.
+    var endingPreparation: EngineLifecycle {
+        switch self {
+        case .preparing(_, over: .absent): .stopped
+        case .preparing(_, over: .running): .running
+        case .preparing(_, over: .degraded(let lost)): .degraded(lost)
+        case .stopped, .running, .degraded, .recovering, .heldByOther: self
+        }
+    }
+
+    private static func adding(_ capability: CapabilityID, to lost: [CapabilityID]) -> [CapabilityID] {
+        lost.contains(capability) ? lost : lost + [capability]
     }
 }
 
@@ -148,8 +193,11 @@ enum ActivationRecovery {
     }
 
     /// Return to the running graph and release the plan that did not become it.
-    static func restore(_ running: RunningGraph, discarding prepared: PreparedActivationID) -> ActivationRecoveryStep {
-        ActivationRecoveryStep(cause: .commitFailed, decisions: decisions(for: .commitFailed, running: running),
+    /// `cause` is the event that started the recovery (`.commitFailed`, or the
+    /// abandonment or fail-closed reason); the instructions do not depend on it.
+    static func restore(_ running: RunningGraph, discarding prepared: PreparedActivationID,
+                        cause: RecoveryEvent) -> ActivationRecoveryStep {
+        ActivationRecoveryStep(cause: cause, decisions: decisions(for: .commitFailed, running: running),
                                effects: [.discard(prepared)])
     }
 
