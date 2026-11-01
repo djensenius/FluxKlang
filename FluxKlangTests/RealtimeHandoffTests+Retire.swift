@@ -146,6 +146,7 @@ extension RealtimeHandoffTests {
             #expect(record.firstFrame == 41)
             #expect(queue.reclaim() == 2)
             #expect(queue.reclaim() == 0)
+            #expect(queue.reservedCount == 0)  // reclaiming unreserved retires clamps at 0
             refused.release()
             #expect(weakRefused == nil)
             #expect(ledger.live == 0)
@@ -279,8 +280,9 @@ extension RealtimeHandoffTests {
             #expect(ledger.allOnControl)
         }
 
-        /// Defensive path: a retire queue overfilled by an unreserved push makes `beginCycle` adopt but stall the
-        /// old payload on render (fault raised), retry it next cycle and never release or lose it.
+        /// Defensive path: a retire queue overfilled by an unreserved push makes `beginCycle` adopt (`.ok`) but
+        /// stall the old payload on render (fault raised). The next cycle retries it and, while that is still
+        /// refused, adopts nothing (`.refused(.full)`). Nothing is released on render or lost.
         @Test func stalledRetireIsKeptRetriedAndNeverReleasedOnRender() throws {
             let ledger = RetireLedger()
             weak var weakOld: RetireProbe?
@@ -293,17 +295,20 @@ extension RealtimeHandoffTests {
             #expect(exchange.publish(RetireProbe(1, ledger)) == .ok)
             let intruder = Unmanaged.passRetained(RetireProbe(9, ledger) as AnyObject)
             #expect(ledger.asRender { queue.retire(intruder, frame: 3) } == .ok)
-            #expect(ledger.asRender { exchange.beginCycle(frame: 7) } == .refused(.full))
+            #expect(ledger.asRender { exchange.beginCycle(frame: 7) } == .ok)  // adopted; the old payload stalled
             #expect(Self.current(exchange, ledger) == 1)
             #expect(weakOld != nil)
+            #expect(queue.refusedCount == 1)
             #expect(faults.acknowledge(RetireQueueing.scope)?.kind == .retireBacklog)
-            #expect(ledger.asRender { exchange.beginCycle(frame: 8) } == .refused(.full))
+            #expect(ledger.asRender { exchange.beginCycle(frame: 8) } == .refused(.full))  // nothing adopted
+            #expect(Self.current(exchange, ledger) == 1)
             #expect(faults.acknowledge(RetireQueueing.scope)?.firstFrame == 8)
             #expect(exchange.reclaim() == 1)  // the intruder
             #expect(weakOld != nil)
             #expect(ledger.asRender { exchange.beginCycle(frame: 9) } == .empty)
             #expect(exchange.reclaim() == 1)
             #expect(weakOld == nil)
+            #expect(queue.reservedCount == 0)  // the intruder was unreserved: the clamp absorbs it
             #expect(!faults.isLatched(RetireQueueing.scope))
             #expect(ledger.allOnControl)
         }
@@ -321,7 +326,7 @@ extension RealtimeHandoffTests {
             let intruder = Unmanaged.passRetained(probes[5] as AnyObject)
             #expect(ledger.asRender { queue.retire(intruder, frame: 0) } == .ok)  // queue now full
             #expect(exchange.publish(probes[2]) == .ok)
-            #expect(ledger.asRender { exchange.beginCycle(frame: 0) } == .refused(.full))  // probes[1] stalled
+            #expect(ledger.asRender { exchange.beginCycle(frame: 0) } == .ok)  // adopted probes[2]; probes[1] stalled
             #expect(other.publish(probes[3]) == .ok)  // pending without a reservation
             #expect(other.publish(probes[4]) == .ok)  // supersedes probes[3]
             return probes.map { probe in { [weak probe] in probe } }
@@ -347,6 +352,67 @@ extension RealtimeHandoffTests {
             #expect(queue.reservedCount == 0)
             #expect(ledger.live == 0)
             #expect(ledger.allOnControl)
+        }
+
+        /// Teardown returns exactly the reservations the exchange still holds. An adopted payload's reservation
+        /// belongs to its retired predecessor (returned by `reclaim`, not teardown). A stalled payload's
+        /// reservation is returned once, leaving other holders' reservations intact. An unadopted first payload of
+        /// an initial-nil exchange holds none, so its teardown returns none.
+        @Test func teardownAfterAdoptionOrStallReturnsExactlyItsReservations() throws {
+            let ledger = RetireLedger()
+            let (queue, faults) = try RetireQueueing.makeQueue(capacity: 2)
+            do {
+                let exchange = ProbeExchange(initial: RetireProbe(0, ledger), retire: queue)
+                #expect(exchange.publish(RetireProbe(1, ledger)) == .ok)
+                #expect(ledger.asRender { exchange.beginCycle(frame: 0) } == .ok)  // probe 0 retired, unreclaimed
+            }
+            #expect(queue.reservedCount == 1)
+            #expect(queue.reclaim() == 1)
+            #expect(queue.reservedCount == 0)
+            #expect(queue.reserve())  // another holder sharing the queue
+            do {
+                let exchange = ProbeExchange(initial: RetireProbe(2, ledger), retire: queue)
+                #expect(exchange.publish(RetireProbe(3, ledger)) == .ok)
+                let intruders = [RetireProbe(8, ledger), RetireProbe(9, ledger)]
+                    .map { Unmanaged.passRetained($0 as AnyObject) }
+                #expect(ledger.asRender { intruders.map { queue.retire($0, frame: 1) } } == [.ok, .ok])
+                #expect(ledger.asRender { exchange.beginCycle(frame: 2) } == .ok)  // probe 2 stalled
+                #expect(queue.reservedCount == 2)
+            }
+            #expect(queue.reservedCount == 1)  // only the stalled payload's reservation came back
+            do {
+                // Initial-nil exchange, published but never adopted: its first adoption would retire nothing, so
+                // it took no reservation and teardown must return none.
+                let fresh = ProbeExchange(initial: nil, retire: queue)
+                #expect(fresh.publish(RetireProbe(4, ledger)) == .ok)
+                #expect(queue.reservedCount == 1)
+            }
+            #expect(queue.reservedCount == 1)
+            #expect(faults.acknowledge(RetireQueueing.scope)?.kind == .retireBacklog)
+            #expect(queue.reclaim() == 2)
+            #expect(ledger.live == 0)
+            #expect(ledger.allOnControl)
+        }
+
+        /// Plan row `withCurrentDoesNotRetain`: the lent reference carries no retain of its own. The retain count
+        /// seen inside the body equals the same measurement, with the same argument shape (`RetireProbe?`), on
+        /// the caller's own strong reference.
+        /// (`isKnownUniquelyReferenced` cannot observe this: binding the lent reference to a `var` retains it.)
+        @Test func withCurrentDoesNotRetain() throws {
+            let ledger = RetireLedger()
+            let held: RetireProbe? = RetireProbe(0, ledger)
+            let fixture = try Self.make(capacity: 1, initial: held)
+            let outside = Self.retainCount(held)
+            let inside = ledger.asRender { fixture.exchange.withCurrent(Self.retainCount) }
+            #expect(outside > 0)
+            #expect(inside == outside)
+            withExtendedLifetime(held) {}
+        }
+
+        @inline(never)
+        static func retainCount(_ probe: RetireProbe?) -> UInt {
+            guard let probe else { return 0 }
+            return _getRetainCount(probe)
         }
     }
 }

@@ -16,7 +16,7 @@ import Synchronization
 ///   control publishes into an empty slot will displace a non-nil `current`. The second says whether the
 ///   payload in `pending` holds a retire reservation.
 ///
-/// Ownership. Each payload is retained once, by `publish`, and released exactly once, on control:
+/// Ownership. Each payload is retained once, by `publish` (or `init`), and released exactly once, on control:
 /// - in `publish`, if it was superseded before render adopted it (render never saw it, so control releases it
 ///   directly; it is not routed through the retire queue);
 /// - in `reclaim`, after render retired it;
@@ -24,7 +24,8 @@ import Synchronization
 ///
 /// Render never releases. `withCurrent` lends `current` without retaining it (`_withUnsafeGuaranteedRef`).
 /// That is safe because `current` keeps its +1 until render itself retires it in a later `beginCycle`, and
-/// control releases it only after taking it from the retire queue.
+/// control releases it only after taking it from the retire queue. A `withCurrent` body must therefore never
+/// call `beginCycle` on the same exchange (no re-entrant cycle).
 ///
 /// Protocol and ordering:
 /// - `publish` (control) retains the payload. If `pending` is non-zero, it tries one
@@ -35,7 +36,7 @@ import Synchronization
 ///   returns `.refused(.full)`.
 /// - `beginCycle` (render) first retries a stalled retire, then `exchange(0)`s `pending`. It makes the taken
 ///   payload `current` and retires the old `current`. If the retire is refused, it keeps the old one in
-///   `stalled`.
+///   `stalled`; the adoption still happened, so it returns `.ok` (status contract on `beginCycle`).
 /// - The publishing write (CAS success and store) is releasing, and render's `exchange` is acquiring. This
 ///   makes the payload's initialisation on control happen before render reads it in `withCurrent`. Relaxed is
 ///   unsound: render could see the pointer before the payload's fields, a data race and a possible read of
@@ -55,15 +56,23 @@ import Synchronization
 /// No counter here wraps: reservations are a bounded `Int` (see `DeferredReleaseQueue`), and there are no
 /// generations.
 ///
-/// Backpressure invariant, per exchange when the queue is not shared:
-/// `retired + (pending ? 1 : 0) <= retire.capacity`. A pending payload adopted over a nil `current` retires
-/// nothing and holds no reservation. That can happen only before this exchange's first retire.
+/// Backpressure invariant, per exchange: `retired + (stalled ? 1 : 0) + (pending ? 1 : 0) <= retire.capacity`,
+/// where `retired` counts this exchange's payloads in the queue that control has not yet reclaimed. A stalled
+/// payload still holds the reservation its adoption took, until a retry retires it (then counted in `retired`)
+/// or teardown returns it. A pending payload adopted over a nil `current` retires nothing and holds no
+/// reservation. That can happen only before this exchange's first retire. On a shared queue only the reserved
+/// terms add up: summed over every exchange, `retired + (stalled ? 1 : 0) + (reserved pending ? 1 : 0) <=
+/// reservedCount <= capacity`, where a pending payload is reserved unless it will be adopted over a nil
+/// `current`. This assumes every direct `retire` was reserved first (see `DeferredReleaseQueue`).
 ///
-/// Progress: every operation is wait-free. `publish` makes at most one CAS and `beginCycle` at most two
-/// retires and one exchange; neither loops.
+/// Progress. Render operations are wait-free and bounded: `beginCycle` makes at most two retires and one
+/// exchange, and `withCurrent` adds only `body`. Neither loops, allocates or releases. Control operations are
+/// wait-free and bounded apart from payload `deinit` time, which is outside render's guarantee: `publish` may
+/// run one `deinit` (a superseded or refused payload), and `reclaim` up to `retire.capacity`.
 ///
 /// `@unchecked Sendable`: one control thread calls `publish`, `reclaim` and teardown; one render thread calls
-/// `beginCycle` and `withCurrent`. Exchanges sharing a queue must share those two threads.
+/// `beginCycle` and `withCurrent`. Exchanges sharing a retire queue must all use that same render/control thread
+/// pair, because the queue is single-producer and single-consumer. This is documented, not enforced.
 final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable {
     let retire: DeferredReleaseQueue
 
@@ -118,10 +127,16 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
     }
 
     /// Render. Adopts the pending payload, if any, and retires the previous one; never releases or allocates.
-    /// Returns `.ok` when it adopted, `.empty` when nothing was pending, and `.refused(.full)` when a retire was
-    /// refused (the defensive path, which raised `.retireBacklog`). In that case the displaced payload is kept
-    /// in `stalled`. Each later cycle retries it first and adopts nothing until the retry succeeds.
-    func beginCycle(frame: Int64 = 0) -> KernelStatus {
+    /// - `.ok`: a pending payload was adopted, so `current` changed. This holds even if the displaced payload's
+    ///   retire was refused (the defensive path). That payload is then kept in `stalled`; the refused retire
+    ///   raised `.retireBacklog` and counts in `retire.refusedCount`.
+    /// - `.empty`: nothing was pending; `current` is unchanged.
+    /// - `.refused(.full)`: nothing was adopted (`current` is unchanged) because an earlier stalled retire is
+    ///   still refused. Each cycle retries a stalled payload first and adopts nothing until the retry succeeds.
+    ///
+    /// Must not be called from inside a `withCurrent` body on the same exchange: it would retire the payload
+    /// that body is still reading, and control could reclaim it concurrently.
+    func beginCycle(frame: Int64) -> KernelStatus {
         if stalled != 0 {
             guard retireBits(stalled, frame: frame) == .ok else { return .refused(.full) }
             stalled = 0
@@ -130,17 +145,18 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
         guard taken != 0 else { return .empty }
         let old = current
         current = taken
-        if old != 0, retireBits(old, frame: frame) != .ok {
-            stalled = old
-            return .refused(.full)
-        }
+        if old != 0, retireBits(old, frame: frame) != .ok { stalled = old }
         return .ok
     }
 
-    /// Render. Lends the current payload to `body` without retaining it; `body` must not let it escape the call.
+    /// Render. Lends the current payload to `body` without retaining it. `body` must not let it escape the call,
+    /// and must not call `beginCycle` on this exchange (see there). `body` is handed straight to
+    /// `_withUnsafeGuaranteedRef`, with no wrapping closure, so even an `-Onone` build adds no retain/release
+    /// here. (`(Payload?) -> R` converts to `(Payload) -> R` without a thunk: a class payload and its Optional
+    /// share one representation.)
     func withCurrent<R>(_ body: (Payload?) -> R) -> R {
         guard let raw = UnsafeRawPointer(bitPattern: current) else { return body(nil) }
-        return Unmanaged<Payload>.fromOpaque(raw)._withUnsafeGuaranteedRef { body($0) }
+        return Unmanaged<Payload>.fromOpaque(raw)._withUnsafeGuaranteedRef(body)
     }
 
     /// Control. Releases every payload render has retired to the (possibly shared) queue; the only place a

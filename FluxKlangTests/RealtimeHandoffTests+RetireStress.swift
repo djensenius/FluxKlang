@@ -26,7 +26,15 @@ private final class RetireHarness: Sendable {
     let failures = Atomic<Int>(0)
     let adoptions = Atomic<Int>(0)
     let refusedPublishes = Atomic<Int>(0)
+    /// `beginCycle` results of `.refused(.full)`: only blocked stall *retries*. A first stall still adopts and
+    /// returns `.ok`, so it shows in `retire.refusedCount` and the `.retireBacklog` fault instead.
     let renderRefusals = Atomic<Int>(0)
+    /// Supersede rounds: the round number control has fully published. Control stores it `.releasing` (its CAS
+    /// precedes it); render loads it `.relaxed` on purpose, so it is no happens-before edge and the pending CAS
+    /// alone must order the payload's initialisation.
+    let ready = Atomic<Int>(0)
+    /// The highest serial render saw; written by render before it exits, read after the acquiring join.
+    let lastSeen = Atomic<Int>(0)
 
     /// `true` once cancelled or past the deadline; the first expiry is counted and cancels every worker.
     func expired() -> Bool {
@@ -37,10 +45,15 @@ private final class RetireHarness: Sendable {
         return true
     }
 
-    /// Spins until `condition` holds or the harness expires; returns whether it held.
+    /// Spins until `condition` holds or the harness expires; returns whether it held. Yields the CPU every
+    /// 1024 polls so a loaded machine can still schedule the other worker; the deadline and cancellation checks
+    /// run on every poll.
     func spin(until condition: () -> Bool) -> Bool {
+        var polls = 0
         while !condition() {
             if expired() { return false }
+            polls &+= 1
+            if polls & 0x3FF == 0 { sched_yield() }
         }
         return true
     }
@@ -52,7 +65,8 @@ private final class RetireHarness: Sendable {
     }
 
     /// Starts one dedicated `Thread` per worker, releases them together and waits (bounded) for all to exit.
-    /// `false` (with an `Issue`) when a worker did not exit; callers then skip every post-run check.
+    /// `false` (with an `Issue`) when a loop timed out or a worker did not exit; callers then skip every post-run
+    /// check (`try #require`).
     func run(_ workers: [@Sendable () -> Void]) -> Bool {
         for worker in workers {
             Thread {
@@ -68,10 +82,13 @@ private final class RetireHarness: Sendable {
         while exited.load(ordering: .acquiring) < workers.count, ContinuousClock.now < limit {
             Thread.sleep(forTimeInterval: 0.001)
         }
-        if timedOut.load(ordering: .relaxed) > 0 { Issue.record("a bounded retire stress loop timed out") }
         guard exited.load(ordering: .acquiring) == workers.count else {
             cancelled.store(true, ordering: .relaxed)
             Issue.record("retire stress workers did not exit; post-run checks skipped")
+            return false
+        }
+        guard timedOut.load(ordering: .relaxed) == 0 else {
+            Issue.record("a bounded retire stress loop timed out; post-run checks skipped")
             return false
         }
         return true
@@ -209,7 +226,7 @@ extension RealtimeHandoffTests {
             let ledger = RetireLedger()
             let harness = RetireHarness()
             let (box, faults) = try Self.prepare(capacity: 2, ledger)
-            let finished = harness.run([
+            try #require(harness.run([
                 {
                     ledger.controlThread.store(RetireLedger.currentThread(), ordering: .releasing)
                     guard harness.arrive(), let exchange = box.value else { return }
@@ -231,14 +248,15 @@ extension RealtimeHandoffTests {
                     guard harness.arrive(), let exchange = box.value else { return }
                     Self.render(exchange, harness)
                 }
-            ])
-            guard finished else { return }
+            ]))
             ledger.controlThread.store(RetireLedger.currentThread(), ordering: .releasing)
+            #expect(box.value?.retire.refusedCount == 0)  // no retire was ever refused, not even a first stall
             box.value?.reclaim()
             box.value = nil
             #expect(harness.failures.load(ordering: .relaxed) == 0)
             #expect(harness.renderRefusals.load(ordering: .relaxed) == 0)
             #expect(harness.adoptions.load(ordering: .relaxed) > 0)
+            #expect(harness.lastSeen.load(ordering: .relaxed) == target)  // the final publish was adopted
             #expect(!faults.isLatched(RetireQueueing.scope))
             Self.expectConserved(ledger, created: target + 1 + harness.refusedPublishes.load(ordering: .relaxed))
             print("RetireStress adoptions \(harness.adoptions.load(ordering: .relaxed)), refused publishes "
@@ -259,51 +277,100 @@ extension RealtimeHandoffTests {
                 }
                 if seen < last { harness.failures.add(1, ordering: .relaxed) }
                 last = max(last, seen)
-                if done, status == .empty { return }
+                if done, status == .empty { break }
             }
+            harness.lastSeen.store(last, ordering: .relaxed)
         }
 
-        /// Deterministic handshake: each round control publishes a fresh payload and render spins on
-        /// `beginCycle` until it adopts it, then checks it. Nothing is reclaimed until the end, so the retire
-        /// ring's `head` never changes and the pending exchange is the only control-to-render edge: a relaxed
-        /// publish or take shows up as a ThreadSanitizer race (or a stale or poisoned payload).
+        /// Deterministic handshake, alternating two kinds of round. Nothing is reclaimed until the end, so the
+        /// retire ring's `head` never changes and the pending slot is the only control-to-render edge. A relaxed
+        /// publish or take therefore shows up as a ThreadSanitizer race (or a stale or poisoned payload).
+        /// - Odd rounds (store path): control publishes one payload into the empty slot; render spins on
+        ///   `beginCycle` until it adopts it.
+        /// - Even rounds (CAS path, forced): control publishes a decoy, then the real payload, then stores
+        ///   `ready` with `.releasing`. Render does not cycle until its `.relaxed` load sees `ready`, so the decoy
+        ///   is still pending and the second publish must supersede it by CAS. Control checks that by its
+        ///   reservation count, which a CAS keeps unchanged. Render then expects `.ok` on its first cycle and
+        ///   serial `3r/2` (one serial per odd round, two per even round).
+        ///
+        /// Render's relaxed `ready` load does not synchronise with the release store. The checks detect either
+        /// too-early take: before the decoy store, it returns `.empty` and the final reclaim count is short;
+        /// between the decoy store and CAS, replacement falls back, failing the reservation and serial checks.
+        /// RMW atomicity makes the latter detectable; it does not establish cross-atomic ordering. The relaxed
+        /// load is deliberate: `ready` adds no happens-before edge, so only the CAS's release orders the real
+        /// payload's initialisation, and weakening that CAS (mutant R3c) is a TSan race on render's read.
+        ///
+        /// Retire capacity is `rounds + rounds / 2` rather than the exact `rounds` adoptions: a CAS that falls
+        /// back to the store path reserves an extra slot. The spare reports that as a counted failure without
+        /// also causing a refusal.
         @Test(.timeLimit(.minutes(1)))
         func stressPendingPublicationOrdersPayloadInitialisation() throws {
             let rounds = 2_048
             let ledger = RetireLedger()
             let harness = RetireHarness()
-            let (box, _) = try Self.prepare(capacity: rounds, ledger)
-            let finished = harness.run([
+            let (box, _) = try Self.prepare(capacity: rounds + rounds / 2, ledger)
+            try #require(harness.run([
                 {
                     ledger.controlThread.store(RetireLedger.currentThread(), ordering: .releasing)
                     guard harness.arrive(), let exchange = box.value else { return }
-                    for round in 1...rounds {
-                        if exchange.publish(RetireProbe(round, ledger)) != .ok {
-                            harness.failures.add(1, ordering: .relaxed)
-                        }
-                        guard harness.spin(until: { harness.acknowledged.load(ordering: .acquiring) >= round })
-                        else { return }
-                    }
+                    Self.publishRounds(rounds, exchange, harness, ledger)
                 },
                 {
                     ledger.renderThread.store(RetireLedger.currentThread(), ordering: .releasing)
                     guard harness.arrive(), let exchange = box.value else { return }
-                    for round in 1...rounds {
-                        guard harness.spin(until: { exchange.beginCycle(frame: Int64(round)) == .ok }) else { return }
-                        let seen = exchange.withCurrent { probe in
-                            probe.map { $0.magic == RetireProbe.alive ? $0.serial : -1 } ?? -2
-                        }
-                        if seen != round { harness.failures.add(1, ordering: .relaxed) }
-                        harness.acknowledged.store(round, ordering: .releasing)
-                    }
+                    Self.adoptRounds(rounds, exchange, harness)
                 }
-            ])
-            guard finished else { return }
+            ]))
             ledger.controlThread.store(RetireLedger.currentThread(), ordering: .releasing)
             #expect(box.value?.reclaim() == rounds)
             box.value = nil
             #expect(harness.failures.load(ordering: .relaxed) == 0)
-            Self.expectConserved(ledger, created: rounds + 1)
+            Self.expectConserved(ledger, created: rounds + rounds / 2 + 1)  // + one decoy per even round
+        }
+
+        /// Control side of the ordering handshake; see `stressPendingPublicationOrdersPayloadInitialisation`.
+        private static func publishRounds(_ rounds: Int, _ exchange: ProbeExchange, _ harness: RetireHarness,
+                                          _ ledger: RetireLedger) {
+            var serial = 0
+            for round in 1...rounds {
+                var published = true
+                if round.isMultiple(of: 2) {
+                    serial += 1
+                    published = exchange.publish(RetireProbe(serial, ledger)) == .ok  // decoy: store path
+                    let reserved = exchange.retire.reservedCount
+                    serial += 1
+                    published = published && exchange.publish(RetireProbe(serial, ledger)) == .ok
+                    published = published && exchange.retire.reservedCount == reserved  // it took the CAS path
+                    harness.ready.store(round, ordering: .releasing)  // render's load stays relaxed: no edge
+                } else {
+                    serial += 1
+                    published = exchange.publish(RetireProbe(serial, ledger)) == .ok
+                }
+                if !published { harness.failures.add(1, ordering: .relaxed) }
+                guard harness.spin(until: { harness.acknowledged.load(ordering: .acquiring) >= round }) else { return }
+            }
+        }
+
+        /// Render side of the ordering handshake.
+        private static func adoptRounds(_ rounds: Int, _ exchange: ProbeExchange, _ harness: RetireHarness) {
+            var expected = 0
+            for round in 1...rounds {
+                let frame = Int64(round)
+                if round.isMultiple(of: 2) {
+                    expected += 2
+                    // Relaxed on purpose: an acquire would mask missing ordering in the pending CAS.
+                    guard harness.spin(until: { harness.ready.load(ordering: .relaxed) >= round }) else { return }
+                    if exchange.beginCycle(frame: frame) != .ok { harness.failures.add(1, ordering: .relaxed) }
+                } else {
+                    expected += 1
+                    guard harness.spin(until: { exchange.beginCycle(frame: frame) == .ok }) else { return }
+                }
+                let seen = exchange.withCurrent { probe in
+                    probe.map { $0.magic == RetireProbe.alive ? $0.serial : -1 } ?? -2
+                }
+                if seen != expected { harness.failures.add(1, ordering: .relaxed) }
+                harness.acknowledged.store(round, ordering: .releasing)
+            }
         }
 
         /// The box holds the only strong reference, so `box.value = nil` on the test thread is the teardown.

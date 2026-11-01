@@ -17,14 +17,23 @@ import Synchronization
 /// Backpressure. Control-side `reserve()` admits a future render `retire` only while
 /// `reservedCount < capacity`, and `reclaim()` returns one reservation per released object. When every retire
 /// is reserved first, `ring count <= reservedCount <= capacity`, so a reserved `retire` never finds the ring
-/// full. An unreserved retire past capacity is the defensive path: it raises `.retireBacklog` on `scope`,
-/// returns `.refused(.full)`, and leaves the +1 with the caller (never released on render).
+/// full. `RetiringExchange` always reserves first. Any other (direct) caller must have control `reserve()`
+/// before render calls `retire` for that object. An unreserved retire skews the accounting: a later `reclaim`
+/// returns a reservation nobody took, and the clamp absorbs it, so other users may meet spurious defensive
+/// refusals. It never causes a leak or a double release. An unreserved retire past capacity is the defensive
+/// path: it raises `.retireBacklog` on `scope`, returns `.refused(.full)`, and leaves the +1 with the caller
+/// (never released on render).
 ///
 /// `reservedCount` is a plain control-owned `Int` in `0...capacity`. It never wraps, and `reclaim` and
 /// `cancelReservation` clamp it at 0. This matters only when unreserved retires have occurred.
 ///
+/// Progress. `retire` is wait-free and bounded on render. `reclaim` runs up to `capacity` payload `deinit`s on
+/// control; their duration is the payload's and lies outside render's bounded guarantee.
+///
 /// `@unchecked Sendable`: one render thread may call `retire`, and one control thread may call everything else.
-/// `init` validates that policy. Teardown (`deinit`) is control-side and requires a detached render side (D10).
+/// Every user of a shared queue (for example several `RetiringExchange`s) must use that same render/control
+/// thread pair. This is documented, not enforced. `init` validates the policy. Teardown (`deinit`) is
+/// control-side and requires a detached render side (D10).
 final class DeferredReleaseQueue: @unchecked Sendable {
     /// Why `init` refused to prepare a retire queue.
     enum PreparationError: Error, Equatable, Sendable {
@@ -82,7 +91,8 @@ final class DeferredReleaseQueue: @unchecked Sendable {
     }
 
     /// Render. Hands `object` (+1) to control. If the queue is full, it raises `.retireBacklog`, returns
-    /// `.refused(.full)` and leaves the +1 with the caller. It never releases and never allocates.
+    /// `.refused(.full)` and leaves the +1 with the caller. It never releases and never allocates. Control must
+    /// have `reserve()`d a slot for this retire (see the type's backpressure notes).
     func retire(_ object: Unmanaged<AnyObject>, frame: Int64) -> KernelStatus {
         let status = ring.tryPush(UInt(bitPattern: object.toOpaque()))
         if status != .ok { _ = faults.raise(scope, .retireBacklog, frame: frame) }
