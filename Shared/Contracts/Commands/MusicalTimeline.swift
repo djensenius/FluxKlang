@@ -36,6 +36,7 @@ private struct TimelineState: Sendable {
     var clock: MusicalClockMap
     var loop: LoopRange?
     var running: Bool
+    var observedWrapFrame: Int64?
 }
 
 private struct TimelineRecord: Sendable {
@@ -340,6 +341,7 @@ private extension MusicalTimeline {
         let correcting = try permitsSameFrameCorrection(event, at: anchor.sample.frame)
         if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting) }
         try checkAnchor(anchor, for: event)
+        var resuming = false
         switch event {
         case .primary:
             break
@@ -349,15 +351,19 @@ private extension MusicalTimeline {
             guard running != state.running else { throw MusicalTimingError.invalidTransition }
             state.clock = try MusicalTiming.reanchor(anchor, using: state.clock)
             state.running = running
+            state.observedWrapFrame = nil
+            resuming = running
         case .wrap:
             state.clock = try MusicalTiming.reanchor(anchor, using: state.clock)
+            state.observedWrapFrame = anchor.sample.frame
         case .map(let map):
             try replaceMap(map)
         case .loop(let loop):
             state.loop = loop
         }
         state.primary = anchor
-        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting) }
+        // Resuming can make a wrap immediately due; it does not observe that wrap.
+        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting || resuming) }
     }
 
     func permitsSameFrameCorrection(_ event: MusicalObservation, at frame: Int64) throws -> Bool {
@@ -365,11 +371,11 @@ private extension MusicalTimeline {
         case .running(false), .loop: break
         default: return false
         }
-        // Pass > 0 proves an actual wrap was observed. Zero-period corrections may stay at that frame,
-        // but neither an initial due wrap nor any uncovered primary advance is waived.
+        // Corrections need a wrap observed at this boundary in the current run, not merely a past pass.
+        // Stop/resume clears that provenance even when both transitions stay at the same frame.
         guard state.running, let loop = state.loop, state.clock.musical.loopIteration > 0,
-              frame == state.primary.sample.frame, frame == state.clock.anchor.sample.frame,
-              state.clock.musical.ticks <= loop.endTicks,
+              frame == state.observedWrapFrame, frame == state.primary.sample.frame,
+              frame == state.clock.anchor.sample.frame, state.clock.musical.ticks <= loop.endTicks,
               MusicalTiming.rounded(MusicalTiming.units(state.clock, from: loop.startTicks,
                                                         to: loop.endTicks)) == 0 else {
             return false
