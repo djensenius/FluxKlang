@@ -433,8 +433,11 @@ struct ActivationTransaction: Hashable, Sendable {
 
     /// Abandons the outstanding `.prepare` whose answer was lost. Checks: phase
     /// `.preparing`, then the attempt (`stalePrepareResponse`). Returns to `.idle`
-    /// with no effects and no discard: the prepared ID is unknown to the transaction;
-    /// H5 must discard any `.success` ID delivered with a refused or abandoned attempt.
+    /// with no effects and no discard: the prepared ID is unknown to the transaction.
+    /// Refusal or abandonment alone does not authorise disposing of an ID that a late
+    /// answer delivers, which may alias an active or reused plan. The owner may reclaim
+    /// it off the render thread only after engine-qualified identity, lifetime and
+    /// ownership checks show it is safe; this type neither performs nor authorises disposal.
     /// The late answer is refused (`unexpectedPhase`, then `stalePrepareResponse`
     /// once a new prepare is out).
     mutating func abandonPrepare(_ attempt: PrepareAttemptID) -> Result<[ActivationEffect], ActivationRefusal> {
