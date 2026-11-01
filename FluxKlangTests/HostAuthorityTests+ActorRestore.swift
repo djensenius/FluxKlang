@@ -201,7 +201,8 @@ extension HostAuthorityTests {
             let restore = try #require(await authority.snapshot().restoring)
             #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, Bench.runningPlan, token)])
             _ = try await Bench.review(authority, &engine)
-            #expect(await engine.completeRestore(authority) == .success(.running))
+            let preparing = EngineLifecycle.preparing(try ContractRevision.initial.next(), over: .running)
+            #expect(await engine.completeRestore(authority) == .success(preparing))
             let acknowledged = await authority.snapshot()
             #expect(!acknowledged.outputsMuted && acknowledged.pendingOutput == false)
 

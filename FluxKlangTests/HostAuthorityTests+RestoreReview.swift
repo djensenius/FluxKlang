@@ -83,6 +83,79 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority) == [.setOutputsMuted(false)])
         }
 
+        @Test(arguments: [false, true])
+        func firstCommitAfterRestoreAcknowledgementRendersOutput(awaitingReview: Bool) async throws {
+            let authority = try await authorityWithNoRunningPlan()
+            var engine = try ScriptedActivationEngine()
+            let oldToken = try await Bench.leaseToken(authority)
+            _ = try await authority.leaseLost(oldToken).get()
+            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+
+            let newToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let restore = try #require(await authority.snapshot().restoring)
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, nil, newToken)])
+            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectA).get()
+            let prepareAttempt = try #require(await authority.snapshot().outstanding[Bench.projectA])
+            let prepareCommands = await engine.drain(authority)
+            #expect(prepareCommands.count == 1 && prepareCommands.first.map {
+                if case .prepare(_, let deliveredAttempt) = $0 { deliveredAttempt == prepareAttempt } else { false }
+            } == true)
+
+            if awaitingReview {
+                #expect(try await engine.answerNext(authority)?.verdict.get() == .routed)
+                #expect(try await Bench.state(authority).phase == .awaitingReview)
+            } else {
+                #expect(try await Bench.state(authority).phase == .preparing)
+            }
+
+            let nextRevision = try ContractRevision.initial.next()
+            let expectedPreparing = EngineLifecycle.preparing(nextRevision, over: .absent)
+            #expect(await engine.completeRestore(authority) == .success(expectedPreparing))
+            let restored = await authority.snapshot()
+            #expect(restored.projects[Bench.projectA]?.lifecycle == expectedPreparing)
+            #expect(restored.projects[Bench.projectA]?.phase == (awaitingReview ? .awaitingReview : .preparing))
+            let replay = await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
+                                                          prepared: restore.prepared, token: restore.token)
+            #expect(Bench.refusal(replay) == .staleRestore)
+            #expect(await authority.snapshot() == restored)
+
+            if !awaitingReview {
+                #expect(try await engine.answerNext(authority)?.verdict.get() == .routed)
+            }
+            let reviewedPlan = try #require(await authority.snapshot().projects[Bench.projectA]?.reviewed)
+            let authorization = try await authority.authorize(
+                project: Bench.projectA, gesture: Bench.gesture()
+            ).get()
+            try await authority.commit(project: Bench.projectA, authorization: authorization).get()
+            let commitCommands = await engine.drain(authority)
+            #expect(commitCommands.contains {
+                if case .commit(let prepared, _, let token) = $0 {
+                    prepared == reviewedPlan && token == newToken
+                } else {
+                    false
+                }
+            })
+            let report = try #require(await engine.report(authority, .succeeded))
+            #expect(try report.verdict.get() == .acknowledged(nextRevision))
+            #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == .running)
+            #expect((await authority.lifecycle(of: Bench.projectA, window: Bench.windowA))?.rendersOutput == true)
+        }
+
+        @Test func restoreWithoutPreparationReturnsToStoppedWithoutRunningPlan() async throws {
+            let authority = try await authorityWithNoRunningPlan()
+            var engine = try ScriptedActivationEngine()
+            let oldToken = try await Bench.leaseToken(authority)
+            _ = try await authority.leaseLost(oldToken).get()
+            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+
+            let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+            let restore = try #require(await authority.snapshot().restoring)
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, nil, token)])
+            #expect(await engine.completeRestore(authority) == .success(.stopped))
+            #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == .stopped)
+            #expect((await authority.lifecycle(of: Bench.projectA, window: Bench.windowA))?.rendersOutput == false)
+        }
+
         @Test func keepingFirstPartialStartsRendering() async throws {
             let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.restore.first"),
                                               musicalClock: nil, nominalRate: 48_000)
@@ -112,6 +185,18 @@ extension HostAuthorityTests {
             let revision = try ContractRevision.initial.next()
             #expect(await authority.resolveRecovery(project: Bench.projectA) == .success(.keptPartial(revision)))
             #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == .degraded([Bench.audio]))
+        }
+
+        private func authorityWithNoRunningPlan() async throws -> HostAuthority {
+            let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.restore.preparing"),
+                                              musicalClock: nil, nominalRate: 48_000)
+            let authority = try HostAuthority(host: ledger, live: Bench.liveState())
+            try await authority.open(project: Bench.projectA,
+                                     running: RunningGraph(revision: .initial, prepared: nil)).get()
+            try await authority.open(project: Bench.projectB,
+                                     running: RunningGraph(revision: .initial, prepared: nil)).get()
+            _ = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
+            return authority
         }
     }
 }

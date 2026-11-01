@@ -110,7 +110,7 @@ extension HostAuthorityBook {
         }
         restoring = nil
         if state.lifecycle == .recovering {
-            state.lifecycle = state.transaction.running.prepared == nil ? .stopped : .running
+            state.lifecycle = lifecycleAfterRestore(for: state)
         }
         projects[record.project] = state
         if outputsMuted {
@@ -118,6 +118,19 @@ extension HostAuthorityBook {
             outputsMuted = false
         }
         return .success(state.lifecycle)
+    }
+
+    private func lifecycleAfterRestore(for state: HostProjectState) -> EngineLifecycle {
+        let running = state.transaction.running
+        let settled: EngineLifecycle = running.prepared == nil ? .stopped : .running
+        switch state.transaction.phase {
+        case .preparing, .awaitingReview:
+            guard let revision = try? running.revision.next() else { return settled }
+            let over: RunningSetState = running.prepared == nil ? .absent : .running
+            return .preparing(revision, over: over)
+        default:
+            return settled
+        }
     }
 
     /// D-auto: try a recovery transition, discarding nothing on any refusal.
