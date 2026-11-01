@@ -218,14 +218,24 @@ extension ControlContractTests {
             #expect(try timeline.project(stored).frame == 6_000)
         }
 
-        @Test func anUnreachableFutureEndDoesNotHideAKnownHeldPredecessor() throws {
+        @Test(arguments: [1, 8])
+        func anUnreachableFutureEndDoesNotHideAKnownHeldPredecessor(_ history: Int) throws {
             let ledger = try fixture.ledger()
-            var timeline = try fixture.timeline(ledger)
+            var timeline = try fixture.timeline(ledger, history: history)
             try fixture.observe(&timeline, .running(false), ledger, frame: 2, ticks: 2)
             try fixture.observe(&timeline, .loop(.init(startTicks: 0, endTicks: 1)), ledger, frame: 2)
             let origin = try timeline.origin(atFrame: 2)
+            let before = String(reflecting: timeline)
             #expect(throws: MusicalTimingError.historyUnavailable) {
                 try timeline.reserve(.absolute(1), origin: origin)
+            }
+            #expect(String(reflecting: timeline) == before)
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    try timeline.reserve(.grid(1), origin: origin, retroactiveMs: 1)
+                }
+                #expect(String(reflecting: timeline) == before)
+                return
             }
             // The latest running anchor qualifies the end, but the held clock cannot project that future pass.
             let pin = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: 1)
@@ -234,6 +244,139 @@ extension ControlContractTests {
             try fixture.observe(&timeline, .running(true), ledger, frame: 2, ticks: 2)
             #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 0))
             #expect(try timeline.project(pin).frame == -1 && !timeline.project(pin).assumesFuture)
+        }
+
+        @Test(arguments: [1, 2], [MusicalTarget.grid(1), .absolute(4)])
+        func stoppedOriginsCannotReplaceAnEvictedRunningAnchor(_ history: Int, _ target: MusicalTarget) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, history: history)
+            try fixture.observe(&timeline, .musical, ledger, frame: 1, ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 7, ticks: 5)
+            let origin = try timeline.origin(atFrame: 7)
+            let before = String(reflecting: timeline)
+            var pin: MusicalPin?
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    pin = try timeline.reserve(target, origin: origin, retroactiveMs: 1)
+                }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                pin = try timeline.reserve(target, origin: origin, retroactiveMs: 1)
+            }
+            if let pin {
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 4))
+                try fixture.observe(&timeline, .running(true), ledger, frame: 11, ticks: 5)
+                #expect(try timeline.project(pin).frame == 9)
+            }
+        }
+
+        @Test func aRetainedRunningPinKeepsStoppedSelectionUsable() throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, history: 1, pins: 2)
+            try fixture.observe(&timeline, .musical, ledger, frame: 1, ticks: 1)
+            let stored = try timeline.reserve(.absolute(0), origin: timeline.origin(atFrame: 1))
+            try fixture.observe(&timeline, .running(false), ledger, frame: 7, ticks: 5)
+            let pin = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 7), retroactiveMs: 1)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 4))
+            try fixture.observe(&timeline, .running(true), ledger, frame: 11, ticks: 5)
+            #expect(try timeline.project(pin).frame == 9)
+            #expect(stored.occurrence == MusicalOccurrence(pass: 0, ticks: 0))
+            #expect(try timeline.project(stored).frame == 3 && timeline.historyCount == 1 && timeline.pinCount == 2)
+        }
+
+        @Test func anInitiallyHeldContextIsUsableOnlyBeforeItsFirstRun() throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, running: false, history: 1, ticks: 5)
+            try fixture.observe(&timeline, .primary, ledger, frame: 7)
+            let pin = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 7), retroactiveMs: 1)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 5))
+            try timeline.release(pin)
+            try fixture.observe(&timeline, .running(true), ledger, frame: 11, ticks: 5)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 13, ticks: 6)
+            let before = String(reflecting: timeline)
+            #expect(throws: MusicalTimingError.historyUnavailable) {
+                try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 13), retroactiveMs: 1)
+            }
+            #expect(String(reflecting: timeline) == before)
+        }
+
+        @Test func rotatingStoppedHistoryCannotRestoreRunningProvenance() throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, history: 2)
+            try fixture.observe(&timeline, .musical, ledger, frame: 1, ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 7, ticks: 5)
+            try timeline.rotate()
+            let before = String(reflecting: timeline)
+            #expect(throws: MusicalTimingError.historyUnavailable) {
+                try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 7), retroactiveMs: 1)
+            }
+            #expect(String(reflecting: timeline) == before)
+        }
+
+        @Test(arguments: [1, 3], [0, 1])
+        func aStoppedEndAliasCannotHideAnUnknownOrdinaryCompetitor(_ history: Int, _ retro: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 0, endTicks: 2),
+                                                 history: history, segments: [(0, 60_000)])
+            try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 0, pass: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 0, pass: 1)
+            let origin = try timeline.origin(atFrame: 0)
+            let before = String(reflecting: timeline)
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    try timeline.reserve(.grid(1), origin: origin, retroactiveMs: retro)
+                }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                let ordinary = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: retro)
+                #expect(ordinary.occurrence == MusicalOccurrence(pass: 1, ticks: 0))
+                try timeline.release(ordinary)
+            }
+            let end = try timeline.reserve(.absolute(2), origin: origin)
+            #expect(end.occurrence == MusicalOccurrence(pass: 1, ticks: 2))
+            try timeline.release(end) // The alias is known; only the missing ordinary inverse blocks the grid.
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0, pass: 1)
+            let current = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 0))
+            #expect(current.occurrence == MusicalOccurrence(pass: 1, ticks: 0))
+            #expect(try timeline.project(current).frame == 0 && !timeline.project(current).assumesFuture)
+        }
+
+        @Test(arguments: [1, 2])
+        func anExactStoppedEndStillNeedsItsCompetingInteriorBound(_ history: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 0, endTicks: 2),
+                                                 history: history, ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 1, ticks: 2)
+            let origin = try timeline.origin(atFrame: 1)
+            let before = String(reflecting: timeline)
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    try timeline.reserve(.grid(1), origin: origin)
+                }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                let pin = try timeline.reserve(.grid(1), origin: origin)
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 2))
+                try fixture.observe(&timeline, .running(true), ledger, frame: 1, ticks: 2)
+                #expect(try timeline.project(pin).frame == 1 && timeline.project(pin).assumesFuture)
+            }
+        }
+
+        @Test func aStrictlyPastEndAliasStillObeysTheHeldOriginTickCeiling() throws {
+            var ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 1, endTicks: 3), ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 1)
+            let origin = try timeline.origin(atFrame: 0)
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 1)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 3, ticks: 1, pass: 1)
+            try fixture.observe(&timeline, .musical, ledger, frame: 3, ticks: 2, pass: 1)
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 2_000_000)])), ledger, frame: 3)
+            let past = try timeline.reserve(.absolute(3), origin: origin)
+            #expect(try timeline.project(past).frame == -3) // Its exact -3.25 is before the held frame.
+            let pin = try timeline.reserve(.grid(3), origin: origin, retroactiveMs: 1)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 1, ticks: 3))
+            #expect(try timeline.project(pin).frame == 9 && timeline.project(pin).assumesFuture)
         }
 
         private func distantHistory(limit: Int, retainEndPin: Bool, reanchor: Bool = false)
