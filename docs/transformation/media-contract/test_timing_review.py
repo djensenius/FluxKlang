@@ -369,6 +369,47 @@ class TimingReviewTests(unittest.TestCase):
                 trace.run()
                 self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, ticks))
 
+    def test_retroactive_search_compares_every_eligible_earlier_pass(self):
+        cases = [(1, None, 65, 10, 1000, 1563, 1548), (2, 1280000, 26, 11, 780, 3120, 3084)]
+        for passes, tempo, step, count, ticks, assigned, forward in cases:
+            for retro in (0, 1):
+                with self.subTest(passes=passes, retro=retro):
+                    origin, revision = passes * 1564, 2 if tempo else 1
+                    records = [anchor(0, 0)]
+                    for iteration in range(1, passes + 1):
+                        records += wrap(iteration * 1564, 0, iteration)
+                    if tempo:
+                        records.append(dict(kind="generation", counter="musicalMap/mus.main",
+                                            **{"from": 1, "to": 2}, reason="tempoEdit",
+                                            musicalMap=[dict(atTicks=0, microsPerQuarter=tempo)]))
+                    records += [anchor(origin + 100 * index, step * index, passes) for index in range(1, count + 1)]
+                    horizon = origin + count * 100
+                    records += [trigger(origin, horizon, dict(timeBase="musical", gridTicks=4)),
+                                outcome(assigned if retro else forward, horizon, "firedLate", revision=revision)]
+                    doc = document(records, loop=(0, 1001), grid=4,
+                                   late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=retro))
+                    self.assertEqual(self.check(doc), [])
+                    trace = checker.Trace(doc, "11-review-timing.json")
+                    trace.run()
+                    self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, ticks) if retro else (passes, 0))
+
+    def test_retroactive_search_compares_overlapping_virtual_passes_without_walking_them(self):
+        for start, end, grid, fraction, back, ticks in [(0, 7, 1, 75, 1, 6), (1, 8, 7, 25, 2, 7)]:
+            for iteration in (2, 10**12):
+                for retro in (0, 1):
+                    with self.subTest(start=start, iteration=iteration, retro=retro):
+                        cue = trigger(0, iteration + 2, dict(timeBase="musical", gridTicks=grid))
+                        cue["originHostTicks"] = iteration * 500 + fraction
+                        assigned = iteration - back + 1 if retro else iteration + back - 1
+                        records = [anchor(0, start), cue, outcome(assigned, iteration + 2, "firedLate")]
+                        doc = document(records, loop=(start, end), grid=grid, tempo=60000,
+                                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=retro))
+                        self.assertEqual(self.check(doc), [])
+                        trace = checker.Trace(doc, "11-review-timing.json")
+                        trace.run()
+                        expected = (iteration - back, ticks) if retro else (iteration, grid)
+                        self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], expected)
+
     def test_projected_predecessor_skips_unobserved_virtual_passes(self):
         records = [anchor(0, 0), anchor(750000, 480000),
                    dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",

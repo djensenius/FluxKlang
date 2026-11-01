@@ -334,33 +334,34 @@ class Trace:
         return (i, b) if i >= 0 and 0 <= b < 2**63 else None
 
     def projected_previous(self, iteration, grid, frame):
-        """Compare the latest inverse and qualified end alias; visit history, never grid ticks or virtual passes."""
-        for _ in range(len(self.hist) + 2):
-            a = self.pass_anchor(iteration)
-            if iteration > self.musical.get("loopIteration", 0) \
-                    and (a.get("loopIteration", 0) < iteration or a["frame"] > frame):
-                iteration = min(iteration, self.ahead(self.musical, frame).get("loopIteration", 0))
+        """Choose the closest eligible projection across recorded passes and a bounded virtual tail."""
+        passes = {iteration}
+        if self.loop:
+            last = self.musical.get("loopIteration", 0)
+            passes = {a.get("loopIteration", 0) for a in self.hist if a.get("loopIteration", 0) <= iteration}
+            if iteration > last:
                 a = self.pass_anchor(iteration)
-            ceiling, best = self.loop["endTicks"] if self.loop else 2**63 - 1, None
+                if a.get("loopIteration", 0) < iteration or a["frame"] > frame:
+                    iteration = min(iteration, self.ahead(self.musical, frame).get("loopIteration", 0))
+                # Positive rounded periods need at most two predecessors; zero-period virtual passes coincide.
+                passes.update(range(max(last + 1, iteration - 2), iteration + 1))
+        best = None
+        for iteration in sorted(passes, reverse=True):
+            a = self.pass_anchor(iteration)
+            ceiling, candidates = self.loop["endTicks"] if self.loop else 2**63 - 1, []
             if self.loop and ceiling % grid == 0:
-                end = iteration, ceiling
-                projected = self.frame_of(end)
-                if projected <= frame:
-                    best = end, projected
+                candidates.append((iteration, ceiling))
                 ceiling -= 1
             prev = self.previous_boundary((iteration, min(ceiling, self.ticks_at_frame(frame, a))), grid)
             if prev is not None and prev[0] == iteration:
-                projected = self.frame_of(prev)
-                if projected <= frame and (best is None or projected >= best[1]):
-                    best = prev, projected  # an equal-frame interior boundary does not invent a future wrap
-            if best is not None:
-                return best[0]
-            if prev is None:
-                return None
-            if prev[0] >= iteration:
-                break
-            iteration = prev[0]
-        raise ValueError("retroactive boundary needs available musical history")
+                candidates.append(prev)
+            for candidate in candidates:
+                projected = self.frame_of(candidate)
+                interior = not self.loop or candidate[1] != self.loop["endTicks"]
+                rank = projected, interior, iteration
+                if projected <= frame and (best is None or rank > best[1]):
+                    best = candidate, rank
+        return best[0] if best else None
 
     def run(self):
         for counter in self.gens:
