@@ -1,6 +1,8 @@
 // #64 fault latch (owner default D14): a fault scope is a handoff × output/stream slot, and a raised fault
 // stays latched until control acknowledges it. Raising takes no lock and has no source-level retry loop; target
-// atomic lowering and progress are unqualified (see Progress). Reference model; not RT-certified.
+// atomic lowering and progress are unqualified (see Progress). Functional correctness, including fail-closed
+// saturation, is conditional on the caller contract (see Raise-context contract); callers that have not proved it
+// are unsupported. Reference model; not RT-certified.
 import Synchronization
 
 #if !_pointerBitWidth(_64)
@@ -114,9 +116,26 @@ struct FaultObservation: Sendable {
 /// qualification. `observe`, `acknowledge` and `pending` run on control, where the lock is acceptable;
 /// under a continuous stream of raises an acknowledge may keep being refused, which fails safe (still latched).
 ///
-/// Saturation. Raisers that pass the cap check concurrently can overshoot `countCap` by at most the number of
-/// concurrent raisers, far below the 2^39 of headroom, so `count` never carries into `generation`. Reads clamp to
-/// `countCap`, and a saturated scope stays latched and fails closed. `admitRaiseForTesting` forces that race.
+/// Raise-context contract (a functional precondition, separate from Progress). Over the latch's whole lifetime, every
+/// `raise` call, on any scope, prepared or not, must belong to one global set of K < 2^39 logical chains (one condition
+/// for the whole latch, not one per scope or generation). Within a chain, calls are non-reentrant and each completed
+/// `raise` happens before the chain's next `raise` begins (its cap check). A chain may migrate between threads only
+/// through a real happens-before handoff (release/acquire, a lock, a join); a call from an unsynchronized or re-entered
+/// context starts a new chain. This reference model neither checks nor proves the contract: callers that have not
+/// proved it are unsupported, and app hot-path integration must prove it or use a different design. That proof is open
+/// in #190; #64's acceptance is not waived.
+///
+/// Saturation (under the contract). By induction over `tally`'s modification order: while nothing has carried, `count`
+/// only grows within a generation and the generation cannot step once `count >= countCap` (a saturated observation is
+/// never acknowledgeable, and an earlier one's exact-`tally` compare-exchange fails). A raise overshoots when its add
+/// sees `count >= countCap`; it writes at least `countCap + 1`, so any later raise on its chain, whose cap check
+/// happens after that add, reads that value or a later one and is refused. Each chain therefore overshoots at most once
+/// for this tally, the overshoot is at most K, and the raw count stays below `countCap + 2^39 = 2^40`, so the first
+/// carry into `generation` can never occur. This bounds cumulative overshoot by chains, not by raisers running at one
+/// moment: unsynchronized contexts calling one after another are separate chains. Reads clamp to `countCap`, and a
+/// saturated scope stays latched and fails closed. `admitRaiseForTesting` forces two admitted raisers to overshoot
+/// together. Without the contract, an unbounded number of stale admissions can carry into `generation` and corrupt the
+/// scope.
 ///
 /// Ordering: acquire/release. Each successful write to `tally` reads the one before it (RMW), and readers
 /// acquire `tally` before `first`, which is enough for every argument above. Relaxed is unsound because it
@@ -200,9 +219,9 @@ final class FaultLatch: @unchecked Sendable {
         keys.deallocate()
     }
 
-    /// Any context; no lock or source-level retry loop (target progress unqualified; see Progress). `.ok` when
-    /// counted against a prepared scope; an unprepared scope is counted in `unknownScopeFaults` and refused with
-    /// `.slotOutOfRange`.
+    /// Any context that satisfies the raise-context contract; no lock or source-level retry loop (target progress
+    /// unqualified; see Progress). `.ok` when counted against a prepared scope; an unprepared scope is counted in
+    /// `unknownScopeFaults` and refused with `.slotOutOfRange`.
     func raise(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> KernelStatus {
         guard let index = index(of: scope) else {
             if unknown.load(ordering: .relaxed) < Bits.unknownCap {
@@ -373,7 +392,10 @@ final class FaultLatch: @unchecked Sendable {
         control.withLock { _ in body() }
     }
 
-    /// Raises against scopes that were never prepared, saturating at `unknownCap`.
+    /// Raises against scopes that were never prepared, saturating at `unknownCap`. Under the raise-context
+    /// contract the same per-chain argument as Saturation holds over the latch's lifetime (relaxed ordering keeps
+    /// write-read coherence), so the overshoot is at most K < 2^39, far below the 2^63 + 1 that would wrap the
+    /// counter. A per-scope or per-generation bound alone would not imply this lifetime bound.
     var unknownScopeFaults: UInt64 { min(unknown.load(ordering: .relaxed), Bits.unknownCap) }
 
     /// Test-only (X1 denies `ForTesting(` outside test targets): overwrites a scope's raw state while no other
