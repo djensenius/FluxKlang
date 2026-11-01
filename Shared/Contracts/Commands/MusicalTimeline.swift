@@ -337,7 +337,8 @@ private extension MusicalTimeline {
 
     mutating func apply(_ event: MusicalObservation, anchor: ClockAnchor) throws {
         let wrapping: Bool = if case .wrap = event { true } else { false }
-        if !wrapping { try checkCoverage(to: anchor.sample.frame) }
+        let correcting = try permitsSameFrameCorrection(event, at: anchor.sample.frame)
+        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting) }
         try checkAnchor(anchor, for: event)
         switch event {
         case .primary:
@@ -356,12 +357,30 @@ private extension MusicalTimeline {
             state.loop = loop
         }
         state.primary = anchor
-        if !wrapping { try checkCoverage(to: anchor.sample.frame) }
+        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting) }
     }
 
-    func checkCoverage(to frame: Int64) throws {
-        if state.running, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks,
-           try Int128(frame) >= MusicalTiming.wrapFrame(state.clock, loop: loop) {
+    func permitsSameFrameCorrection(_ event: MusicalObservation, at frame: Int64) throws -> Bool {
+        switch event {
+        case .running(false), .loop: break
+        default: return false
+        }
+        // Pass > 0 proves an actual wrap was observed. Zero-period corrections may stay at that frame,
+        // but neither an initial due wrap nor any uncovered primary advance is waived.
+        guard state.running, let loop = state.loop, state.clock.musical.loopIteration > 0,
+              frame == state.primary.sample.frame, frame == state.clock.anchor.sample.frame,
+              state.clock.musical.ticks <= loop.endTicks,
+              MusicalTiming.rounded(MusicalTiming.units(state.clock, from: loop.startTicks,
+                                                        to: loop.endTicks)) == 0 else {
+            return false
+        }
+        return try Int128(frame) == MusicalTiming.wrapFrame(state.clock, loop: loop)
+    }
+
+    func checkCoverage(to frame: Int64, allowingSameFrame: Bool = false) throws {
+        guard state.running, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks else { return }
+        let wrap = try MusicalTiming.wrapFrame(state.clock, loop: loop)
+        if Int128(frame) > wrap || (Int128(frame) == wrap && !allowingSameFrame) {
             throw MusicalTimingError.missingWrap
         }
     }
