@@ -39,12 +39,13 @@ private func candidate() -> GraphDocument {
 }
 
 /// Project A runs `prep.running` (opened with `lifecycleA`); project B runs nothing.
-private func makeAuthority(_ lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
+private func makeAuthority(_ lifecycleA: EngineLifecycle? = nil,
+                           recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
     let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                       nominalRate: 48_000)
     let authority = try HostAuthority(host: ledger, live: try liveState())
     try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
-                             lifecycle: lifecycleA).get()
+                             lifecycle: lifecycleA, recoveryBase: recoveryBaseA).get()
     try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
     return authority
 }
@@ -154,7 +155,7 @@ extension HostAuthorityTests {
         }
 
         @Test func recoveringHolderStaysRecoveringOffTheLease() async throws {
-            let authority = try await makeAuthority(.recovering)
+            let authority = try await makeAuthority(.recovering, recoveryBaseA: .running)
             #expect(await authority.lifecycle(of: projectA, window: windowA) == .recovering)
             try await authority.acquire(project: projectA, window: windowA).get()
             #expect(await authority.lifecycle(of: projectA, window: windowA) == .recovering)

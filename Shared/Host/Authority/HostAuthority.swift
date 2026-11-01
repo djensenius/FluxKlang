@@ -45,10 +45,11 @@ actor HostAuthority {
         book.lifecycle(of: project, window: window)
     }
 
-    /// `HostAuthorityBook.open(project:running:lifecycle:)`.
+    /// `HostAuthorityBook.open(project:running:lifecycle:recoveryBase:)`.
     func open(project: ProjectID, running: RunningGraph,
-              lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
-        book.open(project: project, running: running, lifecycle: lifecycle)
+              lifecycle: EngineLifecycle? = nil,
+              recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
+        book.open(project: project, running: running, lifecycle: lifecycle, recoveryBase: recoveryBase)
     }
 
     /// `HostAuthorityBook.acquire(project:window:)`.

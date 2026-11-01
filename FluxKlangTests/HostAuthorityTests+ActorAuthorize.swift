@@ -66,7 +66,7 @@ extension HostAuthorityTests {
         }
 
         @Test func commitWhileRecoveringIsRefused() async throws {
-            let authority = try await Bench.makeAuthority(lifecycleA: .recovering)
+            let authority = try await Bench.makeAuthority(lifecycleA: .recovering, recoveryBaseA: .running)
             var engine = try ScriptedActivationEngine()
             _ = try await Bench.review(authority, &engine)
             let authorization = try await authority.authorize(project: Bench.projectA, gesture: Bench.gesture()).get()

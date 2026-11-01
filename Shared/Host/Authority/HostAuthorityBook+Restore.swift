@@ -111,6 +111,7 @@ extension HostAuthorityBook {
         restoring = nil
         if state.lifecycle == .recovering {
             state.lifecycle = lifecycleAfterRestore(for: state)
+            state.recoveryBase = nil
         }
         projects[record.project] = state
         if outputsMuted {
@@ -122,14 +123,12 @@ extension HostAuthorityBook {
 
     private func lifecycleAfterRestore(for state: HostProjectState) -> EngineLifecycle {
         let running = state.transaction.running
-        let settled: EngineLifecycle = running.prepared == nil ? .stopped : .running
+        let base = state.recoveryBase ?? .absent
         switch state.transaction.phase {
         case .preparing, .awaitingReview:
-            guard let revision = try? running.revision.next() else { return settled }
-            let over: RunningSetState = running.prepared == nil ? .absent : .running
-            return .preparing(revision, over: over)
-        default:
-            return settled
+            guard let revision = try? running.revision.next() else { return base.settledLifecycle }
+            return .preparing(revision, over: base)
+        default: return base.settledLifecycle
         }
     }
 
@@ -224,7 +223,7 @@ extension HostAuthorityBook {
         if failClosed {
             // A partial plan that cannot be kept (or cannot advance the
             // revision) first fails closed, then resolves the new recovery.
-            state.lifecycle = .recovering
+            state.enterRecovery()
             switch state.transaction.resolveRecovery(attempt, lease: lease) {
             case .failure(let refusal): return .failure(refusal)
             case .success(let restored): step = restored

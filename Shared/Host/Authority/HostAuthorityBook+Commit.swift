@@ -96,7 +96,7 @@ extension HostAuthorityBook {
         guard requestMute(step, running: state.transaction.running, into: &stagedQueue) else {
             return .failure(.queueFull)
         }
-        state.lifecycle = state.lifecycle.after(reason.event)
+        state.enterRecovery()
         queue = stagedQueue
         projects[project] = state
         inFlight[project] = nil
@@ -227,7 +227,7 @@ extension HostAuthorityBook {
         }
         var converted = EngineCommandQueue()
         let queuedMute = requestMute(step, running: state.transaction.running, into: &converted)
-        state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
+        state.enterRecovery()
         projects[project] = state
         if !queuedMute { markFIFOMute() }
         let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute

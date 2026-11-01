@@ -67,16 +67,42 @@ struct HostAuthorityBook {
     /// running plan is accepted: a stopped engine stores the running set without
     /// rendering (`EngineLifecycle.acceptsRunningSetChanges`), and `endingPreparation`
     /// returns to `.stopped` whatever the running graph holds. `.recovering` is
-    /// accepted either way: unresolved recovery outlives the running set.
+    /// accepted either way: unresolved recovery outlives the running set. Pass
+    /// `recoveryBase` when resuming a known recovery snapshot; rendering/degraded
+    /// bases require a prepared plan. Without saved provenance, recovery opens over
+    /// `.absent` and settles stopped rather than inferring a running lifecycle from
+    /// a stored plan.
     /// Last, a running plan that is already in use is refused as
     /// `.activation(.preparedIDInUse)`, like `route`: any project's running,
     /// reviewed or held plan (`livePlans()`), or a plan whose `.discard` is queued.
     /// Adopting it would let another project's cancel, or the queued discard,
     /// destroy this project's running graph.
     mutating func open(project: ProjectID, running: RunningGraph,
-                       lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
+                       lifecycle: EngineLifecycle? = nil,
+                       recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
         guard projects[project] == nil else { return .failure(.projectAlreadyOpen(project)) }
         guard projects.count < HostAuthority.projectLimit else { return .failure(.projectLimit) }
+        let opening: (lifecycle: EngineLifecycle, recoveryBase: RunningSetState?)
+        switch openingLifecycle(running: running, lifecycle: lifecycle, recoveryBase: recoveryBase) {
+        case .success(let validated): opening = validated
+        case .failure(let refusal): return .failure(refusal)
+        }
+        if let plan = running.prepared {
+            guard !livePlans().contains(plan) else { return .failure(.activation(.preparedIDInUse)) }
+            guard !queue.pending.contains(.discard(plan)) else { return .failure(.activation(.preparedIDInUse)) }
+        }
+        projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),
+                                             lifecycle: opening.lifecycle,
+                                             recoveryBase: opening.recoveryBase)
+        return .success(())
+    }
+
+    /// Validates explicit lifecycle and saved recovery provenance before `open` mutates the book.
+    private func openingLifecycle(
+        running: RunningGraph,
+        lifecycle: EngineLifecycle?,
+        recoveryBase: RunningSetState?
+    ) -> Result<(lifecycle: EngineLifecycle, recoveryBase: RunningSetState?), HostAuthorityRefusal> {
         if let lifecycle {
             switch lifecycle {
             case .stopped, .recovering: break
@@ -85,14 +111,15 @@ struct HostAuthorityBook {
             case .preparing, .heldByOther: return .failure(.lifecycleNotResumable(lifecycle))
             }
         }
-        if let plan = running.prepared {
-            guard !livePlans().contains(plan) else { return .failure(.activation(.preparedIDInUse)) }
-            guard !queue.pending.contains(.discard(plan)) else { return .failure(.activation(.preparedIDInUse)) }
-        }
         let initial = lifecycle ?? (running.prepared == nil ? .stopped : .running)
-        projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),
-                                             lifecycle: initial)
-        return .success(())
+        if let recoveryBase {
+            guard initial == .recovering else { return .failure(.invalidRecoveryBase) }
+            if recoveryBase != .absent, running.prepared == nil {
+                return .failure(.invalidRecoveryBase)
+            }
+        }
+        let savedBase = initial == .recovering ? recoveryBase ?? .absent : nil
+        return .success((initial, savedBase))
     }
 
     /// Grants `project`'s `window` a new lease (one context bump), staged by
