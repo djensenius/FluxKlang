@@ -8,6 +8,7 @@ private struct EventSourceSnapshot: Equatable {
     let restartRecord: ClockRestartRecord?
     let awaitingTransportBump: Bool
     let resume: TransportResume?
+    let nominalRate: Int
     let states: [ActionID: ReadinessState]
     let reasons: [ActionID: ReadinessReason]
 
@@ -17,6 +18,7 @@ private struct EventSourceSnapshot: Equatable {
         restartRecord = ledger.restartRecord
         awaitingTransportBump = ledger.awaitingTransportBump
         resume = ledger.resume
+        nominalRate = ledger.nominalRate
         states = readiness.states
         reasons = readiness.reasons
     }
@@ -105,15 +107,19 @@ extension ContractFixtureTests {
             #expect(ledger.generation(Self.transport)?.value == 2 && ledger.resume == .locate(ticks: 15_360))
             #expect(ids.allSatisfy { readiness.state($0) == .invalidated && readiness.reasons[$0] == .sourceChanged })
 
+            // The replay starts from the same prepared actions and must reproduce every invalidation.
             var replayed = try Self.makeLedger()
             var replayReadiness = ActionReadiness()
+            try Self.prepare(ids[0], on: [Self.source], ledger: replayed, readiness: &replayReadiness)
+            try Self.prepare(ids[1], on: [Self.context], ledger: replayed, readiness: &replayReadiness)
             var redelivered: [ContractFixtureEvent] = []
+            var replayStale: [[ActionID]] = []
             while let event = second.next() {
                 redelivered.append(event)
-                try FixtureEventApplier.apply(event, ledger: &replayed, readiness: &replayReadiness)
+                replayStale.append(try FixtureEventApplier.apply(event, ledger: &replayed, readiness: &replayReadiness))
             }
-            #expect(redelivered == delivered)
-            #expect(replayed.current == ledger.current && replayed.resume == ledger.resume)
+            #expect(redelivered == delivered && replayStale == stale)
+            #expect(EventSourceSnapshot(replayed, replayReadiness) == EventSourceSnapshot(ledger, readiness))
         }
 
         @Test func sourceRejectsEventsBeyondCapacity() throws {
@@ -184,12 +190,23 @@ extension ContractFixtureTests {
             }
             #expect(repeated.droppedCount == 3 && repeated.lost.entries.count == 2 && repeated.lost.droppedCount == 1)
 
-            var overflowing = try ScriptedEventSource(capacity: 3, events: [lostBump, lostBump, lostBump])
+            let contextBump = ContractFixtureEvent.bump(Self.context, .contextChange)
+            let locate = ContractFixtureEvent.bump(Self.transport, .locate(ticks: 0))
+            var overflowing = try ScriptedEventSource(capacity: 3, events: [lostBump, contextBump, locate])
             _ = overflowing.next()
             try overflowing.inject(.overflow)
             #expect(overflowing.overflowCount == 2 && overflowing.droppedCount == 0 && overflowing.lostCount == 2)
+            #expect(overflowing.lost.entries == [contextBump, locate] && overflowing.lost.droppedCount == 0)
             let afterOverflow = overflowing.next()
             #expect(overflowing.pending.isEmpty && afterOverflow == nil && overflowing.deliveredCount == 1)
+
+            // An overflow after an earlier drop keeps recording until the record is full, then counts.
+            var mixed = try ScriptedEventSource(capacity: 2, events: [lostBump, contextBump])
+            try mixed.inject(.drop)
+            try mixed.inject(.duplicate)
+            try mixed.inject(.overflow)
+            #expect(mixed.droppedCount == 1 && mixed.overflowCount == 2 && mixed.lostCount == 3)
+            #expect(mixed.lost.entries == [lostBump, contextBump] && mixed.lost.droppedCount == 1)
         }
 
         @Test func duplicatedPrimaryBumpIsRefusedWhileRestartPending() throws {
@@ -210,6 +227,10 @@ extension ContractFixtureTests {
             Self.expectRefusal(.ledger(.restartObligationsPending), applying: duplicate,
                                ledger: &ledger, readiness: &readiness)
             #expect(ledger.generation(Self.primary)?.value == 2 && readiness.state(ids[0]) == .invalidated)
+            // A refused rate change must not change the declared rate either; the snapshot covers it.
+            Self.expectRefusal(.ledger(.restartObligationsPending),
+                               applying: .bump(Self.primary, .rateChange(nominalRate: 96_000)),
+                               ledger: &ledger, readiness: &readiness)
 
             // Once the record and transport bump exist, the same primary change is accepted.
             let (record, _) = try Self.restartEvents()
