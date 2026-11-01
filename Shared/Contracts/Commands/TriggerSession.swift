@@ -37,6 +37,8 @@ struct TriggerHandle: Hashable, Sendable {
     }
 }
 
+/// May carry non-V1 invalidTiming/outsideLoop diagnostics; consumers must not
+/// export those diagnostics as canonical media records.
 struct SessionOutcome: Hashable, Sendable {
     let handle: TriggerHandle
     let outcome: TriggerOutcome
@@ -101,16 +103,46 @@ struct TriggerSession: Sendable {
     /// Transfers the pending reservation to the queue exactly once. Shape validation
     /// is canonical B validation, not proof of freshness or correct musical timing.
     mutating func complete(_ handle: TriggerHandle, outcome: TriggerOutcome) throws(TriggerSessionError) {
+        try validateCompletionIdentity(handle, outcome: outcome)
+        do { try outcome.validateMediaShape() } catch { throw .invalidCompletion }
+        enqueue(handle, outcome: outcome)
+    }
+
+    /// Completes a non-V1 control-plane diagnostic, checking shape and ownership,
+    /// not the scheduler's diagnosis. outsideLoop assignedFrame is an optional
+    /// original target reference (any Int64), never a dispatch frame.
+    mutating func completeDiagnostic(_ handle: TriggerHandle, outcome: TriggerOutcome) throws(TriggerSessionError) {
+        try validateCompletionIdentity(handle, outcome: outcome)
+        guard outcome.result == .dropped, outcome.stale == nil, outcome.frame == nil,
+              outcome.startOffsetFrames == 0 else { throw .invalidCompletion }
+        switch outcome.reason {
+        case .invalidTiming:
+            guard outcome.assignedFrame == nil, outcome.musicalMap == nil else { throw .invalidCompletion }
+        case .outsideLoop:
+            guard outcome.musicalMap != nil else { throw .invalidCompletion }
+        default:
+            throw .invalidCompletion
+        }
+        enqueue(handle, outcome: outcome)
+    }
+
+    private func validateCompletionIdentity(
+        _ handle: TriggerHandle, outcome: TriggerOutcome
+    ) throws(TriggerSessionError) {
         guard handle.session == currentToken else { throw .staleSession }
         guard pending.contains(handle.trigger) else { throw .notPending }
         guard outcome.trigger == handle.trigger else { throw .mismatchedCompletion }
-        do { try outcome.validateMediaShape() } catch { throw .invalidCompletion }
+    }
+
+    private mutating func enqueue(_ handle: TriggerHandle, outcome: TriggerOutcome) {
         pending.remove(handle.trigger)
         terminal.append(SessionOutcome(handle: handle, outcome: outcome))
     }
 
     /// Transfers all queued outcomes, in completion order, to the consumer.
     /// Slots are released, but seen IDs remain until explicit quiescent rotation.
+    /// Includes non-V1 invalidTiming/outsideLoop diagnostics, which consumers
+    /// must not export as canonical media records.
     mutating func drain() -> [SessionOutcome] {
         let outcomes = terminal
         terminal = []
