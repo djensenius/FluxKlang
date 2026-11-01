@@ -121,6 +121,11 @@ enum AuthorityBench {
         snapshot.ledger[EngineLeaseRegistry.contextKey]
     }
 
+    /// The current lease token (the one an involuntary `leaseLost` names).
+    static func leaseToken(_ authority: HostAuthority) async throws -> EngineLeaseToken {
+        try #require(await authority.snapshot().lease?.token)
+    }
+
     /// Fills the command queue with `project`'s prepares, abandoning each.
     static func fillQueue(_ authority: HostAuthority, with project: ProjectID = projectB) async throws {
         while await authority.snapshot().queue.count < EngineCommandQueue.capacity {

@@ -8,7 +8,7 @@
 //  The actor stores it as `private var book` in `HostAuthority.swift`, so neither
 //  an `await` nor a function taking `isolated HostAuthority` can reach it: the
 //  members here are internal only so the book's own extensions
-//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`) can share them. A book a
+//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`) can share them. A book a
 //  module caller builds itself is a separate value and never touches an actor's.
 //  Every refusal leaves the whole book unchanged.
 //
@@ -29,6 +29,11 @@ struct HostAuthorityBook {
     /// The window recorded by `authorize`, re-checked by `commit`; cleared when the
     /// authorization is consumed by `commit` or withdrawn by `cancel`.
     var authorizedWindows: [ProjectID: WindowID] = [:]
+    /// The fail-closed output lane, delivered by `nextEngineCommand()` before the FIFO:
+    /// `true` while a mute is owed. It takes no queue slot, so `leaseLost` is never `.queueFull`.
+    var pendingOutput: Bool?
+    /// Engine-global (one engine per host): set by every mute, in the lane or the FIFO.
+    var outputsMuted = false
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState) throws(GenerationLedgerError) {
@@ -44,7 +49,8 @@ struct HostAuthorityBook {
         HostAuthoritySnapshot(lease: registry.snapshot, lastIssuedLease: registry.lastIssued, ledger: ledger.current,
                               live: live, projects: projects.mapValues(HostProjectSnapshot.init),
                               outstanding: outstanding, abandoned: abandoned, queue: queue,
-                              inFlight: inFlight, authorizedWindows: authorizedWindows)
+                              inFlight: inFlight, authorizedWindows: authorizedWindows,
+                              pendingOutput: pendingOutput, outputsMuted: outputsMuted)
     }
 
     /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
@@ -164,8 +170,8 @@ struct HostAuthorityBook {
         return .success(granted.snapshot)
     }
 
-    /// The one place a lease is removed (`release`), staged like `grantLease`.
-    private mutating func removeLease(expected token: EngineLeaseToken) -> Result<Void, HostAuthorityRefusal> {
+    /// The one place a lease is removed (`release`, `leaseLost`), staged like `grantLease`.
+    mutating func removeLease(expected token: EngineLeaseToken) -> Result<Void, HostAuthorityRefusal> {
         var stagedRegistry = registry
         var stagedLedger = ledger
         let change: ContextChange

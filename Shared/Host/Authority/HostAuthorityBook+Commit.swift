@@ -78,7 +78,7 @@ extension HostAuthorityBook {
     /// Checks, in order: reason; `attempt` is an open project's last commit attempt
     /// (`.activation(.staleReport)`); queue room for any recovery step
     /// (`maxRecoveryStepSlots`, before the transition); the transaction's checks.
-    /// Queues the step's mute, enters `.recovering` and ends the attempt's
+    /// Queues the step's mute (marking `outputsMuted`), enters `.recovering` and ends the attempt's
     /// `inFlight` record. A still-queued `.commit` of the attempt is then dropped
     /// by the delivery guard.
     mutating func abandonCommit(_ attempt: CommitAttemptID,
@@ -100,6 +100,7 @@ extension HostAuthorityBook {
         queue = stagedQueue
         projects[project] = state
         inFlight[project] = nil
+        outputsMuted = true
         return .success(())
     }
 
@@ -171,13 +172,15 @@ extension HostAuthorityBook {
         return true
     }
 
-    /// The delivery guard, in one actor turn. A `.commit` is delivered only while
-    /// its attempt is still some project's committing attempt (else dropped, and the
-    /// next command is taken) and only under the current lease token. A commit whose
+    /// The delivery guard, in one actor turn. The fail-closed lane (`takeOutput()`,
+    /// `+LeaseLoss.swift`) goes first, ahead of every queued command. A `.commit` is
+    /// delivered only while its attempt is still some project's committing attempt
+    /// (else dropped, and the next command is taken) and only under the current lease token. A commit whose
     /// token was replaced (released, transferred or reacquired) is withheld: the
     /// actor abandons it as `.leaseLost` and returns `.setOutputsMuted(true)` in its
-    /// place, keeping its FIFO position. A delivered commit is `inFlight`.
+    /// place, keeping its FIFO position (and marking `outputsMuted`). A delivered commit is `inFlight`.
     mutating func nextEngineCommand() -> EngineCommand? {
+        if let output = takeOutput() { return output }
         while let command = queue.dequeue() {
             guard case .commit(_, let attempt, let token) = command else { return command }
             guard let project = committingProject(for: attempt) else { continue }
@@ -211,6 +214,7 @@ extension HostAuthorityBook {
         _ = requestMute(step, running: state.transaction.running, into: &converted)
         state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
         projects[project] = state
+        outputsMuted = true
         let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute
         // Continuation point: the withheld commit's state is settled here, before the
         // replacement is delivered; a post-step on `project` belongs here.
