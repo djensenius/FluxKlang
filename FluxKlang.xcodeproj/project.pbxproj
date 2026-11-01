@@ -486,6 +486,7 @@
 		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
 		EC7181152CB0108099D31C5D /* ContractID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70DF305609475BA00086393C /* ContractID.swift */; };
 		EC91702D6E40FED2005888E3 /* StudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 615719763482C95E8DE3B403 /* StudioView.swift */; };
+		EC9CC8F54F7C6E1D29605BE2 /* RealtimeHandoffTests+FaultsStress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D3B0E1B0303881068B191CC /* RealtimeHandoffTests+FaultsStress.swift */; };
 		ECCE464A818A6BD0037034E3 /* StudioConnectionEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E5D6DBE2BFD126318DB247C /* StudioConnectionEditing.swift */; };
 		ECDA473F5DA6B0D1DD822437 /* CapabilityIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DFA949DDCD2BDD22125945 /* CapabilityIdentityTests.swift */; };
 		ECE336803934A2AD2C09C92A /* AssistantActionReviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E88F008566E38BA066EF7ED1 /* AssistantActionReviewCard.swift */; };
@@ -734,6 +735,7 @@
 		9A81A9CBE5326B9901D4E5A0 /* GlobalStudioConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalStudioConnections.swift; sourceTree = "<group>"; };
 		9BFE38254571D718D3224463 /* PermissionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionState.swift; sourceTree = "<group>"; };
 		9C76ABA1CF79AB3F74A30C46 /* StudioCanvasGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioCanvasGeometry.swift; sourceTree = "<group>"; };
+		9D3B0E1B0303881068B191CC /* RealtimeHandoffTests+FaultsStress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+FaultsStress.swift"; sourceTree = "<group>"; };
 		9D6C0E3A68F0C7E10686C67E /* WingTransporting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingTransporting.swift; sourceTree = "<group>"; };
 		9DFAAC4B1C68CB6CD1127E2E /* EquipmentLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquipmentLibraryView.swift; sourceTree = "<group>"; };
 		9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingAddressBook.swift; sourceTree = "<group>"; };
@@ -1467,6 +1469,7 @@
 				235EEA2B57B91948522C1D87 /* ProjectLegacyContractTests.swift */,
 				4AE3F327090227B3E98CC91C /* RealtimeHandoffTests.swift */,
 				22825538EF6F1C8F798E081D /* RealtimeHandoffTests+Faults.swift */,
+				9D3B0E1B0303881068B191CC /* RealtimeHandoffTests+FaultsStress.swift */,
 				E20026C83A34744D71BC2C74 /* RealtimeHandoffTests+Policy.swift */,
 				A33C53C69E74C297B6FB6160 /* SiriAppIntentsTests.swift */,
 				BDEC454C8E9B9862280CC236 /* SpatialTests.swift */,
@@ -2232,6 +2235,7 @@
 				739519B3886822B88E6B7230 /* ProjectContractTests.swift in Sources */,
 				7A7532554BFE2A9589FFB70E /* ProjectLegacyContractTests.swift in Sources */,
 				CBC5B068DB921FFB05F04E69 /* RealtimeHandoffTests+Faults.swift in Sources */,
+				EC9CC8F54F7C6E1D29605BE2 /* RealtimeHandoffTests+FaultsStress.swift in Sources */,
 				CF6BD616A5F3CA639AC55A14 /* RealtimeHandoffTests+Policy.swift in Sources */,
 				89A7F1AAE828BCFE3BAAA4A3 /* RealtimeHandoffTests.swift in Sources */,
 				1C79FC5F6E4018C85424A1FF /* SiriAppIntentsTests.swift in Sources */,

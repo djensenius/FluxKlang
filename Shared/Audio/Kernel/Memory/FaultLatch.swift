@@ -57,14 +57,23 @@ struct FaultRecord: Sendable, BitwiseCopyable, Equatable {
 /// raised just now can appear on the next poll rather than this one. Otherwise `first` is final for `g`.
 /// `acknowledge` then swaps `(c, g)` for `(0, g + 1)`. An add lands before that compare-exchange (in the returned
 /// record, which retries with the larger count) or after it (the first raise of a new latched record), so no
-/// raise is lost and no record is returned twice; a concurrent second `acknowledge` loses the compare-exchange,
-/// sees the generation move and returns `nil` (without that check it would reset the next generation's count
-/// and report it under this generation's first raise). Reported counts are `min(count, countCap)`.
+/// raise is lost and no record is returned twice. Reported counts are `min(count, countCap)`.
 ///
-/// Progress. `raise` and `isLatched` have no retry loops: one load, at most one wrapping add and at most one
-/// 128-bit release store (`stp` on arm64 macOS; on arm64 iOS and x86_64 a value-comparing compare-exchange loop
-/// that ends within two iterations, because every concurrent access to `first` is a value-preserving read).
-/// `acknowledge` loops only while raises grow the count, so it is lock-free; it runs on control.
+/// Serialization. `acknowledge`, and `pending`'s read of each scope, run under `control`, a control-side
+/// `Mutex`; `raise` and `isLatched` never take it. Only `acknowledge` steps a generation, so while one control
+/// operation holds `control` between reading `tally`/`first` and acting on them, no generation can step, let
+/// alone wrap through 2^24 back to the one it read: a snapshot can never pair an old count with a new claim, nor
+/// commit a compare-exchange against a reused generation (ABA). The compare-exchange's generation check (a lost
+/// race returns `nil`; without it the loser would reset the next generation's count and report it under this
+/// generation's first raise) is therefore defensive, but kept. The `Mutex` is control-side only: the render paths
+/// (`raise`, `isLatched`) stay lock-free and never take it, and X1's lint must allow `Mutex` only in
+/// `FaultLatch` control paths.
+///
+/// Progress. `raise` and `isLatched` have no retry loops and no lock: one load, at most one wrapping add and at
+/// most one 128-bit release store (`stp` on arm64 macOS; on arm64 iOS and x86_64 a value-comparing
+/// compare-exchange loop that ends within two iterations, because every concurrent access to `first` is a
+/// value-preserving read). `acknowledge` loops only while raises grow the count; it and `pending` run on
+/// control, where the lock is acceptable.
 ///
 /// Saturation. Raisers that pass the cap check concurrently can overshoot `countCap` by at most the number of
 /// concurrent raisers, far below the 2^39 of headroom, so `count` never carries into `generation`.
@@ -90,6 +99,13 @@ final class FaultLatch: @unchecked Sendable {
         let claimGeneration: UInt64
     }
 
+    /// One scope's `tally` and published `first`, read in that order; `acknowledge` commits it.
+    struct Snapshot: Sendable {
+        fileprivate let index: Int
+        fileprivate let observed: UInt64
+        fileprivate let claim: WordPair
+    }
+
     /// Largest number of scopes one latch may prepare (inclusive): 4,096 covers 16 handoffs × 256 slots.
     static let maximumScopes = 4_096
     static let countBits: UInt64 = 40
@@ -106,14 +122,16 @@ final class FaultLatch: @unchecked Sendable {
     private let tallies: UnsafeMutablePointer<Atomic<UInt64>>
     private let firsts: UnsafeMutablePointer<Atomic<WordPair>>
     private let unknown = Atomic<UInt64>(0)
+    /// Serializes control operations that read `tally` then `first` (see Serialization above).
+    private let control = Mutex(())
 
     /// Control-side preparation only.
     init(scopes: [FaultScope]) throws(PreparationError) {
         guard !scopes.isEmpty else { throw .emptyScopeTable }
         guard scopes.count <= Self.maximumScopes else { throw .tooManyScopes(scopes.count) }
-        let sorted = scopes.map(Self.key).sorted()
+        let sorted = scopes.map(Bits.key).sorted()
         for index in sorted.indices.dropFirst() where sorted[index] == sorted[index &- 1] {
-            throw .duplicateScope(Self.scope(forKey: sorted[index]))
+            throw .duplicateScope(Bits.scope(forKey: sorted[index]))
         }
         scopeCount = sorted.count
         keys = .allocate(capacity: sorted.count)
@@ -147,10 +165,10 @@ final class FaultLatch: @unchecked Sendable {
             return .refused(.slotOutOfRange)
         }
         let tally = tallies + index
-        guard Self.count(tally.pointee.load(ordering: .acquiring)) < Self.countCap else { return .ok }
+        guard Bits.count(tally.pointee.load(ordering: .acquiring)) < Self.countCap else { return .ok }
         let old = tally.pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
-        if Self.count(old) == 0 {
-            let meta = Self.generation(old) << 8 | UInt64(kind.rawValue)
+        if Bits.count(old) == 0 {
+            let meta = Bits.generation(old) << 8 | UInt64(kind.rawValue)
             (firsts + index).pointee.store(
                 WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
                 ordering: .releasing)
@@ -161,48 +179,79 @@ final class FaultLatch: @unchecked Sendable {
     /// Render; one 64-bit load. `true` while the scope holds an unacknowledged fault.
     func isLatched(_ scope: FaultScope) -> Bool {
         guard let index = index(of: scope) else { return false }
-        return Self.count((tallies + index).pointee.load(ordering: .acquiring)) > 0
+        return Bits.count((tallies + index).pointee.load(ordering: .acquiring)) > 0
     }
 
-    /// Control/UI. Visits each published latched record once, without clearing it, and returns how many it
-    /// visited. A record whose first raise is still publishing is skipped until the next poll. Records of
-    /// different scopes are read one after another, not as one snapshot. A first raiser stalled between its add
-    /// and its store keeps the scope skipped while `isLatched` is already `true`; callers must not read that skip
-    /// as "no fault".
+    /// Control/UI; takes the control lock, so never call from render. Visits each published latched record once,
+    /// without clearing it, and returns how many it visited. A record whose first raise is still publishing is
+    /// skipped until the next poll. Records of different scopes are read one after another, not as one snapshot.
+    /// A first raiser stalled between its add and its store keeps the scope skipped while `isLatched` is already
+    /// `true`; callers must not read that skip as "no fault".
     func pending(_ body: (FaultRecord) -> Void) -> Int {
         var visited = 0
         for index in 0..<scopeCount {
-            let observed = tallies[index].load(ordering: .acquiring)
-            guard Self.count(observed) > 0 else { continue }
-            let claim = firsts[index].load(ordering: .acquiring)
-            guard Self.claimGeneration(claim) == Self.generation(observed) else { continue }
-            body(record(index, observed, claim))
+            // `body` runs outside the lock, so it may call back into the latch.
+            guard let latched = control.withLock({ _ in snapshot(index) }) else { continue }
+            body(record(latched.index, latched.observed, latched.claim))
             visited &+= 1
         }
         return visited
     }
 
-    /// Control. Returns the latched record and re-arms the scope, or `nil` when nothing is latched or the first
-    /// raise is still publishing (retry on the next control tick). Run off-thread recovery before acknowledging.
+    /// Control; takes the control lock, so never call from render. Returns the latched record and re-arms the
+    /// scope, or `nil` when nothing is latched or the first raise is still publishing (retry on the next control
+    /// tick). Run off-thread recovery before acknowledging.
     /// A first raiser stalled between its add and its store yields `nil` while `isLatched` is already `true`;
     /// callers must not read that `nil` as "no fault".
     func acknowledge(_ scope: FaultScope) -> FaultRecord? {
         guard let index = index(of: scope) else { return nil }
-        let tally = tallies + index
-        var observed = tally.pointee.load(ordering: .acquiring)
-        guard Self.count(observed) > 0 else { return nil }
+        return control.withLock { _ in snapshot(index).flatMap(commit) }
+    }
+
+    /// Reads `tally`, then `first`; `nil` when nothing is latched or the first raise is still publishing.
+    /// Callers hold `control`.
+    private func snapshot(_ index: Int) -> Snapshot? {
+        let observed = tallies[index].load(ordering: .acquiring)
+        guard Bits.count(observed) > 0 else { return nil }
         let claim = firsts[index].load(ordering: .acquiring)
-        let generation = Self.generation(observed)
-        guard Self.claimGeneration(claim) == generation else { return nil }
+        guard Bits.claimGeneration(claim) == Bits.generation(observed) else { return nil }
+        return Snapshot(index: index, observed: observed, claim: claim)
+    }
+
+    /// Swaps `(c, g)` for `(0, g + 1)`, retrying while raises grow `c`. Callers hold `control`, so the
+    /// generation check is defensive (see Serialization).
+    private func commit(_ snapshot: Snapshot) -> FaultRecord? {
+        let tally = tallies + snapshot.index
+        let generation = Bits.generation(snapshot.observed)
         let rearmed = ((generation &+ 1) & Self.generationMask) << Self.countBits
+        var observed = snapshot.observed
         while true {
             let (exchanged, original) = tally.pointee.compareExchange(
                 expected: observed, desired: rearmed, ordering: .acquiringAndReleasing)
-            if exchanged { return record(index, observed, claim) }
-            // Another acknowledge re-armed this generation first.
-            guard Self.generation(original) == generation else { return nil }
+            if exchanged { return record(snapshot.index, observed, snapshot.claim) }
+            // Another commit re-armed this generation first.
+            guard Bits.generation(original) == generation else { return nil }
             observed = original
         }
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): `acknowledge`'s first step without the lock, so
+    /// a test can interleave raises and other commits between it and `commitForTesting`. Tests only; bypasses
+    /// the control lock and its ABA protection.
+    func snapshotForTesting(_ scope: FaultScope) -> Snapshot? {
+        index(of: scope).flatMap(snapshot)
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): `acknowledge`'s second step without the lock.
+    /// Tests only; bypasses the control lock and its ABA protection.
+    func commitForTesting(_ snapshot: Snapshot) -> FaultRecord? {
+        commit(snapshot)
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): runs `body` while holding the control lock, to
+    /// show that `acknowledge` and `pending` wait for it. `body` must not call `acknowledge` or `pending`.
+    func withControlLockForTesting(_ body: () -> Void) {
+        control.withLock { _ in body() }
     }
 
     /// Raises against scopes that were never prepared, saturating at `unknownCap`.
@@ -225,8 +274,8 @@ final class FaultLatch: @unchecked Sendable {
     func stateForTesting(_ scope: FaultScope) -> TestState? {
         guard let index = index(of: scope) else { return nil }
         let observed = tallies[index].load(ordering: .acquiring)
-        return TestState(generation: Self.generation(observed), count: Self.count(observed),
-                         claimGeneration: Self.claimGeneration(firsts[index].load(ordering: .acquiring)))
+        return TestState(generation: Bits.generation(observed), count: Bits.count(observed),
+                         claimGeneration: Bits.claimGeneration(firsts[index].load(ordering: .acquiring)))
     }
 
     /// Test-only (X1 denies `ForTesting(` outside test targets): sets the raw unknown-scope counter.
@@ -237,14 +286,14 @@ final class FaultLatch: @unchecked Sendable {
     private func record(_ index: Int, _ observed: UInt64, _ claim: WordPair) -> FaultRecord {
         // Only `FaultKind` raw values are stored, so the fallback is unreachable.
         let kind = FaultKind(rawValue: UInt8(truncatingIfNeeded: claim.second)) ?? .criticalExhausted
-        return FaultRecord(scope: Self.scope(forKey: keys[index]), kind: kind,
-                           count: min(Self.count(observed), Self.countCap),
+        return FaultRecord(scope: Bits.scope(forKey: keys[index]), kind: kind,
+                           count: min(Bits.count(observed), Self.countCap),
                            firstFrame: Int64(truncatingIfNeeded: claim.first))
     }
 
     /// Bounded binary search; allocation-free.
     private func index(of scope: FaultScope) -> Int? {
-        let key = Self.key(scope)
+        let key = Bits.key(scope)
         var low = 0
         var high = scopeCount
         while low < high {
@@ -256,19 +305,24 @@ final class FaultLatch: @unchecked Sendable {
         return nil
     }
 
-    private static func count(_ tally: UInt64) -> UInt64 { tally & countMask }
+    /// Packing helpers. Keep these nested rather than as class static methods: calling a class's static method
+    /// requires its metatype, which the `@_noAllocation`/`@_noLocks` checker rejects on the render path as
+    /// possible metadata allocation or locks. Render-path class methods must not call class static methods.
+    private enum Bits {
+        static func count(_ tally: UInt64) -> UInt64 { tally & countMask }
 
-    private static func generation(_ tally: UInt64) -> UInt64 { (tally >> countBits) & generationMask }
+        static func generation(_ tally: UInt64) -> UInt64 { (tally >> countBits) & generationMask }
 
-    private static func claimGeneration(_ claim: WordPair) -> UInt64 {
-        (UInt64(truncatingIfNeeded: claim.second) >> 8) & generationMask
-    }
+        static func claimGeneration(_ claim: WordPair) -> UInt64 {
+            (UInt64(truncatingIfNeeded: claim.second) >> 8) & generationMask
+        }
 
-    private static func key(_ scope: FaultScope) -> UInt64 {
-        UInt64(scope.handoff) << 32 | UInt64(scope.target)
-    }
+        static func key(_ scope: FaultScope) -> UInt64 {
+            UInt64(scope.handoff) << 32 | UInt64(scope.target)
+        }
 
-    private static func scope(forKey key: UInt64) -> FaultScope {
-        FaultScope(handoff: UInt16(truncatingIfNeeded: key >> 32), target: UInt32(truncatingIfNeeded: key))
+        static func scope(forKey key: UInt64) -> FaultScope {
+            FaultScope(handoff: UInt16(truncatingIfNeeded: key >> 32), target: UInt32(truncatingIfNeeded: key))
+        }
     }
 }
