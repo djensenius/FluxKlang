@@ -329,6 +329,7 @@ class Trace:
 
     def boundary(self, occ, grid, after=False):  # first grid occurrence at (or after) occ; past loop end, next pass's
         i, b = occ[0], (math.floor(Fraction(occ[1], grid)) + 1 if after else math.ceil(Fraction(occ[1], grid))) * grid
+        b = max(b, 0)  # a position extrapolated before tick 0 waits for tick 0, a boundary of every grid
         if self.loop and occ[1] <= self.loop["endTicks"] < b:
             i, b = i + 1, math.ceil(Fraction(self.loop["startTicks"], grid)) * grid
         return i, checked_tick(b)
@@ -610,11 +611,13 @@ class Trace:
         self.evidence.update({"locate": {"seek"}, "sourceLost": {"sourceLoss"}, "underrun": {"prefetch"}}.get(kind, set()))
 
     def on_trigger(self, r):
-        tid, action = r["triggerId"], self.actions.get(r["actionId"])
+        tid, action, req = r["triggerId"], self.actions.get(r["actionId"]), r.get("requires", {})
+        primary = f"sampleClock/{self.primary}"
+        if primary in req and req[primary] == self.gens.get(primary):  # a rejected trigger still bounds the horizon
+            self.horizon = max(self.horizon, r["horizonFrame"])
         if tid in self.triggers or action is None:
             self.err(r, "trigger ids are unique and reference a declared action")
             return
-        req = r["requires"]
         target = r.get("target", action["quantize"])
         if not self.check_target(r, target):
             return
@@ -626,8 +629,6 @@ class Trace:
         if any(k.startswith("musicalMap/") for k in req):
             self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
         stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
-        if req[f"sampleClock/{self.primary}"] == self.gens.get(f"sampleClock/{self.primary}"):
-            self.horizon = max(self.horizon, r["horizonFrame"])
         info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
                 "invalidated": False, "target": target, "expect": None}
         self.triggers[tid] = info

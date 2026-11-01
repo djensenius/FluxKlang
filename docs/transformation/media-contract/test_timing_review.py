@@ -504,6 +504,36 @@ class TimingReviewTests(unittest.TestCase):
                                late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))
                 self.assertEqual(self.check(doc), [])
 
+    def test_origin_before_the_first_anchor_uses_the_first_nonnegative_boundary(self):
+        for loop in (None, (0, 3)):
+            for origin in (0, 99, 100):
+                with self.subTest(loop=loop, origin=origin):
+                    cue = trigger(origin, 100, dict(timeBase="musical", gridTicks=2))
+                    doc = document([anchor(100, 0), cue, outcome(100, 100)], loop=loop, grid=2)
+                    self.assertEqual(self.check(doc), [])
+        cue = trigger(0, 100, dict(timeBase="musical", gridTicks=2))
+        errors = self.check(document([anchor(100, 4), cue, outcome(100, 100)], loop=(4, 12), grid=2))
+        self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
+        self.assertFalse(any("Int64 tick range" in e for e in errors), errors)
+
+    def test_rejected_triggers_still_raise_the_current_horizon(self):
+        changes = [("target", dict(timeBase="musical", gridTicks=2**63)), ("actionId", "act.missing"),
+                   ("requires", {"sampleClock/smp.main": 1})]
+        for field, value in changes:
+            with self.subTest(field=field):
+                rejected = dict(trigger(0, 100, dict(timeBase="asap")), triggerId="trg.rejected")
+                rejected[field] = value
+                doc = document([anchor(0, 0), rejected, trigger(0, 0, dict(timeBase="asap")), outcome(100, 100)],
+                               loop=None, grid=1, late=dict(policy="fireLate", maxLatenessMs=100))
+                errors = self.check(doc)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertFalse(any("expected" in e for e in errors), errors)
+        duplicate = trigger(0, 100, dict(timeBase="asap"))
+        doc = document([anchor(0, 0), trigger(0, 0, dict(timeBase="asap")), duplicate, outcome(100, 100)],
+                       loop=None, grid=1, late=dict(policy="fireLate", maxLatenessMs=100))
+        self.assertEqual([e.split(": ", 1)[1] for e in self.check(doc)],
+                         ["trigger ids are unique and reference a declared action"])
+
     def test_declared_musical_tick_fields_obey_the_int64_domain(self):
         changes = [
             (["clocks", "musical", "loop"], dict(startTicks=2**63, endTicks=2**63 + 1)),

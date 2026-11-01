@@ -225,13 +225,16 @@ Both cancel pending triggers and reject late stale ones (example 06).
 The scheduler publishes `horizonFrame`, the earliest frame it can still affect: at least the next render cycle plus
 any adapter latency. A target is **late** if it precedes the horizon at commit, not at arrival; `asap` commits at that
 horizon. Traces lower-bound it by the primary anchor frames and trigger `horizonFrame`s of the current primary sample
-generation; only a primary `sampleClock` change resets it, not a locate, wrap or map edit.
+generation, including rejected trigger records; only a primary `sampleClock` change resets it, not a locate,
+wrap or map edit.
 
 ### 6.2 Quantization
 
 A `musical` target has exactly one of `gridTicks` (the next boundary at or after the origin, which an exact boundary
-uses) or an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither (schema-enforced). When
-stopped, the action's stopped policy applies: `wait` (default), `immediate` or `startTransport`.
+uses; an origin extrapolated before tick 0 waits for tick 0, which a loop starting later rejects like any other
+pre-loop target) or an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither
+(schema-enforced). When stopped, the action's stopped policy applies: `wait` (default), `immediate` or
+`startTransport`.
 
 ### 6.3 Late and retroactive cues
 
