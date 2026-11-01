@@ -183,10 +183,13 @@ A later re-anchor can move grid lines in either direction relative to the origin
 the latest anchor's inverse-projected grid boundary with its separately qualified end alias. The closest
 nonfuture projection wins; an interior boundary wins an equal-frame tie rather than inventing a future wrap.
 Eligible retained earlier passes are compared too: re-anchors and map edits can make their projections closer
-than an origin-pass match. Virtual candidates are bounded using the latest inverse and per-wrap rounding,
-never by walking the number of elapsed passes or grid ticks.
+than an origin-pass match. Unrecorded passes, in a historical gap or after the latest anchor, project from the
+latest anchor at its rounded period. Each such run contributes at most its last three passes up to the origin's,
+plus its final pass, whose end aliases the following recorded pass. Candidates are found through a per-pass
+anchor index, never by walking the number of elapsed passes or grid ticks.
 An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
-of equality with the origin-time tick.
+of equality with the origin-time tick. An exact-frame predecessor therefore stays eligible, as a non-retroactive
+choice, even when the retroactive window is zero.
 
 ### 5.6 Tempo and meter
 

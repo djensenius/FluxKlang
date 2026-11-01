@@ -3,6 +3,7 @@
 
 Standard library only; no app, hardware, network or plugins. Usage: python3 check_media_contract.py [--write]
 """
+import bisect
 import copy
 import json
 import math
@@ -225,6 +226,7 @@ class Trace:
         self.actions = {a["actionId"]: a for a in doc.get("actions", [])}
         self.state = {k: a["readiness"] for k, a in self.actions.items()}
         self.anchor, self.first_anchor, self.hist = {}, {}, []  # hist: this transport generation's musical anchors
+        self.indexed = None, [], {}  # (history list, recorded passes, latest anchor per pass); hist is never mutated
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq, self.transport_due = set(), None, {}, False
         self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, ([], None)
@@ -305,9 +307,18 @@ class Trace:
         a = self.at(frame)
         return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
 
+    def pass_index(self):
+        """Recorded passes in order and each pass's latest anchor, rebuilt only when the history list is replaced."""
+        if self.indexed[0] is not self.hist:
+            latest = {}
+            for a in self.hist:
+                latest[a.get("loopIteration", 0)] = a
+            self.indexed = self.hist, sorted(latest), latest
+        return self.indexed[1:]
+
     def pass_anchor(self, i):
-        mine, last = [x for x in self.hist if x.get("loopIteration", 0) == i], self.musical
-        return mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1)
+        latest, last = self.pass_index()[1], self.musical
+        return latest[i] if i in latest else self.ahead(last, k=i - last.get("loopIteration", 0) - 1)
 
     def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one
         (i, t), lp = occ, self.loop
@@ -334,17 +345,25 @@ class Trace:
         return (i, b) if i >= 0 and 0 <= b < 2**63 else None
 
     def projected_previous(self, iteration, grid, frame):
-        """Choose the closest eligible projection across recorded passes and a bounded virtual tail."""
+        """Choose the closest eligible projection across recorded passes and bounded runs of virtual passes."""
         passes = {iteration}
         if self.loop:
-            last = self.musical.get("loopIteration", 0)
-            passes = {a.get("loopIteration", 0) for a in self.hist if a.get("loopIteration", 0) <= iteration}
-            if iteration > last:
-                a = self.pass_anchor(iteration)
-                if a.get("loopIteration", 0) < iteration or a["frame"] > frame:
-                    iteration = min(iteration, self.ahead(self.musical, frame).get("loopIteration", 0))
-                # Positive rounded periods need at most two predecessors; zero-period virtual passes coincide.
-                passes.update(range(max(last + 1, iteration - 2), iteration + 1))
+            recorded = self.pass_index()[0]
+            recorded = recorded[:bisect.bisect_right(recorded, iteration)]
+            passes, base = set(recorded), self.musical
+            first = self.ahead(base, k=0)
+            if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
+                located, period = iteration, self.ahead(base, k=1)["frame"] - first["frame"]
+                if period:
+                    located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+                # Within each run of unrecorded passes (gaps and the tail alike) a positive period moves every earlier
+                # pass back by at least one frame, so the last three up to the origin's pass suffice. Only the run's
+                # final pass can also alias its end to the following recorded pass, so it is always compared.
+                low = 0
+                for stop in recorded + [iteration + 1]:
+                    top = min(stop - 1, located)
+                    passes.update(range(max(low, top - 2), top + 1), [stop - 1] if stop > low else [])
+                    low = stop + 1
         best = None
         for iteration in sorted(passes, reverse=True):
             a = self.pass_anchor(iteration)
@@ -637,7 +656,7 @@ class Trace:
                 if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
                     t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
                 retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-                prev = self.projected_previous(i, grid, origin) if retro > 0 else None
+                prev = self.projected_previous(i, grid, origin)  # exact-frame matches stay eligible at zero
                 elapsed = origin - self.frame_of(prev) if prev is not None else None
                 if elapsed is not None and 0 <= elapsed <= retro:
                     choice = {"occ": prev, "retro": elapsed > 0}
