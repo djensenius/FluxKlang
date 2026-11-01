@@ -77,8 +77,13 @@ struct FaultObservation: Sendable {
 /// `acknowledge`, which makes at most one compare-exchange from the exact observed `tally` to `(0, g + 1)` and
 /// returns the record only if it succeeds. It refuses (`nil`, nothing changed) an observation from another latch,
 /// one made before the scope's last acknowledge (per-scope `epoch`), a saturated one, or any whose `tally` has
-/// moved, that is, any raise since the observation; the scope stays latched and control observes and recovers
-/// again. Proof that success means no raise since the observation went unrecovered:
+/// moved, that is, any raise since the observation. `nil` means only that this call changed nothing and re-armed
+/// nothing; it says nothing about the scope's current state, nor (for a foreign observation) about this latch. The
+/// scope may already be acknowledged and unlatched (for example, the observation was acknowledged before) or may
+/// still be latched (new raises, saturation). `nil` grants no authority to resume: the caller reconciles with the
+/// current state (`isLatched`, `observe`) and, only while the scope is still latched, observes and recovers again;
+/// an `observe` of `nil` while `isLatched` is `true` is still not "no fault" (see `observe`).
+/// Proof that success means no raise since the observation went unrecovered:
 /// - Owner: the observation holds its latch strongly, so no other latch can reuse that address while it exists;
 ///   a foreign observation is refused before its index is used.
 /// - Epoch: each scope's `epoch` steps exactly when an acknowledge of it succeeds, in the same `control` critical
@@ -330,7 +335,8 @@ final class FaultLatch: @unchecked Sendable {
 
     /// Control; takes the control lock, so never call from render. Run off-thread recovery of the whole scope
     /// first. Re-arms the scope and returns `observation.record` only if nothing was raised or acknowledged on
-    /// the scope since `observe`; otherwise `nil`, nothing changes and the scope stays latched: observe and
+    /// the scope since `observe`; otherwise `nil`: this call changed nothing, and the scope may already be unlatched
+    /// or may still be latched. Reconcile with the current state and, only if it is still latched, observe and
     /// recover again. At most one compare-exchange (see Acknowledging).
     func acknowledge(_ observation: FaultObservation) -> FaultRecord? {
         guard observation.owner === self, observation.isAcknowledgeable else { return nil }
