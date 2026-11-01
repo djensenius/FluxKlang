@@ -159,6 +159,12 @@ def rnd(x):
     return math.floor(x + Fraction(1, 2))
 
 
+def checked_tick(value):
+    if not 0 <= value < 2**63:
+        raise ValueError("musical tick is outside the Int64 tick range")
+    return value
+
+
 def scale_up(value, src_bits, dst_bits):
     """MIDI 2.0 min-center-max upscaling (MIDI Association bit-scaling recommended practice)."""
     if value == 0:
@@ -314,9 +320,7 @@ class Trace:
         i, b = occ[0], (math.floor(Fraction(occ[1], grid)) + 1 if after else math.ceil(Fraction(occ[1], grid))) * grid
         if self.loop and occ[1] <= self.loop["endTicks"] < b:
             i, b = i + 1, math.ceil(Fraction(self.loop["startTicks"], grid)) * grid
-        if not 0 <= b < 2**63:
-            raise ValueError("musical boundary is outside the Int64 tick range")
-        return i, b
+        return i, checked_tick(b)
 
     def previous_boundary(self, occ, grid):
         """Last admissible grid occurrence at or before occ, including the preceding pass's loop end."""
@@ -328,6 +332,23 @@ class Trace:
             if i < 0 or not self.loop["startTicks"] <= b <= self.loop["endTicks"]:
                 return None
         return (i, b) if i >= 0 and 0 <= b < 2**63 else None
+
+    def projected_previous(self, occ, grid, frame):
+        """Skip future projections by inverting the latest anchor, never by walking grid ticks or virtual passes."""
+        prev = self.previous_boundary(occ, grid)
+        for _ in range(len(self.hist) + 2):
+            if prev is None or self.frame_of(prev) <= frame:
+                return prev
+            a = self.pass_anchor(prev[0])
+            if prev[0] > self.musical.get("loopIteration", 0):
+                current = self.ahead(self.musical, frame)
+                if current.get("loopIteration", 0) < prev[0]:
+                    a = current
+            i, ceiling = a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
+            if i == prev[0]:
+                ceiling = min(ceiling, prev[1] - 1)  # exclude an end alias whose next-pass projection is still future
+            prev = self.previous_boundary((i, ceiling), grid)
+        raise ValueError("retroactive boundary needs available musical history")
 
     def run(self):
         for counter in self.gens:
@@ -341,6 +362,12 @@ class Trace:
         for a in self.actions.values():
             self.check_action(a)
         self.check_map({}, self.map)
+        if self.loop:
+            try:
+                checked_tick(self.loop["startTicks"])
+                checked_tick(self.loop["endTicks"])
+            except ValueError as exc:
+                self.loop = self.err({}, str(exc))
         if self.loop and self.loop["endTicks"] <= self.loop["startTicks"]:
             self.loop = self.err({}, "a loop needs startTicks < endTicks")
         for i, rec in enumerate(records):
@@ -362,6 +389,7 @@ class Trace:
 
     def check_action(self, a):
         media, policy, late = a["media"], a.get("timePolicy"), a["late"]
+        self.check_target(a, a["quantize"])
         allowed = {"audio": {"fixedRate", "timeStretch"}, "midi": {"fixedRate", "tempoFollowing"}}.get(media, {None})
         if policy not in allowed:
             self.err(a, f"{a['actionId']}: {media} actions allow timePolicy {sorted(map(str, allowed))}")
@@ -381,9 +409,25 @@ class Trace:
             self.evidence.add("fixedRateDefault")
 
     def check_map(self, rec, segments):
-        ticks = [s["atTicks"] for s in segments]
+        try:
+            ticks = [checked_tick(s["atTicks"]) for s in segments]
+        except ValueError as exc:
+            self.err(rec, str(exc))
+            return False
         if ticks[0] != 0 or ticks != sorted(set(ticks)):
             self.err(rec, "musical map segments start at 0 and strictly increase (initial map and every revision)")
+            return False
+        return True
+
+    def check_target(self, rec, target):
+        try:
+            for key in ("atTicks", "gridTicks"):
+                if key in target:
+                    checked_tick(target[key])
+        except ValueError as exc:
+            self.err(rec, str(exc))
+            return False
+        return True
 
     def stretch_ok(self, action):
         return action.get("timePolicy") != "timeStretch" or self.doc.get("adapterCapabilities", {}).get("timeStretch")
@@ -398,6 +442,11 @@ class Trace:
         if rate is None:
             self.err(r, "anchor names an undeclared sample clock generation")
             return
+        try:
+            if "musicalTicks" in r:
+                checked_tick(r["musicalTicks"])
+        except ValueError as exc:
+            return self.err(r, str(exc))
         if r["generation"] != self.gens.get(key):
             self.err(r, "anchor generation is not current")
         if clock in self.pending_restart:
@@ -458,6 +507,8 @@ class Trace:
         if ("musicalMap" in r) != (kind == "musicalMap") or ("meter" in r and kind != "musicalMap"):
             self.err(r, "only musicalMap generations carry a musicalMap payload (required) and a meter (optional)")
             return
+        if kind == "musicalMap" and not self.check_map(r, r["musicalMap"]):
+            return
         if ("nominalRate" in r and kind != "sampleClock") or (r["reason"] == "rateChange" and "nominalRate" not in r):
             self.err(r, "nominalRate belongs to sampleClock generations and is required on rateChange")
         if kind == "sampleClock":
@@ -479,7 +530,6 @@ class Trace:
             if r["reason"] != "clockRestart":  # a locate or transport restart supersedes a pending restart resume
                 self.passes, self.resume, self.restart_snap = (self.passes[0] + 1, 0), None, ([], None)
         elif kind == "musicalMap":
-            self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
             if same(r["musicalMap"], self.map) and same(meter, self.meter):
                 self.err(r, "a musicalMap revision changes the tempo segments or the meter (absent: inherited)")
@@ -492,6 +542,7 @@ class Trace:
             if kind == "clockRestart" and "hostTicks" in r and "previousFrame" in r \
                     and clock == self.primary and self.restart_snap[0]:
                 resume = self.under(self.restart_snap, self.position, r["previousFrame"])
+                resume = resume[0], checked_tick(rnd(resume[1]))
             wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
         except ValueError as exc:
             return self.err(r, str(exc))
@@ -507,7 +558,7 @@ class Trace:
                 self.restarts[clock] = r
                 if resume is not None:
                     i, t = resume
-                    self.resume, self.passes = rnd(t), (self.passes[0], self.passes[1] + i)  # it continues pass i
+                    self.resume, self.passes = t, (self.passes[0], self.passes[1] + i)  # it continues pass i
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
         if kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
@@ -533,6 +584,8 @@ class Trace:
             return
         req = r["requires"]
         target = r.get("target", action["quantize"])
+        if not self.check_target(r, target):
+            return
         musical = target["timeBase"] == "musical" or action["late"]["policy"] == "nextBoundary"
         needed = [f"sampleClock/{self.primary}"] + ([f"transport/{self.mus_id}"] if musical else [])
         if any(k not in req for k in needed) or not any(k.startswith("context/") for k in req):
@@ -570,12 +623,9 @@ class Trace:
                 grid = target["gridTicks"]
                 if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
                     t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
-                prev = self.previous_boundary((i, t), grid)
-                if self.loop and prev is not None and prev[1] == self.loop["endTicks"] \
-                        and self.frame_of(prev) > origin:
-                    prev = self.previous_boundary((prev[0], prev[1] - 1), grid)
                 retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-                if prev is not None and prev != (i, t) and retro > 0 and 0 <= origin - self.frame_of(prev) <= retro:
+                prev = self.projected_previous((i, t), grid, origin) if retro > 0 else None
+                if prev is not None and prev != (i, t) and 0 <= origin - self.frame_of(prev) <= retro:
                     choice = {"occ": prev, "retro": True}
                 else:
                     choice = {"occ": self.boundary((i, t), grid), "retro": False}
@@ -708,6 +758,8 @@ class Trace:
             return
         has = "musicalTicks" in r
         try:
+            if has:
+                checked_tick(r["musicalTicks"])
             if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
                 return self.err(r, "capture musicalTicks map from frame through the current musical anchor, "
                                 "exactly when one is")

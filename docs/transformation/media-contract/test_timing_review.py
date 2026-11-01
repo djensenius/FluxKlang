@@ -73,6 +73,18 @@ def unrepresentable_records(kind):
     return records
 
 
+def out_of_range_records(kind):
+    if kind == "firstAnchor":
+        return [anchor(0, 2**63)]
+    records = unrepresentable_records(kind)
+    records[0]["musicalTicks"] = 2**63 - 1
+    if kind == "clockRestart":
+        records[-1]["previousFrame"] = 2
+    else:
+        records[-1]["musicalTicks"] = 2**63
+    return records
+
+
 class TimingReviewTests(unittest.TestCase):
     def check(self, doc):
         return checker.check_example(doc, "11-review-timing.json", SCHEMA)[0]
@@ -256,6 +268,130 @@ class TimingReviewTests(unittest.TestCase):
                         doc = document([anchor(0, 0), cue, outcome(assigned, horizon, result)], grid=grid,
                                        late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))
                         self.assertEqual(self.check(doc), [])
+
+    def test_out_of_range_records_preserve_valid_timing_state(self):
+        for kind in ("firstAnchor", "anchor", "midiCapture", "clockRestart"):
+            with self.subTest(kind=kind):
+                doc = document(out_of_range_records(kind), loop=None, grid=1)
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                self.assertTrue(any("Int64 tick range" in e for e in trace.errors), trace.errors)
+                first = doc["timeline"][0]
+                self.assertEqual(trace.anchor, {} if kind == "firstAnchor" else {"smp.main": first})
+                self.assertEqual(trace.first_anchor, {} if kind == "firstAnchor" else {("smp.main", 1): first})
+                self.assertEqual(trace.hist, [] if kind in ("firstAnchor", "clockRestart") else [first])
+                self.assertEqual(trace.horizon, float("-inf") if kind in ("firstAnchor", "clockRestart") else 0)
+                self.assertEqual(trace.discs, [])
+                self.assertEqual(trace.restarts, {})
+                self.assertEqual(trace.captures, [])
+                self.assertEqual(trace.protocols, {})
+                self.assertIsNone(trace.resume)
+                self.assertEqual(trace.pending_restart, {"smp.main"} if kind == "clockRestart" else set())
+
+    def test_out_of_range_records_continue_independent_outcomes(self):
+        for kind in ("firstAnchor", "anchor", "midiCapture", "clockRestart"):
+            for target in (dict(timeBase="asap"), dict(timeBase="sample", atFrame=4)):
+                with self.subTest(kind=kind, target=target):
+                    records = out_of_range_records(kind)
+                    cue = trigger(2, 2, target)
+                    if kind == "clockRestart":
+                        records += [dict(records[-1], previousFrame=0),
+                                    dict(kind="anchor", sampleClock="smp.main", generation=2, frame=0, hostTicks=1000)]
+                        cue["requires"].update({"sampleClock/smp.main": 2, "transport/mus.main": 2})
+                    else:
+                        records.append(dict(kind="anchor", sampleClock="smp.main", generation=1,
+                                            frame=2, hostTicks=1000))
+                    errors = self.check(document(records + [cue, outcome(99, 99)], loop=None, grid=1,
+                                                 late=dict(policy="fireLate", maxLatenessMs=100)))
+                    self.assertTrue(any("Int64 tick range" in e for e in errors), errors)
+                    self.assertFalse(any("replay aborted" in e for e in errors), errors)
+                    assigned = 2 if target["timeBase"] == "asap" else 4
+                    self.assertTrue(any(f"expected fired assignedFrame={assigned}" in e for e in errors), errors)
+
+    def test_legal_maximum_anchor_capture_and_restart_ticks_remain_valid(self):
+        for kind in ("anchor", "midiCapture", "clockRestart"):
+            with self.subTest(kind=kind):
+                records = out_of_range_records(kind)
+                if kind == "clockRestart":
+                    records[-1]["previousFrame"] = 0
+                    records.append(dict(anchor(0, 2**63 - 1), generation=2, transport=2, hostTicks=1000))
+                else:
+                    records[-1]["musicalTicks"] = 2**63 - 1
+                    if kind == "midiCapture":
+                        records[-1].update(frame=0, hostTicks=0)
+                self.assertEqual(self.check(document(records, loop=None, grid=1)), [])
+
+    def test_retroactive_search_uses_latest_projection_without_walking_grid_ticks(self):
+        for count in (1, 40):
+            for retro in (0, 1):
+                with self.subTest(count=count, retro=retro):
+                    records = [anchor(0, 0)] + [anchor(index * 1000, index * 639) for index in range(1, count + 1)]
+                    assigned = 500 if retro else checker.rnd(Fraction((321 + count) * 25, 16))
+                    records += [trigger(501, count * 1000, dict(timeBase="musical", gridTicks=1)),
+                                outcome(assigned, count * 1000, "firedLate")]
+                    doc = document(records, loop=None, grid=1,
+                                   late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=retro))
+                    self.assertEqual(self.check(doc), [])
+
+    def test_projected_predecessor_skips_unobserved_virtual_passes(self):
+        records = [anchor(0, 0), anchor(750000, 480000),
+                   dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                        musicalMap=[dict(atTicks=0, microsPerQuarter=60000)]),
+                   trigger(720000, 750000, dict(timeBase="musical", gridTicks=1)),
+                   outcome(720000, 750000, "firedLate", revision=2)]
+        doc = document(records, loop=(0, 500000), grid=1,
+                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=1))
+        self.assertEqual(self.check(doc), [])
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 320000))
+
+    def test_end_only_grid_keeps_previous_pass_with_a_nonzero_loop_start(self):
+        for retro in (0, 1):
+            with self.subTest(retro=retro):
+                cue = trigger(0, 4, dict(timeBase="musical", gridTicks=2))
+                cue["originHostTicks"] = 1900
+                records = [anchor(0, 1)] + wrap(2, 1, 1) + wrap(4, 1, 2)
+                records += [cue, outcome(2 if retro else 4, 4, "firedLate" if retro else "fired")]
+                doc = document(records, loop=(1, 2), grid=2,
+                               late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=retro))
+                self.assertEqual(self.check(doc), [])
+
+    def test_declared_musical_tick_fields_obey_the_int64_domain(self):
+        changes = [
+            (["clocks", "musical", "loop"], dict(startTicks=2**63, endTicks=2**63 + 1)),
+            (["clocks", "musical", "loop"], dict(startTicks=0, endTicks=2**63)),
+            (["clocks", "musical", "musicalMap"],
+             [dict(atTicks=0, microsPerQuarter=500000), dict(atTicks=2**63, microsPerQuarter=600000)]),
+            (["actions", 0, "quantize"], dict(timeBase="musical", gridTicks=2**63)),
+            (["actions", 0, "quantize"], dict(timeBase="musical", atTicks=2**63)),
+            (["timeline", 1, "target"], dict(timeBase="musical", gridTicks=2**63)),
+            (["timeline", 1, "target"], dict(timeBase="musical", atTicks=2**63))
+        ]
+        for path, value in changes:
+            with self.subTest(path=path, value=value):
+                doc = document([anchor(0, 0), trigger(0, 0, dict(timeBase="asap")), outcome(0, 0)],
+                               loop=None, grid=1, late=dict(policy="fireLate", maxLatenessMs=100))
+                target = doc
+                for part in path[:-1]:
+                    target = target[part]
+                target[path[-1]] = value
+                errors = self.check(doc)
+                self.assertTrue(any("Int64 tick range" in e for e in errors), errors)
+                self.assertFalse(any("replay aborted" in e for e in errors), errors)
+
+    def test_invalid_map_tick_does_not_publish_a_revision_or_skip_independent_checks(self):
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=500000),
+                                dict(atTicks=2**63, microsPerQuarter=600000)])
+        doc = document([anchor(0, 0), edit, trigger(0, 0, dict(timeBase="asap")), outcome(99, 99)],
+                       loop=None, grid=1, late=dict(policy="fireLate", maxLatenessMs=100))
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertTrue(any("Int64 tick range" in e for e in trace.errors), trace.errors)
+        self.assertEqual(trace.gens["musicalMap/mus.main"], 1)
+        self.assertEqual(trace.map, doc["clocks"]["musical"]["musicalMap"])
+        self.assertTrue(any("expected fired assignedFrame=0" in e for e in trace.errors), trace.errors)
 
     def test_unrepresentable_records_do_not_abort_later_sample_or_asap_checks(self):
         for kind in ("anchor", "loopWrap", "midiCapture", "clockRestart"):

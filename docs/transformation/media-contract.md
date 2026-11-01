@@ -164,8 +164,10 @@ Virtual future passes use the same per-wrap rounding as recorded wraps: full pas
 loop duration, not an accumulated unrounded duration. A zero-rounded duration still permits representable
 current-pass and first-wrap boundaries; a search requiring a later frame fails explicitly rather than
 dividing by zero, walking passes indefinitely or narrowing valid loop bounds. Grid arithmetic stays exact
-through the full declared tick range. An unrepresentable musical observation is diagnosed before publishing
-its timing state; replay continues checking later independent sample/ASAP records.
+through the full declared tick range. Musical positions, map/loop tick fields and grids stay in the nonnegative
+`Int64` domain. An unrepresentable anchor/capture tick or rounded restart resume tick is diagnosed before publishing
+its timing state; replay continues checking later independent sample/ASAP records. An invalid musical-map revision
+does not publish its new generation or map.
 
 For frame projection only, `(pass, endTicks)` aliases `(pass + 1, startTicks)` when the selected pass anchor is
 at or before `endTicks`. A pass anchored past the end does not wrap or alias. This deterministic boundary alias
@@ -177,6 +179,9 @@ boundary is considered before retroactive selection, never mistaken for a past b
 When that upcoming end is on-grid, retroactivity tests the preceding admissible boundary instead. A past-end
 anchor's previous-boundary search starts at the loop end. An unrepresentable `Int64` boundary is a controlled
 resolution failure, not a wider tick domain; it does not prevent an otherwise valid retroactive choice.
+A later re-anchor can also move an ordinary previous grid boundary after the origin. Retroactivity selects the
+latest admissible occurrence whose current-map, latest-pass-anchor projection is not after the exact origin,
+skipping tick ranges and virtual passes arithmetically rather than walking them.
 
 ### 5.6 Tempo and meter
 
