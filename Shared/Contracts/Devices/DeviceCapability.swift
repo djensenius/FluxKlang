@@ -46,6 +46,17 @@ struct DeviceIdentityFields: ControlFields {
     let uid: String
     let evidence: Set<IdentityEvidence>
 
+    private enum CodingKeys: String, CodingKey { case uid, evidence }
+
+    /// Canonical: `evidence` is written sorted by raw value, not in `Set`
+    /// iteration order (seeded per instance). Documents compared by bytes, such
+    /// as activation staleness at commit, must not encode unordered collections.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(uid, forKey: .uid)
+        try container.encode(evidence.sorted { $0.rawValue < $1.rawValue }, forKey: .evidence)
+    }
+
     func validate() throws {
         guard !uid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, uid.utf8.count <= 1024,
               !evidence.isDisjoint(with: [.deviceUID, .endpointUID]) else {
