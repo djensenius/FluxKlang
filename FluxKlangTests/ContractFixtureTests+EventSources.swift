@@ -163,6 +163,28 @@ extension ContractFixtureTests {
             #expect(source == empty)
         }
 
+        @Test func duplicateIsDeliveredNextToItsOriginal() throws {
+            let sourceBump = ContractFixtureEvent.bump(Self.source, .sourceLost)
+            let contextBump = ContractFixtureEvent.bump(Self.context, .contextChange)
+            var source = try ScriptedEventSource(capacity: 3, events: [sourceBump, contextBump])
+            try source.inject(.duplicate)
+            #expect(source.pending == [sourceBump, sourceBump, contextBump])
+
+            let ids = try Self.actions(2)
+            var ledger = try Self.makeLedger()
+            var readiness = ActionReadiness()
+            try Self.prepare(ids[0], on: [Self.source], ledger: ledger, readiness: &readiness)
+            try Self.prepare(ids[1], on: [Self.context], ledger: ledger, readiness: &readiness)
+            var delivered: [ContractFixtureEvent] = []
+            var stale: [[ActionID]] = []
+            while let event = source.next() {
+                delivered.append(event)
+                stale.append(try FixtureEventApplier.apply(event, ledger: &ledger, readiness: &readiness))
+            }
+            #expect(delivered == [sourceBump, sourceBump, contextBump] && stale == [[ids[0]], [], [ids[1]]])
+            #expect(ledger.generation(Self.source)?.value == 3 && ledger.generation(Self.context)?.value == 2)
+        }
+
         @Test func droppedEventIsCountedNotSilent() throws {
             let lostBump = ContractFixtureEvent.bump(Self.source, .sourceLost)
             var source = try ScriptedEventSource(capacity: 2, events: [lostBump, .bump(Self.context, .contextChange)])
@@ -315,6 +337,30 @@ extension ContractFixtureTests {
             #expect(ledger.pendingRestart == nil && ledger.restartRecord == nil)
         }
 
+        @Test func firstAnchorIsCheckedOnTheGivenTimebase() throws {
+            // At 125/3 ns per tick, 24,000,000 ticks are one second: 48,000 frames at 48 kHz.
+            let timebase = HostTimebase(numer: 125, denom: 3)
+            var clock = try FixtureHostClock(startTicks: 0, step: 24_000_000, timebase: timebase)
+            var ledger = try Self.makeLedger()
+            var readiness = ActionReadiness()
+            try FixtureEventApplier.apply(.bump(Self.primary, .deviceRestart), ledger: &ledger, readiness: &readiness)
+            let restarted = try #require(ledger.generation(Self.primary))
+            let start = SampleStamp(clock: ContractFixtureIDs.primaryClock, generation: restarted, frame: 0)
+            let record = ClockRestartRecord(start: start, host: try clock.tick(), previousFrame: 0)
+            try FixtureEventApplier.apply(.restartRecord(record), ledger: &ledger, readiness: &readiness)
+            try FixtureEventApplier.apply(.bump(Self.transport, .clockRestart), ledger: &ledger, readiness: &readiness)
+            _ = try clock.tick()
+            let anchor = ContractFixtureEvent.anchor(clock.anchor(frame: 48_000, generation: restarted),
+                                                     nominalRate: Self.rate)
+
+            // The default 1:1 timebase reads the same ticks as 24 ms, so the anchor disagrees there.
+            Self.expectRefusal(.firstAnchorRejected, applying: anchor, ledger: &ledger, readiness: &readiness)
+            let before = EventSourceSnapshot(ledger, readiness)
+            let stale = try FixtureEventApplier.apply(anchor, ledger: &ledger, readiness: &readiness,
+                                                      timebase: clock.timebase)
+            #expect(stale.isEmpty && EventSourceSnapshot(ledger, readiness) == before)
+        }
+
         @Test func contextBumpMakesContextRequirementStale() throws {
             let ids = try Self.actions(2)
             var ledger = try Self.makeLedger()
@@ -329,14 +375,16 @@ extension ContractFixtureTests {
             #expect(readiness.state(ids[0]) == .invalidated && readiness.reasons[ids[0]] == .sourceChanged)
             #expect(!readiness.isCurrent(ids[0], ledger: ledger) && readiness.isCurrent(ids[1], ledger: ledger))
 
+            // Re-prepared against the new context, the action must survive refused context bumps untouched.
+            try Self.prepare(ids[0], on: [Self.context], ledger: ledger, readiness: &readiness)
+            #expect(readiness.isCurrent(ids[0], ledger: ledger) && ledger.generation(Self.context)?.value == 2)
             Self.expectRefusal(.ledger(.reasonDoesNotMatchKind(Self.context)),
                                applying: .bump(Self.context, .sourceLost), ledger: &ledger, readiness: &readiness)
             let undeclared = GenerationKey(.context, ContractFixtureIDs.device)
             Self.expectRefusal(.ledger(.undeclaredCounter(undeclared)), applying: .bump(undeclared, .contextChange),
                                ledger: &ledger, readiness: &readiness)
-
-            try Self.prepare(ids[0], on: [Self.context], ledger: ledger, readiness: &readiness)
-            #expect(readiness.isCurrent(ids[0], ledger: ledger) && ledger.generation(Self.context)?.value == 2)
+            #expect(readiness.state(ids[0]) == .ready && readiness.isCurrent(ids[0], ledger: ledger))
+            #expect(ledger.generation(Self.context)?.value == 2)
         }
     }
 }
