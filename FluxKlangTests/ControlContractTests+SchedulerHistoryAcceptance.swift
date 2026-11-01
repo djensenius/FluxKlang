@@ -26,9 +26,11 @@ private extension SchedulerFixture {
 extension ControlContractTests {
     struct SchedulerHistoryAcceptance {
         /// V6: grid 1_440 from origin frame 2_500 (ticks 1_600) is frozen at pass 1, ticks 0 (frame 3_000).
-        /// The tempo edit keeps the frame-0 anchor (chronology repaired: the edit is observed after the
-        /// origin, at frame 2_500 or after the wrap at 3_000). Re-quantizing the same host origin on the
-        /// half-speed map would choose ticks 1_440 / frame 4_500 instead of pass 1's start at 6_000.
+        /// Foundation rule: a `.map` observation carries no ticks (`checkAnchor` refuses a musical payload)
+        /// and `replaceMap` re-reads from the last musical anchor, so the edit observed at 2_500 keeps the
+        /// frame-0/ticks-0 anchor, and the one observed at 3_000 keeps the wrap's frame-3_000/ticks-0 anchor.
+        /// (Chronology repaired: the edit is observed after the origin.) Re-quantizing the same host origin
+        /// on the half-speed map would choose ticks 1_440 / frame 4_500 instead of pass 1's start at 6_000.
         @Test(arguments: [false, true])
         func pendingGridRetainsItsOccurrenceAcrossTempoEditsAndWraps(wrapped: Bool) throws {
             var fixture = try SchedulerFixture.looped()
@@ -88,9 +90,10 @@ extension ControlContractTests {
             try outcome.validateMediaShape()
         }
 
-        /// T10: a running re-anchor at 750 (ticks 480) then a half-speed edit moves ticks 960 to 2_250
+        /// T10 (finding 1285; inventory name `finding1285TempoReanchorBeforeWrapIsLost`, no longer lost):
+        /// a running re-anchor at 750 (ticks 480) then a half-speed edit moves ticks 960 to 2_250
         /// and the wrap to 5_250. At 5_251, 3_001 frames (62.5 ms) exceed the 60 ms limit: late drop.
-        @Test func finding1285TempoReanchorBeforeWrapIsLost() throws {
+        @Test func finding1285TempoReanchoredOccurrenceDropsLateBeyondItsLimit() throws {
             var fixture = try SchedulerFixture.looped()
             let handle = try fixture.submitMusical(fixture.musicalStamp(
                 "trg.1285", .musical(atTicks: 960), originHost: 0, policy: .fireLate(maxLatenessMs: 60)))
@@ -121,6 +124,7 @@ extension ControlContractTests {
             let outcome = try fixture.terminal(handle, at: 5_251)
             #expect(outcome == TriggerOutcome(trigger: handle.trigger, result: .firedLate, assignedFrame: 2_250,
                                               frame: 5_251, musicalMap: revision))
+            try outcome.validateMediaShape()
         }
 
         /// A newer physical-only anchor (even one carrying a musical payload) changes neither the pin, the

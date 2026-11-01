@@ -67,10 +67,10 @@ extension ControlContractTests {
             #expect(outcome == Self.fired(outcome, at: .max - 500))
         }
 
-        /// V8: virtual passes keep the rounded period (5, 10, 15 per T9's per-wrap rounding, not the
-        /// original fractional 13/18), and segmented loops keep each tempo segment's exact length.
+        /// V8: the fractional 4.6875-frame loop 0..3 advances every virtual pass by one rounded 5-frame period
+        /// (5, 10, 15, matching T9's explicit wraps; adapted from the inventory's 13/18).
         @Test(arguments: [(Int64(5), Int64(5)), (10, 10), (15, 15)])
-        func virtualFallbackPassesKeepFractionalLength(horizon: Int64, expected: Int64) throws {
+        func virtualFallbackPassesUseOneRoundedPeriod(horizon: Int64, expected: Int64) throws {
             var fixture = try SchedulerFixture(capacity: 1)
             try fixture.prepareMusical(0, loop: LoopRange(startTicks: 0, endTicks: 3))
             let outcome = try fixture.fallback(0, grid: 2, at: horizon)
@@ -78,7 +78,9 @@ extension ControlContractTests {
         }
 
         /// V8 segmented: ticks 0..960 take 1_500 frames and 960..1_920 take 3_000 (a 4_500-frame loop).
-        @Test(arguments: [(Int64(4_000), Int64(4_500)), (5_000, 7_500)])
+        /// 12_500 skips whole virtual passes: with the segmented period it is pass 3's start (13_500);
+        /// a first-segment-only 3_000-frame period would choose pass 3's 1_440 line at 16_500.
+        @Test(arguments: [(Int64(4_000), Int64(4_500)), (5_000, 7_500), (12_500, 13_500)])
         func virtualFallbackPassesKeepTempoSegments(horizon: Int64, expected: Int64) throws {
             var fixture = try SchedulerFixture(capacity: 1)
             try fixture.prepareMusical(at: fixture.anchor(0, ticks: 0), loop: LoopRange(startTicks: 0, endTicks: 1_920),
@@ -107,6 +109,8 @@ extension ControlContractTests {
             let outcome = try fixture.drainOne(handle)
             #expect(outcome == Self.fired(outcome, at: frame))
             #expect(fixture.scheduler.pendingCount == 0 && fixture.scheduler.reservedOutcomeCount == 0)
+            #expect(try fixture.snapshot().horizon?.frame == frame && fixture.scheduler.musicalSummary?.pinCount == 0)
+            #expect(fixture.scheduler.musicalSummary?.clock.musical.loopIteration == UInt32(frame / 5) - 1)
         }
     }
 }
@@ -154,7 +158,9 @@ extension ControlContractTests.SchedulerBoundaryAcceptance {
         #expect(try fixture.commitMusical(handle, at: 3_000) == .completed)
         let outcome = try fixture.drainOne(handle)
         #expect(outcome == Self.fired(outcome, at: 3_000))
+        try outcome.validateMediaShape()
         #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
+        #expect(try fixture.snapshot().horizon?.frame == 3_000 && fixture.scheduler.reservedOutcomeCount == 0)
     }
 
     /// T8: loop 100..2_000; at the wrap (2_969, pass 1, ticks 100) a 5 ms window reaches back to the

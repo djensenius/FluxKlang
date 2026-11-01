@@ -2,9 +2,9 @@ import Testing
 @testable import FluxKlang
 
 /// One M12 resume-provenance candidate offered as the `running(true)` observation of a stopped timeline.
-/// `accepted` is the zero-baseline result; with an `Int64.min` baseline every frame near 6_000 is
+/// `refusal` is the zero-baseline result; with an `Int64.min` baseline every frame near 6_000 is
 /// 2^63 frames from its prediction, so only refusals that fire before the drift check keep their kind.
-struct ResumeCandidate: Sendable, CustomTestStringConvertible {
+private struct ResumeCandidate: Sendable, CustomTestStringConvertible {
     enum Variant: Sendable { case plain, generation, transport, pass, ticks, untimed, foreignClock }
 
     let frame: Int64
@@ -59,6 +59,17 @@ private extension SchedulerFixture {
         return (fixture, handle)
     }
 
+    /// A waiting pin ends only through stale cancellation: a locate bumps `transport`, the request is
+    /// cancelled naming it, and the pin, pending request and reserved slot are all released.
+    mutating func endWaiting(_ handle: TriggerHandle) throws {
+        try ledger.bump(Self.transport, reason: .locate(ticks: 0))
+        #expect(try scheduler.cancelStale(ledger: ledger) == [handle])
+        #expect(try drainOne(handle) == TriggerOutcome(trigger: handle.trigger, result: .cancelled,
+                                                       stale: .generation(Self.transport)))
+        #expect(scheduler.musicalSummary?.pinCount == 0 && scheduler.pendingCount == 0)
+        #expect(scheduler.pendingMusic(handle) == nil && scheduler.reservedOutcomeCount == 0)
+    }
+
     func resumeAnchor(_ candidate: ResumeCandidate) throws -> ClockAnchor {
         let valid = try anchor(candidate.frame, host: candidate.host, ticks: 0)
         let musical = try #require(valid.musical)
@@ -82,9 +93,11 @@ private extension SchedulerFixture {
 
 extension ControlContractTests {
     struct SchedulerResumeAcceptance {
-        /// M12 refusals: each invalid provenance is refused atomically; the stopped pin keeps waiting.
+        /// M12 refusals: each invalid provenance is refused atomically; the stopped pin keeps waiting until
+        /// stale cancellation ends it (the inventory's diagnostic outcome is deferred; see HANDOFF).
         @Test(arguments: [Int64(0), .min], ResumeCandidate.invalid)
-        func stoppedOriginRefusesInvalidResumeProvenance(baseline: Int64, candidate: ResumeCandidate) throws {
+        fileprivate func stoppedOriginRefusesInvalidResumeProvenance(baseline: Int64,
+                                                                     candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: baseline)
             let before = try fixture.admissionState()
             let resume = try fixture.resumeAnchor(candidate)
@@ -93,6 +106,7 @@ extension ControlContractTests {
             }
             #expect(try fixture.admissionState() == before && fixture.scheduler.drain().isEmpty)
             #expect(fixture.scheduler.pendingMusic(handle) == .pinned(MusicalOccurrence(pass: 0, ticks: 0)))
+            try fixture.endWaiting(handle)
         }
 
         /// M12 tolerated provenance: the resume anchors pass 0 at the candidate frame; delivered just after
@@ -100,7 +114,7 @@ extension ControlContractTests {
         /// Phase adaptation: the horizon is the candidate's own wrap + 1 (9_001 for the exact 6_000 resume),
         /// because the wrap observation must be at the resume frame + 3_000.
         @Test(arguments: ResumeCandidate.tolerated)
-        func stoppedOriginAcceptsToleratedResumeProvenance(candidate: ResumeCandidate) throws {
+        fileprivate func stoppedOriginAcceptsToleratedResumeProvenance(candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: 0)
             #expect(try fixture.commitMusical(handle, at: 5_000) == .waitingForTransport)
             try fixture.observeMusical(.running(true), at: fixture.resumeAnchor(candidate))
@@ -118,7 +132,7 @@ extension ControlContractTests {
 
         /// M12 tolerated candidates with an `Int64.min` baseline are 2^63 frames off: refused, still waiting.
         @Test(arguments: ResumeCandidate.tolerated)
-        func minimumBaselineRefusesEveryNearSixThousandResume(candidate: ResumeCandidate) throws {
+        fileprivate func minimumBaselineRefusesEveryNearSixThousandResume(candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: .min)
             let before = try fixture.admissionState()
             #expect(throws: MusicalTimingError.invalidContext) {
@@ -127,9 +141,11 @@ extension ControlContractTests {
             #expect(try fixture.admissionState() == before)
             #expect(try fixture.commitMusical(handle, at: .min + 9_001) == .waitingForTransport)
             #expect(fixture.scheduler.pendingMusic(handle) == .pinned(MusicalOccurrence(pass: 0, ticks: 0)))
+            #expect(fixture.scheduler.drain().isEmpty && fixture.scheduler.musicalSummary?.pinCount == 1)
         }
 
-        /// M12 `nil` provenance: without a resume the wrap cannot be observed and the commit keeps waiting.
+        /// M12 `nil` provenance: without a resume the wrap cannot be observed, the commit keeps waiting,
+        /// and the waiting request ends through stale cancellation.
         @Test func stoppedOriginWithoutResumeKeepsWaiting() throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: 0)
             let before = try fixture.admissionState()
@@ -140,6 +156,8 @@ extension ControlContractTests {
             #expect(try fixture.commitMusical(handle, at: 9_001) == .waitingForTransport)
             #expect(fixture.scheduler.pendingMusic(handle) == .pinned(MusicalOccurrence(pass: 0, ticks: 0)))
             #expect(fixture.scheduler.drain().isEmpty && fixture.scheduler.musicalSummary?.pinCount == 1)
+            try fixture.endWaiting(handle)
+            #expect(try fixture.snapshot().horizon?.frame == 9_001)
         }
 
         /// M12 resume after the delivery point (10_000): the observation is valid provenance now, so the
@@ -155,6 +173,9 @@ extension ControlContractTests {
 
         /// T11: running submission, stop before ticks 1_440, resume at 6_000 (ticks 960) so 1_440 is 6_750;
         /// after the wrap at 7_500 the pass-0 resume anchor still projects it, even with history 1.
+        /// Relies on the missed-then-stopped rule (media contract §6.1: late is judged at commit; §6.2: the stopped
+        /// policy applies when stopped), as B1's `missedThenStoppedOccurrenceFollowsTheStoppedPolicy`; owner may
+        /// override it.
         @Test(arguments: [4, 1])
         func finding1285RunningSubmissionThenStopResumeWrapKeepsResume(history: Int) throws {
             var fixture = try SchedulerFixture(capacity: 1)
@@ -179,6 +200,8 @@ extension ControlContractTests {
         /// T12 (disputed 750 retired): ticks 480 was already passed when the transport stopped at 1_500;
         /// `.wait` holds it, and after a same-pass resume at 6_000 (ticks 960) its identity projects
         /// through the resume anchor to 5_250, dispatched late at the validated horizon 6_001.
+        /// Relies on the same missed-then-stopped rule (media contract §6.1 late at commit, §6.2 stopped policy) as
+        /// B1's `missedThenStoppedOccurrenceFollowsTheStoppedPolicy`; provisional, owner may override.
         @Test func samePassResumeUses5250AndDispatchesAtValidatedHorizon() throws {
             var fixture = try SchedulerFixture(capacity: 1)
             try fixture.prepareMusical(0, loop: LoopRange(startTicks: 0, endTicks: 1_920))

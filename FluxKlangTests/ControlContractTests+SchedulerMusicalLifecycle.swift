@@ -342,9 +342,10 @@ extension ControlContractTests.SchedulerMusicalLifecycle {
         #expect(throws: MusicalTimingError.pinsOutstanding) { try fixture.resetAfterRestart(ticks: 1_920) }
         #expect(try fixture.admissionState() == before && before.music?.pinCount == 1)
         #expect(try fixture.scheduler.cancelStale(ledger: fixture.ledger) == [pinned])
-        #expect(try fixture.drainOne(pinned).result == .cancelled)
+        #expect(try fixture.drainOne(pinned) == TriggerOutcome(trigger: pinned.trigger, result: .cancelled,
+                                                               stale: .generation(fixture.ledger.primaryClock)))
         let quiescent = try fixture.admissionState()
-        #expect(quiescent.music?.pinCount == 0 && quiescent.music?.historyCount == 2)
+        #expect(quiescent.music?.pinCount == 0 && quiescent.music?.historyCount == 2 && quiescent.pending == 0)
         for wrong: Int64 in [1_919, 1_921] {
             #expect(throws: MusicalTimingError.invalidContext) { try fixture.resetAfterRestart(ticks: wrong) }
             #expect(try fixture.admissionState() == quiescent)
