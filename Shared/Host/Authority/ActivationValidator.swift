@@ -11,7 +11,8 @@ import Foundation
 /// Proof that a request passed validation against one context. Only the
 /// validator creates it: do not add initializers in other files. It is not
 /// authorization, grants no engine lease and performs no write; it is stale
-/// once the live context differs from `context`.
+/// once the live context is no longer byte-identical to `context` (equal epoch
+/// and revision, identical permission bytes and capability-document encoding).
 struct ValidatedActivation: Hashable, Sendable {
     let request: ActivationRequest
     let graph: GraphDocument

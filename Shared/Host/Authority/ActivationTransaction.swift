@@ -144,8 +144,8 @@ enum ActivationRefusal: Error, Hashable, Sendable {
     /// `begin` while a transaction is preparing, awaiting review or committing.
     case busy
     case unexpectedPhase(ActivationPhase)
-    /// The live context differs from the one the plan was validated in, or the
-    /// context's active revision is not the running revision.
+    /// The live context is not byte-identical to the one the plan was validated
+    /// in (see `commit`), or its active revision is not the running revision.
     case staleContext
     case authorizationInvalid(AuthorizationDefect)
     case leaseNotHeld
@@ -270,10 +270,13 @@ struct ActivationTransaction: Hashable, Sendable {
     }
 
     /// `lease` is the registry's current snapshot (nil when nothing holds it).
-    /// Checks: phase, authorization, lease, then plan staleness: the live context
-    /// and engine generation must equal those validated, and the live permission
-    /// must be well formed and byte-identical to the request's. Last, the next
-    /// commit attempt is issued (`overflow` if it cannot advance).
+    /// Checks: phase, authorization, lease, then plan staleness: the live host
+    /// epoch, active revision and engine generation must equal those validated,
+    /// the live permission must be well formed and byte-identical to the
+    /// request's, and the live capability document must have a byte-identical
+    /// encoding (within its byte limit). Synthesized `==` is not enough: its
+    /// strings compare by Unicode canonical equivalence. Last, the next commit
+    /// attempt is issued (`overflow` if it cannot advance).
     mutating func commit(
         _ authorization: ActivationAuthorization, lease: EngineLeaseSnapshot?, context live: ActivationLiveContext
     ) -> Result<[ActivationEffect], ActivationRefusal> {
@@ -285,9 +288,13 @@ struct ActivationTransaction: Hashable, Sendable {
         }
         guard let lease else { return .failure(.leaseNotHeld) }
         guard lease.project == project else { return .failure(.leaseHeldByOtherProject(lease.project)) }
-        guard live.activation == plan.validated.context, live.engine == plan.engine,
+        let reviewed = plan.validated.context
+        guard live.activation.hostEpoch == reviewed.hostEpoch,
+              live.activation.activeRevision == reviewed.activeRevision, live.engine == plan.engine,
               let permission = live.activation.permission, permission.isWellFormedForActivation,
-              permission.matchesExactly(plan.validated.request.permission) else {
+              permission.matchesExactly(plan.validated.request.permission),
+              let liveBytes = try? live.activation.capabilities.encoded(),
+              let reviewedBytes = try? reviewed.capabilities.encoded(), liveBytes == reviewedBytes else {
             return .failure(.staleContext)
         }
         let next: Generation

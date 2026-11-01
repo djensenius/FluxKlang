@@ -20,6 +20,18 @@ private func graph(revision: ContractRevision = .initial, nodes ids: [NodeID] = 
                   nodes: ids.map { GraphNode(id: $0, kind: .plugin, label: $0.rawValue) })
 }
 
+/// A one-device document whose free-text `evidence` is `evidence`.
+private func capabilities(evidence: String,
+                          identity: Set<IdentityEvidence> = [.deviceUID]) throws -> DeviceCapabilityDocument {
+    let device = try DeviceDescriptor(
+        id: DeviceID(validated: "dev.interface"), kind: .audioInterface,
+        layout: ChannelLayout(inputs: 2, outputs: 2, sampleRate: 48_000), binding: .reported,
+        identity: DeviceIdentity(.init(uid: "physical-interface-1", evidence: identity)), evidence: evidence
+    )
+    return try DeviceCapabilityDocument(revision: .initial, host: hostEpoch.host, hostEpoch: hostEpoch.generation,
+                                        devices: [device], routes: [])
+}
+
 private func report(_ outcome: ActivationCommitOutcome, applied: Set<NodeID>, unapplied: Set<NodeID>,
                     prepared: PreparedActivationID = planP) -> CommitReportDraft {
     CommitReportDraft(prepared: prepared, outcome: outcome, applied: applied, unapplied: unapplied)
@@ -233,6 +245,61 @@ extension HostAuthorityTests {
             let before = host.transaction.running
             #expect(host.refusal { $0.acknowledged(mismatched) } == .reportMismatch)
             #expect(host.transaction.phase == .committing && host.transaction.running == before)
+        }
+
+        /// `count` × U+00E9 reviewed; the live document has the decomposed twin (e + U+0301),
+        /// equal under `String ==`. At 1.5M the twin's encoding crosses the 4 MiB limit.
+        @Test(arguments: [1, 1_500_000])
+        func capabilityTextIsComparedByEncodedBytes(count: Int) throws {
+            let reviewed = try capabilities(evidence: String(repeating: "\u{E9}", count: count))
+            let twin = try capabilities(evidence: String(repeating: "e\u{301}", count: count))
+            let liveBytes = try? twin.encoded()
+            let reviewedBytes = try reviewed.encoded()
+            #expect(twin == reviewed && liveBytes != reviewedBytes)
+            #expect((liveBytes == nil) == (count > 1))
+            var host = try TransactionBench()
+            host.activation = ActivationContext(hostEpoch: hostEpoch, activeRevision: .initial,
+                                                permission: permission, capabilities: reviewed)
+            try host.acquire(host.transaction.project)
+            try host.review(request(), candidate: graph(), as: planP)
+            let authorization = try host.authorize()
+            let reviewedContext = host.activation
+            host.activation = ActivationContext(hostEpoch: hostEpoch, activeRevision: .initial,
+                                                permission: permission, capabilities: twin)
+            let changed = try host.live
+            let lease = host.registry.snapshot
+            #expect(host.refusal { $0.commit(authorization, lease: lease, context: changed) } == .staleContext)
+            #expect(host.transaction.phase == .awaitingReview && host.transaction.lastAttempt == nil)
+            // The reviewed bytes themselves still commit.
+            host.activation = reviewedContext
+            let effects = try host.commit(authorization).get()
+            #expect(effects == (try host.committed(planP)))
+        }
+
+        /// The live document is the reviewed one decoded from its bytes, or rebuilt
+        /// with an equal identity-evidence set in another order and capacity. Each
+        /// must commit: byte-exact staleness needs a canonical encoding.
+        @Test func decodedOrRebuiltCapabilityTwinCommits() throws {
+            let kinds: [IdentityEvidence] = [.deviceUID, .endpointUID, .transport, .channelLayout, .modelUID]
+            let reviewed = try capabilities(evidence: "probe", identity: Set(kinds))
+            for trial in 0..<8 {
+                var rebuilt = Set<IdentityEvidence>(minimumCapacity: 8 * (trial + 1))
+                for kind in kinds.reversed() { rebuilt.insert(kind) }
+                let twin = try trial.isMultiple(of: 2)
+                    ? DeviceCapabilityDocument.decode(from: reviewed.encoded())
+                    : capabilities(evidence: "probe", identity: rebuilt)
+                #expect(twin == reviewed)
+                var host = try TransactionBench()
+                host.activation = ActivationContext(hostEpoch: hostEpoch, activeRevision: .initial,
+                                                    permission: permission, capabilities: reviewed)
+                try host.acquire(host.transaction.project)
+                try host.review(request(), candidate: graph(), as: planP)
+                let authorization = try host.authorize()
+                host.activation = ActivationContext(hostEpoch: hostEpoch, activeRevision: .initial,
+                                                    permission: permission, capabilities: twin)
+                let effects = try host.commit(authorization).get()
+                #expect(effects == (try host.committed(planP)))
+            }
         }
 
         @Test func commitAttemptOverflowIsRefused() throws {
