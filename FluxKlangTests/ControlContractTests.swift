@@ -36,6 +36,136 @@ private func document() throws -> DeviceCapabilityDocument {
 private let roles = [role: RouteRoleRequirement(direction: .output, channelCount: 2)]
 
 extension ControlContractTests {
+    struct InventoryLimits {
+        @Test func uniqueCollectionLimitsApplyToConstructionMutationAndWire() throws {
+            for field in ["devices", "routes"] {
+                let maximum = field == "devices" ? DeviceCapabilityLimits.devices : DeviceCapabilityLimits.routes
+                let error = DeviceCapabilityLimitError.exceeded(path: "$.\(field)", maximum: maximum)
+                var value = try document()
+                if field == "devices" {
+                    value.routes = []
+                    value.devices = try (0..<maximum).map { index in
+                        var descriptor = try interface()
+                        descriptor.id = try DeviceID("dev.\(index)")
+                        return descriptor
+                    }
+                } else {
+                    value.routes = try (0..<maximum).map { index in
+                        var route = route()
+                        route.id = try RouteID("route.\(index)")
+                        return route
+                    }
+                }
+                _ = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: .initial,
+                                                 devices: value.devices, routes: value.routes)
+                value.unknownFields["futureInventory"] = .bool(true)
+                let data = try ContractCoding.makeEncoder().encode(value)
+                #expect(try DeviceCapabilityDocument.decode(from: data) == value)
+                var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                var entries = try #require(object[field] as? [[String: Any]])
+                var extra = entries[0]
+                extra["id"] = "limit.extra"
+                entries.append(extra)
+                object[field] = entries
+                #expect(throws: error) {
+                    _ = try DeviceCapabilityDocument.decode(from: JSONSerialization.data(withJSONObject: object))
+                }
+                if field == "devices" {
+                    var extra = value.devices[0]
+                    extra.id = DeviceID(validated: "limit.extra")
+                    value.devices.append(extra)
+                } else {
+                    var extra = value.routes[0]
+                    extra.id = RouteID(validated: "limit.extra")
+                    value.routes.append(extra)
+                }
+                #expect(throws: error) {
+                    _ = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: .initial,
+                                                     devices: value.devices, routes: value.routes)
+                }
+                #expect(throws: error) { _ = try ContractCoding.makeEncoder().encode(value) }
+                // Count policy must win over duplicate-ID validation and index creation.
+                if field == "devices" { value.devices[maximum] = value.devices[0] }
+                if field == "routes" { value.routes[maximum] = value.routes[0] }
+                #expect(throws: error) { try value.validate() }
+            }
+        }
+
+        @Test func capabilityLimitAppliesBeforeUniquenessAndDocumentIndexes() throws {
+            let maximum = DeviceCapabilityLimits.capabilitiesPerDevice
+            let error = DeviceCapabilityLimitError.exceeded(path: "$.capabilities", maximum: maximum)
+            var descriptor = try interface()
+            descriptor.capabilities = try (0..<maximum).map { try CapabilityID("cap.\($0)") }
+            _ = try DeviceDescriptor(
+                id: descriptor.id, kind: descriptor.kind, layout: descriptor.layout, binding: descriptor.binding,
+                identity: descriptor.identity, evidence: descriptor.evidence, capabilities: descriptor.capabilities
+            )
+            let data = try ContractCoding.makeEncoder().encode(descriptor)
+            #expect(try ContractCoding.decode(DeviceDescriptor.self, from: data) == descriptor)
+            var value = try document()
+            value.devices = [descriptor]
+            #expect(try DeviceCapabilityDocument.decode(from: ContractCoding.makeEncoder().encode(value)) == value)
+            descriptor.capabilities.append(CapabilityID(validated: "cap.extra"))
+            #expect(throws: error) {
+                _ = try DeviceDescriptor(
+                    id: descriptor.id, kind: descriptor.kind, layout: descriptor.layout, binding: descriptor.binding,
+                    identity: descriptor.identity, evidence: descriptor.evidence, capabilities: descriptor.capabilities
+                )
+            }
+            #expect(throws: error) { _ = try ContractCoding.makeEncoder().encode(descriptor) }
+            var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            object["capabilities"] = descriptor.capabilities.map(\.rawValue)
+            #expect(throws: error) {
+                _ = try ContractCoding.decode(DeviceDescriptor.self,
+                                              from: JSONSerialization.data(withJSONObject: object))
+            }
+            let documentData = try ContractCoding.makeEncoder().encode(value)
+            var wire = try #require(JSONSerialization.jsonObject(with: documentData) as? [String: Any])
+            wire["devices"] = [object]
+            #expect(throws: error) {
+                _ = try DeviceCapabilityDocument.decode(from: JSONSerialization.data(withJSONObject: wire))
+            }
+            value.devices = [descriptor, descriptor]
+            let nestedError = DeviceCapabilityLimitError.exceeded(
+                path: "$.devices[\(descriptor.id)].capabilities", maximum: maximum
+            )
+            #expect(throws: nestedError) {
+                _ = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: .initial,
+                                                 devices: value.devices, routes: value.routes)
+            }
+            #expect(throws: nestedError) { _ = try ContractCoding.makeEncoder().encode(value) }
+            descriptor.capabilities[maximum] = descriptor.capabilities[0]
+            #expect(throws: error) { try descriptor.validate() }
+        }
+
+        @Test func byteLimitAcceptsExactBoundaryAndRejectsOversizeBeforeJSONParsing() throws {
+            let maximum = DeviceCapabilityLimits.documentBytes
+            let error = DeviceCapabilityLimitError.exceeded(path: "$bytes", maximum: maximum)
+            var value = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: .initial,
+                                                     devices: [], routes: [])
+            value.unknownFields["futurePadding"] = .string("")
+            let overhead = try ContractCoding.makeEncoder().encode(value).count
+            value.unknownFields["futurePadding"] = .string(String(repeating: "x", count: maximum - overhead))
+            let boundary = try value.encoded()
+            #expect(boundary.count == maximum)
+            let decoded = try DeviceCapabilityDocument.decode(from: boundary)
+            #expect(decoded.unknownFields == value.unknownFields)
+            #expect(try decoded.encoded() == boundary)
+            value.unknownFields["futurePadding"] = .string(String(repeating: "x", count: maximum - overhead + 1))
+            #expect(throws: error) { _ = try value.encoded() }
+            var oversized = boundary
+            oversized.append(0x20)
+            #expect(throws: error) { _ = try DeviceCapabilityDocument.decode(from: oversized) }
+            var malformed = Data(repeating: 0x20, count: maximum)
+            malformed[0] = 0x5B // Unclosed array: must reach JSON validation at the allowed byte boundary.
+            #expect(throws: DecodingError.self) { _ = try DeviceCapabilityDocument.decode(from: malformed) }
+            malformed.append(0x20)
+            #expect(throws: error) { _ = try DeviceCapabilityDocument.decode(from: malformed) }
+        }
+    }
+}
+
+extension ControlContractTests {
     struct Devices {
         @Test func identityRequiresPerDeviceEvidence() throws {
             #expect(throws: ControlValidationError.self) {

@@ -10,6 +10,26 @@
 
 import Foundation
 
+enum DeviceCapabilityLimitError: Error, Hashable, Sendable {
+    case exceeded(path: String, maximum: Int)
+}
+
+/// v1 inert inventory resource policy, not physical hardware limits or render capacities.
+enum DeviceCapabilityLimits {
+    static let documentBytes = 4 * 1_024 * 1_024
+    static let devices = 1_024
+    static let routes = 4_096
+    static let capabilitiesPerDevice = 1_024
+
+    static func check(_ count: Int, maximum: Int, path: String) throws(DeviceCapabilityLimitError) {
+        if count > maximum { throw .exceeded(path: path, maximum: maximum) }
+    }
+
+    static func checkBytes(_ data: Data) throws(DeviceCapabilityLimitError) {
+        try check(data.count, maximum: documentBytes, path: "$bytes")
+    }
+}
+
 enum DeviceTag: ContractIDTag {}
 typealias DeviceID = ContractID<DeviceTag>
 enum HostTag: ContractIDTag {}
@@ -197,6 +217,9 @@ struct DeviceDescriptor: Hashable, Sendable, Codable {
     }
 
     func validate() throws {
+        try DeviceCapabilityLimits.check(
+            capabilities.count, maximum: DeviceCapabilityLimits.capabilitiesPerDevice, path: "$.capabilities"
+        )
         guard binding != .measured || (presence == .present && evidence?.isEmpty == false),
               presence == .present || actualRate == nil,
               requestedRate.map({ (1...768_000).contains($0) }) ?? true else {
@@ -221,7 +244,8 @@ struct CapabilityAssessment: Hashable, Sendable {
 
 /// The versioned, host-local device document. Decode it only with
 /// `DeviceCapabilityDocument.decode(from:)`, which goes through
-/// `ContractCoding.decode` and the version policy.
+/// the byte limit, `ContractCoding.decode` and the version policy.
+/// Use `encoded()` to enforce the serialized byte ceiling on output too.
 struct DeviceCapabilityDocument: Hashable, Sendable, Codable {
     static let supported = ContractVersion(contract: "fluxklang.devices", version: 1)
 
@@ -264,7 +288,14 @@ struct DeviceCapabilityDocument: Hashable, Sendable, Codable {
     }
 
     static func decode(from data: Data) throws -> DeviceCapabilityDocument {
-        try ContractCoding.decode(DeviceCapabilityDocument.self, from: data)
+        try DeviceCapabilityLimits.checkBytes(data)
+        return try ContractCoding.decode(DeviceCapabilityDocument.self, from: data)
+    }
+
+    func encoded() throws -> Data {
+        let data = try ContractCoding.makeEncoder().encode(self)
+        try DeviceCapabilityLimits.checkBytes(data)
+        return data
     }
 
     init(from decoder: any Decoder) throws {
@@ -308,6 +339,7 @@ struct DeviceCapabilityDocument: Hashable, Sendable, Codable {
     /// Intrinsic validity needs only the document's own devices and host-local evidence.
     /// Checked on construction and at both codec boundaries, including after mutation.
     func validate() throws {
+        try checkCollectionBounds()
         do {
             try ContractUniqueness.require(devices.map(\.id))
             try ContractUniqueness.require(routes.map(\.id))
@@ -329,6 +361,17 @@ struct DeviceCapabilityDocument: Hashable, Sendable, Codable {
                 }
             }
             try route.validate(layout: device.layout)
+        }
+    }
+
+    private func checkCollectionBounds() throws(DeviceCapabilityLimitError) {
+        try DeviceCapabilityLimits.check(devices.count, maximum: DeviceCapabilityLimits.devices, path: "$.devices")
+        try DeviceCapabilityLimits.check(routes.count, maximum: DeviceCapabilityLimits.routes, path: "$.routes")
+        for device in devices {
+            try DeviceCapabilityLimits.check(
+                device.capabilities.count, maximum: DeviceCapabilityLimits.capabilitiesPerDevice,
+                path: "$.devices[\(device.id)].capabilities"
+            )
         }
     }
 
