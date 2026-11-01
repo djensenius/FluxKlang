@@ -92,12 +92,15 @@ enum ActivationPhase: Hashable, Sendable {
     case committing
     case acknowledged(ContractRevision)
     /// The commit of the named plan was partly applied. The running graph is
-    /// unchanged; recovery (H4) decides what happens next.
+    /// unchanged until `resolveRecovery`.
     case partial(PreparedActivationID, applied: Set<NodeID>, unapplied: Set<NodeID>)
     /// The commit of the named plan failed. The running graph and revision are
-    /// unchanged; recovery (H4) decides what happens next.
+    /// unchanged until `resolveRecovery`.
     case commitFailed(PreparedActivationID)
     case prepareFailed(PrepareFailure)
+    /// The named plan's commit was abandoned (outcome unknown or unrepresentable)
+    /// and outputs are muted; `resolveRecovery` restores the running graph.
+    case recovering(PreparedActivationID)
 }
 
 /// What the engine is running. Changes only when a commit is fully acknowledged.
@@ -186,7 +189,7 @@ struct ActivationTransaction: Hashable, Sendable {
     ) -> Result<[ActivationEffect], ActivationRefusal> {
         switch phase {
         case .preparing, .awaitingReview, .committing: return .failure(.busy)
-        case .partial, .commitFailed: return .failure(.unexpectedPhase(phase))
+        case .partial, .commitFailed, .recovering: return .failure(.unexpectedPhase(phase))
         case .idle, .acknowledged, .prepareFailed: break
         }
         guard live.activation.activeRevision == running.revision else { return .failure(.staleContext) }
@@ -279,7 +282,7 @@ struct ActivationTransaction: Hashable, Sendable {
     /// one and discarding the plan it replaces; `.failed` and `.partial` leave
     /// the running graph and revision to recovery, without effects.
     /// If the revision cannot advance (`overflow`), the transaction stays
-    /// `.committing` although the engine applied the plan: recovery (H4) input.
+    /// `.committing` although the engine applied the plan; `abandonCommit` exits.
     mutating func acknowledged(_ report: ActivationCommitReport) -> Result<[ActivationEffect], ActivationRefusal> {
         guard phase == .committing, let plan, let prepared = plan.prepared, let attempt = plan.attempt else {
             return .failure(.unexpectedPhase(phase))
@@ -307,5 +310,49 @@ struct ActivationTransaction: Hashable, Sendable {
         self.plan = nil
         phase = .acknowledged(revision)
         return .success(replaced.map { [.discard($0)] } ?? [])
+    }
+
+    /// Abandons the current commit attempt whose outcome is unknown (timeout,
+    /// lost report, or an applied plan whose revision overflows): never assumed
+    /// successful. Checks: phase `.committing`, then the attempt (`staleReport`).
+    /// Enters `.recovering` with muted outputs; the engine may still hold the
+    /// plan, so it is discarded by `resolveRecovery`. Later reports are refused.
+    mutating func abandonCommit(_ attempt: CommitAttemptID) -> Result<ActivationRecoveryStep, ActivationRefusal> {
+        guard phase == .committing, let prepared = plan?.prepared, let current = plan?.attempt else {
+            return .failure(.unexpectedPhase(phase))
+        }
+        guard attempt == current else { return .failure(.staleReport) }
+        plan = nil
+        phase = .recovering(prepared)
+        return .success(ActivationRecovery.enterRecovery(.commitOutcomeUnknown, running: running))
+    }
+
+    /// The sanctioned exit from `.commitFailed`, `.partial` and `.recovering`.
+    /// Checks: phase, then the failing attempt (`lastAttempt`, else `staleReport`).
+    /// A failed or abandoned plan is discarded and the running graph restored
+    /// (`.idle`). A partial plan is kept as the next revision with its unapplied
+    /// nodes as placeholders (`.acknowledged`), or, if the revision cannot
+    /// advance, fails closed into muted `.recovering`.
+    mutating func resolveRecovery(_ attempt: CommitAttemptID) -> Result<ActivationRecoveryStep, ActivationRefusal> {
+        let prepared: PreparedActivationID
+        var unapplied: Set<NodeID>?
+        switch phase {
+        case .commitFailed(let id), .recovering(let id): prepared = id
+        case .partial(let id, _, let missing): (prepared, unapplied) = (id, missing)
+        default: return .failure(.unexpectedPhase(phase))
+        }
+        guard attempt == lastAttempt else { return .failure(.staleReport) }
+        guard let unapplied else {
+            phase = .idle
+            return .success(ActivationRecovery.restore(running, discarding: prepared))
+        }
+        guard let revision = try? running.revision.next() else {
+            phase = .recovering(prepared)
+            return .success(ActivationRecovery.enterRecovery(.revisionOverflow, running: running))
+        }
+        let step = ActivationRecovery.keepPartial(unapplied: unapplied, replacing: running)
+        running = RunningGraph(revision: revision, prepared: prepared)
+        phase = .acknowledged(revision)
+        return .success(step)
     }
 }
