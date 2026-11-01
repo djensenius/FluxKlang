@@ -44,6 +44,26 @@ struct CommitAttemptID: Hashable, Sendable {
     }
 }
 
+/// One `.prepare` effect, built like `CommitAttemptID`: only
+/// `ActivationTransaction` creates one, from its own identity and a separate
+/// bounded counter, so a delayed, duplicate or other transaction's prepare
+/// response never matches the current one.
+struct PrepareAttemptID: Hashable, Sendable {
+    fileprivate let issuer: CommitAttemptID.Identity
+    /// Compared for equality only, together with the issuer.
+    let generation: Generation
+    // The memberwise initializer is fileprivate because `issuer` is.
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.issuer === rhs.issuer && lhs.generation == rhs.generation
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(ObjectIdentifier(issuer))
+        hasher.combine(generation)
+    }
+}
+
 /// The engine's plan-level verdict on a commit. Recovery (H4) acts on
 /// `.failed` and `.partial`.
 enum ActivationCommitOutcome: Hashable, Sendable {
@@ -80,7 +100,7 @@ struct ActivationCommitReport: Hashable, Sendable {
 }
 
 enum ActivationEffect: Hashable, Sendable {
-    case prepare(ValidatedActivation)
+    case prepare(ValidatedActivation, PrepareAttemptID)
     case commit(PreparedActivationID, CommitAttemptID, EngineLeaseToken)
     case discard(PreparedActivationID)
 }
@@ -131,6 +151,8 @@ enum ActivationRefusal: Error, Hashable, Sendable {
     case leaseHeldByOtherProject(ProjectID)
     /// The report names another attempt than the current commit's.
     case staleReport
+    /// The prepare response names another attempt than the current `.prepare`'s.
+    case stalePrepareResponse
     /// The report names another plan, or its node sets do not split exactly
     /// the plan's nodes consistently with its outcome.
     case reportMismatch
@@ -150,6 +172,7 @@ struct ActivationTransaction: Hashable, Sendable {
     private struct Plan: Hashable, Sendable {
         let validated: ValidatedActivation
         let engine: Generation
+        let prepareAttempt: PrepareAttemptID
         var prepared: PreparedActivationID?
         var attempt: CommitAttemptID?
     }
@@ -165,24 +188,29 @@ struct ActivationTransaction: Hashable, Sendable {
     /// only the H5 owner's copy may commit; a diverged copy would issue an
     /// attempt ID equal to the owner's.
     private let attempts = CommitAttemptID.Identity()
+    /// The last issued prepare attempt, under the same identity and copy rule.
+    private(set) var lastPrepareAttempt: PrepareAttemptID?
     private var plan: Plan?
 
     /// The `resuming` arguments are for diagnostics and test continuity only.
     /// `lastAttempt` is a generation: this transaction's attempts carry its own
     /// identity, so they never equal another instance's.
     init(project: ProjectID, running: RunningGraph, resumingAfterNonce lastNonce: Generation? = nil,
-         resumingAfterAttempt lastAttempt: Generation? = nil) {
+         resumingAfterAttempt lastAttempt: Generation? = nil,
+         resumingAfterPrepareAttempt lastPrepare: Generation? = nil) {
         self.project = project
         self.running = running
         authorizer = ActivationAuthorizer(resumingAfter: lastNonce)
         if let lastAttempt { self.lastAttempt = CommitAttemptID(issuer: attempts, generation: lastAttempt) }
+        if let lastPrepare { lastPrepareAttempt = PrepareAttemptID(issuer: attempts, generation: lastPrepare) }
     }
 
     /// The plan being prepared, reviewed or committed.
     var validated: ValidatedActivation? { plan?.validated }
 
     /// Validates `request` against the live context and, if it passes, asks
-    /// the owner to prepare it. Checks: busy, context revision, then H1 validation.
+    /// the owner to prepare it under a new prepare attempt. Checks: busy, context
+    /// revision, H1 validation, then the attempt counter (`overflow`).
     /// A `.partial` or `.commitFailed` commit must be resolved by recovery first.
     mutating func begin(
         _ request: ActivationRequest, candidate: GraphDocument, in live: ActivationLiveContext
@@ -197,19 +225,25 @@ struct ActivationTransaction: Hashable, Sendable {
         case .failure(let reason):
             return .failure(.rejected(reason))
         case .success(let validated):
-            plan = Plan(validated: validated, engine: live.engine)
+            let next: Generation
+            do { next = try lastPrepareAttempt?.generation.next() ?? .initial } catch { return .failure(.overflow) }
+            let attempt = PrepareAttemptID(issuer: attempts, generation: next)
+            lastPrepareAttempt = attempt
+            plan = Plan(validated: validated, engine: live.engine, prepareAttempt: attempt)
             phase = .preparing
-            return .success([.prepare(validated)])
+            return .success([.prepare(validated, attempt)])
         }
     }
 
-    /// Records the engine's answer to `.prepare`. A failure keeps the running graph.
+    /// Records the engine's answer to the `.prepare` of `attempt`. Checks: phase,
+    /// attempt (`stalePrepareResponse`), then content. A failure keeps the running graph.
     /// An ID equal to the running graph's plan is refused, so acknowledging can
     /// never discard the plan it installs.
     mutating func prepared(
-        _ result: Result<PreparedActivationID, PrepareFailure>
+        _ result: Result<PreparedActivationID, PrepareFailure>, attempt: PrepareAttemptID
     ) -> Result<[ActivationEffect], ActivationRefusal> {
         guard phase == .preparing, var current = plan else { return .failure(.unexpectedPhase(phase)) }
+        guard attempt == current.prepareAttempt else { return .failure(.stalePrepareResponse) }
         switch result {
         case .success(let id):
             guard id != running.prepared else { return .failure(.preparedIDInUse) }

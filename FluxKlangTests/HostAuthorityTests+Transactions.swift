@@ -210,7 +210,8 @@ extension HostAuthorityTests {
             try host.acquire(projectA)
             let running = host.transaction.running
             let effects = try host.begin()
-            #expect(effects == [.prepare(try #require(host.transaction.validated))])
+            let attempt = try #require(host.transaction.lastPrepareAttempt)
+            #expect(effects == [.prepare(try #require(host.transaction.validated), attempt)])
             #expect(host.transaction.phase == .preparing && host.transaction.running == running)
             #expect(try host.transaction.prepared(.failure(.capabilityLost(audio))).get().isEmpty)
             #expect(host.transaction.phase == .prepareFailed(.capabilityLost(audio)))
