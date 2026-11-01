@@ -234,6 +234,32 @@ extension ControlContractTests {
             try TriggerOutcome(trigger: id, result: .fired, assignedFrame: -1, frame: -1).validateMediaShape()
         }
 
+        @Test func lateAndJoinedOutcomesValidateDispatchFramesAndOffsets() throws {
+            let id = TriggerID(validated: "trigger.outcome")
+            for result: OutcomeResult in [.firedLate, .joined] {
+                let valid = TriggerOutcome(trigger: id, result: result, assignedFrame: -5, frame: 0,
+                                           startOffsetFrames: result == .joined ? 5 : 0)
+                try valid.validateMediaShape()
+                for frame in [Int64(-6), -5] {
+                    var invalid = valid
+                    invalid.frame = frame
+                    invalid.startOffsetFrames = 0
+                    #expect(throws: TriggerOutcomeValidationError.invalidShape) {
+                        try invalid.validateMediaShape()
+                    }
+                }
+                var invalidOffset = valid
+                invalidOffset.startOffsetFrames += 1
+                #expect(throws: TriggerOutcomeValidationError.invalidShape) {
+                    try invalidOffset.validateMediaShape()
+                }
+            }
+            #expect(throws: TriggerOutcomeValidationError.invalidShape) {
+                try TriggerOutcome(trigger: id, result: .joined, assignedFrame: .min, frame: .max,
+                                   startOffsetFrames: .max).validateMediaShape()
+            }
+        }
+
         @Test func exactV1TimingBoundsApplyAtConstructionAndDecode() throws {
             let requirements = [GenerationKey(.sampleClock, sample), context]
                 .map { GenerationRequirement(key: $0, generation: .initial) }

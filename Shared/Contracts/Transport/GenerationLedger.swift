@@ -24,6 +24,7 @@ enum GenerationLedgerError: Error, Equatable, Sendable {
     case reasonDoesNotMatchKind(GenerationKey)
     case overflow
     case invalidRate
+    case invalidLocateTicks(Int64)
     case aliasedClocks
     case undeclaredCounter(GenerationKey)
     case alreadyDeclared(GenerationKey)
@@ -154,6 +155,7 @@ struct GenerationLedger: Sendable {
     private func validateBump(_ key: GenerationKey, reason: GenerationBumpReason) throws(GenerationLedgerError) {
         guard reason.kind == key.kind else { throw .reasonDoesNotMatchKind(key) }
         if case .rateChange(let rate) = reason, !MediaNominalRate.isValid(rate) { throw .invalidRate }
+        if case .locate(let ticks) = reason, ticks < 0 { throw .invalidLocateTicks(ticks) }
         switch key.kind {
         case .sampleClock:
             guard key == primaryClock else { throw .undeclaredSampleClock(key) }

@@ -201,6 +201,28 @@ extension ControlContractTests {
             #expect(ledger.resume == .afterRestart(previousFrame: 900))
         }
 
+        @Test(arguments: [-1, Int64.min])
+        func negativeLocatePreservesCountersResumeAndPendingRestart(ticks: Int64) throws {
+            var ledger = try GenerationLedger(primaryClock: primary, musicalClock: musicalClock, nominalRate: 48_000)
+            try ledger.bump(transportKey, reason: .locate(ticks: .max))
+            let second = try ledger.bump(ledger.primaryClock, reason: .wake)
+            let counters = ledger.current
+            let resume = ledger.resume
+            #expect(throws: GenerationLedgerError.invalidLocateTicks(ticks)) {
+                try ledger.bump(transportKey, reason: .locate(ticks: ticks))
+            }
+            #expect(ledger.current == counters && ledger.resume == resume)
+            #expect(ledger.restartRecord == nil && ledger.awaitingTransportBump)
+            try ledger.recordClockRestart(.init(
+                start: .init(clock: primary, generation: second, frame: 0),
+                host: .init(ticks: 1_000), previousFrame: 500
+            ))
+            #expect(ledger.resume == .afterRestart(previousFrame: 500))
+            try ledger.bump(transportKey, reason: .clockRestart)
+            try ledger.bump(transportKey, reason: .locate(ticks: 0))
+            #expect(!ledger.hasRestartObligations && ledger.resume == .locate(ticks: 0))
+        }
+
         @Test func sourceBumpInvalidatesReadinessUntilRePrepared() throws {
             var ledger = try GenerationLedger(primaryClock: primary, musicalClock: musicalClock, nominalRate: 48_000)
             try ledger.declare(sourceKey)
