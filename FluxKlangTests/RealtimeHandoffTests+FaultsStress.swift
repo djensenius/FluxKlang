@@ -346,3 +346,53 @@ extension RealtimeHandoffTests {
         }
     }
 }
+
+/// A real first raiser paused between its add and its publication (`raise`'s own `increment` and `publish`, run
+/// separately through the seam), then resumed. Deterministic and single-threaded.
+extension RealtimeHandoffTests.FaultLatching {
+    /// Resumes a paused raise; records an issue if the latch refuses it.
+    fileprivate static func resume(_ latch: FaultLatch,
+                                   _ paused: consuming FaultLatch.UnpublishedRaiseForTesting) -> Bool {
+        let resumed = latch.publishRaiseForTesting(paused)
+        if !resumed { Issue.record("the paused raise belongs to this latch") }
+        return resumed
+    }
+
+    /// Generation 0 latched `.retireBacklog` at frame 11 and was acknowledged, so a misread would report that stale
+    /// claim. While generation 1's first raiser is paused after its add, another raise lands and control observes:
+    /// the scope is latched, but `observe`, `pending` and acknowledging (including generation 0's observation) all
+    /// refuse it. Once resumed, the record carries the paused raiser's kind and frame and both raises' count.
+    @Test func pausedFirstRaiserBlocksAcknowledgeUntilPublished() throws {
+        let latch = try FaultLatch(scopes: Self.scopes)
+        #expect(latch.raise(Self.scope, .retireBacklog, frame: 11) == .ok)
+        let previous = try #require(latch.observe(Self.scope))
+        #expect(latch.acknowledge(previous) != nil)
+        guard let admitted = latch.admitRaiseForTesting(Self.scope, .sysexOverflow, frame: .min),
+              let paused = latch.addRaiseForTesting(admitted) else {
+            Issue.record("generation 1's first raise must be admitted and added")
+            return
+        }
+        let isFirst = paused.isFirstRaiser
+        #expect(isFirst)
+        // Paused between the add and the publication:
+        #expect(latch.raise(Self.scope, .staleClock, frame: 42) == .ok)
+        let publishing = FaultLatch.TestState(generation: 1, count: 2, claimGeneration: 0)
+        #expect(latch.stateForTesting(Self.scope) == publishing)
+        #expect(latch.isLatched(Self.scope))
+        #expect(latch.observe(Self.scope) == nil)
+        #expect(Self.pendingRecords(latch).isEmpty)
+        #expect(latch.acknowledge(previous) == nil)
+        #expect(Self.acknowledge(latch, Self.scope) == nil)
+        #expect(latch.stateForTesting(Self.scope) == publishing)
+        Self.expectInvariant(latch)
+        guard Self.resume(latch, paused) else { return }
+        let record = FaultRecord(scope: Self.scope, kind: .sysexOverflow, count: 2, firstFrame: .min)
+        #expect(Self.pendingRecords(latch) == [record])
+        let observation = try #require(latch.observe(Self.scope))
+        #expect(observation.record == record && observation.isAcknowledgeable)
+        #expect(latch.acknowledge(observation) == record)
+        #expect(!latch.isLatched(Self.scope))
+        #expect(latch.stateForTesting(Self.scope) == .init(generation: 2, count: 0, claimGeneration: 1))
+        Self.expectInvariant(latch)
+    }
+}

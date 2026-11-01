@@ -71,7 +71,7 @@ struct FaultObservation: Sendable {
 /// `observe` and `pending` read `tally`, then `first`. If `count > 0` but `first` does not yet hold `g`, the
 /// first raiser is still publishing: both skip the scope (`observe` returns `nil`), so a fault raised just now can
 /// appear on the next poll rather than this one. Otherwise `first` is final for `g`. Reported counts are
-/// `min(count, countCap)`.
+/// `min(count, countCap)`. `addRaiseForTesting` and `publishRaiseForTesting` pause a real first raiser there.
 ///
 /// Acknowledging. Control observes a scope, recovers the whole scope off-thread, then passes the observation to
 /// `acknowledge`, which makes at most one compare-exchange from the exact observed `tally` to `(0, g + 1)` and
@@ -210,16 +210,24 @@ final class FaultLatch: @unchecked Sendable {
         Bits.count((tallies + index).pointee.load(ordering: .acquiring)) < Bits.countCap
     }
 
-    /// `raise`'s transition: one wrapping add; the first raiser of the generation publishes `first`.
+    /// `raise`'s transition: one wrapping add, then the first raiser of the generation publishes `first`.
     private func count(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
-        let tally = tallies + index
-        let old = tally.pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
-        if Bits.count(old) == 0 {
-            let meta = Bits.generation(old) &<< 8 | UInt64(kind.rawValue)
-            (firsts + index).pointee.store(
-                WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
-                ordering: .releasing)
-        }
+        publish(index, increment(index), kind, frame)
+    }
+
+    /// `raise`'s add; returns the old tally.
+    private func increment(_ index: Int) -> UInt64 {
+        (tallies + index).pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
+    }
+
+    /// `raise`'s publication: only the raise whose add saw count 0 (the generation's unique first raiser) stores
+    /// `first`, for the generation of `old`.
+    private func publish(_ index: Int, _ old: UInt64, _ kind: FaultKind, _ frame: Int64) {
+        guard Bits.count(old) == 0 else { return }
+        let meta = Bits.generation(old) &<< 8 | UInt64(kind.rawValue)
+        (firsts + index).pointee.store(
+            WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
+            ordering: .releasing)
     }
 
     /// Test-only: one `raise` stopped between its cap check and its add, as a raiser preempted there. It is
@@ -244,6 +252,34 @@ final class FaultLatch: @unchecked Sendable {
     func finishRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> Bool {
         guard admitted.owner === self else { return false }
         count(admitted.index, admitted.kind, admitted.frame)
+        return true
+    }
+
+    /// Test-only: one `raise` stopped after its add and before its publication, as a raiser preempted there.
+    /// Noncopyable, so it publishes at most once; holds its latch strongly.
+    struct UnpublishedRaiseForTesting: ~Copyable {
+        fileprivate let owner: FaultLatch
+        fileprivate let index: Int
+        fileprivate let kind: FaultKind
+        fileprivate let frame: Int64
+        fileprivate let old: UInt64
+        /// `true` when this raise's add saw count 0, so it alone publishes the generation's `first`.
+        var isFirstRaiser: Bool { Bits.count(old) == 0 }
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): runs `raise`'s own add for an admitted raise and
+    /// stops before its publication; `nil` (nothing changes) for another latch's admission.
+    func addRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> UnpublishedRaiseForTesting? {
+        guard admitted.owner === self else { return nil }
+        return UnpublishedRaiseForTesting(owner: self, index: admitted.index, kind: admitted.kind,
+                                          frame: admitted.frame, old: increment(admitted.index))
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): resumes a paused raise with `raise`'s own
+    /// publication; `false` (nothing changes) for another latch's raise.
+    func publishRaiseForTesting(_ added: consuming UnpublishedRaiseForTesting) -> Bool {
+        guard added.owner === self else { return false }
+        publish(added.index, added.old, added.kind, added.frame)
         return true
     }
 
