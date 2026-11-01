@@ -170,6 +170,12 @@ struct TriggerScheduler: Sendable {
                    context: TriggerSchedulerContext(ledger: ledger, readiness: readiness, musicalSequence: nil))
     }
 
+    /// Precedence after the session/handle checks and the staged horizon advance (whose refusals consume
+    /// nothing): a stale requirement (`.cancelled`), then readiness (`notReady`), then clock readiness
+    /// (throws); for musical work, a missing/stale witness (`invalidTiming`, no frame or map), then the
+    /// pinless `outsideLoop` (current map), then the stopped policy, then projection and the late policy.
+    /// M12: a refused resume leaves the request waiting; it ends with `invalidTiming` at the next commit
+    /// naming the refused sequence, or `.cancelled` if a requirement goes stale first.
     @discardableResult
     mutating func commit(_ handle: TriggerHandle, at horizon: SampleStamp, nominalRate: Int,
                          context: TriggerSchedulerContext) throws -> SchedulerCommitDisposition {

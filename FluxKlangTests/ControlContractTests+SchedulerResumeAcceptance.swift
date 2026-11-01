@@ -4,7 +4,7 @@ import Testing
 /// One M12 resume-provenance candidate offered as the `running(true)` observation of a stopped timeline.
 /// `refusal` is the zero-baseline result; with an `Int64.min` baseline every frame near 6_000 is
 /// 2^63 frames from its prediction, so only refusals that fire before the drift check keep their kind.
-private struct ResumeCandidate: Sendable, CustomTestStringConvertible {
+struct ResumeCandidate: Sendable, CustomTestStringConvertible {
     enum Variant: Sendable { case plain, generation, transport, pass, ticks, untimed, foreignClock }
 
     let frame: Int64
@@ -44,17 +44,20 @@ private struct ResumeCandidate: Sendable, CustomTestStringConvertible {
     ]
 }
 
-private extension SchedulerFixture {
+extension SchedulerFixture {
     /// M12's stopped origin: stopped at ticks 0 on `baseline`, grid 1_440 requested at baseline + 5_000.
-    static func stoppedOrigin(baseline: Int64) throws -> (SchedulerFixture, TriggerHandle) {
-        var fixture = try SchedulerFixture(capacity: 1, frame: baseline, host: 0)
+    /// The retained sequence is 1, so a refused resume attempt names 2.
+    static func stoppedOrigin(baseline: Int64, stopped: StoppedPolicy = .wait,
+                              capacity: Int = 1) throws -> (SchedulerFixture, TriggerHandle) {
+        var fixture = try SchedulerFixture(capacity: capacity, frame: baseline, host: 0)
         try fixture.scheduler.prepareMusical(SchedulerMusicalSetup(
             anchor: fixture.anchor(baseline, host: 0, ticks: 0), map: fixture.map(),
             loop: LoopRange(startTicks: 0, endTicks: 1_920), running: false, historyLimit: 4), ledger: fixture.ledger)
         try fixture.observeMusical(.primary, at: fixture.anchor(baseline + 5_000, host: 2_500_000))
-        let handle = try fixture.submitMusical(fixture.musicalStamp(
-            "trg.resume", .grid(ticks: 1_440), originHost: 2_500_000, policy: .fireLate(maxLatenessMs: 100),
-            arrival: baseline + 5_000))
+        var stamp = fixture.musicalStamp("trg.resume", .grid(ticks: 1_440), originHost: 2_500_000,
+                                         policy: .fireLate(maxLatenessMs: 100), arrival: baseline + 5_000)
+        stamp.stoppedPolicy = stopped
+        let handle = try fixture.submitMusical(stamp)
         #expect(fixture.scheduler.pendingMusic(handle) == .pinned(MusicalOccurrence(pass: 0, ticks: 0)))
         return (fixture, handle)
     }
@@ -94,10 +97,9 @@ private extension SchedulerFixture {
 extension ControlContractTests {
     struct SchedulerResumeAcceptance {
         /// M12 refusals: each invalid provenance is refused atomically; the stopped pin keeps waiting until
-        /// stale cancellation ends it (the inventory's diagnostic outcome is deferred; see HANDOFF).
+        /// stale cancellation ends it (the diagnostic outcome is in `SchedulerResumeDiagnostics`).
         @Test(arguments: [Int64(0), .min], ResumeCandidate.invalid)
-        fileprivate func stoppedOriginRefusesInvalidResumeProvenance(baseline: Int64,
-                                                                     candidate: ResumeCandidate) throws {
+        func stoppedOriginRefusesInvalidResumeProvenance(baseline: Int64, candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: baseline)
             let before = try fixture.admissionState()
             let resume = try fixture.resumeAnchor(candidate)
@@ -114,7 +116,7 @@ extension ControlContractTests {
         /// Phase adaptation: the horizon is the candidate's own wrap + 1 (9_001 for the exact 6_000 resume),
         /// because the wrap observation must be at the resume frame + 3_000.
         @Test(arguments: ResumeCandidate.tolerated)
-        fileprivate func stoppedOriginAcceptsToleratedResumeProvenance(candidate: ResumeCandidate) throws {
+        func stoppedOriginAcceptsToleratedResumeProvenance(candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: 0)
             #expect(try fixture.commitMusical(handle, at: 5_000) == .waitingForTransport)
             try fixture.observeMusical(.running(true), at: fixture.resumeAnchor(candidate))
@@ -132,7 +134,7 @@ extension ControlContractTests {
 
         /// M12 tolerated candidates with an `Int64.min` baseline are 2^63 frames off: refused, still waiting.
         @Test(arguments: ResumeCandidate.tolerated)
-        fileprivate func minimumBaselineRefusesEveryNearSixThousandResume(candidate: ResumeCandidate) throws {
+        func minimumBaselineRefusesEveryNearSixThousandResume(candidate: ResumeCandidate) throws {
             var (fixture, handle) = try SchedulerFixture.stoppedOrigin(baseline: .min)
             let before = try fixture.admissionState()
             #expect(throws: MusicalTimingError.invalidContext) {
