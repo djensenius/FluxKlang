@@ -190,6 +190,10 @@ anchor index, never by walking the number of elapsed passes or grid ticks.
 An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
 of equality with the origin-time tick. An exact-frame predecessor therefore stays eligible, as a non-retroactive
 choice, even when the retroactive window is zero.
+Outside the window the forward choice mirrors that search: the closest projection not before the exact origin among
+the origin's pass and later passes, each through its own projection anchor, with the earlier occurrence winning an
+equal frame. It is never retroactive and never skips a boundary of the origin's or a later pass projected between
+the origin and itself, whichever way a re-anchor or map edit moved the grid; the same index bounds its candidates.
 
 ### 5.6 Tempo and meter
 

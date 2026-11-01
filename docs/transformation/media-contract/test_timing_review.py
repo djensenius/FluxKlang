@@ -328,7 +328,7 @@ class TimingReviewTests(unittest.TestCase):
                     with self.subTest(drift=drift, count=count, retro=retro):
                         records = [anchor(0, 0)] + [anchor(index * 1000, index * (640 + drift))
                                                   for index in range(1, count + 1)]
-                        assigned = 500 if retro else checker.rnd(Fraction((321 - count * drift) * 25, 16))
+                        assigned = 500 if retro else 502  # the forward choice never trails the origin
                         records += [trigger(501, count * 1000, dict(timeBase="musical", gridTicks=1)),
                                     outcome(assigned, count * 1000, "firedLate")]
                         doc = document(records, loop=None, grid=1,
@@ -340,7 +340,8 @@ class TimingReviewTests(unittest.TestCase):
             for retro in (0, 1):
                 with self.subTest(ticks=ticks, retro=retro):
                     grid = 1 if ticks == 639 else 2
-                    assigned = 498 if ticks == 641 else 500  # an exact-frame boundary is eligible at zero tolerance
+                    # An exact-frame boundary is eligible at zero tolerance; a forward one never trails the origin.
+                    assigned = (498 if retro else 502) if ticks == 641 else 500
                     joined = dict(outcome(assigned, 1000, "joined"), startOffsetFrames=1000 - assigned)
                     records = [anchor(0, 0), anchor(1000, ticks),
                                trigger(500, 1000, dict(timeBase="musical", gridTicks=grid)), joined]
@@ -370,7 +371,7 @@ class TimingReviewTests(unittest.TestCase):
                 self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, ticks))
 
     def test_retroactive_search_compares_every_eligible_earlier_pass(self):
-        cases = [(1, None, 65, 10, 1000, 1563, 1548), (2, 1280000, 26, 11, 780, 3120, 3084)]
+        cases = [(1, None, 65, 10, 1000, 1563, 1567), (2, 1280000, 26, 11, 780, 3120, 3132)]
         for passes, tempo, step, count, ticks, assigned, forward in cases:
             for retro in (0, 1):
                 with self.subTest(passes=passes, retro=retro):
@@ -391,7 +392,8 @@ class TimingReviewTests(unittest.TestCase):
                     self.assertEqual(self.check(doc), [])
                     trace = checker.Trace(doc, "11-review-timing.json")
                     trace.run()
-                    self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, ticks) if retro else (passes, 0))
+                    want = (0, ticks) if retro else (passes, 12)
+                    self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], want)
 
     def test_retroactive_search_compares_overlapping_virtual_passes_without_walking_them(self):
         for start, end, grid, fraction, back, ticks in [(0, 7, 1, 75, 1, 6), (1, 8, 7, 25, 2, 7)]:
@@ -480,7 +482,7 @@ class TimingReviewTests(unittest.TestCase):
 
     def test_zero_tolerance_keeps_exact_frame_boundaries(self):
         # An exact-frame predecessor is chosen; a strictly earlier one (tick 319 at frame 500) is not.
-        for later, origin, ticks, assigned in [(641, 500, 321, 500), (639, 501, 321, 503)]:
+        for later, origin, ticks, assigned in [(641, 500, 321, 500), (639, 501, 320, 502)]:
             with self.subTest(later=later):
                 records = [anchor(0, 0), anchor(1000, later),
                            trigger(origin, 1000, dict(timeBase="musical", gridTicks=1)),
@@ -515,6 +517,41 @@ class TimingReviewTests(unittest.TestCase):
         errors = self.check(document([anchor(100, 4), cue, outcome(100, 100)], loop=(4, 12), grid=2))
         self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
         self.assertFalse(any("Int64 tick range" in e for e in errors), errors)
+
+    def test_forward_choice_is_the_first_boundary_projected_at_or_after_the_origin(self):
+        # A re-anchor drifted either way moves the projected grid; outside the window the choice never trails the
+        # origin and never skips a boundary projected between the origin and itself.
+        for later, origin, grid, ticks, assigned in [(641, 500, 2, 322, 502), (641, 501, 1, 322, 502),
+                                                     (639, 501, 2, 320, 502), (640, 499, 1, 320, 500)]:
+            with self.subTest(later=later, origin=origin):
+                records = [anchor(0, 0), anchor(1000, later),
+                           trigger(origin, 1000, dict(timeBase="musical", gridTicks=grid)),
+                           dict(outcome(assigned, 1000, "joined"), startOffsetFrames=1000 - assigned)]
+                doc = document(records, loop=None, grid=grid,
+                               late=dict(policy="joinInProgress", maxLatenessMs=1000, retroactiveMs=0))
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                expect = trace.triggers["trg.review"]["expect"]
+                self.assertEqual((expect["occ"], expect["retro"]), ((0, ticks), False))
+                self.assertGreaterEqual(trace.frame_of(expect["occ"]), origin)
+
+    def test_forward_choice_keeps_the_earlier_alias_across_a_tempo_edited_gap(self):
+        # A slower map projects the unrecorded gap before the origin; pass 2's end alias and recorded pass 7's start
+        # share the closest frame, and the earlier occurrence wins rather than the later pass's start.
+        records = [anchor(0, 0)] + wrap(21, 0, 7) + [
+            dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                 musicalMap=[dict(atTicks=0, microsPerQuarter=480000)]),
+            trigger(1, 21, dict(timeBase="musical", gridTicks=1)),
+            outcome(1, 21, "firedLate", revision=2)]
+        doc = document(records, loop=(0, 3), grid=1, tempo=320000,
+                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+        self.assertEqual(self.check(doc), [])
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        expect = trace.triggers["trg.review"]["expect"]
+        self.assertEqual((expect["occ"], expect["retro"]), ((2, 3), False))
+        self.assertEqual(trace.frame_of((2, 3)), trace.frame_of((3, 0)))
 
     def test_rejected_triggers_still_raise_the_current_horizon(self):
         changes = [("target", dict(timeBase="musical", gridTicks=2**63)), ("actionId", "act.missing"),

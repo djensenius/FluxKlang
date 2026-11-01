@@ -383,6 +383,48 @@ class Trace:
                     best = candidate, rank
         return best[0] if best else None
 
+    def projected_next(self, iteration, grid, frame):
+        """Choose the closest projection not before frame among the origin's and later passes, without walking them."""
+        lp, passes = self.loop, {iteration}
+        if lp:
+            recorded = self.pass_index()[0]
+            later = recorded[bisect.bisect_right(recorded, iteration):]
+            passes.update(later)
+            base = self.musical
+            first = self.ahead(base, k=0)
+            if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
+                period, located = self.ahead(base, k=1)["frame"] - first["frame"], iteration
+                if period:
+                    located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+                # Each later run of unrecorded passes is monotonic, so only its pass holding the frame (or the run's
+                # nearest end) or, as a rounded tick can land past the next pass's start, its predecessor can hold the
+                # closest interior boundary; the neighbour expansion below adds that predecessor.
+                low = iteration
+                for stop in later + [None]:
+                    if stop is None or stop > low:
+                        passes.add(max(low, located if stop is None else min(located, stop - 1)))
+                    low = (stop or 0) + 1
+            # A pass's end alias projects at its successor's start: either side of that shared frame can be closest.
+            passes.update([q for p in passes for q in (p - 1, p + 1) if q >= iteration])
+        best = None
+        for i in sorted(passes):
+            a = self.pass_anchor(i)  # the same projection anchor as the predecessor search
+            ticks = self.ticks_at_frame(frame, a)
+            if lp and i:  # a wrapped pass starts at the loop start, like the predecessor search's pass split
+                ticks = max(ticks, lp["startTicks"])
+            if lp and a["musicalTicks"] <= lp["endTicks"]:  # before this eligible pass's rounded wrap
+                ticks = min(ticks, lp["endTicks"])
+            candidates = [self.boundary((i, ticks), grid)]
+            if lp and lp["endTicks"] % grid == 0 and a["musicalTicks"] <= lp["endTicks"]:
+                candidates.append((i, lp["endTicks"]))  # its end alias is qualified separately, as when searching back
+            for occ in candidates:
+                projected = self.frame_of(occ)
+                if projected >= frame and (best is None or (projected, occ) < best):
+                    best = projected, occ  # an equal frame keeps the earlier occurrence
+        if best is None:
+            raise ValueError("no grid boundary projects at or after the origin")
+        return best[1]
+
     def run(self):
         for counter in self.gens:
             kind, identity = counter.split("/", 1)
@@ -648,21 +690,18 @@ class Trace:
             self.err(r, "musical target without a current musical anchor")
             return None
         try:
-            a = self.at(origin)  # retain the exact origin's pass, before rounding to a sample frame
-            i, t = a.get("loopIteration", 0), self.ticks_at_frame(origin, a)
+            i = self.at(origin).get("loopIteration", 0)  # the exact origin's pass, before rounding to a frame
             if "atTicks" in target:
                 choice = {"occ": (i, target["atTicks"]), "retro": False}
             else:
                 grid = target["gridTicks"]
-                if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
-                    t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
                 retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
                 prev = self.projected_previous(i, grid, origin)  # exact-frame matches stay eligible at zero
                 elapsed = origin - self.frame_of(prev) if prev is not None else None
                 if elapsed is not None and 0 <= elapsed <= retro:
                     choice = {"occ": prev, "retro": elapsed > 0}
                 else:
-                    choice = {"occ": self.boundary((i, t), grid), "retro": False}
+                    choice = {"occ": self.projected_next(i, grid, origin), "retro": False}
         except ValueError as exc:
             return self.err(r, str(exc))
         if self.loop and not self.loop["startTicks"] <= choice["occ"][1] <= self.loop["endTicks"]:
