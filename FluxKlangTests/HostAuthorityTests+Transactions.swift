@@ -148,29 +148,32 @@ enum RejectedBegin: CaseIterable, Sendable {
     case staleBase, graphMismatch, invalidGraph, invalidCapabilities, missingCapabilities, staleCapabilities
 }
 
+// iOS's `FluxKlangTests` type shadows the module name, so these defaults avoid module-qualified calls.
+private func currentRequest() -> ActivationRequest { request() }
+private func currentCandidate() -> GraphDocument { candidate() }
+
 private struct RejectedAttempt {
     let rejection: ActivationRejection
-    var request = FluxKlangTests.request()
-    var candidate = FluxKlangTests.candidate()
+    var request = currentRequest()
+    var candidate = currentCandidate()
 }
 
 extension RejectedBegin {
     /// The request and candidate that cause this rejection, if the request is at fault.
-    fileprivate func request() throws -> RejectedAttempt? {
+    fileprivate func faultyAttempt() throws -> RejectedAttempt? {
         let found = try ContractRevision.initial.next()
         switch self {
         case .staleHostEpoch:
-            return RejectedAttempt(rejection: .staleHostEpoch, request: FluxKlangTests.request(epoch: try otherEpoch()))
+            return RejectedAttempt(rejection: .staleHostEpoch, request: request(epoch: try otherEpoch()))
         case .assistantOrigin, .controllerOrigin:
             let origin: CommandOrigin = self == .assistantOrigin ? .assistant : .controller
-            return RejectedAttempt(rejection: .originCannotActivate(origin),
-                                   request: FluxKlangTests.request(origin: origin))
+            return RejectedAttempt(rejection: .originCannotActivate(origin), request: request(origin: origin))
         case .invalidDigest:
             return RejectedAttempt(rejection: .invalidDigest,
-                                   request: FluxKlangTests.request(digest: ActivationDigest(rawValue: "")))
+                                   request: request(digest: ActivationDigest(rawValue: "")))
         case .staleBase:
             return RejectedAttempt(rejection: .staleBase(expected: .initial, found: found),
-                                   request: FluxKlangTests.request(base: found))
+                                   request: request(base: found))
         case .graphMismatch:
             return RejectedAttempt(rejection: .graphMismatch,
                                    candidate: candidate(id: GraphID(validated: "graph.other")))
@@ -230,7 +233,7 @@ extension HostAuthorityTests {
         func invalidRequestsEmitNoEffects(rejected: RejectedBegin) throws {
             var host = try Bench()
             try host.acquire(projectA)
-            let attempt = try rejected.request()
+            let attempt = try rejected.faultyAttempt()
             let contextual = try rejected.context()
             host.activation = contextual?.context ?? host.activation
             let expected = try #require(attempt?.rejection ?? contextual?.rejection)
