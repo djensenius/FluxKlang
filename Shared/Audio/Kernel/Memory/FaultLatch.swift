@@ -1,6 +1,6 @@
 // #64 fault latch (owner default D14): a fault scope is a handoff × output/stream slot, and a raised fault
-// stays latched until control acknowledges it. Raising is wait-free and allocation-free from any context.
-// Reference model; not RT-certified.
+// stays latched until control acknowledges it. Raising takes no lock and has no source-level retry loop; target
+// atomic lowering and progress are unqualified (see Progress). Reference model; not RT-certified.
 import Synchronization
 
 #if !_pointerBitWidth(_64)
@@ -95,14 +95,18 @@ struct FaultObservation: Sendable {
 /// Serialization. `observe`, `acknowledge` and `pending`'s read of each scope run under `control`, a control-side
 /// `Mutex`, which also guards the plain `epoch` words; `raise` and `isLatched` never take it. Only `acknowledge`
 /// steps a generation, so a control operation never pairs an old count with a new claim. Each holds `control` for
-/// a bounded time: one scope's reads and at most one compare-exchange, no retry loop. The `Mutex` is control-side
-/// only: the render paths (`raise`, `isLatched`) stay lock-free and never take it, and X1's lint must allow
-/// `Mutex` only in `FaultLatch` control paths.
+/// one scope's reads and at most one compare-exchange call, with no source-level retry loop (target lowering
+/// unqualified; see Progress). The `Mutex` is control-side only: the render paths (`raise`, `isLatched`) never
+/// take it, and X1's lint must allow `Mutex` only in `FaultLatch` control paths.
 ///
-/// Progress. `raise` and `isLatched` have no retry loops and no lock: one load, at most one wrapping add and at
-/// most one 128-bit release store (`stp` on arm64 macOS; on arm64 iOS and x86_64 a value-comparing
-/// compare-exchange loop that ends within two iterations, because every concurrent access to `first` is a
-/// value-preserving read). `observe`, `acknowledge` and `pending` run on control, where the lock is acceptable;
+/// Progress (source level only). `raise` and `isLatched` take no lock and have no source-level retry loop: one
+/// load, at most one wrapping add and at most one 128-bit release store, each one `Synchronization.Atomic`
+/// operation. That fixed operation count is not target-level wait-freedom. The protocol relies on `Atomic`'s
+/// documented semantics (single-copy atomicity of `UInt64` and `WordPair` at the stated orderings); whether a
+/// target lowers each operation to a bounded, non-spuriously-failing sequence is not proved here, so target atomic
+/// lowering and progress are unqualified. The no-allocation/no-lock and call-graph checks hold only for the
+/// targets and configurations they ran on. This slice does not accept or waive #64's final-target hot-path
+/// qualification. `observe`, `acknowledge` and `pending` run on control, where the lock is acceptable;
 /// under a continuous stream of raises an acknowledge may keep being refused, which fails safe (still latched).
 ///
 /// Saturation. Raisers that pass the cap check concurrently can overshoot `countCap` by at most the number of
@@ -191,8 +195,9 @@ final class FaultLatch: @unchecked Sendable {
         keys.deallocate()
     }
 
-    /// Any context; wait-free. `.ok` when counted against a prepared scope; an unprepared scope is counted in
-    /// `unknownScopeFaults` and refused with `.slotOutOfRange`.
+    /// Any context; no lock or source-level retry loop (target progress unqualified; see Progress). `.ok` when
+    /// counted against a prepared scope; an unprepared scope is counted in `unknownScopeFaults` and refused with
+    /// `.slotOutOfRange`.
     func raise(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> KernelStatus {
         guard let index = index(of: scope) else {
             if unknown.load(ordering: .relaxed) < Bits.unknownCap {
