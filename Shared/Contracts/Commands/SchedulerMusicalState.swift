@@ -240,11 +240,11 @@ struct SchedulerMusicalState: Sendable {
         }
     }
 
-    /// Releases a pending admission's pin, if any; staged by the caller with the terminal enqueue.
+    /// Releases a pending admission's pin, if any, IN PLACE on this staged copy (no per-pin timeline
+    /// copy); the timeline validates the pin before its only mutation, and callers discard the copy on throw.
     mutating func release(_ admission: SchedulerMusicalAdmission?) throws {
         guard case .pinned(let pin) = admission else { return }
-        guard var next = timeline else { throw MusicalTimingError.invalidPin }
-        try next.release(pin)
-        timeline = next
+        guard timeline != nil else { throw MusicalTimingError.invalidPin }
+        try timeline?.release(pin)
     }
 }
