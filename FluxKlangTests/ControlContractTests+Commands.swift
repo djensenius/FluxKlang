@@ -31,15 +31,17 @@ private func intent(_ controlClass: ControlClass, host currentHost: HostEpoch = 
 
 private func context(_ controlClass: ControlClass, scopes: Set<CommandScope>? = nil,
                      revisions: CommandRevisions = CommandRevisions(),
-                     connection currentConnection: ConnectionEpoch? = connection) throws -> AdmissionContext {
+                     connection currentConnection: ConnectionEpoch? = connection,
+                     permission currentPermission: PermissionFingerprint? = permission,
+                     allowedClasses: Set<CommandClass>? = nil) throws -> AdmissionContext {
     let descriptor = try ParameterDescriptor(.init(
         id: parameter, unit: .normalized, lower: 0, upper: 1, defaultValue: 0.5, ceiling: 0.8,
         curve: .linear, ramp: ParameterRamp(.init(kind: .linear, minimumMilliseconds: 10, maximumMilliseconds: 100)),
         controlClass: controlClass == .hazardous ? .hazardous : .live, verification: .reported
     ))
     return AdmissionContext(
-        hostEpoch: hostEpoch, connectionEpoch: currentConnection, revisions: revisions, permission: permission,
-        allowedScopes: scopes ?? [operation(for: controlClass).scope], allowedClasses: [controlClass],
+        hostEpoch: hostEpoch, connectionEpoch: currentConnection, revisions: revisions, permission: currentPermission,
+        allowedScopes: scopes ?? [operation(for: controlClass).scope], allowedClasses: allowedClasses ?? [controlClass],
         catalog: try ParameterCatalog([descriptor])
     )
 }
@@ -78,6 +80,15 @@ extension ControlContractTests {
                 == .admitted)
         }
 
+        @Test(arguments: ControlClass.allCases)
+        func permissionFingerprintsAreRequiredAndCurrent(controlClass: ControlClass) throws {
+            #expect(try CommandAdmission.admit(intent(controlClass), in: context(controlClass, permission: nil))
+                == .refused(.rejected(.permissionDenied)))
+            let changed = PermissionFingerprint(rawValue: "permissions.other")
+            #expect(try CommandAdmission.admit(intent(controlClass), in: context(controlClass, permission: changed))
+                == .refused(.rejected(.permissionChanged)))
+        }
+
         @Test func assistantLocalityNeverGrantsActivationAndClassCannotBeRelabelled() throws {
             #expect(try CommandAdmission.admit(intent(.live, origin: .assistant), in: context(.live))
                 == .refused(.rejected(.permissionDenied)))
@@ -85,9 +96,26 @@ extension ControlContractTests {
                 == .admitted)
             #expect(try CommandAdmission.admit(intent(.live), in: context(.hazardous))
                 == .refused(.rejected(.permissionDenied)))
+            let both = try context(.hazardous, allowedClasses: [.live, .hazardous])
+            #expect(try CommandAdmission.admit(intent(.live), in: both) == .refused(.rejected(.classMismatch)))
+            #expect(try CommandAdmission.admit(intent(.hazardous), in: both) == .admitted)
             let ramp = CommandOperation.ramp(parameter, .init(value: 0.7, unit: .normalized), milliseconds: 101)
             #expect(try CommandAdmission.admit(intent(.live, operation: ramp), in: context(.live))
                 == .refused(.rejected(.invalidValue(.invalidRamp))))
+        }
+
+        @Test(arguments: [false, true])
+        func parameterOperationsRespectContextCeiling(ramped: Bool) throws {
+            var current = try context(.live)
+            current.ceiling = 0.4
+            for level in [0.4, 0.5] {
+                let value = ParameterValue(value: level, unit: .normalized)
+                let operation: CommandOperation = ramped
+                    ? .ramp(parameter, value, milliseconds: 10) : .set(parameter, value)
+                let expected: AdmissionDecision = level == 0.4
+                    ? .admitted : .refused(.rejected(.invalidValue(.aboveCeiling(level, ceiling: 0.4))))
+                #expect(try CommandAdmission.admit(intent(.live, operation: operation), in: current) == expected)
+            }
         }
 
         @Test(arguments: [Int64(-1), Int64.min])
