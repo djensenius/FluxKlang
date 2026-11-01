@@ -42,20 +42,24 @@ extension MusicalTimeline {
         throws -> (occurrence: MusicalOccurrence, units: Int128)? {
         let passes = previousPasses(through: initial, grid: grid, using: index)
         let frames = previousFrameBounds(for: passes, using: index)
-        let missing = try missingInverseBounds(in: passes, grid: grid, frames: frames, using: index)
+        let missing = try missingInverseBounds(in: passes, grid: grid, frames: frames,
+                                               origin: (initial, window.heldTicks), using: index)
         var best: (occurrence: MusicalOccurrence, units: Int128)?
         var unresolved: [MusicalOccurrence] = []
         // Each available pass supplies at most one inverse and an independently qualified end.
         // Descending retained keys settle remaining ties without walking numeric passes or grid ticks.
         for pass in passes.sorted(by: >) {
+            let ceiling = pass == initial ? window.heldTicks ?? Int64.max : Int64.max
             let candidates = try previousCandidates(pass: pass, at: frame, grid: grid,
-                ceiling: pass == initial ? window.heldTicks ?? Int64.max : Int64.max, using: index)
+                                                    ceiling: ceiling, using: index)
             for occurrence in candidates {
                 let units: Int128
                 do {
                     units = try projectionUnits(for: occurrence, using: index)
                 } catch MusicalTimingError.historyUnavailable { unresolved.append(occurrence); continue }
-                guard MusicalFrame(units: units) <= frame,
+                // A qualified exact-frame alias is not retroactive; strictly past ends keep the held tick cap.
+                guard occurrence.ticks <= ceiling || MusicalFrame(units: units) == frame,
+                      MusicalFrame(units: units) <= frame,
                       try MusicalTiming.isRetroactive(units, at: frame, milliseconds: window.milliseconds,
                                                        rate: sample.nominalRate) else { continue }
                 let isEnd = currentLoop?.endTicks == occurrence.ticks
@@ -101,7 +105,8 @@ extension MusicalTimeline {
         var keys = passes.union(index.retainedPasses).union([current])
         for pass in passes where pass < current { keys.insert(pass + 1) }
         var frames: [Int128: Int64] = [:]
-        var upper: Int64?
+        // A held frame bounds earlier running frames, but never supplies an inverse/projection anchor.
+        var upper: Int64? = isRunning ? nil : currentClock.anchor.sample.frame
         // Nearest later genuine anchor, never the end-only summary's proxy as an original anchor.
         for pass in keys.sorted(by: >) {
             if let anchor = previousAnchor(for: pass, using: index) { upper = anchor.sample.frame }
@@ -111,6 +116,7 @@ extension MusicalTimeline {
     }
 
     private func missingInverseBounds(in passes: Set<Int128>, grid: Int64, frames: [Int128: Int64],
+                                      origin: (pass: Int128, heldTicks: Int64?),
                                       using index: MusicalProjectionIndex)
         throws -> [(pass: Int128, upperUnits: Int128)] {
         guard let loop = currentLoop else { return [] }
@@ -121,21 +127,19 @@ extension MusicalTimeline {
         var previous: Int128 = -1 // Include a discarded prefix, not just gaps between retained keys.
         var missing: [(pass: Int128, upperUnits: Int128)] = []
         for pass in passes.sorted() {
-            guard let frame = frames[pass] else { throw MusicalTimingError.historyUnavailable }
-            let base = try MusicalTiming.multiply(Int128(frame), MusicalTiming.unitsPerFrame)
-            if pass - previous > 1 {
-                missing.append((pass - 1, try MusicalTiming.add(base, span)))
-            }
-            if previousAnchor(for: pass, using: index) == nil {
-                if let ticks = index.originalTicks[pass] {
-                    // This pass's retained ticks tighten its missing interior, not any other pass's.
-                    // Its separately qualified end is projected (or tracked as unresolved) independently.
-                    if interior >= loop.startTicks {
-                        missing.append((pass, try MusicalTiming.add(base,
-                            MusicalTiming.units(currentClock, from: ticks, to: interior))))
-                    }
-                } else {
-                    missing.append((pass, try MusicalTiming.add(base, span)))
+            let upper = pass == origin.pass ? min(interior, origin.heldTicks ?? interior) : interior
+            let missingInterior = previousAnchor(for: pass, using: index) == nil && upper >= loop.startTicks
+            if pass - previous > 1 || missingInterior {
+                guard let frame = frames[pass] else { throw MusicalTimingError.historyUnavailable }
+                let base = try MusicalTiming.multiply(Int128(frame), MusicalTiming.unitsPerFrame)
+                if pass - previous > 1 {
+                    missing.append((pass - 1, try MusicalTiming.add(base, span)))
+                }
+                if missingInterior {
+                    // This pass's ticks bound only its own interior; end dependencies are checked separately.
+                    let ticks = originalTicks(for: pass, using: index) ?? 0
+                    missing.append((pass, try MusicalTiming.add(base,
+                        MusicalTiming.units(currentClock, from: ticks, to: upper))))
                 }
             }
             previous = pass
@@ -149,8 +153,7 @@ extension MusicalTimeline {
         guard let loop = currentLoop, occurrence.ticks == loop.endTicks else {
             throw MusicalTimingError.historyUnavailable
         }
-        let originalTicks = previousAnchor(for: occurrence.pass, using: index)?.musical?.ticks
-            ?? index.originalTicks[occurrence.pass]
+        let originalTicks = self.originalTicks(for: occurrence.pass, using: index)
         guard let originalTicks else {
             // Unknown eligibility: an unqualified end is no later than its anchor; an alias uses startTicks.
             guard let frame = frames[occurrence.pass] else { throw MusicalTimingError.historyUnavailable }
@@ -166,7 +169,7 @@ extension MusicalTimeline {
         }
         guard let frame = frames[pass] else { throw MusicalTimingError.historyUnavailable }
         let ticks = pass == occurrence.pass ? occurrence.ticks : loop.startTicks
-        let anchorTicks = previousAnchor(for: pass, using: index)?.musical?.ticks ?? index.originalTicks[pass] ?? 0
+        let anchorTicks = self.originalTicks(for: pass, using: index) ?? 0
         return try (occurrence.pass, MusicalTiming.add(
             MusicalTiming.multiply(Int128(frame), MusicalTiming.unitsPerFrame),
             MusicalTiming.units(currentClock, from: anchorTicks, to: ticks)))
@@ -174,6 +177,15 @@ extension MusicalTimeline {
 
     private func previousAnchor(for pass: Int128, using index: MusicalProjectionIndex) -> ClockAnchor? {
         index.anchor(for: pass)
+    }
+
+    func qualifiedEnd(pass: Int128, grid: Int64, floor: Int64? = nil,
+                      using index: MusicalProjectionIndex) -> MusicalOccurrence? {
+        guard let loop = currentLoop, loop.endTicks % grid == 0, floor ?? 0 <= loop.endTicks else { return nil }
+        let future = pass > Int128(currentClock.musical.loopIteration) && currentClock.musical.ticks <= loop.endTicks
+        guard let ticks = originalTicks(for: pass, using: index) ?? (future ? loop.startTicks : nil),
+              ticks <= loop.endTicks else { return nil }
+        return MusicalOccurrence(pass: pass, ticks: loop.endTicks)
     }
 
     private func missingCannotWin(_ missing: (pass: Int128, upperUnits: Int128),
@@ -195,9 +207,11 @@ extension MusicalTimeline {
         throws -> [MusicalOccurrence] {
         var upper = min(Int128(ceiling), Int128(currentLoop?.endTicks ?? Int64.max))
         var candidates: [MusicalOccurrence] = []
-        if let loop = currentLoop, upper == Int128(loop.endTicks), loop.endTicks % grid == 0 {
-            candidates.append(MusicalOccurrence(pass: pass, ticks: loop.endTicks))
-            upper -= 1
+        if let loop = currentLoop, loop.endTicks % grid == 0 {
+            if ceiling >= loop.endTicks || qualifiedEnd(pass: pass, grid: grid, using: index) != nil {
+                candidates.append(MusicalOccurrence(pass: pass, ticks: loop.endTicks))
+            }
+            upper = min(upper, Int128(loop.endTicks) - 1)
         }
         // A tick-only eligibility summary cannot supply an ordinary inverse.
         guard let anchor = previousAnchor(for: pass, using: index) else { return candidates }

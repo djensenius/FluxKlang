@@ -246,6 +246,11 @@ struct MusicalTimeline: Sendable {
     func projectionUnits(for occurrence: MusicalOccurrence, using index: MusicalProjectionIndex) throws -> Int128 {
         try projectedUnits(prepare(occurrence, using: index))
     }
+    func originalTicks(for pass: Int128, using index: MusicalProjectionIndex) -> Int64? {
+        index.anchor(for: pass)?.musical?.ticks
+            ?? (pass == Int128(state.clock.musical.loopIteration) ? latestRunningTicks : nil)
+            ?? index.originalTicks[pass]
+    }
     private func prepare(_ occurrence: MusicalOccurrence, retaining ticks: Int64? = nil,
                          using index: MusicalProjectionIndex) throws -> TimelineReservation {
         guard state.loop?.admits(ticks: occurrence.ticks) ?? true else { throw MusicalTimingError.outsideLoop }

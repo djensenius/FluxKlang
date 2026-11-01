@@ -15,13 +15,36 @@ extension MusicalTimeline {
             let held = origin.isRunning ? nil : origin.clock.musical.ticks
             if let previous = try projectedPrevious(pass: pass, at: frame, grid: grid,
                                                    window: (retroactiveMs, held), using: index) {
-                if MusicalFrame(units: previous.units) == frame { return previous.occurrence }
+                if MusicalFrame(units: previous.units) == frame {
+                    return try exactHeldWinner(previous.occurrence, at: frame, grid: grid,
+                                               origin: (pass, held), using: index)
+                }
                 if try MusicalTiming.isRetroactive(previous.units, at: frame, milliseconds: retroactiveMs,
                                                     rate: sample.nominalRate) { return previous.occurrence }
             }
             return try projectedNext(pass: pass, at: frame, grid: grid, minimumTicks: forwardFloor(for: origin),
                                      using: index)
         }
+    }
+
+    private func exactHeldWinner(_ previous: MusicalOccurrence, at frame: MusicalFrame, grid: Int64,
+                                 origin: (pass: Int128, ceiling: Int64?), using index: MusicalProjectionIndex)
+        throws -> MusicalOccurrence {
+        guard let ceiling = origin.ceiling, previous.pass == origin.pass, previous.ticks > ceiling,
+              let loop = currentLoop, previous.ticks == loop.endTicks else { return previous }
+        // The capped predecessor already proves candidates at/below held ticks. Only the exact-forward
+        // ordinary competitors above that ceiling remain; an empty domain needs no inverse anchor.
+        let lower = max(Int128(origin.pass > 0 ? loop.startTicks : 0), Int128(ceiling) + 1)
+        let first = ExactMath.ceilDiv(lower, Int128(grid)) * Int128(grid)
+        guard first < Int128(loop.endTicks) else { return previous }
+        let anchor = try forwardAnchor(for: origin.pass, using: index)
+        let candidates = try forwardCandidates(pass: origin.pass, at: frame, grid: grid,
+                                               anchor: anchor, floor: MusicalTiming.narrow(first))
+        for occurrence in candidates where occurrence.pass == origin.pass && occurrence.ticks < loop.endTicks {
+            let units = try forwardUnits(occurrence, pass: origin.pass, anchor: anchor, using: index)
+            if MusicalFrame(units: units) == frame { return occurrence }
+        }
+        return previous
     }
 
     private func forwardFloor(for origin: MusicalOrigin) throws -> Int64? {
@@ -52,18 +75,19 @@ extension MusicalTimeline {
         var best: (occurrence: MusicalOccurrence, units: Int128)?
         var failure: MusicalTimingError = currentLoop == nil ? .overflow : .outsideLoop
         for pass in passes.sorted() {
-            let anchor: (ticks: Int64, units: Int128)
-            let candidates: [MusicalOccurrence]
+            let floor = pass == initial ? minimumTicks : nil
+            var anchor: (ticks: Int64, units: Int128)?
+            var candidates = qualifiedEnd(pass: pass, grid: grid, floor: floor, using: index).map { [$0] } ?? []
             do {
-                anchor = try forwardAnchor(for: pass, using: index)
-                candidates = try forwardCandidates(pass: pass, at: frame, grid: grid, anchor: anchor,
-                                                    floor: pass == initial ? minimumTicks : nil)
+                let value = try forwardAnchor(for: pass, using: index)
+                anchor = value
+                candidates += try forwardCandidates(pass: pass, at: frame, grid: grid, anchor: value, floor: floor)
             } catch let error as MusicalTimingError {
                 failure = error
-                if error == .historyUnavailable, pass <= current {
+                if error == .historyUnavailable, pass <= current,
+                   try needsForwardInverse(pass: pass, at: frame, grid: grid, floor: floor, using: index) {
                     unresolved = earlier(unresolved, MusicalOccurrence(pass: pass, ticks: 0))
                 }
-                continue
             }
             for occurrence in candidates {
                 let units: Int128
@@ -88,6 +112,23 @@ extension MusicalTimeline {
         }
         guard let best else { throw failure }
         return best.occurrence
+    }
+
+    private func needsForwardInverse(pass: Int128, at frame: MusicalFrame, grid: Int64, floor: Int64?,
+                                     using index: MusicalProjectionIndex) throws -> Bool {
+        guard let loop = currentLoop,
+              let end = qualifiedEnd(pass: pass, grid: grid, floor: floor, using: index) else { return true }
+        // Pass zero's pre-loop candidates still need an inverse unless the authenticated floor excludes them.
+        let lower = max(pass > 0 ? loop.startTicks : 0, floor ?? 0)
+        guard ExactMath.ceilDiv(Int128(lower), Int128(grid)) * Int128(grid) < Int128(end.ticks) else { return false }
+        guard !isRunning, pass == Int128(currentClock.musical.loopIteration),
+              let ticks = originalTicks(for: pass, using: index) else { return true }
+        // As in the predecessor, the held frame bounds the lost anchor without replacing it.
+        // Every ordinary boundary is excluded only if the last one's exact upper bound precedes the origin.
+        let upper = try MusicalTiming.add(
+            MusicalTiming.multiply(Int128(currentClock.anchor.sample.frame), MusicalTiming.unitsPerFrame),
+            MusicalTiming.units(currentClock, from: ticks, to: end.ticks - grid))
+        return MusicalFrame(units: upper) >= frame
     }
 
     private func forwardPasses(from initial: Int128, using index: MusicalProjectionIndex)
@@ -127,7 +168,6 @@ extension MusicalTimeline {
         var ticks = try MusicalTiming.gridBounds(at: frame, grid: grid, clock: currentClock,
                                                  projectionAnchor: anchor).forward
         var nextPass = pass
-        var candidates: [MusicalOccurrence] = []
         if let loop = currentLoop {
             let first = ExactMath.ceilDiv(Int128(loop.startTicks), Int128(grid)) * Int128(grid)
             let end = ExactMath.ceilDiv(Int128(loop.endTicks), Int128(grid)) * Int128(grid)
@@ -143,20 +183,16 @@ extension MusicalTimeline {
                 nextPass = try MusicalTiming.add(pass, 1)
                 ticks = first
             }
-            if eligible, loop.endTicks % grid == 0, floor ?? 0 <= loop.endTicks {
-                candidates.append(MusicalOccurrence(pass: pass, ticks: loop.endTicks))
-            }
         } else if let floor {
             ticks = max(ticks, ExactMath.ceilDiv(Int128(floor), Int128(grid)) * Int128(grid))
         }
-        candidates.append(try MusicalOccurrence(pass: nextPass, ticks: MusicalTiming.narrow(ticks)))
-        return candidates
+        return [try MusicalOccurrence(pass: nextPass, ticks: MusicalTiming.narrow(ticks))]
     }
 
     private func forwardUnits(_ occurrence: MusicalOccurrence, pass: Int128,
-                              anchor: (ticks: Int64, units: Int128), using index: MusicalProjectionIndex)
+                              anchor: (ticks: Int64, units: Int128)?, using index: MusicalProjectionIndex)
         throws -> Int128 {
-        if currentLoop?.admits(ticks: occurrence.ticks) == false, occurrence.pass == pass {
+        if let anchor, currentLoop?.admits(ticks: occurrence.ticks) == false, occurrence.pass == pass {
             // Rank pre-loop/out-of-loop boundaries normally; prepare rejects them only if selected.
             return try MusicalTiming.add(anchor.units,
                 MusicalTiming.units(currentClock, from: anchor.ticks, to: occurrence.ticks))

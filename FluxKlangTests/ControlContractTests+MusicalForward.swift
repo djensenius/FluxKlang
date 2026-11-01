@@ -190,6 +190,166 @@ extension ControlContractTests {
             #expect(try timeline.project(stored).frame == frame - 2)
         }
 
+        @Test(arguments: [1, 3], [0, 1])
+        func stoppedEndOnlyGridKeepsTheExactFutureAlias(_ history: Int, _ retro: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 1, endTicks: 2),
+                                                 history: history, ticks: 1, segments: [(0, 60_000)])
+            try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 1, pass: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 1, pass: 1)
+            let pin = try timeline.reserve(.grid(2), origin: timeline.origin(atFrame: 0), retroactiveMs: retro)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 1, ticks: 2))
+            #expect(throws: MusicalTimingError.stopped) { try timeline.project(pin) }
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 1, pass: 1)
+            #expect(try timeline.project(pin).frame == 0 && timeline.project(pin).assumesFuture)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 1, pass: 2)
+            #expect(try timeline.project(pin).frame == 0 && !timeline.project(pin).assumesFuture)
+        }
+
+        @Test(arguments: [1, 3])
+        func stoppedEndOnlyAbsoluteAliasRemainsTheParityControl(_ history: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 1, endTicks: 2),
+                                                 history: history, ticks: 1, segments: [(0, 60_000)])
+            try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 1, pass: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 1, pass: 1)
+            let pin = try timeline.reserve(.absolute(2), origin: timeline.origin(atFrame: 0))
+            #expect(pin.occurrence == MusicalOccurrence(pass: 1, ticks: 2))
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 1, pass: 1)
+            #expect(try timeline.project(pin).frame == 0 && timeline.project(pin).assumesFuture)
+        }
+
+        @Test(arguments: [1, 2])
+        func stoppedEndOnlyForwardAliasDoesNotNeedAnInverseAnchor(_ history: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 1, endTicks: 2),
+                                                 history: history, ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 1)
+            let pin = try timeline.reserve(.grid(2), origin: timeline.origin(atFrame: 0))
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 2))
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 1)
+            #expect(try timeline.project(pin).frame == 2 && timeline.project(pin).assumesFuture)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 2, ticks: 1, pass: 1)
+            #expect(try timeline.project(pin).frame == 2 && !timeline.project(pin).assumesFuture)
+        }
+
+        @Test(arguments: [1, 2])
+        func aStoppedForwardEndCannotHideAnUnknownOrdinaryInverse(_ history: Int) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 0, endTicks: 2),
+                                                 history: history, ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 0)
+            let origin = try timeline.origin(atFrame: 0)
+            let before = String(reflecting: timeline)
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    try timeline.reserve(.grid(1), origin: origin)
+                }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                // The held tick caps the predecessor, not the next inverse; its tick 1 beats the end at frame 3.
+                let pin = try timeline.reserve(.grid(1), origin: origin)
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 1))
+                try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0)
+                #expect(try timeline.project(pin).frame == 2)
+            }
+        }
+
+        @Test(arguments: [1, 3], [false, true])
+        func anExactStoppedEndCannotBypassAnOrdinaryBoundary(_ history: Int, _ addingLoop: Bool) throws {
+            var (timeline, ledger) = try stoppedExactAlias(history: history, addingLoop: addingLoop)
+            let origin = try timeline.origin(atFrame: 0)
+            #expect(!origin.isRunning && origin.clock.musical.ticks == 0)
+            let before = String(reflecting: timeline)
+            if history == 1 {
+                #expect(throws: MusicalTimingError.historyUnavailable) {
+                    try timeline.reserve(.grid(1), origin: origin)
+                }
+                #expect(String(reflecting: timeline) == before)
+                #expect(timeline.pinCount == 0)
+            } else {
+                let pin = try timeline.reserve(.grid(1), origin: origin)
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 1))
+                #expect(throws: MusicalTimingError.stopped) { try timeline.project(pin) }
+                try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0)
+                #expect(try timeline.project(pin).frame == 0 && !timeline.project(pin).assumesFuture)
+            }
+        }
+
+        @Test(arguments: [1, 3], [false, true])
+        func anExactStoppedEndKeepsTheProofForOrdinaryTicksBelowTheCeiling(_ history: Int, _ addingLoop: Bool) throws {
+            // Tick 0's missing inverse is bounded strictly before frame 0; no ordinary grid tick is above held 0.
+            for tempo: Int64 in [60_000, 100_000] {
+                for target in [MusicalTarget.absolute(2), .grid(2)] {
+                    var (timeline, ledger) = try stoppedExactAlias(history: history, addingLoop: addingLoop,
+                                                                 tempo: tempo)
+                    let pin = try timeline.reserve(target, origin: timeline.origin(atFrame: 0))
+                    #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 2))
+                    try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0)
+                    let assigned: Int64 = tempo == 60_000 ? 0 : 1
+                    #expect(try timeline.project(pin).frame == assigned && timeline.project(pin).assumesFuture)
+                }
+            }
+        }
+
+        @Test func anExactHeldEndCannotBeReplacedByALaterOrdinaryBoundary() throws {
+            var ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 0, endTicks: 2), ticks: 1)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 0)
+            let origin = try timeline.origin(atFrame: 0)
+            try fixture.observe(&timeline, .running(true), ledger, frame: 1, ticks: 0)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 4, ticks: 0, pass: 1)
+            try fixture.observe(&timeline, .musical, ledger, frame: 4, ticks: 1, pass: 1)
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 1_280_000)])), ledger, frame: 4)
+            let later = try timeline.reserve(.absolute(1), origin: origin)
+            #expect(try timeline.project(later).frame == 5)
+            let pin = try timeline.reserve(.grid(1), origin: origin)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 2))
+            #expect(try timeline.project(pin).frame == 0 && !timeline.project(pin).assumesFuture)
+        }
+
+        @Test func anExactHeldEndCannotHideAPreLoopForwardRefusal() throws {
+            var ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 4, endTicks: 12),
+                                                 ticks: 1, segments: [(0, 1_000_000)])
+            try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 0)
+            let origin = try timeline.origin(atFrame: 0)
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0)
+            try fixture.observe(&timeline, .musical, ledger, frame: 8, ticks: 3)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 36, ticks: 4, pass: 1)
+            try fixture.observe(&timeline, .musical, ledger, frame: 56, ticks: 11, pass: 1)
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 2_560_000)])), ledger, frame: 56)
+            let before = String(reflecting: timeline)
+            // Tick 2 ties the exact end, but remains pre-loop; the alias must not make it admissible.
+            #expect(throws: MusicalTimingError.outsideLoop) { try timeline.reserve(.grid(1), origin: origin) }
+            #expect(String(reflecting: timeline) == before)
+            #expect(timeline.pinCount == 0)
+        }
+
+        @Test func anEarlierPassEndDoesNotBorrowTheOriginPassHeldCeiling() throws {
+            var ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 0, endTicks: 6),
+                                                 history: 1, ticks: 4, segments: [(0, 60_000)])
+            _ = try timeline.reserve(.absolute(4), origin: timeline.origin(atFrame: 0))
+            _ = try timeline.reserve(.absolute(6), origin: timeline.origin(atFrame: 0))
+            try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 0, pass: 1)
+            try fixture.observe(&timeline, .wrap, ledger, frame: 1, ticks: 0, pass: 2)
+            try fixture.observe(&timeline, .musical, ledger, frame: 1, ticks: 1, pass: 2)
+            try fixture.observe(&timeline, .musical, ledger, frame: 1, ticks: 2, pass: 2)
+            try fixture.observe(&timeline, .running(false), ledger, frame: 1, ticks: 1, pass: 2)
+            try fixture.observe(&timeline, .loop(.init(startTicks: 1, endTicks: 6)), ledger, frame: 1)
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 320_000)])), ledger, frame: 1)
+            // The held ceiling excludes pass 2's tick 2, not the independently proven pass 0 end.
+            let pin = try timeline.reserve(.grid(2), origin: timeline.origin(atFrame: 1))
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 6))
+            #expect(throws: MusicalTimingError.stopped) { try timeline.project(pin) }
+            try fixture.observe(&timeline, .running(true), ledger, frame: 1, ticks: 1, pass: 2)
+            #expect(try timeline.project(pin).frame == 1 && !timeline.project(pin).assumesFuture)
+        }
+
         private func fastEditedLoop(_ loop: LoopRange) throws -> MusicalTimeline {
             var ledger = try fixture.ledger()
             var timeline = try fixture.timeline(ledger, loop: loop, segments: [(0, 3_000_000)])
@@ -261,5 +421,41 @@ extension ControlContractTests {
             #expect(try timeline.project(pin).frame == 19)
             #expect(try timeline.project(pin).assumesFuture)
         }
+    }
+}
+
+extension ControlContractTests.MusicalForwardValidation {
+    @Test(arguments: [1, 3], [false, true])
+    func aForwardEndStillNeedsAnExactOrdinaryInverseAfterMapEdits(_ history: Int, _ addingLoop: Bool) throws {
+        var (timeline, ledger) = try stoppedExactAlias(history: history, addingLoop: addingLoop, tempo: 100_000)
+        let origin = try timeline.origin(atFrame: 0)
+        let before = String(reflecting: timeline)
+        if history == 1 {
+            #expect(throws: MusicalTimingError.historyUnavailable) {
+                try timeline.reserve(.grid(1), origin: origin)
+            }
+            #expect(String(reflecting: timeline) == before && timeline.pinCount == 0)
+        } else {
+            let pin = try timeline.reserve(.grid(1), origin: origin)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 1))
+            try fixture.observe(&timeline, .running(true), ledger, frame: 0, ticks: 0)
+            #expect(try timeline.project(pin).frame == 0 && !timeline.project(pin).assumesFuture)
+        }
+    }
+
+    private func stoppedExactAlias(history: Int, addingLoop: Bool, tempo: Int64 = 60_000)
+        throws -> (MusicalTimeline, GenerationLedger) {
+        var ledger = try fixture.ledger()
+        let loop = try LoopRange(startTicks: 0, endTicks: 2)
+        var timeline = try fixture.timeline(ledger, loop: addingLoop ? nil : loop, history: history,
+                                             ticks: 1, segments: [(0, addingLoop ? tempo : 500_000)])
+        try fixture.observe(&timeline, .running(false), ledger, frame: 0, ticks: 0)
+        if addingLoop {
+            try fixture.observe(&timeline, .loop(loop), ledger, frame: 0)
+        } else {
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, tempo)])), ledger, frame: 0)
+        }
+        return (timeline, ledger)
     }
 }
