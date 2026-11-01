@@ -332,6 +332,31 @@ extension ControlContractTests.SchedulerMusicalLifecycle {
         #expect(summary.observationSequence == 3 && summary.pinCount == 0)
     }
 
+    /// Fractional loop 0..3 (4.6875 frames) wraps at rounded frame 5. At frame 4 the tick 2.56 already
+    /// rounds to the loop end 3, yet the pass is still 0: resetting to the loop start must be refused.
+    /// Rounding ticks first and normalizing 3 to 0 would accept tick 0 there. At the wrap itself, tick 0 is correct.
+    @Test(arguments: [(Int64(4), Int64(3)), (5, 0)])
+    func restartBeforeTheRoundedWrapKeepsTheLoopEndTick(previous: Int64, ticks: Int64) throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        let loop = try LoopRange(startTicks: 0, endTicks: 3)
+        try fixture.prepareMusical(0, loop: loop)
+        try fixture.observeMusical(.primary, 4)
+        try fixture.observeMusical(.wrap, 5, ticks: 0, pass: 1)
+        try fixture.restart(previousFrame: previous)
+        let before = try fixture.admissionState()
+        for wrong in Int64(0)...3 where wrong != ticks {
+            #expect(throws: MusicalTimingError.invalidContext) { try fixture.resetAfterRestart(ticks: wrong) }
+            #expect(try fixture.admissionState() == before)
+        }
+        try fixture.resetAfterRestart(ticks: ticks)
+        let summary = try #require(fixture.scheduler.musicalSummary)
+        #expect(summary.clock.musical.ticks == ticks && summary.clock.musical.loopIteration == 0)
+        #expect(summary.loop == loop && summary.historyCount == 1 && summary.pinCount == 0)
+        #expect(try summary.firstAnchor == fixture.anchor(0, host: 10_000_000, ticks: ticks))
+        #expect(summary.observationSequence == (before.music?.observationSequence ?? 0) + 1)
+        #expect(try summary.sample == fixture.snapshot().baseline && fixture.scheduler.pendingCount == 0)
+    }
+
     @Test func failedRestartPositionPreservesOldTimeline() throws {
         var fixture = try SchedulerFixture(capacity: 1)
         try fixture.prepareMusical(0)

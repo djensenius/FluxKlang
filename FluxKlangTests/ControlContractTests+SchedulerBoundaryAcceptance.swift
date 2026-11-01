@@ -190,4 +190,31 @@ extension ControlContractTests.SchedulerBoundaryAcceptance {
         let forward = try fixture.submitMusical(plain)
         #expect(fixture.scheduler.pendingMusic(forward) == .pinned(MusicalOccurrence(pass: 1, ticks: 960)))
     }
+
+    /// #55/#149 (checker `test_retroactivity_uses_projected_time_not_historical_tick_equality`): the
+    /// anchor at 1_500 names ticks 960, a grid-960 line. An origin at 1_501 has that same historical anchor
+    /// tick but projects to 960.64, so with no window it chooses 1_920 at 3_000 and fires on time. Only the
+    /// exact frame 1_500 or a 1 ms (48-frame) window takes 960 at 1_500, which a 1_501 commit judges late.
+    @Test(arguments: [(Int64(1_501), 0, Int64(3_000)), (1_501, 1, 1_500), (1_500, 0, 1_500)])
+    func latePolicyUsesProjectedFrameNotHistoricalTickEquality(origin: Int64, retro: Int, assigned: Int64) throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        try fixture.prepareMusical(0)
+        try fixture.observeMusical(.musical, 1_500, ticks: 960)
+        try fixture.observeMusical(.primary, 1_501)
+        var stamp = fixture.musicalStamp("trg.projected", .grid(ticks: 960), originHost: UInt64(origin) * 500,
+                                         policy: .fireLate(maxLatenessMs: 100), arrival: 1_501)
+        stamp.retroactiveMs = retro
+        let handle = try fixture.submitMusical(stamp)
+        let occurrence = MusicalOccurrence(pass: 0, ticks: assigned == 3_000 ? 1_920 : 960)
+        #expect(fixture.scheduler.pendingMusic(handle) == .pinned(occurrence))
+        #expect(try fixture.commitMusical(handle, at: 1_501) == .completed)
+        let outcome = try fixture.drainOne(handle)
+        let late = assigned < 1_501
+        #expect(outcome == TriggerOutcome(trigger: handle.trigger, result: late ? .firedLate : .fired,
+                                          assignedFrame: assigned, frame: late ? 1_501 : assigned,
+                                          musicalMap: .initial))
+        try outcome.validateMediaShape()
+        #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
+        #expect(try fixture.snapshot().horizon?.frame == 1_501 && fixture.scheduler.reservedOutcomeCount == 0)
+    }
 }

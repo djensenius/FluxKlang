@@ -146,5 +146,43 @@ extension ControlContractTests {
             #expect(outcome == TriggerOutcome(trigger: handle.trigger, result: .firedLate, assignedFrame: 1_500,
                                               frame: 1_600, musicalMap: .initial))
         }
+
+        /// #55/#149: loop 0..1 at 60_000 us/quarter has a zero rounded period (one tick is 0.1875 frames).
+        /// After the observed wrap at frame 0, a later musical observation is refused (`missingWrap`) and the
+        /// pinned (0, 0) occurrence can only terminate late. Independent sample-time and ASAP requests on the
+        /// same scheduler still admit, commit and terminate normally while the pin is outstanding. No same-frame
+        /// stop or loop correction is attempted, so this holds whether #156 permits one after the wrap or not.
+        @Test func zeroPeriodFailureDoesNotBlockIndependentSampleAndASAP() throws {
+            var fixture = try SchedulerFixture(capacity: 3)
+            try fixture.scheduler.prepareMusical(SchedulerMusicalSetup(
+                anchor: fixture.anchor(0, ticks: 0), map: fixture.map(microsPerQuarter: 60_000),
+                loop: LoopRange(startTicks: 0, endTicks: 1), running: true, historyLimit: 4), ledger: fixture.ledger)
+            let music = try fixture.submitMusical(fixture.musicalStamp("trg.zero", .musical(atTicks: 0), originHost: 0))
+            let pinned = SchedulerPendingMusic.pinned(MusicalOccurrence(pass: 0, ticks: 0))
+            #expect(fixture.scheduler.pendingMusic(music) == pinned)
+            try fixture.observeMusical(.wrap, 0, ticks: 0, pass: 1)
+            let before = try fixture.admissionState()
+            #expect(throws: MusicalTimingError.missingWrap) { try fixture.observeMusical(.primary, 1_000) }
+            #expect(try fixture.admissionState() == before && fixture.scheduler.drain().isEmpty)
+            try fixture.observe(1_000, host: 500_000)
+            let sample = try fixture.submit(fixture.stamp("trg.sample", .sample(atFrame: 1_200), arrival: 1_000))
+            let asap = try fixture.submit(fixture.stamp("trg.asap", arrival: 1_000))
+            #expect(fixture.scheduler.pendingCount == 3 && fixture.scheduler.reservedOutcomeCount == 3)
+            try fixture.commit(asap, at: 1_000)
+            try fixture.commit(sample, at: 1_200)
+            let independent = fixture.scheduler.drain()
+            #expect(independent.map(\.handle) == [asap, sample])
+            #expect(independent.map(\.outcome) == [
+                TriggerOutcome(trigger: asap.trigger, result: .fired, assignedFrame: 1_000, frame: 1_000),
+                TriggerOutcome(trigger: sample.trigger, result: .fired, assignedFrame: 1_200, frame: 1_200)
+            ])
+            #expect(fixture.scheduler.pendingMusic(music) == pinned && fixture.scheduler.pendingCount == 1)
+            #expect(fixture.scheduler.musicalSummary?.pinCount == 1 && fixture.scheduler.reservedOutcomeCount == 1)
+            let outcome = try fixture.terminal(music, at: 1_200)
+            #expect(outcome == TriggerOutcome(trigger: music.trigger, result: .dropped, reason: .late,
+                                              assignedFrame: 0, musicalMap: .initial))
+            try outcome.validateMediaShape()
+            #expect(fixture.scheduler.musicalSummary?.clock.musical.loopIteration == 1)
+        }
     }
 }
