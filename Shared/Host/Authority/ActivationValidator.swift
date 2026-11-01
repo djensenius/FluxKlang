@@ -1,0 +1,95 @@
+//
+//  ActivationValidator.swift
+//  FluxKlang
+//
+//  Current-context validation for every activation caller. Pure: it reads the
+//  supplied context and returns a value, so a refused request emits no write.
+//
+
+import Foundation
+
+/// Proof that a request passed validation against one context. Only the
+/// validator creates it: do not add initializers in other files. It is not
+/// authorization, grants no engine lease and performs no write; it is stale
+/// once the live context differs from `context`.
+struct ValidatedActivation: Hashable, Sendable {
+    let request: ActivationRequest
+    let graph: GraphDocument
+    /// The context the request was checked against.
+    let context: ActivationContext
+    /// Advisory capabilities currently absent; affected nodes degrade, they do not block.
+    let missingAdvisory: Set<CapabilityID>
+
+    fileprivate init(request: ActivationRequest, graph: GraphDocument, context: ActivationContext,
+                     missingAdvisory: Set<CapabilityID>) {
+        self.request = request
+        self.graph = graph
+        self.context = context
+        self.missingAdvisory = missingAdvisory
+    }
+}
+
+enum ActivationValidator {
+    /// Reports only the first failure, in this order: host epoch, permission,
+    /// origin, digest, base revision, graph identity, capability document
+    /// staleness, candidate revision, capability document validity, graph
+    /// validity against advertised capabilities, then present capabilities.
+    static func validate(
+        _ request: ActivationRequest, candidate: GraphDocument, in context: ActivationContext
+    ) -> Result<ValidatedActivation, ActivationRejection> {
+        guard request.hostEpoch == context.hostEpoch else { return .failure(.staleHostEpoch) }
+        // A malformed current fingerprint grants nothing. A malformed request
+        // fingerprint can never equal a well-formed one, so it is `permissionChanged`.
+        guard let permission = context.permission, isWellFormed(permission) else {
+            return .failure(.permissionDenied)
+        }
+        guard permission == request.permission else { return .failure(.permissionChanged) }
+        // The origin is caller-asserted here; being in-process or local adds nothing.
+        guard request.origin == .human else { return .failure(.originCannotActivate(request.origin)) }
+        guard request.digest.isValid else { return .failure(.invalidDigest) }
+        guard request.baseRevision == context.activeRevision else {
+            return .failure(.staleBase(expected: context.activeRevision, found: request.baseRevision))
+        }
+        guard candidate.id == request.graph else { return .failure(.graphMismatch) }
+        let document = context.capabilities
+        guard document.host == context.hostEpoch.host, document.hostEpoch == context.hostEpoch.generation else {
+            return .failure(.staleCapabilities)
+        }
+        // Drafts never bump the revision; only an acknowledged activation does.
+        guard candidate.revision == request.baseRevision else {
+            return .failure(.staleBase(expected: context.activeRevision, found: candidate.revision))
+        }
+        return assess(candidate, capabilities: document).map {
+            ValidatedActivation(request: request, graph: candidate, context: context, missingAdvisory: $0)
+        }
+    }
+
+    /// Same bounds as `CommandIntentFields.validate`.
+    private static func isWellFormed(_ fingerprint: PermissionFingerprint) -> Bool {
+        (1...256).contains(fingerprint.rawValue.utf8.count)
+    }
+
+    /// Graph validity against every capability the host document advertises,
+    /// then live presence. Returns the missing advisory capabilities.
+    private static func assess(
+        _ candidate: GraphDocument, capabilities document: DeviceCapabilityDocument
+    ) -> Result<Set<CapabilityID>, ActivationRejection> {
+        guard (try? document.validate()) != nil else { return .failure(.invalidCapabilities) }
+        let advertised = Set(document.devices.flatMap(\.capabilities))
+        do {
+            try candidate.validateForPreparation(supportedCapabilities: advertised)
+        } catch {
+            return .failure(.invalidGraph(error))
+        }
+        // Required on any node wins over advisory on another.
+        let required = Set(candidate.nodes.flatMap(\.requiredCapabilities))
+        let advisory = Set(candidate.nodes.flatMap(\.advisoryCapabilities)).subtracting(required)
+        let requirements = required.sorted().map { CapabilityRequirement(capability: $0, level: .required) }
+            + advisory.sorted().map { CapabilityRequirement(capability: $0, level: .advisory) }
+        guard let assessment = try? document.assess(requirements) else { return .failure(.invalidCapabilities) }
+        guard assessment.requirementsSatisfied else {
+            return .failure(.missingCapabilities(assessment.missingRequired))
+        }
+        return .success(assessment.missingAdvisory)
+    }
+}
