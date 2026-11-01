@@ -263,8 +263,10 @@ extension ControlContractTests.SchedulerLifecycle {
         }
     }
 
+    /// The forwarder names no musical witness, so every stopped label yields the same missing-music
+    /// diagnostic; injected completion failures belong to the shared terminal transaction's tests.
     @Test(arguments: [StoppedPolicy.wait, .immediate, .startTransport])
-    func terminalEnqueuePrecedesPendingCleanup(stopped: StoppedPolicy) throws {
+    func missingMusicDiagnosticSharesTheCanonicalQueue(stopped: StoppedPolicy) throws {
         var fixture = try SchedulerFixture(capacity: 2)
         let bare = fixture.stamp("trg.diagnostic", .sample(atFrame: .min), policy: .nextBoundary(gridTicks: 960))
         #expect(throws: TriggerValidationError.nextBoundaryWithoutTransport) { try fixture.submit(bare) }
