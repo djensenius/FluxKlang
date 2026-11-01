@@ -85,15 +85,118 @@ extension ControlContractTests {
             try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, tempo)])), ledger, frame: 12)
             let origin = try timeline.origin(at: .init(ticks: 2_400))
             #expect(origin.clock.musical.loopIteration == 0) // Covered pass 0, not a current-map virtual origin.
-            if tempo == 240_000 {
+            let pin = try timeline.reserve(.grid(1), origin: origin)
+            #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 1))
+            #expect(try timeline.project(pin).frame == (tempo == 240_000 ? 9 : 8))
+        }
+
+        @Test(arguments: [UInt64(781), 782, 2_400])
+        func passZeroFloorUsesTheExactRecordedOriginAtLoopStart(_ host: UInt64) throws {
+            var ledger = try fixture.ledger()
+            let loop = try LoopRange(startTicks: 1, endTicks: 3)
+            var timeline = try fixture.timeline(ledger, loop: loop, history: 10, pins: 1,
+                                                 segments: [(0, 640_000)])
+            for frame: Int64 in 5...10 { try fixture.observe(&timeline, .musical, ledger, frame: frame, ticks: 2) }
+            let latest = timeline.currentClock.anchor
+            try fixture.observe(&timeline, .wrap, ledger, frame: 12, ticks: 1, pass: 1)
+            let revision = try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger)), ledger, frame: 12)
+            let origin = try timeline.origin(at: .init(ticks: host))
+            #expect(origin.exactFrame == MusicalFrame(units: Int128(host) * MusicalTiming.unitsPerFrame / 500))
+            #expect(origin.clock.anchor.sample.frame == 0 && origin.clock.musical.loopIteration == 0)
+            let recorded = try MusicalTiming.reanchor(origin.clock.anchor, using: timeline.currentClock)
+            let start = MusicalFrame(units: MusicalTiming.units(recorded, from: 0, to: loop.startTicks))
+            if host == 781 {
+                #expect(origin.exactFrame < start) // 1.562 is just below the exact start at 1.5625.
+                let before = String(reflecting: timeline)
+                #expect(throws: MusicalTimingError.outsideLoop) { try timeline.reserve(.grid(1), origin: origin) }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                #expect(origin.exactFrame > start)
+                if host == 2_400 {
+                    let end = MusicalFrame(units: MusicalTiming.units(recorded, from: 0, to: loop.endTicks))
+                    #expect(origin.exactFrame > end) // Exact end 4.6875 < origin 4.8 < rounded wrap 5.
+                    let wrap = try MusicalTiming.wrapFrame(recorded, loop: loop)
+                    #expect(origin.exactFrame < MusicalFrame(integer: wrap))
+                }
                 let pin = try timeline.reserve(.grid(1), origin: origin)
                 #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 1))
-                #expect(try timeline.project(pin).frame == 9)
-            } else {
-                // Current-map tick 3.072 is past the exact end, but frame 4.8 is before the rounded wrap at 5.
-                #expect(throws: MusicalTimingError.outsideLoop) { try timeline.reserve(.grid(1), origin: origin) }
-                #expect(timeline.pinCount == 0)
+                let projection = try timeline.project(pin)
+                #expect(projection.frame == 8 && !projection.assumesFuture && timeline.pinCount == 1)
+                #expect(projection.musicalMap == revision)
+                #expect(revision == (try Generation.initial.next()))
+                let clock = try MusicalTiming.reanchor(latest, using: timeline.currentClock)
+                let units = try MusicalTiming.projectedUnits(of: pin.occurrence, from: clock, loop: loop)
+                #expect(units == 135 * MusicalTiming.unitsPerFrame / 16) // 8.4375, before horizon 12.
             }
+        }
+
+        @Test(arguments: [UInt64(375), 468, 469, 750, 875, 1_000, 1_375, 1_875, 2_375])
+        func recordedLoopFloorDoesNotRepeatWithTheVirtualPhase(_ host: UInt64) throws {
+            var timeline = try fastEditedLoop(LoopRange(startTicks: 5, endTicks: 8))
+            let origin = try timeline.origin(at: .init(ticks: host))
+            #expect(origin.clock.anchor.sample.frame == 0 && origin.clock.musical.loopIteration == 0)
+            if host < 469 { // 0.75 and 0.936 are below the exact start at 0.9375.
+                let before = String(reflecting: timeline)
+                #expect(throws: MusicalTimingError.outsideLoop) { try timeline.reserve(.grid(1), origin: origin) }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                let pin = try timeline.reserve(.grid(1), origin: origin)
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 5))
+                let units = try MusicalTiming.projectedUnits(of: pin.occurrence, from: timeline.currentClock,
+                                                             loop: timeline.currentLoop)
+                #expect(units == 611 * MusicalTiming.unitsPerFrame / 16) // Exact 38.1875, not a virtual pass.
+                #expect(try timeline.project(pin).frame == 38)
+            }
+        }
+
+        @Test(arguments: [UInt64(500), 625, 750])
+        func zeroPeriodOriginsStayInTheirRecordedPass(_ host: UInt64) throws {
+            var timeline = try fastEditedLoop(LoopRange(startTicks: 6, endTicks: 7))
+            let origin = try timeline.origin(at: .init(ticks: host))
+            #expect(origin.clock.anchor.sample.frame == 0 && origin.clock.musical.loopIteration == 0)
+            if host == 500 { // Frame 1 is below exact start 1.125, despite a rounded wrap at 1.
+                let before = String(reflecting: timeline)
+                #expect(throws: MusicalTimingError.outsideLoop) { try timeline.reserve(.grid(1), origin: origin) }
+                #expect(String(reflecting: timeline) == before)
+            } else {
+                let pin = try timeline.reserve(.grid(1), origin: origin)
+                #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: 6))
+                let units = try MusicalTiming.projectedUnits(of: pin.occurrence, from: timeline.currentClock,
+                                                             loop: timeline.currentLoop)
+                #expect(units == 307 * MusicalTiming.unitsPerFrame / 8) // Exact 38.375 at origins 1.25/1.5.
+                #expect(try timeline.project(pin).frame == 38)
+            }
+        }
+
+        @Test(arguments: [Int64(0), 1])
+        func passZeroFloorCannotReinterpretAnEvictedOrReplacedOrigin(_ frame: Int64) throws {
+            let ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: .init(startTicks: 5, endTicks: 2_000),
+                                                 history: 1, pins: 2, ticks: 5)
+            let old = try timeline.origin(atFrame: 0)
+            let stored = try timeline.reserve(.grid(1), origin: old)
+            #expect(stored.occurrence == MusicalOccurrence(pass: 0, ticks: 5))
+            try fixture.observe(&timeline, .musical, ledger, frame: frame, ticks: 6)
+            #expect(timeline.firstMusicalAnchor.musical?.ticks == 5 && timeline.currentClock.musical.ticks == 6)
+            let before = String(reflecting: timeline)
+            #expect(throws: MusicalTimingError.expiredOrigin) { try timeline.reserve(.grid(1), origin: old) }
+            #expect(String(reflecting: timeline) == before)
+            // At frame 0 coverage still exists, but the replaced record cannot authenticate the old token.
+            let fresh = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: frame))
+            #expect(fresh.occurrence == MusicalOccurrence(pass: 0, ticks: 6))
+            #expect(try timeline.project(fresh).frame == frame && timeline.pinCount == 2)
+            #expect(stored.occurrence == MusicalOccurrence(pass: 0, ticks: 5))
+            #expect(try timeline.project(stored).frame == frame - 2)
+        }
+
+        private func fastEditedLoop(_ loop: LoopRange) throws -> MusicalTimeline {
+            var ledger = try fixture.ledger()
+            var timeline = try fixture.timeline(ledger, loop: loop, segments: [(0, 3_000_000)])
+            try fixture.observe(&timeline, .musical, ledger, frame: 38, ticks: 4)
+            try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+            try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 60_000)])), ledger, frame: 38)
+            return timeline
         }
 
         @Test(arguments: [0, 1])

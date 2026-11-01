@@ -22,10 +22,10 @@ struct MusicalProjectionIndex: Sendable {
         if running { anchors[pass] = clock.anchor }
     }
 
-    mutating func includeCurrent(_ clock: MusicalClockMap, running: Bool) {
+    mutating func includeCurrent(_ clock: MusicalClockMap, running: Bool, initiallyHeld: Bool = false) {
         let pass = Int128(clock.musical.loopIteration)
         retainedPasses.insert(pass)
-        if running { anchors[pass] = clock.anchor }
+        if running || initiallyHeld { anchors[pass] = clock.anchor }
     }
 
     func anchor(for pass: Int128) -> ClockAnchor? { anchors[pass] }
@@ -173,7 +173,7 @@ extension MusicalTimeline {
     }
 
     private func previousAnchor(for pass: Int128, using index: MusicalProjectionIndex) -> ClockAnchor? {
-        index.anchor(for: pass) ?? (pass == Int128(currentClock.musical.loopIteration) ? currentClock.anchor : nil)
+        index.anchor(for: pass)
     }
 
     private func missingCannotWin(_ missing: (pass: Int128, upperUnits: Int128),

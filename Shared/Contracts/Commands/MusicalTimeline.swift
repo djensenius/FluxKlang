@@ -64,6 +64,8 @@ struct MusicalTimeline: Sendable {
     private var instance = UUID()
     private var epoch = UUID()
     private var state: TimelineState
+    // Current-pass eligibility only; nil identifies an initially-held epoch. Never a projection anchor.
+    private var latestRunningTicks: Int64?
     private var records: [TimelineRecord]
     private var reservations: [UUID: TimelineReservation] = [:]
 
@@ -86,6 +88,7 @@ struct MusicalTimeline: Sendable {
         self.historyLimit = historyLimit
         self.pinLimit = pinLimit
         self.state = initial
+        self.latestRunningTicks = running ? clock.musical.ticks : nil
         self.records = [TimelineRecord(state: initial)]
     }
 
@@ -217,6 +220,7 @@ struct MusicalTimeline: Sendable {
         self.sample = sample
         firstMusicalAnchor = anchor
         state = initial
+        latestRunningTicks = state.running ? clock.musical.ticks : nil
         records = [TimelineRecord(state: initial)]
         epoch = UUID()
         observationSequence = sequence
@@ -235,7 +239,8 @@ struct MusicalTimeline: Sendable {
         for record in records {
             index.includeRecord(record.state.clock, running: record.state.running)
         }
-        index.includeCurrent(state.clock, running: state.running)
+        // An initial-held clock is genuine context, never a substitute for an evicted running anchor.
+        index.includeCurrent(state.clock, running: state.running, initiallyHeld: latestRunningTicks == nil)
         return index
     }
     func projectionUnits(for occurrence: MusicalOccurrence, using index: MusicalProjectionIndex) throws -> Int128 {
@@ -250,8 +255,8 @@ struct MusicalTimeline: Sendable {
             originalTicks = value
         } else if let ticks {
             originalTicks = ticks
-        } else if occurrence.pass == current {
-            originalTicks = state.clock.musical.ticks
+        } else if occurrence.pass == current, let value = latestRunningTicks {
+            originalTicks = value // Qualifies an end alias, but cannot project this pass's interior.
         } else if let value = index.originalTicks[occurrence.pass] {
             originalTicks = value // Eligibility only, never a second retained original anchor.
         } else if occurrence.pass > current, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks {
@@ -259,7 +264,7 @@ struct MusicalTimeline: Sendable {
         } else { throw MusicalTimingError.historyUnavailable }
         let pass = try MusicalTiming.projectionPass(occurrence, loop: state.loop, anchorTicks: originalTicks)
         let anchor = index.anchor(for: pass)
-        guard pass >= current || anchor != nil else { throw MusicalTimingError.historyUnavailable }
+        guard pass > current || anchor != nil else { throw MusicalTimingError.historyUnavailable }
         return TimelineReservation(occurrence: occurrence, originalTicks: originalTicks, pass: pass, anchor: anchor)
     }
     private func projectedUnits(_ value: TimelineReservation) throws -> Int128 {
@@ -267,7 +272,7 @@ struct MusicalTimeline: Sendable {
         if let anchor = value.anchor {
             clock = try MusicalTiming.reanchor(anchor, using: state.clock)
         } else {
-            guard value.pass >= Int128(state.clock.musical.loopIteration) else {
+            guard value.pass > Int128(state.clock.musical.loopIteration) else {
                 throw MusicalTimingError.historyUnavailable
             }
             clock = state.clock
@@ -361,9 +366,14 @@ private extension MusicalTimeline {
         case .loop(let loop):
             state.loop = loop
         }
+        retainRunningTicks()
         state.primary = anchor
         // Resuming can make a wrap immediately due; it does not observe that wrap.
         if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting || resuming) }
+    }
+
+    mutating func retainRunningTicks() {
+        if state.running { latestRunningTicks = state.clock.musical.ticks }
     }
 
     func permitsSameFrameCorrection(_ event: MusicalObservation, at frame: Int64) throws -> Bool {

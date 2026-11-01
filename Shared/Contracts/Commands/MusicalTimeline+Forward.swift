@@ -30,29 +30,16 @@ extension MusicalTimeline {
         // Initial tick membership is eligibility only; the first anchor never replaces a discarded projection anchor.
         if let ticks = firstMusicalAnchor.musical?.ticks, loop.admits(ticks: ticks) { return loop.startTicks }
         let clock = try MusicalTiming.reanchor(origin.clock.anchor, using: currentClock)
-        return try loopContains(origin.exactFrame, from: clock, loop: loop) ? loop.startTicks : nil
+        return try reachesLoopStart(origin.exactFrame, from: clock, loop: loop) ? loop.startTicks : nil
     }
 
-    private func loopContains(_ frame: MusicalFrame, from clock: MusicalClockMap, loop: LoopRange) throws -> Bool {
+    private func reachesLoopStart(_ frame: MusicalFrame, from clock: MusicalClockMap, loop: LoopRange) throws -> Bool {
+        guard clock.musical.ticks <= loop.endTicks else { return false }
         let base = try MusicalTiming.multiply(Int128(clock.anchor.sample.frame), MusicalTiming.unitsPerFrame)
         let start = try MusicalTiming.add(base,
             MusicalTiming.units(clock, from: clock.musical.ticks, to: loop.startTicks))
-        let end = try MusicalTiming.add(base, MusicalTiming.units(clock, from: clock.musical.ticks, to: loop.endTicks))
-        if frame >= MusicalFrame(units: start), frame <= MusicalFrame(units: end) { return true }
-        guard clock.musical.ticks <= loop.endTicks else { return false }
-        let wrap = try MusicalTiming.wrapFrame(clock, loop: loop)
-        guard frame >= MusicalFrame(integer: wrap) else { return false }
-        let span = MusicalTiming.units(clock, from: loop.startTicks, to: loop.endTicks)
-        let period = MusicalTiming.rounded(span)
-        guard period > 0 else {
-            guard frame == MusicalFrame(integer: wrap) else { throw MusicalTimingError.nonAdvancingLoop }
-            return true
-        }
-        // Classify only the rounded-period phase; never construct or change the authenticated origin's pass.
-        let elapsed = try MusicalTiming.add(frame.whole, -wrap)
-        let phaseStart = try MusicalTiming.add(frame.whole, -(elapsed % period))
-        return try frame <= MusicalFrame(units: MusicalTiming.add(
-            MusicalTiming.multiply(phaseStart, MusicalTiming.unitsPerFrame), span))
+        // The covered origin stays in its recorded pass even beyond the exact end or a virtual wrap.
+        return frame >= MusicalFrame(units: start)
     }
 
     /// Exact mirror of the predecessor search. No hypothetical pass becomes origin coverage.
@@ -123,7 +110,7 @@ extension MusicalTimeline {
     private func forwardAnchor(for pass: Int128, using index: MusicalProjectionIndex)
         throws -> (ticks: Int64, units: Int128) {
         let current = Int128(currentClock.musical.loopIteration)
-        if let anchor = index.anchor(for: pass) ?? (pass == current ? currentClock.anchor : nil) {
+        if let anchor = index.anchor(for: pass) {
             let clock = try MusicalTiming.reanchor(anchor, using: currentClock)
             return try (clock.musical.ticks,
                         MusicalTiming.multiply(Int128(clock.anchor.sample.frame), MusicalTiming.unitsPerFrame))
