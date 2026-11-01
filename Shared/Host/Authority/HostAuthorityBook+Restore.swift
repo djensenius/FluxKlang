@@ -142,7 +142,10 @@ extension HostAuthorityBook {
 
     /// A lease change (or newer mute) invalidates restore authority; queued dependent
     /// discards stay reserved until a fresh restore under the current token is queued.
+    /// Keep the project's unacknowledged obligation in its recovering lifecycle,
+    /// independently of the stale attempt, including unmuted recovery and queue pressure.
     mutating func leaseChanged() {
+        if let project = restoring?.project { projects[project]?.enterRecovery() }
         if let record = restoring, !record.discardAfterRestore.isEmpty {
             let extracted = queue.extractDiscards(Set(record.discardAfterRestore))
             if !extracted.isEmpty {
