@@ -46,6 +46,15 @@ extension ActivationTransaction {
         guard let lastAttempt else { return .failure(.unexpectedPhase(phase)) }
         return acknowledged(draft.report(for: lastAttempt))
     }
+
+    /// Test shorthand: the engine's answer to the latest `.prepare`, refusing like
+    /// `acknowledged(_ draft:)` when none was issued.
+    mutating func prepared(
+        _ result: Result<PreparedActivationID, PrepareFailure>
+    ) -> Result<[ActivationEffect], ActivationRefusal> {
+        guard let lastPrepareAttempt else { return .failure(.unexpectedPhase(phase)) }
+        return prepared(result, attempt: lastPrepareAttempt)
+    }
 }
 
 extension TransactionBench {
@@ -55,6 +64,18 @@ extension TransactionBench {
         let attempt = try #require(transaction.lastAttempt)
         #expect(attempt.generation == generation)
         return [.commit(prepared, attempt, try #require(registry.snapshot).token)]
+    }
+
+    /// Begins the default request at the initial revision, returning the attempt
+    /// named by the single `.prepare` effect.
+    fileprivate mutating func preparing() throws -> PrepareAttemptID {
+        if registry.snapshot == nil { try acquire(transaction.project) }
+        let effects = try begin(request(), candidate: graph())
+        guard effects.count == 1, case .prepare(_, let attempt) = effects[0] else {
+            Issue.record("Expected one prepare, got \(effects)")
+            throw CancellationError()
+        }
+        return attempt
     }
 
     /// Reviews `ids` at the running revision as `prepared`, then authorizes and
@@ -113,6 +134,65 @@ extension HostAuthorityTests {
             #expect(current.transaction.running == RunningGraph(revision: .initial, prepared: runningPlan))
             let own = report(.succeeded, applied: Set(nodes), unapplied: []).report(for: first)
             #expect(try current.transaction.acknowledged(own).get() == [.discard(runningPlan)])
+        }
+
+        @Test(arguments: [Result<PreparedActivationID, PrepareFailure>.success(planP), .failure(.engineRefused)])
+        func delayedPrepareResponseAfterCancelIsStale(delayed: Result<PreparedActivationID, PrepareFailure>) throws {
+            var host = try TransactionBench()
+            let first = try host.preparing()
+            _ = try host.transaction.prepared(.success(planP), attempt: first).get()
+            #expect(try host.transaction.cancel().get() == [.discard(planP)])
+            let retry = try host.preparing()
+            #expect(retry.generation == (try first.generation.next()) && retry != first)
+            // A's delayed success or failure neither names B's plan nor ends B's preparation.
+            #expect(host.refusal { $0.prepared(delayed, attempt: first) } == .stalePrepareResponse)
+            #expect(host.transaction.phase == .preparing)
+            _ = try host.transaction.prepared(.success(planQ), attempt: retry).get()
+            #expect(try host.commit(try host.authorize()).get() == (try host.committed(planQ)))
+        }
+
+        @Test func duplicatePrepareResponseIsRefused() throws {
+            var host = try TransactionBench()
+            let attempt = try host.preparing()
+            _ = try host.transaction.prepared(.success(planP), attempt: attempt).get()
+            #expect(host.refusal { $0.prepared(.success(planQ), attempt: attempt) }
+                == .unexpectedPhase(.awaitingReview))
+            #expect(host.refusal { $0.prepared(.failure(.cancelled), attempt: attempt) }
+                == .unexpectedPhase(.awaitingReview))
+            #expect(try host.commit(try host.authorize()).get() == (try host.committed(planP)))
+        }
+
+        @Test func staleSuccessNamingRunningPlanIsStaleNotInUse() throws {
+            var host = try TransactionBench()
+            let first = try host.preparing()
+            _ = try host.transaction.prepared(.failure(.engineRefused), attempt: first).get()
+            let retry = try host.preparing()
+            // Attempt before content: the stale answer is refused as stale, not as `preparedIDInUse`.
+            #expect(host.refusal { $0.prepared(.success(runningPlan), attempt: first) } == .stalePrepareResponse)
+            #expect(host.transaction.phase == .preparing && host.transaction.lastPrepareAttempt == retry)
+        }
+
+        @Test func prepareResponseFromAnotherTransactionIsStale() throws {
+            var other = try TransactionBench()
+            let foreign = try other.preparing()
+            var host = try TransactionBench()
+            let own = try host.preparing()
+            #expect(own.generation == foreign.generation && own != foreign)
+            #expect(host.refusal { $0.prepared(.success(planP), attempt: foreign) } == .stalePrepareResponse)
+            #expect(host.refusal { $0.prepared(.failure(.engineRefused), attempt: foreign) } == .stalePrepareResponse)
+            _ = try host.transaction.prepared(.success(planQ), attempt: own).get()
+            #expect(host.transaction.phase == .awaitingReview && host.transaction.validated != nil)
+        }
+
+        @Test func prepareAttemptOverflowIsRefused() throws {
+            var host = try TransactionBench()
+            let last = try Generation(Generation.maximumValue)
+            let running = host.transaction.running
+            host.transaction = ActivationTransaction(project: host.transaction.project, running: running,
+                                                     resumingAfterPrepareAttempt: last)
+            let live = try host.live
+            #expect(host.refusal { $0.begin(request(), candidate: graph(), in: live) } == .overflow)
+            #expect(host.transaction.phase == .idle && host.transaction.lastPrepareAttempt?.generation == last)
         }
 
         @Test(arguments: [[NodeID](), nodes])
