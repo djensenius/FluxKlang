@@ -38,12 +38,16 @@ enum ActivationValidator {
         _ request: ActivationRequest, candidate: GraphDocument, in context: ActivationContext
     ) -> Result<ValidatedActivation, ActivationRejection> {
         guard request.hostEpoch == context.hostEpoch else { return .failure(.staleHostEpoch) }
-        // A malformed current fingerprint grants nothing. A malformed request
-        // fingerprint can never equal a well-formed one, so it is `permissionChanged`.
+        // A malformed current fingerprint grants nothing; a malformed or different
+        // request fingerprint is `permissionChanged`. Fingerprints are opaque tokens,
+        // so compare exact UTF-8 bytes, not Unicode canonical equivalence.
         guard let permission = context.permission, isWellFormed(permission) else {
             return .failure(.permissionDenied)
         }
-        guard permission == request.permission else { return .failure(.permissionChanged) }
+        guard isWellFormed(request.permission),
+              permission.rawValue.utf8.elementsEqual(request.permission.rawValue.utf8) else {
+            return .failure(.permissionChanged)
+        }
         // The origin is caller-asserted here; being in-process or local adds nothing.
         guard request.origin == .human else { return .failure(.originCannotActivate(request.origin)) }
         guard request.digest.isValid else { return .failure(.invalidDigest) }
