@@ -483,6 +483,7 @@
 		E10730CD5847DC39C95AB055 /* FaderMathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06CCF54AD33E1916E650B686 /* FaderMathTests.swift */; };
 		E1E7DAD222441892D6050749 /* GlobalStudioConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A81A9CBE5326B9901D4E5A0 /* GlobalStudioConnections.swift */; };
 		E2901FF5456D92B23904ED93 /* AssistantCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6949840EA8E8305E0BC00A80 /* AssistantCardView.swift */; };
+		E3782D0C2C3C0528DAAE3A20 /* HostAuthorityTests+ActorLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = E330CD136532218A0ADC845D /* HostAuthorityTests+ActorLease.swift */; };
 		E3AEFE14C5AADF69612EB3A9 /* AssistantReliabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B2759BB8651D4FEE01749FE /* AssistantReliabilityTests.swift */; };
 		E496766802C8E7F5830435F7 /* PendingStudioPatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B152D0112770B4C8D6BF0DEF /* PendingStudioPatchStore.swift */; };
 		E4B59E590763D51AF4BA0A28 /* AssistantCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6949840EA8E8305E0BC00A80 /* AssistantCardView.swift */; };
@@ -858,6 +859,7 @@
 		E1238969FDBD826B7453E0A0 /* ControlContractTests+ClockValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+ClockValidation.swift"; sourceTree = "<group>"; };
 		E2EC6F10CA4CDFF4A2E5F8C2 /* EffectRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectRouting.swift; sourceTree = "<group>"; };
 		E3303B038460EE95529FD811 /* CommandAdmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandAdmission.swift; sourceTree = "<group>"; };
+		E330CD136532218A0ADC845D /* HostAuthorityTests+ActorLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityTests+ActorLease.swift"; sourceTree = "<group>"; };
 		E47075D2AAB467EA271F7916 /* ScrollWheel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollWheel.swift; sourceTree = "<group>"; };
 		E470C74DDAD45D6C32ABCF5C /* SceneButtonsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneButtonsView.swift; sourceTree = "<group>"; };
 		E502F19AA5C1BCD11E888CE2 /* EffectRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectRow.swift; sourceTree = "<group>"; };
@@ -1540,6 +1542,7 @@
 				059CF01B6A3BCFB2E6847FDC /* GraphEditContractTests.swift */,
 				BAEF48255948E3D20F00166A /* HostAuthorityTests.swift */,
 				881AFB0C513492CF7F678591 /* HostAuthorityTests+Actor.swift */,
+				E330CD136532218A0ADC845D /* HostAuthorityTests+ActorLease.swift */,
 				3419E51D6E2D0147057E7A94 /* HostAuthorityTests+CommitReports.swift */,
 				880CCB258FEC3EAD7C30102A /* HostAuthorityTests+EngineCommands.swift */,
 				EEA20BD9178D8D887AFCF665 /* HostAuthorityTests+Recovery.swift */,
@@ -2319,6 +2322,7 @@
 				45A8A43FBBDFCC09A15E8DB9 /* GraphContractTests.swift in Sources */,
 				725BCA0357B5BC131BBC0289 /* GraphEditContractTests.swift in Sources */,
 				E0699F314A438DEB4233B314 /* HostAuthorityTests+Actor.swift in Sources */,
+				E3782D0C2C3C0528DAAE3A20 /* HostAuthorityTests+ActorLease.swift in Sources */,
 				F0B044163BBA0A92411A6797 /* HostAuthorityTests+CommitReports.swift in Sources */,
 				F273C54B1BCFA5EBC442D177 /* HostAuthorityTests+EngineCommands.swift in Sources */,
 				BDC24B9E3EF6DBF95A3228C5 /* HostAuthorityTests+Recovery.swift in Sources */,

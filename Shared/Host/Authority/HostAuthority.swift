@@ -61,13 +61,47 @@ struct HostProjectState: Hashable, Sendable {
     var reviewed: PreparedActivationID?
 }
 
-/// The whole actor state, for refusal checks and diagnostics.
+/// A transaction kept inert for the snapshot: equality and hashing still cover
+/// the whole transaction, so any change is detected, but nothing reads it back.
+/// Only the actor's own copy may transition (the single-owner rule): a copy
+/// handed out could issue commits with the same authorization and attempt IDs
+/// outside the actor's queue.
+struct TransactionRecord: Hashable, Sendable {
+    private let transaction: ActivationTransaction
+
+    fileprivate init(_ transaction: ActivationTransaction) {
+        self.transaction = transaction
+    }
+}
+
+/// One open project as the snapshot shows it: read-only diagnostics and an inert
+/// record of its transaction, never the transaction itself.
+struct HostProjectSnapshot: Hashable, Sendable {
+    let phase: ActivationPhase
+    let running: RunningGraph
+    let lastPrepareAttempt: PrepareAttemptID?
+    let lifecycle: EngineLifecycle
+    let reviewed: PreparedActivationID?
+    let record: TransactionRecord
+
+    fileprivate init(_ state: HostProjectState) {
+        phase = state.transaction.phase
+        running = state.transaction.running
+        lastPrepareAttempt = state.transaction.lastPrepareAttempt
+        lifecycle = state.lifecycle
+        reviewed = state.reviewed
+        record = TransactionRecord(state.transaction)
+    }
+}
+
+/// The whole actor state, for refusal checks and diagnostics. It holds no
+/// transaction (`HostProjectSnapshot`).
 struct HostAuthoritySnapshot: Hashable, Sendable {
     let lease: EngineLeaseSnapshot?
     let lastIssuedLease: Generation?
     let ledger: [GenerationKey: Generation]
     let live: HostLiveState
-    let projects: [ProjectID: HostProjectState]
+    let projects: [ProjectID: HostProjectSnapshot]
     /// The one unanswered, not abandoned prepare of each preparing project.
     let outstanding: [ProjectID: PrepareAttemptID]
     /// Abandoned and unanswered, oldest first; at most `abandonedPrepareLimit`.
@@ -105,8 +139,8 @@ actor HostAuthority {
 
     func snapshot() -> HostAuthoritySnapshot {
         HostAuthoritySnapshot(lease: registry.snapshot, lastIssuedLease: registry.lastIssued, ledger: ledger.current,
-                              live: live, projects: projects, outstanding: outstanding, abandoned: abandoned,
-                              queue: queue)
+                              live: live, projects: projects.mapValues(HostProjectSnapshot.init),
+                              outstanding: outstanding, abandoned: abandoned, queue: queue)
     }
 
     /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
@@ -118,6 +152,11 @@ actor HostAuthority {
     /// rendering (`EngineLifecycle.acceptsRunningSetChanges`), and `endingPreparation`
     /// returns to `.stopped` whatever the running graph holds. `.recovering` is
     /// accepted either way: unresolved recovery outlives the running set.
+    /// Last, a running plan that is already in use is refused as
+    /// `.activation(.preparedIDInUse)`, like `route`: any project's running,
+    /// reviewed or held plan (`livePlans()`), or a plan whose `.discard` is queued.
+    /// Adopting it would let another project's cancel, or the queued discard,
+    /// destroy this project's running graph.
     func open(project: ProjectID, running: RunningGraph,
               lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
         guard projects[project] == nil else { return .failure(.projectAlreadyOpen(project)) }
@@ -129,6 +168,10 @@ actor HostAuthority {
                 guard running.prepared != nil else { return .failure(.lifecycleNotResumable(lifecycle)) }
             case .preparing, .heldByOther: return .failure(.lifecycleNotResumable(lifecycle))
             }
+        }
+        if let plan = running.prepared {
+            guard !livePlans().contains(plan) else { return .failure(.activation(.preparedIDInUse)) }
+            guard !queue.pending.contains(.discard(plan)) else { return .failure(.activation(.preparedIDInUse)) }
         }
         let initial = lifecycle ?? (running.prepared == nil ? .stopped : .running)
         projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),

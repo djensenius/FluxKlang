@@ -65,13 +65,13 @@ private func refusal<Success>(_ result: Result<Success, HostAuthorityRefusal>) -
     return nil
 }
 
-private func state(_ authority: HostAuthority, _ project: ProjectID) async throws -> HostProjectState {
+private func state(_ authority: HostAuthority, _ project: ProjectID) async throws -> HostProjectSnapshot {
     try #require(await authority.snapshot().projects[project])
 }
 
 /// The project's outstanding prepare attempt, read without taking the queued command.
 private func outstanding(_ authority: HostAuthority, _ project: ProjectID) async throws -> PrepareAttemptID {
-    try #require(try await state(authority, project).transaction.lastPrepareAttempt)
+    try #require(try await state(authority, project).lastPrepareAttempt)
 }
 
 /// Begins `project` and abandons the prepare without answering it; returns the attempt.
@@ -140,7 +140,7 @@ extension HostAuthorityTests {
             #expect(after == before && noAttempts(after))
             await engine.drain(authority)
             #expect(engine.discarded == [id])
-            #expect(try await state(authority, projectA).transaction.phase == .idle)
+            #expect(try await state(authority, projectA).phase == .idle)
         }
 
         @Test func lateSuccessAfterRebeginIsDiscarded() async throws {
@@ -167,7 +167,7 @@ extension HostAuthorityTests {
             let routed = await authority.prepareAnswered(current, attempt: third)
             #expect(routed == .success(.routed))
             let (review, currentID) = (try await state(authority, projectA), try current.get())
-            #expect(review.transaction.phase == .awaitingReview && review.reviewed == currentID)
+            #expect(review.phase == .awaitingReview && review.reviewed == currentID)
             // A new plan is in review: the second attempt's success is stale too, and discarded.
             let secondLate = engine.scriptedAnswer()
             let secondID = try secondLate.get()
@@ -176,7 +176,7 @@ extension HostAuthorityTests {
             await engine.drain(authority)
             #expect(engine.discarded == [firstID, secondID])
             let (reviewing, preparing) = (try await state(authority, projectA), try firstPreparing())
-            #expect(reviewing.transaction.phase == .awaitingReview && reviewing.lifecycle == preparing)
+            #expect(reviewing.phase == .awaitingReview && reviewing.lifecycle == preparing)
             try await authority.cancel(project: projectA).get()
             await engine.drain(authority)
             #expect(engine.discarded.last == currentID)
@@ -421,15 +421,15 @@ extension HostAuthorityTests {
             let stateA = try await state(authority, projectA)
             let stateB = try await state(authority, projectB)
             let (preparing, planIDB) = (try firstPreparing(), try answerB.get())
-            #expect(stateA.transaction.phase == .preparing && stateA.lifecycle == preparing)
-            #expect(stateB.transaction.phase == .awaitingReview && stateB.reviewed == planIDB)
+            #expect(stateA.phase == .preparing && stateA.lifecycle == preparing)
+            #expect(stateB.phase == .awaitingReview && stateB.reviewed == planIDB)
             // The scripted fault answers A's prepare: only A fails, back to what it renders.
             let answerA = engine.scriptedAnswer()
             #expect(answerA == .failure(.engineRefused))
             #expect(await authority.prepareAnswered(answerA, attempt: attemptA) == .success(.routed))
             let failedA = try await state(authority, projectA)
-            #expect(failedA.transaction.phase == .prepareFailed(.engineRefused) && failedA.lifecycle == .running)
-            #expect(try await state(authority, projectB).transaction.phase == .awaitingReview)
+            #expect(failedA.phase == .prepareFailed(.engineRefused) && failedA.lifecycle == .running)
+            #expect(try await state(authority, projectB).phase == .awaitingReview)
             #expect(noAttempts(await authority.snapshot()))
         }
 
@@ -470,7 +470,7 @@ extension HostAuthorityTests {
                                      lifecycle: .recovering).get()
             try await begin(authority, projectB).get()
             let preparing = try await state(authority, projectB)
-            #expect(preparing.transaction.phase == .preparing && preparing.lifecycle == .recovering)
+            #expect(preparing.phase == .preparing && preparing.lifecycle == .recovering)
             try await authority.abandonPrepare(project: projectB).get()
             #expect(try await state(authority, projectB).lifecycle == .recovering)
         }
