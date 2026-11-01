@@ -12,9 +12,10 @@ private struct EventSourceSnapshot: Equatable {
     let awaitingTransportBump: Bool
     let resume: TransportResume?
     let nominalRate: Int
-    /// `resume` after recording a probe restart, or nil when the ledger refuses a record.
-    /// This is where the private `restartPositionSuperseded` flag is observable.
-    let resumeAfterRecordProbe: TransportResume??
+    /// `resume` after recording a probe restart with previous frame 0 and, on another copy, 1;
+    /// nil when the ledger refuses a record. This is where the private
+    /// `restartPositionSuperseded` flag is observable.
+    let resumeAfterRecordProbes: [TransportResume?]?
     let states: [ActionID: ReadinessState]
     let reasons: [ActionID: ReadinessReason]
     /// The private ready-entry count of every action, ready or not (a later `markReady` exposes it).
@@ -32,7 +33,7 @@ private struct EventSourceSnapshot: Equatable {
         awaitingTransportBump = ledger.awaitingTransportBump
         resume = ledger.resume
         nominalRate = ledger.nominalRate
-        resumeAfterRecordProbe = Self.recordProbe(ledger)
+        resumeAfterRecordProbes = Self.recordProbes(ledger)
         states = readiness.states
         reasons = readiness.reasons
         readyEntries = Self.entryProbe(readiness, ledger)
@@ -43,14 +44,22 @@ private struct EventSourceSnapshot: Equatable {
         }
     }
 
-    private static func recordProbe(_ ledger: GenerationLedger) -> TransportResume?? {
+    /// A record leaves `resume` unchanged when the flag is set and makes it
+    /// `.afterRestart(previousFrame)` when it is clear. One fixed frame is masked when `resume`
+    /// already equals `.afterRestart` of that frame; two different frames cannot be: set gives
+    /// two equal results, clear gives two different ones. Only `previousFrame` reaches the flag.
+    private static func recordProbes(_ ledger: GenerationLedger) -> [TransportResume?]? {
         guard let pending = ledger.pendingRestart,
               let clock = ClockID(rawValue: ledger.primaryClock.subject.rawValue) else { return nil }
-        var probe = ledger
-        let record = ClockRestartRecord(start: SampleStamp(clock: clock, generation: pending, frame: 0),
-                                        host: HostStamp(ticks: 0), previousFrame: 0)
-        guard (try? probe.recordClockRestart(record)) != nil else { return nil }
-        return .some(probe.resume)
+        var results: [TransportResume?] = []
+        for previousFrame: Int64 in [0, 1] {
+            var probe = ledger
+            let record = ClockRestartRecord(start: SampleStamp(clock: clock, generation: pending, frame: 0),
+                                            host: HostStamp(ticks: 0), previousFrame: previousFrame)
+            guard (try? probe.recordClockRestart(record)) != nil else { return nil }
+            results.append(probe.resume)
+        }
+        return results
     }
 
     private static func entryProbe(_ readiness: ActionReadiness, _ ledger: GenerationLedger) -> [ActionID: Int] {
@@ -62,6 +71,7 @@ private struct EventSourceSnapshot: Equatable {
             var probe = readiness
             if probe.state(action) != .preparing { try? probe.transition(action, to: .preparing) }
             try? probe.markReady(action, preparedAgainst: [], ledger: ledger)
+            // `markReady` adds exactly 1 whatever the requirements, so the count maps one to one.
             if let entry = probe.readyEntry(action) { result[action] = entry - 1 }
         }
     }
@@ -320,6 +330,28 @@ extension ContractFixtureTests {
             let (record, _) = try Self.restartEvents()
             try FixtureEventApplier.apply(.restartRecord(record), ledger: &ledger, readiness: &readiness)
             #expect(ledger.restartRecord == record && ledger.resume == nil)
+        }
+
+        @Test func refusedPrimaryBumpKeepsRestartPositionAfterEarlierRestart() throws {
+            var ledger = try Self.makeLedger()
+            var readiness = ActionReadiness()
+            try FixtureEventApplier.apply(.bump(Self.primary, .deviceRestart), ledger: &ledger, readiness: &readiness)
+            let (earlier, _) = try Self.restartEvents()
+            let atZero = ClockRestartRecord(start: earlier.start, host: earlier.host, previousFrame: 0)
+            try FixtureEventApplier.apply(.restartRecord(atZero), ledger: &ledger, readiness: &readiness)
+            try FixtureEventApplier.apply(.bump(Self.transport, .clockRestart), ledger: &ledger, readiness: &readiness)
+            try FixtureEventApplier.apply(.bump(Self.primary, .wake), ledger: &ledger, readiness: &readiness)
+            // A new restart is pending while the earlier one left `.afterRestart(previousFrame: 0)`.
+            #expect(ledger.resume == .afterRestart(previousFrame: 0) && ledger.restartRecord == nil)
+            #expect(ledger.pendingRestart?.value == 3)
+            Self.expectRefusal(.ledger(.restartObligationsPending), applying: .bump(Self.primary, .wake),
+                               ledger: &ledger, readiness: &readiness)
+
+            let pending = try #require(ledger.pendingRestart)
+            let start = SampleStamp(clock: ContractFixtureIDs.primaryClock, generation: pending, frame: 0)
+            let next = ClockRestartRecord(start: start, host: earlier.host, previousFrame: 5)
+            try FixtureEventApplier.apply(.restartRecord(next), ledger: &ledger, readiness: &readiness)
+            #expect(ledger.resume == .afterRestart(previousFrame: 5))
         }
 
         @Test func swappedRestartEventsRespectLedgerObligations() throws {
