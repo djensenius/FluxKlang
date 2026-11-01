@@ -333,21 +333,33 @@ class Trace:
                 return None
         return (i, b) if i >= 0 and 0 <= b < 2**63 else None
 
-    def projected_previous(self, occ, grid, frame):
-        """Skip future projections by inverting the latest anchor, never by walking grid ticks or virtual passes."""
-        prev = self.previous_boundary(occ, grid)
+    def projected_previous(self, iteration, grid, frame):
+        """Compare the latest inverse and qualified end alias; visit history, never grid ticks or virtual passes."""
         for _ in range(len(self.hist) + 2):
-            if prev is None or self.frame_of(prev) <= frame:
-                return prev
-            a = self.pass_anchor(prev[0])
-            if prev[0] > self.musical.get("loopIteration", 0):
-                current = self.ahead(self.musical, frame)
-                if current.get("loopIteration", 0) < prev[0]:
-                    a = current
-            i, ceiling = a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
-            if i == prev[0]:
-                ceiling = min(ceiling, prev[1] - 1)  # exclude an end alias whose next-pass projection is still future
-            prev = self.previous_boundary((i, ceiling), grid)
+            a = self.pass_anchor(iteration)
+            if iteration > self.musical.get("loopIteration", 0) \
+                    and (a.get("loopIteration", 0) < iteration or a["frame"] > frame):
+                iteration = min(iteration, self.ahead(self.musical, frame).get("loopIteration", 0))
+                a = self.pass_anchor(iteration)
+            ceiling, best = self.loop["endTicks"] if self.loop else 2**63 - 1, None
+            if self.loop and ceiling % grid == 0:
+                end = iteration, ceiling
+                projected = self.frame_of(end)
+                if projected <= frame:
+                    best = end, projected
+                ceiling -= 1
+            prev = self.previous_boundary((iteration, min(ceiling, self.ticks_at_frame(frame, a))), grid)
+            if prev is not None and prev[0] == iteration:
+                projected = self.frame_of(prev)
+                if projected <= frame and (best is None or projected >= best[1]):
+                    best = prev, projected  # an equal-frame interior boundary does not invent a future wrap
+            if best is not None:
+                return best[0]
+            if prev is None:
+                return None
+            if prev[0] >= iteration:
+                break
+            iteration = prev[0]
         raise ValueError("retroactive boundary needs available musical history")
 
     def run(self):
@@ -624,9 +636,10 @@ class Trace:
                 if self.loop and a["musicalTicks"] <= self.loop["endTicks"] < t:
                     t = self.loop["endTicks"]  # still before this eligible pass's rounded wrap
                 retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-                prev = self.projected_previous((i, t), grid, origin) if retro > 0 else None
-                if prev is not None and prev != (i, t) and 0 <= origin - self.frame_of(prev) <= retro:
-                    choice = {"occ": prev, "retro": True}
+                prev = self.projected_previous(i, grid, origin) if retro > 0 else None
+                elapsed = origin - self.frame_of(prev) if prev is not None else None
+                if elapsed is not None and 0 <= elapsed <= retro:
+                    choice = {"occ": prev, "retro": elapsed > 0}
                 else:
                     choice = {"occ": self.boundary((i, t), grid), "retro": False}
         except ValueError as exc:

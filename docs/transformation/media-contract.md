@@ -179,9 +179,12 @@ boundary is considered before retroactive selection, never mistaken for a past b
 When that upcoming end is on-grid, retroactivity tests the preceding admissible boundary instead. A past-end
 anchor's previous-boundary search starts at the loop end. An unrepresentable `Int64` boundary is a controlled
 resolution failure, not a wider tick domain; it does not prevent an otherwise valid retroactive choice.
-A later re-anchor can also move an ordinary previous grid boundary after the origin. Retroactivity selects the
-latest admissible occurrence whose current-map, latest-pass-anchor projection is not after the exact origin,
-skipping tick ranges and virtual passes arithmetically rather than walking them.
+A later re-anchor can move grid lines in either direction relative to the origin. Each examined pass compares
+the latest anchor's inverse-projected grid boundary with its separately qualified end alias. The closest
+nonfuture projection wins; an interior boundary wins an equal-frame tie rather than inventing a future wrap.
+Earlier passes are examined only if needed, skipping tick ranges and virtual passes arithmetically.
+An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
+of equality with the origin-time tick.
 
 ### 5.6 Tempo and meter
 

@@ -322,16 +322,52 @@ class TimingReviewTests(unittest.TestCase):
                 self.assertEqual(self.check(document(records, loop=None, grid=1)), [])
 
     def test_retroactive_search_uses_latest_projection_without_walking_grid_ticks(self):
-        for count in (1, 40):
+        for drift in (-1, 1):
+            for count in (1, 40):
+                for retro in (0, 1):
+                    with self.subTest(drift=drift, count=count, retro=retro):
+                        records = [anchor(0, 0)] + [anchor(index * 1000, index * (640 + drift))
+                                                  for index in range(1, count + 1)]
+                        assigned = 500 if retro else checker.rnd(Fraction((321 - count * drift) * 25, 16))
+                        records += [trigger(501, count * 1000, dict(timeBase="musical", gridTicks=1)),
+                                    outcome(assigned, count * 1000, "firedLate")]
+                        doc = document(records, loop=None, grid=1,
+                                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=retro))
+                        self.assertEqual(self.check(doc), [])
+
+    def test_retroactivity_uses_projected_time_not_historical_tick_equality(self):
+        for ticks in (639, 640, 641):
             for retro in (0, 1):
-                with self.subTest(count=count, retro=retro):
-                    records = [anchor(0, 0)] + [anchor(index * 1000, index * 639) for index in range(1, count + 1)]
-                    assigned = 500 if retro else checker.rnd(Fraction((321 + count) * 25, 16))
-                    records += [trigger(501, count * 1000, dict(timeBase="musical", gridTicks=1)),
-                                outcome(assigned, count * 1000, "firedLate")]
-                    doc = document(records, loop=None, grid=1,
-                                   late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=retro))
+                with self.subTest(ticks=ticks, retro=retro):
+                    grid = 1 if ticks == 639 else 2
+                    assigned = 502 if ticks == 639 and not retro else 498 if ticks == 641 else 500
+                    joined = dict(outcome(assigned, 1000, "joined"), startOffsetFrames=1000 - assigned)
+                    records = [anchor(0, 0), anchor(1000, ticks),
+                               trigger(500, 1000, dict(timeBase="musical", gridTicks=grid)), joined]
+                    doc = document(records, loop=None, grid=grid,
+                                   late=dict(policy="joinInProgress", maxLatenessMs=1000, retroactiveMs=retro))
+                    is_retro = bool(retro and ticks == 641)
+                    if is_retro:
+                        doc["covers"].append("retroactiveCue")
                     self.assertEqual(self.check(doc), [])
+                    trace = checker.Trace(doc, "11-review-timing.json")
+                    trace.run()
+                    self.assertEqual(trace.triggers["trg.review"]["expect"]["retro"], is_retro)
+
+    def test_retroactive_search_compares_end_alias_and_interior_projections(self):
+        for end, at_wrap, count, host, ticks, assigned in [(3, 5, 1, 2250, 3, 4), (100, 156, 99, 77500, 99, 155)]:
+            with self.subTest(end=end):
+                records = [anchor(0, 0)] + wrap(at_wrap, 0, 1)
+                records += [anchor(at_wrap + tick, tick, 1) for tick in range(1, count + 1)]
+                cue = trigger(0, at_wrap + count, dict(timeBase="musical", gridTicks=1))
+                cue["originHostTicks"] = host
+                records += [cue, outcome(assigned, at_wrap + count, "firedLate")]
+                doc = document(records, loop=(0, end), grid=1,
+                               late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=1))
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, ticks))
 
     def test_projected_predecessor_skips_unobserved_virtual_passes(self):
         records = [anchor(0, 0), anchor(750000, 480000),
