@@ -426,7 +426,8 @@ extension RealtimeHandoffTests {
             let bodies: [@Sendable () -> Void] = (0..<state.requesters).map { index in
                 { state.requester(index, deadline: deadline) }
             } + [{ state.taker(deadline: deadline) }]
-            #expect(runOnThreads(deadline: deadline, bodies), "a thread timed out at the barrier or join")
+            // Read worker-owned results only after every thread has joined; a timed-out worker may still write them.
+            try #require(runOnThreads(deadline: deadline, bodies), "a thread timed out at the barrier or join")
             #expect(state.timeouts.load(ordering: .acquiring) == 0, "a bounded wait timed out")
             #expect(state.lost == 0)
             #expect(state.overlapped == state.rounds)
@@ -460,7 +461,9 @@ extension RealtimeHandoffTests {
                     state.acknowledged.store(current, ordering: .releasing)
                 }
             }
-            #expect(runOnThreads(deadline: deadline, [requester, taker]), "a thread timed out at the barrier or join")
+            try #require(
+                runOnThreads(deadline: deadline, [requester, taker]), "a thread timed out at the barrier or join"
+            )
             #expect(state.timeouts.load(ordering: .acquiring) == 0, "a bounded wait timed out")
             #expect(state.mismatches == 0)
         }
