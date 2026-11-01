@@ -1,3 +1,5 @@
+import Foundation
+import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -225,51 +227,125 @@ extension RealtimeHandoffTests {
     }
 
     struct TelemetryStress {
+        /// Runs on dedicated threads so overlap never depends on executor scheduling. A start barrier, a
+        /// free-running phase, then a bounded marker handshake that guarantees an intermediate observation.
         @Test(.timeLimit(.minutes(1)))
-        func stressNoTornReads() async throws {
-            let slots = try makeSlots(2)
-            let count: UInt64 = 200_000  // even: slot 0 receives the last word
-            let seen = await withTaskGroup(of: StressObservation?.self, returning: StressObservation?.self) { group in
-                group.addTask {
-                    for word in 1...count {
-                        let slot = Int(word & 1)
-                        _ = slots.publish(slot: slot, value: Paired(word), stamp: stamp(Int64(word)))
-                    }
-                    return nil
-                }
-                group.addTask {
-                    var seen = StressObservation()
-                    var lastWord: [UInt64] = [0, 0]
-                    var lastSequence: [UInt64] = [0, 0]
-                    var reads = 0
-                    while lastWord[0] < count, reads < 50_000_000 {
-                        reads += 1
-                        for slot in 0..<2 {
-                            guard let got = sample(slots.latest(slot: slot)) else { continue }
-                            let ordered = got.value.word >= lastWord[slot] && got.sequence >= lastSequence[slot]
-                            let matches = got.stamp.frame == Int64(got.value.word)
-                                && got.sequence == (got.value.word + 1) / 2
-                                && Int(got.value.word & 1) == slot
-                            if !got.value.isConsistent || !ordered || !matches { seen.failures += 1 }
-                            if got.value.word != lastWord[slot], got.value.word < count - 1 {
-                                seen.distinctIntermediate += 1
-                            }
-                            lastWord[slot] = got.value.word
-                            lastSequence[slot] = got.sequence
-                        }
-                    }
-                    seen.sawFinal = lastWord[0] == count
-                    return seen
-                }
-                for await case let observed? in group { return observed }
-                return nil
+        func stressNoTornReads() throws {
+            let harness = StressHarness(slots: try makeSlots(2))
+            Thread { harness.runProducer() }.start()
+            Thread { harness.runConsumer() }.start()
+            let joined = [harness.producerDone, harness.consumerDone].map {
+                $0.wait(timeout: .now() + StressHarness.joinTimeoutSeconds) == .success
             }
-            #expect(seen?.failures == 0)
-            #expect(seen?.sawFinal == true)
-            // More than one distinct value, so the reader overlapped the producer rather than seeing only the end.
-            #expect((seen?.distinctIntermediate ?? 0) > 0)
-            #expect(sample(slots.latest(slot: 1))?.value == Paired(count - 1))
-            #expect(sample(slots.latest(slot: 0))?.value == Paired(count))
+            guard joined == [true, true] else {
+                Issue.record("stress threads did not finish within \(StressHarness.joinTimeoutSeconds) s")
+                return
+            }
+            let barrierTimedOut = harness.barrierTimedOut.load(ordering: .acquiring)
+            let handshakeTimedOut = harness.handshakeTimedOut.load(ordering: .acquiring)
+            let producerFinished = harness.producerFinished.load(ordering: .acquiring)
+            #expect(producerFinished)
+            #expect(!barrierTimedOut, "start barrier timed out")
+            #expect(!handshakeTimedOut, "consumer did not acknowledge the marker before the final publications")
+            let seen = harness.observation.withLock { $0 }
+            #expect(seen.failures == 0)
+            #expect(seen.sawFinal)
+            // The marker is intermediate, so an acknowledged handshake makes this non-vacuous.
+            #expect(seen.distinctIntermediate > 0)
+            #expect(sample(harness.slots.latest(slot: 1))?.value == Paired(StressHarness.finalWord - 1))
+            #expect(sample(harness.slots.latest(slot: 0))?.value == Paired(StressHarness.finalWord))
         }
+    }
+}
+
+/// Test-only coordination for `stressNoTornReads`; the slots themselves never wait. Every wait is bounded.
+private final class StressHarness: Sendable {
+    static let freeRunningWords: UInt64 = 200_000
+    /// Odd, so it lands on slot 1, and below both slots' final words, so it counts as intermediate.
+    static let marker: UInt64 = freeRunningWords + 1
+    /// Even: slot 0 receives the last word.
+    static let finalWord: UInt64 = freeRunningWords + 4
+    static let barrierTimeout: Duration = .seconds(5)
+    static let handshakeTimeout: Duration = .seconds(5)
+    static let consumerTimeout: Duration = .seconds(30)
+    static let joinTimeoutSeconds = 45.0
+
+    let slots: Slots
+    let arrived = Atomic<Int>(0)
+    /// The highest word the consumer has observed; the producer's handshake waits on it.
+    let highestSeen = Atomic<UInt64>(0)
+    let barrierTimedOut = Atomic<Bool>(false)
+    let handshakeTimedOut = Atomic<Bool>(false)
+    let producerFinished = Atomic<Bool>(false)
+    let observation = Mutex(StressObservation())
+    let producerDone = DispatchSemaphore(value: 0)
+    let consumerDone = DispatchSemaphore(value: 0)
+
+    init(slots: Slots) {
+        self.slots = slots
+    }
+
+    /// Yields until `done` holds or `timeout` passes; returns whether `done` held.
+    private static func wait(upTo timeout: Duration, until done: () -> Bool) -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !done() {
+            if ContinuousClock.now >= deadline { return done() }
+            sched_yield()
+        }
+        return true
+    }
+
+    private func arriveAtBarrier() {
+        arrived.add(1, ordering: .acquiringAndReleasing)
+        if !Self.wait(upTo: Self.barrierTimeout, until: { arrived.load(ordering: .acquiring) >= 2 }) {
+            barrierTimedOut.store(true, ordering: .releasing)
+        }
+    }
+
+    private func publish(_ word: UInt64) {
+        _ = slots.publish(slot: Int(word & 1), value: Paired(word), stamp: stamp(Int64(word)))
+    }
+
+    func runProducer() {
+        arriveAtBarrier()
+        for word in 1...Self.freeRunningWords {
+            publish(word)
+        }
+        publish(Self.marker)
+        if !Self.wait(upTo: Self.handshakeTimeout, until: { highestSeen.load(ordering: .acquiring) >= Self.marker }) {
+            handshakeTimedOut.store(true, ordering: .releasing)
+        }
+        for word in (Self.marker + 1)...Self.finalWord {
+            publish(word)
+        }
+        producerFinished.store(true, ordering: .releasing)
+        producerDone.signal()
+    }
+
+    func runConsumer() {
+        arriveAtBarrier()
+        var seen = StressObservation()
+        var lastWord: [UInt64] = [0, 0]
+        var lastSequence: [UInt64] = [0, 0]
+        let deadline = ContinuousClock.now + Self.consumerTimeout
+        while lastWord[0] < Self.finalWord, ContinuousClock.now < deadline {
+            for slot in 0..<2 {
+                guard let got = sample(slots.latest(slot: slot)) else { continue }
+                let ordered = got.value.word >= lastWord[slot] && got.sequence >= lastSequence[slot]
+                let matches = got.stamp.frame == Int64(got.value.word)
+                    && got.sequence == (got.value.word + 1) / 2
+                    && Int(got.value.word & 1) == slot
+                if !got.value.isConsistent || !ordered || !matches { seen.failures += 1 }
+                if got.value.word != lastWord[slot], got.value.word < Self.finalWord - 1 {
+                    seen.distinctIntermediate += 1
+                }
+                lastWord[slot] = got.value.word
+                lastSequence[slot] = got.sequence
+            }
+            highestSeen.store(max(lastWord[0], lastWord[1]), ordering: .releasing)
+        }
+        seen.sawFinal = lastWord[0] == Self.finalWord
+        observation.withLock { $0 = seen }
+        consumerDone.signal()
     }
 }
