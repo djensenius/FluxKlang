@@ -182,6 +182,7 @@
 		5149040F9FD6A11AF32D74CF /* StudioConnectNodesMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80954917DAF02E7638ABB5FC /* StudioConnectNodesMenu.swift */; };
 		5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDEC454C8E9B9862280CC236 /* SpatialTests.swift */; };
 		51B93DBEC07DAB46A5D13163 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = B688B351B86D8CBE326E2A92 /* JSONValue.swift */; };
+		51F1FF28F9CCC074C94BD903 /* ControlContractTests+MusicalRestart.swift in Sources */ = {isa = PBXBuildFile; fileRef = D48C3118988D4A3EC745C803 /* ControlContractTests+MusicalRestart.swift */; };
 		5220D2BDE2A9014301AE6ACA /* AcceptanceLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */; };
 		5263405FB4FAE17C3819E801 /* CommandAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3303B038460EE95529FD811 /* CommandAdmission.swift */; };
 		52B144CCB29DE0AA32B4756B /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
@@ -800,6 +801,7 @@
 		D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSetup.swift; sourceTree = "<group>"; };
 		D31B6A889015506D2A5AFACE /* TriggerScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerScheduler.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
+		D48C3118988D4A3EC745C803 /* ControlContractTests+MusicalRestart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+MusicalRestart.swift"; sourceTree = "<group>"; };
 		D64BD7BCB392D3013AF8EF17 /* AssistantActionPlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionPlanningTests.swift; sourceTree = "<group>"; };
 		D77E7718C94E0A74F0E2D651 /* ControlContractTests+Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+Media.swift"; sourceTree = "<group>"; };
 		D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchControlXLController.swift; sourceTree = "<group>"; };
@@ -1421,6 +1423,7 @@
 				E1238969FDBD826B7453E0A0 /* ControlContractTests+ClockValidation.swift */,
 				AE1C6FE228CF243320EB83DA /* ControlContractTests+Commands.swift */,
 				D77E7718C94E0A74F0E2D651 /* ControlContractTests+Media.swift */,
+				D48C3118988D4A3EC745C803 /* ControlContractTests+MusicalRestart.swift */,
 				9CD2B9CAA819509505999673 /* ControlContractTests+MusicalTimeline.swift */,
 				A2CE46388408191FF6367360 /* ControlContractTests+MusicalTiming.swift */,
 				34E165CD6BF759AE4FB03E75 /* ControlContractTests+SchedulerClock.swift */,
@@ -2173,6 +2176,7 @@
 				7792E704BE779CB04B5B33C1 /* ControlContractTests+ClockValidation.swift in Sources */,
 				002F3991C0FC3EED4ECDF0CA /* ControlContractTests+Commands.swift in Sources */,
 				D5E3A20DFB86D6611FCBCFD4 /* ControlContractTests+Media.swift in Sources */,
+				51F1FF28F9CCC074C94BD903 /* ControlContractTests+MusicalRestart.swift in Sources */,
 				511E712B4C50BED916DDB9A7 /* ControlContractTests+MusicalTimeline.swift in Sources */,
 				2FFE4926B5CF5DD332E819AF /* ControlContractTests+MusicalTiming.swift in Sources */,
 				87E2BAB9D277222AB927CDDF /* ControlContractTests+SchedulerClock.swift in Sources */,

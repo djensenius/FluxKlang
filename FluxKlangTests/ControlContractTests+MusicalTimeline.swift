@@ -369,3 +369,95 @@ extension ControlContractTests {
         }
     }
 }
+
+extension ControlContractTests.MusicalTimelineValidation {
+    @Test(arguments: [false, true], [UInt64(40_000), 60_000])
+    func delayedHostOriginsUseLatestPrimaryBeforeSelectingHistory(_ reanchored: Bool, _ host: UInt64) throws {
+        let ledger = try fixture.ledger()
+        var timeline = try fixture.timeline(ledger)
+        if reanchored { try fixture.observe(&timeline, .musical, ledger, frame: 60, ticks: 38) }
+        try timeline.observe(.primary, at: fixture.anchor(ledger, frame: 100, host: host),
+                             sequence: timeline.observationSequence + 1, ledger: ledger)
+        let origin = try timeline.origin(at: .init(ticks: 25_000))
+        let positiveDrift = host == 40_000
+        #expect(origin.exactFrame == MusicalFrame(positiveDrift ? 70 : 30))
+        #expect(origin.clock.anchor.sample.frame == (reanchored && positiveDrift ? 60 : 0))
+        let pin = try timeline.reserve(.grid(32), origin: origin)
+        #expect(pin.occurrence == MusicalOccurrence(pass: 0, ticks: positiveDrift ? 64 : 32))
+        #expect(try timeline.project(pin).frame == (positiveDrift ? 100 : 50) + (reanchored ? 1 : 0))
+        #expect(timeline.sample.anchor.sample.frame == 0)
+        #expect(timeline.firstMusicalAnchor.sample.frame == 0)
+    }
+
+    @Test func futurePassPinsPreventLoopRemovalUntilReleased() throws {
+        let ledger = try fixture.ledger()
+        let loop = try LoopRange(startTicks: 0, endTicks: 1_920)
+        var timeline = try fixture.timeline(ledger, loop: loop, history: 2)
+        let first = try timeline.origin(atFrame: 0)
+        try fixture.observe(&timeline, .primary, ledger, frame: 2_500)
+        let pin = try timeline.reserve(.grid(1_440), origin: timeline.origin(atFrame: 2_500))
+        let projection = try timeline.project(pin)
+        #expect(pin.occurrence == MusicalOccurrence(pass: 1, ticks: 0))
+        #expect(projection.frame == 3_000 && projection.assumesFuture)
+        var released = timeline
+        try released.release(pin)
+        try fixture.observe(&released, .loop(nil), ledger, frame: 2_500)
+        #expect(released.currentLoop == nil && released.isQuiescent)
+        #expect(released.observationSequence == 2)
+        let primary = timeline.latestPrimary
+        let clock = timeline.currentClock
+        #expect(throws: MusicalTimingError.historyUnavailable) {
+            try fixture.observe(&timeline, .loop(nil), ledger, frame: 2_500)
+        }
+        #expect(timeline.currentLoop == loop && timeline.observationSequence == 1)
+        #expect(timeline.historyCount == 2 && timeline.pinCount == 1)
+        #expect(timeline.latestPrimary == primary && timeline.currentClock == clock)
+        #expect(try timeline.project(pin) == projection)
+        let retained = try timeline.reserve(.absolute(0), origin: first)
+        #expect(try timeline.project(retained).frame == 0)
+    }
+
+    @Test func stoppedFuturePinsKeepWrapEligibilityAcrossLoopChanges() throws {
+        let ledger = try fixture.ledger()
+        let loop = try LoopRange(startTicks: 0, endTicks: 1_920)
+        var timeline = try fixture.timeline(ledger, loop: loop)
+        try fixture.observe(&timeline, .primary, ledger, frame: 2_500)
+        let pin = try timeline.reserve(.grid(1_440), origin: timeline.origin(atFrame: 2_500))
+        try fixture.observe(&timeline, .running(false), ledger, frame: 2_500, ticks: 1_600)
+        #expect(throws: MusicalTimingError.stopped) { try timeline.project(pin) }
+        for ((start, end), error): ((Int64, Int64), MusicalTimingError) in [
+            ((100, 1_920), .outsideLoop), ((0, 1_500), .historyUnavailable)
+        ] {
+            #expect(throws: error) {
+                try fixture.observe(&timeline, .loop(LoopRange(startTicks: start, endTicks: end)), ledger, frame: 2_500)
+            }
+            #expect(timeline.currentLoop == loop && timeline.observationSequence == 2)
+            #expect(timeline.historyCount == 3 && timeline.pinCount == 1 && !timeline.isRunning)
+        }
+        try fixture.observe(&timeline, .loop(LoopRange(startTicks: 0, endTicks: 2_000)), ledger, frame: 2_500)
+        try fixture.observe(&timeline, .running(true), ledger, frame: 6_000, ticks: 1_600)
+        #expect(pin.occurrence == MusicalOccurrence(pass: 1, ticks: 0))
+        #expect(try timeline.project(pin).frame == 6_625)
+        #expect(try timeline.project(pin).assumesFuture)
+    }
+
+    @Test func reservationRefreshRejectsUnrepresentableFramesAtomically() throws {
+        var ledger = try fixture.ledger()
+        let frame = Int64.max - 2_000
+        var timeline = try fixture.timeline(ledger, frame: frame)
+        let pin = try timeline.reserve(.absolute(960), origin: timeline.origin(atFrame: frame))
+        let projection = try timeline.project(pin)
+        try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+        let map = try fixture.map(ledger, segments: [(0, 1_000_000)])
+        let primary = try fixture.anchor(ledger, frame: frame)
+        #expect(throws: MusicalTimingError.overflow) {
+            try timeline.observe(.map(map), at: primary, sequence: 1, ledger: ledger)
+        }
+        #expect(timeline.observationSequence == 0 && timeline.historyCount == 1 && timeline.pinCount == 1)
+        #expect(timeline.currentClock.map.revision == .initial)
+        #expect(try timeline.project(pin) == projection)
+        try timeline.release(pin)
+        try timeline.observe(.map(map), at: primary, sequence: 1, ledger: ledger)
+        #expect(timeline.currentClock.map == map && timeline.observationSequence == 1)
+    }
+}

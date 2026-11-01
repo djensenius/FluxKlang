@@ -105,24 +105,26 @@ struct MusicalTimeline: Sendable {
         if candidate.records.count > historyLimit { candidate.records.removeFirst() }
         self = candidate
     }
-
-    /// A host origin uses the retained primary mapping in effect there, not the newest primary anchor.
-    func origin(at host: HostStamp) throws -> MusicalOrigin {
+    /// Convert through the newest validated primary, then select retained musical history by exact frame.
+    /// A caller's newer physical-only anchor changes conversion, never the musical coverage or drift baseline.
+    func origin(at host: HostStamp, latestPrimary: ClockAnchor? = nil) throws -> MusicalOrigin {
+        let primary = latestPrimary ?? state.primary
+        guard sample.agrees(primary) else { throw MusicalTimingError.invalidContext }
+        guard primary.sample.frame >= state.primary.sample.frame, primary.host.ticks >= state.primary.host.ticks else {
+            throw MusicalTimingError.timeRegressed
+        }
         guard let first = records.first, host.ticks >= first.state.primary.host.ticks,
-              host.ticks <= state.primary.host.ticks,
-              let record = records.last(where: { $0.state.primary.host.ticks <= host.ticks }) else {
+              host.ticks <= primary.host.ticks else {
             throw MusicalTimingError.uncoveredOrigin
         }
-        let mapping = try SampleClockMap(anchor: record.state.primary, nominalRate: sample.nominalRate,
+        let mapping = try SampleClockMap(anchor: primary, nominalRate: sample.nominalRate,
                                          timebase: sample.timebase)
         return try origin(at: MusicalFrame(host: host, through: mapping))
     }
-
     /// Only actual recorded coverage is eligible. Future projection is not origin coverage.
     func origin(atFrame frame: Int64) throws -> MusicalOrigin {
         try origin(at: MusicalFrame(frame))
     }
-
     private func origin(at frame: MusicalFrame) throws -> MusicalOrigin {
         guard let first = records.first, frame >= MusicalFrame(first.state.primary.sample.frame),
               frame <= MusicalFrame(state.primary.sample.frame),
@@ -182,7 +184,6 @@ struct MusicalTimeline: Sendable {
         epoch = UUID()
         records = [TimelineRecord(state: state)]
     }
-
     /// A discontinuous clock/transport epoch requires terminal cancellation and pin release first.
     /// Restart resume ticks are derived from covered OLD history, never supplied as an unverified hint.
     /// Run state and loop are retained; changing either requires its own ordered observation.
@@ -204,10 +205,7 @@ struct MusicalTimeline: Sendable {
         }
         var restartTicks: Int64?
         if case .afterRestart(let frame) = ledger.resume {
-            let origin = try self.origin(atFrame: frame)
-            let oldClock = try MusicalTiming.reanchor(origin.clock.anchor, using: state.clock)
-            let ticks = try origin.isRunning ? oldClock.ticks(atFrame: frame) : oldClock.musical.ticks
-            restartTicks = origin.loop?.endTicks == ticks ? origin.loop?.startTicks : ticks
+            restartTicks = try MusicalTiming.restartTicks(at: frame, origin: origin(atFrame: frame), using: state.clock)
         }
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map,
                                          ledger: ledger, restartTicks: restartTicks)
@@ -364,7 +362,9 @@ struct MusicalTimeline: Sendable {
     }
     private mutating func refreshReservations() throws {
         for (id, old) in reservations {
-            reservations[id] = try prepare(old.occurrence, retaining: old.originalTicks)
+            let value = try prepare(old.occurrence, retaining: old.originalTicks)
+            _ = try MusicalTiming.narrow(MusicalTiming.rounded(projectedUnits(value)))
+            reservations[id] = value
         }
     }
     private func checkSequence(_ sequence: UInt64) throws {

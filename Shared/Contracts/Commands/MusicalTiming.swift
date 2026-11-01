@@ -131,6 +131,29 @@ enum MusicalTiming {
                        rounded(units(clock, from: clock.musical.ticks, to: loop.endTicks)))
     }
 
+    /// Choose the pass at the rounded wrap BEFORE rounding its tick position.
+    /// The old covered anchor uses the map in force at the restart, not its recorded map revision.
+    static func restartTicks(at frame: Int64, origin: MusicalOrigin, using current: MusicalClockMap) throws -> Int64 {
+        guard origin.isRunning else { return origin.clock.musical.ticks }
+        let clock = try reanchor(origin.clock.anchor, using: current)
+        guard let loop = origin.loop, clock.musical.ticks <= loop.endTicks else {
+            return try clock.ticks(atFrame: frame)
+        }
+        let wrap = try wrapFrame(clock, loop: loop)
+        guard Int128(frame) >= wrap else { return try clock.ticks(atFrame: frame) }
+        let period = rounded(units(clock, from: loop.startTicks, to: loop.endTicks))
+        guard period > 0 || Int128(frame) == wrap else { throw MusicalTimingError.nonAdvancingLoop }
+        let elapsed = period == 0 ? 0 : (Int128(frame) - wrap) % period
+        // An offset-only inverse at loop start: no historical anchor or virtual pass is retained.
+        let anchor = try ClockAnchor(
+            sample: .init(clock: clock.anchor.sample.clock, generation: clock.anchor.sample.generation,
+                          frame: narrow(Int128(frame) - elapsed)), host: clock.anchor.host,
+            musical: .init(transport: clock.musical.transport, musicalMap: clock.map.revision,
+                           ticks: loop.startTicks, loopIteration: clock.musical.loopIteration)
+        )
+        return try reanchor(anchor, using: clock).ticks(atFrame: frame)
+    }
+
     /// The end alias is for projection only; it never mutates the stored identity.
     static func projectionPass(_ occurrence: MusicalOccurrence, loop: LoopRange?, anchorTicks: Int64) throws -> Int128 {
         guard occurrence.pass >= 0, occurrence.ticks >= 0 else { throw MusicalTimingError.invalidTarget }
