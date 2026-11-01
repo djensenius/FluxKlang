@@ -270,5 +270,25 @@ extension HostAuthorityTests {
                 request(permission: PermissionFingerprint(rawValue: raw)), candidate: candidate(), in: try context()
             )) == .permissionChanged)
         }
+
+        @Test func oversizedCanonicallyEqualRequestFingerprintIsRejected() throws {
+            let composed = PermissionFingerprint(rawValue: String(repeating: "\u{E9}", count: 128))
+            let decomposed = PermissionFingerprint(rawValue: String(repeating: "e\u{301}", count: 128))
+            #expect(composed.rawValue.utf8.count == 256)
+            #expect(decomposed.rawValue.utf8.count == 384)
+            let result = ActivationValidator.validate(request(permission: decomposed), candidate: candidate(),
+                                                      in: try context(permission: composed))
+            #expect(rejection(result) == .permissionChanged)
+            #expect((try? result.get()) == nil)
+        }
+
+        @Test func canonicallyEquivalentButByteDifferentFingerprintIsChanged() throws {
+            let composed = PermissionFingerprint(rawValue: "permissions.caf\u{E9}")
+            let decomposed = PermissionFingerprint(rawValue: "permissions.cafe\u{301}")
+            #expect(decomposed.rawValue.utf8.count <= 256)
+            #expect(rejection(ActivationValidator.validate(
+                request(permission: decomposed), candidate: candidate(), in: try context(permission: composed)
+            )) == .permissionChanged)
+        }
     }
 }
