@@ -218,3 +218,68 @@ extension ControlContractTests.SchedulerBoundaryAcceptance {
         #expect(try fixture.snapshot().horizon?.frame == 1_501 && fixture.scheduler.reservedOutcomeCount == 0)
     }
 }
+
+/// #55 gap 1: an equal-frame current occurrence must not invent a future wrap (scheduler counterpart of
+/// the pure `futurePassAtTheSameFrameRemainsHypotheticalUntilObserved`).
+extension ControlContractTests.SchedulerBoundaryAcceptance {
+    /// Interior: the origin is the current anchor (2_250, ticks 1_440) on a grid-1_440 line in loop 0..1_920.
+    /// The next boundary is pass 1's start at 3_000, but the equal-frame interior wins on the current pass.
+    @Test(arguments: [0, 1])
+    func equalFrameInteriorDoesNotInventAFutureWrap(retro: Int) throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        try fixture.prepareMusical(0, loop: LoopRange(startTicks: 0, endTicks: 1_920))
+        try fixture.observeMusical(.musical, 2_250, ticks: 1_440)
+        var stamp = fixture.musicalStamp("trg.interior", .grid(ticks: 1_440), originHost: 1_125_000,
+                                         policy: .fireLate(maxLatenessMs: 100), arrival: 2_250)
+        stamp.retroactiveMs = retro
+        let handle = try fixture.submitMusical(stamp)
+        #expect(fixture.scheduler.pendingMusic(handle) == .pinned(MusicalOccurrence(pass: 0, ticks: 1_440)))
+        #expect(fixture.scheduler.musicalSummary?.clock.musical.loopIteration == 0)
+        #expect(try fixture.commitMusical(handle, at: 2_250) == .completed)
+        let outcome = try fixture.drainOne(handle)
+        #expect(outcome == Self.fired(outcome, at: 2_250))
+        try outcome.validateMediaShape()
+        #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
+        #expect(try fixture.snapshot().horizon?.frame == 2_250 && fixture.scheduler.reservedOutcomeCount == 0)
+        #expect(fixture.scheduler.musicalSummary?.clock.musical.loopIteration == 0)
+    }
+
+    /// Zero period: loop 0..1 at 60_000 us/quarter wraps at frame 0 the moment it runs. Until that wrap is
+    /// observed, nothing treats it as wrapped: grid 1 pins (0, 0), a pass-1 stamp is refused, and a same-frame
+    /// stop is `missingWrap` (MusicalTimeline.swift:369-392). After the observed wrap, pass 1 is current and
+    /// the stop correction is permitted.
+    @Test func immediatelyDueZeroPeriodBoundaryIsNotWrappedUntilObserved() throws {
+        var fixture = try SchedulerFixture(capacity: 2)
+        try fixture.scheduler.prepareMusical(SchedulerMusicalSetup(
+            anchor: fixture.anchor(0, ticks: 0), map: fixture.map(microsPerQuarter: 60_000),
+            loop: LoopRange(startTicks: 0, endTicks: 1), running: true, historyLimit: 4), ledger: fixture.ledger)
+        var early = fixture.musicalStamp("trg.zero.early", .grid(ticks: 1), originHost: 0)
+        let current = try fixture.submitMusical(early)
+        #expect(fixture.scheduler.pendingMusic(current) == .pinned(MusicalOccurrence(pass: 0, ticks: 0)))
+        let before = try fixture.admissionState()
+        var invented = fixture.musicalStamp("trg.zero.invented", .grid(ticks: 1), originHost: 0)
+        invented.loopIteration = 1
+        #expect(throws: TriggerSchedulerError.musicalPassMismatch) { try fixture.submitMusical(invented) }
+        #expect(throws: MusicalTimingError.missingWrap) {
+            try fixture.observeMusical(.running(false), 0, ticks: 0)
+        }
+        #expect(try fixture.admissionState() == before && before.music?.clock.musical.loopIteration == 0)
+        try fixture.observeMusical(.wrap, 0, ticks: 0, pass: 1)
+        early = fixture.musicalStamp("trg.zero.late", .grid(ticks: 1), originHost: 0)
+        #expect(throws: TriggerSchedulerError.musicalPassMismatch) { try fixture.submitMusical(early) }
+        var observed = fixture.musicalStamp("trg.zero.observed", .grid(ticks: 1), originHost: 0)
+        observed.loopIteration = 1
+        let next = try fixture.submitMusical(observed)
+        #expect(fixture.scheduler.pendingMusic(next) == .pinned(MusicalOccurrence(pass: 1, ticks: 0)))
+        for handle in [current, next] {
+            #expect(try fixture.commitMusical(handle, at: 0) == .completed)
+            let outcome = try fixture.drainOne(handle)
+            #expect(outcome == Self.fired(outcome, at: 0))
+        }
+        #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
+        #expect(fixture.scheduler.reservedOutcomeCount == 0)
+        try fixture.observeMusical(.running(false), 0, ticks: 0, pass: 1)
+        #expect(fixture.scheduler.musicalSummary?.isRunning == false)
+        #expect(fixture.scheduler.musicalSummary?.clock.musical.loopIteration == 1)
+    }
+}
