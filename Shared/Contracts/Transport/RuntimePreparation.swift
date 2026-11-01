@@ -73,6 +73,11 @@ struct RuntimePreparation {
         return slot
     }
 
+    private func requireStream(_ stream: StreamID?, direction: RuntimeStreamDirection) throws(RuntimePreparationError) {
+        guard let stream else { throw .invalidDiscontinuity }
+        _ = try slot(for: .stream(stream, direction: direction))
+    }
+
     func key(_ value: GenerationKey) throws -> RuntimeGenerationKey {
         let slot: UInt32
         // Retagging a validated subject preserves its text; the explicit kind
@@ -143,11 +148,13 @@ struct RuntimePreparation {
         case .clockRestart:
             guard host != nil else { throw RuntimePreparationError.invalidDiscontinuity }
         case .underrun, .overflow:
-            guard frames != nil, let stream else { throw RuntimePreparationError.invalidDiscontinuity }
+            guard frames != nil else { throw RuntimePreparationError.invalidDiscontinuity }
             let direction: RuntimeStreamDirection
             if case .underrun = kind { direction = .playback } else { direction = .capture }
-            _ = try slot(for: .stream(stream, direction: direction))
-        case .sourceLost, .sourceRestored, .formatChange, .captureStopped:
+            try requireStream(stream, direction: direction)
+        case .captureStopped:
+            try requireStream(stream, direction: .capture)
+        case .sourceLost, .sourceRestored, .formatChange:
             guard stream != nil else { throw RuntimePreparationError.invalidDiscontinuity }
         case .sampleJump, .locate, .loopWrap: break
         }

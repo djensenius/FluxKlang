@@ -264,6 +264,14 @@ extension ControlContractTests {
             let playback = try RuntimePreparation(primaryClock: clock, musicalClock: nil,
                 bindings: [(.sampleClock(clock), 0), (.stream(stream, direction: .playback), 1)])
             _ = try playback.discontinuity(.underrun, sample: stamp, frames: 1, stream: stream)
+            for kind: RuntimeDiscontinuityKind in [
+                .captureStopped(reason: .diskFull), .captureStopped(reason: .deviceLost)
+            ] {
+                #expect(throws: RuntimePreparationError.unmappedIdentity(.stream(stream, direction: .capture))) {
+                    try playback.discontinuity(kind, sample: stamp, stream: stream)
+                }
+                _ = try prepared.discontinuity(kind, sample: stamp, stream: stream)
+            }
             let missing = StreamID(validated: "stream.unknown")
             #expect(throws: RuntimePreparationError.undeclaredStream(missing)) {
                 try prepared.discontinuity(.sourceLost, sample: stamp, stream: missing)
