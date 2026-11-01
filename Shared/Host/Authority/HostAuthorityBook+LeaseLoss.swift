@@ -71,7 +71,7 @@ extension HostAuthorityBook {
             }
         case .idle, .preparing, .awaitingReview, .acknowledged, .prepareFailed, .recovering: break
         }
-        lost.lifecycle = lost.lifecycle.after(.leaseLost)
+        lost.enterRecovery()
         return lost
     }
 }

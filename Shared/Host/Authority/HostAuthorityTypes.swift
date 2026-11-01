@@ -31,6 +31,8 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
     case projectLimit
     /// `open` resumes only a settled lifecycle consistent with the running graph.
     case lifecycleNotResumable(EngineLifecycle)
+    /// A recovery base was supplied for a nonrecovering project or without its running plan.
+    case invalidRecoveryBase
     case lease(EngineLeaseError)
     case ledger(GenerationLedgerError)
     /// The engine command queue cannot take the transition's commands; nothing moved.
@@ -70,6 +72,17 @@ enum CommitReportOutcome: Hashable, Sendable {
 }
 
 extension EngineLifecycle {
+    /// What rendered before recovery started, if this lifecycle carries that state.
+    var recoveryRunningSet: RunningSetState? {
+        switch self {
+        case .stopped: .absent
+        case .preparing(_, over: let runningSet): runningSet
+        case .running: .running
+        case .degraded(let lost): .degraded(lost)
+        case .recovering, .heldByOther: nil
+        }
+    }
+
     /// The lifecycle once the engine acknowledged an activation: a preparation over
     /// nothing or a running graph renders `.running`; over a degraded graph it stays
     /// `.degraded` with the same lost capabilities; `.recovering` stays (fail closed:
@@ -79,6 +92,16 @@ extension EngineLifecycle {
         case .preparing(_, over: .absent), .preparing(_, over: .running): .running
         case .preparing(_, over: .degraded(let lost)): .degraded(lost)
         case .recovering, .stopped, .running, .degraded, .heldByOther: self
+        }
+    }
+}
+
+extension RunningSetState {
+    var settledLifecycle: EngineLifecycle {
+        switch self {
+        case .absent: .stopped
+        case .running: .running
+        case .degraded(let lost): .degraded(lost)
         }
     }
 }
@@ -97,9 +120,19 @@ struct HostProjectState: Hashable {
     var transaction: ActivationTransaction
     /// What this project's windows on the lease observe (`EngineLifecycle.observed`).
     var lifecycle: EngineLifecycle
+    /// The rendering/degradation base saved on first entry to recovery; `nil` outside recovery.
+    var recoveryBase: RunningSetState?
     /// The plan the engine prepared for the current review; meaningful only
     /// while the transaction is awaiting review or committing.
     var reviewed: PreparedActivationID?
+
+    /// Preserve the first pre-recovery rendering state across repeated recovery entries.
+    mutating func enterRecovery() {
+        if lifecycle != .recovering {
+            recoveryBase = lifecycle.recoveryRunningSet
+        }
+        lifecycle = .recovering
+    }
 }
 
 @available(*, unavailable, message: "a project's transaction never leaves HostAuthority")
@@ -127,6 +160,8 @@ struct HostProjectSnapshot: Hashable, Sendable {
     /// The last issued commit attempt, for routing `abandonCommit` and diagnostics.
     let lastCommitAttempt: CommitAttemptID?
     let lifecycle: EngineLifecycle
+    /// Saved rendering/degradation state during recovery; `.absent` for an unknown imported baseline.
+    let recoveryBase: RunningSetState?
     let reviewed: PreparedActivationID?
     let record: TransactionRecord
 
@@ -138,6 +173,7 @@ struct HostProjectSnapshot: Hashable, Sendable {
         lastPrepareAttempt = state.transaction.lastPrepareAttempt
         lastCommitAttempt = state.transaction.lastAttempt
         lifecycle = state.lifecycle
+        recoveryBase = state.recoveryBase
         reviewed = state.reviewed
         record = TransactionRecord(state.transaction)
     }

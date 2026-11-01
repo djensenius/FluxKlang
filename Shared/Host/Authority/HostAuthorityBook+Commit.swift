@@ -41,8 +41,10 @@ extension HostAuthorityBook {
     ///    (`windowCannotAuthorize(role)`; no record is `authorizationInvalid(.noneOutstanding)`).
     ///    A released, transferred or detached lease therefore refuses here, before
     ///    the transaction's own lease checks;
-    /// 4. queue room for the `.commit` (`.queueFull`, before the transition);
-    /// 5. the transaction's checks against the authorization, the current lease and
+    /// 4. no queued or delivered restore awaiting acknowledgement (`.activation(.busy)`);
+    ///    preparation and authorization remain permitted, but cannot be consumed yet;
+    /// 5. queue room for the `.commit` (`.queueFull`, before the transition);
+    /// 6. the transaction's checks against the authorization, the current lease and
     ///    the live context built now from `live`, `ledger` and the running graph.
     /// The queued `.commit` is delivered only if its lease is still current
     /// (`nextEngineCommand()`). Success consumes the window record.
@@ -55,6 +57,7 @@ extension HostAuthorityBook {
         }
         let role = registry.role(of: window, project: project)
         guard case .renders = role else { return .failure(.windowCannotAuthorize(role)) }
+        guard restoring == nil else { return .failure(.activation(.busy)) }
         guard queue.canAccept(1) else { return .failure(.queueFull) }
         guard let context = liveContext(over: state.transaction.running) else {
             return .failure(.ledger(.undeclaredCounter(EngineLeaseRegistry.contextKey)))
@@ -79,8 +82,9 @@ extension HostAuthorityBook {
     /// (`.activation(.staleReport)`); queue room for any recovery step
     /// (`maxRecoveryStepSlots`, before the transition); the transaction's checks.
     /// Queues the step's mute (marking `outputsMuted`), enters `.recovering` and ends the attempt's
-    /// `inFlight` record. A still-queued `.commit` of the attempt is then dropped
-    /// by the delivery guard.
+    /// `inFlight` record. After publishing, Rule M gates the current holder and
+    /// best-effort queues its restore after the mute. A still-queued `.commit`
+    /// of the abandoned attempt is dropped by the delivery guard.
     mutating func abandonCommit(_ attempt: CommitAttemptID,
                                 reason: CommitAbandonment) -> Result<Void, HostAuthorityRefusal> {
         guard reason == .outcomeUnknown else { return .failure(.abandonmentReserved(reason)) }
@@ -96,10 +100,11 @@ extension HostAuthorityBook {
         guard requestMute(step, running: state.transaction.running, into: &stagedQueue) else {
             return .failure(.queueFull)
         }
-        state.lifecycle = state.lifecycle.after(reason.event)
+        state.enterRecovery()
         queue = stagedQueue
         projects[project] = state
         inFlight[project] = nil
+        reconcileFIFOMute()
         return .success(())
     }
 
@@ -215,24 +220,26 @@ extension HostAuthorityBook {
     /// `.leaseLost` and returns the one command that takes the commit's place in
     /// the queue: the recovery step's mute. The lifecycle becomes `.recovering`;
     /// the reviewed plan stays live. Private to the delivery guard, so no caller can
-    /// claim `.leaseLost`. State changes only if the abandon succeeds; otherwise
-    /// (a contract break) nothing changes and the mute is still returned in place
-    /// of the dropped commit, which fails closed.
+    /// claim `.leaseLost`. An unexpected abandon refusal (a contract break) still
+    /// publishes the fail-closed mute and reconciles the holder, without changing
+    /// the causing transaction.
     private mutating func withholdCommit(_ attempt: CommitAttemptID, of project: ProjectID) -> EngineCommand {
         let mute = EngineCommand.setOutputsMuted(true)
         guard var state = projects[project],
               case .success(let step) = state.transaction.abandonCommit(attempt, reason: .leaseLost) else {
             markFIFOMute()
+            reconcileFIFOMute()
             return mute
         }
         var converted = EngineCommandQueue()
         let queuedMute = requestMute(step, running: state.transaction.running, into: &converted)
-        state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
+        state.enterRecovery()
         projects[project] = state
         if !queuedMute { markFIFOMute() }
         let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute
-        // Continuation point: the withheld commit's state is settled here, before the
-        // replacement is delivered; a post-step on `project` belongs here.
+        // The replacement mute is returned before any subsequently queued restore.
+        // Reconcile only after the causing project's recovery state is published.
+        reconcileFIFOMute()
         return replacement
     }
 }

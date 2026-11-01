@@ -48,14 +48,30 @@ extension HostAuthorityTests {
             try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
             let prepareB = try #require(try await Bench.state(authority, Bench.projectB).lastPrepareAttempt)
             let taken = await engine.drain(authority)
-            #expect(taken.count == 2 && taken.first == .setOutputsMuted(true))
-            guard taken.count == 2, case .prepare(_, prepareB) = taken[1] else {
+            let expectedCount = change == .reacquired ? 4 : change == .transferred ? 3 : 2
+            #expect(taken.count == expectedCount && taken.first == .setOutputsMuted(true))
+            guard taken.count == expectedCount, case .prepare(_, prepareB) = taken[1] else {
                 Issue.record("Expected the mute, then B's prepare; got \(taken)")
                 return
             }
-            #expect(engine.pendingCommits.isEmpty && engine.discarded.isEmpty)
+            #expect(engine.pendingCommits.isEmpty)
             let state = try await Bench.state(authority)
-            #expect(state.phase == .recovering(reviewed, cause: .leaseLost))
+            if change == .reacquired {
+                let token = try await Bench.leaseToken(authority)
+                let restore = try await Bench.restore(authority)
+                #expect(restore.token == token && restore.prepared == Bench.runningPlan && restore.revision == .initial)
+                #expect(Array(taken.dropFirst(2)) == [Bench.restoreCommand(restore), .discard(reviewed)])
+                #expect(engine.discarded == [reviewed])
+                #expect(state.phase == .idle)
+            } else {
+                #expect(engine.discarded.isEmpty)
+                #expect(state.phase == .recovering(reviewed, cause: .leaseLost))
+                if change == .transferred {
+                    let restore = try await Bench.restore(authority)
+                    #expect(restore.project == Bench.projectB && restore.prepared == nil)
+                    #expect(Array(taken.dropFirst(2)) == [Bench.restoreCommand(restore)])
+                }
+            }
             #expect(state.lifecycle == .recovering && state.reviewed == reviewed)
             #expect(await authority.snapshot().inFlight.isEmpty)
         }
@@ -67,10 +83,12 @@ extension HostAuthorityTests {
             let attempt = try await Bench.attempt(authority)
             try await authority.abandonCommit(attempt, reason: .outcomeUnknown).get()
             // The queued `.commit` is dropped: its attempt is no longer committing.
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            let restore = try await Bench.restore(authority)
+            #expect(await engine.drain(authority) ==
+                    [.setOutputsMuted(true), Bench.restoreCommand(restore), .discard(reviewed)])
             #expect(engine.pendingCommits.isEmpty)
             let state = try await Bench.state(authority)
-            #expect(state.phase == .recovering(reviewed, cause: .commitOutcomeUnknown))
+            #expect(state.phase == .idle)
             #expect(state.lifecycle == .recovering)
             #expect(await authority.snapshot().inFlight.isEmpty)
         }
@@ -78,13 +96,15 @@ extension HostAuthorityTests {
         @Test func abandoningADeliveredCommitEndsItsFlight() async throws {
             let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
-            _ = try await Bench.commitQueued(authority, &engine)
+            let reviewed = try await Bench.commitQueued(authority, &engine)
             await engine.drain(authority)
             let attempt = try await Bench.attempt(authority)
             #expect(await authority.snapshot().inFlight == [Bench.projectA: attempt])
             try await authority.abandonCommit(attempt, reason: .outcomeUnknown).get()
             #expect(await authority.snapshot().inFlight.isEmpty)
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            let restore = try await Bench.restore(authority)
+            #expect(await engine.drain(authority) ==
+                    [.setOutputsMuted(true), Bench.restoreCommand(restore), .discard(reviewed)])
             // Nothing is in flight any more, so the lease can be released.
             try await authority.release(project: Bench.projectA).get()
         }
@@ -165,6 +185,8 @@ extension HostAuthorityTests {
             let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
             let reviewed = try await Bench.commitQueued(authority, &engine)
+            // Without a holder, Rule M cannot restore/discard the retained plan.
+            try await authority.release(project: Bench.projectA).get()
             try await authority.abandonCommit(try await Bench.attempt(authority), reason: .outcomeUnknown).get()
             await engine.drain(authority)
             let before = await authority.snapshot()

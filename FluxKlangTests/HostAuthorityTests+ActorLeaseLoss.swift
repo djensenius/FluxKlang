@@ -46,6 +46,12 @@ enum LeaseLossPhase: CaseIterable, Sendable {
             return .prepareFailed(.engineRefused)
         case .recovering:
             let reviewed = try await Bench.commitQueued(authority, &engine)
+            // Leave room for the mute but not Rule M's automatic restore, so
+            // this row still starts in the transaction's recovering phase.
+            for _ in 1..<(EngineCommandQueue.capacity - 3) {
+                try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+                try await authority.abandonPrepare(project: Bench.projectB).get()
+            }
             try await authority.abandonCommit(try await Bench.attempt(authority), reason: .outcomeUnknown).get()
             await engine.drain(authority)
             return .recovering(reviewed, cause: .commitOutcomeUnknown)

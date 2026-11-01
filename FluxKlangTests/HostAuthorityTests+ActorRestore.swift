@@ -16,18 +16,37 @@ enum RestoreCommitPhase: CaseIterable, Sendable {
     var withAux: Bool { self == .partial }
 }
 
+func authorityWithDeferredRestoreDiscard(
+    _ engine: inout ScriptedActivationEngine
+) async throws -> (HostAuthority, PreparedActivationID) {
+    let authority = try await Bench.makeAuthority()
+    let failedPlan = try await Bench.commitDelivered(authority, &engine)
+    _ = try #require(await engine.report(authority, .failed)).verdict.get()
+    let firstToken = try await Bench.leaseToken(authority)
+    _ = try await authority.leaseLost(firstToken).get()
+    #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+    let secondToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
+    #expect(await authority.snapshot().restoring?.discardAfterRestore == [failedPlan])
+    _ = try await authority.leaseLost(secondToken).get()
+    #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+    #expect(await authority.snapshot().deferredRestoreDiscards == [Bench.projectA: [failedPlan]])
+    return (authority, failedPlan)
+}
+
 extension HostAuthorityTests {
     /// Recovery restore admission, exact engine acknowledgement and fail-closed unmuting (H5d-2a).
     struct ActorRestore {
         @Test func restoreWaitsForHeldLease() async throws {
-            let unheld = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering)
+            let unheld = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering,
+                                                       recoveryBaseA: .running)
             let beforeUnheld = await unheld.snapshot()
             let unheldResult = await unheld.resolveRecovery(project: Bench.projectA)
             #expect(Bench.refusal(unheldResult) == .activation(.leaseNotHeld))
             #expect(await unheld.snapshot() == beforeUnheld)
             #expect(await unheld.nextEngineCommand() == nil)
 
-            let otherHolder = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering)
+            let otherHolder = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering,
+                                                            recoveryBaseA: .running)
             _ = try await otherHolder.acquire(project: Bench.projectB, window: Bench.windowB).get()
             let beforeOtherHolder = await otherHolder.snapshot()
             let heldByOther = await otherHolder.resolveRecovery(project: Bench.projectA)
@@ -37,7 +56,8 @@ extension HostAuthorityTests {
         }
 
         @Test func explicitResolveQueuesOneRestore() async throws {
-            let authority = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering)
+            let authority = try await Bench.makeAuthority(holding: nil, lifecycleA: .recovering,
+                                                          recoveryBaseA: .running)
             try await Bench.fillQueue(authority)
             _ = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
             #expect(await authority.snapshot().restoring == nil)
@@ -200,8 +220,9 @@ extension HostAuthorityTests {
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let restore = try #require(await authority.snapshot().restoring)
             #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, Bench.runningPlan, token)])
-            _ = try await Bench.review(authority, &engine)
-            #expect(await engine.completeRestore(authority) == .success(.running))
+            let reviewed = try await Bench.review(authority, &engine)
+            let preparing = EngineLifecycle.preparing(try ContractRevision.initial.next(), over: .running)
+            #expect(await engine.completeRestore(authority) == .success(preparing))
             let acknowledged = await authority.snapshot()
             #expect(!acknowledged.outputsMuted && acknowledged.pendingOutput == false)
 
@@ -213,7 +234,10 @@ extension HostAuthorityTests {
                                               reason: .outcomeUnknown).get()
             let abandoned = await authority.snapshot()
             #expect(abandoned.outputsMuted && abandoned.pendingOutput == nil)
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            let replacement = try await Bench.restore(authority)
+            #expect(replacement.attempt != restore.attempt)
+            #expect(await engine.drain(authority) ==
+                    [.setOutputsMuted(true), Bench.restoreCommand(replacement), .discard(reviewed)])
         }
 
         @Test(arguments: [true, false])
@@ -262,17 +286,6 @@ extension HostAuthorityTests {
                 .setOutputsMuted(true), .restore(thirdRestore.attempt, .initial, Bench.runningPlan, thirdToken),
                 .discard(failedPlan)
             ])
-        }
-
-        @Test func deferredRestorePlanCannotBeOpened() async throws {
-            var engine = try ScriptedActivationEngine()
-            let (authority, failedPlan) = try await authorityWithDeferredRestoreDiscard(&engine)
-            let before = await authority.snapshot()
-            let result = await authority.open(
-                project: Bench.projectC, running: RunningGraph(revision: .initial, prepared: failedPlan)
-            )
-            #expect(Bench.refusal(result) == .activation(.preparedIDInUse))
-            #expect(await authority.snapshot() == before)
         }
 
         @Test func deferredRestorePlanCannotBeAdoptedByPrepareAnswer() async throws {
@@ -442,21 +455,5 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot() == full)
         }
 
-        private func authorityWithDeferredRestoreDiscard(
-            _ engine: inout ScriptedActivationEngine
-        ) async throws -> (HostAuthority, PreparedActivationID) {
-            let authority = try await Bench.makeAuthority()
-            let failedPlan = try await Bench.commitDelivered(authority, &engine)
-            _ = try #require(await engine.report(authority, .failed)).verdict.get()
-            let firstToken = try await Bench.leaseToken(authority)
-            _ = try await authority.leaseLost(firstToken).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
-            let secondToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
-            #expect(await authority.snapshot().restoring?.discardAfterRestore == [failedPlan])
-            _ = try await authority.leaseLost(secondToken).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
-            #expect(await authority.snapshot().deferredRestoreDiscards == [Bench.projectA: [failedPlan]])
-            return (authority, failedPlan)
-        }
     }
 }

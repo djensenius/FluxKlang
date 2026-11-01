@@ -467,7 +467,7 @@ extension HostAuthorityTests {
         @Test func recoveringEngineNeverShowsPreparing() async throws {
             let authority = try await makeAuthority()
             try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil),
-                                     lifecycle: .recovering).get()
+                                     lifecycle: .recovering, recoveryBase: .absent).get()
             try await begin(authority, projectB).get()
             let preparing = try await state(authority, projectB)
             #expect(preparing.phase == .preparing && preparing.lifecycle == .recovering)
