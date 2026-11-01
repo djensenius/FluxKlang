@@ -460,4 +460,24 @@ extension ControlContractTests.MusicalTimelineValidation {
         try timeline.observe(.map(map), at: primary, sequence: 1, ledger: ledger)
         #expect(timeline.currentClock.map == map && timeline.observationSequence == 1)
     }
+
+    @Test(arguments: [MusicalTarget.absolute(960), .grid(960)])
+    func unprojectableReservationsDoNotConsumeCapacity(_ target: MusicalTarget) throws {
+        let ledger = try fixture.ledger()
+        let base = Int64.max - 1_000
+        var timeline = try fixture.timeline(ledger, pins: 1, frame: base)
+        try timeline.observe(.primary, at: fixture.anchor(ledger, frame: base + 1, host: 500),
+                             sequence: 1, ledger: ledger)
+        let origin = try timeline.origin(atFrame: base + 1)
+        let clock = timeline.currentClock
+        #expect(throws: MusicalTimingError.overflow) { try timeline.reserve(target, origin: origin) }
+        #expect(timeline.pinCount == 0 && timeline.isQuiescent)
+        #expect(timeline.observationSequence == 1 && timeline.historyCount == 2)
+        #expect(timeline.currentClock == clock && timeline.latestPrimary.sample.frame == base + 1)
+        try timeline.observe(.primary, at: fixture.anchor(ledger, frame: base + 2, host: 1_000),
+                             sequence: 2, ledger: ledger)
+        let pin = try timeline.reserve(.absolute(0), origin: origin)
+        #expect(timeline.pinCount == 1 && timeline.observationSequence == 2)
+        #expect(try timeline.project(pin).frame == base)
+    }
 }

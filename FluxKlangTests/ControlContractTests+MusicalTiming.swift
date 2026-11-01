@@ -13,7 +13,7 @@ extension ControlContractTests {
             try fixture.observe(&timeline, .running(false), ledger, frame: 150, ticks: 96)
             try fixture.observe(&timeline, .running(true), ledger, frame: 1_000, ticks: 96)
             let resumed = try timeline.reserve(.grid(33), origin: delayed, retroactiveMs: 1)
-            #expect(resumed.occurrence == MusicalOccurrence(pass: 0, ticks: 66))
+            #expect(resumed.occurrence == .init(pass: 0, ticks: 0)); #expect(try timeline.project(resumed).frame == 850)
         }
         @Test func delayedOriginUsesActualPassAndAnchorButCurrentResolutionMap() throws {
             var ledger = try fixture.ledger(); var timeline = try fixture.timeline(ledger)
@@ -22,7 +22,7 @@ extension ControlContractTests {
             try ledger.bump(fixture.mapKey, reason: .tempoEdit)
             try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 1_000_000)])), ledger, frame: 750)
             let pin = try timeline.reserve(.grid(240), origin: origin)
-            #expect(pin.occurrence == .init(pass: 0, ticks: 240)); #expect(try timeline.project(pin).frame == 0)
+            #expect(pin.occurrence == .init(pass: 0, ticks: 480)); #expect(try timeline.project(pin).frame == 750)
         }
         @Test func delayedOriginDoesNotAcquireHypotheticalPassesAfterTempoEdit() throws {
             var ledger = try fixture.ledger()
@@ -34,10 +34,10 @@ extension ControlContractTests {
             try fixture.observe(&timeline, .map(fixture.map(ledger, segments: [(0, 60_000)])), ledger, frame: 3_000)
             let pin = try timeline.reserve(.absolute(0), origin: origin)
             #expect(pin.occurrence == .init(pass: 0, ticks: 0)); #expect(try timeline.project(pin).frame == 0)
-            #expect(throws: MusicalTimingError.outsideLoop) {
-                try timeline.reserve(.grid(1_440), origin: origin)
-            }
-            #expect(timeline.pinCount == 1) // Never silently reinterpret the old origin as virtual pass 6.
+            let forward = try timeline.reserve(.grid(1_440), origin: origin)
+            #expect(forward.occurrence == .init(pass: 1, ticks: 0))
+            #expect(try timeline.project(forward).frame == 3_000 && !timeline.project(forward).assumesFuture)
+            #expect(timeline.pinCount == 2 && origin.clock.musical.loopIteration == 0)
         }
         @Test func initialAndFallbackQuantizationCrossWrapWithoutRetargeting() throws {
             let ledger = try fixture.ledger(); let loop = try LoopRange(startTicks: 0, endTicks: 1_920)
@@ -415,8 +415,8 @@ extension ControlContractTests.MusicalTimingValidation {
         }
         let pin = try timeline.reserve(.grid(4), origin: timeline.origin(atFrame: 3_128), retroactiveMs: retro)
         let earlier = retro > 0 && (retention.1 || retention.0 == 15)
-        #expect(pin.occurrence == .init(pass: earlier ? 0 : 2, ticks: retro == 0 ? 0 : earlier ? 780 : 8))
-        #expect(try timeline.project(pin).frame == (retro == 0 ? 3_084 : earlier ? 3_120 : 3_116))
+        #expect(pin.occurrence == .init(pass: earlier ? 0 : 2, ticks: retro == 0 ? 12 : earlier ? 780 : 8))
+        #expect(try timeline.project(pin).frame == (retro == 0 ? 3_132 : earlier ? 3_120 : 3_116))
     }
     @Test(arguments: [0, 1]) func retroactiveSearchComparesEarlierPassesAfterValidReanchors(_ retro: Int) throws {
         let ledger = try fixture.ledger()
@@ -427,8 +427,8 @@ extension ControlContractTests.MusicalTimingValidation {
         }
         let pin = try timeline.reserve(.grid(4), origin: timeline.origin(atFrame: 1_564), retroactiveMs: retro)
         // Pass 1 tick 8 projects to 1560.875; pass 0 tick 1000 is closer at 1562.5.
-        #expect(pin.occurrence == MusicalOccurrence(pass: retro == 0 ? 1 : 0, ticks: retro == 0 ? 0 : 1_000))
-        #expect(try timeline.project(pin).frame == (retro == 0 ? 1_548 : 1_563))
+        #expect(pin.occurrence == MusicalOccurrence(pass: retro == 0 ? 1 : 0, ticks: retro == 0 ? 12 : 1_000))
+        #expect(try timeline.project(pin).frame == (retro == 0 ? 1_567 : 1_563))
     }
     @Test(arguments: [Int64(0), 100])
     func stoppedOriginsKeepBothHeldTickAndFrameBounds(_ resumeFrame: Int64) throws {
@@ -468,10 +468,10 @@ extension ControlContractTests.MusicalTimingValidation {
             }
             let forward = try timeline.reserve(.grid(1), origin: origin)
             let prior = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: 1)
-            #expect(forward.occurrence == .init(pass: 0, ticks: frame == 500 ? Int64(320 + count * drift) : 321))
+            #expect(forward.occurrence == .init(pass: 0, ticks: Int64((frame == 500 ? 320 : 321) + count * drift)))
             #expect(prior.occurrence == MusicalOccurrence(pass: 0, ticks: Int64(320 + count * drift)))
             #expect(try timeline.project(prior).frame == 500)
-            if frame == 500 { #expect(try timeline.project(forward).frame == 500) }
+            #expect(try timeline.project(forward).frame == (frame == 500 ? 500 : 502))
             if count == 1 && drift == 1 && frame == 500 {
                 let midpoint = try timeline.reserve(.grid(6), origin: origin)
                 #expect(midpoint.occurrence == .init(pass: 0, ticks: 324))

@@ -132,11 +132,12 @@ enum MusicalTiming {
     }
 
     /// Choose the pass at the rounded wrap BEFORE rounding its tick position.
-    /// The old covered anchor uses the map in force at the restart, not its recorded map revision.
-    static func restartTicks(at frame: Int64, origin: MusicalOrigin, using current: MusicalClockMap) throws -> Int64 {
+    /// Keep the old covered anchor/rate, but use the map and loop in force at restart.
+    static func restartTicks(at frame: Int64, origin: MusicalOrigin, using current: MusicalClockMap,
+                             loop: LoopRange?) throws -> Int64 {
         guard origin.isRunning else { return origin.clock.musical.ticks }
         let clock = try reanchor(origin.clock.anchor, using: current)
-        guard let loop = origin.loop, clock.musical.ticks <= loop.endTicks else {
+        guard let loop, clock.musical.ticks <= loop.endTicks else {
             return try clock.ticks(atFrame: frame)
         }
         let wrap = try wrapFrame(clock, loop: loop)
@@ -305,14 +306,16 @@ enum MusicalTiming {
     }
 
     /// At most 64 comparisons, including a sentinel for an unrepresentable forward boundary.
-    static func gridBounds(at frame: MusicalFrame, grid: Int64, clock: MusicalClockMap)
+    static func gridBounds(at frame: MusicalFrame, grid: Int64, clock: MusicalClockMap,
+                           projectionAnchor: (ticks: Int64, units: Int128)? = nil)
         throws -> (forward: Int128, previous: Int128) {
         try validate(clock)
         guard grid > 0 else { throw MusicalTimingError.invalidTarget }
-        let base = try multiply(Int128(clock.anchor.sample.frame), unitsPerFrame)
+        let base = try projectionAnchor?.units ?? multiply(Int128(clock.anchor.sample.frame), unitsPerFrame)
+        let anchoredTicks = projectionAnchor?.ticks ?? clock.musical.ticks
         func coordinate(_ index: Int128) throws -> MusicalFrame {
             let ticks = try narrow(index * Int128(grid))
-            return try MusicalFrame(units: add(base, units(clock, from: clock.musical.ticks, to: ticks)))
+            return try MusicalFrame(units: add(base, units(clock, from: anchoredTicks, to: ticks)))
         }
         let last = Int128(Int64.max) / Int128(grid)
         var lower: Int128 = 0
