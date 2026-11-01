@@ -282,22 +282,23 @@ extension ControlContractTests {
                 }
             }
         }
-        @Test func futurePassAtTheSameFrameRemainsHypotheticalUntilObserved() throws {
+        @Test(arguments: [0, 1])
+        func futurePassAtTheSameFrameRemainsHypotheticalUntilObserved(_ retro: Int) throws {
             let ledger = try fixture.ledger()
             var timeline = try fixture.timeline(ledger, loop: LoopRange(startTicks: 0, endTicks: 1),
                                                  segments: [(0, 60_000)])
             let next = try timeline.nextBoundary(at: 0, grid: 1)
             #expect(next.occurrence == .init(pass: 1, ticks: 0) && next.frame == 0 && next.assumesFuture)
             let origin = try timeline.origin(atFrame: 0)
-            let current = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: 1)
+            let current = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: retro)
             let end = try timeline.reserve(.absolute(1), origin: origin)
             #expect(current.occurrence == MusicalOccurrence(pass: 0, ticks: 0))
             #expect(try !timeline.project(current).assumesFuture); #expect(try timeline.project(end).assumesFuture)
             try fixture.observe(&timeline, .wrap, ledger, frame: 0, ticks: 0, pass: 1)
             #expect(try !timeline.project(end).assumesFuture)
-            let delayed = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: 1)
+            let delayed = try timeline.reserve(.grid(1), origin: origin, retroactiveMs: retro)
             #expect(delayed.occurrence == MusicalOccurrence(pass: 0, ticks: 0))
-            let observed = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 0), retroactiveMs: 1)
+            let observed = try timeline.reserve(.grid(1), origin: timeline.origin(atFrame: 0), retroactiveMs: retro)
             #expect(observed.occurrence == MusicalOccurrence(pass: 1, ticks: 0))
             let subsequent = try timeline.nextBoundary(at: 0, grid: 1)
             #expect(subsequent.occurrence == MusicalOccurrence(pass: 2, ticks: 0))
@@ -406,17 +407,16 @@ extension ControlContractTests.MusicalTimingValidation {
         for index: Int64 in 1...11 {
             try fixture.observe(&timeline, .musical, ledger, frame: 3_128 + 100 * index, ticks: 26 * index, pass: 2)
         }
-        if retention.0 == 13 && retention.1 {
+        if retention.0 == 13 {
             #expect(throws: MusicalTimingError.historyUnavailable) {
                 try timeline.reserve(.grid(4), origin: timeline.origin(atFrame: 3_128), retroactiveMs: retro)
             }
-            #expect(timeline.pinCount == 1)
+            #expect(timeline.pinCount == (retention.1 ? 1 : 0))
             return
         }
         let pin = try timeline.reserve(.grid(4), origin: timeline.origin(atFrame: 3_128), retroactiveMs: retro)
-        let earlier = retro > 0 && (retention.1 || retention.0 == 15)
-        #expect(pin.occurrence == .init(pass: earlier ? 0 : 2, ticks: retro == 0 ? 12 : earlier ? 780 : 8))
-        #expect(try timeline.project(pin).frame == (retro == 0 ? 3_132 : earlier ? 3_120 : 3_116))
+        #expect(pin.occurrence == .init(pass: retro == 0 ? 2 : 0, ticks: retro == 0 ? 12 : 780))
+        #expect(try timeline.project(pin).frame == (retro == 0 ? 3_132 : 3_120))
     }
     @Test(arguments: [0, 1]) func retroactiveSearchComparesEarlierPassesAfterValidReanchors(_ retro: Int) throws {
         let ledger = try fixture.ledger()

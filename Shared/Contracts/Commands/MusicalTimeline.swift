@@ -36,6 +36,7 @@ private struct TimelineState: Sendable {
     var clock: MusicalClockMap
     var loop: LoopRange?
     var running: Bool
+    var observedWrapFrame: Int64?
 }
 
 private struct TimelineRecord: Sendable {
@@ -337,8 +338,10 @@ private extension MusicalTimeline {
 
     mutating func apply(_ event: MusicalObservation, anchor: ClockAnchor) throws {
         let wrapping: Bool = if case .wrap = event { true } else { false }
-        if !wrapping { try checkCoverage(to: anchor.sample.frame) }
+        let correcting = try permitsSameFrameCorrection(event, at: anchor.sample.frame)
+        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting) }
         try checkAnchor(anchor, for: event)
+        var resuming = false
         switch event {
         case .primary:
             break
@@ -348,20 +351,42 @@ private extension MusicalTimeline {
             guard running != state.running else { throw MusicalTimingError.invalidTransition }
             state.clock = try MusicalTiming.reanchor(anchor, using: state.clock)
             state.running = running
+            state.observedWrapFrame = nil
+            resuming = running
         case .wrap:
             state.clock = try MusicalTiming.reanchor(anchor, using: state.clock)
+            state.observedWrapFrame = anchor.sample.frame
         case .map(let map):
             try replaceMap(map)
         case .loop(let loop):
             state.loop = loop
         }
         state.primary = anchor
-        if !wrapping { try checkCoverage(to: anchor.sample.frame) }
+        // Resuming can make a wrap immediately due; it does not observe that wrap.
+        if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting || resuming) }
     }
 
-    func checkCoverage(to frame: Int64) throws {
-        if state.running, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks,
-           try Int128(frame) >= MusicalTiming.wrapFrame(state.clock, loop: loop) {
+    func permitsSameFrameCorrection(_ event: MusicalObservation, at frame: Int64) throws -> Bool {
+        switch event {
+        case .running(false), .loop: break
+        default: return false
+        }
+        // Corrections need a wrap observed at this boundary in the current run, not merely a past pass.
+        // Stop/resume clears that provenance even when both transitions stay at the same frame.
+        guard state.running, let loop = state.loop, state.clock.musical.loopIteration > 0,
+              frame == state.observedWrapFrame, frame == state.primary.sample.frame,
+              frame == state.clock.anchor.sample.frame, state.clock.musical.ticks <= loop.endTicks,
+              MusicalTiming.rounded(MusicalTiming.units(state.clock, from: loop.startTicks,
+                                                        to: loop.endTicks)) == 0 else {
+            return false
+        }
+        return try Int128(frame) == MusicalTiming.wrapFrame(state.clock, loop: loop)
+    }
+
+    func checkCoverage(to frame: Int64, allowingSameFrame: Bool = false) throws {
+        guard state.running, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks else { return }
+        let wrap = try MusicalTiming.wrapFrame(state.clock, loop: loop)
+        if Int128(frame) > wrap || (Int128(frame) == wrap && !allowingSameFrame) {
             throw MusicalTimingError.missingWrap
         }
     }

@@ -13,7 +13,8 @@ extension MusicalTimeline {
             guard grid > 0 else { throw MusicalTimingError.invalidTarget }
             let frame = origin.isRunning ? origin.exactFrame : MusicalFrame(origin.clock.anchor.sample.frame)
             let held = origin.isRunning ? nil : origin.clock.musical.ticks
-            if let previous = try projectedPrevious(pass: pass, at: frame, grid: grid, heldTicks: held, using: index) {
+            if let previous = try projectedPrevious(pass: pass, at: frame, grid: grid,
+                                                   window: (retroactiveMs, held), using: index) {
                 if MusicalFrame(units: previous.units) == frame { return previous.occurrence }
                 if try MusicalTiming.isRetroactive(previous.units, at: frame, milliseconds: retroactiveMs,
                                                     rate: sample.nominalRate) { return previous.occurrence }
