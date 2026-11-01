@@ -569,12 +569,12 @@ class Trace:
             except ValueError as exc:
                 return self.err(r, str(exc))
         prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
-        restart = self.restarts.get(clock, {})  # a restarted generation's first anchor is bounded against the restart
-        ref = restart if first is r and restart.get("generation") == r["generation"] else first
+        restart = self.restarts.get(clock, {})  # keep one drift reference for the entire restarted generation
+        ref = restart if restart.get("generation") == r["generation"] else first
         if ref is not r:
             span = (r["hostTicks"] - ref["hostTicks"]) * self.ns_per_tick * rate / 10**9
             if min(span, r["frame"] - ref["frame"]) < 0 or abs(r["frame"] - ref["frame"] - span) * 1000 > rate + span \
-                    or ref is first and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]):
+                    or first is not r and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]):
                 self.err(r, "anchors advance and stay within (rate + span)/1000 frames of "
                          + ("their clockRestart stamp" if ref is restart else "their generation's first"))
         self.anchor[clock] = r

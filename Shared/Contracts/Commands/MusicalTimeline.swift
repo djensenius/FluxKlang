@@ -83,7 +83,7 @@ struct MusicalTimeline: Sendable {
         if case .afterRestart = ledger.resume { throw MusicalTimingError.historyUnavailable }
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map, ledger: ledger, restartTicks: nil)
         let initial = TimelineState(primary: anchor, clock: clock, loop: loop, running: running)
-        self.sample = sample
+        self.sample = try Self.restartBaseline(sample, ledger: ledger)
         self.firstMusicalAnchor = anchor
         self.historyLimit = historyLimit
         self.pinLimit = pinLimit
@@ -197,7 +197,8 @@ struct MusicalTimeline: Sendable {
                         sequence: UInt64, ledger: GenerationLedger) throws {
         guard isQuiescent else { throw MusicalTimingError.pinsOutstanding }
         try checkSequence(sequence)
-        guard sample.anchor.sample.clock == self.sample.anchor.sample.clock, map.clock == state.clock.map.clock else {
+        guard sample.timebase == self.sample.timebase,
+              sample.anchor.sample.clock == self.sample.anchor.sample.clock, map.clock == state.clock.map.clock else {
             throw MusicalTimingError.invalidContext
         }
         guard sample.anchor.sample.generation != self.sample.anchor.sample.generation
@@ -217,7 +218,7 @@ struct MusicalTimeline: Sendable {
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map,
                                          ledger: ledger, restartTicks: restartTicks)
         let initial = TimelineState(primary: anchor, clock: clock, loop: state.loop, running: state.running)
-        self.sample = sample
+        self.sample = try Self.restartBaseline(sample, ledger: ledger)
         firstMusicalAnchor = anchor
         state = initial
         latestRunningTicks = state.running ? clock.musical.ticks : nil
@@ -306,6 +307,13 @@ struct MusicalTimeline: Sendable {
     }
 }
 private extension MusicalTimeline {
+    /// The restart stamp, not a jittered first observation, remains the generation's drift reference.
+    static func restartBaseline(_ sample: SampleClockMap, ledger: GenerationLedger) throws -> SampleClockMap {
+        guard let record = ledger.restartRecord else { return sample }
+        let origin = ClockAnchor(sample: record.start, host: record.host)
+        return try SampleClockMap(anchor: origin, nominalRate: sample.nominalRate, timebase: sample.timebase)
+    }
+
     static func initialClock(sample: SampleClockMap, anchor: ClockAnchor, map: MusicalMap,
                              ledger: GenerationLedger, restartTicks: Int64?) throws -> MusicalClockMap {
         guard !ledger.hasRestartObligations, ledger.nominalRate == sample.nominalRate,
@@ -319,9 +327,11 @@ private extension MusicalTimeline {
               position.transport == ledger.generation(GenerationKey(.transport, map.clock)) else {
             throw MusicalTimingError.invalidContext
         }
-        if ledger.pendingRestart != nil,
-           !ledger.acceptsFirstAnchor(sample.anchor, nominalRate: sample.nominalRate, timebase: sample.timebase) {
-            throw MusicalTimingError.invalidContext
+        if ledger.pendingRestart != nil {
+            guard ledger.acceptsFirstAnchor(sample.anchor, nominalRate: sample.nominalRate, timebase: sample.timebase),
+                  ledger.acceptsFirstAnchor(anchor, nominalRate: sample.nominalRate, timebase: sample.timebase) else {
+                throw MusicalTimingError.invalidContext
+            }
         }
         if case .locate(let ticks) = ledger.resume, position.ticks != ticks {
             throw MusicalTimingError.invalidContext

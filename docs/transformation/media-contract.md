@@ -119,10 +119,11 @@ device mapping is a `sampleJump` discontinuity.
   at or before it (else the first); for a target, the latest anchor of its loop pass ([§5.5](#55-loop)). Frames to
   ticks is the exact inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up
   (`floor(x + ½)`) only at the final frame or tick.
-- Within one generation, anchors must advance, and each must agree with the frame predicted from the generation's
-  **first** anchor at the nominal rate within `(rate + span) / 1000` frames, where `span` is the predicted frame
-  count: 1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against the first anchor,
-  but a real rate change does. The checker applies exactly this bound, in exact arithmetic.
+- Within one generation, anchors must advance, and each must agree with the frame predicted from its fixed drift
+  reference: the generation's **first** anchor, or its `clockRestart` stamp for a restarted generation. The bound at
+  the nominal rate is `(rate + span) / 1000` frames, where `span` is the predicted frame count from that reference:
+  1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against this reference, but a real
+  rate change does. The checker applies exactly this bound, in exact arithmetic.
 - A device-reported rate change is authoritative and always bumps `sampleClock` (`rateChange`). An unreported
   disagreement beyond the bound is treated the same way.
 
@@ -140,8 +141,9 @@ The policy for a device restart, rate change, configuration change or wake:
    at the `sampleClock` bump (so at the old rate; a `previousFrame` at loop end resumes at `startTicks`), with
    `loopIteration` 0. There is no catch-up.
 4. Re-anchor. The first new anchor is not before the restart's `(frame, hostTicks)` and agrees with it at the new
-   rate within the §5.2 bound, `span` measured from the restart (examples 01, 08). Late triggers stamped with the old
-   generation are `rejectedStale` (example 01: 48 → 96 kHz).
+   rate within the §5.2 bound, `span` measured from the restart (examples 01, 08). The restart stamp remains the drift
+   reference for every anchor in that sample generation; it does not replace the first observed musical anchor.
+   Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
 
