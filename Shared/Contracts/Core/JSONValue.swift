@@ -19,7 +19,10 @@ import Foundation
 /// Equality and hashing compare numbers by value: `.int`, `.uint` and `.double`
 /// are equal when they represent the same exact integer (the double is finite,
 /// integral and exactly representable), so `.double(1.0) == .int(1)`. `-0.0`
-/// is normalised to `0`. Encoding a non-finite double throws.
+/// is normalised to `0`. Encoding is canonical under the same equivalence: a
+/// double that is an exact integer encodes as that `Int64`/`UInt64` (`.double(2^63)`
+/// and `.uint(2^63)` produce identical bytes, `-0.0` encodes as `0`); any other
+/// finite double encodes unchanged. Encoding a non-finite double throws.
 ///
 /// Object keys compare by canonical equivalence (`"\u{E9}"` == `"e\u{301}"`) and plain
 /// `JSONDecoder` keeps only the first duplicate; contract documents MUST be decoded with
@@ -82,7 +85,8 @@ enum JSONValue: Codable, Hashable, Sendable {
                     )
                 )
             }
-            try single(value)
+            var container = encoder.singleValueContainer()
+            try Self.encodeCanonical(value, to: &container)
         case .string(let value):
             try single(value)
         case .array(let value):
@@ -95,6 +99,17 @@ enum JSONValue: Codable, Hashable, Sendable {
             for (key, value) in members.sorted(by: { $0.key < $1.key }) {
                 try container.encode(value, forKey: DynamicCodingKey(key))
             }
+        }
+    }
+
+    /// Same exact-integer test as `numberKey`, so equal numbers encode to equal bytes.
+    private static func encodeCanonical(_ value: Double, to container: inout any SingleValueEncodingContainer) throws {
+        if let exact = Int64(exactly: value) {
+            try container.encode(exact)
+        } else if let exact = UInt64(exactly: value) {
+            try container.encode(exact)
+        } else {
+            try container.encode(value)
         }
     }
 
