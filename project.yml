@@ -162,6 +162,7 @@ targets:
       - path: FluxKlangTests/ProjectPackagePathTests.swift
       - path: FluxKlangTests/ProjectPackageAdmissionTests.swift
       - path: FluxKlangTests/ProjectPackageStreamTests.swift
+      - path: FluxKlangTests/MIDIProtocolTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
