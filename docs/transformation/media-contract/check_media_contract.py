@@ -315,17 +315,25 @@ class Trace:
         until its rounded wrap; past it, the last unrecorded pass up to the next recorded one whose projected start is
         not after the origin (the anchor's own pass if none is), found in closed form from the latest anchor."""
         x = self.in_effect(frame)
-        a = self.ahead(x, frame)
-        if a is x:
-            return a.get("loopIteration", 0)
-        located, base = a["loopIteration"], self.musical
+        wrap = self.ahead(x, k=0)
+        if wrap is x or frame < wrap["frame"]:
+            return x.get("loopIteration", 0)
+        base = self.musical
         first = self.ahead(base, k=0)
-        if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
-            period = self.ahead(base, k=1)["frame"] - first["frame"]
-            if period:
-                located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
         recorded, low = self.pass_index()[0], x.get("loopIteration", 0)
         later = recorded[bisect.bisect_right(recorded, low):]
+        if first is base:  # a latest anchor past the loop end projects no unrecorded pass; x's own wrap advances
+            located = self.ahead(x, frame)["loopIteration"]
+        else:  # unrecorded passes project from the latest anchor, one rounded period apart
+            period = self.ahead(base, k=1)["frame"] - first["frame"]
+            located = low  # unless an unrecorded pass starts at or before the origin
+            if period:
+                located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+            elif frame >= first["frame"]:  # every unrecorded pass starts at the latest anchor's rounded wrap
+                # That wrap is at or after the latest anchor's frame, so x is the latest anchor: no later pass exists.
+                if frame > first["frame"]:  # an unbounded tail: only its first wrap is representable
+                    raise ValueError("nextBoundary cannot resolve before the current horizon")
+                located = base.get("loopIteration", 0) + 1
         return max(low, min(located, later[0] - 1) if later else located)
 
     def pass_index(self):

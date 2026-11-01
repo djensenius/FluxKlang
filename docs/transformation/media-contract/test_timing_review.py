@@ -701,6 +701,77 @@ class TimingReviewTests(unittest.TestCase):
                 inside = [e for e in trace.errors if "inside the active loop" in e]
                 self.assertEqual(bool(inside), host < 500, trace.errors)
 
+    def test_pass_zero_floor_series_uses_the_exact_origin(self):
+        # Exact origin frames 0.936 and 0.938 straddle tick 5 (frame 0.9375) through the anchor in effect: only the
+        # later one is inside the loop. The exact end (1.5) and the rounded wrap (2) stay in pass 0, as do the
+        # rounded-phase tails, since pass 1 projects from the latest anchor at frame 39.
+        for host in (469, 750, 875, 1000, 1375, 1875, 2375):
+            with self.subTest(host=host):
+                doc = self.pre_loop_edit_document(host, [outcome(38, 40, "firedLate", revision=2)])
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 5))
+                self.assertEqual(trace.frame_of((0, 5)), Fraction(611, 16))
+        for host in (375, 468):
+            with self.subTest(host=host):
+                errors = self.check(self.pre_loop_edit_document(host))
+                self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
+
+    def test_zero_period_origin_past_a_superseded_wrap_stays_in_the_latest_anchors_pass(self):
+        # A (6, 7) loop under the edited map: from the first anchor the pass enters the loop at frame 1.125 and ends at
+        # 1.3125, rounding to a zero-period wrap at frame 1. The pass-0 re-anchor at frame 38 supersedes that wrap:
+        # pass 1 projects from it to frame 39, so no unrecorded pass starts before these origins.
+        def run(host, outcomes=()):
+            doc = self.pre_loop_edit_document(host, outcomes)
+            doc["clocks"]["musical"]["loop"] = dict(startTicks=6, endTicks=7)
+            trace = checker.Trace(doc, "11-review-timing.json")
+            trace.run()
+            return trace
+        with self.subTest(host=500):
+            trace = run(500)
+            self.assertEqual(trace.frame_of((1, 6)), 39)
+            self.assertEqual(trace.origin_pass(Fraction(1)), 0)
+            self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in trace.errors),
+                            trace.errors)  # tick 16/3 at the origin: pass 0 is still before the loop start
+        for host in (625, 750):
+            with self.subTest(host=host):
+                trace = run(host, [outcome(38, 40, "firedLate", revision=2)])
+                self.assertEqual(trace.errors, [])
+                self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 6))
+                self.assertEqual(trace.frame_of((0, 6)), Fraction(307, 8))
+
+    def test_zero_period_gap_passes_share_the_latest_anchors_first_wrap(self):
+        # Pass 0 starts in a (6, 7) loop, pass 2 is recorded at frame 18, and the edited map rounds the period to zero:
+        # gap pass 1 projects from pass 2 at frame 18, so an earlier origin stays in pass 0 (at 18 pass 2 is in effect
+        # and its first wrap, pass 3, holds the origin).
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=60000)])
+        cue = dict(trigger(0, 19, dict(timeBase="musical", gridTicks=1)), originHostTicks=125)
+        doc = document([anchor(0, 6), *wrap(18, 6, 2), edit, cue], loop=(6, 7), grid=1, tempo=3000000,
+                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.frame_of((1, 6)), 18)
+        self.assertEqual([trace.origin_pass(Fraction(f, 4)) for f in (1, 71, 72)], [0, 0, 3])
+        self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 7))  # pass 0's end alias, at frame 18
+
+    def test_pass_zero_floor_holds_between_the_exact_end_and_the_rounded_wrap(self):
+        # Origin 4.8 is past pass 0's exact loop end (4.6875) through the anchor in effect but before its rounded wrap
+        # (5); pass 0 stays inside the loop, so its loop start projects through its latest anchor at frame 135/16.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=500000)])
+        records = [anchor(0, 0), *[anchor(frame, 2) for frame in range(5, 11)], *wrap(12, 1, 1), edit,
+                   dict(trigger(0, 12, dict(timeBase="musical", gridTicks=1)), originHostTicks=2400),
+                   outcome(8, 12, "firedLate", revision=2)]
+        doc = document(records, loop=(1, 3), grid=1, tempo=640000,
+                       late=dict(policy="fireLate", maxLatenessMs=100, retroactiveMs=0))
+        self.assertEqual(self.check(doc), [])
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 1))
+        self.assertEqual(trace.frame_of((0, 1)), Fraction(135, 16))
+
     def test_clock_restart_previous_frame_cannot_precede_the_old_generations_latest_anchor(self):
         def records(previous):
             return [anchor(0, 0), anchor(2400, 1536),

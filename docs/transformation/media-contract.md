@@ -192,6 +192,9 @@ anchor index, never by walking the number of elapsed passes or grid ticks.
 The origin's pass, where the backward search ends and the forward search starts, is located the same way. The anchor
 in effect at the origin keeps its pass until its rounded wrap. Past that wrap, the origin is in the last unrecorded pass
 (before the next recorded pass, if any) whose projected start is at or before the origin, else in the anchor's pass.
+This holds for a zero rounded period too: every unrecorded pass then starts at the latest anchor's rounded wrap, at or
+after every recorded anchor: an earlier origin stays in its anchor's pass, one exactly there is in the first wrap, and a
+later one fails explicitly.
 A producer may refuse (`historyUnavailable`) a target these rules would resolve; it then emits no trace record, so a
 refusal never contradicts them.
 An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
