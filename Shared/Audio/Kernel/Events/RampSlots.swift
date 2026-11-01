@@ -97,10 +97,17 @@ final class RampSlots: @unchecked Sendable {
         ramp.elapsed < ramp.duration ? interpolate(ramp) : ramp.target
     }
 
-    /// Only called with `elapsed < duration`, so `duration > 0`. Computed in `Double` so the span between two
-    /// finite `Float`s cannot overflow, and the result stays between `start` and `target`.
+    /// Only called with `elapsed < duration`, so `duration > 0`. Computed as `start + span * fraction` in `Double`:
+    /// - the span between two finite `Float`s is at most 2 × `greatestFiniteMagnitude`, so it cannot overflow
+    ///   `Double` and needs no infinite-span fallback;
+    /// - every step (convert, divide, multiply, add, narrow) rounds monotonically, so the value never steps away
+    ///   from `target` as `elapsed` grows. The weighted sum `start * (1 - f) + target * f` does not have this
+    ///   property (#183);
+    /// - the span itself can round past `target`, so the result is clamped to the endpoints.
     private static func interpolate(_ ramp: Ramp) -> Float {
         let fraction = Double(ramp.elapsed) / Double(ramp.duration)
-        return Float(Double(ramp.start) * (1 - fraction) + Double(ramp.target) * fraction)
+        let span = Double(ramp.target) - Double(ramp.start)
+        let value = Float(Double(ramp.start) + span * fraction)
+        return min(max(value, min(ramp.start, ramp.target)), max(ramp.start, ramp.target))
     }
 }

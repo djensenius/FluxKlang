@@ -5,6 +5,39 @@ private func ramps(_ count: Int) -> RampSlots? {
     try? RampSlots(parameterCount: count)
 }
 
+/// Seeded SplitMix64, so the random monotonicity check is reproducible.
+private struct SplitMix64: RandomNumberGenerator {
+    var state: UInt64
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var mixed = state
+        mixed = (mixed ^ (mixed >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        mixed = (mixed ^ (mixed >> 27)) &* 0x94D0_49BB_1331_11EB
+        return mixed ^ (mixed >> 31)
+    }
+}
+
+/// Starts a ramp on parameter 0 and advances it by each of `steps`, counting samples that leave
+/// `[min(start, target), max(start, target)]` or step back away from the target; -1 if `set` is refused.
+private func rampViolations(_ slots: RampSlots, from start: Float, to target: Float, duration: Int64,
+                            steps: [Int64]) -> Int {
+    guard slots.set(parameter: 0, target: target, durationFrames: duration, current: start) == .ok else {
+        return -1
+    }
+    let low = min(start, target)
+    let high = max(start, target)
+    var previous = start
+    var violations = 0
+    for step in steps {
+        guard let sample = slots.advance(parameter: 0, frames: step) else { break }
+        let backwards = target > start ? sample < previous : sample > previous
+        if backwards || sample < low || sample > high { violations += 1 }
+        previous = sample
+    }
+    return violations
+}
+
 extension RealtimeHandoffTests {
     struct RampRules {
         @Test func newRampReplacesFromCurrentValue() throws {
@@ -158,6 +191,70 @@ extension RealtimeHandoffTests {
                     #expect(samples >= 3 && samples <= 1_001)
                 }
             }
+        }
+
+        /// Review regression (#183): the weighted sum `start * (1 - f) + target * f` stepped back to `start`.
+        @Test func adjacentEndpointsNeverStepBack() throws {
+            let slots = try #require(ramps(1))
+            let start = Float(bitPattern: 0x3f80_0001)
+            let target = Float(bitPattern: 0x3f80_0002)
+            #expect(slots.set(parameter: 0, target: target, durationFrames: 1 << 40, current: start) == .ok)
+            let first = try #require(slots.advance(parameter: 0, frames: 549_755_812_352))
+            let second = try #require(slots.advance(parameter: 0, frames: 1))
+            #expect(first == start || first == target)
+            #expect(second >= first && second <= target)
+            // Adjacent-ULP endpoints at several magnitudes, both directions, huge durations. The window is
+            // sampled densely around the midpoint, where the rounded value flips from one endpoint to the other.
+            let bases: [Float] = [.leastNonzeroMagnitude, 1e-30, 1, 3e5, 1e30, -1,
+                                  Float.greatestFiniteMagnitude.nextDown]
+            for base in bases {
+                for (from, to) in [(base, base.nextUp), (base.nextUp, base)] {
+                    for duration: Int64 in [1 << 40, 1 << 52, .max] {
+                        let unit = max(duration >> 40, 1)
+                        let window = [duration / 2 - 4_096 * unit] + Array(repeating: unit, count: 8_192)
+                        let coarse = Array(repeating: duration / 1_000, count: 1_001)
+                        #expect(rampViolations(slots, from: from, to: to, duration: duration, steps: window) == 0)
+                        #expect(rampViolations(slots, from: from, to: to, duration: duration, steps: coarse) == 0)
+                    }
+                }
+            }
+        }
+
+        @Test func seededRandomRampsAreMonotonic() throws {
+            let slots = try #require(ramps(1))
+            var generator = SplitMix64(state: 0x00E3_0183)
+            func finite() -> Float {
+                while true {
+                    let value = Float(bitPattern: UInt32(truncatingIfNeeded: generator.next()))
+                    if value.isFinite { return value }
+                }
+            }
+            for trial in 0..<300 {
+                let start = finite()
+                // Odd trials use an adjacent-ULP target (when finite), even trials a random one.
+                let adjacent = trial.isMultiple(of: 3) ? start.nextDown : start.nextUp
+                let target = trial.isMultiple(of: 2) ? finite() : (adjacent.isFinite ? adjacent : start)
+                let duration = Int64.random(in: 1 ... .max, using: &generator)
+                // Half the marks are spread over the ramp, half near the midpoint where adjacent endpoints flip.
+                let near = max(duration >> 40, 1) &* 4_096
+                let middle = max(duration / 2 - near, 0) ..< min(duration / 2 + near, duration)
+                let spread = (0..<32).map { _ in Int64.random(in: 0..<duration, using: &generator) }
+                let clustered = (0..<32).map { _ in Int64.random(in: middle, using: &generator) }
+                let marks = (spread + clustered).sorted()
+                let steps = zip([0] + marks, marks).map { $1 - $0 }
+                let violations = rampViolations(slots, from: start, to: target, duration: duration, steps: steps)
+                #expect(violations == 0, "start \(start.bitPattern) target \(target.bitPattern) duration \(duration)")
+            }
+        }
+
+        /// When `elapsed / duration` rounds to 1 the rounded span can land past the target, so it is clamped.
+        @Test func roundedFullFractionIsClampedToTarget() throws {
+            let slots = try #require(ramps(1))
+            #expect(slots.set(parameter: 0, target: 0.1, durationFrames: .max, current: 1e30) == .ok)
+            #expect(slots.advance(parameter: 0, frames: .max - 1) == 0.1)
+            #expect(slots.value(parameter: 0) == 0.1)
+            #expect(slots.advance(parameter: 0, frames: 1) == 0.1)
+            #expect(slots.advance(parameter: 0, frames: 1) == nil)
         }
 
         @Test func outOfRangeParameterRefused() throws {
