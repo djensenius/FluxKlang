@@ -15,6 +15,11 @@ private final class StressState: Sendable {
     /// Bounded worker waits or loops that gave up; any is a test failure.
     let timedOut = Atomic<Int>(0)
     let finishedRaisers = Atomic<Int>(0)
+    /// Acknowledge handshake: the gate an acknowledge opens once it returns a record; raisers wait for it after
+    /// their first batch.
+    let released = Atomic<Bool>(false)
+    /// `finishedRaisers` seen by the acknowledge that opened the gate (-1 until then).
+    let finishedAtRelease = Atomic<Int>(-1)
     let exited = Atomic<Int>(0)
     let reported = Atomic<UInt64>(0)
     let mispaired = Atomic<Int>(0)
@@ -48,17 +53,20 @@ extension RealtimeHandoffTests {
             record.firstFrame >= 0 && record.kind == kind(for: record.firstFrame)
         }
 
-        /// Raises `raisesPerThread` times from one thread, stopping early if cancelled.
-        fileprivate static func raise(_ latch: FaultLatch, _ scopes: [FaultScope], thread: Int,
-                                      _ state: StressState) {
-            for raise in 0..<raisesPerThread {
-                if state.cancelled.load(ordering: .relaxed) { return }
+        /// Raises frames `batch` of one thread's `raisesPerThread`, stopping early (`false`) if cancelled. The
+        /// batch ending at `raisesPerThread` counts the thread in `finishedRaisers`.
+        @discardableResult
+        fileprivate static func raise(_ latch: FaultLatch, _ scopes: [FaultScope], thread: Int, _ state: StressState,
+                                      batch: Range<Int> = 0..<raisesPerThread) -> Bool {
+            for raise in batch {
+                if state.cancelled.load(ordering: .relaxed) { return false }
                 let frame = Int64(thread * raisesPerThread + raise)
                 if latch.raise(scopes[(thread + raise) % scopes.count], kind(for: frame), frame: frame) != .ok {
                     state.refused.add(1, ordering: .relaxed)
                 }
             }
-            state.finishedRaisers.add(1, ordering: .releasing)
+            if batch.upperBound == raisesPerThread { state.finishedRaisers.add(1, ordering: .releasing) }
+            return true
         }
 
         /// Worker side: spins until `condition` holds; `false` (counted in `timedOut`) once cancelled or after
@@ -235,19 +243,43 @@ extension RealtimeHandoffTests {
 
         /// `raisers` raising threads plus `acknowledgers` acknowledging threads behind one start barrier. Asserts
         /// conservation, pairing, no empty record, no first raise reported twice and the generation invariant.
-        /// It makes no claim about which calls overlapped.
+        ///
+        /// Handshake, so the run cannot degrade into a sequential drain: each raiser raises its first half, then
+        /// waits (bounded, cancellable) until an acknowledge has returned a record; that acknowledge opens the gate
+        /// (with one or two acknowledgers, whichever returns a record first) and the raisers raise their second
+        /// half. A record always exists for it (first-half raises, drained only by acknowledges that also open the
+        /// gate), and no raiser can finish before the gate opens, so at least one acknowledge returning a record
+        /// provably precedes half of every raiser's raises; `finishedAtRelease == 0` checks it.
         static func raiseWhileAcknowledging(_ scopes: [FaultScope], acknowledgers: Int) throws {
             let latch = try FaultLatch(scopes: scopes)
             let state = StressState()
+            let half = Self.raisesPerThread / 2
             let ran = Self.run(threads: Self.raisers + acknowledgers, state) { thread in
-                guard thread >= Self.raisers else { return Self.raise(latch, scopes, thread: thread, state) }
+                if thread < Self.raisers {
+                    guard Self.raise(latch, scopes, thread: thread, state, batch: 0..<half) else { return }
+                    guard Self.spin(state, until: { state.released.load(ordering: .acquiring) }) else { return }
+                    Self.raise(latch, scopes, thread: thread, state, batch: half..<Self.raisesPerThread)
+                    return
+                }
                 // Each poll acknowledges every scope; bounded and cancellable like every worker wait.
                 _ = Self.spin(state) {
-                    for scope in scopes { if let record = latch.acknowledge(scope) { Self.note(record, state) } }
+                    for scope in scopes {
+                        guard let record = latch.acknowledge(scope) else { continue }
+                        Self.note(record, state)
+                        if state.finishedAtRelease.compareExchange(
+                            expected: -1, desired: state.finishedRaisers.load(ordering: .acquiring),
+                            ordering: .relaxed).exchanged {
+                            state.released.store(true, ordering: .releasing)
+                        }
+                    }
                     return state.finishedRaisers.load(ordering: .acquiring) == Self.raisers
                 }
             }
             guard ran else { return }
+            let released = state.released.load(ordering: .acquiring)
+            #expect(released)
+            #expect(state.finishedAtRelease.load(ordering: .relaxed) == 0)
+            #expect(state.finishedRaisers.load(ordering: .acquiring) == Self.raisers)
             _ = latch.pending { Self.note($0, state) }
             #expect(state.refused.load(ordering: .relaxed) == 0)
             #expect(state.mispaired.load(ordering: .relaxed) == 0)
