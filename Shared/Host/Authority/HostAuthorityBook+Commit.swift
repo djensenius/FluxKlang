@@ -1,16 +1,16 @@
 //
-//  HostAuthority+Commit.swift
+//  HostAuthorityBook+Commit.swift
 //  FluxKlang
 //
-//  The commit path of `HostAuthority` (#62 H5c-1): authorizing from a rendering
-//  window's gesture, committing against the live context and lease built at
-//  commit, and abandoning a commit whose outcome is unknown. `release`,
-//  `transfer` (sharing `acquire`'s private lease staging) and the delivery
-//  guard's private `withholdCommit` live in `HostAuthority.swift`. Every refusal
-//  leaves the whole actor state unchanged.
+//  The commit path of `HostAuthorityBook` (#62 H5c-1): authorizing from a
+//  rendering window's gesture, committing against the live context and lease
+//  built at commit, abandoning a commit whose outcome is unknown, and the delivery
+//  guard with its private `withholdCommit`. `release` and `transfer` (sharing
+//  `acquire`'s private lease staging) live in `HostAuthorityBook.swift`. Every
+//  refusal leaves the whole book unchanged.
 //
 
-extension HostAuthority {
+extension HostAuthorityBook {
     /// Issues a single-use authorization for `project`'s reviewed plan. Checks, in
     /// order: project open; the gesture's window renders `project`
     /// (`windowCannotAuthorize(role)`: no lease, a window off the lease, or another
@@ -18,8 +18,8 @@ extension HostAuthority {
     /// request's origin) and the live permission. Success records `gesture.window`
     /// for the commit-time re-check, replacing any earlier record together with the
     /// earlier authorization.
-    func authorize(project: ProjectID,
-                   gesture: ActivationGesture) -> Result<ActivationAuthorization, HostAuthorityRefusal> {
+    mutating func authorize(project: ProjectID,
+                            gesture: ActivationGesture) -> Result<ActivationAuthorization, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         let role = registry.role(of: gesture.window, project: project)
         guard case .renders = role else { return .failure(.windowCannotAuthorize(role)) }
@@ -45,7 +45,8 @@ extension HostAuthority {
     ///    the live context built now from `live`, `ledger` and the running graph.
     /// The queued `.commit` is delivered only if its lease is still current
     /// (`nextEngineCommand()`). Success consumes the window record.
-    func commit(project: ProjectID, authorization: ActivationAuthorization) -> Result<Void, HostAuthorityRefusal> {
+    mutating func commit(project: ProjectID,
+                         authorization: ActivationAuthorization) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         if case .recovering = state.lifecycle { return .failure(.lifecycleRejectsChanges(state.lifecycle)) }
         guard let window = authorizedWindows[project] else {
@@ -79,7 +80,8 @@ extension HostAuthority {
     /// Queues the step's mute, enters `.recovering` and ends the attempt's
     /// `inFlight` record. A still-queued `.commit` of the attempt is then dropped
     /// by the delivery guard.
-    func abandonCommit(_ attempt: CommitAttemptID, reason: CommitAbandonment) -> Result<Void, HostAuthorityRefusal> {
+    mutating func abandonCommit(_ attempt: CommitAttemptID,
+                                reason: CommitAbandonment) -> Result<Void, HostAuthorityRefusal> {
         guard reason == .outcomeUnknown else { return .failure(.abandonmentReserved(reason)) }
         guard let project = projects.first(where: { $0.value.transaction.lastAttempt == attempt })?.key,
               var state = projects[project] else { return .failure(.activation(.staleReport)) }
@@ -101,7 +103,7 @@ extension HostAuthority {
     }
 
     /// The one place an H5c recovery step's mute is requested: `abandonCommit`
-    /// queues it, `withholdCommit` (in `HostAuthority.swift`) converts it in the
+    /// queues it, `withholdCommit` (below) converts it in the
     /// withheld commit's place. It only fills the caller's own `staged` queue;
     /// `false` (nothing queued) if it does not fit.
     func requestMute(_ step: ActivationRecoveryStep, running: RunningGraph,
@@ -110,5 +112,51 @@ extension HostAuthority {
             return false
         }
         return true
+    }
+
+    /// The delivery guard, in one actor turn. A `.commit` is delivered only while
+    /// its attempt is still some project's committing attempt (else dropped, and the
+    /// next command is taken) and only under the current lease token. A commit whose
+    /// token was replaced (released, transferred or reacquired) is withheld: the
+    /// actor abandons it as `.leaseLost` and returns `.setOutputsMuted(true)` in its
+    /// place, keeping its FIFO position. A delivered commit is `inFlight`.
+    mutating func nextEngineCommand() -> EngineCommand? {
+        while let command = queue.dequeue() {
+            guard case .commit(_, let attempt, let token) = command else { return command }
+            guard let project = committingProject(for: attempt) else { continue }
+            guard token == registry.snapshot?.token else { return withholdCommit(attempt, of: project) }
+            inFlight[project] = attempt
+            return command
+        }
+        return nil
+    }
+
+    /// The project whose transaction is still committing `attempt`, if any.
+    private func committingProject(for attempt: CommitAttemptID) -> ProjectID? {
+        projects.first { $0.value.transaction.phase == .committing && $0.value.transaction.lastAttempt == attempt }?
+            .key
+    }
+
+    /// Abandons `project`'s committing `attempt` (from `committingProject`) as
+    /// `.leaseLost` and returns the one command that takes the commit's place in
+    /// the queue: the recovery step's mute. The lifecycle becomes `.recovering`;
+    /// the reviewed plan stays live. Private to the delivery guard, so no caller can
+    /// claim `.leaseLost`. State changes only if the abandon succeeds; otherwise
+    /// (a contract break) nothing changes and the mute is still returned in place
+    /// of the dropped commit, which fails closed.
+    private mutating func withholdCommit(_ attempt: CommitAttemptID, of project: ProjectID) -> EngineCommand {
+        let mute = EngineCommand.setOutputsMuted(true)
+        guard var state = projects[project],
+              case .success(let step) = state.transaction.abandonCommit(attempt, reason: .leaseLost) else {
+            return mute
+        }
+        var converted = EngineCommandQueue()
+        _ = requestMute(step, running: state.transaction.running, into: &converted)
+        state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
+        projects[project] = state
+        let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute
+        // Continuation point: the withheld commit's state is settled here, before the
+        // replacement is delivered; a post-step on `project` belongs here.
+        return replacement
     }
 }
