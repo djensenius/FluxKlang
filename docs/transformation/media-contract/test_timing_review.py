@@ -537,8 +537,8 @@ class TimingReviewTests(unittest.TestCase):
                 self.assertGreaterEqual(trace.frame_of(expect["occ"]), origin)
 
     def test_forward_choice_keeps_the_earlier_alias_across_a_tempo_edited_gap(self):
-        # A slower map projects the unrecorded gap before the origin; pass 2's end alias and recorded pass 7's start
-        # share the closest frame, and the earlier occurrence wins rather than the later pass's start.
+        # A slower map projects the unrecorded gap before the origin; pass 2's end alias and unrecorded pass 3's
+        # start share the closest frame, and the earlier occurrence wins rather than the later pass's start.
         records = [anchor(0, 0)] + wrap(21, 0, 7) + [
             dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
                  musicalMap=[dict(atTicks=0, microsPerQuarter=480000)]),
@@ -552,6 +552,42 @@ class TimingReviewTests(unittest.TestCase):
         expect = trace.triggers["trg.review"]["expect"]
         self.assertEqual((expect["occ"], expect["retro"]), ((2, 3), False))
         self.assertEqual(trace.frame_of((2, 3)), trace.frame_of((3, 0)))
+
+    def test_forward_choice_keeps_a_pass_begun_inside_the_loop_at_or_after_its_start(self):
+        # Through pass 0's drifted re-anchor or an edited map the origin projects before the loop start; a pass that
+        # began inside the loop still resolves its loop start rather than a pre-loop tick.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=400000)])
+        for later, origin, edited in [(644, 0, False), (645, 0, True), (645, 100, True), (645, 150, True)]:
+            with self.subTest(later=later, origin=origin):
+                records = [anchor(0, 5), anchor(1000, later)] + ([edit] if edited else [])
+                doc = document(records + [trigger(origin, 1000, dict(timeBase="musical", gridTicks=1))], loop=(5, 2000),
+                               grid=1, late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                expect = trace.triggers["trg.review"]["expect"]
+                self.assertEqual((expect["occ"], expect["retro"]), ((0, 5), False))
+                self.assertGreaterEqual(trace.frame_of(expect["occ"]), origin)
+                self.assertFalse(any("inside the active loop" in e for e in trace.errors), trace.errors)
+
+    def test_forward_choice_floors_pass_zero_only_while_it_is_inside_the_loop(self):
+        # Pass 0 began before the loop but, through the anchor in effect, had entered it by the origin; later anchors
+        # drifted back project that origin before the loop start, and its loop start still wins.
+        cue = trigger(0, 2000, dict(timeBase="musical", gridTicks=1))
+        cue["originHostTicks"] = 4300
+        doc = document([anchor(0, 0), anchor(1000, 639), anchor(2000, 1278), cue], loop=(5, 4000), grid=1,
+                       late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 5))
+        self.assertFalse(any("inside the active loop" in e for e in trace.errors), trace.errors)
+        # A pass 0 begun past the loop end never enters the loop: an edited map's earlier projection stays rejected.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=250000)])
+        records = [anchor(0, 50), anchor(1000, 690), edit, trigger(0, 1000, dict(timeBase="musical", gridTicks=1))]
+        errors = self.check(document(records, loop=(5, 10), grid=1,
+                                     late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0)))
+        self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
 
     def test_rejected_triggers_still_raise_the_current_horizon(self):
         changes = [("target", dict(timeBase="musical", gridTicks=2**63)), ("actionId", "act.missing"),

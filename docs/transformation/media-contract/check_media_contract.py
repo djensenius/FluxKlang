@@ -406,11 +406,15 @@ class Trace:
                     low = (stop or 0) + 1
             # A pass's end alias projects at its successor's start: either side of that shared frame can be closest.
             passes.update([q for p in passes for q in (p - 1, p + 1) if q >= iteration])
-        best = None
+        best, first = None, self.hist[0]
+        # Once pass 0 is inside the loop at the origin (begun there, or reached through the anchor then in effect), its
+        # ticks cannot precede the loop start either; a pass 0 begun past the loop end never enters the loop.
+        inside = lp and first["frame"] <= frame and any(
+            lp["startTicks"] <= t <= lp["endTicks"] for t in (first["musicalTicks"], self.position(frame)[1]))
         for i in sorted(passes):
             a = self.pass_anchor(i)  # the same projection anchor as the predecessor search
             ticks = self.ticks_at_frame(frame, a)
-            if lp and i:  # a wrapped pass starts at the loop start, like the predecessor search's pass split
+            if lp and (i or inside):  # a wrapped pass starts at the loop start, like the predecessor's pass split
                 ticks = max(ticks, lp["startTicks"])
             if lp and a["musicalTicks"] <= lp["endTicks"]:  # before this eligible pass's rounded wrap
                 ticks = min(ticks, lp["endTicks"])

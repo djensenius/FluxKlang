@@ -194,6 +194,10 @@ Outside the window the forward choice mirrors that search: the closest projectio
 the origin's pass and later passes, each through its own projection anchor, with the earlier occurrence winning an
 equal frame. It is never retroactive and never skips a boundary of the origin's or a later pass projected between
 the origin and itself, whichever way a re-anchor or map edit moved the grid; the same index bounds its candidates.
+A pass inside the loop at the origin has no pre-loop ticks: every wrapped pass, and pass 0 once under way when its first
+anchor or the anchor in effect at the origin places it in the loop. An origin that a re-anchor or map edit projects
+before the loop start resolves to that pass's first in-loop boundary. Only an origin before the first anchor, before
+pass 0 reaches the loop, or in a pass 0 begun past the loop end names a pre-loop grid target.
 
 ### 5.6 Tempo and meter
 
