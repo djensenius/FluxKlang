@@ -118,6 +118,11 @@ actor HostAuthority {
         book.abandonCommit(attempt, reason: reason)
     }
 
+    /// `HostAuthorityBook.commitReported(_:)`.
+    func commitReported(_ report: ActivationCommitReport) -> Result<CommitReportOutcome, HostAuthorityRefusal> {
+        book.commitReported(report)
+    }
+
     /// The delivery guard (`HostAuthorityBook.nextEngineCommand()`).
     func nextEngineCommand() -> EngineCommand? {
         book.nextEngineCommand()

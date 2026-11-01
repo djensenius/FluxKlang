@@ -23,6 +23,8 @@ enum AuthorityBench {
     static let windowA = WindowID(validated: "win.a")
     static let windowA2 = WindowID(validated: "win.a2")
     static let windowB = WindowID(validated: "win.b")
+    static let nodeOut = NodeID(validated: "node.out")
+    static let nodeAux = NodeID(validated: "node.aux")
 
     static func liveState(epoch: HostEpoch = hostEpoch) throws -> HostLiveState {
         let device = try DeviceDescriptor(
@@ -36,11 +38,13 @@ enum AuthorityBench {
         return HostLiveState(hostEpoch: epoch, permission: permission, capabilities: document)
     }
 
-    static func candidate() -> GraphDocument {
-        GraphDocument(id: graphID, revision: .initial,
-                      capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
-                      nodes: [GraphNode(id: NodeID(validated: "node.out"), kind: .plugin, label: "Out",
-                                        requiredCapabilities: [audio])])
+    /// One output node; `withAux` adds a second node, for consistent partial reports.
+    static func candidate(withAux: Bool = false) -> GraphDocument {
+        let out = GraphNode(id: nodeOut, kind: .plugin, label: "Out", requiredCapabilities: [audio])
+        let aux = GraphNode(id: nodeAux, kind: .plugin, label: "Aux", requiredCapabilities: [audio])
+        return GraphDocument(id: graphID, revision: .initial,
+                             capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
+                             nodes: withAux ? [out, aux] : [out])
     }
 
     static func request() -> ActivationRequest {
@@ -68,21 +72,31 @@ enum AuthorityBench {
 
     /// Begins `project`, drains the queue and routes the engine's success; returns the reviewed plan.
     static func review(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
-                       project: ProjectID = projectA) async throws -> PreparedActivationID {
-        try await authority.begin(request(), candidate: candidate(), project: project).get()
+                       project: ProjectID = projectA, withAux: Bool = false) async throws -> PreparedActivationID {
+        try await authority.begin(request(), candidate: candidate(withAux: withAux), project: project).get()
         await engine.drain(authority)
         let answer = try #require(await engine.answerNext(authority))
         #expect(answer.verdict == .success(.routed))
         return try answer.answer.get()
     }
 
-    /// Reviews A, authorizes from `window` and commits; the `.commit` stays queued.
+    /// Reviews `project`, authorizes from `window` and commits; the `.commit` stays queued.
     /// Returns the reviewed plan.
     static func commitQueued(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
-                             window: WindowID = windowA) async throws -> PreparedActivationID {
-        let reviewed = try await review(authority, &engine)
-        let authorization = try await authority.authorize(project: projectA, gesture: gesture(window)).get()
-        try await authority.commit(project: projectA, authorization: authorization).get()
+                             window: WindowID = windowA, project: ProjectID = projectA,
+                             withAux: Bool = false) async throws -> PreparedActivationID {
+        let reviewed = try await review(authority, &engine, project: project, withAux: withAux)
+        let authorization = try await authority.authorize(project: project, gesture: gesture(window)).get()
+        try await authority.commit(project: project, authorization: authorization).get()
+        return reviewed
+    }
+
+    /// `commitQueued`, then drains so the engine takes (and holds) the `.commit`.
+    static func commitDelivered(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                                project: ProjectID = projectA, window: WindowID = windowA,
+                                withAux: Bool = false) async throws -> PreparedActivationID {
+        let reviewed = try await commitQueued(authority, &engine, window: window, project: project, withAux: withAux)
+        await engine.drain(authority)
         return reviewed
     }
 
