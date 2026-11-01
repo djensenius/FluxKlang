@@ -290,5 +290,47 @@ extension HostAuthorityTests {
                 request(permission: decomposed), candidate: candidate(), in: try context(permission: composed)
             )) == .permissionChanged)
         }
+
+        @Test func graphOverDocumentByteLimitIsRefused() throws {
+            var unlabeled = candidate()
+            unlabeled.label = ""
+            // The empty label already encodes as `"label":""`, so each character adds one byte.
+            let room = ProjectGraphLimits.documentBytes - (try unlabeled.encoded().count)
+            var atLimit = unlabeled
+            atLimit.label = String(repeating: "a", count: room)
+            #expect(try atLimit.encoded().count == ProjectGraphLimits.documentBytes)
+            #expect(rejection(ActivationValidator.validate(request(), candidate: atLimit, in: try context())) == nil)
+            var oversized = unlabeled
+            oversized.label = String(repeating: "a", count: room + 1)
+            let result = ActivationValidator.validate(request(), candidate: oversized, in: try context())
+            #expect(rejection(result) == .invalidGraph(.bounds(.exceeded(
+                path: "$bytes", maximum: ProjectGraphLimits.documentBytes
+            ))))
+            #expect((try? result.get()) == nil)
+        }
+
+        @Test func capabilityDocumentOverByteLimitIsRefused() throws {
+            var document = try capabilities()
+            document.extensions = ["blob": .string(String(repeating: "a", count: DeviceCapabilityLimits.documentBytes))]
+            let result = ActivationValidator.validate(request(), candidate: candidate(),
+                                                      in: try context(capabilities: document))
+            #expect(rejection(result) == .invalidCapabilities)
+            #expect((try? result.get()) == nil)
+        }
+
+        @Test func unencodableGraphIsRefused() throws {
+            var graph = candidate()
+            graph.extensions = ["gain": .double(.infinity)]
+            let result = ActivationValidator.validate(request(), candidate: graph, in: try context())
+            #expect(rejection(result) == .unencodableGraph)
+        }
+
+        @Test func unencodableCapabilityDocumentIsRefused() throws {
+            var document = try capabilities()
+            document.extensions = ["gain": .double(.nan)]
+            #expect(rejection(ActivationValidator.validate(
+                request(), candidate: candidate(), in: try context(capabilities: document)
+            )) == .invalidCapabilities)
+        }
     }
 }
