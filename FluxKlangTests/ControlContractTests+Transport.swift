@@ -172,6 +172,35 @@ extension ControlContractTests {
             }
         }
 
+        @Test(arguments: [false, true])
+        func transportRestartSupersedesClockResumeInEitherRecordOrder(recordFirst: Bool) throws {
+            var ledger = try GenerationLedger(primaryClock: primary, musicalClock: musicalClock, nominalRate: 48_000)
+            let second = try ledger.bump(ledger.primaryClock, reason: .wake)
+            let record = ClockRestartRecord(
+                start: SampleStamp(clock: primary, generation: second, frame: 0), host: HostStamp(ticks: 1_000),
+                previousFrame: 500
+            )
+            if recordFirst {
+                try ledger.recordClockRestart(record)
+                #expect(ledger.resume == .afterRestart(previousFrame: 500))
+            }
+            try ledger.bump(transportKey, reason: .transportRestart)
+            #expect(ledger.resume == nil)
+            #expect(ledger.awaitingTransportBump)
+            if !recordFirst { try ledger.recordClockRestart(record) }
+            #expect(ledger.resume == nil)
+            #expect(ledger.hasRestartObligations)
+            try ledger.bump(transportKey, reason: .clockRestart)
+            #expect(!ledger.hasRestartObligations && ledger.resume == nil)
+
+            let third = try ledger.bump(ledger.primaryClock, reason: .deviceRestart)
+            try ledger.recordClockRestart(.init(
+                start: .init(clock: primary, generation: third, frame: 0),
+                host: .init(ticks: 2_000), previousFrame: 900
+            ))
+            #expect(ledger.resume == .afterRestart(previousFrame: 900))
+        }
+
         @Test func sourceBumpInvalidatesReadinessUntilRePrepared() throws {
             var ledger = try GenerationLedger(primaryClock: primary, musicalClock: musicalClock, nominalRate: 48_000)
             try ledger.declare(sourceKey)

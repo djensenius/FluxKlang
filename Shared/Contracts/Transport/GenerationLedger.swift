@@ -5,7 +5,7 @@
 //  The live generation counters of one graph (media-contract.md §5.1–§5.4).
 //  Generations start at 1, step by exactly 1 and compare by equality only (M2).
 //  The ledger also tracks the clock-restart obligations of §5.3 and the
-//  transport resume position that a locate supersedes (§5.4).
+//  transport resume position that a locate or transport restart supersedes.
 //
 
 import Foundation
@@ -75,7 +75,7 @@ struct GenerationLedger: Sendable {
     private(set) var awaitingTransportBump = false
     private(set) var resume: TransportResume?
     private(set) var nominalRate: Int
-    private var locatedSinceRestart = false
+    private var restartPositionSuperseded = false
 
     /// `musicalClock` is nil when the graph has no transport.
     /// The declared generation rate, not a hardware measurement. No implicit default.
@@ -137,12 +137,15 @@ struct GenerationLedger: Sendable {
             awaitingTransportBump = false
         case .locate(let ticks):
             resume = .locate(ticks: ticks)
-            locatedSinceRestart = true
+            restartPositionSuperseded = true
+        case .transportRestart:
+            resume = nil
+            restartPositionSuperseded = true
         case _ where key.kind == .sampleClock:
             pendingRestart = next
             restartRecord = nil
             awaitingTransportBump = musicalClock != nil
-            locatedSinceRestart = false
+            restartPositionSuperseded = false
         default: break
         }
         return next
@@ -174,7 +177,7 @@ struct GenerationLedger: Sendable {
             throw .restartGenerationMismatch
         }
         restartRecord = record
-        if musicalClock != nil, !locatedSinceRestart {
+        if musicalClock != nil, !restartPositionSuperseded {
             resume = .afterRestart(previousFrame: record.previousFrame)
         }
     }
