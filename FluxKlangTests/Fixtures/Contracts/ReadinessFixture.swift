@@ -85,8 +85,17 @@ struct ReadinessFixture: Sendable {
         let reasons: [ActionID: ReadinessReason]
         let readyEntries: [ActionID: Int]
         let current: Set<ActionID>
+        // Every non-private stored property of `GenerationLedger`. The private
+        // `restartPositionSuperseded` is not observable on its own; it only decides
+        // whether a later restart record sets `resume`, which is captured.
+        let primaryClock: GenerationKey
+        let musicalClock: ClockID?
         let generations: [GenerationKey: Generation]
         let pendingRestart: Generation?
+        let restartRecord: ClockRestartRecord?
+        let awaitingTransportBump: Bool
+        let resume: TransportResume?
+        let nominalRate: Int
         /// For every ledger counter, the actions a change of that counter would
         /// invalidate. Two stores with the same states can depend on different
         /// counters; this tells them apart. Each key is probed on its own copy, so
@@ -101,8 +110,14 @@ struct ReadinessFixture: Sendable {
             reasons = readiness.reasons
             readyEntries = readiness.states.keys.reduce(into: [:]) { $0[$1] = readiness.readyEntry($1) }
             current = Set(readiness.states.keys.filter { readiness.isCurrent($0, ledger: ledger) })
+            primaryClock = ledger.primaryClock
+            musicalClock = ledger.musicalClock
             generations = ledger.current
             pendingRestart = ledger.pendingRestart
+            restartRecord = ledger.restartRecord
+            awaitingTransportBump = ledger.awaitingTransportBump
+            resume = ledger.resume
+            nominalRate = ledger.nominalRate
             invalidatedBy = ledger.current.keys.reduce(into: [:]) { result, key in
                 var probe = readiness
                 result[key] = probe.generationChanged(key)

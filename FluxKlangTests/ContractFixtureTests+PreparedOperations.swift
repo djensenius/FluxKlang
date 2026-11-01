@@ -146,6 +146,36 @@ extension ContractFixtureTests {
             #expect(onContext.readiness.isCurrent(action, ledger: onContext.ledger))
         }
 
+        @Test func snapshotsTrackLedgerRestartState() throws {
+            var fixture = try ReadinessFixture.make(.available)
+            let next = try fixture.ledger.bump(ReadinessFixture.primaryKey, reason: .wake)
+            let pending = fixture.snapshot
+            #expect(fixture.ledger.hasRestartObligations)
+
+            let clock = ContractFixtureIDs.primaryClock
+            let wrong = ClockRestartRecord(start: SampleStamp(clock: clock, generation: .initial, frame: 0),
+                                           host: HostStamp(ticks: 2_000), previousFrame: 480)
+            #expect(throws: GenerationLedgerError.restartGenerationMismatch) {
+                try fixture.ledger.recordClockRestart(wrong)
+            }
+            #expect(fixture.snapshot == pending)
+
+            let record = ClockRestartRecord(start: SampleStamp(clock: clock, generation: next, frame: 0),
+                                            host: HostStamp(ticks: 2_000), previousFrame: 480)
+            try fixture.ledger.recordClockRestart(record)
+            let recorded = fixture.snapshot
+            #expect(recorded != pending)
+            #expect(fixture.ledger.restartRecord == record)
+            #expect(fixture.ledger.resume == .afterRestart(previousFrame: 480))
+            // Only the restart record and resume position changed; the generations did not.
+            #expect(recorded.generations == pending.generations && recorded.pendingRestart == pending.pendingRestart)
+
+            #expect(throws: GenerationLedgerError.restartAlreadyRecorded) {
+                try fixture.ledger.recordClockRestart(record)
+            }
+            #expect(fixture.snapshot == recorded)
+        }
+
         @Test func preparationAgainstStaleGenerationIsRefused() throws {
             var fixture = try ReadinessFixture.make(.missing)
             let captured = fixture.requirements(for: action)
