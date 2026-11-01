@@ -172,14 +172,16 @@ extension HostAuthorityTests {
             #expect(keep.decisions.count == 3 && keep.effects.count == 1)
             let earlier = try discards(1)
             let failedToken = try failed.token
+            let restoreAttempt = RestoreAttemptID()
             var queue = EngineCommandQueue()
             try queue.enqueue(effects: earlier).get()
-            try queue.enqueue(restore, running: failed.transaction.running, lease: failedToken).get()
+            try queue.enqueue(restore, running: failed.transaction.running, lease: failedToken,
+                              restoreAttempt: restoreAttempt).get()
             try queue.enqueue(keep, running: partial.transaction.running, lease: try partial.token).get()
             // restorePrevious → discard; keepActivePartial → placeholders (sorted) → discard of the replaced plan.
             let recovered = drain(&queue)
             #expect(recovered == earlier.map(EngineCommand.init) + [
-                .restore(.initial, runningPlan, failedToken), .discard(planID),
+                .restore(restoreAttempt, .initial, runningPlan, failedToken), .discard(planID),
                 .keepActivePartial(planID), .placeholders([nodes[1], nodes[2]]), .discard(runningPlan)
             ])
             // A fail-closed exit is a decision only: mute, nothing discarded.
@@ -249,6 +251,9 @@ extension HostAuthorityTests {
             var queue = EngineCommandQueue()
             try queue.enqueue(effects: try discards(1)).get()
             let before = queue
+            let missingAttempt = queue.enqueue(restore, running: running, lease: token)
+            #expect(refusal(missingAttempt) == .restoreAttemptRequired)
+            #expect(queue == before)
             let unleased = queue.enqueue(restore, running: running, lease: nil)
             #expect(refusal(unleased) == .leaseRequired)
             let moved = RunningGraph(revision: try running.revision.next(), prepared: running.prepared)
@@ -271,8 +276,11 @@ extension HostAuthorityTests {
             #expect(refusal(restoreStale) == .runningMismatch)
             #expect(queue == before)
             // A running graph without a plan is restored as such.
-            try queue.enqueue(restore, running: bare, lease: token).get()
-            #expect(Array(queue.pending.dropFirst()) == [.restore(.initial, nil, token), .discard(planID)])
+            let restoreAttempt = RestoreAttemptID()
+            try queue.enqueue(restore, running: bare, lease: token, restoreAttempt: restoreAttempt).get()
+            #expect(Array(queue.pending.dropFirst()) == [
+                .restore(restoreAttempt, .initial, nil, token), .discard(planID)
+            ])
         }
 
         @Test func maximumPartialKeepNeedsThreeSlots() throws {
@@ -387,8 +395,9 @@ extension HostAuthorityTests {
             let attempt = try host.committedAttempt()
             let token = try host.token
             let running = RunningGraph(revision: .initial, prepared: runningPlan)
+            let restoreAttempt = RestoreAttemptID()
             let decisions: [(RecoveryDecision, EngineCommand)] = [
-                (.restorePrevious(.initial), .restore(.initial, runningPlan, token)),
+                (.restorePrevious(.initial), .restore(restoreAttempt, .initial, runningPlan, token)),
                 (.keepActivePartial, .keepActivePartial(runningPlan)),
                 (.missingPlaceholder(nodes[2]), .placeholders([nodes[2]])),
                 (.recover(muteOutputs: true), .setOutputsMuted(true)),
@@ -402,7 +411,14 @@ extension HostAuthorityTests {
             ]
             for (decision, command) in decisions {
                 var queue = EngineCommandQueue()
-                try queue.enqueue(step([decision]), running: running, lease: token).get()
+                let admissionID: RestoreAttemptID?
+                if case .restorePrevious = decision {
+                    admissionID = restoreAttempt
+                } else {
+                    admissionID = nil
+                }
+                try queue.enqueue(step([decision]), running: running, lease: token,
+                                  restoreAttempt: admissionID).get()
                 #expect(queue.pending == [command])
                 #expect(kinds[DecisionKind(decision)] == CommandKind(command))
             }

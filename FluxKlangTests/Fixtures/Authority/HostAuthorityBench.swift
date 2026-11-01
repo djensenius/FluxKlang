@@ -59,12 +59,13 @@ enum AuthorityBench {
 
     /// Opens A (with `lifecycleA`) and B; A acquires the lease on `window` unless it is nil.
     static func makeAuthority(holding window: WindowID? = windowA,
-                              lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
+                              lifecycleA: EngineLifecycle? = nil,
+                              recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
         let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                           nominalRate: 48_000)
         let authority = try HostAuthority(host: ledger, live: try liveState())
         try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
-                                 lifecycle: lifecycleA).get()
+                                 lifecycle: lifecycleA, recoveryBase: recoveryBaseA).get()
         try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
         if let window { _ = try await authority.acquire(project: projectA, window: window).get() }
         return authority

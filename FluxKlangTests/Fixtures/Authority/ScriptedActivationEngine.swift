@@ -37,6 +37,14 @@ struct ScriptedCommitReport: Sendable {
     let verdict: Result<CommitReportOutcome, HostAuthorityRefusal>
 }
 
+/// One delivered restore that the engine has not acknowledged.
+struct ScriptedRestore: Hashable, Sendable {
+    let attempt: RestoreAttemptID
+    let revision: ContractRevision
+    let prepared: PreparedActivationID?
+    let token: EngineLeaseToken
+}
+
 struct ScriptedActivationEngine: Sendable {
     /// Fails exactly the scripted prepare answers (1-based, in answer order).
     private(set) var faults: FaultScript
@@ -48,6 +56,8 @@ struct ScriptedActivationEngine: Sendable {
     private(set) var pending: [PrepareAttemptID] = []
     /// Commits taken and not yet reported, oldest first.
     private(set) var pendingCommits: [ScriptedCommit] = []
+    /// Restores taken and not yet acknowledged, oldest first.
+    private(set) var pendingRestores: [ScriptedRestore] = []
     /// The node IDs of each prepare taken, until it is answered.
     private var preparingNodes: [PrepareAttemptID: Set<NodeID>] = [:]
     /// The node IDs of each plan this engine prepared (answered with success).
@@ -83,6 +93,9 @@ struct ScriptedActivationEngine: Sendable {
                 preparingNodes[attempt] = Set(graph.nodes.map(\.id))
             case .commit(let prepared, let attempt, let token):
                 pendingCommits.append(ScriptedCommit(prepared: prepared, attempt: attempt, token: token))
+            case .restore(let attempt, let revision, let prepared, let token):
+                pendingRestores.append(ScriptedRestore(attempt: attempt, revision: revision,
+                                                       prepared: prepared, token: token))
             default: break
             }
             taken.append(command)
@@ -141,5 +154,14 @@ struct ScriptedActivationEngine: Sendable {
         guard let commit = withholdCommit() else { return nil }
         let report = report(on: commit, outcome)
         return ScriptedCommitReport(report: report, verdict: await authority.commitReported(report))
+    }
+
+    /// Acknowledges the oldest delivered restore; nil when none is pending.
+    mutating func completeRestore(_ authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal>? {
+        guard !pendingRestores.isEmpty else { return nil }
+        let restore = pendingRestores.removeFirst()
+        return await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
+                                                prepared: restore.prepared, token: restore.token)
     }
 }

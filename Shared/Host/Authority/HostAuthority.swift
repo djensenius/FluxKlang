@@ -45,10 +45,11 @@ actor HostAuthority {
         book.lifecycle(of: project, window: window)
     }
 
-    /// `HostAuthorityBook.open(project:running:lifecycle:)`.
+    /// `HostAuthorityBook.open(project:running:lifecycle:recoveryBase:)`.
     func open(project: ProjectID, running: RunningGraph,
-              lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
-        book.open(project: project, running: running, lifecycle: lifecycle)
+              lifecycle: EngineLifecycle? = nil,
+              recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
+        book.open(project: project, running: running, lifecycle: lifecycle, recoveryBase: recoveryBase)
     }
 
     /// `HostAuthorityBook.acquire(project:window:)`.
@@ -121,6 +122,19 @@ actor HostAuthority {
     /// `HostAuthorityBook.leaseLost(_:)`.
     func leaseLost(_ token: EngineLeaseToken) -> Result<ProjectID, HostAuthorityRefusal> {
         book.leaseLost(token)
+    }
+
+    /// `HostAuthorityBook.resolveRecovery(project:)`.
+    func resolveRecovery(project: ProjectID) -> Result<RecoveryResolution, HostAuthorityRefusal> {
+        book.resolveRecovery(project: project)
+    }
+
+    /// `HostAuthorityBook.restoreCompleted(attempt:revision:prepared:token:)`.
+    func restoreCompleted(
+        attempt: RestoreAttemptID, revision: ContractRevision, prepared: PreparedActivationID?,
+        token: EngineLeaseToken
+    ) -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        book.restoreCompleted(attempt: attempt, revision: revision, prepared: prepared, token: token)
     }
 
     /// `HostAuthorityBook.commitReported(_:)`.
