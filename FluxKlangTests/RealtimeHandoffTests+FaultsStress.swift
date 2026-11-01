@@ -2,7 +2,11 @@ import Darwin
 import Foundation
 import Synchronization
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 /// Shared counters for the `Thread`-based stress tests.
 private final class StressState: Sendable {
