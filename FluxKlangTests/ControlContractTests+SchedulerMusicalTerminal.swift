@@ -20,6 +20,7 @@ extension ControlContractTests {
                            musicalMap: try #require(fixture.ledger.generation(SchedulerFixture.mapKey)))
         }
 
+        #if DEBUG // The terminal seam completeForTesting exists only in DEBUG; release test lanes omit these.
         @Test func completionFailurePreservesPinPendingQueueAndClock() throws {
             var fixture = try SchedulerFixture(capacity: 3)
             try fixture.prepareMusical(0)
@@ -80,6 +81,28 @@ extension ControlContractTests {
                                                                    reason: .invalidTiming))
             #expect(fixture.scheduler.musicalSummary?.pinCount == 0)
         }
+
+        /// A batch whose LAST enqueue fails publishes nothing: earlier staged releases/enqueues are discarded.
+        @Test func batchFailureMidwayPublishesNothing() throws {
+            var fixture = try SchedulerFixture(capacity: 4)
+            try fixture.prepareMusical(0)
+            let unrelated = try fixture.submit(fixture.stamp("trg.unrelated"))
+            try fixture.commit(unrelated, at: 100)
+            let pins = try (["trg.b", "trg.a", "trg.c"] as [StaticString]).map { try Self.pin(&fixture, $0) }
+            let before = try fixture.admissionState()
+            let cancel = { (handle: TriggerHandle) in
+                TriggerOutcome(trigger: handle.trigger, result: .cancelled, stale: .generation(SchedulerFixture.source))
+            }
+            let batch = [(pins[0], cancel(pins[0])), (pins[1], cancel(pins[1])),
+                         (pins[2], TriggerOutcome(trigger: pins[2].trigger, result: .fired))]
+            #expect(throws: TriggerSessionError.invalidCompletion) { try fixture.scheduler.completeForTesting(batch) }
+            #expect(try fixture.admissionState() == before && before.music?.pinCount == 3)
+            #expect(pins.allSatisfy { fixture.scheduler.pendingMusic($0) == Self.occurrence })
+            try fixture.scheduler.completeForTesting(pins.map { ($0, cancel($0)) })
+            #expect(fixture.scheduler.drain().map(\.handle) == [unrelated] + pins)
+            #expect(fixture.scheduler.musicalSummary?.pinCount == 0)
+        }
+        #endif
 
         /// A non-outsideLoop timeline refusal inside the late `.nextBoundary` fallback (boundary past
         /// Int64.max) propagates non-consumingly: no horizon advance, queue or pending change.
@@ -159,27 +182,6 @@ extension ControlContractTests {
             #expect(try fixture.scheduler.cancelStale(ledger: fixture.ledger) == handles)
             #expect(fixture.scheduler.musicalSummary?.pinCount == 0 && fixture.scheduler.pendingCount == 0)
             #expect(fixture.scheduler.drain().map(\.handle) == handles)
-        }
-
-        /// A batch whose LAST enqueue fails publishes nothing: earlier staged releases/enqueues are discarded.
-        @Test func batchFailureMidwayPublishesNothing() throws {
-            var fixture = try SchedulerFixture(capacity: 4)
-            try fixture.prepareMusical(0)
-            let unrelated = try fixture.submit(fixture.stamp("trg.unrelated"))
-            try fixture.commit(unrelated, at: 100)
-            let pins = try (["trg.b", "trg.a", "trg.c"] as [StaticString]).map { try Self.pin(&fixture, $0) }
-            let before = try fixture.admissionState()
-            let cancel = { (handle: TriggerHandle) in
-                TriggerOutcome(trigger: handle.trigger, result: .cancelled, stale: .generation(SchedulerFixture.source))
-            }
-            let batch = [(pins[0], cancel(pins[0])), (pins[1], cancel(pins[1])),
-                         (pins[2], TriggerOutcome(trigger: pins[2].trigger, result: .fired))]
-            #expect(throws: TriggerSessionError.invalidCompletion) { try fixture.scheduler.completeForTesting(batch) }
-            #expect(try fixture.admissionState() == before && before.music?.pinCount == 3)
-            #expect(pins.allSatisfy { fixture.scheduler.pendingMusic($0) == Self.occurrence })
-            try fixture.scheduler.completeForTesting(pins.map { ($0, cancel($0)) })
-            #expect(fixture.scheduler.drain().map(\.handle) == [unrelated] + pins)
-            #expect(fixture.scheduler.musicalSummary?.pinCount == 0)
         }
 
         @Test func identityRotationPreservesMusicalHistorySequenceAndHorizon() throws {
