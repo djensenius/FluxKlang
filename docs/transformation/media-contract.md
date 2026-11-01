@@ -155,9 +155,11 @@ A loop is `[startTicks, endTicks)`, with `startTicks < endTicks`. At the wrap fr
 pass's anchor, rounded as in §5.2) the transport records a `loopWrap` discontinuity, re-anchors with `musicalTicks =
 startTicks` and `loopIteration + 1`, and dispatches owned-note releases first ([§6.5](#65-ordering)). A pass anchored
 past `endTicks` does not wrap. A position resolves through the anchor in effect at its frame, so an event before the
-wrap keeps its pass even when delivered after the wrap anchor. A scheduled target is an **occurrence**: the pass
-holding its origin, plus its ticks. A wrap never moves it; musical-map revisions re-resolve it within its pass. A grid
-boundary equal to `endTicks` is the wrap frame, and later ones continue on the next pass's grid (example 03). In v1,
+wrap keeps its pass even when delivered after the wrap anchor. A scheduled target is an **occurrence**: a pass plus its
+ticks. An explicit tick target takes the origin's pass; grid resolution selects the occurrence's pass, which can be an
+earlier or later pass than the origin's (below), and that choice is then frozen. A wrap never moves it; musical-map
+revisions re-resolve its frame within its pass. A grid boundary equal to `endTicks` is the wrap frame, and later ones
+continue on the next pass's grid (example 03). In v1,
 musical targets must resolve inside `[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
 
 Virtual future passes use the same per-wrap rounding as recorded wraps: full passes advance by the rounded
@@ -187,6 +189,11 @@ than an origin-pass match. Unrecorded passes, in a historical gap or after the l
 latest anchor at its rounded period. Each such run contributes at most its last three passes up to the origin's,
 plus its final pass, whose end aliases the following recorded pass. Candidates are found through a per-pass
 anchor index, never by walking the number of elapsed passes or grid ticks.
+The origin's pass, where the backward search ends and the forward search starts, is located the same way. The anchor
+in effect at the origin keeps its pass until its rounded wrap. Past that wrap, the origin is in the last unrecorded pass
+(before the next recorded pass, if any) whose projected start is at or before the origin, else in the anchor's pass.
+A producer may refuse (`historyUnavailable`) a target these rules would resolve; it then emits no trace record, so a
+refusal never contradicts them.
 An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
 of equality with the origin-time tick. An exact-frame predecessor therefore stays eligible, as a non-retroactive
 choice, even when the retroactive window is zero.
@@ -195,9 +202,10 @@ the origin's pass and later passes, each through its own projection anchor, with
 equal frame. It is never retroactive and never skips a boundary of the origin's or a later pass projected between
 the origin and itself, whichever way a re-anchor or map edit moved the grid; the same index bounds its candidates.
 A pass inside the loop at the origin has no pre-loop ticks: every wrapped pass, and pass 0 once under way when its first
-anchor or the anchor in effect at the origin places it in the loop. An origin that a re-anchor or map edit projects
-before the loop start resolves to that pass's first in-loop boundary. Only an origin before the first anchor, before
-pass 0 reaches the loop, or in a pass 0 begun past the loop end names a pre-loop grid target.
+anchor places it in the loop or the recorded anchor in effect at the origin, anchored at or before the loop end, places
+it at or past the loop start (possibly past the loop end). An origin that a re-anchor or map edit projects before the
+loop start resolves to that pass's first in-loop boundary. Only an origin before the first anchor, before pass 0
+reaches the loop, or in a pass 0 begun past the loop end names a pre-loop grid target.
 
 ### 5.6 Tempo and meter
 

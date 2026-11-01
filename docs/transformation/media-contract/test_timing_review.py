@@ -176,7 +176,8 @@ class TimingReviewTests(unittest.TestCase):
                    outcome(0, None, "dropped")]
         errors = self.check(document(records, loop=(0, 1), grid=1, tempo=60000))
         self.assertEqual(len(errors), 1, errors)
-        self.assertIn("nextBoundary cannot resolve before the current horizon", errors[0])
+        # A musical target is not a nextBoundary resolution: the origin itself lies past the only representable wrap.
+        self.assertIn("a zero-period loop has no pass after its wrap frame", errors[0])
         self.assertNotIn("replay aborted", errors[0])
 
     def test_valid_loop_bounds_are_not_narrowed(self):
@@ -588,6 +589,152 @@ class TimingReviewTests(unittest.TestCase):
         errors = self.check(document(records, loop=(5, 10), grid=1,
                                      late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0)))
         self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
+
+    @staticmethod
+    def gap_edit_records(origin, horizon=21):
+        # Pass 0 is anchored, passes 1-6 are an unrecorded gap before pass 7's wrap. The faster edited map shrinks the
+        # rounded period to one frame, so the gap projects from pass 7 at frames 15..20 while at() extrapolates pass 0.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=106667)])
+        return [anchor(0, 0)] + wrap(21, 0, 7) + [edit, trigger(origin, horizon, dict(timeBase="musical", gridTicks=3))]
+
+    def test_origin_pass_is_located_where_the_gap_projects_after_a_tempo_edit(self):
+        for origin, occ, assigned in [(10, (0, 3), 15), (14, (0, 3), 15), (16, (2, 0), 16)]:
+            with self.subTest(origin=origin):
+                records = self.gap_edit_records(origin) + [outcome(assigned, 21, "firedLate", revision=2)]
+                doc = document(records, loop=(0, 3), grid=3, tempo=320000,
+                               late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                expect = trace.triggers["trg.review"]["expect"]
+                self.assertEqual((expect["occ"], expect["retro"]), (occ, False))
+                self.assertEqual(trace.frame_of(occ), assigned)
+
+    def test_forward_choice_is_monotonic_in_the_origin_across_a_tempo_edited_gap(self):
+        previous = None
+        for origin in range(26):
+            with self.subTest(origin=origin):
+                doc = document(self.gap_edit_records(origin, horizon=max(origin, 21)), loop=(0, 3), grid=3,
+                               tempo=320000, late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                occ = trace.triggers["trg.review"]["expect"]["occ"]
+                frame = trace.frame_of(occ)
+                self.assertGreaterEqual(frame, origin)
+                if previous is not None:
+                    self.assertGreaterEqual((frame, occ), previous)
+                previous = frame, occ
+
+    def test_half_frame_period_rounds_up_once_per_wrap_and_locates_the_origin_there(self):
+        # A 4.5-frame loop rounds to 5 at every wrap, so pass k starts exactly at 5k and pass k - 1's end aliases it.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=480000)])
+        doc = document([anchor(0, 0), edit], loop=(0, 3), grid=1, tempo=320000)
+        trace = checker.Trace(doc, "11-review-timing.json")
+        trace.run()
+        self.assertEqual(trace.errors, [])
+        for k in range(1, 7):
+            with self.subTest(k=k):
+                self.assertEqual(trace.frame_of((k, 0)), 5 * k)
+                self.assertEqual(trace.frame_of((k - 1, 3)), 5 * k)
+                self.assertEqual(trace.origin_pass(Fraction(5 * k)), k)
+                self.assertEqual(trace.origin_pass(Fraction(5 * k) - Fraction(1, 4)), k - 1)
+                # Just before the shared frame the earlier occurrence (the end alias) wins the equal forward frame.
+                self.assertEqual(trace.projected_next(k - 1, 1, Fraction(5 * k) - Fraction(1, 4)), (k - 1, 3))
+                self.assertEqual(trace.projected_previous(k, 1, Fraction(5 * k)), (k, 0))
+
+    def test_retroactive_window_is_inclusive_across_a_tempo_edited_gap(self):
+        # At half speed the gap's pass 1 projects from pass 3 at frame 1920. Exactly 1 ms (48 frames) later it is
+        # still retroactive; one frame later the forward choice is the gap's next boundary, pass 1's end alias.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=160000)])
+        for origin, occ, retro, assigned in [(1968, (1, 0), True, 1920), (1969, (1, 960), False, 2400)]:
+            with self.subTest(origin=origin):
+                cue = trigger(origin, 2880, dict(timeBase="musical", gridTicks=960))
+                records = [anchor(0, 0)] + wrap(2880, 0, 3) + [edit, cue]
+                records.append(outcome(assigned, 2880, "firedLate", revision=2))
+                doc = document(records, loop=(0, 960), grid=960, tempo=320000,
+                               late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=1))
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                expect = trace.triggers["trg.review"]["expect"]
+                self.assertEqual((expect["occ"], expect["retro"]), (occ, retro))
+                self.assertEqual(origin - trace.frame_of((1, 0)), 48 if retro else 49)
+
+    @staticmethod
+    def pre_loop_edit_document(host, outcomes=()):
+        # Pass 0 starts before a (5, 8) loop at a slow tempo; a fast edit then has its anchor in effect reach the loop
+        # end (tick 8 at frame 1.5) well before the rounded wrap (frame 2), and later passes overrun their 0.5625-frame
+        # length by rounding up to 1 frame, so at() can extrapolate ticks past endTicks.
+        edit = dict(kind="generation", counter="musicalMap/mus.main", **{"from": 1, "to": 2}, reason="tempoEdit",
+                    musicalMap=[dict(atTicks=0, microsPerQuarter=60000)])
+        cue = dict(trigger(0, 40, dict(timeBase="musical", gridTicks=1)), originHostTicks=host)
+        return document([anchor(0, 0), anchor(38, 4), edit, cue, *outcomes], loop=(5, 8), grid=1, tempo=3000000,
+                        late=dict(policy="fireLate", maxLatenessMs=1000, retroactiveMs=0))
+
+    def test_pass_zero_is_inside_the_loop_once_its_anchor_in_effect_reaches_the_loop_start(self):
+        for host in (500, 750, 875, 1000, 1375, 1875, 2375):
+            with self.subTest(host=host):
+                doc = self.pre_loop_edit_document(host, [outcome(38, 40, "firedLate", revision=2)])
+                self.assertEqual(self.check(doc), [])
+                trace = checker.Trace(doc, "11-review-timing.json")
+                trace.run()
+                self.assertEqual(trace.triggers["trg.review"]["expect"]["occ"], (0, 5))
+        # Before the anchor in effect reaches the loop start, pass 0's boundary is still pre-loop.
+        errors = self.check(self.pre_loop_edit_document(375, [outcome(37, 40, "firedLate", revision=2)]))
+        self.assertTrue(any("v1 resolves musical targets inside the active loop" in e for e in errors), errors)
+
+    def test_forward_choice_is_monotonic_in_the_origin_from_before_the_loop_start(self):
+        previous = None
+        for host in range(0, 4000, 125):
+            with self.subTest(host=host):
+                trace = checker.Trace(self.pre_loop_edit_document(host), "11-review-timing.json")
+                trace.run()
+                occ = trace.triggers["trg.review"]["expect"]["occ"]
+                frame = trace.frame_of(occ)
+                self.assertGreaterEqual(frame, Fraction(host, 500))
+                if previous is not None:
+                    self.assertGreaterEqual((frame, occ), previous)
+                previous = frame, occ
+                inside = [e for e in trace.errors if "inside the active loop" in e]
+                self.assertEqual(bool(inside), host < 500, trace.errors)
+
+    def test_clock_restart_previous_frame_cannot_precede_the_old_generations_latest_anchor(self):
+        def records(previous):
+            return [anchor(0, 0), anchor(2400, 1536),
+                    dict(kind="generation", counter="sampleClock/smp.main", **{"from": 1, "to": 2},
+                         reason="deviceRestart"),
+                    dict(kind="generation", counter="transport/mus.main", **{"from": 1, "to": 2},
+                         reason="clockRestart"),
+                    dict(kind="discontinuity", type="clockRestart", sampleClock="smp.main", generation=2, frame=0,
+                         hostTicks=1200000, previousFrame=previous)]
+        self.assertEqual(self.check(document(records(2400), loop=None)), [])
+        errors = self.check(document(records(2399), loop=None))
+        self.assertTrue(any("previousFrame cannot precede the old generation's latest anchor" in e for e in errors),
+                        errors)
+
+    def test_back_to_back_restarts_compare_previous_frame_only_with_the_ending_generation(self):
+        # Generation 2 has no anchor, so the second restart's previousFrame (in generation 2's frames) is unrelated
+        # to generation 1's latest anchor at frame 1000.
+        def bump(to, host, previous):
+            return [dict(kind="generation", counter="sampleClock/smp.main", **{"from": to - 1, "to": to},
+                         reason="deviceRestart"),
+                    dict(kind="generation", counter="transport/mus.main", **{"from": to - 1, "to": to},
+                         reason="clockRestart"),
+                    dict(kind="discontinuity", type="clockRestart", sampleClock="smp.main", generation=to, frame=0,
+                         hostTicks=host, previousFrame=previous)]
+        records = [anchor(0, 0), anchor(1000, 640)] + bump(2, 600000, 1000) + bump(3, 700000, 50)
+        self.assertEqual(self.check(document(records, loop=None, grid=1)), [])
+
+    def test_stale_loop_wrap_before_the_current_musical_anchor_is_rejected(self):
+        # Pass 1 is a gap: anchor(0, 0)'s virtual pass 1 starts at frame 5, so a loopWrap stamped there after the
+        # pass-2 wrap at 10 used to match that virtual pass silently.
+        records = [anchor(0, 0)] + wrap(10, 0, 2)
+        self.assertEqual(self.check(document(records)), [])
+        errors = self.check(document(records + wrap(5, 0, 1)[:1]))
+        self.assertTrue(any("a stale loopWrap precedes the current musical anchor" in e for e in errors), errors)
 
     def test_rejected_triggers_still_raise_the_current_horizon(self):
         changes = [("target", dict(timeBase="musical", gridTicks=2**63)), ("actionId", "act.missing"),

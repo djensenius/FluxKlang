@@ -300,12 +300,33 @@ class Trace:
         it = a.get("loopIteration", 0) + 1 + k
         return {"frame": end + k * length, "musicalTicks": lp["startTicks"], "loopIteration": it}
 
-    def at(self, frame):  # anchor in effect at a frame: latest at or before it (else the first), or a virtual pass
-        return self.ahead(([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1], frame)
+    def in_effect(self, frame):  # the recorded anchor in effect at a frame: latest at or before it, else the first
+        return ([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1]
+
+    def at(self, frame):  # anchor in effect at a frame, or a virtual pass past its rounded wrap
+        return self.ahead(self.in_effect(frame), frame)
 
     def position(self, frame):  # (loopIteration, ticks) at a frame, through the anchor in effect there
         a = self.at(frame)
         return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
+
+    def origin_pass(self, frame):
+        """The pass holding an exact origin, located as frame_of projects passes: the anchor in effect keeps its pass
+        until its rounded wrap; past it, the last unrecorded pass up to the next recorded one whose projected start is
+        not after the origin (the anchor's own pass if none is), found in closed form from the latest anchor."""
+        x = self.in_effect(frame)
+        a = self.ahead(x, frame)
+        if a is x:
+            return a.get("loopIteration", 0)
+        located, base = a["loopIteration"], self.musical
+        first = self.ahead(base, k=0)
+        if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
+            period = self.ahead(base, k=1)["frame"] - first["frame"]
+            if period:
+                located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+        recorded, low = self.pass_index()[0], x.get("loopIteration", 0)
+        later = recorded[bisect.bisect_right(recorded, low):]
+        return max(low, min(located, later[0] - 1) if later else located)
 
     def pass_index(self):
         """Recorded passes in order and each pass's latest anchor, rebuilt only when the history list is replaced."""
@@ -406,11 +427,13 @@ class Trace:
                     low = (stop or 0) + 1
             # A pass's end alias projects at its successor's start: either side of that shared frame can be closest.
             passes.update([q for p in passes for q in (p - 1, p + 1) if q >= iteration])
-        best, first = None, self.hist[0]
-        # Once pass 0 is inside the loop at the origin (begun there, or reached through the anchor then in effect), its
-        # ticks cannot precede the loop start either; a pass 0 begun past the loop end never enters the loop.
-        inside = lp and first["frame"] <= frame and any(
-            lp["startTicks"] <= t <= lp["endTicks"] for t in (first["musicalTicks"], self.position(frame)[1]))
+        best, first, x = None, self.hist[0], self.in_effect(frame)
+        # Once pass 0 is inside the loop at the origin (begun there, or its recorded anchor in effect, eligible to wrap,
+        # has reached the loop start), its ticks cannot precede the loop start either; a pass 0 begun past the loop end
+        # never enters the loop. Pass 0 is only searched when it holds the origin, so x is then pass 0's own anchor.
+        inside = lp and first["frame"] <= frame and (
+            lp["startTicks"] <= first["musicalTicks"] <= lp["endTicks"]
+            or x["musicalTicks"] <= lp["endTicks"] and self.ticks_at_frame(frame, x) >= lp["startTicks"])
         for i in sorted(passes):
             a = self.pass_anchor(i)  # the same projection anchor as the predecessor search
             ticks = self.ticks_at_frame(frame, a)
@@ -635,12 +658,19 @@ class Trace:
                 self.err(r, "clockRestart records the host ticks at which the new generation starts")
             else:
                 self.restarts[clock] = r
+                old = self.anchor.get(clock)  # the ending generation's latest anchor, if it has one
+                if "previousFrame" in r and old and old["generation"] == r["generation"] - 1 \
+                        and r["previousFrame"] < old["frame"]:
+                    self.err(r, "clockRestart previousFrame cannot precede the old generation's latest anchor")
                 if resume is not None:
                     i, t = resume
                     self.resume, self.passes = t, (self.passes[0], self.passes[1] + i)  # it continues pass i
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
-        if kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
+        m = self.musical
+        if kind == "loopWrap" and m and m["generation"] == r["generation"] and r["frame"] < m["frame"]:
+            self.err(r, "a stale loopWrap precedes the current musical anchor")
+        elif kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
             self.err(r, "a loopWrap falls exactly at the loop end of the anchored pass")  # a virtual next-pass anchor
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
         stream = self.streams.get(r.get("stream"))
@@ -694,7 +724,10 @@ class Trace:
             self.err(r, "musical target without a current musical anchor")
             return None
         try:
-            i = self.at(origin).get("loopIteration", 0)  # the exact origin's pass, before rounding to a frame
+            try:
+                i = self.origin_pass(origin)  # the exact origin's pass, before rounding to a frame
+            except ValueError:  # only a zero-period loop's virtual pass past its wrap raises here
+                raise ValueError("a zero-period loop has no pass after its wrap frame") from None
             if "atTicks" in target:
                 choice = {"occ": (i, target["atTicks"]), "retro": False}
             else:
@@ -995,6 +1028,8 @@ def check_example(doc, name, schema):
 MUTATIONS = [
     ("01", 4, {"to": 3}, "advance the current value by exactly one"),
     ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
+    ("01", "", {"timeline.0.frame": 144001, "timeline.0.musicalTicks": 92160},
+     "previousFrame cannot precede the old generation's latest anchor"),
     ("01", 7, {"hostTicks": 2490000001}, "their clockRestart stamp"),
     ("01", 9, {"streamSeq": 41}, "stream order is preserved within a stream"),
     ("01", 10, {"horizonFrame": 9000000}, None),  # a stale sample generation cannot advance the live horizon
@@ -1012,6 +1047,10 @@ MUTATIONS = [
      "expected fired assignedFrame=359998"),  # a later anchor moves the boundary behind the horizon: step past loop end
     ("03", 3, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
     ("03", 3, {"frame": 191999}, "a loopWrap falls exactly at the loop end"),
+    ("03", 9, {"kind": "discontinuity", "type": "loopWrap", "sampleClock": "smp.main", "generation": 1, "stream": None,
+               "ump": None, "hostTicks": None, "musicalTicks": None, "endpointProtocol": None, "portProtocol": None,
+               "translatedBy": None, "effective": None, "note": None},
+     "a stale loopWrap precedes the current musical anchor"),  # the capture's frame 191000, before the pass-1 anchor
     ("03", 8, {"assignedFrame": 384000, "frame": 384000}, "expected fired assignedFrame=288000"),
     ("03", 9, {"musicalTicks": 121600}, "capture musicalTicks map from frame"),
     ("03", 12, {"reason": "clockRestart"}, "forces one transport bump with reason clockRestart"),
