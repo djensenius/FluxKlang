@@ -29,12 +29,13 @@ enum StudioGraphNeutralAdapter {
         )
         try ProjectGraphLimits.check(legacy.nodes.count, maximum: ProjectGraphLimits.nodes, path: "legacy.nodes")
         try ProjectGraphLimits.check(legacy.edges.count, maximum: ProjectGraphLimits.edges, path: "legacy.edges")
+        let endpointsByID = Dictionary(uniqueKeysWithValues: endpoints.map { ($0.id, $0) })
         var addresses: [UUID: Set<LegacyPort>] = [:]
         for edge in legacy.edges {
             for port in [edge.from, edge.to] { addresses[port.nodeID, default: []].insert(port) }
         }
         let nodes = legacy.nodes.map { node in
-            let endpoint = endpoints.first { $0.id == node.kind.reference }
+            let endpoint = node.kind.reference.flatMap { endpointsByID[$0] }
             let kind = node.kind.neutralKind(destination: endpoint?.destination)
             let role = kind.requiresRole ? node.kind.reference.flatMap {
                 RoleID(rawValue: "legacy.\(node.kind.name).\($0.uuidString)")
