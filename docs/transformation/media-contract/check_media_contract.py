@@ -3,6 +3,7 @@
 
 Standard library only; no app, hardware, network or plugins. Usage: python3 check_media_contract.py [--write]
 """
+import bisect
 import copy
 import json
 import math
@@ -159,6 +160,12 @@ def rnd(x):
     return math.floor(x + Fraction(1, 2))
 
 
+def checked_tick(value):
+    if not 0 <= value < 2**63:
+        raise ValueError("musical tick is outside the Int64 tick range")
+    return value
+
+
 def scale_up(value, src_bits, dst_bits):
     """MIDI 2.0 min-center-max upscaling (MIDI Association bit-scaling recommended practice)."""
     if value == 0:
@@ -219,6 +226,7 @@ class Trace:
         self.actions = {a["actionId"]: a for a in doc.get("actions", [])}
         self.state = {k: a["readiness"] for k, a in self.actions.items()}
         self.anchor, self.first_anchor, self.hist = {}, {}, []  # hist: this transport generation's musical anchors
+        self.indexed = None, [], {}  # (history list, recorded passes, latest anchor per pass); hist is never mutated
         self.triggers, self.captures, self.discs = {}, [], []
         self.pending_restart, self.last_dispatch, self.stream_seq, self.transport_due = set(), None, {}, False
         self.bumps, self.protocols, self.resume, self.restart_snap = Counter(), {}, None, ([], None)
@@ -280,32 +288,177 @@ class Trace:
         lp = self.loop
         if not lp or a["musicalTicks"] > lp["endTicks"]:  # only a pass anchored inside the loop wraps
             return a
-        end, length = rnd(self.frame_of_ticks(lp["endTicks"], a)), self.span(lp["startTicks"], lp["endTicks"])
+        end = rnd(self.frame_of_ticks(lp["endTicks"], a))
+        length = rnd(self.span(lp["startTicks"], lp["endTicks"]))  # each full pass re-anchors at its rounded wrap
         if frame is not None and frame < end:
             return a
-        k = k if frame is None else (frame - end) // length
+        if frame is not None:
+            if not length and frame > end:
+                raise ValueError("nextBoundary cannot resolve before the current horizon")
+            # A zero-period loop can name a boundary at end, but cannot advance to a later frame.
+            k = (frame - end) // length if length else 0
         it = a.get("loopIteration", 0) + 1 + k
         return {"frame": end + k * length, "musicalTicks": lp["startTicks"], "loopIteration": it}
 
-    def at(self, frame):  # anchor in effect at a frame: latest at or before it (else the first), or a virtual pass
-        return self.ahead(([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1], frame)
+    def in_effect(self, frame):  # the recorded anchor in effect at a frame: latest at or before it, else the first
+        return ([x for x in self.hist if x["frame"] <= frame] or self.hist[:1])[-1]
+
+    def at(self, frame):  # anchor in effect at a frame, or a virtual pass past its rounded wrap
+        return self.ahead(self.in_effect(frame), frame)
 
     def position(self, frame):  # (loopIteration, ticks) at a frame, through the anchor in effect there
         a = self.at(frame)
         return a.get("loopIteration", 0), self.ticks_at_frame(frame, a)
 
-    def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one; loop end starts the next
+    def origin_pass(self, frame):
+        """The pass holding an exact origin, located as frame_of projects passes: the anchor in effect keeps its pass
+        until its rounded wrap; past it, the last unrecorded pass up to the next recorded one whose projected start is
+        not after the origin (the anchor's own pass if none is), found in closed form from the latest anchor."""
+        x = self.in_effect(frame)
+        wrap = self.ahead(x, k=0)
+        if wrap is x or frame < wrap["frame"]:
+            return x.get("loopIteration", 0)
+        base = self.musical
+        first = self.ahead(base, k=0)
+        recorded, low = self.pass_index()[0], x.get("loopIteration", 0)
+        later = recorded[bisect.bisect_right(recorded, low):]
+        if first is base:  # a latest anchor past the loop end projects no unrecorded pass; x's own wrap advances
+            located = self.ahead(x, frame)["loopIteration"]
+        else:  # unrecorded passes project from the latest anchor, one rounded period apart
+            period = self.ahead(base, k=1)["frame"] - first["frame"]
+            located = low  # unless an unrecorded pass starts at or before the origin
+            if period:
+                located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+            elif frame >= first["frame"]:  # every unrecorded pass starts at the latest anchor's rounded wrap
+                # That wrap is at or after the latest anchor's frame, so x is the latest anchor: no later pass exists.
+                if frame > first["frame"]:  # an unbounded tail: only its first wrap is representable
+                    raise ValueError("nextBoundary cannot resolve before the current horizon")
+                located = base.get("loopIteration", 0) + 1
+        return max(low, min(located, later[0] - 1) if later else located)
+
+    def pass_index(self):
+        """Recorded passes in order and each pass's latest anchor, rebuilt only when the history list is replaced."""
+        if self.indexed[0] is not self.hist:
+            latest = {}
+            for a in self.hist:
+                latest[a.get("loopIteration", 0)] = a
+            self.indexed = self.hist, sorted(latest), latest
+        return self.indexed[1:]
+
+    def pass_anchor(self, i):
+        latest, last = self.pass_index()[1], self.musical
+        return latest[i] if i in latest else self.ahead(last, k=i - last.get("loopIteration", 0) - 1)
+
+    def frame_of(self, occ):  # (pass, ticks) via that pass's latest anchor or a virtual one
         (i, t), lp = occ, self.loop
-        if lp and t == lp["endTicks"]:
-            i, t = i + 1, lp["startTicks"]
-        mine, last = [x for x in self.hist if x.get("loopIteration", 0) == i], self.musical
-        return self.frame_of_ticks(t, mine[-1] if mine else self.ahead(last, k=i - last.get("loopIteration", 0) - 1))
+        a = self.pass_anchor(i)
+        if lp and t == lp["endTicks"] and a["musicalTicks"] <= lp["endTicks"]:
+            a, t = self.pass_anchor(i + 1), lp["startTicks"]
+        return self.frame_of_ticks(t, a)
 
     def boundary(self, occ, grid, after=False):  # first grid occurrence at (or after) occ; past loop end, next pass's
-        i, b = occ[0], (math.floor(occ[1] / grid) + 1 if after else math.ceil(occ[1] / grid)) * grid
+        i, b = occ[0], (math.floor(Fraction(occ[1], grid)) + 1 if after else math.ceil(Fraction(occ[1], grid))) * grid
+        b = max(b, 0)  # a position extrapolated before tick 0 waits for tick 0, a boundary of every grid
         if self.loop and occ[1] <= self.loop["endTicks"] < b:
-            i, b = i + 1, math.ceil(self.loop["startTicks"] / grid) * grid
-        return i, b
+            i, b = i + 1, math.ceil(Fraction(self.loop["startTicks"], grid)) * grid
+        return i, checked_tick(b)
+
+    def previous_boundary(self, occ, grid):
+        """Last admissible grid occurrence at or before occ, including the preceding pass's loop end."""
+        ticks = min(occ[1], self.loop["endTicks"] if self.loop else 2**63 - 1)
+        i, b = occ[0], math.floor(Fraction(ticks, grid)) * grid
+        if self.loop:
+            if b < self.loop["startTicks"]:
+                i, b = i - 1, (self.loop["endTicks"] // grid) * grid
+            if i < 0 or not self.loop["startTicks"] <= b <= self.loop["endTicks"]:
+                return None
+        return (i, b) if i >= 0 and 0 <= b < 2**63 else None
+
+    def projected_previous(self, iteration, grid, frame):
+        """Choose the closest eligible projection across recorded passes and bounded runs of virtual passes."""
+        passes = {iteration}
+        if self.loop:
+            recorded = self.pass_index()[0]
+            recorded = recorded[:bisect.bisect_right(recorded, iteration)]
+            passes, base = set(recorded), self.musical
+            first = self.ahead(base, k=0)
+            if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
+                located, period = iteration, self.ahead(base, k=1)["frame"] - first["frame"]
+                if period:
+                    located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+                # Within each run of unrecorded passes (gaps and the tail alike) a positive period moves every earlier
+                # pass back by at least one frame, so the last three up to the origin's pass suffice. Only the run's
+                # final pass can also alias its end to the following recorded pass, so it is always compared.
+                low = 0
+                for stop in recorded + [iteration + 1]:
+                    top = min(stop - 1, located)
+                    passes.update(range(max(low, top - 2), top + 1), [stop - 1] if stop > low else [])
+                    low = stop + 1
+        best = None
+        for iteration in sorted(passes, reverse=True):
+            a = self.pass_anchor(iteration)
+            ceiling, candidates = self.loop["endTicks"] if self.loop else 2**63 - 1, []
+            if self.loop and ceiling % grid == 0:
+                candidates.append((iteration, ceiling))
+                ceiling -= 1
+            prev = self.previous_boundary((iteration, min(ceiling, self.ticks_at_frame(frame, a))), grid)
+            if prev is not None and prev[0] == iteration:
+                candidates.append(prev)
+            for candidate in candidates:
+                projected = self.frame_of(candidate)
+                interior = not self.loop or candidate[1] != self.loop["endTicks"]
+                rank = projected, interior, iteration
+                if projected <= frame and (best is None or rank > best[1]):
+                    best = candidate, rank
+        return best[0] if best else None
+
+    def projected_next(self, iteration, grid, frame):
+        """Choose the closest projection not before frame among the origin's and later passes, without walking them."""
+        lp, passes = self.loop, {iteration}
+        if lp:
+            recorded = self.pass_index()[0]
+            later = recorded[bisect.bisect_right(recorded, iteration):]
+            passes.update(later)
+            base = self.musical
+            first = self.ahead(base, k=0)
+            if first is not base:  # unrecorded passes project from the latest anchor, one rounded period apart
+                period, located = self.ahead(base, k=1)["frame"] - first["frame"], iteration
+                if period:
+                    located = base.get("loopIteration", 0) + 1 + (frame - first["frame"]) // period
+                # Each later run of unrecorded passes is monotonic, so only its pass holding the frame (or the run's
+                # nearest end) or, as a rounded tick can land past the next pass's start, its predecessor can hold the
+                # closest interior boundary; the neighbour expansion below adds that predecessor.
+                low = iteration
+                for stop in later + [None]:
+                    if stop is None or stop > low:
+                        passes.add(max(low, located if stop is None else min(located, stop - 1)))
+                    low = (stop or 0) + 1
+            # A pass's end alias projects at its successor's start: either side of that shared frame can be closest.
+            passes.update([q for p in passes for q in (p - 1, p + 1) if q >= iteration])
+        best, first, x = None, self.hist[0], self.in_effect(frame)
+        # Once pass 0 is inside the loop at the origin (begun there, or its recorded anchor in effect, eligible to wrap,
+        # has reached the loop start), its ticks cannot precede the loop start either; a pass 0 begun past the loop end
+        # never enters the loop. Pass 0 is only searched when it holds the origin, so x is then pass 0's own anchor.
+        inside = lp and first["frame"] <= frame and (
+            lp["startTicks"] <= first["musicalTicks"] <= lp["endTicks"]
+            or x["musicalTicks"] <= lp["endTicks"] and self.ticks_at_frame(frame, x) >= lp["startTicks"])
+        for i in sorted(passes):
+            a = self.pass_anchor(i)  # the same projection anchor as the predecessor search
+            ticks = self.ticks_at_frame(frame, a)
+            if lp and (i or inside):  # a wrapped pass starts at the loop start, like the predecessor's pass split
+                ticks = max(ticks, lp["startTicks"])
+            if lp and a["musicalTicks"] <= lp["endTicks"]:  # before this eligible pass's rounded wrap
+                ticks = min(ticks, lp["endTicks"])
+            candidates = [self.boundary((i, ticks), grid)]
+            if lp and lp["endTicks"] % grid == 0 and a["musicalTicks"] <= lp["endTicks"]:
+                candidates.append((i, lp["endTicks"]))  # its end alias is qualified separately, as when searching back
+            for occ in candidates:
+                projected = self.frame_of(occ)
+                if projected >= frame and (best is None or (projected, occ) < best):
+                    best = projected, occ  # an equal frame keeps the earlier occurrence
+        if best is None:
+            raise ValueError("no grid boundary projects at or after the origin")
+        return best[1]
 
     def run(self):
         for counter in self.gens:
@@ -319,6 +472,12 @@ class Trace:
         for a in self.actions.values():
             self.check_action(a)
         self.check_map({}, self.map)
+        if self.loop:
+            try:
+                checked_tick(self.loop["startTicks"])
+                checked_tick(self.loop["endTicks"])
+            except ValueError as exc:
+                self.loop = self.err({}, str(exc))
         if self.loop and self.loop["endTicks"] <= self.loop["startTicks"]:
             self.loop = self.err({}, "a loop needs startTicks < endTicks")
         for i, rec in enumerate(records):
@@ -340,6 +499,7 @@ class Trace:
 
     def check_action(self, a):
         media, policy, late = a["media"], a.get("timePolicy"), a["late"]
+        self.check_target(a, a["quantize"])
         allowed = {"audio": {"fixedRate", "timeStretch"}, "midi": {"fixedRate", "tempoFollowing"}}.get(media, {None})
         if policy not in allowed:
             self.err(a, f"{a['actionId']}: {media} actions allow timePolicy {sorted(map(str, allowed))}")
@@ -359,9 +519,25 @@ class Trace:
             self.evidence.add("fixedRateDefault")
 
     def check_map(self, rec, segments):
-        ticks = [s["atTicks"] for s in segments]
+        try:
+            ticks = [checked_tick(s["atTicks"]) for s in segments]
+        except ValueError as exc:
+            self.err(rec, str(exc))
+            return False
         if ticks[0] != 0 or ticks != sorted(set(ticks)):
             self.err(rec, "musical map segments start at 0 and strictly increase (initial map and every revision)")
+            return False
+        return True
+
+    def check_target(self, rec, target):
+        try:
+            for key in ("atTicks", "gridTicks"):
+                if key in target:
+                    checked_tick(target[key])
+        except ValueError as exc:
+            self.err(rec, str(exc))
+            return False
+        return True
 
     def stretch_ok(self, action):
         return action.get("timePolicy") != "timeStretch" or self.doc.get("adapterCapabilities", {}).get("timeStretch")
@@ -376,17 +552,29 @@ class Trace:
         if rate is None:
             self.err(r, "anchor names an undeclared sample clock generation")
             return
+        try:
+            if "musicalTicks" in r:
+                checked_tick(r["musicalTicks"])
+        except ValueError as exc:
+            return self.err(r, str(exc))
         if r["generation"] != self.gens.get(key):
             self.err(r, "anchor generation is not current")
         if clock in self.pending_restart:
             self.err(r, "new sample generation needs a clockRestart discontinuity before its first anchor")
+        m, position = self.musical, None
+        if "musicalTicks" in r and clock == self.primary and m and m["transport"] == r.get("transport") \
+                and m["generation"] == r["generation"]:
+            try:
+                position = self.position(r["frame"])
+            except ValueError as exc:
+                return self.err(r, str(exc))
         prev, first = self.anchor.get(clock), self.first_anchor.setdefault((clock, r["generation"]), r)
-        restart = self.restarts.get(clock, {})  # a restarted generation's first anchor is bounded against the restart
-        ref = restart if first is r and restart.get("generation") == r["generation"] else first
+        restart = self.restarts.get(clock, {})  # keep one drift reference for the entire restarted generation
+        ref = restart if restart.get("generation") == r["generation"] else first
         if ref is not r:
             span = (r["hostTicks"] - ref["hostTicks"]) * self.ns_per_tick * rate / 10**9
             if min(span, r["frame"] - ref["frame"]) < 0 or abs(r["frame"] - ref["frame"] - span) * 1000 > rate + span \
-                    or ref is first and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]):
+                    or first is not r and (r["frame"] <= prev["frame"] or r["hostTicks"] <= prev["hostTicks"]):
                 self.err(r, "anchors advance and stay within (rate + span)/1000 frames of "
                          + ("their clockRestart stamp" if ref is restart else "their generation's first"))
         self.anchor[clock] = r
@@ -398,7 +586,7 @@ class Trace:
             return
         if r["transport"] != self.gens.get(f"transport/{self.mus_id}"):
             self.err(r, "anchor transport generation is not current")
-        m, it, wrap = self.musical, r.get("loopIteration", 0), self.prev or {}
+        it, wrap = r.get("loopIteration", 0), self.prev or {}
         if (not m or m["transport"] != r["transport"]) and it:
             self.err(r, "a new transport generation (start, locate or restart) begins at loopIteration 0")
         if self.resume is not None and r["musicalTicks"] != self.resume:
@@ -407,7 +595,7 @@ class Trace:
         if m and m["transport"] == r["transport"]:
             if m["generation"] != r["generation"]:
                 self.err(r, "a sample clock restart must re-anchor with a new transport generation")
-            elif self.position(r["frame"])[0] != it or abs(self.position(r["frame"])[1] - r["musicalTicks"]) > 1:
+            elif position[0] != it or abs(position[1] - r["musicalTicks"]) > 1:
                 self.err(r, "musical position jumped without locate or loop wrap (one loopIteration per wrap)")
             elif it != m.get("loopIteration", 0):
                 if (wrap.get("type"), wrap.get("frame")) != ("loopWrap", r["frame"]) \
@@ -428,6 +616,8 @@ class Trace:
             self.err(r, f"reason {r['reason']} does not apply to {kind}")
         if ("musicalMap" in r) != (kind == "musicalMap") or ("meter" in r and kind != "musicalMap"):
             self.err(r, "only musicalMap generations carry a musicalMap payload (required) and a meter (optional)")
+            return
+        if kind == "musicalMap" and not self.check_map(r, r["musicalMap"]):
             return
         if ("nominalRate" in r and kind != "sampleClock") or (r["reason"] == "rateChange" and "nominalRate" not in r):
             self.err(r, "nominalRate belongs to sampleClock generations and is required on rateChange")
@@ -450,7 +640,6 @@ class Trace:
             if r["reason"] != "clockRestart":  # a locate or transport restart supersedes a pending restart resume
                 self.passes, self.resume, self.restart_snap = (self.passes[0] + 1, 0), None, ([], None)
         elif kind == "musicalMap":
-            self.check_map(r, r["musicalMap"])
             meter = r.get("meter", self.meter)
             if same(r["musicalMap"], self.map) and same(meter, self.meter):
                 self.err(r, "a musicalMap revision changes the tempo segments or the meter (absent: inherited)")
@@ -458,6 +647,15 @@ class Trace:
 
     def on_discontinuity(self, r):
         kind, clock = r["type"], r["sampleClock"]
+        resume = None
+        try:
+            if kind == "clockRestart" and "hostTicks" in r and "previousFrame" in r \
+                    and clock == self.primary and self.restart_snap[0]:
+                resume = self.under(self.restart_snap, self.position, r["previousFrame"])
+                resume = resume[0], checked_tick(rnd(resume[1]))
+            wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
+        except ValueError as exc:
+            return self.err(r, str(exc))
         self.discs.append(r)
         if r["generation"] != self.gens.get(f"sampleClock/{clock}"):
             self.err(r, "discontinuity generation is not current")
@@ -468,13 +666,19 @@ class Trace:
                 self.err(r, "clockRestart records the host ticks at which the new generation starts")
             else:
                 self.restarts[clock] = r
-                if "previousFrame" in r and clock == self.primary and self.restart_snap[0]:
-                    i, t = self.under(self.restart_snap, self.position, r["previousFrame"])
-                    self.resume, self.passes = rnd(t), (self.passes[0], self.passes[1] + i)  # it continues pass i
+                old = self.anchor.get(clock)  # the ending generation's latest anchor, if it has one
+                if "previousFrame" in r and old and old["generation"] == r["generation"] - 1 \
+                        and r["previousFrame"] < old["frame"]:
+                    self.err(r, "clockRestart previousFrame cannot precede the old generation's latest anchor")
+                if resume is not None:
+                    i, t = resume
+                    self.resume, self.passes = t, (self.passes[0], self.passes[1] + i)  # it continues pass i
             self.pending_restart.discard(clock)
             self.evidence.add("clockRestart")
-        wrap = kind == "loopWrap" and self.loop and self.musical_ok() and self.at(r["frame"])
-        if kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
+        m = self.musical
+        if kind == "loopWrap" and m and m["generation"] == r["generation"] and r["frame"] < m["frame"]:
+            self.err(r, "a stale loopWrap precedes the current musical anchor")
+        elif kind == "loopWrap" and not (wrap and wrap["frame"] == r["frame"] and wrap not in self.hist):
             self.err(r, "a loopWrap falls exactly at the loop end of the anchored pass")  # a virtual next-pass anchor
         direction = {"underrun": "playback", "overflow": "capture"}.get(kind)
         stream = self.streams.get(r.get("stream"))
@@ -491,12 +695,16 @@ class Trace:
         self.evidence.update({"locate": {"seek"}, "sourceLost": {"sourceLoss"}, "underrun": {"prefetch"}}.get(kind, set()))
 
     def on_trigger(self, r):
-        tid, action = r["triggerId"], self.actions.get(r["actionId"])
+        tid, action, req = r["triggerId"], self.actions.get(r["actionId"]), r.get("requires", {})
+        primary = f"sampleClock/{self.primary}"
+        if primary in req and req[primary] == self.gens.get(primary):  # a rejected trigger still bounds the horizon
+            self.horizon = max(self.horizon, r["horizonFrame"])
         if tid in self.triggers or action is None:
             self.err(r, "trigger ids are unique and reference a declared action")
             return
-        req = r["requires"]
         target = r.get("target", action["quantize"])
+        if not self.check_target(r, target):
+            return
         musical = target["timeBase"] == "musical" or action["late"]["policy"] == "nextBoundary"
         needed = [f"sampleClock/{self.primary}"] + ([f"transport/{self.mus_id}"] if musical else [])
         if any(k not in req for k in needed) or not any(k.startswith("context/") for k in req):
@@ -505,8 +713,6 @@ class Trace:
         if any(k.startswith("musicalMap/") for k in req):
             self.err(r, "musical map revisions re-resolve targets; they never make a trigger stale")
         stale = sorted({k.split("/")[0] for k, v in req.items() if self.gens.get(k) != v})
-        if req[f"sampleClock/{self.primary}"] == self.gens.get(f"sampleClock/{self.primary}"):
-            self.horizon = max(self.horizon, r["horizonFrame"])
         info = {"rec": r, "action": action, "stale": stale, "ready": self.state[r["actionId"]] == "ready",
                 "invalidated": False, "target": target, "expect": None}
         self.triggers[tid] = info
@@ -525,16 +731,24 @@ class Trace:
         if not self.musical_ok():
             self.err(r, "musical target without a current musical anchor")
             return None
-        i, t = self.position(origin)  # the target is an occurrence in the pass holding the origin
-        if "atTicks" in target:
-            choice = {"occ": (i, target["atTicks"]), "retro": False}
-        else:
-            grid = target["gridTicks"]
-            prev, nxt = (i, math.floor(t / grid) * grid), self.boundary((i, t), grid)
-            retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
-            choice = {"occ": nxt, "retro": False}
-            if prev != nxt and retro > 0 and origin - self.frame_of(prev) <= retro:
-                choice = {"occ": prev, "retro": True}
+        try:
+            try:
+                i = self.origin_pass(origin)  # the exact origin's pass, before rounding to a frame
+            except ValueError:  # only a zero-period loop's virtual pass past its wrap raises here
+                raise ValueError("a zero-period loop has no pass after its wrap frame") from None
+            if "atTicks" in target:
+                choice = {"occ": (i, target["atTicks"]), "retro": False}
+            else:
+                grid = target["gridTicks"]
+                retro = Fraction(action["late"].get("retroactiveMs", 0) * self.rate(), 1000)
+                prev = self.projected_previous(i, grid, origin)  # exact-frame matches stay eligible at zero
+                elapsed = origin - self.frame_of(prev) if prev is not None else None
+                if elapsed is not None and 0 <= elapsed <= retro:
+                    choice = {"occ": prev, "retro": elapsed > 0}
+                else:
+                    choice = {"occ": self.projected_next(i, grid, origin), "retro": False}
+        except ValueError as exc:
+            return self.err(r, str(exc))
         if self.loop and not self.loop["startTicks"] <= choice["occ"][1] <= self.loop["endTicks"]:
             self.err(r, "v1 resolves musical targets inside the active loop; loop end is the wrap frame")
         return choice
@@ -555,19 +769,24 @@ class Trace:
             if not self.musical_ok():
                 self.err(info["rec"], "nextBoundary needs a current musical anchor")
                 return "dropped", assigned, None, False
-            occ = self.boundary(self.position(horizon), grid)
-            last_pass = self.position(horizon)[0] + 1
-            while True:
-                if self.loop and not self.loop["startTicks"] <= occ[1] <= self.loop["endTicks"]:
-                    self.err(info["rec"], "nextBoundary target must resolve inside the active loop")
-                    return "dropped", assigned, None, True
-                frame = rnd(self.frame_of(occ))
-                if frame >= horizon:
-                    return "fired", frame, frame, True
-                if occ[0] > last_pass:
-                    self.err(info["rec"], "nextBoundary cannot resolve before the current horizon")
-                    return "dropped", assigned, None, True
-                occ = self.boundary(occ, grid, after=True)
+            try:
+                position = self.position(horizon)
+                occ = self.boundary(position, grid)
+                last_pass = position[0] + 1
+                while True:
+                    if self.loop and not self.loop["startTicks"] <= occ[1] <= self.loop["endTicks"]:
+                        self.err(info["rec"], "nextBoundary target must resolve inside the active loop")
+                        return "dropped", assigned, None, True
+                    frame = rnd(self.frame_of(occ))
+                    if frame >= horizon:
+                        return "fired", frame, frame, True
+                    if occ[0] > last_pass:
+                        self.err(info["rec"], "nextBoundary cannot resolve before the current horizon")
+                        return "dropped", assigned, None, True
+                    occ = self.boundary(occ, grid, after=True)
+            except ValueError as exc:
+                self.err(info["rec"], str(exc))
+                return "dropped", assigned, None, True
         return "dropped", assigned, None, musical
 
     def on_outcome(self, r):
@@ -655,6 +874,15 @@ class Trace:
         if r["hostTicks"] < self.restarts.get(self.primary, {}).get("hostTicks", 0):
             self.err(r, "capture timestamp predates clockRestart: v1 rejects it, never remapping it (§9.2)")
             return
+        has = "musicalTicks" in r
+        try:
+            if has:
+                checked_tick(r["musicalTicks"])
+            if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
+                return self.err(r, "capture musicalTicks map from frame through the current musical anchor, "
+                                "exactly when one is")
+        except ValueError as exc:
+            return self.err(r, str(exc))
         words = [int(w, 16) for w in r["ump"]]
         mt, ep, port = words[0] >> 28, r["endpointProtocol"], r["portProtocol"]
         if len(words) != UMP_WORDS[mt]:
@@ -675,9 +903,6 @@ class Trace:
         frame = self.frame_at_host(r["hostTicks"])
         if frame is None or rnd(frame) != r["frame"]:
             self.err(r, "capture frame must map from hostTicks through the current anchor")
-        has = "musicalTicks" in r
-        if has != self.musical_ok() or has and rnd(self.position(r["frame"])[1]) != r["musicalTicks"]:
-            self.err(r, "capture musicalTicks map from frame through the current musical anchor, exactly when one is")
         self.captures.append((r, words, (self.hist, self.map), self.passes))
         if r["effective"] == ep == "midi1" and mt in (2, 4):
             self.evidence.add("midi1InUmp")
@@ -720,8 +945,11 @@ class Trace:
                 self.err(r, "SMF export declares smfFormat and a division that divides 15360")
                 return
             groups = {(e[1][0] >> 24) & 0xF for e in events if e[1][0] >> 28 in GROUPED}
-            timing = [self.smf_frame(snap, c["frame"], TPQ // division, base) if "musicalTicks" in c else (None, None)
-                      for c, _, snap, base in events]
+            try:
+                timing = [self.smf_frame(snap, c["frame"], TPQ // division, base) if "musicalTicks" in c else (None, None)
+                          for c, _, snap, base in events]
+            except ValueError as exc:
+                return self.err(r, str(exc))
             first = min((p for p, _ in timing if p), default=None)
             for (c, words, _, _), (key, frame) in zip(events, timing):
                 mt = words[0] >> 28
@@ -808,6 +1036,8 @@ def check_example(doc, name, schema):
 MUTATIONS = [
     ("01", 4, {"to": 3}, "advance the current value by exactly one"),
     ("01", 8, {"musicalTicks": 46080}, "resumes at the last rendered tick 92160"),
+    ("01", "", {"timeline.0.frame": 144001, "timeline.0.musicalTicks": 92160},
+     "previousFrame cannot precede the old generation's latest anchor"),
     ("01", 7, {"hostTicks": 2490000001}, "their clockRestart stamp"),
     ("01", 9, {"streamSeq": 41}, "stream order is preserved within a stream"),
     ("01", 10, {"horizonFrame": 9000000}, None),  # a stale sample generation cannot advance the live horizon
@@ -825,6 +1055,10 @@ MUTATIONS = [
      "expected fired assignedFrame=359998"),  # a later anchor moves the boundary behind the horizon: step past loop end
     ("03", 3, {"type": "sampleJump"}, "loop iteration must follow a loopWrap"),
     ("03", 3, {"frame": 191999}, "a loopWrap falls exactly at the loop end"),
+    ("03", 9, {"kind": "discontinuity", "type": "loopWrap", "sampleClock": "smp.main", "generation": 1, "stream": None,
+               "ump": None, "hostTicks": None, "musicalTicks": None, "endpointProtocol": None, "portProtocol": None,
+               "translatedBy": None, "effective": None, "note": None},
+     "a stale loopWrap precedes the current musical anchor"),  # the capture's frame 191000, before the pass-1 anchor
     ("03", 8, {"assignedFrame": 384000, "frame": 384000}, "expected fired assignedFrame=288000"),
     ("03", 9, {"musicalTicks": 121600}, "capture musicalTicks map from frame"),
     ("03", 12, {"reason": "clockRestart"}, "forces one transport bump with reason clockRestart"),

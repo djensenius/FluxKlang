@@ -429,7 +429,7 @@ extension HostAuthorityTests {
         func permissionIsComparedByteForByte(live: PermissionFingerprint) throws {
             // Canonically equal to `live` under `String ==`, but different UTF-8 bytes.
             let granted = PermissionFingerprint(rawValue: live.rawValue.precomposedStringWithCanonicalMapping)
-            #expect(granted == live && !granted.matchesExactly(live) && granted.isWellFormedForActivation)
+            #expect(granted.rawValue == live.rawValue && granted != live && granted.isWellFormedForActivation)
             let expected: ActivationRejection = live.isWellFormedForActivation ? .permissionChanged : .permissionDenied
             var host = try Bench(permission: granted)
             try host.reviewing(request(permission: granted))
