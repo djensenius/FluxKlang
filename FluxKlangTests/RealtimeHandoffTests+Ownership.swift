@@ -32,16 +32,62 @@ private func event(_ payload: KernelEventPayload, scope: UInt32 = 0) -> KernelEv
     KernelEvent(frame: 0, scope: scope, sequence: 0, payload: payload)
 }
 
-/// Shared state for the `Thread`-based publication test: a plain, non-atomic payload published by `request`.
+/// Every stress spin gives up at this point (well inside the 1-minute `timeLimit`), recording a timeout.
+private func stressDeadline() -> ContinuousClock.Instant {
+    .now + .seconds(25)
+}
+
+/// Bounded spin: `true` once `condition` holds; `false`, after counting a timeout, once `deadline` passes.
+private func spin(until deadline: ContinuousClock.Instant, timeouts: borrowing Atomic<Int>,
+                  _ condition: () -> Bool) -> Bool {
+    var spins = 0
+    while !condition() {
+        spins &+= 1
+        if spins & 1_023 == 0, ContinuousClock.now >= deadline {
+            timeouts.add(1, ordering: .relaxed)
+            return false
+        }
+    }
+    return true
+}
+
+/// Start barrier and completion signal for dedicated stress `Thread`s.
+private final class ThreadGroup: @unchecked Sendable {
+    let arrived = Atomic<Int>(0)
+    let timeouts = Atomic<Int>(0)
+    let finished = DispatchSemaphore(value: 0)
+}
+
+/// Runs each body on its own `Thread` behind a start barrier and waits, bounded, for all of them. Returns `false`
+/// if the barrier or the join timed out. No task-runtime synchronisation is involved.
+private func runOnThreads(deadline: ContinuousClock.Instant, _ bodies: [@Sendable () -> Void]) -> Bool {
+    let group = ThreadGroup()
+    for body in bodies {
+        Thread {
+            group.arrived.add(1, ordering: .acquiringAndReleasing)
+            if spin(until: deadline, timeouts: group.timeouts, {
+                group.arrived.load(ordering: .acquiring) >= bodies.count
+            }) {
+                body()
+            }
+            group.finished.signal()
+        }.start()
+    }
+    let joinDeadline = DispatchTime.now() + .seconds(30)
+    var joined = 0
+    for _ in bodies where group.finished.wait(timeout: joinDeadline) == .success { joined += 1 }
+    return joined == bodies.count && group.timeouts.load(ordering: .acquiring) == 0
+}
+
+/// Shared state for the publication test: a plain, non-atomic payload published by `request`.
 private final class Publication: @unchecked Sendable {
     let flags: SafetyFlags
     let payload = UnsafeMutablePointer<Int>.allocate(capacity: 1)
     /// Taker → requester only, so it adds no happens-before edge from the requester's write to the taker's read.
     let acknowledged = Atomic<Int>(0)
-    /// Written by the taker thread only; read after both threads have finished.
+    let timeouts = Atomic<Int>(0)
+    /// Written by the taker thread only; read after the join.
     var mismatches = 0
-    let requesterDone = DispatchSemaphore(value: 0)
-    let takerDone = DispatchSemaphore(value: 0)
 
     init(flags: SafetyFlags) {
         self.flags = flags
@@ -51,6 +97,74 @@ private final class Publication: @unchecked Sendable {
     deinit {
         payload.deinitialize(count: 1)
         payload.deallocate()
+    }
+}
+
+/// Shared state for the concurrent-requests test. Requesters and the taker hand off through these counters only.
+private final class Contention: @unchecked Sendable {
+    let flags: SafetyFlags
+    let rounds: Int
+    let scopes = 8
+    let requesters = 4
+    /// Round the requesters may run; the taker advances it after each round's final sweep.
+    let round = Atomic<Int>(0)
+    /// Requester round completions (cumulative).
+    let completed = Atomic<Int>(0)
+    /// Mid-round handshakes raised by requesters (cumulative, RMW only).
+    let signalled = Atomic<Int>(0)
+    /// The `signalled` value the taker loaded before its most recent completed sweep.
+    let acknowledged = Atomic<Int>(0)
+    let timeouts = Atomic<Int>(0)
+    /// Written by the taker thread only; read after the join.
+    var lost = 0
+    var overlapped = 0
+
+    init(flags: SafetyFlags, rounds: Int) {
+        self.flags = flags
+        self.rounds = rounds
+    }
+
+    /// Requests `flag` on this requester's 4 scopes each round: 2 before a handshake with the taker, 2 after.
+    func requester(_ index: Int, deadline: ContinuousClock.Instant) {
+        let flag = SafetyFlag.allCases[index % SafetyFlag.allCases.count]
+        let mine = (0..<scopes).filter { $0 % (requesters / 2) == index / 2 }.map { UInt32($0) }
+        for current in 0..<rounds {
+            guard spin(until: deadline, timeouts: timeouts, { round.load(ordering: .acquiring) >= current }) else {
+                return
+            }
+            for scope in mine.prefix(2) { _ = flags.request(flag, scope: scope) }
+            // The taker's next sweep starts after an acquiring load of this value, so it must see both requests.
+            let signal = signalled.add(1, ordering: .releasing).newValue
+            guard spin(until: deadline, timeouts: timeouts, {
+                acknowledged.load(ordering: .acquiring) >= signal
+            }) else { return }
+            for scope in mine.dropFirst(2) { _ = flags.request(flag, scope: scope) }
+            completed.add(1, ordering: .releasing)
+        }
+    }
+
+    /// Sweeps every scope until all requesters finish the round, acknowledging handshakes, then sweeps once more.
+    func taker(deadline: ContinuousClock.Instant) {
+        for current in 0..<rounds {
+            var union = [SafetyFlagSet](repeating: [], count: scopes)
+            var sweeps = 0
+            while completed.load(ordering: .acquiring) < requesters * (current + 1) {
+                let seen = signalled.load(ordering: .acquiring)
+                sweep(flags, into: &union)
+                acknowledged.store(seen, ordering: .releasing)
+                sweeps &+= 1
+                if sweeps & 1_023 == 0, ContinuousClock.now >= deadline {
+                    timeouts.add(1, ordering: .relaxed)
+                    return
+                }
+            }
+            // Requests published before a handshake happen-before the acknowledging sweep, which ran before the
+            // round completed; so this union is non-empty in every round unless a request was lost.
+            if union.contains(where: { !$0.isEmpty }) { overlapped += 1 }
+            sweep(flags, into: &union)
+            lost += union.filter { $0 != [.panic, .allNotesOff] }.count
+            round.store(current + 1, ordering: .releasing)
+        }
     }
 }
 
@@ -301,52 +415,21 @@ extension RealtimeHandoffTests {
     }
 
     struct OwnershipStress {
-        /// Requesters and one spinning taker run each round concurrently; every (scope, flag) pair is requested
-        /// exactly once per round by one requester, so a lost request is never repaired by a later one.
+        /// Four requester `Thread`s and one spinning taker `Thread` run each round concurrently. Every
+        /// (scope, flag) pair is requested exactly once per round by one requester, so a later request never
+        /// repairs a lost one. Each requester also hands off mid-round, so overlap is guaranteed, not left to
+        /// scheduling.
         @Test(.timeLimit(.minutes(1)))
-        func stressConcurrentSafetyRequestsAreNeverLost() async throws {
-            let (rounds, scopes, requesters) = (2_000, 8, 4)
-            let flags = try #require(safetyFlags(scopes: scopes))
-            let round = Atomic<Int>(0)
-            let requested = Atomic<Int>(0)
-            let (lost, overlapped) = await withTaskGroup(of: (Int, Int).self) { group in
-                for requester in 0..<requesters {
-                    group.addTask {
-                        let flag = SafetyFlag.allCases[requester % SafetyFlag.allCases.count]
-                        for current in 0..<rounds {
-                            while round.load(ordering: .acquiring) < current { await Task.yield() }
-                            for scope in 0..<scopes where scope % (requesters / 2) == requester / 2 {
-                                _ = flags.request(flag, scope: UInt32(scope))
-                            }
-                            requested.add(1, ordering: .acquiringAndReleasing)
-                        }
-                        return (0, 0)
-                    }
-                }
-                group.addTask {
-                    var (lost, overlapped) = (0, 0)
-                    for current in 0..<rounds {
-                        var union = [SafetyFlagSet](repeating: [], count: scopes)
-                        var sweeps = 0
-                        while requested.load(ordering: .acquiring) < requesters * (current + 1) {
-                            sweep(flags, into: &union)
-                            sweeps += 1
-                            if sweeps % 64 == 0 { await Task.yield() }
-                        }
-                        // A round overlapped when a take made while requesters were still running found a request.
-                        if union.contains(where: { !$0.isEmpty }) { overlapped += 1 }
-                        sweep(flags, into: &union)
-                        lost += union.filter { $0 != [.panic, .allNotesOff] }.count
-                        round.store(current + 1, ordering: .releasing)
-                    }
-                    return (lost, overlapped)
-                }
-                var total = (0, 0)
-                for await part in group { total = (total.0 + part.0, total.1 + part.1) }
-                return total
-            }
-            #expect(lost == 0)
-            #expect(overlapped > 0)
+        func stressConcurrentSafetyRequestsAreNeverLost() throws {
+            let state = Contention(flags: try #require(safetyFlags(scopes: 8)), rounds: 2_000)
+            let deadline = stressDeadline()
+            let bodies: [@Sendable () -> Void] = (0..<state.requesters).map { index in
+                { state.requester(index, deadline: deadline) }
+            } + [{ state.taker(deadline: deadline) }]
+            #expect(runOnThreads(deadline: deadline, bodies), "a thread timed out at the barrier or join")
+            #expect(state.timeouts.load(ordering: .acquiring) == 0, "a bounded wait timed out")
+            #expect(state.lost == 0)
+            #expect(state.overlapped == state.rounds)
         }
 
         /// `request` (release) publishes the requester's earlier plain writes to the thread whose `take` (acquire)
@@ -358,24 +441,27 @@ extension RealtimeHandoffTests {
         func stressRequestPublishesPriorWritesToTaker() throws {
             let rounds = 20_000
             let state = Publication(flags: try #require(safetyFlags(scopes: 1)))
-            Thread {
+            let deadline = stressDeadline()
+            let requester: @Sendable () -> Void = {
                 for current in 1...rounds {
                     state.payload.pointee = current
                     _ = state.flags.request(.panic, scope: 0)
-                    while state.acknowledged.load(ordering: .acquiring) < current {}
+                    guard spin(until: deadline, timeouts: state.timeouts, {
+                        state.acknowledged.load(ordering: .acquiring) >= current
+                    }) else { return }
                 }
-                state.requesterDone.signal()
-            }.start()
-            Thread {
+            }
+            let taker: @Sendable () -> Void = {
                 for current in 1...rounds {
-                    while state.flags.take(scope: 0).isEmpty {}
+                    guard spin(until: deadline, timeouts: state.timeouts, {
+                        !state.flags.take(scope: 0).isEmpty
+                    }) else { return }
                     if state.payload.pointee != current { state.mismatches += 1 }
                     state.acknowledged.store(current, ordering: .releasing)
                 }
-                state.takerDone.signal()
-            }.start()
-            state.requesterDone.wait()
-            state.takerDone.wait()
+            }
+            #expect(runOnThreads(deadline: deadline, [requester, taker]), "a thread timed out at the barrier or join")
+            #expect(state.timeouts.load(ordering: .acquiring) == 0, "a bounded wait timed out")
             #expect(state.mismatches == 0)
         }
     }
