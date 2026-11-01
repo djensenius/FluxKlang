@@ -78,16 +78,7 @@ struct ReadinessFixture: Sendable {
     }
 
     /// The observable state, for comparing fixtures and proving refusals changed nothing.
-    var snapshot: Snapshot {
-        Snapshot(
-            states: readiness.states,
-            reasons: readiness.reasons,
-            readyEntries: readiness.states.keys.reduce(into: [:]) { $0[$1] = readiness.readyEntry($1) },
-            current: readiness.states.keys.filter { readiness.isCurrent($0, ledger: ledger) },
-            generations: ledger.current,
-            pendingRestart: ledger.pendingRestart
-        )
-    }
+    var snapshot: Snapshot { Snapshot(self) }
 
     struct Snapshot: Hashable, Sendable {
         let states: [ActionID: ReadinessState]
@@ -96,17 +87,26 @@ struct ReadinessFixture: Sendable {
         let current: Set<ActionID>
         let generations: [GenerationKey: Generation]
         let pendingRestart: Generation?
+        /// For every ledger counter, the actions a change of that counter would
+        /// invalidate. Two stores with the same states can depend on different
+        /// counters; this tells them apart. Each key is probed on its own copy, so
+        /// the fixture is not changed. The ledger has a fixed set of counters (five
+        /// in every `make` state), so this costs one pass over the store per counter.
+        let invalidatedBy: [GenerationKey: [ActionID]]
 
-        init(
-            states: [ActionID: ReadinessState], reasons: [ActionID: ReadinessReason], readyEntries: [ActionID: Int],
-            current: some Sequence<ActionID>, generations: [GenerationKey: Generation], pendingRestart: Generation?
-        ) {
-            self.states = states
-            self.reasons = reasons
-            self.readyEntries = readyEntries
-            self.current = Set(current)
-            self.generations = generations
-            self.pendingRestart = pendingRestart
+        init(_ fixture: ReadinessFixture) {
+            let readiness = fixture.readiness
+            let ledger = fixture.ledger
+            states = readiness.states
+            reasons = readiness.reasons
+            readyEntries = readiness.states.keys.reduce(into: [:]) { $0[$1] = readiness.readyEntry($1) }
+            current = Set(readiness.states.keys.filter { readiness.isCurrent($0, ledger: ledger) })
+            generations = ledger.current
+            pendingRestart = ledger.pendingRestart
+            invalidatedBy = ledger.current.keys.reduce(into: [:]) { result, key in
+                var probe = readiness
+                result[key] = probe.generationChanged(key)
+            }
         }
     }
 

@@ -121,6 +121,31 @@ extension ContractFixtureTests {
             #expect(fixture.requirements(for: action).contains(.init(key: source, generation: generation)))
         }
 
+        @Test func snapshotsDistinguishDependencyDrivenInvalidation() throws {
+            func prepared(against key: GenerationKey) throws -> ReadinessFixture {
+                var fixture = try ReadinessFixture.make(.missing)
+                let requirement = try #require(fixture.requirements(for: action).first { $0.key == key })
+                var fake = try processor()
+                try fake.prepare(action, policy: nil, against: [requirement], in: &fixture)
+                return fixture
+            }
+            var onSource = try prepared(against: ReadinessFixture.sourceKey)
+            var onContext = try prepared(against: ReadinessFixture.contextKey)
+            #expect(onSource.readiness.state(action) == .ready && onContext.readiness.state(action) == .ready)
+            let sourceSnapshot = onSource.snapshot
+            #expect(sourceSnapshot != onContext.snapshot)
+            // Taking a snapshot probes copies only.
+            #expect(onSource.snapshot == sourceSnapshot && onSource.readiness.state(action) == .ready)
+
+            try onSource.ledger.bump(ReadinessFixture.sourceKey, reason: .sourceLost)
+            try onContext.ledger.bump(ReadinessFixture.sourceKey, reason: .sourceLost)
+            #expect(onSource.readiness.generationChanged(ReadinessFixture.sourceKey) == [action])
+            #expect(onContext.readiness.generationChanged(ReadinessFixture.sourceKey).isEmpty)
+            #expect(onSource.readiness.state(action) == .invalidated)
+            #expect(onContext.readiness.state(action) == .ready)
+            #expect(onContext.readiness.isCurrent(action, ledger: onContext.ledger))
+        }
+
         @Test func preparationAgainstStaleGenerationIsRefused() throws {
             var fixture = try ReadinessFixture.make(.missing)
             let captured = fixture.requirements(for: action)
