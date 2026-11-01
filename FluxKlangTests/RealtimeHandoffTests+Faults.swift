@@ -438,3 +438,60 @@ extension RealtimeHandoffTests {
         }
     }
 }
+
+/// The cap race, kept outside the main suite body (`type_body_length`).
+extension RealtimeHandoffTests.FaultLatching {
+    /// Two raisers both pass the cap check at `countCap - 1` before either adds (forced through the admission
+    /// seam, which runs `raise`'s own check and add): the raw count overshoots by one, reads clamp to the cap,
+    /// `kind`/`firstFrame` stay sticky, the scope stays latched and fails closed, and an observation made below
+    /// the cap is refused. Admissions held across a successful acknowledge count in the next generation.
+    @Test func twoRaisersAdmittedBelowTheCapBothCount() throws {
+        let cap = FaultLatch.countCap
+        let latch = try FaultLatch(scopes: Self.scopes)
+        Self.seed(latch, generation: 9, count: cap - 1, claim: 9, kind: .sysexAborted, frame: .max)
+        let preCap = try #require(latch.observe(Self.scope))
+        #expect(preCap.isAcknowledgeable && preCap.record.count == cap - 1)
+        guard let first = latch.admitRaiseForTesting(Self.scope, .noPlan, frame: 1),
+              let second = latch.admitRaiseForTesting(Self.scope, .staleClock, frame: 2) else {
+            Issue.record("both raisers must pass the cap check at countCap - 1")
+            return
+        }
+        let firstAdded = latch.finishRaiseForTesting(first)
+        #expect(firstAdded)
+        let atCap = try #require(latch.observe(Self.scope))
+        #expect(!atCap.isAcknowledgeable && atCap.record.count == cap)
+        #expect(latch.raise(Self.scope, .noPlan, frame: 3) == .ok) // refused by the cap check: no add
+        let secondAdded = latch.finishRaiseForTesting(second)
+        #expect(secondAdded)
+        #expect(latch.raise(Self.scope, .noPlan, frame: 4) == .ok)
+        if latch.admitRaiseForTesting(Self.scope, .noPlan, frame: 5) != nil {
+            Issue.record("the cap check must refuse an admission past the cap")
+        }
+        let saturated = FaultRecord(scope: Self.scope, kind: .sysexAborted, count: cap, firstFrame: .max)
+        let overshot = FaultLatch.TestState(generation: 9, count: cap + 1, claimGeneration: 9)
+        #expect(latch.stateForTesting(Self.scope) == overshot)
+        #expect(Self.pendingRecords(latch) == [saturated])
+        #expect(latch.acknowledge(preCap) == nil)
+        #expect(latch.acknowledge(atCap) == nil)
+        #expect(latch.observe(Self.scope)?.record == saturated)
+        #expect(Self.acknowledge(latch, Self.scope) == nil)
+        #expect(latch.isLatched(Self.scope))
+        #expect(latch.stateForTesting(Self.scope) == overshot)
+        Self.expectInvariant(latch)
+
+        Self.seed(latch, generation: 9, count: cap - 1, claim: 9, kind: .sysexAborted, frame: .max)
+        let below = try #require(latch.observe(Self.scope))
+        guard let late = latch.admitRaiseForTesting(Self.scope, .noPlan, frame: 1),
+              let later = latch.admitRaiseForTesting(Self.scope, .staleClock, frame: 2) else {
+            Issue.record("both raisers must pass the cap check at countCap - 1")
+            return
+        }
+        #expect(latch.acknowledge(below) == below.record)
+        let lateAdded = latch.finishRaiseForTesting(late)
+        let laterAdded = latch.finishRaiseForTesting(later)
+        #expect(lateAdded && laterAdded)
+        #expect(latch.stateForTesting(Self.scope) == .init(generation: 10, count: 2, claimGeneration: 10))
+        #expect(Self.pendingRecords(latch) == [.init(scope: Self.scope, kind: .noPlan, count: 2, firstFrame: 1)])
+        Self.expectInvariant(latch)
+    }
+}

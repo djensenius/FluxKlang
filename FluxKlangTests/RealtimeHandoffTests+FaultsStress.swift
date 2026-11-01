@@ -19,6 +19,8 @@ private final class StressState: Sendable {
     /// Bounded worker waits or loops that gave up; any is a test failure.
     let timedOut = Atomic<Int>(0)
     let finishedRaisers = Atomic<Int>(0)
+    /// Raisers admitted below the cap (cap-race test); each adds only once both are admitted.
+    let admitted = Atomic<Int>(0)
     /// Acknowledge handshake: the gate an acknowledge opens once it returns a record; raisers wait for it after
     /// their first batch.
     let released = Atomic<Bool>(false)
@@ -159,6 +161,41 @@ extension RealtimeHandoffTests {
         /// per-scope epoch refuses whichever observation went stale.
         @Test(.timeLimit(.minutes(1))) func twoAcknowledgersNeverDuplicateOrLose() throws {
             try Self.raiseWhileAcknowledging([FaultScope(handoff: 4, target: 0)], acknowledgers: 2)
+        }
+
+        /// The cap race with real threads (TSan): each of two raisers runs `raise`'s cap check at `countCap - 1`
+        /// through the admission seam, waits (bounded, cancellable) until both are admitted, then both add
+        /// concurrently. Waiting on admissions, not on timing, is what forces both checks before either add.
+        @Test(.timeLimit(.minutes(1))) func admittedRaisersOvershootTheCapTogether() throws {
+            let scope = FaultScope(handoff: 6, target: 0)
+            let latch = try FaultLatch(scopes: [scope])
+            let cap = FaultLatch.countCap
+            let below = FaultLatch.TestState(generation: 4, count: cap - 1, claimGeneration: 4)
+            #expect(latch.seedForTesting(scope, below, kind: .retireBacklog, frame: -1))
+            let preCap = try #require(latch.observe(scope))
+            let state = StressState()
+            let ran = Self.run(threads: 2, state) { thread in
+                guard let admitted = latch.admitRaiseForTesting(scope, .noPlan, frame: Int64(thread)) else {
+                    state.refused.add(1, ordering: .relaxed)
+                    state.cancelled.store(true, ordering: .relaxed)
+                    return
+                }
+                state.admitted.add(1, ordering: .releasing)
+                guard Self.spin(state, until: { state.admitted.load(ordering: .acquiring) == 2 }) else { return }
+                if !latch.finishRaiseForTesting(admitted) { state.refused.add(1, ordering: .relaxed) }
+                state.finishedRaisers.add(1, ordering: .releasing)
+            }
+            #expect(state.refused.load(ordering: .relaxed) == 0)
+            guard ran else { return }
+            #expect(state.finishedRaisers.load(ordering: .acquiring) == 2)
+            #expect(latch.stateForTesting(scope) == .init(generation: 4, count: cap + 1, claimGeneration: 4))
+            var records: [FaultRecord] = []
+            _ = latch.pending { records.append($0) }
+            #expect(records == [FaultRecord(scope: scope, kind: .retireBacklog, count: cap, firstFrame: -1)])
+            #expect(latch.acknowledge(preCap) == nil)
+            #expect(FaultLatching.acknowledge(latch, scope) == nil)
+            #expect(latch.isLatched(scope))
+            FaultLatching.expectInvariant(latch, [scope])
         }
 
         /// A delayed control call across the wrap: while the control lock is held, an `acknowledge` of an

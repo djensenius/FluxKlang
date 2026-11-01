@@ -106,7 +106,8 @@ struct FaultObservation: Sendable {
 /// under a continuous stream of raises an acknowledge may keep being refused, which fails safe (still latched).
 ///
 /// Saturation. Raisers that pass the cap check concurrently can overshoot `countCap` by at most the number of
-/// concurrent raisers, far below the 2^39 of headroom, so `count` never carries into `generation`.
+/// concurrent raisers, far below the 2^39 of headroom, so `count` never carries into `generation`. Reads clamp to
+/// `countCap`, and a saturated scope stays latched and fails closed. `admitRaiseForTesting` forces that race.
 ///
 /// Ordering: acquire/release. Each successful write to `tally` reads the one before it (RMW), and readers
 /// acquire `tally` before `first`, which is enough for every argument above. Relaxed is unsound because it
@@ -199,8 +200,19 @@ final class FaultLatch: @unchecked Sendable {
             }
             return .refused(.slotOutOfRange)
         }
+        if admits(index) { count(index, kind, frame) }
+        return .ok
+    }
+
+    /// `raise`'s cap check: one acquire load. A raise admitted here may be preempted before `count`, so raisers
+    /// admitted together just below the cap all add (see Saturation).
+    private func admits(_ index: Int) -> Bool {
+        Bits.count((tallies + index).pointee.load(ordering: .acquiring)) < Bits.countCap
+    }
+
+    /// `raise`'s transition: one wrapping add; the first raiser of the generation publishes `first`.
+    private func count(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
         let tally = tallies + index
-        guard Bits.count(tally.pointee.load(ordering: .acquiring)) < Bits.countCap else { return .ok }
         let old = tally.pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
         if Bits.count(old) == 0 {
             let meta = Bits.generation(old) &<< 8 | UInt64(kind.rawValue)
@@ -208,7 +220,31 @@ final class FaultLatch: @unchecked Sendable {
                 WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
                 ordering: .releasing)
         }
-        return .ok
+    }
+
+    /// Test-only: one `raise` stopped between its cap check and its add, as a raiser preempted there. It is
+    /// noncopyable, so it adds at most once, and it holds its latch strongly.
+    struct AdmittedRaiseForTesting: ~Copyable {
+        fileprivate let owner: FaultLatch
+        fileprivate let index: Int
+        fileprivate let kind: FaultKind
+        fileprivate let frame: Int64
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): runs `raise`'s own cap check and stops before the
+    /// add; `nil` when the scope is unprepared or the check refuses (count at the cap). Every admission held
+    /// open is one stalled raiser, so hold only a few (each may overshoot the cap by one).
+    func admitRaiseForTesting(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> AdmittedRaiseForTesting? {
+        guard let index = index(of: scope), admits(index) else { return nil }
+        return AdmittedRaiseForTesting(owner: self, index: index, kind: kind, frame: frame)
+    }
+
+    /// Test-only (X1 denies `ForTesting(` outside test targets): completes an admitted raise with `raise`'s own
+    /// transition, without re-checking the cap; `false` (nothing changes) for another latch's admission.
+    func finishRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> Bool {
+        guard admitted.owner === self else { return false }
+        count(admitted.index, admitted.kind, admitted.frame)
+        return true
     }
 
     /// Render; one 64-bit load. `true` while the scope holds an unacknowledged fault.
