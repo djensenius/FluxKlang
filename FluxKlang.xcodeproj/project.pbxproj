@@ -153,6 +153,7 @@
 		46DE9CCE5AA5F6703E8B3CDE /* AssistantLiveWingAppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9769A67EE74D4DD298756E /* AssistantLiveWingAppModelTests.swift */; };
 		47220E65AC62ACA10FEFD370 /* LaunchControlXLAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18B692495100D60BFAD2DE14 /* LaunchControlXLAppModel.swift */; };
 		47C91CDDFE59BCC4B5FAE50C /* SpeakersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A9CE21781DB88EDDE90462D /* SpeakersView.swift */; };
+		47F848A6AB908A4A50888247 /* TelemetrySlots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 582533B0649437667E8E9E32 /* TelemetrySlots.swift */; };
 		4864971B2EF4B106CE1862DE /* AssistantActionController+Evidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6891DBEAEBFD62148A4A6CF /* AssistantActionController+Evidence.swift */; };
 		4872E0B8B0A6728872B6DF06 /* StudioApplyStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D265E6C5A7FF29C75D0FB81 /* StudioApplyStatusView.swift */; };
 		48E63419996AA48D1D52CD67 /* AssistantRoutingOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE6D932F7A7AAE8C0CB51834 /* AssistantRoutingOwnershipTests.swift */; };
@@ -256,6 +257,7 @@
 		7951EBDF9B91AE079389E0C0 /* TemporaryMoveFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345578080CB2BA19B233E700 /* TemporaryMoveFlowView.swift */; };
 		79916F69904E5D32DDAC9931 /* GraphDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78EC4ADA6D810AF5978AB977 /* GraphDocument.swift */; };
 		79A5D3DA42833E09CD5D2B6D /* ParameterCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E0A9B5E9A265C2BDA42E967 /* ParameterCatalog.swift */; };
+		7A269A2E3D64469C61712637 /* TelemetrySlots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 582533B0649437667E8E9E32 /* TelemetrySlots.swift */; };
 		7A513AA35FC620E41AE0CD3B /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
 		7A7532554BFE2A9589FFB70E /* ProjectLegacyContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 235EEA2B57B91948522C1D87 /* ProjectLegacyContractTests.swift */; };
 		7B331AB3CBAE8B518F042818 /* AssistantLiveWingContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFCE8AA440C3D6E84D343A6 /* AssistantLiveWingContextTests.swift */; };
@@ -372,6 +374,7 @@
 		B263FCB1BE3C611F0B30D67D /* AssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42FC270A0061C38573676C43 /* AssistantView.swift */; };
 		B33244B398322808F6F85F79 /* WingSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282FD5D129226FE552419869 /* WingSource.swift */; };
 		B34446EBA891946BBB4F8CD4 /* WireLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA94B70ED6A5B914A576414 /* WireLayer.swift */; };
+		B3C9FC4A40E2303EBE977340 /* RealtimeHandoffTests+Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43423ACC8B50310637A8E654 /* RealtimeHandoffTests+Telemetry.swift */; };
 		B3DD2228953D9230648F7F6E /* AppIconPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */; };
 		B3F9AD6C712F851B0FF2B1F4 /* ProjectGraphLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A720B12AF7724D7C8CC0209 /* ProjectGraphLimits.swift */; };
 		B4A918A73CB13BA6FFD371D0 /* HardwareServiceFactories.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22EF50295E4CDE232D1A10A /* HardwareServiceFactories.swift */; };
@@ -626,6 +629,7 @@
 		415B289F973D0827B92F2CE1 /* DiscoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryView.swift; sourceTree = "<group>"; };
 		42E2ABF281A69773388F2300 /* AssistantConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantConversation.swift; sourceTree = "<group>"; };
 		42FC270A0061C38573676C43 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
+		43423ACC8B50310637A8E654 /* RealtimeHandoffTests+Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+Telemetry.swift"; sourceTree = "<group>"; };
 		435B3823839F80D106B8B028 /* StudioCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioCanvasView.swift; sourceTree = "<group>"; };
 		437C08E45AF09839441CF3D5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		443BC949EB9A1CCE391A5D33 /* StudioSignalCompiler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSignalCompiler.swift; sourceTree = "<group>"; };
@@ -648,6 +652,7 @@
 		567409B5C0186F971324C844 /* PatchbayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchbayView.swift; sourceTree = "<group>"; };
 		568F07F0F058B49FFCE6D840 /* PresetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsView.swift; sourceTree = "<group>"; };
 		581CD8ACF8D35B9779227576 /* InputPatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputPatchView.swift; sourceTree = "<group>"; };
+		582533B0649437667E8E9E32 /* TelemetrySlots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetrySlots.swift; sourceTree = "<group>"; };
 		5932A8319C2B122F05FFC3C1 /* launch-control-xl.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "launch-control-xl.json"; sourceTree = "<group>"; };
 		5A720B12AF7724D7C8CC0209 /* ProjectGraphLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectGraphLimits.swift; sourceTree = "<group>"; };
 		5B0C58809B54E7219DC7642B /* SpatialRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialRouting.swift; sourceTree = "<group>"; };
@@ -1462,6 +1467,7 @@
 				235EEA2B57B91948522C1D87 /* ProjectLegacyContractTests.swift */,
 				4AE3F327090227B3E98CC91C /* RealtimeHandoffTests.swift */,
 				E20026C83A34744D71BC2C74 /* RealtimeHandoffTests+Policy.swift */,
+				43423ACC8B50310637A8E654 /* RealtimeHandoffTests+Telemetry.swift */,
 				A33C53C69E74C297B6FB6160 /* SiriAppIntentsTests.swift */,
 				BDEC454C8E9B9862280CC236 /* SpatialTests.swift */,
 				312B315E1B2F14F2988BD85B /* StartupHardwareIsolationTests.swift */,
@@ -1489,6 +1495,7 @@
 			children = (
 				C8F2D81E0B10679454625837 /* HandoffPolicy.swift */,
 				FED4989129C837DDD3DC00DD /* KernelStatus.swift */,
+				582533B0649437667E8E9E32 /* TelemetrySlots.swift */,
 			);
 			path = Memory;
 			sourceTree = "<group>";
@@ -1892,6 +1899,7 @@
 				F2140B7BB6B895C00439C50F /* StudioSignalCompiler.swift in Sources */,
 				40165757D9D23BC0248D9678 /* StudioView.swift in Sources */,
 				AD4F2CFE951DB3FE1B23E4AF /* StudioWiringAdvisor.swift in Sources */,
+				7A269A2E3D64469C61712637 /* TelemetrySlots.swift in Sources */,
 				A80A5C5D209F6AD2FD2B52D1 /* TemporaryDeviceMove.swift in Sources */,
 				F39B3DF5E145B31B1F34D2FE /* TemporaryMoveAppModel.swift in Sources */,
 				4A69ECB35E8FC7F5617B79DF /* TemporaryMoveFlowView.swift in Sources */,
@@ -2122,6 +2130,7 @@
 				608BF55953884619BAE7872D /* StudioSignalCompiler.swift in Sources */,
 				EC91702D6E40FED2005888E3 /* StudioView.swift in Sources */,
 				0DDF495324967CAAF39F6A79 /* StudioWiringAdvisor.swift in Sources */,
+				47F848A6AB908A4A50888247 /* TelemetrySlots.swift in Sources */,
 				4B65799C2223FCC2301C66B0 /* TemporaryDeviceMove.swift in Sources */,
 				BF39C3B857D81B9A632A1DAF /* TemporaryMoveAppModel.swift in Sources */,
 				7951EBDF9B91AE079389E0C0 /* TemporaryMoveFlowView.swift in Sources */,
@@ -2223,6 +2232,7 @@
 				739519B3886822B88E6B7230 /* ProjectContractTests.swift in Sources */,
 				7A7532554BFE2A9589FFB70E /* ProjectLegacyContractTests.swift in Sources */,
 				CF6BD616A5F3CA639AC55A14 /* RealtimeHandoffTests+Policy.swift in Sources */,
+				B3C9FC4A40E2303EBE977340 /* RealtimeHandoffTests+Telemetry.swift in Sources */,
 				89A7F1AAE828BCFE3BAAA4A3 /* RealtimeHandoffTests.swift in Sources */,
 				1C79FC5F6E4018C85424A1FF /* SiriAppIntentsTests.swift in Sources */,
 				5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */,
