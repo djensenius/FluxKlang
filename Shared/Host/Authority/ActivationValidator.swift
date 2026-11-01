@@ -41,11 +41,10 @@ enum ActivationValidator {
         // A malformed current fingerprint grants nothing; a malformed or different
         // request fingerprint is `permissionChanged`. Fingerprints are opaque tokens,
         // so compare exact UTF-8 bytes, not Unicode canonical equivalence.
-        guard let permission = context.permission, isWellFormed(permission) else {
+        guard let permission = context.permission, permission.isWellFormedForActivation else {
             return .failure(.permissionDenied)
         }
-        guard isWellFormed(request.permission),
-              permission.rawValue.utf8.elementsEqual(request.permission.rawValue.utf8) else {
+        guard request.permission.isWellFormedForActivation, permission.matchesExactly(request.permission) else {
             return .failure(.permissionChanged)
         }
         // The origin is caller-asserted here; being in-process or local adds nothing.
@@ -66,11 +65,6 @@ enum ActivationValidator {
         return assess(candidate, capabilities: document).map {
             ValidatedActivation(request: request, graph: candidate, context: context, missingAdvisory: $0)
         }
-    }
-
-    /// Same bounds as `CommandIntentFields.validate`.
-    private static func isWellFormed(_ fingerprint: PermissionFingerprint) -> Bool {
-        (1...256).contains(fingerprint.rawValue.utf8.count)
     }
 
     /// Graph validity against every capability the host document advertises,
@@ -95,5 +89,17 @@ enum ActivationValidator {
             return .failure(.missingCapabilities(assessment.missingRequired))
         }
         return .success(assessment.missingAdvisory)
+    }
+}
+
+/// The one permission check every activation step shares.
+extension PermissionFingerprint {
+    /// Same bounds as `CommandIntentFields.validate`: 1…256 UTF-8 bytes.
+    var isWellFormedForActivation: Bool { (1...256).contains(rawValue.utf8.count) }
+
+    /// Exact UTF-8 byte equality. Fingerprints are opaque tokens, so Unicode
+    /// canonical equivalence (`String ==`) is not a match.
+    func matchesExactly(_ other: PermissionFingerprint) -> Bool {
+        rawValue.utf8.elementsEqual(other.rawValue.utf8)
     }
 }
