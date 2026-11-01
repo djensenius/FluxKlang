@@ -163,14 +163,16 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().authorizedWindows == [Bench.projectA: Bench.windowA])
             try await authority.leaseLost(try await Bench.leaseToken(authority)).get()
             #expect(await authority.snapshot().authorizedWindows.isEmpty)
-            _ = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
+            let reacquired = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
             let held = await authority.snapshot()
             let refused = await authority.commit(project: Bench.projectA, authorization: authorization)
             #expect(Bench.refusal(refused) == .lifecycleRejectsChanges(.recovering))
             #expect(await authority.snapshot() == held)
             // The reviewed plan stays live and can still be withdrawn.
             try await authority.cancel(project: Bench.projectA).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true), .discard(reviewed)])
+            #expect(await engine.drain(authority) == [
+                .setOutputsMuted(true), .restore(.initial, Bench.runningPlan, reacquired.token), .discard(reviewed)
+            ])
         }
 
         @Test func lossKeepsOtherProjectsAndStalesTheirPlans() async throws {

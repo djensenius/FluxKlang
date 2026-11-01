@@ -123,6 +123,18 @@ actor HostAuthority {
         book.leaseLost(token)
     }
 
+    /// `HostAuthorityBook.resolveRecovery(project:)`.
+    func resolveRecovery(project: ProjectID) -> Result<RecoveryResolution, HostAuthorityRefusal> {
+        book.resolveRecovery(project: project)
+    }
+
+    /// `HostAuthorityBook.restoreCompleted(revision:prepared:token:)`.
+    func restoreCompleted(
+        revision: ContractRevision, prepared: PreparedActivationID?, token: EngineLeaseToken
+    ) -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        book.restoreCompleted(revision: revision, prepared: prepared, token: token)
+    }
+
     /// `HostAuthorityBook.commitReported(_:)`.
     func commitReported(_ report: ActivationCommitReport) -> Result<CommitReportOutcome, HostAuthorityRefusal> {
         book.commitReported(report)

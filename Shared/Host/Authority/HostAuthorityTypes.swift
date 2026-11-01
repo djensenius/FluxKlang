@@ -43,6 +43,8 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
     /// Callers may only abandon a commit as `.outcomeUnknown`; the actor alone
     /// abandons for a lost lease, and revision overflow is refused at `begin`.
     case abandonmentReserved(CommitAbandonment)
+    /// `restoreCompleted` did not match a delivered restore under the current lease.
+    case staleRestore
 }
 
 /// What became of an engine's answer to a `.prepare`.
@@ -162,4 +164,25 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     let pendingOutput: Bool?
     /// Whether the engine's outputs are muted (engine-global: one engine per host).
     let outputsMuted: Bool
+    /// The one restore queued or delivered under the current lease.
+    let restoring: RestoreRecord?
+    /// Discards held until their project's next current-token restore is queued.
+    let deferredRestoreDiscards: [ProjectID: [PreparedActivationID]]
+}
+
+/// One restore queued or delivered for the current lease. No API accepts a record.
+struct RestoreRecord: Hashable, Sendable {
+    let project: ProjectID
+    let revision: ContractRevision
+    let prepared: PreparedActivationID?
+    let token: EngineLeaseToken
+    var delivered: Bool
+    /// Discards emitted after this restore, held back if its lease is invalidated.
+    var discardAfterRestore: [PreparedActivationID]
+}
+
+/// What recovery resolution scheduled.
+enum RecoveryResolution: Hashable, Sendable {
+    case restoring(ContractRevision)
+    case keptPartial(ContractRevision)
 }

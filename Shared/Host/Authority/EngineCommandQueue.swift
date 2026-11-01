@@ -135,6 +135,17 @@ struct EngineCommandQueue: Hashable, Sendable {
         pending.isEmpty ? nil : pending.removeFirst()
     }
 
+    /// Extracts the selected discards while preserving every other command's FIFO order.
+    mutating func extractDiscards(_ preparedIDs: Set<PreparedActivationID>) -> [PreparedActivationID] {
+        var extracted: [PreparedActivationID] = []
+        pending.removeAll { command in
+            guard case .discard(let prepared) = command, preparedIDs.contains(prepared) else { return false }
+            extracted.append(prepared)
+            return true
+        }
+        return extracted
+    }
+
     private mutating func append(_ commands: [EngineCommand]) -> Result<Void, EngineCommandQueueRefusal> {
         guard canAccept(commands.count) else {
             return .failure(.full(requested: commands.count, available: capacity - pending.count))

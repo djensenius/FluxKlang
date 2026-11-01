@@ -8,7 +8,8 @@
 //  The actor stores it as `private var book` in `HostAuthority.swift`, so neither
 //  an `await` nor a function taking `isolated HostAuthority` can reach it: the
 //  members here are internal only so the book's own extensions
-//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`) can share them. A book a
+//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`,
+//  `+Restore.swift`) can share them. A book a
 //  module caller builds itself is a separate value and never touches an actor's.
 //  Every refusal leaves the whole book unchanged.
 //
@@ -34,6 +35,10 @@ struct HostAuthorityBook {
     var pendingOutput: Bool?
     /// Engine-global (one engine per host): set by every mute, in the lane or the FIFO.
     var outputsMuted = false
+    /// H5d-2: the one restore queued or delivered under the current lease.
+    var restoring: RestoreRecord?
+    /// Discards from an invalidated restore step; requeued only after its next restore.
+    var deferredRestoreDiscards: [ProjectID: [PreparedActivationID]] = [:]
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState) throws(GenerationLedgerError) {
@@ -50,7 +55,8 @@ struct HostAuthorityBook {
                               live: live, projects: projects.mapValues(HostProjectSnapshot.init),
                               outstanding: outstanding, abandoned: abandoned, queue: queue,
                               inFlight: inFlight, authorizedWindows: authorizedWindows,
-                              pendingOutput: pendingOutput, outputsMuted: outputsMuted)
+                              pendingOutput: pendingOutput, outputsMuted: outputsMuted, restoring: restoring,
+                              deferredRestoreDiscards: deferredRestoreDiscards)
     }
 
     /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
@@ -156,7 +162,7 @@ struct HostAuthorityBook {
 
     /// The one place a lease is granted (`acquire`, `transfer`): staged on registry
     /// and ledger copies, so both change or neither does, and the grant's context
-    /// change is applied exactly once. Later lease hooks belong here.
+    /// change is applied exactly once. Lease lifecycle hooks run after both staged values commit.
     private mutating func grantLease(
         _ grant: (inout EngineLeaseRegistry) throws(EngineLeaseError) -> EngineLeaseGrant
     ) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
@@ -167,6 +173,8 @@ struct HostAuthorityBook {
         do { try granted.context.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
         registry = stagedRegistry
         ledger = stagedLedger
+        leaseChanged()
+        leaseGranted(to: granted.snapshot.project)
         return .success(granted.snapshot)
     }
 
@@ -179,6 +187,7 @@ struct HostAuthorityBook {
         do { try change.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
         registry = stagedRegistry
         ledger = stagedLedger
+        leaseChanged()
         return .success(())
     }
 
@@ -189,7 +198,8 @@ struct HostAuthorityBook {
         return ActivationLiveContext(activation: activation, engine: engine)
     }
 
-    /// Every plan the engine must keep: running, reviewed or committing, and held by a phase.
+    /// Every plan the engine must keep: running, reviewed or committing, held by a phase,
+    /// or reserved while its restore-dependent discard is deferred.
     func livePlans() -> Set<PreparedActivationID> {
         var plans: Set<PreparedActivationID> = []
         for state in projects.values {
@@ -199,6 +209,9 @@ struct HostAuthorityBook {
             case .partial(let id, _, _), .commitFailed(let id), .recovering(let id, _): plans.insert(id)
             case .idle, .preparing, .acknowledged, .prepareFailed: break
             }
+        }
+        for prepared in deferredRestoreDiscards.values.flatMap({ $0 }) {
+            plans.insert(prepared)
         }
         return plans
     }

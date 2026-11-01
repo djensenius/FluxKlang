@@ -100,7 +100,6 @@ extension HostAuthorityBook {
         queue = stagedQueue
         projects[project] = state
         inFlight[project] = nil
-        outputsMuted = true
         return .success(())
     }
 
@@ -161,15 +160,22 @@ extension HostAuthorityBook {
     }
 
     /// The one place an H5c recovery step's mute is requested: `abandonCommit`
-    /// queues it, `withholdCommit` (below) converts it in the
-    /// withheld commit's place. It only fills the caller's own `staged` queue;
-    /// `false` (nothing queued) if it does not fit.
-    func requestMute(_ step: ActivationRecoveryStep, running: RunningGraph,
-                     into staged: inout EngineCommandQueue) -> Bool {
+    /// queues it, `withholdCommit` converts it in the withheld commit's place.
+    /// On success it records the mute without moving it out of the FIFO.
+    mutating func requestMute(_ step: ActivationRecoveryStep, running: RunningGraph,
+                              into staged: inout EngineCommandQueue) -> Bool {
         guard case .success = staged.enqueue(step, running: running, lease: registry.snapshot?.token) else {
             return false
         }
+        markFIFOMute()
         return true
+    }
+
+    /// A queued mute supersedes an unconsumed restore acknowledgement's unmute;
+    /// keep the mute in the FIFO rather than moving it to the fail-closed lane.
+    mutating func markFIFOMute() {
+        if pendingOutput == false { pendingOutput = nil }
+        outputsMuted = true
     }
 
     /// The delivery guard, in one actor turn. The fail-closed lane (`takeOutput()`,
@@ -182,6 +188,14 @@ extension HostAuthorityBook {
     mutating func nextEngineCommand() -> EngineCommand? {
         if let output = takeOutput() { return output }
         while let command = queue.dequeue() {
+            if case .restore = command {
+                guard admitRestore(command) else { continue }
+                return command
+            }
+            if case .discard(let prepared) = command {
+                retireRestoreDiscard(prepared)
+                return command
+            }
             guard case .commit(_, let attempt, let token) = command else { return command }
             guard let project = committingProject(for: attempt) else { continue }
             guard token == registry.snapshot?.token else { return withholdCommit(attempt, of: project) }
@@ -208,13 +222,14 @@ extension HostAuthorityBook {
         let mute = EngineCommand.setOutputsMuted(true)
         guard var state = projects[project],
               case .success(let step) = state.transaction.abandonCommit(attempt, reason: .leaseLost) else {
+            markFIFOMute()
             return mute
         }
         var converted = EngineCommandQueue()
-        _ = requestMute(step, running: state.transaction.running, into: &converted)
+        let queuedMute = requestMute(step, running: state.transaction.running, into: &converted)
         state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
         projects[project] = state
-        outputsMuted = true
+        if !queuedMute { markFIFOMute() }
         let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute
         // Continuation point: the withheld commit's state is settled here, before the
         // replacement is delivered; a post-step on `project` belongs here.
