@@ -144,8 +144,10 @@ struct MusicalTimeline: Sendable {
               records.contains(where: { $0.id == origin.record }) else { throw MusicalTimingError.expiredOrigin }
         guard pinCount < pinLimit else { throw MusicalTimingError.pinCapacity }
         guard (0...120).contains(retroactiveMs) else { throw MusicalTimingError.invalidTarget }
-        let occurrence = try select(target, origin: origin, retroactiveMs: retroactiveMs)
-        let value = try prepare(occurrence)
+        let index = projectionIndex()
+        let occurrence = try select(target, origin: origin, retroactiveMs: retroactiveMs, using: index)
+        let value = try prepare(occurrence, using: index)
+        _ = try projectedFrame(value)
         let pin = MusicalPin(instance: instance, epoch: epoch, id: UUID(), occurrence: occurrence)
         reservations[pin.id] = value
         return pin
@@ -155,7 +157,7 @@ struct MusicalTimeline: Sendable {
         let reservation = try reservation(for: pin)
         guard isRunning else { throw MusicalTimingError.stopped }
         let currentPass = Int128(state.clock.musical.loopIteration)
-        let frame = try MusicalTiming.narrow(MusicalTiming.rounded(projectedUnits(reservation)))
+        let frame = try projectedFrame(reservation)
         return MusicalProjection(occurrence: pin.occurrence, frame: frame, musicalMap: state.clock.map.revision,
                                  assumesFuture: reservation.pass > currentPass || frame > state.primary.sample.frame)
     }
@@ -205,7 +207,8 @@ struct MusicalTimeline: Sendable {
         }
         var restartTicks: Int64?
         if case .afterRestart(let frame) = ledger.resume {
-            restartTicks = try MusicalTiming.restartTicks(at: frame, origin: origin(atFrame: frame), using: state.clock)
+            restartTicks = try MusicalTiming.restartTicks(at: frame, origin: origin(atFrame: frame),
+                                                          using: state.clock, loop: state.loop)
         }
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map,
                                          ledger: ledger, restartTicks: restartTicks)
@@ -222,51 +225,39 @@ struct MusicalTimeline: Sendable {
               value.occurrence == pin.occurrence else { throw MusicalTimingError.invalidPin }
         return value
     }
-    private func runningAnchor(for pass: Int128) -> ClockAnchor? {
-        if state.running, Int128(state.clock.musical.loopIteration) == pass { return state.clock.anchor }
-        if let record = records.last(where: {
-            $0.state.running && Int128($0.state.clock.musical.loopIteration) == pass
-        }) { return record.state.clock.anchor }
-        return reservations.values.first(where: { $0.pass == pass && $0.anchor != nil })?.anchor
-    }
-    private func select(_ target: MusicalTarget, origin: MusicalOrigin,
-                        retroactiveMs: Int) throws -> MusicalOccurrence {
-        // The record selects the actual origin anchor/pass, not an old map revision or a virtual pass.
-        let currentOrigin = try MusicalOrigin(
-            instance: instance, epoch: epoch, record: origin.record, frame: origin.frame, exactFrame: origin.exactFrame,
-            clock: MusicalTiming.reanchor(origin.clock.anchor, using: state.clock),
-            loop: state.loop, isRunning: origin.isRunning
-        )
-        let choices = try MusicalTiming.candidates(for: target, origin: currentOrigin)
-        guard case .grid(let grid) = target else {
-            return try choices.forward.get()
+    private func projectionIndex() -> MusicalProjectionIndex {
+        var index = MusicalProjectionIndex()
+        for value in reservations.values {
+            index.includeReservation(value.occurrence, originalTicks: value.originalTicks,
+                                     pass: value.pass, anchor: value.anchor)
         }
-        let frame = origin.isRunning ? origin.exactFrame : MusicalFrame(origin.clock.anchor.sample.frame)
-        guard let previous = try projectedPrevious(pass: Int128(origin.clock.musical.loopIteration),
-            at: frame, grid: grid, heldTicks: origin.isRunning ? nil : origin.clock.musical.ticks) else {
-            return try choices.forward.get()
+        for record in records {
+            index.includeRecord(record.state.clock, running: record.state.running)
         }
-        if MusicalFrame(units: previous.units) == frame { return previous.occurrence }
-        return try MusicalTiming.isRetroactive(previous.units, at: frame, milliseconds: retroactiveMs,
-                                               rate: sample.nominalRate) ? previous.occurrence : choices.forward.get()
+        index.includeCurrent(state.clock, running: state.running)
+        return index
     }
-    private func prepare(_ occurrence: MusicalOccurrence, retaining ticks: Int64? = nil) throws -> TimelineReservation {
+    func projectionUnits(for occurrence: MusicalOccurrence, using index: MusicalProjectionIndex) throws -> Int128 {
+        try projectedUnits(prepare(occurrence, using: index))
+    }
+    private func prepare(_ occurrence: MusicalOccurrence, retaining ticks: Int64? = nil,
+                         using index: MusicalProjectionIndex) throws -> TimelineReservation {
         guard state.loop?.admits(ticks: occurrence.ticks) ?? true else { throw MusicalTimingError.outsideLoop }
         let current = Int128(state.clock.musical.loopIteration)
         let originalTicks: Int64
-        if let value = runningAnchor(for: occurrence.pass)?.musical?.ticks {
+        if let value = index.anchor(for: occurrence.pass)?.musical?.ticks {
             originalTicks = value
         } else if let ticks {
             originalTicks = ticks
         } else if occurrence.pass == current {
             originalTicks = state.clock.musical.ticks
-        } else if let value = reservations.values.first(where: { $0.occurrence.pass == occurrence.pass }) {
-            originalTicks = value.originalTicks // Eligibility only, never a second retained original anchor.
+        } else if let value = index.originalTicks[occurrence.pass] {
+            originalTicks = value // Eligibility only, never a second retained original anchor.
         } else if occurrence.pass > current, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks {
             originalTicks = loop.startTicks
         } else { throw MusicalTimingError.historyUnavailable }
         let pass = try MusicalTiming.projectionPass(occurrence, loop: state.loop, anchorTicks: originalTicks)
-        let anchor = runningAnchor(for: pass)
+        let anchor = index.anchor(for: pass)
         guard pass >= current || anchor != nil else { throw MusicalTimingError.historyUnavailable }
         return TimelineReservation(occurrence: occurrence, originalTicks: originalTicks, pass: pass, anchor: anchor)
     }
@@ -285,85 +276,15 @@ struct MusicalTimeline: Sendable {
         return try MusicalTiming.projectedUnits(of: MusicalOccurrence(pass: value.pass, ticks: ticks),
                                                 from: clock, loop: state.loop)
     }
-    private func projectedPrevious(pass initial: Int128, at frame: MusicalFrame, grid: Int64, heldTicks: Int64?)
-        throws -> (occurrence: MusicalOccurrence, units: Int128)? {
-        let (passes, missing) = previousPasses(through: initial, grid: grid)
-        var best: (value: TimelineReservation, units: Int128)?
-        var unavailable = false
-        // Each available pass supplies at most one inverse and an independently qualified end.
-        // Descending retained keys settle remaining ties without walking numeric passes or grid ticks.
-        for pass in passes.sorted(by: >) {
-            let candidates = try previousCandidates(pass: pass, at: frame, grid: grid,
-                ceiling: pass == initial ? heldTicks ?? Int64.max : Int64.max, retained: passes)
-            unavailable = unavailable || candidates.unavailable
-            for occurrence in candidates.occurrences {
-                let value: TimelineReservation
-                let units: Int128
-                do {
-                    value = try prepare(occurrence)
-                    units = try projectedUnits(value)
-                } catch MusicalTimingError.historyUnavailable { unavailable = true; continue }
-                guard MusicalFrame(units: units) <= frame else { continue }
-                let isEnd = state.loop?.endTicks == occurrence.ticks
-                if let current = best, units < current.units
-                    || (units == current.units && (isEnd || state.loop?.endTicks != current.value.occurrence.ticks)) {
-                    continue // Equal exact frames prefer an ordinary interior over a loop end.
-                }
-                best = (value, units)
-            }
-        }
-        if let missing {
-            // A retained exact-frame winner is safe only if no missing pass can beat its remaining tie ranks.
-            guard let best, let loop = state.loop, MusicalFrame(units: best.units) == frame,
-                  best.value.occurrence.pass > missing,
-                  best.value.occurrence.ticks < loop.endTicks || loop.endTicks - grid < loop.startTicks else {
-                throw MusicalTimingError.historyUnavailable
-            }
-        }
-        if let best { return (best.value.occurrence, best.units) }
-        // Missing earlier context cannot invent a candidate, nor invalidate an independently usable one.
-        if unavailable { throw MusicalTimingError.historyUnavailable }
-        return nil
-    }
-    private func previousPasses(through initial: Int128, grid: Int64) -> (Set<Int128>, Int128?) {
-        var passes: Set<Int128> = [initial]
-        guard let loop = state.loop else { return (passes, nil) }
-        guard Int128(loop.endTicks) / Int128(grid) * Int128(grid) >= Int128(loop.startTicks) else { return ([], nil) }
-        passes.formUnion(records.map { Int128($0.state.clock.musical.loopIteration) })
-        passes.formUnion(reservations.values.compactMap { $0.anchor == nil ? nil : $0.pass })
-        let anchors = passes.filter { $0 <= initial }.sorted()
-        // Only internal gaps between retained full anchors matter; never reconstruct an evicted pass.
-        let missing = zip(anchors, anchors.dropFirst()).filter { $0.1 - $0.0 > 1 }.last.map { $0.1 - 1 }
-        passes.formUnion(reservations.values.map(\.occurrence.pass))
-        return (passes.filter { $0 <= initial }, missing)
-    }
-    private func previousCandidates(pass: Int128, at frame: MusicalFrame, grid: Int64, ceiling: Int64,
-                                    retained: Set<Int128>)
-        throws -> (occurrences: [MusicalOccurrence], unavailable: Bool) {
-        var upper = min(Int128(ceiling), Int128(state.loop?.endTicks ?? Int64.max))
-        var candidates: [MusicalOccurrence] = []
-        if let loop = state.loop, upper == Int128(loop.endTicks), loop.endTicks % grid == 0 {
-            candidates.append(MusicalOccurrence(pass: pass, ticks: loop.endTicks))
-            upper -= 1
-        }
-        // A tick-only eligibility summary cannot supply an ordinary inverse.
-        guard let anchor = runningAnchor(for: pass)
-            ?? (pass == Int128(state.clock.musical.loopIteration) ? state.clock.anchor : nil) else {
-            return (candidates, true)
-        }
-        let clock = try MusicalTiming.reanchor(anchor, using: state.clock)
-        let bounds = try MusicalTiming.gridBounds(at: frame, grid: grid, clock: clock)
-        guard let previous = MusicalTiming.previousBoundary(pass: pass, ticks: min(bounds.previous, upper),
-                                                            grid: grid, loop: state.loop) else {
-            return (candidates, false)
-        }
-        if previous.pass == pass { candidates.append(previous) }
-        return (candidates, previous.pass < pass && !retained.contains(previous.pass))
+    private func projectedFrame(_ value: TimelineReservation) throws -> Int64 {
+        try MusicalTiming.narrow(MusicalTiming.rounded(projectedUnits(value)))
     }
     private mutating func refreshReservations() throws {
+        guard !reservations.isEmpty else { return }
+        let index = projectionIndex()
         for (id, old) in reservations {
-            let value = try prepare(old.occurrence, retaining: old.originalTicks)
-            _ = try MusicalTiming.narrow(MusicalTiming.rounded(projectedUnits(value)))
+            let value = try prepare(old.occurrence, retaining: old.originalTicks, using: index)
+            _ = try projectedFrame(value)
             reservations[id] = value
         }
     }

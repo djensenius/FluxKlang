@@ -102,4 +102,38 @@ extension ControlContractTests.MusicalTimelineValidation {
         #expect(origin.clock == timeline.currentClock) // Optional physical payload never becomes musical history.
         #expect(timeline.observationSequence == 1 && timeline.historyCount == 2 && timeline.isQuiescent)
     }
+
+    @Test(arguments: [false, true])
+    func restartUsesTheLoopInForceAtRestart(_ removeLoop: Bool) throws {
+        var ledger = try fixture.ledger()
+        let loop = try LoopRange(startTicks: 0, endTicks: 3)
+        var timeline = try fixture.timeline(ledger, loop: loop)
+        try fixture.observe(&timeline, .primary, ledger, frame: 4)
+        try fixture.observe(&timeline, .wrap, ledger, frame: 5, ticks: 0, pass: 1)
+        try fixture.observe(&timeline, .wrap, ledger, frame: 10, ticks: 0, pass: 2)
+        if removeLoop { try fixture.observe(&timeline, .loop(nil), ledger, frame: 10) }
+        try ledger.bump(fixture.mapKey, reason: .tempoEdit)
+        let map = try fixture.map(ledger, segments: [(0, 200_000)])
+        try fixture.observe(&timeline, .map(map), ledger, frame: 10)
+        let sequence = timeline.observationSequence + 1
+        let generation = try ledger.bump(ledger.primaryClock, reason: .wake)
+        try ledger.bump(fixture.transport, reason: .clockRestart)
+        try ledger.recordClockRestart(.init(start: .init(clock: fixture.primary, generation: generation, frame: 0),
+                                             host: .init(ticks: 1_000_000), previousFrame: 4))
+        let sample = try SampleClockMap(anchor: fixture.anchor(ledger, host: 1_000_000), nominalRate: 48_000,
+                                        timebase: timeline.sample.timebase)
+        var rejected = timeline
+        #expect(throws: MusicalTimingError.invalidContext) {
+            try rejected.reset(sample: sample,
+                               anchor: fixture.anchor(ledger, host: 1_000_000, ticks: removeLoop ? 0 : 6),
+                               map: map, sequence: sequence, ledger: ledger)
+        }
+        #expect(rejected.observationSequence == timeline.observationSequence)
+        #expect(rejected.currentClock == timeline.currentClock && rejected.historyCount == timeline.historyCount)
+        try timeline.reset(sample: sample,
+                           anchor: fixture.anchor(ledger, host: 1_000_000, ticks: removeLoop ? 6 : 0),
+                           map: map, sequence: sequence, ledger: ledger)
+        #expect(timeline.currentClock.musical.ticks == (removeLoop ? 6 : 0))
+        #expect(timeline.currentLoop == (removeLoop ? nil : loop))
+    }
 }
