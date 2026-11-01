@@ -240,7 +240,7 @@ extension ControlContractTests {
         }
 
         /// T4: completed obligations but a musical anchor before the restart start is refused
-        /// atomically, with no musical coverage created.
+        /// atomically; a first timeline after a restart is refused (restart ticks come only from old history).
         @Test func finding1183MusicalAnchorBeforeTheRestartStartIsRefused() throws {
             var fixture = try SchedulerFixture(capacity: 1, anchored: false)
             try fixture.ledger.bump(fixture.ledger.primaryClock, reason: .wake)
@@ -256,10 +256,11 @@ extension ControlContractTests {
                                                                originHost: 500_000))
             }
             #expect(try fixture.admissionState() == before)
-            // The genuine physical restart anchor is accepted; it never creates musical coverage. A first
-            // timeline in a restarted generation is restart-derivation semantics (D1, held for #156).
+            // The physical restart anchor is accepted without musical coverage; only resetMusical on an
+            // existing timeline may derive restart ticks, so the foundation refuses a first timeline here.
             try fixture.observe(1_000, host: 500_000)
             #expect(try fixture.snapshot().baseline?.anchor.sample.frame == 1_000)
+            #expect(throws: MusicalTimingError.historyUnavailable) { try fixture.prepareMusical(1_000) }
             #expect(fixture.scheduler.musicalSummary == nil)
             #expect(throws: TriggerSchedulerError.musicalContextRequired) {
                 try fixture.submitMusical(fixture.musicalStamp("trg.restart", .musical(atTicks: 960),
