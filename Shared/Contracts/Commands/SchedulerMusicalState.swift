@@ -7,6 +7,8 @@
 
 /// The owner's CURRENT trusted snapshots for one scheduler call. `musicalSequence` is the
 /// producer's latest observation sequence; nil means no musical context is claimed.
+/// Witness contract: it is the latest ATTEMPTED sequence. A refused observation publishes nothing,
+/// so naming its number is stale (strict invalidTiming at commit); a retry reuses that number.
 struct TriggerSchedulerContext: Sendable {
     let ledger: GenerationLedger
     let readiness: ActionReadiness
@@ -202,6 +204,8 @@ struct SchedulerMusicalState: Sendable {
 
     /// Projects through the timeline only after the current-context check; never re-quantizes.
     /// Projection errors propagate non-consumingly; the caller publishes nothing on a throw.
+    /// Precedence: missing/stale context, then the pinless outsideLoop diagnosis (fixed at admission,
+    /// never re-admitted; names the map revision current NOW), then stopped, then projection.
     func resolve(_ admission: SchedulerMusicalAdmission?,
                  context: TriggerSchedulerContext) throws -> SchedulerMusicalResolution {
         let timeline: MusicalTimeline
