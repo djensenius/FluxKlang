@@ -32,8 +32,9 @@ struct ValidatedActivation: Hashable, Sendable {
 enum ActivationValidator {
     /// Reports only the first failure, in this order: host epoch, permission,
     /// origin, digest, base revision, graph identity, capability document
-    /// staleness, candidate revision, capability document validity, graph
-    /// validity against advertised capabilities, then present capabilities.
+    /// staleness, candidate revision, capability document validity and bounded
+    /// encoding, graph validity against advertised capabilities, graph bounded
+    /// encoding, then present capabilities.
     static func validate(
         _ request: ActivationRequest, candidate: GraphDocument, in context: ActivationContext
     ) -> Result<ValidatedActivation, ActivationRejection> {
@@ -67,17 +68,28 @@ enum ActivationValidator {
         }
     }
 
-    /// Graph validity against every capability the host document advertises,
-    /// then live presence. Returns the missing advisory capabilities.
+    /// Document validity and bounded encoding, graph validity against every
+    /// capability the host document advertises and its bounded encoding, then
+    /// live presence. Returns the missing advisory capabilities.
     private static func assess(
         _ candidate: GraphDocument, capabilities document: DeviceCapabilityDocument
     ) -> Result<Set<CapabilityID>, ActivationRejection> {
-        guard (try? document.validate()) != nil else { return .failure(.invalidCapabilities) }
+        // `encoded()` enforces the 4 MiB byte limit that `validate()` does not; any failure is invalid.
+        guard (try? document.validate()) != nil, (try? document.encoded()) != nil else {
+            return .failure(.invalidCapabilities)
+        }
         let advertised = Set(document.devices.flatMap(\.capabilities))
         do {
             try candidate.validateForPreparation(supportedCapabilities: advertised)
         } catch {
             return .failure(.invalidGraph(error))
+        }
+        do {
+            _ = try candidate.encoded()
+        } catch let error as ProjectGraphLimitError {
+            return .failure(.invalidGraph(.bounds(error)))
+        } catch {
+            return .failure(.unencodableGraph)
         }
         // Required on any node wins over advisory on another.
         let required = Set(candidate.nodes.flatMap(\.requiredCapabilities))

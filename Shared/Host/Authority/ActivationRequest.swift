@@ -50,7 +50,9 @@ enum ActivationRejection: Error, Hashable, Sendable {
     case staleBase(expected: ContractRevision, found: ContractRevision)
     case graphMismatch
     case invalidGraph(GraphValidationError)
-    /// The capability document itself failed validation during assessment.
+    /// The graph cannot be encoded (for example a non-finite extension number).
+    case unencodableGraph
+    /// The capability document failed validation or bounded encoding.
     case invalidCapabilities
     case missingCapabilities(Set<CapabilityID>)
     case staleCapabilities
