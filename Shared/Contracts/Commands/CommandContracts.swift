@@ -31,8 +31,22 @@ struct ConnectionEpoch: Hashable, Sendable, Codable {
 
 /// An opaque digest of the permission state a command was authorised under.
 /// Callers derive it from the permission owner (#57); any change invalidates.
+///
+/// Equality and hashing compare UTF-8 bytes, not `String` canonical
+/// equivalence: an opaque token whose bytes differ is a different permission.
 struct PermissionFingerprint: Hashable, Sendable, Codable {
+    static let utf8Bounds = 1...256
+
     let rawValue: String
+
+    var isWellFormed: Bool { Self.utf8Bounds.contains(rawValue.utf8.count) }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue.utf8.elementsEqual(rhs.rawValue.utf8) }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(rawValue.utf8.count)
+        for byte in rawValue.utf8 { hasher.combine(byte) }
+    }
 }
 
 /// Why a command was rejected.
