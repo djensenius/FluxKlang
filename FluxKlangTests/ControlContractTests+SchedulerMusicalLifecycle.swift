@@ -289,3 +289,89 @@ extension ControlContractTests.SchedulerMusicalLifecycle {
         #expect(summary.clock.musical.ticks == 3_072 && summary.observationSequence == 2)
     }
 }
+
+/// D1: restart reset delegation. The scheduler never computes restart ticks; the timeline derives
+/// them from its old history, so only the position that history implies is accepted.
+extension SchedulerFixture {
+    /// Records a completed wake restart starting at frame 0 / host 10_000_000.
+    mutating func restart(previousFrame: Int64) throws {
+        try ledger.bump(ledger.primaryClock, reason: .wake)
+        try ledger.bump(Self.transport, reason: .clockRestart)
+        try ledger.recordClockRestart(.init(start: sample(0), host: .init(ticks: 10_000_000),
+                                            previousFrame: previousFrame))
+    }
+
+    mutating func resetAfterRestart(ticks: Int64, map: MusicalMap? = nil) throws {
+        let reset = SchedulerMusicalReset(anchor: try anchor(0, host: 10_000_000, ticks: ticks),
+                                          map: try map ?? self.map(),
+                                          sequence: (scheduler.musicalSummary?.observationSequence ?? 0) + 1)
+        try scheduler.resetMusical(reset, ledger: ledger)
+    }
+}
+
+extension ControlContractTests.SchedulerMusicalLifecycle {
+    /// Loop 0..1920 wraps at frame 3_000. The pass is chosen at the rounded wrap before ticks are rounded.
+    @Test(arguments: [(Int64(2_999), Int64(1_919)), (3_000, 0), (3_001, 1)])
+    func restartUsesRoundedWrapBeforeTickRounding(previous: Int64, ticks: Int64) throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        try fixture.prepareMusical(0, loop: LoopRange(startTicks: 0, endTicks: 1_920))
+        try fixture.observeMusical(.wrap, 3_000, ticks: 0, pass: 1)
+        try fixture.observeMusical(.musical, 3_600, ticks: 384, pass: 1)
+        try fixture.restart(previousFrame: previous)
+        for wrong in [ticks + 1, ticks == 0 ? 1_920 : ticks - 1] {
+            let before = try fixture.admissionState()
+            #expect(throws: MusicalTimingError.invalidContext) { try fixture.resetAfterRestart(ticks: wrong) }
+            #expect(try fixture.admissionState() == before)
+        }
+        try fixture.resetAfterRestart(ticks: ticks)
+        let summary = try #require(fixture.scheduler.musicalSummary)
+        // A current-loop restart: pass 0 of the new epoch, loop retained, old history discarded.
+        #expect(summary.clock.musical.ticks == ticks && summary.clock.musical.loopIteration == 0)
+        #expect(try summary.loop == LoopRange(startTicks: 0, endTicks: 1_920) && summary.historyCount == 1)
+        #expect(try summary.firstAnchor == fixture.anchor(0, host: 10_000_000, ticks: ticks))
+        #expect(summary.observationSequence == 3 && summary.pinCount == 0)
+    }
+
+    @Test func failedRestartPositionPreservesOldTimeline() throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        try fixture.prepareMusical(0)
+        try fixture.observeMusical(.musical, 3_000, ticks: 1_920)
+        let pinned = try fixture.submitMusical(fixture.stamp("trg.pinned", .musical(atTicks: 2_400)))
+        try fixture.restart(previousFrame: 3_000)
+        let before = try fixture.admissionState()
+        #expect(throws: MusicalTimingError.pinsOutstanding) { try fixture.resetAfterRestart(ticks: 1_920) }
+        #expect(try fixture.admissionState() == before && before.music?.pinCount == 1)
+        #expect(try fixture.scheduler.cancelStale(ledger: fixture.ledger) == [pinned])
+        #expect(try fixture.drainOne(pinned).result == .cancelled)
+        let quiescent = try fixture.admissionState()
+        #expect(quiescent.music?.pinCount == 0 && quiescent.music?.historyCount == 2)
+        for wrong: Int64 in [1_919, 1_921] {
+            #expect(throws: MusicalTimingError.invalidContext) { try fixture.resetAfterRestart(ticks: wrong) }
+            #expect(try fixture.admissionState() == quiescent)
+        }
+        try fixture.resetAfterRestart(ticks: 1_920)
+        let summary = try #require(fixture.scheduler.musicalSummary)
+        #expect(summary.clock.musical.ticks == 1_920 && summary.observationSequence == 2)
+        #expect(try summary.historyCount == 1 && summary.sample == fixture.snapshot().baseline)
+    }
+
+    @Test func restartUsesOldMapAndNewPhysicalBaseline() throws {
+        var fixture = try SchedulerFixture(capacity: 1)
+        try fixture.prepareMusical(0)
+        try fixture.observeMusical(.primary, 4_500) // Old history covers previousFrame.
+        try fixture.restart(previousFrame: 4_500)
+        let revision = try fixture.ledger.bump(SchedulerFixture.mapKey, reason: .tempoEdit)
+        let slow = try fixture.map(microsPerQuarter: 1_000_000)
+        let before = try fixture.admissionState()
+        // The position is read through the OLD map: 4_500 x 0.64 = 2_880, never 4_500 x 0.32 = 1_440.
+        #expect(throws: MusicalTimingError.invalidContext) { try fixture.resetAfterRestart(ticks: 1_440, map: slow) }
+        #expect(try fixture.admissionState() == before)
+        try fixture.resetAfterRestart(ticks: 2_880, map: slow)
+        let summary = try #require(fixture.scheduler.musicalSummary)
+        let physical = try fixture.snapshot()
+        #expect(summary.clock.musical.ticks == 2_880 && summary.clock.map == slow && slow.revision == revision)
+        #expect(summary.sample == physical.baseline && physical.baseline?.anchor.sample.frame == 0)
+        #expect(physical.baseline?.anchor.host.ticks == 10_000_000)
+        #expect(summary.sample != before.music?.sample)
+    }
+}

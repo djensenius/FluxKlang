@@ -272,6 +272,7 @@
 		7D51EDF91AE119B3D5F14B36 /* StudioPhysicalTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90838B90936905F261C36103 /* StudioPhysicalTypes.swift */; };
 		7D5AF62AF9D076E350640CB5 /* FluxKlangIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E0B5FA487448648A7FF8E9 /* FluxKlangIntents.swift */; };
 		7DD7FC9A1B1561DB4256E9FD /* TutorialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3881C24F96EFD21A4EC22C /* TutorialView.swift */; };
+		7EF8B99043C5C52679145450 /* ControlContractTests+SchedulerBoundaryAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF68EC28D9B4B253F7943430 /* ControlContractTests+SchedulerBoundaryAcceptance.swift */; };
 		7F73B0ADD7DD512A79A8051D /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		808E5D176C48BBEF2496969F /* GraphIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C597CA63829764E6094DE33 /* GraphIDs.swift */; };
 		809DC1CF6841FCE1985D75FB /* ContractVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDCE4307223DF0D0B3EBCCC4 /* ContractVersion.swift */; };
@@ -381,6 +382,7 @@
 		B237144F6450EB9C135C178D /* StudioGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD5C7284F6CC337CFC97B758 /* StudioGraph.swift */; };
 		B245513A40D81627D969BC49 /* AssistantActionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCCB44247D8EC868B007927F /* AssistantActionController.swift */; };
 		B263FCB1BE3C611F0B30D67D /* AssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42FC270A0061C38573676C43 /* AssistantView.swift */; };
+		B2A783907DE2BC356CDBF228 /* ControlContractTests+SchedulerResumeAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2F4D9FB941D31E0970F0753 /* ControlContractTests+SchedulerResumeAcceptance.swift */; };
 		B33244B398322808F6F85F79 /* WingSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282FD5D129226FE552419869 /* WingSource.swift */; };
 		B34446EBA891946BBB4F8CD4 /* WireLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA94B70ED6A5B914A576414 /* WireLayer.swift */; };
 		B3DD2228953D9230648F7F6E /* AppIconPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99FD06478A0C1CD01F0201 /* AppIconPicker.swift */; };
@@ -425,6 +427,7 @@
 		CB1180B15BD9C1B8D903200E /* OutputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34B8FA3B5EE2ECF220DA32B8 /* OutputPatchbayGrid.swift */; };
 		CB19842B27C432A04CFEEE42 /* WingDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */; };
 		CB581AEEF9DD687D63DF8605 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
+		CB987998E5FCF25670853F22 /* ControlContractTests+SchedulerHistoryAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92CECCDDC9DF737E95925180 /* ControlContractTests+SchedulerHistoryAcceptance.swift */; };
 		CB9AC0EEEFD6C95C72FEB60A /* MacCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834B3F839743E70274C9D787 /* MacCommands.swift */; };
 		CBA03237162399C4482F9FDE /* ControlContractTests+SchedulerMusicalObservations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6002EEFDAA2D889FF08DCB8F /* ControlContractTests+SchedulerMusicalObservations.swift */; };
 		CD6619B8244FA86D16CA157F /* AppModel+Assistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = A496F8403A330675A590FE5B /* AppModel+Assistant.swift */; };
@@ -739,6 +742,7 @@
 		910E4B334BFBBDB92877F243 /* VerticalFader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalFader.swift; sourceTree = "<group>"; };
 		91BDAA2E7774E86BD873FC43 /* StudioNodeDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioNodeDisplay.swift; sourceTree = "<group>"; };
 		9288316CFEC271A60E003289 /* AssistantRoutingChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantRoutingChatTests.swift; sourceTree = "<group>"; };
+		92CECCDDC9DF737E95925180 /* ControlContractTests+SchedulerHistoryAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+SchedulerHistoryAcceptance.swift"; sourceTree = "<group>"; };
 		94B8CD1C8E2EB68FD8B7E7AC /* SpeakerConfigView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerConfigView.swift; sourceTree = "<group>"; };
 		94CB10C5C359579FEB414EF6 /* AssistantActionEvidenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionEvidenceView.swift; sourceTree = "<group>"; };
 		95B87C965DD2017928F28903 /* SpatialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialView.swift; sourceTree = "<group>"; };
@@ -770,10 +774,12 @@
 		AB3881C24F96EFD21A4EC22C /* TutorialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TutorialView.swift; sourceTree = "<group>"; };
 		AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGraph.swift; sourceTree = "<group>"; };
 		AE1C6FE228CF243320EB83DA /* ControlContractTests+Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+Commands.swift"; sourceTree = "<group>"; };
+		AF68EC28D9B4B253F7943430 /* ControlContractTests+SchedulerBoundaryAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+SchedulerBoundaryAcceptance.swift"; sourceTree = "<group>"; };
 		B08E59FFF869F286A1BFDFCB /* StudioResourceAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioResourceAllocator.swift; sourceTree = "<group>"; };
 		B152D0112770B4C8D6BF0DEF /* PendingStudioPatchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingStudioPatchStore.swift; sourceTree = "<group>"; };
 		B17E516E1112364021E312C2 /* StudioConnectionMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionMigrationTests.swift; sourceTree = "<group>"; };
 		B2BBDA94BA3DF57C8A6B4C92 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
+		B2F4D9FB941D31E0970F0753 /* ControlContractTests+SchedulerResumeAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+SchedulerResumeAcceptance.swift"; sourceTree = "<group>"; };
 		B2FE3F20E847A6D6C5759AB6 /* ConnectionStatusPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusPresentation.swift; sourceTree = "<group>"; };
 		B361516C0EA80B04919B6FFA /* ChainGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainGeometry.swift; sourceTree = "<group>"; };
 		B457F24BAF4DFAAFC171EC50 /* FluxKlang.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlang.entitlements; sourceTree = "<group>"; };
@@ -1455,11 +1461,14 @@
 				F549DE62C7FADAE56A65968E /* ControlContractTests+MusicalScheduling.swift */,
 				9CD2B9CAA819509505999673 /* ControlContractTests+MusicalTimeline.swift */,
 				A2CE46388408191FF6367360 /* ControlContractTests+MusicalTiming.swift */,
+				AF68EC28D9B4B253F7943430 /* ControlContractTests+SchedulerBoundaryAcceptance.swift */,
 				34E165CD6BF759AE4FB03E75 /* ControlContractTests+SchedulerClock.swift */,
+				92CECCDDC9DF737E95925180 /* ControlContractTests+SchedulerHistoryAcceptance.swift */,
 				4D7F04F93D094DC328C72E4D /* ControlContractTests+SchedulerLifecycle.swift */,
 				96C4F06F85D5E388D7F2F40E /* ControlContractTests+SchedulerMusicalLifecycle.swift */,
 				6002EEFDAA2D889FF08DCB8F /* ControlContractTests+SchedulerMusicalObservations.swift */,
 				6A1645682F149E49B2A3E90A /* ControlContractTests+SchedulerMusicalTerminal.swift */,
+				B2F4D9FB941D31E0970F0753 /* ControlContractTests+SchedulerResumeAcceptance.swift */,
 				81CF4A9FBBCE5C69BA5DDF0C /* ControlContractTests+SchedulingValidation.swift */,
 				FA9DE01BE2E9A3DC554B4151 /* ControlContractTests+Transport.swift */,
 				CFE289DC554F5321E725DA06 /* ControlContractTests+TransportRuntime.swift */,
@@ -2221,11 +2230,14 @@
 				9251C7C839B1F5B9E6536F8C /* ControlContractTests+MusicalScheduling.swift in Sources */,
 				511E712B4C50BED916DDB9A7 /* ControlContractTests+MusicalTimeline.swift in Sources */,
 				2FFE4926B5CF5DD332E819AF /* ControlContractTests+MusicalTiming.swift in Sources */,
+				7EF8B99043C5C52679145450 /* ControlContractTests+SchedulerBoundaryAcceptance.swift in Sources */,
 				87E2BAB9D277222AB927CDDF /* ControlContractTests+SchedulerClock.swift in Sources */,
+				CB987998E5FCF25670853F22 /* ControlContractTests+SchedulerHistoryAcceptance.swift in Sources */,
 				77F24309A6DA0C108DCD1009 /* ControlContractTests+SchedulerLifecycle.swift in Sources */,
 				41311B57A728F5AEEEB278E7 /* ControlContractTests+SchedulerMusicalLifecycle.swift in Sources */,
 				CBA03237162399C4482F9FDE /* ControlContractTests+SchedulerMusicalObservations.swift in Sources */,
 				C23F3A52BD0EE38F12A74E29 /* ControlContractTests+SchedulerMusicalTerminal.swift in Sources */,
+				B2A783907DE2BC356CDBF228 /* ControlContractTests+SchedulerResumeAcceptance.swift in Sources */,
 				B2345E410F0D212569EE3BDA /* ControlContractTests+SchedulingValidation.swift in Sources */,
 				DB6498D82ADE8A1B864670F5 /* ControlContractTests+Transport.swift in Sources */,
 				8BF8EE9B4BF4B3613165B886 /* ControlContractTests+TransportRuntime.swift in Sources */,
