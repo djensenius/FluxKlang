@@ -21,7 +21,7 @@ private struct RestoreAdmission {
 extension HostAuthorityBook {
     /// Resolves `project`'s recovery under its held lease.
     /// Checks, in order: project open; lease held by this project; no restore or
-    /// delivered commit already pending; room for the largest recovery step.
+    /// committing transaction or delivered commit already pending; room for the largest recovery step.
     /// Every refusal leaves the book unchanged.
     mutating func resolveRecovery(project: ProjectID) -> Result<RecoveryResolution, HostAuthorityRefusal> {
         guard let state = projects[project] else { return .failure(.unknownProject(project)) }
@@ -29,7 +29,9 @@ extension HostAuthorityBook {
         guard lease.project == project else {
             return .failure(.activation(.leaseHeldByOtherProject(lease.project)))
         }
-        guard restoring == nil, inFlight[project] == nil else { return .failure(.activation(.busy)) }
+        guard restoring == nil, inFlight[project] == nil, state.transaction.phase != .committing else {
+            return .failure(.activation(.busy))
+        }
         guard queue.canAccept(EngineCommandQueue.maxRecoveryStepSlots) else { return .failure(.queueFull) }
         switch recoveryPlan(for: state, lease: lease) {
         case .failure(let refusal): return .failure(.activation(refusal))
@@ -138,9 +140,12 @@ extension HostAuthorityBook {
         _ = resolveRecovery(project: project)
     }
 
-    /// A lease grant or removal invalidates the restore; its queued dependent discards
-    /// are held until a restore under the next current token is queued.
+    /// A lease change (or newer mute) invalidates restore authority; queued dependent
+    /// discards stay reserved until a fresh restore under the current token is queued.
+    /// Keep the project's unacknowledged obligation in its recovering lifecycle,
+    /// independently of the stale attempt, including unmuted recovery and queue pressure.
     mutating func leaseChanged() {
+        if let project = restoring?.project { projects[project]?.enterRecovery() }
         if let record = restoring, !record.discardAfterRestore.isEmpty {
             let extracted = queue.extractDiscards(Set(record.discardAfterRestore))
             if !extracted.isEmpty {
@@ -158,9 +163,22 @@ extension HostAuthorityBook {
         restoring = record
     }
 
-    /// D-auto is project-scoped; Rule G is intentionally deferred to H5d-2b.
+    /// Rule G: a muted engine puts only its new grantee into recovery before
+    /// D-auto tries to queue a restore. Even a full queue leaves it fail-closed.
     mutating func leaseGranted(to project: ProjectID) {
+        if outputsMuted { projects[project]?.enterRecovery() }
         resumeRecovery(of: project)
+    }
+
+    /// Rule M, called only after the mute-causing transition is fully published.
+    /// Retire older restore authority before gating the current holder, even when
+    /// another project caused the mute. The new restore follows the FIFO mute;
+    /// pressure or an already-admitted commit leaves the gate for explicit retry.
+    mutating func reconcileFIFOMute() {
+        leaseChanged()
+        guard let holder = registry.snapshot?.project else { return }
+        projects[holder]?.enterRecovery()
+        resumeRecovery(of: holder)
     }
 
     /// Marks only an exact, undelivered restore under the current lease as delivered.
@@ -190,9 +208,6 @@ extension HostAuthorityBook {
     private func recoveryPlan(for state: HostProjectState,
                               lease: EngineLeaseSnapshot) -> Result<HostRecoveryPlan, ActivationRefusal> {
         switch state.transaction.phase {
-        case .commitFailed where !outputsMuted:
-            // The direct, unmuted commit-failure recovery path is deferred to H5d-2b.
-            return .failure(.unexpectedPhase(state.transaction.phase))
         case .commitFailed, .recovering, .partial:
             return transactionRecoveryPlan(state, lease: lease)
         default:

@@ -79,8 +79,10 @@ extension HostAuthorityTests {
             _ = try await Bench.commitDelivered(authority, &engine)
             try await authority.abandonCommit(try await Bench.attempt(authority),
                                               reason: .outcomeUnknown).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
-            #expect(await authority.resolveRecovery(project: Bench.projectA) == .success(.restoring(.initial)))
+            #expect(await authority.nextEngineCommand() == .setOutputsMuted(true))
+            let firstQueued = await authority.snapshot()
+            #expect(Bench.refusal(await authority.resolveRecovery(project: Bench.projectA)) == .activation(.busy))
+            #expect(await authority.snapshot() == firstQueued)
             let firstCommands = await engine.drain(authority)
             let firstRestore = try #require(engine.pendingRestores.first)
             #expect(firstCommands.count == 2 &&
@@ -92,8 +94,10 @@ extension HostAuthorityTests {
             _ = try await Bench.commitDelivered(authority, &engine)
             try await authority.abandonCommit(try await Bench.attempt(authority),
                                               reason: .outcomeUnknown).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
-            #expect(await authority.resolveRecovery(project: Bench.projectA) == .success(.restoring(.initial)))
+            #expect(await authority.nextEngineCommand() == .setOutputsMuted(true))
+            let secondQueued = await authority.snapshot()
+            #expect(Bench.refusal(await authority.resolveRecovery(project: Bench.projectA)) == .activation(.busy))
+            #expect(await authority.snapshot() == secondQueued)
             #expect(await authority.snapshot().lease?.token == lease)
             let secondRestore = try #require(await authority.snapshot().restoring)
             #expect(secondRestore.attempt != firstRestore.attempt)

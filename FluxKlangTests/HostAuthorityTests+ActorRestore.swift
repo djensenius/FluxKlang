@@ -220,7 +220,7 @@ extension HostAuthorityTests {
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let restore = try #require(await authority.snapshot().restoring)
             #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, Bench.runningPlan, token)])
-            _ = try await Bench.review(authority, &engine)
+            let reviewed = try await Bench.review(authority, &engine)
             let preparing = EngineLifecycle.preparing(try ContractRevision.initial.next(), over: .running)
             #expect(await engine.completeRestore(authority) == .success(preparing))
             let acknowledged = await authority.snapshot()
@@ -234,7 +234,10 @@ extension HostAuthorityTests {
                                               reason: .outcomeUnknown).get()
             let abandoned = await authority.snapshot()
             #expect(abandoned.outputsMuted && abandoned.pendingOutput == nil)
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            let replacement = try await Bench.restore(authority)
+            #expect(replacement.attempt != restore.attempt)
+            #expect(await engine.drain(authority) ==
+                    [.setOutputsMuted(true), Bench.restoreCommand(replacement), .discard(reviewed)])
         }
 
         @Test(arguments: [true, false])

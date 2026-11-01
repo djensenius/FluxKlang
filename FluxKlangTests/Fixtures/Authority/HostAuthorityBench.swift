@@ -60,13 +60,16 @@ enum AuthorityBench {
     /// Opens A (with `lifecycleA`) and B; A acquires the lease on `window` unless it is nil.
     static func makeAuthority(holding window: WindowID? = windowA,
                               lifecycleA: EngineLifecycle? = nil,
-                              recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
+                              recoveryBaseA: RunningSetState? = nil,
+                              runningB: PreparedActivationID? = nil,
+                              lifecycleB: EngineLifecycle? = nil) async throws -> HostAuthority {
         let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                           nominalRate: 48_000)
         let authority = try HostAuthority(host: ledger, live: try liveState())
         try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
                                  lifecycle: lifecycleA, recoveryBase: recoveryBaseA).get()
-        try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
+        try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: runningB),
+                                 lifecycle: lifecycleB).get()
         if let window { _ = try await authority.acquire(project: projectA, window: window).get() }
         return authority
     }
@@ -125,6 +128,34 @@ enum AuthorityBench {
     /// The current lease token (the one an involuntary `leaseLost` names).
     static func leaseToken(_ authority: HostAuthority) async throws -> EngineLeaseToken {
         try #require(await authority.snapshot().lease?.token)
+    }
+
+    /// The exact queued or delivered restore, including its opaque identity.
+    static func restore(_ authority: HostAuthority) async throws -> RestoreRecord {
+        try #require(await authority.snapshot().restoring)
+    }
+
+    static func restoreCommand(_ record: RestoreRecord) -> EngineCommand {
+        .restore(record.attempt, record.revision, record.prepared, record.token)
+    }
+
+    /// Explicit replay/early acknowledgement for refusal tests; normal completion uses the engine fixture.
+    static func acknowledge(_ record: RestoreRecord, on authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        await authority.restoreCompleted(attempt: record.attempt, revision: record.revision,
+                                         prepared: record.prepared, token: record.token)
+    }
+
+    /// Adversarial adapter scheduling: answer without draining earlier commands.
+    /// Prepare-answer admission does not require pull/delivery bookkeeping. This
+    /// reaches already-admitted commit interleavings through the real actor API.
+    static func commitWithoutDrain(_ authority: HostAuthority, project: ProjectID, window: WindowID,
+                                   prepared: PreparedActivationID, withAux: Bool = false) async throws {
+        try await authority.begin(request(), candidate: candidate(withAux: withAux), project: project).get()
+        let attempt = try #require(await authority.snapshot().projects[project]?.lastPrepareAttempt)
+        #expect(await authority.prepareAnswered(.success(prepared), attempt: attempt) == .success(.routed))
+        let authorization = try await authority.authorize(project: project, gesture: gesture(window)).get()
+        try await authority.commit(project: project, authorization: authorization).get()
     }
 
     /// Fills the command queue with `project`'s prepares, abandoning each.
