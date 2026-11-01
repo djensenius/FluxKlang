@@ -9,106 +9,6 @@
 //  (`snapshot()`).
 //
 
-/// The live host state every activation context is built from. Only the actor
-/// combines it with a project's running revision; callers never supply a context.
-struct HostLiveState: Hashable, Sendable {
-    let hostEpoch: HostEpoch
-    /// `nil` when no permission is currently granted.
-    let permission: PermissionFingerprint?
-    let capabilities: DeviceCapabilityDocument
-}
-
-/// Why the actor refused. Every refusal leaves the actor state unchanged.
-enum HostAuthorityRefusal: Error, Equatable, Sendable {
-    /// The transaction's own refusal, unchanged.
-    case activation(ActivationRefusal)
-    case unknownProject(ProjectID)
-    case projectAlreadyOpen(ProjectID)
-    case projectLimit
-    /// `open` resumes only a settled lifecycle consistent with the running graph.
-    case lifecycleNotResumable(EngineLifecycle)
-    case lease(EngineLeaseError)
-    case ledger(GenerationLedgerError)
-    /// The engine command queue cannot take the transition's commands; nothing moved.
-    case queueFull
-}
-
-/// What became of an engine's answer to a `.prepare`.
-enum PrepareAnswerOutcome: Hashable, Sendable {
-    /// The issuing project's transaction accepted it.
-    case routed
-    /// A success for an abandoned attempt, refused by the transaction with `refusal`:
-    /// the engine's plan was queued for discard, exactly once.
-    case discarded(PreparedActivationID, refusal: ActivationRefusal)
-    /// An abandoned attempt's failure, or a success naming a live plan, or a plan
-    /// whose discard is already queued: nothing to discard.
-    case dropped
-}
-
-/// A prepare attempt `abandonPrepare` gave up on; its late success is discarded.
-struct AbandonedPrepare: Hashable, Sendable {
-    let attempt: PrepareAttemptID
-    let project: ProjectID
-}
-
-/// One open project: its only transaction copy and its engine lifecycle.
-struct HostProjectState: Hashable, Sendable {
-    var transaction: ActivationTransaction
-    /// What this project's windows on the lease observe (`EngineLifecycle.observed`).
-    var lifecycle: EngineLifecycle
-    /// The plan the engine prepared for the current review; meaningful only
-    /// while the transaction is awaiting review or committing.
-    var reviewed: PreparedActivationID?
-}
-
-/// A transaction kept inert for the snapshot: equality and hashing still cover
-/// the whole transaction, so any change is detected, but nothing reads it back.
-/// Only the actor's own copy may transition (the single-owner rule): a copy
-/// handed out could issue commits with the same authorization and attempt IDs
-/// outside the actor's queue.
-struct TransactionRecord: Hashable, Sendable {
-    private let transaction: ActivationTransaction
-
-    fileprivate init(_ transaction: ActivationTransaction) {
-        self.transaction = transaction
-    }
-}
-
-/// One open project as the snapshot shows it: read-only diagnostics and an inert
-/// record of its transaction, never the transaction itself.
-struct HostProjectSnapshot: Hashable, Sendable {
-    let phase: ActivationPhase
-    let running: RunningGraph
-    let lastPrepareAttempt: PrepareAttemptID?
-    let lifecycle: EngineLifecycle
-    let reviewed: PreparedActivationID?
-    let record: TransactionRecord
-
-    fileprivate init(_ state: HostProjectState) {
-        phase = state.transaction.phase
-        running = state.transaction.running
-        lastPrepareAttempt = state.transaction.lastPrepareAttempt
-        lifecycle = state.lifecycle
-        reviewed = state.reviewed
-        record = TransactionRecord(state.transaction)
-    }
-}
-
-/// The whole actor state, for refusal checks and diagnostics. It holds no
-/// transaction (`HostProjectSnapshot`).
-struct HostAuthoritySnapshot: Hashable, Sendable {
-    let lease: EngineLeaseSnapshot?
-    let lastIssuedLease: Generation?
-    let ledger: [GenerationKey: Generation]
-    let live: HostLiveState
-    let projects: [ProjectID: HostProjectSnapshot]
-    /// The one unanswered, not abandoned prepare of each preparing project.
-    let outstanding: [ProjectID: PrepareAttemptID]
-    /// Abandoned and unanswered, oldest first; at most `abandonedPrepareLimit`.
-    let abandoned: [AbandonedPrepare]
-    let queue: EngineCommandQueue
-}
-
 actor HostAuthority {
     static let projectLimit = 16
     /// Abandoned attempts remembered for discarding their late success. When the
@@ -118,14 +18,31 @@ actor HostAuthority {
     /// that clears it). Abandons alone never make `begin` refuse.
     static let abandonedPrepareLimit = 64
 
-    private var registry = EngineLeaseRegistry()
+    // Access audit (B1). Actor isolation only forbids *synchronous* access from
+    // outside: module code may still `await` a read of any internal Sendable
+    // property or call any internal method. Hence:
+    // - `projects` holds the transactions; `HostProjectState` is not `Sendable`, so
+    //   the dictionary cannot leave the actor, even by `await`.
+    // - `ledger`, `outstanding`, `abandoned` and the delivery guard's helpers are private.
+    // - `registry` and `live` are `private(set)`; `queue`, `inFlight` and
+    //   `authorizedWindows` stay internal for `HostAuthority+Commit.swift`. An
+    //   outside `await` read yields only a value copy of what `snapshot()` already
+    //   shows, and an outside write does not compile.
+    // - Internal methods (`liveContext`, `livePlans`, `requestMute`) return values
+    //   and change no actor state.
+    private(set) var registry = EngineLeaseRegistry()
     private var ledger: GenerationLedger
-    private var live: HostLiveState
-    private var projects: [ProjectID: HostProjectState] = [:]
+    private(set) var live: HostLiveState
+    var projects: [ProjectID: HostProjectState] = [:]
     /// Keyed by project: at most one outstanding attempt per open project.
     private var outstanding: [ProjectID: PrepareAttemptID] = [:]
     private var abandoned: [AbandonedPrepare] = []
-    private var queue = EngineCommandQueue()
+    var queue = EngineCommandQueue()
+    /// Commits delivered to the engine and not yet reported (H5c-2 clears them on report).
+    var inFlight: [ProjectID: CommitAttemptID] = [:]
+    /// The window recorded by `authorize`, re-checked by `commit`; cleared when the
+    /// authorization is consumed by `commit` or withdrawn by `cancel`.
+    var authorizedWindows: [ProjectID: WindowID] = [:]
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState) throws(GenerationLedgerError) {
@@ -140,7 +57,8 @@ actor HostAuthority {
     func snapshot() -> HostAuthoritySnapshot {
         HostAuthoritySnapshot(lease: registry.snapshot, lastIssuedLease: registry.lastIssued, ledger: ledger.current,
                               live: live, projects: projects.mapValues(HostProjectSnapshot.init),
-                              outstanding: outstanding, abandoned: abandoned, queue: queue)
+                              outstanding: outstanding, abandoned: abandoned, queue: queue,
+                              inFlight: inFlight, authorizedWindows: authorizedWindows)
     }
 
     /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
@@ -179,20 +97,40 @@ actor HostAuthority {
         return .success(())
     }
 
-    /// Staged on registry and ledger copies; both change or neither does. The one
-    /// place a lease is granted, so H5d can refuse it during unresolved recovery.
+    /// Grants `project`'s `window` a new lease (one context bump), staged by
+    /// `grantLease` like `transfer`.
     func acquire(project: ProjectID, window: WindowID) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
         guard projects[project] != nil else { return .failure(.unknownProject(project)) }
-        var stagedRegistry = registry
-        var stagedLedger = ledger
-        let grant: EngineLeaseGrant
-        do { grant = try stagedRegistry.acquire(project: project, window: window) } catch {
-            return .failure(.lease(error))
+        return grantLease { registry throws(EngineLeaseError) in
+            try registry.acquire(project: project, window: window)
         }
-        do { try grant.context.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
-        registry = stagedRegistry
-        ledger = stagedLedger
-        return .success(grant.snapshot)
+    }
+
+    /// Releases `project`'s lease, staged by `removeLease` (one context bump).
+    /// Checks, in order: project open; no delivered commit is unreported
+    /// (`.activation(.busy)`); the lease is held by `project`. A commit that is only
+    /// queued does not block: the delivery guard withholds it lazily when it reaches
+    /// the head of the queue.
+    func release(project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
+        guard projects[project] != nil else { return .failure(.unknownProject(project)) }
+        guard inFlight.isEmpty else { return .failure(.activation(.busy)) }
+        guard let held = registry.snapshot else { return .failure(.lease(.notHeld)) }
+        guard held.project == project else { return .failure(.lease(.heldByOtherProject(held.project))) }
+        return removeLease(expected: held.token)
+    }
+
+    /// Hands the lease to `project`'s `window` under a new token, staged by
+    /// `grantLease` (one context bump). Checks, in order: project open; no delivered
+    /// commit is unreported (`.activation(.busy)`); a lease is held; the registry's
+    /// own checks (`alreadyHeld` for the holder itself). Queued commits are
+    /// withheld lazily, as for `release`.
+    func transfer(to project: ProjectID, window: WindowID) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
+        guard projects[project] != nil else { return .failure(.unknownProject(project)) }
+        guard inFlight.isEmpty else { return .failure(.activation(.busy)) }
+        guard let token = registry.snapshot?.token else { return .failure(.lease(.notHeld)) }
+        return grantLease { registry throws(EngineLeaseError) in
+            try registry.transfer(to: project, window: window, expected: token)
+        }
     }
 
     /// Adds a window of the holding project, under the current token.
@@ -309,11 +247,54 @@ actor HostAuthority {
         state.reviewed = nil
         queue = stagedQueue
         projects[project] = state
+        authorizedWindows[project] = nil
         return .success(())
     }
 
+    /// The delivery guard, in one actor turn. A `.commit` is delivered only while
+    /// its attempt is still some project's committing attempt (else dropped, and the
+    /// next command is taken) and only under the current lease token. A commit whose
+    /// token was replaced (released, transferred or reacquired) is withheld: the
+    /// actor abandons it as `.leaseLost` and returns `.setOutputsMuted(true)` in its
+    /// place, keeping its FIFO position. A delivered commit is `inFlight`.
     func nextEngineCommand() -> EngineCommand? {
-        queue.dequeue()
+        while let command = queue.dequeue() {
+            guard case .commit(_, let attempt, let token) = command else { return command }
+            guard let project = committingProject(for: attempt) else { continue }
+            guard token == registry.snapshot?.token else { return withholdCommit(attempt, of: project) }
+            inFlight[project] = attempt
+            return command
+        }
+        return nil
+    }
+
+    /// The project whose transaction is still committing `attempt`, if any.
+    private func committingProject(for attempt: CommitAttemptID) -> ProjectID? {
+        projects.first { $0.value.transaction.phase == .committing && $0.value.transaction.lastAttempt == attempt }?
+            .key
+    }
+
+    /// Abandons `project`'s committing `attempt` (from `committingProject`) as
+    /// `.leaseLost` and returns the one command that takes the commit's place in
+    /// the queue: the recovery step's mute. The lifecycle becomes `.recovering`;
+    /// the reviewed plan stays live. Private to the delivery guard, so no caller can
+    /// claim `.leaseLost`. State changes only if the abandon succeeds; otherwise
+    /// (a contract break) nothing changes and the mute is still returned in place
+    /// of the dropped commit, which fails closed.
+    private func withholdCommit(_ attempt: CommitAttemptID, of project: ProjectID) -> EngineCommand {
+        let mute = EngineCommand.setOutputsMuted(true)
+        guard var state = projects[project],
+              case .success(let step) = state.transaction.abandonCommit(attempt, reason: .leaseLost) else {
+            return mute
+        }
+        var converted = EngineCommandQueue()
+        _ = requestMute(step, running: state.transaction.running, into: &converted)
+        state.lifecycle = state.lifecycle.after(CommitAbandonment.leaseLost.event)
+        projects[project] = state
+        let replacement = converted.pending.count == 1 ? converted.dequeue() ?? mute : mute
+        // Continuation point: the withheld commit's state is settled here, before the
+        // replacement is delivered; a post-step on `project` belongs here.
+        return replacement
     }
 
     /// What `window` of `project` observes.
@@ -365,7 +346,35 @@ actor HostAuthority {
         return .success(.discarded(id, refusal: refusal))
     }
 
-    private func liveContext(over running: RunningGraph) -> ActivationLiveContext? {
+    /// The one place a lease is granted (`acquire`, `transfer`): staged on registry
+    /// and ledger copies, so both change or neither does, and the grant's context
+    /// change is applied exactly once. Later lease hooks belong here.
+    private func grantLease(
+        _ grant: (inout EngineLeaseRegistry) throws(EngineLeaseError) -> EngineLeaseGrant
+    ) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
+        var stagedRegistry = registry
+        var stagedLedger = ledger
+        let granted: EngineLeaseGrant
+        do { granted = try grant(&stagedRegistry) } catch { return .failure(.lease(error)) }
+        do { try granted.context.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
+        registry = stagedRegistry
+        ledger = stagedLedger
+        return .success(granted.snapshot)
+    }
+
+    /// The one place a lease is removed (`release`), staged like `grantLease`.
+    private func removeLease(expected token: EngineLeaseToken) -> Result<Void, HostAuthorityRefusal> {
+        var stagedRegistry = registry
+        var stagedLedger = ledger
+        let change: ContextChange
+        do { change = try stagedRegistry.release(expected: token) } catch { return .failure(.lease(error)) }
+        do { try change.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
+        registry = stagedRegistry
+        ledger = stagedLedger
+        return .success(())
+    }
+
+    func liveContext(over running: RunningGraph) -> ActivationLiveContext? {
         guard let engine = ledger.generation(EngineLeaseRegistry.contextKey) else { return nil }
         let activation = ActivationContext(hostEpoch: live.hostEpoch, activeRevision: running.revision,
                                            permission: live.permission, capabilities: live.capabilities)
@@ -373,7 +382,7 @@ actor HostAuthority {
     }
 
     /// Every plan the engine must keep: running, reviewed or committing, and held by a phase.
-    private func livePlans() -> Set<PreparedActivationID> {
+    func livePlans() -> Set<PreparedActivationID> {
         var plans: Set<PreparedActivationID> = []
         for state in projects.values {
             if let running = state.transaction.running.prepared { plans.insert(running) }

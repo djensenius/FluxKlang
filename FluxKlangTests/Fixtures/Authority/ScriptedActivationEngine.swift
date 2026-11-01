@@ -23,6 +23,13 @@ struct ScriptedPrepareAnswer: Sendable {
     let verdict: Result<PrepareAnswerOutcome, HostAuthorityRefusal>
 }
 
+/// One `.commit` the engine took and has not reported.
+struct ScriptedCommit: Hashable, Sendable {
+    let prepared: PreparedActivationID
+    let attempt: CommitAttemptID
+    let token: EngineLeaseToken
+}
+
 struct ScriptedActivationEngine: Sendable {
     /// Fails exactly the scripted prepare answers (1-based, in answer order).
     private(set) var faults: FaultScript
@@ -32,6 +39,8 @@ struct ScriptedActivationEngine: Sendable {
     private(set) var ids: FixtureIDSequence<PreparedActivationTag>
     /// Prepares taken and not yet answered, oldest first.
     private(set) var pending: [PrepareAttemptID] = []
+    /// Commits taken and not yet reported, oldest first.
+    private(set) var pendingCommits: [ScriptedCommit] = []
 
     init(failing: [Int: FixtureFault] = [:], answerLimit: Int = 512,
          recordCapacity: Int = 1_024) throws(ScriptedEngineError) {
@@ -50,14 +59,19 @@ struct ScriptedActivationEngine: Sendable {
         }
     }
 
-    /// Takes every queued command, recording each and remembering each prepare.
+    /// Takes every queued command, recording each and remembering each prepare and commit.
     /// Returns the commands taken by this call.
     @discardableResult
     mutating func drain(_ authority: HostAuthority) async -> [EngineCommand] {
         var taken: [EngineCommand] = []
         while let command = await authority.nextEngineCommand() {
             _ = recorder.record(command)
-            if case .prepare(_, let attempt) = command { pending.append(attempt) }
+            switch command {
+            case .prepare(_, let attempt): pending.append(attempt)
+            case .commit(let prepared, let attempt, let token):
+                pendingCommits.append(ScriptedCommit(prepared: prepared, attempt: attempt, token: token))
+            default: break
+            }
             taken.append(command)
         }
         return taken
@@ -83,5 +97,11 @@ struct ScriptedActivationEngine: Sendable {
     /// or late); the test delivers it later, for example with `scriptedAnswer()`.
     mutating func withholdNext() -> PrepareAttemptID? {
         pending.isEmpty ? nil : pending.removeFirst()
+    }
+
+    /// Takes the oldest pending commit without reporting it (the report is lost or
+    /// late); H5c-2 adds reporting.
+    mutating func withholdCommit() -> ScriptedCommit? {
+        pendingCommits.isEmpty ? nil : pendingCommits.removeFirst()
     }
 }
