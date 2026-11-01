@@ -118,6 +118,11 @@ actor HostAuthority {
         book.abandonCommit(attempt, reason: reason)
     }
 
+    /// `HostAuthorityBook.leaseLost(_:)`.
+    func leaseLost(_ token: EngineLeaseToken) -> Result<ProjectID, HostAuthorityRefusal> {
+        book.leaseLost(token)
+    }
+
     /// `HostAuthorityBook.commitReported(_:)`.
     func commitReported(_ report: ActivationCommitReport) -> Result<CommitReportOutcome, HostAuthorityRefusal> {
         book.commitReported(report)

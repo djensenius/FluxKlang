@@ -158,4 +158,8 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     let inFlight: [ProjectID: CommitAttemptID]
     /// The window whose gesture authorized each project's outstanding authorization.
     let authorizedWindows: [ProjectID: WindowID]
+    /// The fail-closed output lane: `true` while a mute is owed, delivered before the FIFO.
+    let pendingOutput: Bool?
+    /// Whether the engine's outputs are muted (engine-global: one engine per host).
+    let outputsMuted: Bool
 }
