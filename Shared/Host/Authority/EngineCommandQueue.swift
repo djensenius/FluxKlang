@@ -67,6 +67,10 @@ struct EngineCommandQueue: Hashable, Sendable {
     /// Queued commands, oldest first.
     private(set) var pending: [EngineCommand] = []
 
+    /// An empty queue. Declared explicitly so the synthesized `init(pending:)`
+    /// does not exist: commands enter only through the checked `enqueue` methods.
+    init() {}
+
     var capacity: Int { Self.capacity }
     var count: Int { pending.count }
     var isEmpty: Bool { pending.isEmpty }
