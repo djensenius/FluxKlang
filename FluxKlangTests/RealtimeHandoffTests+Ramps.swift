@@ -89,6 +89,75 @@ extension RealtimeHandoffTests {
                 #expect(slots.advance(parameter: 0, frames: frames) == nil)
             }
             #expect(slots.activeCount == 0)
+            // A jump replaces an active ramp from `current`: one slot, the new target, then idle.
+            #expect(slots.set(parameter: 0, target: 10, durationFrames: 100, current: 0) == .ok)
+            #expect(slots.advance(parameter: 0, frames: 50) == 5)
+            #expect(slots.set(parameter: 0, target: -1, durationFrames: 0, current: 5) == .ok)
+            #expect(slots.activeCount == 1)
+            #expect(slots.advance(parameter: 0, frames: 0) == -1)
+            #expect(slots.activeCount == 0)
+            #expect(slots.advance(parameter: 0, frames: 1) == nil)
+            // A pending jump replaced by another before any advance: still one slot, and the newer target wins.
+            #expect(slots.set(parameter: 1, target: 4, durationFrames: 0, current: 0) == .ok)
+            #expect(slots.set(parameter: 1, target: 6, durationFrames: -1, current: 0) == .ok)
+            #expect(slots.activeCount == 1)
+            #expect(slots.advance(parameter: 1, frames: 0) == 6)
+            #expect(slots.activeCount == 0)
+            #expect(slots.advance(parameter: 1, frames: 0) == nil)
+        }
+
+        @Test func valueReadsWithoutAdvancing() throws {
+            let slots = try #require(ramps(2))
+            for parameter: UInt32 in [0, 1, 2, .max] {
+                #expect(slots.value(parameter: parameter) == nil)
+            }
+            #expect(slots.set(parameter: 0, target: 8, durationFrames: 8, current: 0) == .ok)
+            #expect(slots.value(parameter: 0) == 0)
+            #expect(slots.advance(parameter: 0, frames: 2) == 2)
+            #expect(slots.value(parameter: 0) == 2)
+            #expect(slots.value(parameter: 0) == 2)
+            #expect(slots.activeCount == 1)
+            #expect(slots.value(parameter: 1) == nil)
+            #expect(slots.advance(parameter: 0, frames: 2) == 4)
+            #expect(slots.value(parameter: 0) == 4)
+            // Replacing reads from the new `current` straight away.
+            #expect(slots.set(parameter: 0, target: 0, durationFrames: 4, current: 3) == .ok)
+            #expect(slots.value(parameter: 0) == 3)
+            #expect(slots.advance(parameter: 0, frames: 4) == 0)
+            #expect(slots.value(parameter: 0) == nil)
+            #expect(slots.activeCount == 0)
+            // A pending jump reads as its target and stays pending until `advance`.
+            #expect(slots.set(parameter: 1, target: 7, durationFrames: 0, current: -2) == .ok)
+            #expect(slots.value(parameter: 1) == 7)
+            #expect(slots.value(parameter: 1) == 7)
+            #expect(slots.activeCount == 1)
+            #expect(slots.advance(parameter: 1, frames: 0) == 7)
+            #expect(slots.value(parameter: 1) == nil)
+            #expect(slots.activeCount == 0)
+        }
+
+        @Test func intermediateValuesStayBoundedAndMonotonic() throws {
+            let slots = try #require(ramps(1))
+            let spans: [(start: Float, target: Float)] = [(-3e38, 1e38), (1e30, 0.1), (-1, 1)]
+            for span in spans {
+                let low = min(span.start, span.target)
+                let high = max(span.start, span.target)
+                for duration: Int64 in [3, 1_000, 1 << 40] {
+                    #expect(slots.set(parameter: 0, target: span.target, durationFrames: duration,
+                                      current: span.start) == .ok)
+                    let stride = max(duration / 1_000, 1)
+                    var previous = span.start
+                    var samples = 0
+                    while let sample = slots.advance(parameter: 0, frames: stride) {
+                        samples += 1
+                        #expect(sample >= low && sample <= high)
+                        #expect(span.target > span.start ? sample >= previous : sample <= previous)
+                        previous = sample
+                    }
+                    #expect(previous == span.target)
+                    #expect(samples >= 3 && samples <= 1_001)
+                }
+            }
         }
 
         @Test func outOfRangeParameterRefused() throws {
@@ -172,6 +241,8 @@ extension RealtimeHandoffTests {
         @Test func initRejectsOutOfRangeParameterCounts() {
             let maximum = RampSlots.maximumParameters
             #expect(maximum == KernelLimits.maximumCapacity)
+            // Every prepared index must be addressable by a `UInt32` parameter.
+            #expect(maximum <= Int(UInt32.max))
             for count in RealtimeHandoffTests.adversarialInts + [maximum + 1] where count < 1 || count > maximum {
                 #expect(throws: RampSlots.PreparationError.parameterCountOutOfRange(count)) {
                     try RampSlots(parameterCount: count)

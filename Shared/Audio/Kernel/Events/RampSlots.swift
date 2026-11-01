@@ -54,6 +54,7 @@ final class RampSlots: @unchecked Sendable {
     /// `target` or `current` is NaN or infinite. A refusal leaves the slot and `activeCount` unchanged.
     func set(parameter: UInt32, target: Float, durationFrames: Int64, current: Float) -> KernelStatus {
         guard let index = index(parameter) else { return .refused(.slotOutOfRange) }
+        // Follow-up (#64): a dedicated `.nonFinite` refusal; `.invalidLength` is the closest existing case.
         guard target.isFinite, current.isFinite else { return .refused(.invalidLength) }
         if !slots[index].active { activeCount &+= 1 }
         slots[index] = Ramp(start: current, target: target, duration: max(durationFrames, 0), elapsed: 0,
@@ -74,12 +75,26 @@ final class RampSlots: @unchecked Sendable {
             return slots[index].target
         }
         slots[index].elapsed &+= step
-        return Self.interpolate(slots[index])
+        return Self.sample(slots[index])
+    }
+
+    /// Reads `parameter`'s value without moving the ramp: what the last `advance` returned, or `current` before
+    /// the first. A pending jump (`durationFrames <= 0`) reads as its `target`. `nil` when the parameter is idle or
+    /// out of range.
+    func value(parameter: UInt32) -> Float? {
+        guard let index = index(parameter), slots[index].active else { return nil }
+        return Self.sample(slots[index])
     }
 
     private func index(_ parameter: UInt32) -> Int? {
         guard parameter < UInt32(truncatingIfNeeded: parameterCount) else { return nil }
         return Int(parameter)
+    }
+
+    /// The value at `elapsed`, shared by `advance` and `value`: `target` once `elapsed` reaches `duration` (only a
+    /// pending jump, since `advance` completes a ramp there), otherwise interpolated.
+    private static func sample(_ ramp: Ramp) -> Float {
+        ramp.elapsed < ramp.duration ? interpolate(ramp) : ramp.target
     }
 
     /// Only called with `elapsed < duration`, so `duration > 0`. Computed in `Double` so the span between two
