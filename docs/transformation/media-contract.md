@@ -160,6 +160,16 @@ holding its origin, plus its ticks. A wrap never moves it; musical-map revisions
 boundary equal to `endTicks` is the wrap frame, and later ones continue on the next pass's grid (example 03). In v1,
 musical targets must resolve inside `[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
 
+Virtual future passes use the same per-wrap rounding as recorded wraps: full passes advance by the rounded
+loop duration, not an accumulated unrounded duration. A zero-rounded duration still permits representable
+current-pass and first-wrap boundaries; a search requiring a later frame fails explicitly rather than
+dividing by zero, walking passes indefinitely or narrowing valid loop bounds. Grid arithmetic stays exact
+through the full declared tick range.
+
+For frame projection only, `(pass, endTicks)` aliases `(pass + 1, startTicks)`, as in the reference checker.
+This deterministic boundary alias does not change the stored occurrence or substitute the currently running
+pass for a historical one.
+
 ### 5.6 Tempo and meter
 
 A musical-map edit bumps `musicalMap` and carries the whole new tempo map plus an optional `meter` (inherited when
@@ -167,6 +177,14 @@ absent; in v1 one meter applies to the whole map, and it only labels bars becaus
 keep their frames; pending musical targets re-resolve with the new map, and their outcome names the revision used
 (example 04). External tempo (#84) is rate-limited so it cannot cause unbounded re-resolution. Fixed-rate audio keeps
 its sample length; a tempo mismatch is advisory.
+
+Before commit, occurrence identity is frozen, not a physical sample frame. While running, resolve with the
+current map and latest valid running anchor of the projection pass, including the loop-end alias above.
+A same-pass resume may change `assignedFrame` through backward projection from its resume anchor. That frame
+is a timing-policy reference, not evidence that the transport physically traversed the tick then; actual
+dispatch remains constrained by the commit horizon. Only committed events retain their committed frames.
+The v1 trace format/checker does not encode stop/resume transitions, so this rule does not establish validation
+of a complete pause trace or introduce new v1 records.
 
 ### 5.7 Source loss
 
