@@ -33,6 +33,12 @@ policy persist per action; two actions may use the same asset differently.
 The action media must match the referenced asset. Nothing here schedules a trigger.
 Unknown optional fields and explicit extension bags remain separate and round-trip.
 
+Shared `JSONValue` encoding writes exact integral doubles as `Int64` or `UInt64`
+where representable, and `-0.0` as `0`; other finite doubles keep their double
+encoding. Large integral doubles may therefore be written as integers rather
+than exponent notation. This canonicalizes numeric representation only: it does
+not normalize Unicode or preserve the original JSON bytes.
+
 ## Legacy adoption
 
 `StudioGraphNeutralAdapter.adapt(graphData:endpointsData:id:)` reads the existing
