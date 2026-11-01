@@ -1,26 +1,69 @@
 import Testing
 @testable import FluxKlang
 
-/// Everything an event may change, so a refusal can be shown to change nothing.
+/// Everything an event may change, so a refusal can be shown to change nothing. Private
+/// state is captured through behaviour, each probe on its own copy (see HANDOFF.md audit).
 private struct EventSourceSnapshot: Equatable {
+    let primaryClock: GenerationKey
+    let musicalClock: ClockID?
     let generations: [GenerationKey: Generation]
     let pendingRestart: Generation?
     let restartRecord: ClockRestartRecord?
     let awaitingTransportBump: Bool
     let resume: TransportResume?
     let nominalRate: Int
+    /// `resume` after recording a probe restart, or nil when the ledger refuses a record.
+    /// This is where the private `restartPositionSuperseded` flag is observable.
+    let resumeAfterRecordProbe: TransportResume??
     let states: [ActionID: ReadinessState]
     let reasons: [ActionID: ReadinessReason]
+    /// The private ready-entry count of every action, ready or not (a later `markReady` exposes it).
+    let readyEntries: [ActionID: Int]
+    let current: Set<ActionID>
+    /// For every ledger counter, the actions its change would invalidate: the private dependencies.
+    let invalidatedBy: [GenerationKey: [ActionID]]
 
     init(_ ledger: GenerationLedger, _ readiness: ActionReadiness) {
+        primaryClock = ledger.primaryClock
+        musicalClock = ledger.musicalClock
         generations = ledger.current
         pendingRestart = ledger.pendingRestart
         restartRecord = ledger.restartRecord
         awaitingTransportBump = ledger.awaitingTransportBump
         resume = ledger.resume
         nominalRate = ledger.nominalRate
+        resumeAfterRecordProbe = Self.recordProbe(ledger)
         states = readiness.states
         reasons = readiness.reasons
+        readyEntries = Self.entryProbe(readiness, ledger)
+        current = Set(readiness.states.keys.filter { readiness.isCurrent($0, ledger: ledger) })
+        invalidatedBy = ledger.current.keys.reduce(into: [:]) { result, key in
+            var probe = readiness
+            result[key] = probe.generationChanged(key)
+        }
+    }
+
+    private static func recordProbe(_ ledger: GenerationLedger) -> TransportResume?? {
+        guard let pending = ledger.pendingRestart,
+              let clock = ClockID(rawValue: ledger.primaryClock.subject.rawValue) else { return nil }
+        var probe = ledger
+        let record = ClockRestartRecord(start: SampleStamp(clock: clock, generation: pending, frame: 0),
+                                        host: HostStamp(ticks: 0), previousFrame: 0)
+        guard (try? probe.recordClockRestart(record)) != nil else { return nil }
+        return .some(probe.resume)
+    }
+
+    private static func entryProbe(_ readiness: ActionReadiness, _ ledger: GenerationLedger) -> [ActionID: Int] {
+        readiness.states.keys.reduce(into: [:]) { result, action in
+            if let entry = readiness.readyEntry(action) {
+                result[action] = entry
+                return
+            }
+            var probe = readiness
+            if probe.state(action) != .preparing { try? probe.transition(action, to: .preparing) }
+            try? probe.markReady(action, preparedAgainst: [], ledger: ledger)
+            if let entry = probe.readyEntry(action) { result[action] = entry - 1 }
+        }
     }
 }
 
@@ -261,6 +304,22 @@ extension ContractFixtureTests {
             #expect(!ledger.hasRestartObligations)
             try FixtureEventApplier.apply(duplicate, ledger: &ledger, readiness: &readiness)
             #expect(ledger.generation(Self.primary)?.value == 3 && ledger.hasRestartObligations)
+        }
+
+        @Test func refusedPrimaryBumpKeepsTransportRestartSupersession() throws {
+            var ledger = try Self.makeLedger()
+            var readiness = ActionReadiness()
+            try FixtureEventApplier.apply(.bump(Self.primary, .deviceRestart), ledger: &ledger, readiness: &readiness)
+            try FixtureEventApplier.apply(.bump(Self.transport, .transportRestart), ledger: &ledger,
+                                          readiness: &readiness)
+            #expect(ledger.hasRestartObligations && ledger.resume == nil)
+            Self.expectRefusal(.ledger(.restartObligationsPending), applying: .bump(Self.primary, .wake),
+                               ledger: &ledger, readiness: &readiness)
+
+            // The transport restart superseded the restart position, so the record must not set one.
+            let (record, _) = try Self.restartEvents()
+            try FixtureEventApplier.apply(.restartRecord(record), ledger: &ledger, readiness: &readiness)
+            #expect(ledger.restartRecord == record && ledger.resume == nil)
         }
 
         @Test func swappedRestartEventsRespectLedgerObligations() throws {
