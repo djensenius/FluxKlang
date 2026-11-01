@@ -64,8 +64,8 @@ struct PrepareAttemptID: Hashable, Sendable {
     }
 }
 
-/// The engine's plan-level verdict on a commit. Recovery (H4) acts on
-/// `.failed` and `.partial`.
+/// The engine's plan-level verdict on a commit. `resolveRecovery` acts on
+/// `.failed` and `.partial`; a missing report is `abandonCommit(_:reason:)`.
 enum ActivationCommitOutcome: Hashable, Sendable {
     /// Every planned node is applied; the plan is now running.
     case succeeded
@@ -118,12 +118,13 @@ enum ActivationPhase: Hashable, Sendable {
     /// unchanged until `resolveRecovery`.
     case commitFailed(PreparedActivationID)
     case prepareFailed(PrepareFailure)
-    /// The named plan's commit was abandoned (outcome unknown or unrepresentable)
-    /// and outputs are muted; `resolveRecovery` restores the running graph.
+    /// The named plan's commit was abandoned (outcome unknown, revision overflow
+    /// or lease lost) and outputs are muted; `resolveRecovery` restores the running graph.
     case recovering(PreparedActivationID)
 }
 
-/// What the engine is running. Changes only when a commit is fully acknowledged.
+/// What the engine is running. Changes only when a commit is fully acknowledged
+/// or a partial commit is kept by `resolveRecovery`.
 struct RunningGraph: Hashable, Sendable {
     let revision: ContractRevision
     let prepared: PreparedActivationID?
@@ -184,6 +185,8 @@ struct ActivationTransaction: Hashable, Sendable {
     /// The last issued commit attempt; attempts never repeat within the one
     /// copy that issues commits. Value copies share it with the identity below.
     private(set) var lastAttempt: CommitAttemptID?
+    /// The lease `lastAttempt` was issued under; a partial plan is kept only under it.
+    private var commitLease: EngineLeaseToken?
     /// Issues this transaction's commit attempts. Value copies share it, so
     /// only the H5 owner's copy may commit; a diverged copy would issue an
     /// attempt ID equal to the owner's.
@@ -211,7 +214,7 @@ struct ActivationTransaction: Hashable, Sendable {
     /// Validates `request` against the live context and, if it passes, asks
     /// the owner to prepare it under a new prepare attempt. Checks: busy, context
     /// revision, H1 validation, then the attempt counter (`overflow`).
-    /// A `.partial` or `.commitFailed` commit must be resolved by recovery first.
+    /// A `.partial`, `.commitFailed` or `.recovering` commit must be resolved first.
     mutating func begin(
         _ request: ActivationRequest, candidate: GraphDocument, in live: ActivationLiveContext
     ) -> Result<[ActivationEffect], ActivationRefusal> {
@@ -292,6 +295,7 @@ struct ActivationTransaction: Hashable, Sendable {
         let attempt = CommitAttemptID(issuer: attempts, generation: next)
         authorizer.revoke()
         lastAttempt = attempt
+        commitLease = lease.token
         plan.attempt = attempt
         self.plan = plan
         phase = .committing
@@ -314,9 +318,10 @@ struct ActivationTransaction: Hashable, Sendable {
     /// the plan's nodes (`ActivationCommitReport.isConsistent(with:)`). Only
     /// `.succeeded` makes the plan the running graph, advancing the revision by
     /// one and discarding the plan it replaces; `.failed` and `.partial` leave
-    /// the running graph and revision to recovery, without effects.
+    /// the running graph and revision to `resolveRecovery`, without effects.
     /// If the revision cannot advance (`overflow`), the transaction stays
-    /// `.committing` although the engine applied the plan; `abandonCommit` exits.
+    /// `.committing` although the engine applied the plan; the exit is
+    /// `abandonCommit(_:reason: .revisionOverflow)`.
     mutating func acknowledged(_ report: ActivationCommitReport) -> Result<[ActivationEffect], ActivationRefusal> {
         guard phase == .committing, let plan, let prepared = plan.prepared, let attempt = plan.attempt else {
             return .failure(.unexpectedPhase(phase))
@@ -346,28 +351,47 @@ struct ActivationTransaction: Hashable, Sendable {
         return .success(replaced.map { [.discard($0)] } ?? [])
     }
 
-    /// Abandons the current commit attempt whose outcome is unknown (timeout,
-    /// lost report, or an applied plan whose revision overflows): never assumed
-    /// successful. Checks: phase `.committing`, then the attempt (`staleReport`).
-    /// Enters `.recovering` with muted outputs; the engine may still hold the
-    /// plan, so it is discarded by `resolveRecovery`. Later reports are refused.
-    mutating func abandonCommit(_ attempt: CommitAttemptID) -> Result<ActivationRecoveryStep, ActivationRefusal> {
-        guard phase == .committing, let prepared = plan?.prepared, let current = plan?.attempt else {
+    /// Abandons the current commit attempt without a usable report: its outcome
+    /// is unknown (timeout, lost report), its applied plan has no next revision,
+    /// or the lease was lost. Never assumed successful. Allowed from `.committing`,
+    /// and from `.commitFailed` or `.partial` for `.leaseLost` only. Checks: phase,
+    /// then the attempt (`staleReport`); a `.revisionOverflow` claim is verified, and
+    /// refused as `unexpectedPhase` while the revision can advance. Enters `.recovering` with muted outputs,
+    /// without effects: the engine may still hold the plan, so `resolveRecovery`
+    /// discards it. Later reports are refused.
+    mutating func abandonCommit(
+        _ attempt: CommitAttemptID, reason: CommitAbandonment
+    ) -> Result<ActivationRecoveryStep, ActivationRefusal> {
+        let prepared: PreparedActivationID
+        switch phase {
+        case .committing:
+            guard let id = plan?.prepared else { return .failure(.unexpectedPhase(phase)) }
+            prepared = id
+        case .commitFailed(let id) where reason == .leaseLost, .partial(let id, _, _) where reason == .leaseLost:
+            prepared = id
+        default: return .failure(.unexpectedPhase(phase))
+        }
+        guard attempt == lastAttempt else { return .failure(.staleReport) }
+        if reason == .revisionOverflow, (try? running.revision.next()) != nil {
             return .failure(.unexpectedPhase(phase))
         }
-        guard attempt == current else { return .failure(.staleReport) }
         plan = nil
         phase = .recovering(prepared)
-        return .success(ActivationRecovery.enterRecovery(.commitOutcomeUnknown, running: running))
+        return .success(ActivationRecovery.enterRecovery(reason.event, running: running))
     }
 
     /// The sanctioned exit from `.commitFailed`, `.partial` and `.recovering`.
     /// Checks: phase, then the failing attempt (`lastAttempt`, else `staleReport`).
     /// A failed or abandoned plan is discarded and the running graph restored
-    /// (`.idle`). A partial plan is kept as the next revision with its unapplied
-    /// nodes as placeholders (`.acknowledged`), or, if the revision cannot
-    /// advance, fails closed into muted `.recovering`.
-    mutating func resolveRecovery(_ attempt: CommitAttemptID) -> Result<ActivationRecoveryStep, ActivationRefusal> {
+    /// (`.idle`) only under this project's lease (any token, so reacquiring
+    /// unblocks it), else `leaseNotHeld` / `leaseHeldByOtherProject`. A partial plan is
+    /// kept as the next revision with its unapplied nodes as placeholders
+    /// (`.acknowledged`) only while `lease` is still the commit's lease, and the
+    /// revision can advance; otherwise it fails closed into muted `.recovering`,
+    /// installing nothing and discarding nothing.
+    mutating func resolveRecovery(
+        _ attempt: CommitAttemptID, lease: EngineLeaseSnapshot?
+    ) -> Result<ActivationRecoveryStep, ActivationRefusal> {
         let prepared: PreparedActivationID
         var unapplied: Set<NodeID>?
         switch phase {
@@ -377,8 +401,14 @@ struct ActivationTransaction: Hashable, Sendable {
         }
         guard attempt == lastAttempt else { return .failure(.staleReport) }
         guard let unapplied else {
+            guard let lease else { return .failure(.leaseNotHeld) }
+            guard lease.project == project else { return .failure(.leaseHeldByOtherProject(lease.project)) }
             phase = .idle
             return .success(ActivationRecovery.restore(running, discarding: prepared))
+        }
+        guard let lease, lease.project == project, lease.token == commitLease else {
+            phase = .recovering(prepared)
+            return .success(ActivationRecovery.enterRecovery(.leaseLost, running: running))
         }
         guard let revision = try? running.revision.next() else {
             phase = .recovering(prepared)
@@ -388,5 +418,19 @@ struct ActivationTransaction: Hashable, Sendable {
         running = RunningGraph(revision: revision, prepared: prepared)
         phase = .acknowledged(revision)
         return .success(step)
+    }
+
+    /// Abandons the outstanding `.prepare` whose answer was lost. Checks: phase
+    /// `.preparing`, then the attempt (`stalePrepareResponse`). Returns to `.idle`
+    /// with no effects and no discard: the prepared ID is unknown to the transaction;
+    /// H5 must discard any `.success` ID delivered with a refused or abandoned attempt.
+    /// The late answer is refused (`unexpectedPhase`, then `stalePrepareResponse`
+    /// once a new prepare is out).
+    mutating func abandonPrepare(_ attempt: PrepareAttemptID) -> Result<[ActivationEffect], ActivationRefusal> {
+        guard phase == .preparing, let current = plan?.prepareAttempt else { return .failure(.unexpectedPhase(phase)) }
+        guard attempt == current else { return .failure(.stalePrepareResponse) }
+        plan = nil
+        phase = .idle
+        return .success([])
     }
 }

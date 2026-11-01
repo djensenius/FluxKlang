@@ -14,6 +14,8 @@ enum EngineLifecycle: Hashable, Sendable {
     case preparing(ContractRevision)
     case running
     /// Running with these capabilities lost; affected nodes are silent placeholders.
+    /// Which nodes are affected, and leaving `degraded` when a capability
+    /// returns, are re-derived by the owner from the capability document.
     case degraded([CapabilityID])
     /// Outputs are muted and changes to the running set are rejected.
     case recovering
@@ -86,18 +88,41 @@ enum RecoveryEvent: Hashable, Sendable {
 /// What the owner must do, in order, before performing a step's effects.
 enum RecoveryDecision: Hashable, Sendable {
     /// Return the engine to the running graph's prepared plan at this revision.
+    /// `resolveRecovery` issues it only under this project's engine lease, and the
+    /// owner (H5) performs it under that lease; without it, it stays recovering, muted.
     case restorePrevious(ContractRevision)
     /// Keep the partly applied plan active.
     case keepActivePartial
     /// The node stays a silent placeholder (not bypassed) and raises a
     /// diagnostic; it is never re-activated automatically.
     case missingPlaceholder(NodeID)
-    /// Mute outputs and enter recovery. The policy only ever mutes.
+    /// Mute outputs and enter recovery. The policy only ever mutes (`true`);
+    /// the field keeps the instruction explicit for the owner and diagnostics.
     case recover(muteOutputs: Bool)
+}
+
+/// Why a commit attempt is abandoned without a usable report.
+enum CommitAbandonment: Hashable, Sendable {
+    /// No report arrived, for example after a timeout or a lost report.
+    case outcomeUnknown
+    /// The plan was applied, but the running revision cannot advance.
+    case revisionOverflow
+    /// The engine lease was lost or changed hands.
+    case leaseLost
+
+    var event: RecoveryEvent {
+        switch self {
+        case .outcomeUnknown: .commitOutcomeUnknown
+        case .revisionOverflow: .revisionOverflow
+        case .leaseLost: .leaseLost
+        }
+    }
 }
 
 /// One recovery transition's output: decisions first, then effects.
 struct ActivationRecoveryStep: Hashable, Sendable {
+    /// What the step recovers from, for the owner's diagnostics.
+    let cause: RecoveryEvent
     let decisions: [RecoveryDecision]
     let effects: [ActivationEffect]
 }
@@ -119,12 +144,12 @@ enum ActivationRecovery {
     /// Fail closed: mute and recover, keeping the running graph. `prepared`
     /// stays held by the engine until the recovery is resolved.
     static func enterRecovery(_ event: RecoveryEvent, running: RunningGraph) -> ActivationRecoveryStep {
-        ActivationRecoveryStep(decisions: decisions(for: event, running: running), effects: [])
+        ActivationRecoveryStep(cause: event, decisions: decisions(for: event, running: running), effects: [])
     }
 
     /// Return to the running graph and release the plan that did not become it.
     static func restore(_ running: RunningGraph, discarding prepared: PreparedActivationID) -> ActivationRecoveryStep {
-        ActivationRecoveryStep(decisions: decisions(for: .commitFailed, running: running),
+        ActivationRecoveryStep(cause: .commitFailed, decisions: decisions(for: .commitFailed, running: running),
                                effects: [.discard(prepared)])
     }
 
@@ -132,6 +157,7 @@ enum ActivationRecovery {
     /// become placeholders, and the replaced plan is released.
     static func keepPartial(unapplied: Set<NodeID>, replacing previous: RunningGraph) -> ActivationRecoveryStep {
         ActivationRecoveryStep(
+            cause: .partialCommit,
             decisions: decisions(for: .partialCommit, running: previous)
                 + unapplied.sorted().map { .missingPlaceholder($0) },
             effects: previous.prepared.map { [.discard($0)] } ?? []

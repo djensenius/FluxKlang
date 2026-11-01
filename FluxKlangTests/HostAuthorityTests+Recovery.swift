@@ -13,14 +13,71 @@ private let windowA = WindowID(validated: "win.a1")
 private let windowB = WindowID(validated: "win.b1")
 private let planID = PreparedActivationID(validated: "prep.next")
 private let runningPlan = PreparedActivationID(validated: "prep.running")
+private let value = ParameterValue(value: 0.5, unit: .normalized)
 private let nodes = [NodeID(validated: "node.fx"), NodeID(validated: "node.eq"), NodeID(validated: "node.out")]
 private let liveParameter = ParameterID(validated: "parameter.live")
-private let hazardousParameter = ParameterID(validated: "parameter.hazardous")
 private let draftID = DraftID(validated: "draft.main")
 
-private let lifecycles: [EngineLifecycle] = [
-    .stopped, .preparing(.initial), .running, .degraded([audio]), .recovering, .heldByOther(projectB)
-]
+/// One case per `EngineLifecycle` case; `init(_:)` has no `default`, so a new lifecycle fails to compile here.
+private enum LifecycleKind: CaseIterable {
+    case stopped, preparing, running, degraded, recovering, heldByOther
+
+    init(_ lifecycle: EngineLifecycle) {
+        switch lifecycle {
+        case .stopped: self = .stopped
+        case .preparing: self = .preparing
+        case .running: self = .running
+        case .degraded: self = .degraded
+        case .recovering: self = .recovering
+        case .heldByOther: self = .heldByOther
+        }
+    }
+
+    var lifecycle: EngineLifecycle {
+        switch self {
+        case .stopped: .stopped
+        case .preparing: .preparing(.initial)
+        case .running: .running
+        case .degraded: .degraded([audio])
+        case .recovering: .recovering
+        case .heldByOther: .heldByOther(projectB)
+        }
+    }
+}
+
+private let lifecycles = LifecycleKind.allCases.map(\.lifecycle)
+/// Hard-coded: the lifecycles in which the running set must not change.
+private let blocking: [EngineLifecycle] = [.recovering, .heldByOther(projectB)]
+
+/// One case per `RecoveryEvent` case, exhaustive like `LifecycleKind`.
+private enum EventKind: CaseIterable {
+    case commitFailed, partialCommit, commitOutcomeUnknown, revisionOverflow, processorCrashed, leaseLost
+    case capabilityLost
+
+    init(_ event: RecoveryEvent) {
+        switch event {
+        case .commitFailed: self = .commitFailed
+        case .partialCommit: self = .partialCommit
+        case .commitOutcomeUnknown: self = .commitOutcomeUnknown
+        case .revisionOverflow: self = .revisionOverflow
+        case .processorCrashed: self = .processorCrashed
+        case .leaseLost: self = .leaseLost
+        case .capabilityLost: self = .capabilityLost
+        }
+    }
+
+    var event: RecoveryEvent {
+        switch self {
+        case .commitFailed: .commitFailed
+        case .partialCommit: .partialCommit
+        case .commitOutcomeUnknown: .commitOutcomeUnknown
+        case .revisionOverflow: .revisionOverflow
+        case .processorCrashed: .processorCrashed(nodes[0])
+        case .leaseLost: .leaseLost
+        case .capabilityLost: .capabilityLost(audio)
+        }
+    }
+}
 
 private func request(base: ContractRevision = .initial) -> ActivationRequest {
     ActivationRequest(draft: draftID, graph: graphID, baseRevision: base, hostEpoch: hostEpoch,
@@ -42,36 +99,79 @@ private func report(_ outcome: ActivationCommitOutcome, applied: Set<NodeID> = S
 private let partial = report(.partial, applied: [nodes[0]], unapplied: [nodes[1], nodes[2]])
 
 private func restore(_ revision: ContractRevision) -> ActivationRecoveryStep {
-    ActivationRecoveryStep(decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
+    ActivationRecoveryStep(cause: .commitFailed, decisions: [.restorePrevious(revision)], effects: [.discard(planID)])
 }
 
-private let mutedRecovery = ActivationRecoveryStep(decisions: [.recover(muteOutputs: true)], effects: [])
+private func mutedRecovery(_ cause: RecoveryEvent) -> ActivationRecoveryStep {
+    ActivationRecoveryStep(cause: cause, decisions: [.recover(muteOutputs: true)], effects: [])
+}
 
 extension TransactionBench {
     /// Reviews, authorizes and commits the plan at `base`, returning the attempt the engine was given.
-    fileprivate mutating func committedAttempt(base: ContractRevision = .initial) throws -> CommitAttemptID {
+    mutating func committedAttempt(base: ContractRevision = .initial) throws -> CommitAttemptID {
         try reviewing(request(base: base), candidate: candidate(revision: base))
         _ = try commit(try authorize()).get()
         return try #require(transaction.lastAttempt)
     }
 
     /// An attempt issued by another transaction, which this one must treat as stale.
-    fileprivate static func foreignAttempt() throws -> CommitAttemptID {
+    static func foreignAttempt() throws -> CommitAttemptID {
         var other = try TransactionBench()
         return try other.committedAttempt()
     }
+
+    /// Expects a restoring `resolveRecovery` refused, unchanged, without this project's lease.
+    mutating func expectRestoreNeedsLease(_ attempt: CommitAttemptID) throws {
+        #expect(refusal { $0.resolveRecovery(attempt, lease: nil) } == .leaseNotHeld)
+        var moved = registry
+        if let token = moved.snapshot?.token { _ = try moved.release(expected: token) }
+        _ = try moved.acquire(project: projectB, window: windowB)
+        #expect(refusal { $0.resolveRecovery(attempt, lease: moved.snapshot) } == .leaseHeldByOtherProject(projectB))
+    }
+
+    /// Expects `transaction` settled in `phase` over `running`, holding no plan and
+    /// keeping `before`'s attempts and authorizer: a recovery exit issues and revokes nothing.
+    func expectSettled(_ phase: ActivationPhase, running: RunningGraph, since before: ActivationTransaction,
+                       sourceLocation: SourceLocation = #_sourceLocation) {
+        let now = transaction
+        #expect(now.phase == phase && now.running == running && now.validated == nil, sourceLocation: sourceLocation)
+        #expect(now.lastAttempt == before.lastAttempt && now.lastPrepareAttempt == before.lastPrepareAttempt
+            && now.authorizer == before.authorizer && now.project == before.project, sourceLocation: sourceLocation)
+    }
 }
 
-/// One command per kind of change the gate distinguishes.
-private enum GatedCommand: CaseIterable {
-    case live, hazardous, bind, transport, panic, safeMute, propose, editDraft
+/// One case per `CommandOperation` case; `init(_:)` has no `default`, so a new operation fails to compile here.
+private enum OperationKind: CaseIterable {
+    case set, ramp, bind, recall, trigger, start, stop, locate, panic, safeMute, propose, editDraft
+
+    // swiftlint:disable:next cyclomatic_complexity
+    init(_ operation: CommandOperation) { // One case per operation, deliberately without `default`.
+        switch operation {
+        case .set: self = .set
+        case .ramp: self = .ramp
+        case .bind: self = .bind
+        case .recall: self = .recall
+        case .trigger: self = .trigger
+        case .start: self = .start
+        case .stop: self = .stop
+        case .locate: self = .locate
+        case .panic: self = .panic
+        case .safeMute: self = .safeMute
+        case .propose: self = .propose
+        case .editDraft: self = .editDraft
+        }
+    }
 
     var operation: CommandOperation {
         switch self {
-        case .live: .set(liveParameter, .init(value: 0.5, unit: .normalized))
-        case .hazardous: .set(hazardousParameter, .init(value: 0.5, unit: .normalized))
+        case .set: .set(liveParameter, value)
+        case .ramp: .ramp(liveParameter, value, milliseconds: 50)
         case .bind: .bind(RouteID(validated: "route.main"))
-        case .transport: .start
+        case .recall: .recall(PatchID(validated: "patch.main"))
+        case .trigger: .trigger(ActionID(validated: "action.main"))
+        case .start: .start
+        case .stop: .stop
+        case .locate: .locate(ticks: 0)
         case .panic: .panic
         case .safeMute: .safeMute
         case .propose: .propose(draftID)
@@ -79,46 +179,53 @@ private enum GatedCommand: CaseIterable {
         }
     }
 
-    var commandClass: ControlClass {
+    /// Hard-coded: whether the operation changes what the engine renders.
+    var changesRunningSet: Bool {
         switch self {
-        case .live, .transport: .live
-        case .hazardous: .hazardous
-        case .bind, .editDraft: .structural
-        case .panic, .safeMute: .safety
-        case .propose: .proposal
+        case .set, .ramp, .bind, .recall, .trigger, .start, .stop, .locate: true
+        case .panic, .safeMute, .propose, .editDraft: false
         }
     }
 
-    /// Whether the command changes what the engine renders.
-    var changesRunningSet: Bool { [.live, .hazardous, .bind, .transport].contains(self) }
+    var isSafety: Bool { self == .panic || self == .safeMute }
 
-    func intent(epoch: HostEpoch = hostEpoch, origin: CommandOrigin = .human) throws -> CommandIntent {
+    func intent(epoch: HostEpoch = hostEpoch, revisions: CommandRevisions = CommandRevisions(),
+                origin: CommandOrigin = .human, granted: PermissionFingerprint = permission) throws -> CommandIntent {
         try CommandIntent(.init(
-            id: CommandID(validated: "command.recovery"), commandClass: commandClass, origin: origin,
-            hostEpoch: epoch, connectionEpoch: nil, revisions: CommandRevisions(), operation: operation,
-            permission: permission
+            id: CommandID(validated: "command.recovery"), commandClass: operation.controlClass ?? .live,
+            origin: origin, hostEpoch: epoch, connectionEpoch: nil, revisions: revisions, operation: operation,
+            permission: granted
         ))
     }
 }
 
-private func admission() throws -> AdmissionContext {
-    let descriptors = try [(liveParameter, ControlClass.live), (hazardousParameter, .hazardous)].map { id, kind in
-        try ParameterDescriptor(.init(
-            id: id, unit: .normalized, lower: 0, upper: 1, defaultValue: 0.5, ceiling: 0.8, curve: .linear,
-            ramp: ParameterRamp(.init(kind: .linear, minimumMilliseconds: 10, maximumMilliseconds: 100)),
-            controlClass: kind, verification: .reported
-        ))
-    }
+/// Admission for every operation's scope, or only `scopes` when given.
+private func admission(scopes: Set<CommandScope>? = nil) throws -> AdmissionContext {
+    let descriptor = try ParameterDescriptor(.init(
+        id: liveParameter, unit: .normalized, lower: 0, upper: 1, defaultValue: 0.5, ceiling: 0.8, curve: .linear,
+        ramp: ParameterRamp(.init(kind: .linear, minimumMilliseconds: 10, maximumMilliseconds: 100)),
+        controlClass: .live, verification: .reported
+    ))
     return AdmissionContext(
         hostEpoch: hostEpoch, connectionEpoch: nil, revisions: CommandRevisions(), permission: permission,
-        allowedScopes: Set(GatedCommand.allCases.map(\.operation.scope)), allowedClasses: Set(ControlClass.allCases),
-        catalog: try ParameterCatalog(descriptors)
+        allowedScopes: scopes ?? Set(OperationKind.allCases.map(\.operation.scope)),
+        allowedClasses: Set(ControlClass.allCases), catalog: try ParameterCatalog([descriptor])
     )
 }
 
-private func gate(_ command: GatedCommand, in lifecycle: EngineLifecycle,
-                  epoch: HostEpoch = hostEpoch) throws -> HostCommandDecision {
-    HostCommandGate.admit(try command.intent(epoch: epoch), admission: try admission(), lifecycle: lifecycle)
+private func gate(_ kind: OperationKind, in lifecycle: EngineLifecycle, epoch: HostEpoch = hostEpoch)
+throws -> HostCommandDecision {
+    HostCommandGate.admit(try kind.intent(epoch: epoch), admission: try admission(), lifecycle: lifecycle)
+}
+
+/// Every operation in `lifecycle`: running-set changes are unavailable while blocking, all else admitted.
+private func expectGate(in lifecycle: EngineLifecycle, sourceLocation: SourceLocation = #_sourceLocation) throws {
+    #expect(OperationKind.allCases.allSatisfy { OperationKind($0.operation) == $0 })
+    for kind in OperationKind.allCases {
+        let expected: HostCommandDecision = blocking.contains(lifecycle) && kind.changesRunningSet
+            ? .unavailable(lifecycle) : .admitted
+        #expect(try gate(kind, in: lifecycle) == expected, "\(kind)", sourceLocation: sourceLocation)
+    }
 }
 
 extension HostAuthorityTests {
@@ -129,11 +236,13 @@ extension HostAuthorityTests {
             #expect(try host.transaction.acknowledged(report(.failed, applied: [], unapplied: Set(nodes)))
                 .get().isEmpty)
             let foreign = try TransactionBench.foreignAttempt()
-            #expect(host.refusal { $0.resolveRecovery(foreign) } == .staleReport)
-            #expect(try host.transaction.resolveRecovery(attempt).get() == restore(.initial))
-            #expect(host.transaction.phase == .idle)
-            #expect(host.transaction.running == RunningGraph(revision: .initial, prepared: runningPlan))
-            #expect(host.refusal { $0.resolveRecovery(attempt) } == .unexpectedPhase(.idle))
+            let lease = host.registry.snapshot
+            #expect(host.refusal { $0.resolveRecovery(foreign, lease: lease) } == .staleReport)
+            try host.expectRestoreNeedsLease(attempt)
+            let before = host.transaction
+            #expect(try host.transaction.resolveRecovery(attempt, lease: lease).get() == restore(.initial))
+            host.expectSettled(.idle, running: RunningGraph(revision: .initial, prepared: runningPlan), since: before)
+            #expect(host.refusal { $0.resolveRecovery(attempt, lease: lease) } == .unexpectedPhase(.idle))
             #expect(EngineLifecycle.running.after(.commitFailed) == .running)
             // Recovered: another activation may begin over the unchanged running graph.
             #expect(try host.begin(request(), candidate: candidate()).count == 1)
@@ -143,38 +252,49 @@ extension HostAuthorityTests {
             var host = try TransactionBench()
             let attempt = try host.committedAttempt()
             #expect(try host.transaction.acknowledged(partial).get().isEmpty)
+            let lease = host.registry.snapshot
+            let foreign = try TransactionBench.foreignAttempt()
+            #expect(host.refusal { $0.resolveRecovery(foreign, lease: lease) } == .staleReport)
+            let before = host.transaction
             let next = try ContractRevision.initial.next()
-            #expect(try host.transaction.resolveRecovery(attempt).get() == ActivationRecoveryStep(
+            #expect(try host.transaction.resolveRecovery(attempt, lease: lease).get() == ActivationRecoveryStep(
+                cause: .partialCommit,
                 decisions: [.keepActivePartial, .missingPlaceholder(nodes[1]), .missingPlaceholder(nodes[2])],
                 effects: [.discard(runningPlan)]
             ))
-            #expect(host.transaction.running == RunningGraph(revision: next, prepared: planID))
-            #expect(host.transaction.phase == .acknowledged(next))
+            host.expectSettled(.acknowledged(next), running: RunningGraph(revision: next, prepared: planID),
+                               since: before)
+            #expect(host.refusal { $0.resolveRecovery(attempt, lease: lease) } == .unexpectedPhase(.acknowledged(next)))
         }
 
-        @Test func unknownCommitOutcomeFailsClosedIntoMutedRecovery() throws {
+        @Test(arguments: [CommitAbandonment.outcomeUnknown, .leaseLost])
+        func unknownCommitOutcomeFailsClosedIntoMutedRecovery(reason: CommitAbandonment) throws {
             var host = try TransactionBench()
             try host.reviewing(request(), candidate: candidate())
             let foreign = try TransactionBench.foreignAttempt()
-            #expect(host.refusal { $0.abandonCommit(foreign) } == .unexpectedPhase(.awaitingReview))
+            #expect(host.refusal { $0.abandonCommit(foreign, reason: reason) } == .unexpectedPhase(.awaitingReview))
             _ = try host.commit(try host.authorize()).get()
             let attempt = try #require(host.transaction.lastAttempt)
-            #expect(host.refusal { $0.abandonCommit(foreign) } == .staleReport)
-            #expect(try host.transaction.abandonCommit(attempt).get() == mutedRecovery)
-            #expect(host.transaction.phase == .recovering(planID))
-            #expect(host.transaction.running == RunningGraph(revision: .initial, prepared: runningPlan))
-            let lifecycle = EngineLifecycle.running.after(.commitOutcomeUnknown)
+            #expect(host.refusal { $0.abandonCommit(foreign, reason: reason) } == .staleReport)
+            // An overflow claim is checked: this revision can still advance.
+            #expect(host.refusal { $0.abandonCommit(attempt, reason: .revisionOverflow) }
+                == .unexpectedPhase(.committing))
+            let before = host.transaction
+            #expect(try host.transaction.abandonCommit(attempt, reason: reason).get() == mutedRecovery(reason.event))
+            host.expectSettled(.recovering(planID), running: before.running, since: before)
+            let lifecycle = EngineLifecycle.running.after(reason.event)
             #expect(lifecycle == .recovering && lifecycle.outputsMuted)
             // Never assumed successful: a late report is ignored and nothing new begins.
             #expect(host.refusal { $0.acknowledged(report(.succeeded)) } == .unexpectedPhase(.recovering(planID)))
-            #expect(host.refusal { $0.abandonCommit(attempt) } == .unexpectedPhase(.recovering(planID)))
+            #expect(host.refusal { $0.abandonCommit(attempt, reason: reason) } == .unexpectedPhase(.recovering(planID)))
             let live = try host.live
             #expect(host.refusal { $0.begin(request(), candidate: candidate(), in: live) }
                 == .unexpectedPhase(.recovering(planID)))
-            #expect(host.refusal { $0.resolveRecovery(foreign) } == .staleReport)
-            #expect(try host.transaction.resolveRecovery(attempt).get() == restore(.initial))
-            #expect(host.transaction.phase == .idle)
-            #expect(host.transaction.running == RunningGraph(revision: .initial, prepared: runningPlan))
+            #expect(host.refusal { $0.resolveRecovery(foreign, lease: nil) } == .staleReport)
+            try host.expectRestoreNeedsLease(attempt)
+            #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
+                == restore(.initial))
+            host.expectSettled(.idle, running: before.running, since: before)
         }
 
         @Test(arguments: [false, true])
@@ -185,16 +305,41 @@ extension HostAuthorityTests {
             if partially {
                 // The partial plan cannot become a revision, so it is not kept.
                 #expect(try host.transaction.acknowledged(partial).get().isEmpty)
-                #expect(try host.transaction.resolveRecovery(attempt).get() == mutedRecovery)
+                #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get()
+                    == mutedRecovery(.revisionOverflow))
             } else {
                 #expect(host.refusal { $0.acknowledged(report(.succeeded)) } == .overflow)
                 #expect(host.transaction.phase == .committing)
-                #expect(try host.transaction.abandonCommit(attempt).get() == mutedRecovery)
+                #expect(try host.transaction.abandonCommit(attempt, reason: .revisionOverflow).get()
+                    == mutedRecovery(.revisionOverflow))
             }
-            #expect(host.transaction.phase == .recovering(planID))
-            #expect(try host.transaction.resolveRecovery(attempt).get() == restore(last))
+            #expect(host.transaction.phase == .recovering(planID) && host.transaction.validated == nil)
+            #expect(try host.transaction.resolveRecovery(attempt, lease: host.registry.snapshot).get() == restore(last))
             #expect(host.transaction.phase == .idle)
             #expect(host.transaction.running == RunningGraph(revision: last, prepared: runningPlan))
+        }
+
+        @Test func lostPrepareAnswerHasAnAttemptBoundExit() throws {
+            var other = try TransactionBench()
+            try other.acquire(projectA)
+            _ = try other.begin()
+            let foreign = try #require(other.transaction.lastPrepareAttempt)
+            var host = try TransactionBench()
+            try host.acquire(projectA)
+            #expect(host.refusal { $0.abandonPrepare(foreign) } == .unexpectedPhase(.idle))
+            _ = try host.begin()
+            let lost = try #require(host.transaction.lastPrepareAttempt)
+            #expect(host.refusal { $0.abandonPrepare(foreign) } == .stalePrepareResponse)
+            let before = host.transaction
+            #expect(try host.transaction.abandonPrepare(lost).get().isEmpty)  // No discard: the ID may be reissued.
+            host.expectSettled(.idle, running: before.running, since: before)
+            #expect(host.refusal { $0.abandonPrepare(lost) } == .unexpectedPhase(.idle))
+            #expect(host.refusal { $0.prepared(.success(planID), attempt: lost) } == .unexpectedPhase(.idle))
+            // The next prepare has a new attempt, so the late answer stays stale.
+            _ = try host.begin()
+            #expect(host.refusal { $0.prepared(.success(planID), attempt: lost) } == .stalePrepareResponse)
+            _ = try host.transaction.prepared(.success(planID)).get()
+            #expect(host.refusal { $0.abandonPrepare(lost) } == .unexpectedPhase(.awaitingReview))
         }
 
         @Test func processorCrashBecomesMissingPlaceholderNotReactivation() throws {
@@ -210,7 +355,18 @@ extension HostAuthorityTests {
             var host = try TransactionBench()
             let attempt = try host.committedAttempt()
             _ = try host.transaction.acknowledged(report(.succeeded)).get()
-            #expect(host.refusal { $0.resolveRecovery(attempt) } == .unexpectedPhase(host.transaction.phase))
+            let phase = host.transaction.phase
+            #expect(host.refusal { $0.resolveRecovery(attempt, lease: nil) } == .unexpectedPhase(phase))
+        }
+
+        @Test func recoveryNeverUnmutesOutputs() {
+            let running = RunningGraph(revision: .initial, prepared: runningPlan)
+            #expect(EventKind.allCases.allSatisfy { EventKind($0.event) == $0 })
+            for kind in EventKind.allCases {
+                #expect(!ActivationRecovery.decisions(for: kind.event, running: running)
+                    .contains(.recover(muteOutputs: false)), "\(kind)")
+            }
+            #expect(LifecycleKind.allCases.allSatisfy { LifecycleKind($0.lifecycle) == $0 })
         }
 
         @Test func leaseLossEntersRecoveringWithMutedOutputs() throws {
@@ -221,8 +377,7 @@ extension HostAuthorityTests {
                 #expect(after == .recovering && after.outputsMuted && !after.rendersOutput)
             }
             #expect(lifecycles.filter(\.outputsMuted) == [.recovering])
-            #expect(try gate(.live, in: EngineLifecycle.running.after(.leaseLost)) == .unavailable(.recovering))
-            #expect(try gate(.panic, in: EngineLifecycle.running.after(.leaseLost)) == .admitted)
+            try expectGate(in: EngineLifecycle.running.after(.leaseLost))
         }
 
         @Test func capabilityLossDegradesWithoutRecovery() throws {
@@ -235,33 +390,46 @@ extension HostAuthorityTests {
             #expect(EngineLifecycle.recovering.after(.capabilityLost(audio)) == .recovering)
         }
 
-        @Test(arguments: [EngineLifecycle.recovering, .heldByOther(projectB)])
+        @Test(arguments: blocking)
         func liveCommandsRejectedWhileRecovering(lifecycle: EngineLifecycle) throws {
-            for command in GatedCommand.allCases {
-                #expect(try gate(command, in: lifecycle) == (command.changesRunningSet ? .unavailable(lifecycle)
-                                                                                        : .admitted))
-            }
-            // CommandAdmission refusals come first and are unchanged.
-            let stale = HostEpoch(host: hostEpoch.host, generation: try Generation.initial.next())
-            #expect(try gate(.live, in: lifecycle, epoch: stale) == .refused(.stale(.hostEpoch)))
-            let assistant = try GatedCommand.live.intent(origin: .assistant)
+            try expectGate(in: lifecycle)
+            let assistant = try OperationKind.set.intent(origin: .assistant)
             #expect(HostCommandGate.admit(assistant, admission: try admission(), lifecycle: lifecycle)
                 == .refused(.rejected(.permissionDenied)))
         }
 
-        @Test(arguments: [EngineLifecycle.stopped, .preparing(.initial), .running, .degraded([audio])])
+        @Test(arguments: lifecycles.filter { !blocking.contains($0) })
         func commandsAdmittedWhileEngineAcceptsChanges(lifecycle: EngineLifecycle) throws {
-            for command in GatedCommand.allCases {
-                #expect(try gate(command, in: lifecycle) == .admitted)
-            }
+            try expectGate(in: lifecycle)
         }
 
         @Test(arguments: lifecycles)
         func safetyCommandsAdmittedInEveryLifecycle(lifecycle: EngineLifecycle) throws {
             #expect(try gate(.panic, in: lifecycle) == .admitted)
             #expect(try gate(.safeMute, in: lifecycle) == .admitted)
+        }
+
+        /// The gate returns `CommandAdmission`'s own refusal, even for safety commands (#55 owns the rules).
+        @Test(arguments: lifecycles)
+        func gateReturnsAdmissionRefusalUnchanged(lifecycle: EngineLifecycle) throws {
             let stale = HostEpoch(host: hostEpoch.host, generation: try Generation.initial.next())
-            #expect(try gate(.panic, in: lifecycle, epoch: stale) == .refused(.stale(.hostEpoch)))
+            var revisions = CommandRevisions()
+            revisions.graph = try ContractRevision.initial.next()
+            let other = PermissionFingerprint(rawValue: "permissions.other")
+            for kind in OperationKind.allCases {
+                let cases: [(CommandIntent, CommandResult)] = [
+                    (try kind.intent(epoch: stale), .stale(.hostEpoch)),
+                    (try kind.intent(revisions: revisions), .rejected(.revisionChanged)),
+                    (try kind.intent(granted: other), .rejected(.permissionChanged)),
+                    (try kind.intent(), .rejected(.scopeDenied))
+                ]
+                for (intent, result) in cases {
+                    let context = try admission(scopes: result == .rejected(.scopeDenied) ? [] : nil)
+                    #expect(CommandAdmission.admit(intent, in: context) == .refused(result))
+                    #expect(HostCommandGate.admit(intent, admission: context, lifecycle: lifecycle) == .refused(result),
+                            "\(kind)")
+                }
+            }
         }
 
         @Test func heldByOtherWindowCannotRender() throws {
@@ -270,7 +438,7 @@ extension HostAuthorityTests {
             #expect(EngineLifecycle.observed(by: windowA, of: projectA, in: registry, engine: .running) == .running)
             let other = EngineLifecycle.observed(by: windowB, of: projectB, in: registry, engine: .running)
             #expect(other == .heldByOther(projectA) && !other.rendersOutput && !other.outputsMuted)
-            #expect(try gate(.live, in: other) == .unavailable(other))
+            #expect(try gate(.set, in: other) == .unavailable(other))
             #expect(try gate(.panic, in: other) == .admitted && gate(.editDraft, in: other) == .admitted)
             let detached = EngineLifecycle.observed(by: windowB, of: projectA, in: registry, engine: .running)
             #expect(detached == .heldByOther(projectA) && !detached.rendersOutput)
