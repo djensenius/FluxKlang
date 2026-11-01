@@ -7,8 +7,9 @@
 
 /// The owner's CURRENT trusted snapshots for one scheduler call. `musicalSequence` is the
 /// producer's latest observation sequence; nil means no musical context is claimed.
-/// Witness contract: it is the latest ATTEMPTED sequence. A refused observation publishes nothing,
-/// so naming its number is stale (strict invalidTiming at commit); a retry reuses that number.
+/// Witness contract: the producer claims its latest ATTEMPTED sequence; the claim is accepted only when
+/// it equals the latest PUBLISHED sequence. A refused observation publishes nothing, so naming its
+/// number is stale (strict invalidTiming at commit); a retry reuses that number.
 struct TriggerSchedulerContext: Sendable {
     let ledger: GenerationLedger
     let readiness: ActionReadiness

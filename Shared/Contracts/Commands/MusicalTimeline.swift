@@ -64,6 +64,8 @@ struct MusicalTimeline: Sendable {
     private var instance = UUID()
     private var epoch = UUID()
     private var state: TimelineState
+    // Current-pass eligibility only; nil identifies an initially-held epoch. Never a projection anchor.
+    private var latestRunningTicks: Int64?
     private var records: [TimelineRecord]
     private var reservations: [UUID: TimelineReservation] = [:]
 
@@ -81,11 +83,12 @@ struct MusicalTimeline: Sendable {
         if case .afterRestart = ledger.resume { throw MusicalTimingError.historyUnavailable }
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map, ledger: ledger, restartTicks: nil)
         let initial = TimelineState(primary: anchor, clock: clock, loop: loop, running: running)
-        self.sample = sample
+        self.sample = try Self.restartBaseline(sample, ledger: ledger)
         self.firstMusicalAnchor = anchor
         self.historyLimit = historyLimit
         self.pinLimit = pinLimit
         self.state = initial
+        self.latestRunningTicks = running ? clock.musical.ticks : nil
         self.records = [TimelineRecord(state: initial)]
     }
 
@@ -194,7 +197,8 @@ struct MusicalTimeline: Sendable {
                         sequence: UInt64, ledger: GenerationLedger) throws {
         guard isQuiescent else { throw MusicalTimingError.pinsOutstanding }
         try checkSequence(sequence)
-        guard sample.anchor.sample.clock == self.sample.anchor.sample.clock, map.clock == state.clock.map.clock else {
+        guard sample.timebase == self.sample.timebase,
+              sample.anchor.sample.clock == self.sample.anchor.sample.clock, map.clock == state.clock.map.clock else {
             throw MusicalTimingError.invalidContext
         }
         guard sample.anchor.sample.generation != self.sample.anchor.sample.generation
@@ -214,9 +218,10 @@ struct MusicalTimeline: Sendable {
         let clock = try Self.initialClock(sample: sample, anchor: anchor, map: map,
                                          ledger: ledger, restartTicks: restartTicks)
         let initial = TimelineState(primary: anchor, clock: clock, loop: state.loop, running: state.running)
-        self.sample = sample
+        self.sample = try Self.restartBaseline(sample, ledger: ledger)
         firstMusicalAnchor = anchor
         state = initial
+        latestRunningTicks = state.running ? clock.musical.ticks : nil
         records = [TimelineRecord(state: initial)]
         epoch = UUID()
         observationSequence = sequence
@@ -235,11 +240,17 @@ struct MusicalTimeline: Sendable {
         for record in records {
             index.includeRecord(record.state.clock, running: record.state.running)
         }
-        index.includeCurrent(state.clock, running: state.running)
+        // An initial-held clock is genuine context, never a substitute for an evicted running anchor.
+        index.includeCurrent(state.clock, running: state.running, initiallyHeld: latestRunningTicks == nil)
         return index
     }
     func projectionUnits(for occurrence: MusicalOccurrence, using index: MusicalProjectionIndex) throws -> Int128 {
         try projectedUnits(prepare(occurrence, using: index))
+    }
+    func originalTicks(for pass: Int128, using index: MusicalProjectionIndex) -> Int64? {
+        index.anchor(for: pass)?.musical?.ticks
+            ?? (pass == Int128(state.clock.musical.loopIteration) ? latestRunningTicks : nil)
+            ?? index.originalTicks[pass]
     }
     private func prepare(_ occurrence: MusicalOccurrence, retaining ticks: Int64? = nil,
                          using index: MusicalProjectionIndex) throws -> TimelineReservation {
@@ -250,8 +261,8 @@ struct MusicalTimeline: Sendable {
             originalTicks = value
         } else if let ticks {
             originalTicks = ticks
-        } else if occurrence.pass == current {
-            originalTicks = state.clock.musical.ticks
+        } else if occurrence.pass == current, let value = latestRunningTicks {
+            originalTicks = value // Qualifies an end alias, but cannot project this pass's interior.
         } else if let value = index.originalTicks[occurrence.pass] {
             originalTicks = value // Eligibility only, never a second retained original anchor.
         } else if occurrence.pass > current, let loop = state.loop, state.clock.musical.ticks <= loop.endTicks {
@@ -259,7 +270,7 @@ struct MusicalTimeline: Sendable {
         } else { throw MusicalTimingError.historyUnavailable }
         let pass = try MusicalTiming.projectionPass(occurrence, loop: state.loop, anchorTicks: originalTicks)
         let anchor = index.anchor(for: pass)
-        guard pass >= current || anchor != nil else { throw MusicalTimingError.historyUnavailable }
+        guard pass > current || anchor != nil else { throw MusicalTimingError.historyUnavailable }
         return TimelineReservation(occurrence: occurrence, originalTicks: originalTicks, pass: pass, anchor: anchor)
     }
     private func projectedUnits(_ value: TimelineReservation) throws -> Int128 {
@@ -267,7 +278,7 @@ struct MusicalTimeline: Sendable {
         if let anchor = value.anchor {
             clock = try MusicalTiming.reanchor(anchor, using: state.clock)
         } else {
-            guard value.pass >= Int128(state.clock.musical.loopIteration) else {
+            guard value.pass > Int128(state.clock.musical.loopIteration) else {
                 throw MusicalTimingError.historyUnavailable
             }
             clock = state.clock
@@ -296,6 +307,13 @@ struct MusicalTimeline: Sendable {
     }
 }
 private extension MusicalTimeline {
+    /// The restart stamp, not a jittered first observation, remains the generation's drift reference.
+    static func restartBaseline(_ sample: SampleClockMap, ledger: GenerationLedger) throws -> SampleClockMap {
+        guard let record = ledger.restartRecord else { return sample }
+        let origin = ClockAnchor(sample: record.start, host: record.host)
+        return try SampleClockMap(anchor: origin, nominalRate: sample.nominalRate, timebase: sample.timebase)
+    }
+
     static func initialClock(sample: SampleClockMap, anchor: ClockAnchor, map: MusicalMap,
                              ledger: GenerationLedger, restartTicks: Int64?) throws -> MusicalClockMap {
         guard !ledger.hasRestartObligations, ledger.nominalRate == sample.nominalRate,
@@ -309,9 +327,11 @@ private extension MusicalTimeline {
               position.transport == ledger.generation(GenerationKey(.transport, map.clock)) else {
             throw MusicalTimingError.invalidContext
         }
-        if ledger.pendingRestart != nil,
-           !ledger.acceptsFirstAnchor(sample.anchor, nominalRate: sample.nominalRate, timebase: sample.timebase) {
-            throw MusicalTimingError.invalidContext
+        if ledger.pendingRestart != nil {
+            guard ledger.acceptsFirstAnchor(sample.anchor, nominalRate: sample.nominalRate, timebase: sample.timebase),
+                  ledger.acceptsFirstAnchor(anchor, nominalRate: sample.nominalRate, timebase: sample.timebase) else {
+                throw MusicalTimingError.invalidContext
+            }
         }
         if case .locate(let ticks) = ledger.resume, position.ticks != ticks {
             throw MusicalTimingError.invalidContext
@@ -361,9 +381,14 @@ private extension MusicalTimeline {
         case .loop(let loop):
             state.loop = loop
         }
+        retainRunningTicks()
         state.primary = anchor
         // Resuming can make a wrap immediately due; it does not observe that wrap.
         if !wrapping { try checkCoverage(to: anchor.sample.frame, allowingSameFrame: correcting || resuming) }
+    }
+
+    mutating func retainRunningTicks() {
+        if state.running { latestRunningTicks = state.clock.musical.ticks }
     }
 
     func permitsSameFrameCorrection(_ event: MusicalObservation, at frame: Int64) throws -> Bool {
