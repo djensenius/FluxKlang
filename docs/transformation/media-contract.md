@@ -119,10 +119,11 @@ device mapping is a `sampleJump` discontinuity.
   at or before it (else the first); for a target, the latest anchor of its loop pass ([§5.5](#55-loop)). Frames to
   ticks is the exact inverse, so a frame before the anchor crosses earlier tempo segments. Round half-up
   (`floor(x + ½)`) only at the final frame or tick.
-- Within one generation, anchors must advance, and each must agree with the frame predicted from the generation's
-  **first** anchor at the nominal rate within `(rate + span) / 1000` frames, where `span` is the predicted frame
-  count: 1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against the first anchor,
-  but a real rate change does. The checker applies exactly this bound, in exact arithmetic.
+- Within one generation, anchors must advance, and each must agree with the frame predicted from its fixed drift
+  reference: the generation's **first** anchor, or its `clockRestart` stamp for a restarted generation. The bound at
+  the nominal rate is `(rate + span) / 1000` frames, where `span` is the predicted frame count from that reference:
+  1 ms of observation jitter plus 0.1% of the elapsed span. Jitter never accumulates against this reference, but a real
+  rate change does. The checker applies exactly this bound, in exact arithmetic.
 - A device-reported rate change is authoritative and always bumps `sampleClock` (`rateChange`). An unreported
   disagreement beyond the bound is treated the same way.
 
@@ -140,8 +141,9 @@ The policy for a device restart, rate change, configuration change or wake:
    at the `sampleClock` bump (so at the old rate; a `previousFrame` at loop end resumes at `startTicks`), with
    `loopIteration` 0. There is no catch-up.
 4. Re-anchor. The first new anchor is not before the restart's `(frame, hostTicks)` and agrees with it at the new
-   rate within the §5.2 bound, `span` measured from the restart (examples 01, 08). Late triggers stamped with the old
-   generation are `rejectedStale` (example 01: 48 → 96 kHz).
+   rate within the §5.2 bound, `span` measured from the restart (examples 01, 08). The restart stamp remains the drift
+   reference for every anchor in that sample generation; it does not replace the first observed musical anchor.
+   Late triggers stamped with the old generation are `rejectedStale` (example 01: 48 → 96 kHz).
 
 ### 5.4 Seek (locate)
 
@@ -155,10 +157,60 @@ A loop is `[startTicks, endTicks)`, with `startTicks < endTicks`. At the wrap fr
 pass's anchor, rounded as in §5.2) the transport records a `loopWrap` discontinuity, re-anchors with `musicalTicks =
 startTicks` and `loopIteration + 1`, and dispatches owned-note releases first ([§6.5](#65-ordering)). A pass anchored
 past `endTicks` does not wrap. A position resolves through the anchor in effect at its frame, so an event before the
-wrap keeps its pass even when delivered after the wrap anchor. A scheduled target is an **occurrence**: the pass
-holding its origin, plus its ticks. A wrap never moves it; musical-map revisions re-resolve it within its pass. A grid
-boundary equal to `endTicks` is the wrap frame, and later ones continue on the next pass's grid (example 03). In v1,
+wrap keeps its pass even when delivered after the wrap anchor. A scheduled target is an **occurrence**: a pass plus its
+ticks. An explicit tick target takes the origin's pass; grid resolution selects the occurrence's pass, which can be an
+earlier or later pass than the origin's (below), and that choice is then frozen. A wrap never moves it; musical-map
+revisions re-resolve its frame within its pass. A grid boundary equal to `endTicks` is the wrap frame, and later ones
+continue on the next pass's grid (example 03). In v1,
 musical targets must resolve inside `[startTicks, endTicks]` while a loop is active ([§14](#14-open-questions)).
+
+Virtual future passes use the same per-wrap rounding as recorded wraps: full passes advance by the rounded
+loop duration, not an accumulated unrounded duration. A zero-rounded duration still permits representable
+current-pass and first-wrap boundaries; a search requiring a later frame fails explicitly rather than
+dividing by zero, walking passes indefinitely or narrowing valid loop bounds. Grid arithmetic stays exact
+through the full declared tick range. Musical positions, map/loop tick fields and grids stay in the nonnegative
+`Int64` domain. An unrepresentable anchor/capture tick or rounded restart resume tick is diagnosed before publishing
+its timing state; replay continues checking later independent sample/ASAP records. An invalid musical-map revision
+does not publish its new generation or map.
+
+For frame projection only, `(pass, endTicks)` aliases `(pass + 1, startTicks)` when the selected pass anchor is
+at or before `endTicks`. A pass anchored past the end does not wrap or alias. This deterministic boundary alias
+does not change the stored occurrence or substitute the currently running pass for a historical one.
+
+Quantized origins retain their exact frame fraction until pass classification and grid selection. The interval
+after an unrounded loop end but before its rounded wrap still belongs to the original pass: its upcoming wrap
+boundary is considered before retroactive selection, never mistaken for a past boundary.
+When that upcoming end is on-grid, retroactivity tests the preceding admissible boundary instead. A past-end
+anchor's previous-boundary search starts at the loop end. An unrepresentable `Int64` boundary is a controlled
+resolution failure, not a wider tick domain; it does not prevent an otherwise valid retroactive choice.
+A later re-anchor can move grid lines in either direction relative to the origin. Each examined pass compares
+the latest anchor's inverse-projected grid boundary with its separately qualified end alias. The closest
+nonfuture projection wins; an interior boundary wins an equal-frame tie rather than inventing a future wrap.
+Eligible retained earlier passes are compared too: re-anchors and map edits can make their projections closer
+than an origin-pass match. Unrecorded passes, in a historical gap or after the latest anchor, project from the
+latest anchor at its rounded period. Each such run contributes at most its last three passes up to the origin's,
+plus its final pass, whose end aliases the following recorded pass. Candidates are found through a per-pass
+anchor index, never by walking the number of elapsed passes or grid ticks.
+The origin's pass, where the backward search ends and the forward search starts, is located the same way. The anchor
+in effect at the origin keeps its pass until its rounded wrap. Past that wrap, the origin is in the last unrecorded pass
+(before the next recorded pass, if any) whose projected start is at or before the origin, else in the anchor's pass.
+This holds for a zero rounded period too: every unrecorded pass then starts at the latest anchor's rounded wrap, at or
+after every recorded anchor: an earlier origin stays in its anchor's pass, one exactly there is in the first wrap, and a
+later one fails explicitly.
+A producer may refuse (`historyUnavailable`) a target these rules would resolve; it then emits no trace record, so a
+refusal never contradicts them.
+An assignment is retroactive only when its projected frame is strictly before the exact origin, regardless
+of equality with the origin-time tick. An exact-frame predecessor therefore stays eligible, as a non-retroactive
+choice, even when the retroactive window is zero.
+Outside the window the forward choice mirrors that search: the closest projection not before the exact origin among
+the origin's pass and later passes, each through its own projection anchor, with the earlier occurrence winning an
+equal frame. It is never retroactive and never skips a boundary of the origin's or a later pass projected between
+the origin and itself, whichever way a re-anchor or map edit moved the grid; the same index bounds its candidates.
+A pass inside the loop at the origin has no pre-loop ticks: every wrapped pass, and pass 0 once under way when its first
+anchor places it in the loop or the recorded anchor in effect at the origin, anchored at or before the loop end, places
+it at or past the loop start (possibly past the loop end). An origin that a re-anchor or map edit projects before the
+loop start resolves to that pass's first in-loop boundary. Only an origin before the first anchor, before pass 0
+reaches the loop, or in a pass 0 begun past the loop end names a pre-loop grid target.
 
 ### 5.6 Tempo and meter
 
@@ -167,6 +219,14 @@ absent; in v1 one meter applies to the whole map, and it only labels bars becaus
 keep their frames; pending musical targets re-resolve with the new map, and their outcome names the revision used
 (example 04). External tempo (#84) is rate-limited so it cannot cause unbounded re-resolution. Fixed-rate audio keeps
 its sample length; a tempo mismatch is advisory.
+
+Before commit, occurrence identity is frozen, not a physical sample frame. While running, resolve with the
+current map and latest valid running anchor of the projection pass, including the loop-end alias above.
+A same-pass resume may change `assignedFrame` through backward projection from its resume anchor. That frame
+is a timing-policy reference, not evidence that the transport physically traversed the tick then; actual
+dispatch remains constrained by the commit horizon. Only committed events retain their committed frames.
+The v1 trace format/checker does not encode stop/resume transitions, so this rule does not establish validation
+of a complete pause trace or introduce new v1 records.
 
 ### 5.7 Source loss
 
@@ -186,13 +246,16 @@ Both cancel pending triggers and reject late stale ones (example 06).
 The scheduler publishes `horizonFrame`, the earliest frame it can still affect: at least the next render cycle plus
 any adapter latency. A target is **late** if it precedes the horizon at commit, not at arrival; `asap` commits at that
 horizon. Traces lower-bound it by the primary anchor frames and trigger `horizonFrame`s of the current primary sample
-generation; only a primary `sampleClock` change resets it, not a locate, wrap or map edit.
+generation, including rejected trigger records; only a primary `sampleClock` change resets it, not a locate,
+wrap or map edit.
 
 ### 6.2 Quantization
 
 A `musical` target has exactly one of `gridTicks` (the next boundary at or after the origin, which an exact boundary
-uses) or an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither (schema-enforced). When
-stopped, the action's stopped policy applies: `wait` (default), `immediate` or `startTransport`.
+uses; an origin extrapolated before tick 0 waits for tick 0, which a loop starting later rejects like any other
+pre-loop target) or an absolute `atTicks`; a `sample` target has `atFrame`; an `asap` target has neither
+(schema-enforced). When stopped, the action's stopped policy applies: `wait` (default), `immediate` or
+`startTransport`.
 
 ### 6.3 Late and retroactive cues
 

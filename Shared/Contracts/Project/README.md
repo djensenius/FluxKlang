@@ -33,6 +33,12 @@ policy persist per action; two actions may use the same asset differently.
 The action media must match the referenced asset. Nothing here schedules a trigger.
 Unknown optional fields and explicit extension bags remain separate and round-trip.
 
+Shared `JSONValue` encoding writes exact integral doubles as `Int64` or `UInt64`
+where representable, and `-0.0` as `0`; other finite doubles keep their double
+encoding. Large integral doubles may therefore be written as integers rather
+than exponent notation. This canonicalizes numeric representation only: it does
+not normalize Unicode or preserve the original JSON bytes.
+
 ## Legacy adoption
 
 `StudioGraphNeutralAdapter.adapt(graphData:endpointsData:id:)` reads the existing
@@ -47,3 +53,28 @@ have unconfirmed channel counts. All imports require review; console observation
 become non-routable shortcuts with no ports. Equipment/endpoint role IDs use distinct
 legacy namespaces. No USB mapping, authority, current device evidence or compatibility
 with a future contract version is inferred. Versioned input is not accepted as legacy.
+
+## Package manifest v1
+
+`ProjectPackageManifest` describes the reserved root member `manifest.json`, with
+contract `fluxklang.project-package` and version `1`. It records one project,
+pinned graphs, digest-keyed resources and opaque-state members. Member paths are
+explicit package-root-relative paths, not names derived from identities.
+Resources have optional embedded media and a required bookmark-candidate array;
+candidate order grants no preference or access authority. Unknown optional fields
+and extension bags round-trip semantically, not as original JSON bytes.
+
+The caller supplies finite P1 package limits and a manifest-byte ceiling.
+Declaration checks reject duplicate ownership, file/ancestor collisions,
+oversized claims and entry/byte-budget overflow. Decoding counts original
+manifest input bytes; encoding counts actual output bytes. Reference checking
+has neither the original manifest bytes nor their length and does not recreate
+that byte-inclusive total. External asset lengths are not bookmark byte counts
+or package consumption. Identity checks preserve inert `requiresReview` intent
+without claiming graph readiness, resource availability or activation authority.
+
+This is not a package reader or writer. A later reader must retain original
+member bytes, including unsupported, failed and unlisted content, within refusal
+limits; independently verify membership, lengths, digests and confinement; and
+charge delivered bytes through P1. No filesystem access or bookmark resolution
+is performed by the manifest.

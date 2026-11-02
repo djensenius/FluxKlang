@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 // #64 E2: `DeadlinePolicy` (late dispatch, drop and admission) and `ClockPulseGate` (stale skip, rate limit and a
 // single resync). Both are render-owned value types with no shared state, so there is no concurrency stress test.
