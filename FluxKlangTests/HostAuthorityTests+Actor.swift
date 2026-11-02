@@ -114,7 +114,7 @@ private func firstPreparing() throws -> EngineLifecycle {
 
 extension HostAuthorityTests {
     struct Actor {
-        @Test func abandonedPrepareSuccessIsDiscardedOnce() async throws {
+        @Test func abandonedPrepareSuccessIsUnreclaimedOnce() async throws {
             let authority = try await makeAuthority()
             var engine = try ScriptedActivationEngine()
             try await begin(authority).get()
@@ -128,22 +128,22 @@ extension HostAuthorityTests {
             }
             try await authority.abandonPrepare(project: projectA).get()
             #expect(try await state(authority, projectA).lifecycle == .running)
-            // The late success arrives while idle: refused by the transaction, discarded once by the actor.
+            // The late success arrives while idle: handled once, unreclaimed, never discarded (#191).
             let late = engine.scriptedAnswer()
             let id = try late.get()
             let verdict = await authority.prepareAnswered(late, attempt: attempt)
-            #expect(verdict == .success(.discarded(id, refusal: .unexpectedPhase(.idle))))
+            #expect(verdict == .success(.unreclaimed(id, refusal: .unexpectedPhase(.idle))))
             let before = await authority.snapshot()
             let duplicate = await authority.prepareAnswered(late, attempt: attempt)
             #expect(refusal(duplicate) == .activation(.stalePrepareResponse))
             let after = await authority.snapshot()
             #expect(after == before && noAttempts(after))
             await engine.drain(authority)
-            #expect(engine.discarded == [id])
+            #expect(engine.discarded.isEmpty)
             #expect(try await state(authority, projectA).phase == .idle)
         }
 
-        @Test func lateSuccessAfterRebeginIsDiscarded() async throws {
+        @Test func lateSuccessAfterRebeginIsUnreclaimed() async throws {
             let authority = try await makeAuthority()
             var engine = try ScriptedActivationEngine()
             try await begin(authority).get()
@@ -158,28 +158,29 @@ extension HostAuthorityTests {
             await engine.drain(authority)
             let third = try withheld(&engine)
             #expect(Set([first, second, third]).count == 3)
-            // A new prepare is out: the first attempt's success is stale, and discarded.
+            // A new prepare is out: the first attempt's success is stale, and unreclaimed.
             let firstLate = engine.scriptedAnswer()
             let firstID = try firstLate.get()
             let firstVerdict = await authority.prepareAnswered(firstLate, attempt: first)
-            #expect(firstVerdict == .success(.discarded(firstID, refusal: .stalePrepareResponse)))
+            #expect(firstVerdict == .success(.unreclaimed(firstID, refusal: .stalePrepareResponse)))
             let current = engine.scriptedAnswer()
             let routed = await authority.prepareAnswered(current, attempt: third)
             #expect(routed == .success(.routed))
             let (review, currentID) = (try await state(authority, projectA), try current.get())
             #expect(review.phase == .awaitingReview && review.reviewed == currentID)
-            // A new plan is in review: the second attempt's success is stale too, and discarded.
+            // A new plan is in review: the second attempt's success is stale too, and unreclaimed.
             let secondLate = engine.scriptedAnswer()
             let secondID = try secondLate.get()
             let secondVerdict = await authority.prepareAnswered(secondLate, attempt: second)
-            #expect(secondVerdict == .success(.discarded(secondID, refusal: .unexpectedPhase(.awaitingReview))))
+            #expect(secondVerdict == .success(.unreclaimed(secondID, refusal: .unexpectedPhase(.awaitingReview))))
             await engine.drain(authority)
-            #expect(engine.discarded == [firstID, secondID])
+            #expect(engine.discarded.isEmpty)
             let (reviewing, preparing) = (try await state(authority, projectA), try firstPreparing())
             #expect(reviewing.phase == .awaitingReview && reviewing.lifecycle == preparing)
+            // Only the transaction's own cancel discards, and only its reviewed plan.
             try await authority.cancel(project: projectA).get()
             await engine.drain(authority)
-            #expect(engine.discarded.last == currentID)
+            #expect(engine.discarded == [currentID])
             #expect(try await state(authority, projectA).lifecycle == .running)
         }
 
@@ -227,14 +228,14 @@ extension HostAuthorityTests {
                 let verdict = await authority.prepareAnswered(.success(live), attempt: attempt)
                 #expect(verdict == .success(.dropped))
             }
-            // An unrelated late success is still discarded.
+            // An unrelated late success is unreclaimed: reported, never discarded.
             let attempt = try await beginAndAbandon(authority)
             let unrelated = engine.scriptedAnswer()
             let unrelatedID = try unrelated.get()
             let verdict = await authority.prepareAnswered(unrelated, attempt: attempt)
-            #expect(verdict == .success(.discarded(unrelatedID, refusal: .unexpectedPhase(.idle))))
+            #expect(verdict == .success(.unreclaimed(unrelatedID, refusal: .unexpectedPhase(.idle))))
             await engine.drain(authority)
-            #expect(engine.discarded == [unrelatedID])
+            #expect(engine.discarded.isEmpty)
             #expect(noAttempts(await authority.snapshot()))
         }
 
@@ -288,18 +289,19 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot() == full)
             try await begin(authority).get()
             let preparing = await authority.snapshot()
-            // An evicted attempt's success is stale: no discard, nothing changes.
+            // An evicted attempt's success is stale: nothing changes.
             for evicted in lost.prefix(2) {
                 let verdict = await authority.prepareAnswered(.success(PreparedActivationID(validated: "prep.evicted")),
                                                               attempt: evicted)
                 #expect(refusal(verdict) == .activation(.stalePrepareResponse))
             }
             #expect(await authority.snapshot() == preparing)
-            // The oldest remembered attempt's success is still discarded.
+            // The oldest remembered attempt's success is still recognised, once, and unreclaimed.
             let kept = PreparedActivationID(validated: "prep.kept")
             let verdict = await authority.prepareAnswered(.success(kept), attempt: lost[2])
-            #expect(verdict == .success(.discarded(kept, refusal: .stalePrepareResponse)))
+            #expect(verdict == .success(.unreclaimed(kept, refusal: .stalePrepareResponse)))
             #expect(await authority.snapshot().abandoned.count == limit - 1)
+            #expect(await authority.snapshot().queue == preparing.queue)
         }
 
         @Test func routedSuccessNamingAnotherProjectsPlanIsRefused() async throws {
@@ -351,42 +353,44 @@ extension HostAuthorityTests {
             #expect(try await state(authority, projectC).lifecycle == .stopped)
         }
 
-        @Test func lateSuccessWithQueuedDiscardIsNotDiscardedTwice() async throws {
+        @Test func lateSuccessNamingAQueuedDiscardIsDropped() async throws {
             let authority = try await makeAuthority()
-            let reused = PreparedActivationID(validated: "prep.reused")
-            let (first, second) = (try await beginAndAbandon(authority), try await beginAndAbandon(authority))
-            _ = try await authority.prepareAnswered(.success(reused), attempt: first).get()
+            let cancelled = PreparedActivationID(validated: "prep.cancelled")
+            let late = try await beginAndAbandon(authority)
+            try await begin(authority).get()
+            let review = try await outstanding(authority, projectA)
+            #expect(await authority.prepareAnswered(.success(cancelled), attempt: review) == .success(.routed))
+            try await authority.cancel(project: projectA).get()
             let before = await authority.snapshot()
-            // The second late success names the same plan: its record goes, no second discard is queued.
-            #expect(await authority.prepareAnswered(.success(reused), attempt: second) == .success(.dropped))
+            // The cancel's own discard is queued; a late success naming that plan is dropped, never a second discard.
+            #expect(await authority.prepareAnswered(.success(cancelled), attempt: late) == .success(.dropped))
             let after = await authority.snapshot()
-            #expect(after.queue.pending.filter { $0 == .discard(reused) }.count == 1 && after.queue == before.queue)
-            #expect(after.abandoned == before.abandoned.filter { $0.attempt != second } && noAttempts(after))
+            #expect(after.queue.pending.filter { $0 == .discard(cancelled) }.count == 1 && after.queue == before.queue)
+            #expect(after.abandoned == before.abandoned.filter { $0.attempt != late } && noAttempts(after))
             #expect(after.projects == before.projects && after.ledger == before.ledger && after.lease == before.lease)
-            // With the queue full, the already queued discard is not refused as `.queueFull`.
-            let third = try await beginAndAbandon(authority)
+            // With the queue full, it is still `.dropped`, never `.queueFull`.
+            var newest = late
             while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
-                let attempt = try await beginAndAbandon(authority)
-                _ = try await authority.prepareAnswered(.success(PreparedActivationID(validated: "prep.fill")),
-                                                        attempt: attempt).get()
+                newest = try await beginAndAbandon(authority)
             }
             let full = await authority.snapshot()
-            #expect(await authority.prepareAnswered(.success(reused), attempt: third) == .success(.dropped))
+            #expect(await authority.prepareAnswered(.success(cancelled), attempt: newest) == .success(.dropped))
             let drained = await authority.snapshot()
-            #expect(drained.queue == full.queue && !drained.abandoned.contains { $0.attempt == third })
+            #expect(drained.queue == full.queue && !drained.abandoned.contains { $0.attempt == newest })
         }
 
         @Test func planWithQueuedDiscardIsNotAdopted() async throws {
-            let authority = try await makeAuthority()
+            let authority = try await makeAuthority([projectB])
             var engine = try ScriptedActivationEngine()
             let reused = PreparedActivationID(validated: "prep.reused")
-            let abandoned = try await beginAndAbandon(authority)
-            let late = await authority.prepareAnswered(.success(reused), attempt: abandoned)
-            #expect(late == .success(.discarded(reused, refusal: .unexpectedPhase(.idle))))
+            try await begin(authority, projectB).get()
+            let reviewB = try await outstanding(authority, projectB)
+            #expect(await authority.prepareAnswered(.success(reused), attempt: reviewB) == .success(.routed))
+            try await authority.cancel(project: projectB).get()
             try await begin(authority).get()
             let attempt = try await outstanding(authority, projectA)
             let before = await authority.snapshot()
-            // The engine reuses the ID while its discard is still queued: never adopted.
+            // The engine reuses the cancelled plan's ID while its discard is still queued: never adopted.
             let reusedVerdict = await authority.prepareAnswered(.success(reused), attempt: attempt)
             #expect(refusal(reusedVerdict) == .activation(.preparedIDInUse))
             #expect(await authority.snapshot() == before)
@@ -435,12 +439,8 @@ extension HostAuthorityTests {
 
         @Test func fullQueueRefusesBeforeTheTransition() async throws {
             let authority = try await makeAuthority([projectB, projectC])
-            // Each abandoned prepare plus its discarded late success takes two slots.
-            for index in 0..<((EngineCommandQueue.capacity - 2) / 2) {
-                let attempt = try await beginAndAbandon(authority)
-                let late = try PreparedActivationID("prep.late\(index)")
-                _ = try await authority.prepareAnswered(.success(late), attempt: attempt).get()
-            }
+            // Each abandoned prepare takes one slot; its late success, if any, takes none.
+            for _ in 0..<(EngineCommandQueue.capacity - 2) { _ = try await beginAndAbandon(authority) }
             try await begin(authority).get()
             let review = try await outstanding(authority, projectA)
             _ = try await authority.prepareAnswered(.success(planB), attempt: review).get()
@@ -450,18 +450,15 @@ extension HostAuthorityTests {
             #expect(refusal(await begin(authority, projectC)) == .queueFull)
             #expect(refusal(await authority.cancel(project: projectA)) == .queueFull)
             #expect(await authority.snapshot() == full)
-            // A stale success waits for room rather than being lost.
+            // A late success needs no room: handled at once, unreclaimed, queue unchanged.
             let stale = try await outstanding(authority, projectB)
             try await authority.abandonPrepare(project: projectB).get()
             let abandoned = await authority.snapshot()
             let late = PreparedActivationID(validated: "prep.waiting")
-            let waiting = await authority.prepareAnswered(.success(late), attempt: stale)
-            #expect(refusal(waiting) == .queueFull)
-            #expect(await authority.snapshot() == abandoned)
-            _ = await authority.nextEngineCommand()
-            let retried = await authority.prepareAnswered(.success(late), attempt: stale)
-            #expect(retried == .success(.discarded(late, refusal: .unexpectedPhase(.idle))))
-            #expect(await authority.snapshot().queue.pending.last == .discard(late))
+            let verdict = await authority.prepareAnswered(.success(late), attempt: stale)
+            #expect(verdict == .success(.unreclaimed(late, refusal: .unexpectedPhase(.idle))))
+            let after = await authority.snapshot()
+            #expect(after.queue == abandoned.queue && after.projects == abandoned.projects)
         }
 
         @Test func recoveringEngineNeverShowsPreparing() async throws {
