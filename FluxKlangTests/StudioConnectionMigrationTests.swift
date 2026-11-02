@@ -53,8 +53,11 @@ struct StudioConnectionMigrationTests {
 
     @MainActor
     @Test func storeRepairsPersistedOutOfRangeLegacyInputs() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("studio-migration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
-        let fileStore = JSONFileStore(cloud: cloud)
+        let fileStore = JSONFileStore(directory: directory, cloud: cloud)
         let fileName = "studio-connections-\(UUID().uuidString).json"
         let synth = Equipment(name: "Synth", outputs: ["L", "R"], isStereo: true)
         let persisted = StudioConnectionsStore.Persisted(
