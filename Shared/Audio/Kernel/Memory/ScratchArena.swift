@@ -6,8 +6,8 @@
 ///
 /// Control prepares the arena (`init` allocates `byteCapacity` bytes once, aligned to `alignment`) and hands it
 /// to its single owner, which for a `PreparedPlanSlot` is render. The owner calls `resetCycle()` at each cycle
-/// boundary and `take(_:count:)` during the cycle. Neither allocates, locks, releases, loops or traps: `take` is
-/// a bump of one cursor, and `resetCycle` rewinds it, so every cycle reuses the same bytes.
+/// boundary and `take(_:count:)` during the cycle. `take` bumps one cursor and `resetCycle` rewinds it, so every
+/// cycle reuses the same bytes.
 ///
 /// `take` either returns a whole buffer of `count` elements or `nil`; never a partial buffer. A buffer starts on
 /// a multiple of `max(alignment, MemoryLayout<T>.alignment)` of its absolute address, and the padding needed to
@@ -27,6 +27,23 @@
 ///
 /// `highWater` (the largest cursor any cycle reached, padding included) and `exhaustedCount` (refused takes,
 /// saturating at `UInt64.max`) persist across cycles and are owner-only reads.
+///
+/// Progress (source level only). `take` is one bounded claim: overflow-reporting arithmetic, comparisons and at
+/// most two plain stores, with no loop, atomic, lock, allocation, release or trapping operator in this source.
+/// `resetCycle` is one plain store. Generated code is not proved here. In the inspected scratch configurations
+/// unspecialised `take` (all `-Onone` code) still calls out-of-line stdlib generics (`max`, and
+/// `UnsafeMutableBufferPointer.init(start:count:)`, whose debug preconditions the guards above already exclude)
+/// and `-Onone` exclusivity checks (`swift_beginAccess`). A caller passing an element type whose metadata is not
+/// static (a generic type such as `SIMD4<Float>`) from unspecialised code instantiates that metadata itself; a
+/// first request may lock and allocate in the runtime. The allocation, lock, metadata and trap checks cover only
+/// those configurations and known element types. Not an RT certification; this slice does not accept or waive
+/// #64's final-target hot-path qualification.
+///
+/// Lifetime (documented, not enforced). Construct and destroy an arena on control only: `init` allocates and
+/// `deinit` frees. Release the last reference only once the owner is quiescent, with no `take`, `resetCycle` or
+/// buffer use in flight or still to come; a slot ensures that through M6 retirement or render detachment (D10).
+/// Render must never release the last reference. Each caller keeps the arena strongly alive for its calls and
+/// for every use of a buffer it took.
 ///
 /// `@unchecked Sendable`: `byteCapacity` and `alignment` are immutable. The cursor and counters are plain
 /// stored properties owned by one context at a time; the arena is handed from control to render only through

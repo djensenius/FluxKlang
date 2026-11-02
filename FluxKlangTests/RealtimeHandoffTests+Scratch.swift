@@ -1,7 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Root = RealtimeHandoffTests
 typealias ScratchProbeSlot = PreparedPlanSlot<ScratchPlanProbe>
@@ -437,7 +441,7 @@ extension RealtimeHandoffTests {
             let intruder = Unmanaged.passRetained(ScratchPlanProbe(9, scratchBytes: 0, ledger, watch) as AnyObject)
             #expect(ledger.asRender { queue.retire(intruder, frame: 1) } == .ok)  // unreserved: the ring is full
             #expect(ledger.asRender { slot.beginCycle(frame: 2) } == .ok)  // plan 2 adopted; plan 1 stalled
-            #expect(faults.acknowledge(Root.scratchRetireScope)?.kind == .retireBacklog)
+            #expect(faults.observe(Root.scratchRetireScope).flatMap(faults.acknowledge)?.kind == .retireBacklog)
             #expect(fill() == true)
             #expect(fill() == false)  // exhausted for the rest of this cycle
             for frame in 3...4 {
@@ -445,7 +449,7 @@ extension RealtimeHandoffTests {
                 #expect(ledger.asRender { slot.withCurrent { plan, _ in plan.serial } } == 2)
                 #expect(fill() == true)  // reset although nothing was adopted
             }
-            #expect(faults.acknowledge(Root.scratchRetireScope)?.firstFrame == 3)
+            #expect(faults.observe(Root.scratchRetireScope).flatMap(faults.acknowledge)?.firstFrame == 3)
             #expect(slot.reclaim() == 1)  // the intruder
             #expect(watch.aliveAtPlanDeinit.load(ordering: .relaxed) == 0)
             #expect(ledger.asRender { slot.beginCycle(frame: 5) } == .empty)  // the retry retires plan 1
