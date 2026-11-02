@@ -11,20 +11,58 @@ struct AssistantLiveWingAppModelTests {
         let gear: Equipment
     }
 
-    private func fixture() async throws -> Fixture {
-        let transport = AssistantRecordingWingTransport()
-        let wing = WingController(transport: transport)
-        let model = AppModel(assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()), wing: wing)
-        let gear = try #require(model.equipment.items.first)
-        _ = model.environments.addEnvironment(named: "Live Alias Test")
-        try await model.studioConnections.replaceHome(StudioHomeConnections(inputs: gear.outputs.indices.map {
-            StudioInputConnection(connector: 7 + $0, equipmentID: gear.id, outputPort: $0)
-        }), equipment: model.equipment.items)
-        await transport.put(WingAddress.inputName(7), .string("Fixture Alias"))
-        await wing.connect(host: "192.0.2.10")
-        await transport.emit(WingAddress.inputName(7), .string("Fixture Alias"))
-        try await AssistantBackendFixture.wait { wing.confirmedValues[WingAddress.inputName(7)] != nil }
-        return Fixture(model: model, transport: transport, gear: gear)
+    @MainActor
+    private final class FixtureOwner {
+        var model: AppModel?
+
+        func finish() async {
+            // The body has stopped submitting. This family's memory draft store
+            // and recording transport spawn no fake workers or unowned Tasks.
+            guard let model else { return }
+            model.assistantChat.cancel()
+            await model.assistantChat.awaitOwnedWorkSnapshot()
+            await model.wing.disconnect()
+            // Finite owner snapshots, not future/global/durable completion.
+            await model.awaitDomainScheduledSaveSnapshots()
+            await model.awaitSiriEntityIndexingSnapshot()
+            self.model = nil
+        }
+    }
+
+    private func withFixture(
+        _ body: @MainActor (Fixture) async throws -> Void
+    ) async throws {
+        try await withAssistantFixtureResources { resources in
+            let owner = FixtureOwner()
+            resources.onFinish { await owner.finish() }
+            let settings = AssistantProviderSettings(
+                defaults: try resources.defaults("provider"), credentials: MemoryAssistantCredentialStore())
+            settings.provider = .deterministic
+            let transport = AssistantRecordingWingTransport()
+            let wing = WingController(transport: transport)
+            let model = AppModel(
+                assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
+                assistantProviderSettings: settings, wing: wing, hardware: .inert,
+                launchControlXLStore: JSONFileStore(
+                    directory: resources.root.appendingPathComponent("launch-control-xl"), cloud: nil),
+                domainStore: JSONFileStore(directory: resources.root.appendingPathComponent("domain"), cloud: nil),
+                assistantConversationStore: AssistantConversationStore(local: LocalAssistantHistoryBackend(
+                    directory: resources.root.appendingPathComponent("history", isDirectory: true),
+                    legacyFileURL: resources.root.appendingPathComponent("absent-legacy-history.json")), cloud: nil),
+                assistantSpokenRepliesDefaults: try resources.defaults("spoken-replies"))
+            // Retain before any throwing assertion, Home mutation, or connection.
+            owner.model = model
+            let gear = try #require(model.equipment.items.first)
+            _ = model.environments.addEnvironment(named: "Live Alias Test")
+            try await model.studioConnections.replaceHome(StudioHomeConnections(inputs: gear.outputs.indices.map {
+                StudioInputConnection(connector: 7 + $0, equipmentID: gear.id, outputPort: $0)
+            }), equipment: model.equipment.items)
+            await transport.put(WingAddress.inputName(7), .string("Fixture Alias"))
+            await wing.connect(host: "192.0.2.10")
+            await transport.emit(WingAddress.inputName(7), .string("Fixture Alias"))
+            try await AssistantBackendFixture.wait { wing.confirmedValues[WingAddress.inputName(7)] != nil }
+            try await body(Fixture(model: model, transport: transport, gear: gear))
+        }
     }
 
     private func buildAliasDraft(_ model: AppModel, gear: Equipment) async throws {
@@ -38,95 +76,99 @@ struct AssistantLiveWingAppModelTests {
     }
 
     @Test func liveScribblesNeverChangeSavedEffectiveOrCompiledStudioRouting() async throws {
-        let fixture = try await fixture()
-        let model = fixture.model
-        let transport = fixture.transport
-        let saved = model.studioConnections.connections
-        let effective = model.studioConnectionsForCurrentWing().effectiveHome
-        let compiled = model.studioCompiledRouting()
-        for (connector, name) in [(7, "Other Gear R"), (19, "New Gear L"), (20, "New Gear R")] {
-            await transport.emit(WingAddress.inputName(connector), .string(name))
+        try await withFixture { fixture in
+            let model = fixture.model
+            let transport = fixture.transport
+            let saved = model.studioConnections.connections
+            let effective = model.studioConnectionsForCurrentWing().effectiveHome
+            let compiled = model.studioCompiledRouting()
+            for (connector, name) in [(7, "Other Gear R"), (19, "New Gear L"), (20, "New Gear R")] {
+                await transport.emit(WingAddress.inputName(connector), .string(name))
+            }
+            try await AssistantBackendFixture.wait {
+                model.wing.confirmedValues[WingAddress.inputName(20)] == .string("New Gear R")
+            }
+            _ = model.assistantToolContext()
+            #expect(model.studioConnections.connections == saved)
+            #expect(model.studioConnectionsForCurrentWing().effectiveHome == effective)
+            #expect(model.studioCompiledRouting() == compiled)
+            #expect(model.wing.transportWriteCount == 0)
+            #expect(await transport.writes.isEmpty)
+            await model.wing.disconnect()
         }
-        try await AssistantBackendFixture.wait {
-            model.wing.confirmedValues[WingAddress.inputName(20)] == .string("New Gear R")
-        }
-        _ = model.assistantToolContext()
-        #expect(model.studioConnections.connections == saved)
-        #expect(model.studioConnectionsForCurrentWing().effectiveHome == effective)
-        #expect(model.studioCompiledRouting() == compiled)
-        #expect(model.wing.transportWriteCount == 0)
-        #expect(await transport.writes.isEmpty)
-        await model.wing.disconnect()
     }
 
     @Test func staleAliasDraftReviewRefreshesBeforeEnablingAcceptanceWithoutHardwareWrites() async throws {
-        let fixture = try await fixture()
-        let model = fixture.model
-        let transport = fixture.transport
-        try await buildAliasDraft(model, gear: fixture.gear)
-        var stale = model.assistantToolContext()
-        stale.liveWing = AssistantLiveWingContext.project(
-            model.wing.confirmedSnapshot(now: Date().addingTimeInterval(31)),
-            equipment: model.equipment.items, connections: stale.effectiveConnections)
-        _ = await model.assistant.perform(.validatePendingStudioDraft, context: stale)
-        #expect(model.assistant.pendingStudioDraft?.validation.contains { $0.code == "live-alias-changed" } == true)
-        let before = await transport.queries.filter { $0 == WingAddress.inputName(7) }.count
-        let graph = model.environments.activeStudioGraph
-        await model.refreshPendingAssistantDraftForReview()
-        #expect(model.assistant.pendingStudioDraft?.hasErrors == false, "Review must allow safe acceptance again")
-        #expect(model.environments.activeStudioGraph == graph)
-        #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
-        #expect(await transport.writes.isEmpty)
-        let result = await model.acceptPendingAssistantDraft()
-        #expect(result != nil)
-        #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
-        #expect(model.wing.transportWriteCount == 0)
-        #expect(await transport.writes.isEmpty)
-        await model.wing.disconnect()
+        try await withFixture { fixture in
+            let model = fixture.model
+            let transport = fixture.transport
+            try await buildAliasDraft(model, gear: fixture.gear)
+            var stale = model.assistantToolContext()
+            stale.liveWing = AssistantLiveWingContext.project(
+                model.wing.confirmedSnapshot(now: Date().addingTimeInterval(31)),
+                equipment: model.equipment.items, connections: stale.effectiveConnections)
+            _ = await model.assistant.perform(.validatePendingStudioDraft, context: stale)
+            #expect(model.assistant.pendingStudioDraft?.validation.contains { $0.code == "live-alias-changed" } == true)
+            let before = await transport.queries.filter { $0 == WingAddress.inputName(7) }.count
+            let graph = model.environments.activeStudioGraph
+            await model.refreshPendingAssistantDraftForReview()
+            #expect(model.assistant.pendingStudioDraft?.hasErrors == false, "Review must allow safe acceptance again")
+            #expect(model.environments.activeStudioGraph == graph)
+            #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
+            #expect(await transport.writes.isEmpty)
+            let result = await model.acceptPendingAssistantDraft()
+            #expect(result != nil)
+            #expect(await transport.queries.filter { $0 == WingAddress.inputName(7) }.count > before)
+            #expect(model.wing.transportWriteCount == 0)
+            #expect(await transport.writes.isEmpty)
+            await model.wing.disconnect()
+        }
     }
 
     @Test func reviewRefreshRejectsChangedOrUnconfirmedAliasesWithoutAllowingAcceptance() async throws {
         for scenario in 0...2 {
-            let fixture = try await fixture()
-            let model = fixture.model
-            try await buildAliasDraft(model, gear: fixture.gear)
-            let graph = model.environments.activeStudioGraph
-            let home = model.studioConnections.connections
-            switch scenario {
-            case 0: await fixture.transport.put(WingAddress.inputName(7), .string("Renamed"))
-            case 1: await fixture.transport.configure(answers: false)
-            default: await model.wing.disconnect()
+            try await withFixture { fixture in
+                let model = fixture.model
+                try await buildAliasDraft(model, gear: fixture.gear)
+                let graph = model.environments.activeStudioGraph
+                let home = model.studioConnections.connections
+                switch scenario {
+                case 0: await fixture.transport.put(WingAddress.inputName(7), .string("Renamed"))
+                case 1: await fixture.transport.configure(answers: false)
+                default: await model.wing.disconnect()
+                }
+                await model.refreshPendingAssistantDraftForReview()
+                #expect(model.assistant.pendingStudioDraft?.hasErrors == true)
+                #expect(await model.acceptPendingAssistantDraft() == nil)
+                #expect(model.environments.activeStudioGraph == graph)
+                #expect(model.studioConnections.connections == home)
+                #expect(model.wing.transportWriteCount == 0)
+                #expect(await fixture.transport.writes.isEmpty)
+                await model.wing.disconnect()
             }
-            await model.refreshPendingAssistantDraftForReview()
-            #expect(model.assistant.pendingStudioDraft?.hasErrors == true)
-            #expect(await model.acceptPendingAssistantDraft() == nil)
-            #expect(model.environments.activeStudioGraph == graph)
-            #expect(model.studioConnections.connections == home)
-            #expect(model.wing.transportWriteCount == 0)
-            #expect(await fixture.transport.writes.isEmpty)
-            await model.wing.disconnect()
         }
     }
 
     @Test func changedDisconnectedOrUnconfirmedAliasAcceptancePreservesGraphAndHomeWithoutWrites() async throws {
         for scenario in 0...2 {
-            let fixture = try await fixture()
-            let model = fixture.model
-            let transport = fixture.transport
-            try await buildAliasDraft(model, gear: fixture.gear)
-            let graph = model.environments.activeStudioGraph
-            let home = model.studioConnections.connections
-            switch scenario {
-            case 0: await transport.put(WingAddress.inputName(7), .string("Renamed"))
-            case 1: await model.wing.disconnect()
-            default: await transport.configure(answers: false)
+            try await withFixture { fixture in
+                let model = fixture.model
+                let transport = fixture.transport
+                try await buildAliasDraft(model, gear: fixture.gear)
+                let graph = model.environments.activeStudioGraph
+                let home = model.studioConnections.connections
+                switch scenario {
+                case 0: await transport.put(WingAddress.inputName(7), .string("Renamed"))
+                case 1: await model.wing.disconnect()
+                default: await transport.configure(answers: false)
+                }
+                #expect(await model.acceptPendingAssistantDraft() == nil)
+                #expect(model.environments.activeStudioGraph == graph)
+                #expect(model.studioConnections.connections == home)
+                #expect(model.wing.transportWriteCount == 0)
+                #expect(await transport.writes.isEmpty)
+                await model.wing.disconnect()
             }
-            #expect(await model.acceptPendingAssistantDraft() == nil)
-            #expect(model.environments.activeStudioGraph == graph)
-            #expect(model.studioConnections.connections == home)
-            #expect(model.wing.transportWriteCount == 0)
-            #expect(await transport.writes.isEmpty)
-            await model.wing.disconnect()
         }
     }
 }
