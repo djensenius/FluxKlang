@@ -100,17 +100,33 @@ enum LocalNetworkProbe {
 
     /// Returns the connect errno, or nil when the path is allowed.
     @Sendable static func connectErrno(ipv4 host: String, port: UInt16) -> Int32? {
+        connectErrno(ipv4: host, port: port, mirroring: nil)
+    }
+
+    @Sendable static func connectErrno(
+        ipv4 host: String, port: UInt16, mirroring audit: ProductionAccessAudit?
+    ) -> Int32? {
+        ProductionAccessAudit.shared.record(.attempted, for: .localNetworkProbe, mirroring: audit)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .localNetworkProbe, mirroring: audit)
+            return ENETUNREACH
+        }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = port.bigEndian
         guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return nil }
+        ProductionAccessAudit.shared.record(.apiEntered, for: .localNetworkProbe, mirroring: audit)
         let descriptor = socket(AF_INET, SOCK_DGRAM, 0)
         guard descriptor >= 0 else { return errno }
-        defer { close(descriptor) }
+        defer {
+            ProductionAccessAudit.shared.record(.apiEntered, for: .localNetworkProbe, mirroring: audit)
+            close(descriptor)
+        }
         let result = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                ProductionAccessAudit.shared.record(.apiEntered, for: .localNetworkProbe, mirroring: audit)
+                return connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
         return result == 0 ? nil : errno
@@ -231,18 +247,30 @@ actor WingTransport: WingTransporting {
 /// never accept the first arbitrary sender as the console's identity.
 enum WingPeerIdentity {
     static func ipv4Addresses(for host: String) -> Set<String> {
+        ipv4Addresses(for: host, mirroring: nil)
+    }
+
+    static func ipv4Addresses(for host: String, mirroring audit: ProductionAccessAudit?) -> Set<String> {
         guard !host.isEmpty, !host.unicodeScalars.contains(where: {
             CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0)
         }) else { return [] }
+        if let address = WingIPv4Literal.canonicalized(host) { return [address] }
+        ProductionAccessAudit.shared.record(.attempted, for: .wingPeerResolution, mirroring: audit)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .wingPeerResolution, mirroring: audit)
+            return []
+        }
         var hints = addrinfo()
         hints.ai_family = AF_INET
         var result: UnsafeMutablePointer<addrinfo>?
+        ProductionAccessAudit.shared.record(.apiEntered, for: .wingPeerResolution, mirroring: audit)
         guard getaddrinfo(host, nil, &hints, &result) == 0 else { return [] }
         defer { freeaddrinfo(result) }
         var addresses = Set<String>()
         var cursor = result
         while let entry = cursor {
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            ProductionAccessAudit.shared.record(.apiEntered, for: .wingPeerResolution, mirroring: audit)
             if getnameinfo(entry.pointee.ai_addr, entry.pointee.ai_addrlen,
                            &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
                 let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }

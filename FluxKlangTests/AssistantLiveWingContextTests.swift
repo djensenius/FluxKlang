@@ -197,12 +197,14 @@ struct AssistantLiveWingContextTests {
         #expect(wing.liveObservations.values.isEmpty)
     }
 
-    @Test func realTransportRejectsUnresolvedPeerBeforeOpeningSocket() async {
+    @Test func realTransportRejectsUnresolvedPeerBeforeOpeningSocket() async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
         let transport = WingTransport()
-        do {
+        await #expect(throws: WingTransportError.unresolvedPeer) {
             try await transport.start(remoteHost: "invalid host with spaces", localPort: nil, broadcast: false)
-            Issue.record("Unresolved peer must fail, not create a connected discard-all session")
-        } catch { #expect(await transport.sessionID == nil) }
+        }
+        #expect(await transport.sessionID == nil)
+        #expect(await transport.peerHosts.isEmpty)
         #expect(WingPeerIdentity.ipv4Addresses(for: "192.0.2.10") == ["192.0.2.10"])
     }
 
