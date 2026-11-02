@@ -42,11 +42,17 @@ import Synchronization
 /// object's lifetime. Hot-path calls go through unretained copies (`ringRef`, `faultsRef`) with
 /// `_withUnsafeGuaranteedRef`, so they perform no retain or release: every call runs inside a method of `self`,
 /// which the caller keeps alive, and `self` keeps both objects alive through the strong `let`s, which are never
-/// reassigned. Evidence today is a scratch `@_noAllocation @_noLocks` compile probe of these entry points (not
-/// part of this repository); X1 is to enforce such a probe in CI. Neither is an RT certification.
+/// reassigned. Evidence today is scratch-only (not part of this repository): a `@_noAllocation @_noLocks` compile
+/// probe of specialized wrappers, and an assembly call-graph probe that also roots at the unannotated,
+/// unspecialized methods. X1 is to enforce such probes in CI. Neither is an RT certification.
 ///
-/// `@unchecked Sendable`: `pushed` is touched only by the producer and the inner ring is safe only under SPSC
-/// use, which R2 validation in `init` declares.
+/// Lifetime. Create and destroy a ring on the control side, only once both endpoints are quiescent (no producer
+/// or consumer call in flight or still to come). `deinit` frees `popScratch` and may drop the last references to
+/// the inner ring and the latch, so a render thread must never release the last reference. An owner such as M5
+/// must hold that reference and implement the ownership and deferred-release contract on the control side.
+///
+/// `@unchecked Sendable`: `pushed` is touched only by the producer, `popScratch` only by the consumer, and the
+/// inner ring is safe only under SPSC use, which R2 validation in `init` declares.
 final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable {
     /// Why `init` refused to prepare a ring.
     enum PreparationError: Error, Equatable, Sendable {
@@ -90,6 +96,9 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     private let refusedCritical: Atomic<UInt64>
     /// Successful pushes; owned by the producer only.
     private var pushed: UInt64
+    /// Consumer-only one-element slot that `tryPop` copies through (see `tryPop`). Allocated last in `init`,
+    /// after every throw, and freed in `deinit`; `Element` is trivial, so it needs no deinitialization.
+    private let popScratch: UnsafeMutablePointer<Element>
 
     /// Validates `policy` and allocates `policy.capacity` slots. Control-side only. `scope` should be prepared
     /// in `faults`; an unprepared scope is still counted in `FaultLatch.unknownScopeFaults`.
@@ -139,7 +148,10 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         pushed = startingIndex
         refusedGeneral = Atomic(startingRefusals)
         refusedCritical = Atomic(startingRefusals)
+        popScratch = .allocate(capacity: 1)
     }
+
+    deinit { popScratch.deallocate() }
 
     /// Producer only; wait-free. Appends `value`, or refuses it whole: a general event with `.refused(.full)`
     /// at `generalLimit`, a critical event with `.refused(.criticalExhausted)` at `capacity`, which also raises
@@ -163,10 +175,22 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     }
 
     /// Consumer only; wait-free. Removes and returns the oldest element, or `nil` without side effects.
+    ///
+    /// The inner `popAll(limit: 1)` hands the element to a closure that copies it into `popScratch`. It has the
+    /// same protocol as the inner `tryPop`: one acquiring tail load, and the slot is read and the head published
+    /// before that closure runs. This shape avoids a local `Optional<Element>`: unspecialized code (any `-Onone`
+    /// build, or an optimized caller that cannot specialize) must look up that type's generic metadata, and on
+    /// first use the runtime takes a lock and allocates. Returning `nil` or the copy writes straight into the
+    /// caller's result. `popScratch` is written and read only on the consumer thread, and only within this call,
+    /// so a re-entrant `tryPop` from a `popAll` body cannot clobber a live value.
     func tryPop() -> Element? {
-        guard let value = ringRef._withUnsafeGuaranteedRef({ $0.tryPop() }) else { return nil }
+        let scratch = popScratch  // A local copy, so the closures capture no `self`.
+        let count = ringRef._withUnsafeGuaranteedRef { inner in
+            inner.popAll(limit: 1) { scratch.initialize(to: $0) }
+        }
+        guard count == 1 else { return nil }
         notePopped()
-        return value
+        return scratch.pointee
     }
 
     /// Consumer only. Pops up to `min(max(limit, 0), available, capacity)` elements in FIFO order and returns

@@ -159,6 +159,8 @@ targets:
         excludes: ["**/.DS_Store"]
       # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
       - path: FluxKlangTests/TestSupport.swift
+      - path: FluxKlangTests
+        includes: ["RealtimeHandoffTests*.swift"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
