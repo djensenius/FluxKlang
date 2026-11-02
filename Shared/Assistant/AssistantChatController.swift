@@ -43,7 +43,8 @@ final class AssistantChatController {
         }
     }
 
-    @ObservationIgnored private lazy var synthesizer = AVSpeechSynthesizer()
+    @ObservationIgnored private let makeSpeech: @MainActor () -> (String) -> Void
+    @ObservationIgnored private lazy var speakReply = makeSpeech()
     private static let spokenRepliesKey = "assistant.spokenReplies"
     private static var forcesFallbackForUITesting: Bool {
         ProcessInfo.processInfo.arguments.contains("-ui-test-force-fallback")
@@ -53,10 +54,15 @@ final class AssistantChatController {
         coordinator: AssistantCoordinator,
         store: AssistantConversationStore = .live(),
         generator: (any AssistantGenerating)? = nil,
-        actionInterpreter: (any AssistantActionInterpreting)? = nil
+        actionInterpreter: (any AssistantActionInterpreting)? = nil,
+        makeSpeech: @escaping @MainActor () -> (String) -> Void = {
+            let synthesizer = AVSpeechSynthesizer()
+            return { synthesizer.speak(AVSpeechUtterance(string: $0)) }
+        }
     ) {
         self.coordinator = coordinator
         self.store = store
+        self.makeSpeech = makeSpeech
         self.actionInterpreter = actionInterpreter
             ?? Self.defaultActionInterpreter(forcesFallback: Self.forcesFallbackForUITesting)
         let fallback = AssistantFallbackGenerator(coordinator: coordinator)
@@ -73,8 +79,8 @@ final class AssistantChatController {
         } else {
             self.generator = AssistantDraftPreflightGenerator(
                 coordinator: coordinator,
-                downstream: AssistantGeneratorRouter(
-                    model: FoundationModelAssistantGenerator(coordinator: coordinator),
+                downstream: AssistantGeneratorRouter.defaultGenerator(
+                    model: { FoundationModelAssistantGenerator(coordinator: coordinator) },
                     fallback: fallback
                 )
             )
@@ -346,8 +352,9 @@ final class AssistantChatController {
         activeResponseID = nil
         isStreaming = false
         responseTask = nil
-        if state == .complete, spokenRepliesEnabled, let spokenText, !spokenText.isEmpty {
-            synthesizer.speak(AVSpeechUtterance(string: spokenText))
+        if state == .complete, spokenRepliesEnabled, let spokenText, !spokenText.isEmpty,
+           !AssistantServiceIsolation.deniesLiveServices {
+            speakReply(spokenText)
         }
     }
 
@@ -396,9 +403,14 @@ final class AssistantChatController {
 }
 
 extension AssistantChatController {
-    static func defaultActionInterpreter(forcesFallback: Bool) -> any AssistantActionInterpreting {
+    static func defaultActionInterpreter(
+        forcesFallback: Bool, live: () -> any AssistantActionInterpreting = { FoundationModelActionInterpreter() }
+    ) -> any AssistantActionInterpreting {
         if forcesFallback { return AssistantUnavailableActionInterpreter(reason: "deterministic UI-test mode") }
-        return FoundationModelActionInterpreter()
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            return AssistantUnavailableActionInterpreter(reason: AssistantServiceIsolation.reason)
+        }
+        return live()
     }
 
     private func handleRoutingSubmission(
