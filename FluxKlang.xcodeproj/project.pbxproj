@@ -245,6 +245,7 @@
 		5220D2BDE2A9014301AE6ACA /* AcceptanceLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800413E3A4432898249D5FC0 /* AcceptanceLaunchConfiguration.swift */; };
 		5263405FB4FAE17C3819E801 /* CommandAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3303B038460EE95529FD811 /* CommandAdmission.swift */; };
 		52B144CCB29DE0AA32B4756B /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
+		52F0570FB3FF455540DE2F03 /* AssistantModelGeneratorIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCDE323ACD4AF06B0A16FE6F /* AssistantModelGeneratorIsolationTests.swift */; };
 		53011874E5D36EB6A2E8C6D2 /* HostAuthorityBook+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C90E6BDB3977BB5ED32B6D1 /* HostAuthorityBook+Restore.swift */; };
 		5369DAD8D87CC9CE4F8BF20E /* FoundationModelActionInterpreterLiveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 198A5087722F3FEB5AAB083A /* FoundationModelActionInterpreterLiveTests.swift */; };
 		537ABAA1B3223F68CE0A4910 /* SpatialView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95B87C965DD2017928F28903 /* SpatialView.swift */; };
@@ -1227,6 +1228,7 @@
 		FA86393DA6F09EDA447E1C15 /* WingController+Confirmed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WingController+Confirmed.swift"; sourceTree = "<group>"; };
 		FA9DE01BE2E9A3DC554B4151 /* ControlContractTests+Transport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+Transport.swift"; sourceTree = "<group>"; };
 		FCB96FBE419ABB2A05379616 /* GraphNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphNode.swift; sourceTree = "<group>"; };
+		FCDE323ACD4AF06B0A16FE6F /* AssistantModelGeneratorIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantModelGeneratorIsolationTests.swift; sourceTree = "<group>"; };
 		FDC161FABC40775CD97C8AF7 /* SpatialPadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialPadView.swift; sourceTree = "<group>"; };
 		FE008189B554CBD9741C6447 /* FluxKlang.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FluxKlang.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FE452E09E8066C81589FC39E /* FanOutHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FanOutHandoff.swift; sourceTree = "<group>"; };
@@ -1941,6 +1943,7 @@
 				4AE4CF55813C13B22457A191 /* AssistantMixerChatTests.swift */,
 				650DFA4AC57F28D2293AE3D3 /* AssistantMixerExecutionTests.swift */,
 				2A5804CBF18A194B2EDCD6C3 /* AssistantMixerIntentTests.swift */,
+				FCDE323ACD4AF06B0A16FE6F /* AssistantModelGeneratorIsolationTests.swift */,
 				8B2759BB8651D4FEE01749FE /* AssistantReliabilityTests.swift */,
 				25BD34D17B2D46E3CD10430A /* AssistantReviewedChatTests.swift */,
 				12701398AAB33E351617AFD9 /* AssistantRoutingAppModelTests.swift */,
@@ -2932,6 +2935,7 @@
 				4F3AB1C7EE035B27D174DDD7 /* AssistantMixerChatTests.swift in Sources */,
 				EEB3C01920894B9C66059772 /* AssistantMixerExecutionTests.swift in Sources */,
 				3C8773ED2C5F5CD62AE0173D /* AssistantMixerIntentTests.swift in Sources */,
+				52F0570FB3FF455540DE2F03 /* AssistantModelGeneratorIsolationTests.swift in Sources */,
 				E3AEFE14C5AADF69612EB3A9 /* AssistantReliabilityTests.swift in Sources */,
 				98E784D7540E8C11672E1857 /* AssistantReviewedChatTests.swift in Sources */,
 				64A74C393F4A9336C9297D1A /* AssistantRoutingAppModelTests.swift in Sources */,
