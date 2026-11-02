@@ -59,7 +59,7 @@ struct ScriptedActivationEngine: Sendable {
     private(set) var pendingCommits: [ScriptedCommit] = []
     /// The node IDs of each prepare taken, until it is answered.
     private var preparingNodes: [PrepareAttemptID: Set<NodeID>] = [:]
-    /// The node IDs of each plan this engine prepared (answered with success).
+    /// Report-node coverage for generated IDs; chosen/reused-ID reports are not modeled.
     private(set) var plannedNodes: [PreparedActivationID: Set<NodeID>] = [:]
     /// Plans prepared with `prepare(_:as:)` and still held, oldest first. A taken
     /// `.discard` disposes of the oldest held plan with its ID, and only of a held plan.
