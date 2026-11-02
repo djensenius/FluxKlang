@@ -1,172 +1,176 @@
 import Testing
 @testable import FluxKlang
 
-private let host = HostID(validated: "host.late")
-private let hostEpoch = HostEpoch(host: host, generation: .initial)
-private let permission = PermissionFingerprint(rawValue: "permissions.current")
-private let graphID = GraphID(validated: "graph.main")
-private let audio = CapabilityID(validated: "cap.audio")
-private let projectA = ProjectID(validated: "prj.a")
-private let projectB = ProjectID(validated: "prj.b")
-private let projectC = ProjectID(validated: "prj.c")
-private let runningPlan = PreparedActivationID(validated: "prep.running")
+private typealias Bench = AuthorityBench
 private let reused = PreparedActivationID(validated: "prep.reused")
-private let node = NodeID(validated: "node.out")
 
-private func liveState() throws -> HostLiveState {
-    let device = try DeviceDescriptor(
-        id: DeviceID(validated: "dev.interface"), kind: .audioInterface,
-        layout: ChannelLayout(inputs: 2, outputs: 2, sampleRate: 48_000), binding: .reported,
-        identity: DeviceIdentity(.init(uid: "physical-interface-1", evidence: [.deviceUID])),
-        presence: .present, capabilities: [audio]
-    )
-    let document = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: hostEpoch.generation,
-                                                devices: [device], routes: [])
-    return HostLiveState(hostEpoch: hostEpoch, permission: permission, capabilities: document)
-}
+enum LatePrepareReuse: CaseIterable, Sendable { case sameProject, crossProject }
+enum LatePrepareOrder: CaseIterable, Sendable { case lateFirst, lateFirstThenDrain, newerFirst }
 
-private func begin(_ authority: HostAuthority, _ project: ProjectID) async -> Result<Void, HostAuthorityRefusal> {
-    let request = ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: .initial,
-                                    hostEpoch: hostEpoch, permission: permission,
-                                    digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human)
-    let candidate = GraphDocument(id: graphID, revision: .initial,
-                                  capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
-                                  nodes: [GraphNode(id: node, kind: .plugin, label: "Out",
-                                                    requiredCapabilities: [audio])])
-    return await authority.begin(request, candidate: candidate, project: project)
-}
-
-/// Project A runs `prep.running`; project B runs nothing.
-private func makeAuthority() async throws -> HostAuthority {
-    let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
-                                      nominalRate: 48_000)
-    let authority = try HostAuthority(host: ledger, live: try liveState())
-    try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan)).get()
-    try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
-    return authority
-}
-
-private func refusal<Success>(_ result: Result<Success, HostAuthorityRefusal>) -> HostAuthorityRefusal? {
-    if case .failure(let refusal) = result { return refusal }
-    return nil
-}
-
-/// The queue holds no `.discard` at all.
-private func noDiscardQueued(_ snapshot: HostAuthoritySnapshot) -> Bool {
-    !snapshot.queue.pending.contains { if case .discard = $0 { true } else { false } }
-}
-
-/// Project A's prepare, taken by the engine and prepared as `reused`, then abandoned
-/// by the actor; the engine later lets that plan go, freeing `reused`. Returns the
-/// abandoned attempt and its late, still undelivered, success.
-private func abandonPreparedAsReused(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine)
-async throws -> (PrepareAttemptID, Result<PreparedActivationID, PrepareFailure>) {
-    try await begin(authority, projectA).get()
+private func take(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                  project: ProjectID = Bench.projectA, withAux: Bool = false) async throws -> HostPrepare {
+    try await Bench.begin(authority, project: project, withAux: withAux)
     await engine.drain(authority)
-    let taken = engine.withholdNext()
-    let old = try #require(taken)
-    let late = engine.prepare(old, as: reused)
-    try await authority.abandonPrepare(project: projectA).get()
-    engine.release(old)
-    return (old, late)
+    return try engine.requireNext()
 }
 
-/// The exact late outcome: a live reused ID is dropped; otherwise it is unreclaimed, refused by the
-/// abandoned project's phase (preparing a newer attempt, or idle when the reuse is cross-project).
-private func expectedLateOutcome(_ reuse: LatePrepareReuse, _ order: LatePrepareOrder)
--> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
-    if order == .newerFirst { return .success(.dropped) }
-    let refusal: ActivationRefusal = reuse == .sameProject ? .stalePrepareResponse : .unexpectedPhase(.idle)
-    return .success(.unreclaimed(reused, refusal: refusal))
-}
-
-/// Which project's newer prepare the engine answers with the reused ID.
-enum LatePrepareReuse: CaseIterable, Sendable {
-    case sameProject, crossProject
-}
-
-/// The order the abandoned attempt's late answer and the newer answer reach the actor.
-enum LatePrepareOrder: CaseIterable, Sendable {
-    /// The late answer first, while the newer answer is outstanding.
-    case lateFirst
-    /// The late answer first, and the engine takes the queue before the newer answer.
-    case lateFirstThenDrain
-    /// The newer answer first: the reused ID is in review when the late answer arrives.
-    case newerFirst
+private func send(_ authority: HostAuthority, _ answer: Result<PreparedActivationID, PrepareFailure>,
+                  for preparation: HostPrepare) async -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
+    await authority.prepareAnswered(answer, instance: preparation.instance, attempt: preparation.attempt)
 }
 
 extension HostAuthorityTests {
-    /// #191: a late success for an abandoned prepare names only a bare ID, which
-    /// the engine may have reused; the actor never disposes of a plan from it.
     struct ActorLatePrepare {
-        @Test(arguments: LatePrepareReuse.allCases, LatePrepareOrder.allCases)
-        func lateSuccessNeverDisposesAReusedID(_ reuse: LatePrepareReuse, _ order: LatePrepareOrder) async throws {
-            let authority = try await makeAuthority()
+        @Test func cancellingNewAliasNeverDisposesOlderLostPreparation() async throws {
             var engine = try ScriptedActivationEngine()
-            let (old, late) = try await abandonPreparedAsReused(authority, &engine)
-            let project = reuse == .sameProject ? projectA : projectB
-            try await begin(authority, project).get()
-            await engine.drain(authority)
-            let taken = engine.withholdNext()
-            let newer = try #require(taken)
+            let authority = try await Bench.makeAuthority(&engine)
+            let old = try await take(authority, &engine)
+            let late = engine.prepare(old, as: reused)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            let newer = try await take(authority, &engine)
             let current = engine.prepare(newer, as: reused)
-            if order == .newerFirst {
-                #expect(await authority.prepareAnswered(current, attempt: newer) == .success(.routed))
+            #expect(await send(authority, current, for: newer) == .success(.routed))
+            let binding = try #require(try await Bench.state(authority).reviewed)
+            try await authority.cancel(project: Bench.projectA).get()
+            let cancelled = await authority.snapshot()
+            #expect(Bench.refusal(await authority.cancel(project: Bench.projectA))
+                    == .activation(.unexpectedPhase(.idle)))
+            #expect(await authority.snapshot() == cancelled)
+            #expect(await engine.drain(authority) == [.discard(binding)])
+            #expect(engine.disposed == [.init(preparation: newer, id: reused)])
+            #expect(engine.held.contains(.init(preparation: old, id: reused)))
+            let result = try await send(authority, late, for: old).get()
+            guard case .reclaimed(let oldBinding) = result else {
+                Issue.record("Expected old resource to remain reclaimable")
+                return
             }
+            await engine.drain(authority)
+            #expect(engine.discarded == [binding, oldBinding])
+            #expect(engine.disposed == [.init(preparation: newer, id: reused), .init(preparation: old, id: reused)])
+        }
+
+        @Test(arguments: LatePrepareReuse.allCases, LatePrepareOrder.allCases)
+        func lateSuccessDisposesOnlyItsQualifiedPreparation(_ reuse: LatePrepareReuse,
+                                                            _ order: LatePrepareOrder) async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            let old = try await take(authority, &engine)
+            let late = engine.prepare(old, as: reused)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            let project = reuse == .sameProject ? Bench.projectA : Bench.projectB
+            let newer = try await take(authority, &engine, project: project)
+            let current = engine.prepare(newer, as: reused)
+            if order == .newerFirst { #expect(await send(authority, current, for: newer) == .success(.routed)) }
             let before = await authority.snapshot()
-            let verdict = await authority.prepareAnswered(late, attempt: old)
+            let verdict = await send(authority, late, for: old)
+            guard case .success(.reclaimed(let binding)) = verdict else {
+                Issue.record("Expected qualified late retirement")
+                return
+            }
+            #expect(binding.instance == old.instance && binding.attempt == old.attempt && binding.prepared == reused)
             let after = await authority.snapshot()
-            // Handled once, without a transaction, a queue slot or a discard.
-            #expect(verdict == expectedLateOutcome(reuse, order))
             #expect(after.projects == before.projects && after.outstanding == before.outstanding)
-            #expect(after.queue == before.queue && noDiscardQueued(after))
-            #expect(after.abandoned == before.abandoned.filter { $0.attempt != old })
+            #expect(after.queue.pending == before.queue.pending + [.discard(binding)])
             #expect(after.ledger == before.ledger && after.lease == before.lease)
-            let duplicate = await authority.prepareAnswered(late, attempt: old)
-            #expect(refusal(duplicate) == .activation(.stalePrepareResponse))
+            #expect(Bench.refusal(await send(authority, late, for: old)) == .activation(.stalePrepareResponse))
             #expect(await authority.snapshot() == after)
             if order == .lateFirstThenDrain { await engine.drain(authority) }
-            if order != .newerFirst {
-                #expect(await authority.prepareAnswered(current, attempt: newer) == .success(.routed))
-            }
-            // The newer plan is still held by the engine and in review: nothing disposed of it.
+            if order != .newerFirst { #expect(await send(authority, current, for: newer) == .success(.routed)) }
             await engine.drain(authority)
-            #expect(engine.discarded.isEmpty && engine.disposed.isEmpty)
-            #expect(engine.held == [ScriptedHeldPlan(id: reused, attempt: newer)])
-            let reviewing = try #require(await authority.snapshot().projects[project])
-            #expect(reviewing.phase == .awaitingReview && reviewing.reviewed == reused)
+            #expect(engine.discarded == [binding] && engine.disposed == [.init(preparation: old, id: reused)])
+            #expect(engine.held.contains(.init(preparation: newer, id: reused)))
+            let reviewing = try await Bench.state(authority, project)
+            #expect(reviewing.phase == .awaitingReview && reviewing.reviewed?.attempt == newer.attempt)
+            #expect(reviewing.reviewed?.prepared == reused)
         }
 
-        @Test func lateSuccessNeverPoisonsALaterOpen() async throws {
-            let authority = try await makeAuthority()
+        @Test func lateSuccessNeverAuthorizesRawBootAdoption() async throws {
             var engine = try ScriptedActivationEngine()
-            let (old, late) = try await abandonPreparedAsReused(authority, &engine)
-            #expect(refusal(await authority.prepareAnswered(late, attempt: old)) == nil)
-            #expect(noDiscardQueued(await authority.snapshot()))
-            // Another project may run the reused ID: nothing queued would destroy it.
+            let authority = try await Bench.makeAuthority(&engine)
+            let old = try await take(authority, &engine)
+            let late = engine.prepare(old, as: reused)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            _ = try await send(authority, late, for: old).get()
+            let before = await authority.snapshot()
             let running = RunningGraph(revision: .initial, prepared: reused)
-            try await authority.open(project: projectC, running: running).get()
+            #expect(Bench.refusal(await authority.open(project: Bench.projectC, running: running))
+                    == .unqualifiedResident)
+            #expect(await authority.snapshot() == before)
             await engine.drain(authority)
-            #expect(engine.discarded.isEmpty)
-            #expect(await authority.snapshot().projects[projectC]?.running == running)
+            #expect(engine.disposed == [.init(preparation: old, id: reused)])
         }
 
-        @Test func lateSuccessNeverNeedsQueueRoom() async throws {
-            let authority = try await makeAuthority()
-            var newest: PrepareAttemptID?
-            while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
-                try await begin(authority, projectA).get()
-                newest = await authority.snapshot().projects[projectA]?.lastPrepareAttempt
-                try await authority.abandonPrepare(project: projectA).get()
-            }
-            let attempt = try #require(newest)
+        @Test func lateSuccessNeverNeedsQueueRoomAndRefillsFIFO() async throws {
+            var engine = try ScriptedActivationEngine(trackedLimit: 512)
+            let authority = try await Bench.makeAuthority(&engine)
+            let first = try await take(authority, &engine)
+            let firstAnswer = engine.prepare(first, as: reused)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            let second = try await take(authority, &engine)
+            let secondAnswer = engine.prepare(second, as: reused)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            try await Bench.fillQueue(authority)
             let full = await authority.snapshot()
-            // Never `.queueFull`: the answer is handled now, and never needs re-delivery.
-            let verdict = await authority.prepareAnswered(.success(reused), attempt: attempt)
-            #expect(refusal(verdict) == nil)
-            let after = await authority.snapshot()
-            #expect(after.queue == full.queue && after.projects == full.projects)
-            #expect(after.abandoned == full.abandoned.filter { $0.attempt != attempt })
+            let firstResult = try await send(authority, firstAnswer, for: first).get()
+            let secondResult = try await send(authority, secondAnswer, for: second).get()
+            guard case .reclaimed(let one) = firstResult, case .reclaimed(let two) = secondResult else {
+                Issue.record("Expected both late successes reclaimed")
+                return
+            }
+            let queued = await authority.snapshot()
+            #expect(queued.queue == full.queue && queued.projects == full.projects)
+            #expect(queued.retirementOutbox == [one, two])
+            #expect(Bench.refusal(await authority.retired(one)) == .retirementQueued)
+            #expect(Bench.refusal(await send(authority, firstAnswer, for: first)) == .activation(.stalePrepareResponse))
+            #expect(await authority.snapshot() == queued)
+            // Read two commands directly to observe each refill, then deliver
+            // the rest through the same engine that owns the retiring bindings.
+            #expect(await authority.nextEngineCommand() == full.queue.pending[0])
+            let afterOne = await authority.snapshot()
+            #expect(afterOne.queue.count == EngineCommandQueue.capacity && afterOne.retirementOutbox == [two])
+            #expect(afterOne.queue.pending.last == .discard(one))
+            #expect(await authority.nextEngineCommand() == full.queue.pending[1])
+            let afterTwo = await authority.snapshot()
+            #expect(afterTwo.queue.count == EngineCommandQueue.capacity && afterTwo.retirementOutbox.isEmpty)
+            #expect(Array(afterTwo.queue.pending.suffix(2)) == [.discard(one), .discard(two)])
+            #expect(Bench.refusal(await authority.retired(one)) == .retirementQueued)
+            let delivered = await engine.drain(authority)
+            #expect(delivered == Array(full.queue.pending.dropFirst(2)) + [.discard(one), .discard(two)])
+            #expect(engine.disposed == [.init(preparation: first, id: reused), .init(preparation: second, id: reused)])
+            #expect(Bench.refusal(await authority.retired(one)) == .plans(.unknownAttempt))
+            #expect(await authority.nextEngineCommand() == nil)
+        }
+
+        @Test func chosenReusedIDsKeepExactPreparationNodeCoverage() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            let first = try await take(authority, &engine, project: Bench.projectB)
+            let firstAnswer = engine.prepare(first, as: reused)
+            #expect(await send(authority, firstAnswer, for: first) == .success(.routed))
+            let second = try await take(authority, &engine, withAux: true)
+            let secondAnswer = engine.prepare(second, as: reused)
+            #expect(await send(authority, secondAnswer, for: second) == .success(.routed))
+            let auth = try await authority.authorize(project: Bench.projectA, gesture: Bench.gesture()).get()
+            try await authority.commit(project: Bench.projectA, authorization: auth).get()
+            await engine.drain(authority)
+            let report = try #require(await engine.report(authority, .partial))
+            #expect(report.verdict == .success(.partial(unapplied: [Bench.nodeOut])))
+            #expect(report.report.applied == [Bench.nodeAux] && report.report.unapplied == [Bench.nodeOut])
+            #expect(engine.plannedNodes[first] == [Bench.nodeOut])
+            #expect(engine.plannedNodes[second] == [Bench.nodeOut, Bench.nodeAux])
+        }
+
+        @Test func fixtureCapacityRecordsFailureRatherThanSilentSuccess() async throws {
+            // Bootstrap occupies the only tracked preparation. Overflow is an
+            // expected Testing issue, not permission to hide it from the test runner.
+            var engine = try ScriptedActivationEngine(trackedLimit: 1)
+            let authority = try await Bench.makeAuthority(&engine)
+            try await Bench.begin(authority)
+            await withKnownIssue("Deliberately exhaust qualified fixture tracking") {
+                await engine.drain(authority)
+            }
+            #expect(engine.pending.isEmpty && engine.plannedNodes.count == 1)
+            #expect(engine.anomalies == ["tracked preparations capacity"])
         }
     }
 }

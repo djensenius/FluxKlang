@@ -57,7 +57,7 @@ enum EnginePlanPhase: Hashable, Sendable {
     case retiring
 }
 
-/// Qualified answer without changing the existing engine command vocabulary.
+/// Qualified ownership outcome for an engine preparation answer.
 enum EnginePlanCompletion: Hashable, Sendable {
     case held(PlanBinding)
     case retiring(PlanBinding)
@@ -76,6 +76,8 @@ enum EnginePlanLedgerRefusal: Error, Hashable, Sendable {
     case notPending
     case bindingMismatch
     case notHeld
+    case notCommitted
+    case sameBinding
     case notReclaimable
     case notRetiring
     case priorInstanceRetained
@@ -190,6 +192,40 @@ final class EnginePlanLedger {
             records[record].entries.remove(at: entry)
             releaseQuiescentPrior()
             return .failed(instance: instance, attempt: attempt, reason: reason)
+        }
+    }
+
+    /// A successful answer refused by its transaction still owns a resource.
+    /// Validate first, then bind and retire in one indivisible transition.
+    func completeRetiring(
+        instance: EngineInstanceID, attempt: PrepareAttemptID, prepared: PreparedActivationID
+    ) throws(EnginePlanLedgerRefusal) -> PlanBinding {
+        let (record, entry) = try entryIndex(instance: instance, attempt: attempt)
+        guard case .pending = records[record].entries[entry].state else { throw .notPending }
+        let binding = PlanBinding(instance: instance, attempt: attempt, prepared: prepared)
+        records[record].entries[entry].state = .bound(binding, .retiring)
+        return binding
+    }
+
+    /// Success only: validate BOTH exact roles before changing either entry.
+    /// An already-retiring previous plan is not a successful replacement.
+    func commitReplacing(
+        _ binding: PlanBinding, previous: PlanBinding?
+    ) throws(EnginePlanLedgerRefusal) {
+        let next = try boundIndex(binding)
+        guard next.phase == .held else { throw .notHeld }
+        var old: BoundLocation?
+        if let previous {
+            guard binding.instance != previous.instance || binding.attempt != previous.attempt else {
+                throw .sameBinding
+            }
+            let location = try boundIndex(previous)
+            guard location.phase == .committed else { throw .notCommitted }
+            old = location
+        }
+        records[next.record].entries[next.entry].state = .bound(binding, .committed)
+        if let old, let previous {
+            records[old.record].entries[old.entry].state = .bound(previous, .retiring)
         }
     }
 
