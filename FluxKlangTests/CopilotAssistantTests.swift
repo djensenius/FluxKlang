@@ -4,6 +4,81 @@ import Testing
 
 @MainActor
 struct CopilotAssistantTests {
+    @Test(arguments: [true, false])
+    func credentialSelectionIsLazyAndPreservesOperations(isTesting: Bool) throws {
+        let production = MemoryCredentialStore()
+        var constructions = 0
+        let selected = AssistantCredentialStores.select(
+            isTesting: isTesting,
+            production: { constructions += 1; return production }()
+        )
+
+        #expect(constructions == (isTesting ? 0 : 1))
+        #expect(production.accessCount == 0)
+        #expect((selected is MemoryAssistantCredentialStore) == isTesting)
+        #expect((selected as? MemoryCredentialStore) === (isTesting ? nil : production))
+        #expect(selected.value(for: "token") == nil)
+        try selected.setValue("secret", for: "token")
+        #expect(selected.value(for: "token") == "secret")
+        try selected.setValue("other-secret", for: "other")
+        try selected.removeValue(for: "token")
+        #expect(selected.value(for: "token") == nil)
+        #expect(selected.value(for: "other") == "other-secret")
+        try selected.removeValue(for: "other")
+        #expect(selected.value(for: "other") == nil)
+        #expect(production.accessCount == (isTesting ? 0 : 9))
+        #expect(constructions == (isTesting ? 0 : 1))
+    }
+
+    @Test func defaultSettingsUseFreshMemoryCredentialsInTestHosts() throws {
+        try #require(AppPersistence.isTesting)
+        #expect(AssistantCredentialStores.current is MemoryAssistantCredentialStore)
+        let suite = "CopilotAssistantTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AssistantProviderSettings(defaults: defaults)
+        #expect(settings.provider == .appleIntelligence)
+        #expect(!settings.hasCopilotToken)
+        #expect(settings.copilotConfiguration() == nil)
+        settings.provider = .githubCopilot
+        settings.copilotModel = " "
+        settings.saveCopilotToken("  secret-token\n")
+        #expect(settings.hasCopilotToken)
+        #expect(settings.copilotConfiguration()?.token == "secret-token")
+        #expect(settings.copilotConfiguration()?.model == "gpt-4o")
+        #expect(settings.credentialError == nil)
+        let second = AssistantProviderSettings(defaults: defaults)
+        #expect(second.provider == .githubCopilot)
+        #expect(!second.hasCopilotToken)
+        #expect(second.copilotConfiguration() == nil)
+        second.saveCopilotToken("second-token")
+        settings.removeCopilotToken()
+        #expect(!settings.hasCopilotToken)
+        #expect(settings.copilotConfiguration() == nil)
+        #expect(second.copilotConfiguration()?.token == "second-token")
+        second.removeCopilotToken()
+        #expect(!second.hasCopilotToken)
+        #expect(second.copilotConfiguration() == nil)
+    }
+
+    @Test func explicitCredentialsRemainSharedAndAreReadDuringInitialization() throws {
+        let suite = "CopilotAssistantTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let credentials = MemoryCredentialStore()
+        credentials.setValue("seed-token", for: "github-copilot-token")
+        let settings = AssistantProviderSettings(defaults: defaults, credentials: credentials)
+        #expect(credentials.accessCount == 2)
+        #expect(settings.hasCopilotToken)
+        #expect(settings.copilotConfiguration()?.token == "seed-token")
+        settings.saveCopilotToken("updated-token")
+        let second = AssistantProviderSettings(defaults: defaults, credentials: credentials)
+        #expect(second.hasCopilotToken)
+        #expect(second.copilotConfiguration()?.token == "updated-token")
+        second.removeCopilotToken()
+        #expect(settings.copilotConfiguration() == nil)
+    }
+
     @Test func settingsKeepTokenOutOfUserDefaults() throws {
         let suite = "CopilotAssistantTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -323,17 +398,29 @@ struct CopilotAssistantTests {
 private final class MemoryCredentialStore: AssistantCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
+    private var accesses = 0
+
+    var accessCount: Int { lock.withLock { accesses } }
 
     func value(for account: String) -> String? {
-        lock.withLock { values[account] }
+        lock.withLock {
+            accesses += 1
+            return values[account]
+        }
     }
 
     func setValue(_ value: String, for account: String) {
-        lock.withLock { values[account] = value }
+        lock.withLock {
+            accesses += 1
+            values[account] = value
+        }
     }
 
     func removeValue(for account: String) {
-        lock.withLock { values[account] = nil }
+        lock.withLock {
+            accesses += 1
+            values[account] = nil
+        }
     }
 }
 
