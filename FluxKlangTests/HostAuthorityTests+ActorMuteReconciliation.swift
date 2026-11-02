@@ -2,18 +2,165 @@ import Testing
 @testable import FluxKlang
 
 private typealias Bench = AuthorityBench
+private typealias Book = QualifiedRecoveryBook
+
+/// Stored-stopped standalone-book counterpart; no actor lifecycle injection.
+func repeatedStoredMutesReplaceRestoreAuthority(abandon: Bool) throws {
+    var book = try Book.make(baseline: .storedStopped, installB: true)
+    _ = try Book.commit(&book, name: .init(validated: "prep.a"), deliver: false)
+    let attemptA = try #require(book.projects[Bench.projectA]?.transaction.lastAttempt)
+    let windowC = WindowID(validated: "win.c")
+    try book.open(project: Bench.projectC, running: RunningGraph(revision: .initial, prepared: nil)).get()
+    _ = try book.transfer(to: Bench.projectC, window: windowC).get()
+    _ = try Book.reviewQueued(&book, project: Bench.projectC, name: .init(validated: "prep.c"))
+    let authorization = try book.authorize(project: Bench.projectC, gesture: Bench.gesture(windowC)).get()
+    try book.commit(project: Bench.projectC, authorization: authorization).get()
+    let attemptC = try #require(book.projects[Bench.projectC]?.transaction.lastAttempt)
+    _ = try book.transfer(to: Bench.projectB, window: Bench.windowB).get()
+    let before = book.snapshot()
+    if abandon {
+        try book.abandonCommit(attemptA, reason: .outcomeUnknown).get()
+    } else {
+        #expect(book.nextEngineCommand() == .setOutputsMuted(true))
+    }
+    let first = try #require(book.restoring)
+    #expect(book.projects[Bench.projectB]?.recoveryBase == .absent)
+    if abandon {
+        try book.abandonCommit(attemptC, reason: .outcomeUnknown).get()
+    } else {
+        let prepare = book.nextEngineCommand()
+        #expect(prepare.map { if case .prepare = $0 { true } else { false } } == true)
+        #expect(book.nextEngineCommand() == .setOutputsMuted(true))
+    }
+    let second = try #require(book.restoring)
+    #expect(first.attempt != second.attempt && first.token == second.token && first.target == second.target)
+    let queued = book.snapshot()
+    #expect(queued.ledger == before.ledger && queued.projects[Bench.projectB]?.recoveryBase == .absent)
+    #expect(Bench.refusal(Book.acknowledge(&book, first)) == .staleRestore)
+    #expect(book.snapshot() == queued)
+    let taken = try Book.drain(&book)
+    #expect(!taken.contains(Bench.restoreCommand(first)))
+    #expect(Array(taken.suffix(abandon ? 3 : 1)) ==
+            (abandon ? [.setOutputsMuted(true), .setOutputsMuted(true)] : []) + [Bench.restoreCommand(second)])
+    let delivered = book.snapshot()
+    #expect(Bench.refusal(Book.acknowledge(&book, first)) == .staleRestore)
+    #expect(book.snapshot() == delivered)
+    #expect(Book.acknowledge(&book, second) == .success(.stopped))
+    #expect(book.projects[Bench.projectB]?.recoveryBase == nil)
+    #expect(try Book.drain(&book) == [.setOutputsMuted(false)])
+}
+
+func storedGrantProvenance(phase: RecoveryEntryPhase) throws {
+    var book = try Book.make(baseline: .storedStopped, installB: true)
+    let installed = try #require(book.projects[Bench.projectB]?.installed)
+    if phase == .preparing || phase == .awaitingReview {
+        if phase == .awaitingReview {
+            _ = try Book.review(&book, project: Bench.projectB, name: .init(validated: "prep.review"))
+        } else {
+            try Book.begin(&book, project: Bench.projectB)
+            #expect(try Book.drain(&book).count == 1)
+        }
+    }
+    if phase == .pressured {
+        try book.open(project: Bench.projectC, running: RunningGraph(revision: .initial, prepared: nil)).get()
+        for _ in 0..<EngineCommandQueue.capacity {
+            try Book.begin(&book, project: Bench.projectC)
+            try book.abandonPrepare(project: Bench.projectC).get()
+        }
+    }
+    _ = try book.leaseLost(try #require(book.registry.snapshot?.token)).get()
+    let before = book.snapshot()
+    _ = try book.acquire(project: Bench.projectB, window: Bench.windowB).get()
+    let granted = book.snapshot()
+    #expect(granted.projects[Bench.projectB]?.lifecycle == .recovering)
+    #expect(granted.projects[Bench.projectB]?.recoveryBase == .absent)
+    #expect(granted.projects[Bench.projectA] == before.projects[Bench.projectA])
+    #expect(granted.projects[Bench.projectC] == before.projects[Bench.projectC])
+    #expect(granted.outputsMuted && granted.pendingOutput == true)
+    #expect(Bench.context(granted) == (try #require(Bench.context(before)).next()))
+    if phase == .pressured {
+        #expect(book.restoring == nil)
+        #expect(Bench.refusal(book.resolveRecovery(project: Bench.projectB)) == .queueFull)
+        #expect(book.snapshot() == granted)
+        #expect(try Book.drain(&book) == [.setOutputsMuted(true)] + before.queue.pending)
+        _ = try book.resolveRecovery(project: Bench.projectB).get()
+    }
+    let old = try #require(book.restoring)
+    try book.release(project: Bench.projectB).get()
+    let token = try book.acquire(project: Bench.projectB, window: Bench.windowB).get().token
+    let fresh = try #require(book.restoring)
+    #expect(fresh.attempt != old.attempt && fresh.token == token)
+    guard case .resident(let resident) = fresh.target else {
+        Issue.record("Expected a qualified stored resident")
+        return
+    }
+    #expect(resident.binding == installed && book.projects[Bench.projectB]?.recoveryBase == .absent)
+    let queued = book.snapshot()
+    #expect(Bench.refusal(Book.acknowledge(&book, old)) == .staleRestore)
+    #expect(book.snapshot() == queued)
+    #expect(try Book.drain(&book) ==
+            (phase == .pressured ? [] : [.setOutputsMuted(true)]) + [Bench.restoreCommand(fresh)])
+    let expected: EngineLifecycle = phase == .preparing || phase == .awaitingReview
+        ? .preparing(try fresh.revision.next(), over: .absent) : .stopped
+    #expect(Book.acknowledge(&book, fresh) == .success(expected))
+    #expect(book.projects[Bench.projectB]?.recoveryBase == nil && book.ledger.current == queued.ledger)
+    #expect(book.projects[Bench.projectB]?.transaction.running == granted.projects[Bench.projectB]?.running)
+    #expect(try Book.drain(&book) == [.setOutputsMuted(false)])
+}
+
+func storedLateMuteProvenance(abandon: Bool) throws {
+    var book = try Book.make(baseline: .storedStopped, installB: true)
+    let retained = try Book.commit(&book, name: .init(validated: "prep.a"), deliver: false)
+    let attemptA = try #require(book.projects[Bench.projectA]?.transaction.lastAttempt)
+    _ = try book.transfer(to: Bench.projectB, window: Bench.windowB).get()
+    try Book.begin(&book, project: Bench.projectB)
+    let before = book.snapshot()
+    let prepareCommand = try #require(before.queue.pending.last)
+    let prepare = try #require(before.outstanding[Bench.projectB])
+    if abandon {
+        try book.abandonCommit(attemptA, reason: .outcomeUnknown).get()
+    } else {
+        #expect(book.nextEngineCommand() == .setOutputsMuted(true))
+    }
+    let muted = book.snapshot()
+    #expect(muted.outputsMuted && muted.projects[Bench.projectB]?.lifecycle == .recovering)
+    #expect(muted.projects[Bench.projectB]?.recoveryBase == .absent)
+    #expect(muted.projects[Bench.projectB]?.phase == .preparing && muted.ledger == before.ledger)
+    #expect(muted.projects[Bench.projectA]?.phase ==
+            .recovering(retained.prepared, cause: abandon ? .commitOutcomeUnknown : .leaseLost))
+    let restore = try #require(book.restoring)
+    #expect(try Book.drain(&book) ==
+            [prepareCommand] + (abandon ? [.setOutputsMuted(true)] : []) + [Bench.restoreCommand(restore)])
+    #expect(try book.prepareAnswered(.success(.init(validated: "prep.b-next")), instance: prepare.instance,
+                                     attempt: prepare.attempt).get() == .routed)
+    let fresh = try #require(book.projects[Bench.projectB]?.reviewed)
+    let authorization = try book.authorize(project: Bench.projectB, gesture: Bench.gesture(Bench.windowB)).get()
+    let gated = book.snapshot()
+    #expect(Bench.refusal(book.commit(project: Bench.projectB, authorization: authorization))
+            == .lifecycleRejectsChanges(.recovering))
+    #expect(book.snapshot() == gated)
+    #expect(Book.acknowledge(&book, restore) == .success(.preparing(try restore.revision.next(), over: .absent)))
+    #expect(book.projects[Bench.projectB]?.recoveryBase == nil && book.ledger.current == before.ledger)
+    #expect(try Book.drain(&book) == [.setOutputsMuted(false)])
+    try book.commit(project: Bench.projectB, authorization: authorization).get()
+    _ = try Book.drain(&book)
+    try Book.report(&book, binding: fresh, project: Bench.projectB, outcome: .succeeded)
+    #expect(book.projects[Bench.projectB]?.lifecycle == .running && book.phase(of: retained) == .held)
+}
 
 extension HostAuthorityTests {
     /// Rule M: a later FIFO mute gates the current holder, regardless of its cause.
     struct ActorMuteReconciliation {
         @Test(arguments: [false, true], [false, true])
         func lateMuteGatesCurrentHolder(abandon: Bool, runningB: Bool) async throws {
-            let planB = runningB ? PreparedActivationID(validated: "prep.b-running") : nil
-            let authority = try await Bench.makeAuthority(runningB: planB)
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            if runningB { try await Bench.installB(authority, &engine) }
+            let installedB = try await Bench.state(authority, Bench.projectB).installed
             try await authority.open(project: Bench.projectC,
                                      running: RunningGraph(revision: .initial, prepared: nil)).get()
             let planA = try await Bench.commitQueued(authority, &engine)
+            let retainedA = try #require(try await Bench.state(authority).reviewed)
             let attemptA = try await Bench.attempt(authority)
             let token = try await authority.transfer(to: Bench.projectB, window: Bench.windowB).get().token
             let granted = await authority.snapshot()
@@ -34,13 +181,20 @@ extension HostAuthorityTests {
             #expect(muted.ledger == granted.ledger)
             let restore = try await Bench.restore(authority)
             #expect(restore.project == Bench.projectB && restore.token == token)
-            #expect(restore.revision == .initial && restore.prepared == planB && !restore.delivered)
+            #expect(restore.revision == granted.projects[Bench.projectB]?.running.revision && !restore.delivered)
+            #expect(restore.target.instance == granted.plans.currentInstance)
+            if case .resident(let resident) = restore.target {
+                #expect(resident.binding == installedB)
+            } else {
+                #expect(installedB == nil)
+            }
             #expect(Bench.refusal(await Bench.acknowledge(restore, on: authority)) == .staleRestore)
             #expect(await authority.snapshot() == muted)
             #expect(await engine.drain(authority) ==
                     (abandon ? [.setOutputsMuted(true)] : []) + [Bench.restoreCommand(restore)])
             // Fresh context/authorization, not a stale plan that would refuse anyway.
-            let freshB = try await Bench.review(authority, &engine, project: Bench.projectB)
+            _ = try await Bench.review(authority, &engine, project: Bench.projectB)
+            let freshB = try #require(try await Bench.state(authority, Bench.projectB).reviewed)
             let authorization = try await authority.authorize(
                 project: Bench.projectB, gesture: Bench.gesture(Bench.windowB)
             ).get()
@@ -49,7 +203,8 @@ extension HostAuthorityTests {
                     == .lifecycleRejectsChanges(.recovering))
             #expect(await authority.snapshot() == beforeCommit)
             let preparing = EngineLifecycle.preparing(
-                try ContractRevision.initial.next(), over: runningB ? .running : .absent
+                try #require(granted.projects[Bench.projectB]).running.revision.next(),
+                over: runningB ? .running : .absent
             )
             #expect(await engine.completeRestore(authority) == .success(preparing))
             #expect(await engine.drain(authority) == [.setOutputsMuted(false)])
@@ -57,13 +212,13 @@ extension HostAuthorityTests {
             try await authority.commit(project: Bench.projectB, authorization: authorization).get()
             let attemptB = try await Bench.attempt(authority, Bench.projectB)
             #expect(await engine.drain(authority) == [.commit(freshB, attemptB, token)])
-            #expect(!engine.discarded.contains(planA))
+            #expect(!engine.discarded.contains(retainedA))
         }
 
         @Test(arguments: [false, true])
         func pressureKeepsGateUntilExplicitRetry(abandon: Bool) async throws {
-            let authority = try await Bench.makeAuthority()
-            var engine = try ScriptedActivationEngine()
+            var engine = try ScriptedActivationEngine(trackedLimit: 512)
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitQueued(authority, &engine)
             let attempt = try await Bench.attempt(authority)
             _ = try await authority.transfer(to: Bench.projectB, window: Bench.windowB).get()
@@ -98,13 +253,13 @@ extension HostAuthorityTests {
 
         @Test(arguments: [false, true], [ActivationCommitOutcome.succeeded, .failed, .partial])
         func admittedCommitSettlesBehindRecoveryGate(delivered: Bool, outcome: ActivationCommitOutcome) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitQueued(authority, &engine)
             let attemptA = try await Bench.attempt(authority)
             _ = try await authority.transfer(to: Bench.projectB, window: Bench.windowB).get()
             let planB = PreparedActivationID(validated: "prep.b")
-            try await Bench.commitWithoutDrain(authority, project: Bench.projectB, window: Bench.windowB,
+            try await Bench.commitWithoutDrain(authority, &engine, project: Bench.projectB, window: Bench.windowB,
                                                prepared: planB, withAux: true)
             let attemptB = try await Bench.attempt(authority, Bench.projectB)
             if delivered {
@@ -142,7 +297,7 @@ extension HostAuthorityTests {
                 _ = try await authority.resolveRecovery(project: Bench.projectB).get()
             }
             let restore = try await Bench.restore(authority)
-            #expect(restore.prepared == (outcome == .failed ? nil : planB))
+            #expect(restore.target.prepared == (outcome == .failed ? nil : planB))
             _ = await engine.drain(authority)
             // Settling admitted work does not replace the first, absent recovery base
             // with a rendering state merely because a plan is now stored.
@@ -161,12 +316,12 @@ extension HostAuthorityTests {
             try book.open(project: Bench.projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
             _ = try book.acquire(project: Bench.projectB, window: Bench.windowB).get()
             try book.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
-            guard case .prepare(_, let prepare) = book.nextEngineCommand() else {
+            guard case .prepare(_, let instance, let prepare) = book.nextEngineCommand() else {
                 Issue.record("Expected B's prepare")
                 return
             }
             let plan = PreparedActivationID(validated: "prep.b")
-            _ = try book.prepareAnswered(.success(plan), attempt: prepare).get()
+            _ = try book.prepareAnswered(.success(plan), instance: instance, attempt: prepare).get()
             let authorization = try book.authorize(project: Bench.projectB, gesture: Bench.gesture(Bench.windowB)).get()
             try book.commit(project: Bench.projectB, authorization: authorization).get()
             guard case .commit(_, let attempt, _) = book.nextEngineCommand() else {
@@ -204,7 +359,7 @@ extension HostAuthorityTests {
             let command = book.nextEngineCommand()
             #expect(command == Bench.restoreCommand(restore))
             let completed = book.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
-                                                   prepared: restore.prepared, token: restore.token)
+                                                   target: restore.target, token: restore.token)
             #expect(completed == .success(.stopped))
             #expect(book.projects[Bench.projectB]?.recoveryBase == nil)
             let unmute = book.nextEngineCommand()
@@ -213,17 +368,20 @@ extension HostAuthorityTests {
 
         @Test(arguments: [false, true], RecoveryEntryBaseline.allCases)
         func repeatedMutesReplaceRestoreAuthority(abandon: Bool, baseline: RecoveryEntryBaseline) async throws {
-            let authority = try await Bench.makeAuthority(
-                runningB: PreparedActivationID(validated: "prep.b-stored"), lifecycleB: baseline.lifecycle
-            )
+            if baseline == .storedStopped {
+                try repeatedStoredMutesReplaceRestoreAuthority(abandon: abandon)
+                return
+            }
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            try await Bench.installB(authority, &engine, lifecycle: baseline.lifecycle)
             _ = try await Bench.commitQueued(authority, &engine)
             let attemptA = try await Bench.attempt(authority)
             let windowC = WindowID(validated: "win.c")
             try await authority.open(project: Bench.projectC,
                                      running: RunningGraph(revision: .initial, prepared: nil)).get()
             _ = try await authority.transfer(to: Bench.projectC, window: windowC).get()
-            try await Bench.commitWithoutDrain(authority, project: Bench.projectC, window: windowC,
+            try await Bench.commitWithoutDrain(authority, &engine, project: Bench.projectC, window: windowC,
                                                prepared: PreparedActivationID(validated: "prep.c"))
             let attemptC = try await Bench.attempt(authority, Bench.projectC)
             _ = try await authority.transfer(to: Bench.projectB, window: Bench.windowB).get()
@@ -264,5 +422,71 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().projects[Bench.projectB]?.recoveryBase == nil)
             #expect(await engine.drain(authority) == [.setOutputsMuted(false)])
         }
+    }
+}
+
+extension HostAuthorityTests.ActorMuteReconciliation {
+    @Test func capabilityLossBeforeRestoreAdmissionPreservesDegradedResident() async throws {
+        var engine = try ScriptedActivationEngine(trackedLimit: 512)
+        let authority = try await Bench.makeAuthority(&engine, lifecycleA: .degraded([Bench.audio]))
+        _ = try await Bench.commitDelivered(authority, &engine)
+        let before = await authority.snapshot()
+        let installed = try #require(before.projects[Bench.projectA]?.installed)
+        let dependent = try #require(before.projects[Bench.projectA]?.reviewed)
+        let token = try await Bench.leaseToken(authority)
+        // The mute fits; fewer than maxRecoveryStepSlots remain for automatic admission.
+        for _ in 0..<(EngineCommandQueue.capacity - EngineCommandQueue.maxRecoveryStepSlots) {
+            try await Bench.begin(authority, project: Bench.projectB)
+            try await authority.abandonPrepare(project: Bench.projectB).get()
+        }
+        try await authority.abandonCommit(try await Bench.attempt(authority), reason: .outcomeUnknown).get()
+        let blocked = await authority.snapshot()
+        #expect(blocked.restoring == nil && blocked.outputsMuted && blocked.inFlight.isEmpty)
+        #expect(blocked.projects[Bench.projectA]?.lifecycle == .recovering)
+        #expect(blocked.projects[Bench.projectA]?.recoveryBase == .degraded([Bench.audio]))
+        #expect(blocked.lease == before.lease && !blocked.queue.canAccept(EngineCommandQueue.maxRecoveryStepSlots))
+        #expect(Bench.refusal(await authority.resolveRecovery(project: Bench.projectA)) == .queueFull)
+        #expect(await authority.snapshot() == blocked)
+        let loss = CapabilityID(validated: "cap.adat") // Sorts before the existing audio loss.
+        let retained = [Bench.audio, loss].sorted()
+        try await authority.capabilityLost(loss, project: Bench.projectA, token: token).get()
+        let updated = await authority.snapshot()
+        #expect(updated.restoring == nil && updated.projects[Bench.projectA]?.lifecycle == .recovering)
+        #expect(updated.projects[Bench.projectA]?.recoveryBase == .degraded(retained))
+        #expect(updated.projects[Bench.projectA]?.record == blocked.projects[Bench.projectA]?.record)
+        #expect(updated.lease == blocked.lease && updated.ledger == blocked.ledger && updated.plans == blocked.plans)
+        #expect(updated.queue == blocked.queue && updated.outstanding == blocked.outstanding)
+        #expect(await engine.drain(authority) == blocked.queue.pending)
+        try await engine.finishAbandoned(authority)
+        let drained = await authority.snapshot()
+        #expect(drained.restoring == nil && drained.outputsMuted && drained.queue.isEmpty)
+        #expect(drained.lease == before.lease && engine.pending.isEmpty && engine.pendingRestores.isEmpty)
+        #expect(drained.plans.records.flatMap(\.entries).count == 2)
+        let revision = try #require(before.projects[Bench.projectA]).running.revision
+        #expect(await authority.resolveRecovery(project: Bench.projectA) == .success(.restoring(revision)))
+        let queued = await authority.snapshot()
+        let restore = try #require(queued.restoring)
+        guard case .resident(let resident) = restore.target else {
+            Issue.record("Expected the genuinely installed qualified resident")
+            return
+        }
+        #expect(resident.binding == installed && restore.target.instance == before.plans.currentInstance)
+        #expect(restore.token == token && restore.revision == revision && !restore.delivered)
+        #expect(restore.discardAfterRestore == [dependent])
+        #expect(queued.projects[Bench.projectA]?.recoveryBase == .degraded(retained))
+        #expect(queued.queue.pending == [Bench.restoreCommand(restore), .discard(dependent)])
+        #expect(Bench.refusal(await Bench.acknowledge(restore, on: authority)) == .staleRestore)
+        #expect(await authority.snapshot() == queued)
+        #expect(await engine.drain(authority) == [Bench.restoreCommand(restore), .discard(dependent)])
+        #expect(await engine.completeRestore(authority) == .success(.degraded(retained)))
+        let acknowledged = await authority.snapshot()
+        #expect(acknowledged.projects[Bench.projectA]?.lifecycle == .degraded(retained))
+        #expect(acknowledged.projects[Bench.projectA]?.recoveryBase == nil && acknowledged.restoring == nil)
+        #expect(acknowledged.projects[Bench.projectA]?.running == before.projects[Bench.projectA]?.running)
+        #expect(acknowledged.projects[Bench.projectA]?.installed == installed && acknowledged.ledger == before.ledger)
+        #expect(!acknowledged.outputsMuted && acknowledged.pendingOutput == false && acknowledged.lease == before.lease)
+        #expect(acknowledged.plans.records.flatMap(\.entries).count == 1)
+        #expect(engine.discarded == [dependent] && engine.anomalies.isEmpty)
+        #expect(await engine.drain(authority) == [.setOutputsMuted(false)])
     }
 }

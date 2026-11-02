@@ -195,27 +195,30 @@ private enum OperationKind: CaseIterable {
 
     var isSafety: Bool { self == .panic || self == .safeMute }
 
-    func intent(epoch: HostEpoch = hostEpoch, revisions: CommandRevisions = CommandRevisions(),
-                origin: CommandOrigin = .human, granted: PermissionFingerprint = permission) throws -> CommandIntent {
+    func intent(epoch: HostEpoch = hostEpoch, connection: ConnectionEpoch? = nil,
+                revisions: CommandRevisions = CommandRevisions(), origin: CommandOrigin = .human,
+                commandClass: CommandClass? = nil, granted: PermissionFingerprint = permission)
+    throws -> CommandIntent {
         try CommandIntent(.init(
-            id: CommandID(validated: "command.recovery"), commandClass: operation.controlClass ?? .live,
-            origin: origin, hostEpoch: epoch, connectionEpoch: nil, revisions: revisions, operation: operation,
+            id: CommandID(validated: "command.recovery"), commandClass: commandClass ?? operation.controlClass ?? .live,
+            origin: origin, hostEpoch: epoch, connectionEpoch: connection, revisions: revisions, operation: operation,
             permission: granted
         ))
     }
 }
 
-/// Admission for every operation's scope, or only `scopes` when given.
-private func admission(scopes: Set<CommandScope>? = nil) throws -> AdmissionContext {
+/// Admission for every operation's scope and class, or only `scopes`/`classes` when given.
+private func admission(scopes: Set<CommandScope>? = nil, classes: Set<CommandClass>? = nil,
+                       current: PermissionFingerprint? = permission) throws -> AdmissionContext {
     let descriptor = try ParameterDescriptor(.init(
         id: liveParameter, unit: .normalized, lower: 0, upper: 1, defaultValue: 0.5, ceiling: 0.8, curve: .linear,
         ramp: ParameterRamp(.init(kind: .linear, minimumMilliseconds: 10, maximumMilliseconds: 100)),
         controlClass: .live, verification: .reported
     ))
     return AdmissionContext(
-        hostEpoch: hostEpoch, connectionEpoch: nil, revisions: CommandRevisions(), permission: permission,
+        hostEpoch: hostEpoch, connectionEpoch: nil, revisions: CommandRevisions(), permission: current,
         allowedScopes: scopes ?? Set(OperationKind.allCases.map(\.operation.scope)),
-        allowedClasses: Set(ControlClass.allCases), catalog: try ParameterCatalog([descriptor])
+        allowedClasses: classes ?? Set(ControlClass.allCases), catalog: try ParameterCatalog([descriptor])
     )
 }
 
@@ -418,26 +421,40 @@ extension HostAuthorityTests {
             #expect(try gate(.safeMute, in: lifecycle) == .admitted)
         }
 
-        /// The gate returns `CommandAdmission`'s own refusal, even for safety commands (#55 owns the rules).
+        /// The gate returns `CommandAdmission`'s own refusal, even for safety commands (#55 and #169 own the
+        /// rules: epochs, a present matching permission, exact revisions, allowed scope and class).
         @Test(arguments: lifecycles)
         func gateReturnsAdmissionRefusalUnchanged(lifecycle: EngineLifecycle) throws {
             let stale = HostEpoch(host: hostEpoch.host, generation: try Generation.initial.next())
+            let remote = ConnectionEpoch(connection: ConnectionID(validated: "connection.remote"),
+                                         host: hostEpoch.host, generation: .initial)
             var revisions = CommandRevisions()
             revisions.graph = try ContractRevision.initial.next()
             let other = PermissionFingerprint(rawValue: "permissions.other")
+            let nfc = PermissionFingerprint(rawValue: "perm.caf\u{E9}")
+            let nfd = PermissionFingerprint(rawValue: "perm.cafe\u{301}")
+            #expect(nfc.rawValue == nfd.rawValue && nfc != nfd && nfd.isWellFormed)
+            let full = try admission()
             for kind in OperationKind.allCases {
-                let cases: [(CommandIntent, CommandResult)] = [
-                    (try kind.intent(epoch: stale), .stale(.hostEpoch)),
-                    (try kind.intent(revisions: revisions), .rejected(.revisionChanged)),
-                    (try kind.intent(granted: other), .rejected(.permissionChanged)),
-                    (try kind.intent(), .rejected(.scopeDenied))
-                ]
-                for (intent, result) in cases {
-                    let context = try admission(scopes: result == .rejected(.scopeDenied) ? [] : nil)
+                func refuses(_ intent: CommandIntent, _ context: AdmissionContext, _ result: CommandResult) {
                     #expect(CommandAdmission.admit(intent, in: context) == .refused(result))
                     #expect(HostCommandGate.admit(intent, admission: context, lifecycle: lifecycle) == .refused(result),
                             "\(kind)")
                 }
+                refuses(try kind.intent(epoch: stale), full, .stale(.hostEpoch))
+                refuses(try kind.intent(connection: remote), full, .stale(.connectionEpoch))
+                refuses(try kind.intent(), try admission(current: nil), .rejected(.permissionDenied))
+                refuses(try kind.intent(), try admission(current: .init(rawValue: "")), .rejected(.permissionDenied))
+                refuses(try kind.intent(), try admission(current: .init(rawValue: String(repeating: "p", count: 257))),
+                        .rejected(.permissionDenied))
+                refuses(try kind.intent(granted: nfd), try admission(current: nfc), .rejected(.permissionChanged))
+                refuses(try kind.intent(revisions: revisions), full, .rejected(.revisionChanged))
+                refuses(try kind.intent(granted: other), full, .rejected(.permissionChanged))
+                refuses(try kind.intent(), try admission(scopes: []), .rejected(.scopeDenied))
+                guard kind.isSafety else { continue }
+                refuses(try kind.intent(origin: .assistant), full, .rejected(.permissionDenied))
+                refuses(try kind.intent(commandClass: .live), full, .rejected(.classMismatch))
+                refuses(try kind.intent(), try admission(classes: [.live]), .rejected(.permissionDenied))
             }
         }
 

@@ -109,6 +109,24 @@ extension TransactionBench {
     }
 }
 
+/// One live-context field changed between review and commit, with the
+/// capability document left byte-identical so only that field's guard can refuse.
+enum LiveContextChange: CaseIterable, Sendable {
+    case hostEpoch, activeRevision
+
+    func applied(to context: ActivationContext) throws -> ActivationContext {
+        switch self {
+        case .hostEpoch:
+            let epoch = HostEpoch(host: context.hostEpoch.host, generation: try context.hostEpoch.generation.next())
+            return ActivationContext(hostEpoch: epoch, activeRevision: context.activeRevision,
+                                     permission: context.permission, capabilities: context.capabilities)
+        case .activeRevision:
+            return ActivationContext(hostEpoch: context.hostEpoch, activeRevision: try context.activeRevision.next(),
+                                     permission: context.permission, capabilities: context.capabilities)
+        }
+    }
+}
+
 extension HostAuthorityTests {
     struct CommitReports {
         @Test func duplicateReportOfReusedPreparedIDIsStale() throws {
@@ -300,6 +318,25 @@ extension HostAuthorityTests {
                 let effects = try host.commit(authorization).get()
                 #expect(effects == (try host.committed(planP)))
             }
+        }
+
+        @Test(arguments: LiveContextChange.allCases)
+        func liveEpochOrRevisionChangeAtCommitIsStale(change: LiveContextChange) throws {
+            var host = try TransactionBench()
+            try host.acquire(host.transaction.project)
+            try host.review(request(), candidate: graph(), as: planP)
+            let authorization = try host.authorize()
+            let reviewed = host.activation
+            host.activation = try change.applied(to: reviewed)
+            #expect(host.activation != reviewed && host.activation.capabilities == reviewed.capabilities)
+            let changed = try host.live
+            let lease = host.registry.snapshot
+            #expect(host.refusal { $0.commit(authorization, lease: lease, context: changed) } == .staleContext)
+            #expect(host.transaction.phase == .awaitingReview && host.transaction.lastAttempt == nil)
+            #expect(host.transaction.authorizer.outstanding == authorization)
+            // Control: the unchanged context commits with the same authorization.
+            host.activation = reviewed
+            #expect(try host.commit(authorization).get() == (try host.committed(planP)))
         }
 
         @Test func commitAttemptOverflowIsRefused() throws {

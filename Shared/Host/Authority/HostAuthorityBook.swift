@@ -2,8 +2,8 @@
 //  HostAuthorityBook.swift
 //  FluxKlang
 //
-//  Everything `HostAuthority` owns, as one value (#62 H5): the lease registry, the
-//  ledger, the live state, every project's transaction, the prepare bookkeeping,
+//  Everything `HostAuthority` owns (#62 H5): the lease registry, generation
+//  counters, one canonical plan ledger, live state, each project's transaction,
 //  the engine command queue and the commit bookkeeping, with their transitions.
 //  The actor stores it as `private var book` in `HostAuthority.swift`, so neither
 //  an `await` nor a function taking `isolated HostAuthority` can reach it: the
@@ -15,14 +15,17 @@
 //
 
 /// Deliberately NOT `Sendable` (see the extension below), like `HostProjectState`.
+/// Never stage by copying this book: copies would alias the canonical plan ledger.
 struct HostAuthorityBook {
     var registry = EngineLeaseRegistry()
     var ledger: GenerationLedger
     var live: HostLiveState
     var projects: [ProjectID: HostProjectState] = [:]
     /// Keyed by project: at most one outstanding attempt per open project.
-    var outstanding: [ProjectID: PrepareAttemptID] = [:]
-    var abandoned: [AbandonedPrepare] = []
+    var outstanding: [ProjectID: HostPrepare] = [:]
+    /// Only the private actor's book owns this reference. Snapshots expose data only.
+    let plans: EnginePlanLedger
+    var retirementOutbox: [PlanBinding] = []
     var queue = EngineCommandQueue()
     /// Commits delivered to the engine and not yet reported; `commitReported` and
     /// `abandonCommit` clear them.
@@ -38,14 +41,16 @@ struct HostAuthorityBook {
     /// H5d-2: the one restore queued or delivered under the current lease.
     var restoring: RestoreRecord?
     /// Discards from an invalidated restore step; requeued only after its next restore.
-    var deferredRestoreDiscards: [ProjectID: [PreparedActivationID]] = [:]
+    var deferredRestoreDiscards: [ProjectID: [PlanBinding]] = [:]
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
-    init(host ledger: GenerationLedger, live: HostLiveState) throws(GenerationLedgerError) {
+    init(host ledger: GenerationLedger, live: HostLiveState,
+         planCapacity: Int = HostAuthority.planCapacity) throws(HostAuthorityRefusal) {
         var declared = ledger
         if declared.generation(EngineLeaseRegistry.contextKey) == nil {
-            try declared.declare(EngineLeaseRegistry.contextKey)
+            do { try declared.declare(EngineLeaseRegistry.contextKey) } catch { throw .ledger(error) }
         }
+        do { plans = try EnginePlanLedger(capacity: planCapacity) } catch { throw .plans(error) }
         self.ledger = declared
         self.live = live
     }
@@ -53,30 +58,26 @@ struct HostAuthorityBook {
     func snapshot() -> HostAuthoritySnapshot {
         HostAuthoritySnapshot(lease: registry.snapshot, lastIssuedLease: registry.lastIssued, ledger: ledger.current,
                               live: live, projects: projects.mapValues(HostProjectSnapshot.init),
-                              outstanding: outstanding, abandoned: abandoned, queue: queue,
+                              outstanding: outstanding, plans: plans.snapshot(),
+                              retirementOutbox: retirementOutbox, queue: queue,
                               inFlight: inFlight, authorizedWindows: authorizedWindows,
                               pendingOutput: pendingOutput, outputsMuted: outputsMuted, restoring: restoring,
                               deferredRestoreDiscards: deferredRestoreDiscards)
     }
 
-    /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
-    /// over a running plan, else `.stopped`; pass one only to resume a settled state.
+    /// Opens `project` over an empty, unqualified running graph; prepared residents
+    /// must be installed through this book's canonical plan ledger. `lifecycle`
+    /// defaults to `.stopped`; pass a settled state only when consistent with that graph.
     /// Refused as `lifecycleNotResumable`: `.preparing` (no prepare is outstanding
     /// yet), `.heldByOther` (derived from the lease by `lifecycle(of:window:)`), and
-    /// a rendering `.running`/`.degraded` with no running plan. `.stopped` over a
-    /// running plan is accepted: a stopped engine stores the running set without
-    /// rendering (`EngineLifecycle.acceptsRunningSetChanges`), and `endingPreparation`
-    /// returns to `.stopped` whatever the running graph holds. `.recovering` is
-    /// accepted either way: unresolved recovery outlives the running set. Pass
-    /// `recoveryBase` when resuming a known recovery snapshot; rendering/degraded
-    /// bases require a prepared plan. Without saved provenance, recovery opens over
-    /// `.absent` and settles stopped rather than inferring a running lifecycle from
-    /// a stored plan.
-    /// Last, a running plan that is already in use is refused as
-    /// `.activation(.preparedIDInUse)`, like `route`: any project's running,
-    /// reviewed or held plan (`livePlans()`), or a plan whose `.discard` is queued.
-    /// Adopting it would let another project's cancel, or the queued discard,
-    /// destroy this project's running graph.
+    /// a rendering `.running`/`.degraded` with no book-owned resident. `.stopped` is
+    /// accepted over an empty graph. `.recovering` is
+    /// accepted either way: unresolved recovery outlives the running set.
+    /// Pass `recoveryBase` when resuming a known recovery snapshot; rendering/degraded
+    /// bases require an installed resident, which raw `open` cannot import. Without
+    /// saved provenance, recovery opens over `.absent` and settles stopped rather
+    /// than inferring a running lifecycle from a stored plan. Bootstrap through real
+    /// prepare/commit operations so this canonical ledger owns every installed binding.
     mutating func open(project: ProjectID, running: RunningGraph,
                        lifecycle: EngineLifecycle? = nil,
                        recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
@@ -86,10 +87,6 @@ struct HostAuthorityBook {
         switch openingLifecycle(running: running, lifecycle: lifecycle, recoveryBase: recoveryBase) {
         case .success(let validated): opening = validated
         case .failure(let refusal): return .failure(refusal)
-        }
-        if let plan = running.prepared {
-            guard !livePlans().contains(plan) else { return .failure(.activation(.preparedIDInUse)) }
-            guard !queue.pending.contains(.discard(plan)) else { return .failure(.activation(.preparedIDInUse)) }
         }
         projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),
                                              lifecycle: opening.lifecycle,
@@ -111,6 +108,7 @@ struct HostAuthorityBook {
             case .preparing, .heldByOther: return .failure(.lifecycleNotResumable(lifecycle))
             }
         }
+        guard running.prepared == nil else { return .failure(.unqualifiedResident) }
         let initial = lifecycle ?? (running.prepared == nil ? .stopped : .running)
         if let recoveryBase {
             guard initial == .recovering else { return .failure(.invalidRecoveryBase) }
@@ -225,23 +223,6 @@ struct HostAuthorityBook {
         return ActivationLiveContext(activation: activation, engine: engine)
     }
 
-    /// Every plan the engine must keep: running, reviewed or committing, held by a phase,
-    /// or reserved while its restore-dependent discard is deferred.
-    func livePlans() -> Set<PreparedActivationID> {
-        var plans: Set<PreparedActivationID> = []
-        for state in projects.values {
-            if let running = state.transaction.running.prepared { plans.insert(running) }
-            switch state.transaction.phase {
-            case .awaitingReview, .committing: if let reviewed = state.reviewed { plans.insert(reviewed) }
-            case .partial(let id, _, _), .commitFailed(let id), .recovering(let id, _): plans.insert(id)
-            case .idle, .preparing, .acknowledged, .prepareFailed: break
-            }
-        }
-        for prepared in deferredRestoreDiscards.values.flatMap({ $0 }) {
-            plans.insert(prepared)
-        }
-        return plans
-    }
 }
 
 @available(*, unavailable, message: "the book never leaves HostAuthority")

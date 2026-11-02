@@ -54,26 +54,26 @@ extension HostAuthorityTests {
             // A separate book exercises the guard without an actor command-injection API.
             var book = try HostAuthorityBook(host: ledger, live: Bench.liveState())
             try book.open(project: Bench.projectA,
-                          running: RunningGraph(revision: .initial, prepared: Bench.runningPlan),
-                          lifecycle: .recovering, recoveryBase: .running).get()
+                          running: RunningGraph(revision: .initial, prepared: nil),
+                          lifecycle: .recovering, recoveryBase: .absent).get()
             _ = try book.acquire(project: Bench.projectA, window: Bench.windowA).get()
             let restore = try #require(book.restoring)
             let before = book.snapshot()
             let foreign = EngineCommand.restore(RestoreAttemptID(), restore.revision,
-                                                restore.prepared, restore.token)
+                                                restore.target, restore.token)
             let admittedForeign = book.admitRestore(foreign)
             #expect(!admittedForeign)
             #expect(book.snapshot() == before)
             let delivered = book.nextEngineCommand()
             #expect(delivered == .restore(
-                restore.attempt, restore.revision, restore.prepared, restore.token
+                restore.attempt, restore.revision, restore.target, restore.token
             ))
             #expect(book.restoring?.delivered == true)
         }
 
         @Test func repeatedOutcomeUnknownRestoreRejectsReplayedAcknowledgement() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let lease = try await Bench.leaseToken(authority)
 
             _ = try await Bench.commitDelivered(authority, &engine)
@@ -86,7 +86,8 @@ extension HostAuthorityTests {
             let firstCommands = await engine.drain(authority)
             let firstRestore = try #require(engine.pendingRestores.first)
             #expect(firstCommands.count == 2 &&
-                    firstCommands.first == .restore(firstRestore.attempt, .initial, Bench.runningPlan, lease))
+                    firstCommands.first == .restore(firstRestore.attempt, firstRestore.revision,
+                                                    firstRestore.target, lease))
             #expect(firstCommands.last.map { if case .discard = $0 { true } else { false } } == true)
             #expect(await engine.completeRestore(authority) == .success(.running))
             #expect(await engine.drain(authority) == [.setOutputsMuted(false)])
@@ -105,7 +106,7 @@ extension HostAuthorityTests {
             let pending = await authority.snapshot()
             let earlyReplay = await authority.restoreCompleted(attempt: firstRestore.attempt,
                                                                revision: firstRestore.revision,
-                                                               prepared: firstRestore.prepared,
+                                                               target: firstRestore.target,
                                                                token: firstRestore.token)
             #expect(Bench.refusal(earlyReplay) == .staleRestore)
             #expect(await authority.snapshot() == pending)
@@ -113,13 +114,13 @@ extension HostAuthorityTests {
 
             let secondCommands = await engine.drain(authority)
             #expect(secondCommands.count == 2 && secondCommands.first == .restore(
-                secondRestore.attempt, .initial, Bench.runningPlan, lease
+                secondRestore.attempt, secondRestore.revision, secondRestore.target, lease
             ))
             #expect(secondCommands.last.map { if case .discard = $0 { true } else { false } } == true)
             let delivered = await authority.snapshot()
             let lateReplay = await authority.restoreCompleted(attempt: firstRestore.attempt,
                                                               revision: firstRestore.revision,
-                                                              prepared: firstRestore.prepared,
+                                                              target: firstRestore.target,
                                                               token: firstRestore.token)
             #expect(Bench.refusal(lateReplay) == .staleRestore)
             #expect(await authority.snapshot() == delivered)
@@ -140,12 +141,14 @@ extension HostAuthorityTests {
 
             let newToken = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let restore = try #require(await authority.snapshot().restoring)
-            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, nil, newToken)])
-            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectA).get()
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, restore.target, newToken)])
+            try await Bench.begin(authority)
             let prepareAttempt = try #require(await authority.snapshot().outstanding[Bench.projectA])
             let prepareCommands = await engine.drain(authority)
             #expect(prepareCommands.count == 1 && prepareCommands.first.map {
-                if case .prepare(_, let deliveredAttempt) = $0 { deliveredAttempt == prepareAttempt } else { false }
+                if case .prepare(_, let instance, let attempt) = $0 {
+                    HostPrepare(instance: instance, attempt: attempt) == prepareAttempt
+                } else { false }
             } == true)
 
             if awaitingReview {
@@ -162,7 +165,7 @@ extension HostAuthorityTests {
             #expect(restored.projects[Bench.projectA]?.lifecycle == expectedPreparing)
             #expect(restored.projects[Bench.projectA]?.phase == (awaitingReview ? .awaitingReview : .preparing))
             let replay = await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
-                                                          prepared: restore.prepared, token: restore.token)
+                                                          target: restore.target, token: restore.token)
             #expect(Bench.refusal(replay) == .staleRestore)
             #expect(await authority.snapshot() == restored)
 
@@ -197,7 +200,7 @@ extension HostAuthorityTests {
 
             let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
             let restore = try #require(await authority.snapshot().restoring)
-            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, nil, token)])
+            #expect(await engine.drain(authority) == [.restore(restore.attempt, .initial, restore.target, token)])
             #expect(await engine.completeRestore(authority) == .success(.stopped))
             #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == .stopped)
             #expect((await authority.lifecycle(of: Bench.projectA, window: Bench.windowA))?.rendersOutput == false)
@@ -205,8 +208,8 @@ extension HostAuthorityTests {
 
         @Test(arguments: RestoreLifecycleBaseline.allCases)
         func settledRestorePreservesPreRecoveryLifecycle(_ baseline: RestoreLifecycleBaseline) async throws {
-            let authority = try await Bench.makeAuthority(lifecycleA: baseline.lifecycle)
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine, lifecycleA: baseline.lifecycle)
             let oldToken = try await Bench.leaseToken(authority)
             _ = try await authority.leaseLost(oldToken).get()
             #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
@@ -222,7 +225,7 @@ extension HostAuthorityTests {
             let restore = try #require(await authority.snapshot().restoring)
             #expect(restore.attempt != interimRestore.attempt)
             #expect(await engine.drain(authority) == [
-                .restore(restore.attempt, .initial, Bench.runningPlan, token)
+                .restore(restore.attempt, restore.revision, restore.target, token)
             ])
             #expect(await engine.completeRestore(authority) == .success(baseline.lifecycle))
             #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == baseline.lifecycle)
@@ -230,16 +233,21 @@ extension HostAuthorityTests {
 
         @Test(arguments: OpenRecoveryBaseline.allCases)
         func openedRecoveryUsesOnlyExplicitSavedBase(_ baseline: OpenRecoveryBaseline) async throws {
+            var engine = try ScriptedActivationEngine()
             let authority = try await Bench.makeAuthority(
-                lifecycleA: .recovering, recoveryBaseA: baseline.recoveryBase
+                &engine, lifecycleA: .recovering, recoveryBaseA: baseline.recoveryBase
             )
             let saved = try #require(await authority.snapshot().projects[Bench.projectA]?.recoveryBase)
             #expect(saved == (baseline.recoveryBase ?? .absent))
-            var engine = try ScriptedActivationEngine()
             let restore = try #require(await authority.snapshot().restoring)
-            #expect(await engine.drain(authority) == [
-                .restore(restore.attempt, .initial, Bench.runningPlan, restore.token)
-            ])
+            let restoreCommand = EngineCommand.restore(restore.attempt, restore.revision,
+                                                       restore.target, restore.token)
+            let expectedCommands: [EngineCommand]
+            switch baseline {
+            case .running, .degraded: expectedCommands = [.setOutputsMuted(true), restoreCommand]
+            case .unknown, .absent: expectedCommands = [restoreCommand]
+            }
+            #expect(await engine.drain(authority) == expectedCommands)
             #expect(await engine.completeRestore(authority) == .success(baseline.lifecycle))
             #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == baseline.lifecycle)
         }
@@ -261,13 +269,17 @@ extension HostAuthorityTests {
                                             lifecycle: .recovering,
                                             recoveryBase: .degraded([Bench.audio]))) == .invalidRecoveryBase)
             #expect(book.snapshot() == before)
+            let raw = RunningGraph(revision: .initial, prepared: Bench.runningPlan)
+            #expect(Bench.refusal(book.open(project: Bench.projectA, running: raw,
+                                            lifecycle: .recovering, recoveryBase: .running)) == .unqualifiedResident)
+            #expect(book.snapshot() == before)
         }
 
         @Test(arguments: [false, true])
         func preparationRestorePreservesItsPreRecoveryRunningSet(awaitingReview: Bool) async throws {
             for baseline in RestoreLifecycleBaseline.allCases {
-                let authority = try await Bench.makeAuthority(lifecycleA: baseline.lifecycle)
                 var engine = try ScriptedActivationEngine()
+                let authority = try await Bench.makeAuthority(&engine, lifecycleA: baseline.lifecycle)
                 let oldToken = try await Bench.leaseToken(authority)
                 _ = try await authority.leaseLost(oldToken).get()
                 #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
@@ -275,10 +287,11 @@ extension HostAuthorityTests {
 
                 let token = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get().token
                 let restore = try #require(await authority.snapshot().restoring)
+                let runningRevision = try await Bench.state(authority).running.revision
                 #expect(await engine.drain(authority) == [
-                    .restore(restore.attempt, .initial, Bench.runningPlan, token)
+                    .restore(restore.attempt, restore.revision, restore.target, token)
                 ])
-                try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectA).get()
+                try await Bench.begin(authority)
                 let prepareCommands = await engine.drain(authority)
                 #expect(prepareCommands.count == 1 && prepareCommands.first.map {
                     if case .prepare = $0 { true } else { false }
@@ -289,9 +302,7 @@ extension HostAuthorityTests {
                     #expect(try await Bench.state(authority).phase == .awaitingReview)
                 }
 
-                let expected = EngineLifecycle.preparing(
-                    try ContractRevision.initial.next(), over: baseline.runningSet
-                )
+                let expected = EngineLifecycle.preparing(try runningRevision.next(), over: baseline.runningSet)
                 #expect(await engine.completeRestore(authority) == .success(expected))
                 #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == expected)
             }
@@ -300,10 +311,9 @@ extension HostAuthorityTests {
         @Test(arguments: [false, true])
         func leaseLossDuringPreparationKeepsItsPriorRenderingState(awaitingReview: Bool) async throws {
             for baseline in RestoreLifecycleBaseline.allCases {
-                let authority = try await Bench.makeAuthority(lifecycleA: baseline.lifecycle)
                 var engine = try ScriptedActivationEngine()
-                try await authority.begin(Bench.request(), candidate: Bench.candidate(),
-                                          project: Bench.projectA).get()
+                let authority = try await Bench.makeAuthority(&engine, lifecycleA: baseline.lifecycle)
+                try await Bench.begin(authority)
                 #expect((await engine.drain(authority)).count == 1)
                 if awaitingReview {
                     #expect(try await engine.answerNext(authority)?.verdict.get() == .routed)
@@ -319,12 +329,11 @@ extension HostAuthorityTests {
                     project: Bench.projectA, window: Bench.windowA
                 ).get().token
                 let restore = try #require(await authority.snapshot().restoring)
+                let runningRevision = try await Bench.state(authority).running.revision
                 #expect(await engine.drain(authority) == [
-                    .restore(restore.attempt, .initial, Bench.runningPlan, nextToken)
+                    .restore(restore.attempt, restore.revision, restore.target, nextToken)
                 ])
-                let expected = EngineLifecycle.preparing(
-                    try ContractRevision.initial.next(), over: baseline.runningSet
-                )
+                let expected = EngineLifecycle.preparing(try runningRevision.next(), over: baseline.runningSet)
                 #expect(await engine.completeRestore(authority) == .success(expected))
                 #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == expected)
             }
@@ -351,12 +360,12 @@ extension HostAuthorityTests {
         }
 
         @Test func keepingPartialPreservesDegradedLifecycle() async throws {
-            let authority = try await Bench.makeAuthority(lifecycleA: .degraded([Bench.audio]))
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine, lifecycleA: .degraded([Bench.audio]))
             _ = try await Bench.commitDelivered(authority, &engine, withAux: true)
             _ = try #require(await engine.report(authority, .partial)).verdict.get()
 
-            let revision = try ContractRevision.initial.next()
+            let revision = try await Bench.state(authority).running.revision.next()
             #expect(await authority.resolveRecovery(project: Bench.projectA) == .success(.keptPartial(revision)))
             #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA) == .degraded([Bench.audio]))
         }
@@ -375,14 +384,16 @@ extension HostAuthorityTests {
     }
 
     struct ActorRestoreOpening {
-        @Test func deferredRestorePlanCannotBeOpened() async throws {
+        @Test func deferredRestoreBindingCannotBeImportedAsARawResident() async throws {
             var engine = try ScriptedActivationEngine()
-            let (authority, failedPlan) = try await authorityWithDeferredRestoreDiscard(&engine)
+            let (authority, failedBinding) = try await authorityWithDeferredRestoreDiscard(&engine)
             let before = await authority.snapshot()
             let result = await authority.open(
-                project: Bench.projectC, running: RunningGraph(revision: .initial, prepared: failedPlan)
+                project: Bench.projectC,
+                running: RunningGraph(revision: .initial, prepared: failedBinding.prepared),
+                lifecycle: .recovering, recoveryBase: .running
             )
-            #expect(Bench.refusal(result) == .activation(.preparedIDInUse))
+            #expect(Bench.refusal(result) == .unqualifiedResident)
             #expect(await authority.snapshot() == before)
         }
     }

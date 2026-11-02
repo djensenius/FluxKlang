@@ -52,11 +52,7 @@ extension HostAuthorityBook {
                          authorization: ActivationAuthorization) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         if case .recovering = state.lifecycle { return .failure(.lifecycleRejectsChanges(state.lifecycle)) }
-        guard let window = authorizedWindows[project] else {
-            return .failure(.activation(.authorizationInvalid(.noneOutstanding)))
-        }
-        let role = registry.role(of: window, project: project)
-        guard case .renders = role else { return .failure(.windowCannotAuthorize(role)) }
+        if let refusal = commitWindowRefusal(for: project) { return .failure(refusal) }
         guard restoring == nil else { return .failure(.activation(.busy)) }
         guard queue.canAccept(1) else { return .failure(.queueFull) }
         guard let context = liveContext(over: state.transaction.running) else {
@@ -67,12 +63,26 @@ extension HostAuthorityBook {
         case .failure(let refusal): return .failure(.activation(refusal))
         case .success(let emitted): effects = emitted
         }
+        guard let binding = state.reviewed, phase(of: binding) == .held,
+              effects.count == 1, case .commit(let prepared, let attempt, let token) = effects[0],
+              prepared == binding.prepared else { return .failure(.unboundPlan) }
         var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue(effects: effects) else { return .failure(.queueFull) }
+        guard case .success = stagedQueue.enqueue([.commit(binding, attempt, token)]) else {
+            return .failure(.queueFull)
+        }
         queue = stagedQueue
         projects[project] = state
         authorizedWindows[project] = nil
         return .success(())
+    }
+
+    private func commitWindowRefusal(for project: ProjectID) -> HostAuthorityRefusal? {
+        guard let window = authorizedWindows[project] else {
+            return .activation(.authorizationInvalid(.noneOutstanding))
+        }
+        let role = registry.role(of: window, project: project)
+        guard case .renders = role else { return .windowCannotAuthorize(role) }
+        return nil
     }
 
     /// Abandons a commit that never got a report. Callers may only claim
@@ -121,8 +131,9 @@ extension HostAuthorityBook {
     /// 5. only for `.succeeded`, one `ctx.engine` bump on a staged ledger
     ///    (`.ledger(error)` with nothing changed: the commit stays in flight and
     ///    may be abandoned as `.outcomeUnknown`).
-    /// Then state, ledger and queue change together: the commit leaves `inFlight`,
-    /// the reviewed plan is cleared and the lifecycle moves
+    /// Then state, ledgers and queue change together: the commit leaves `inFlight`,
+    /// success installs the reviewed binding; failed/partial retain it for H5d.
+    /// The lifecycle moves
     /// (`acknowledgingActivation`; `endingPreparation` on `.failed`/`.partial`,
     /// which H5d resolves).
     mutating func commitReported(
@@ -138,38 +149,74 @@ extension HostAuthorityBook {
         case .failure(let refusal): return .failure(.activation(refusal))
         case .success(let emitted): effects = emitted
         }
+        guard let reviewed = state.reviewed, reviewed.prepared == report.prepared,
+              phase(of: reviewed) == .held else { return .failure(.unboundPlan) }
+        let previous = state.installed
+        let expected: [ActivationEffect] = report.outcome == .succeeded
+            ? previous.map { [.discard($0.prepared)] } ?? [] : []
+        guard effects == expected else { return .failure(.unboundPlan) }
         var stagedLedger = ledger
-        let outcome: CommitReportOutcome
-        switch report.outcome {
-        case .succeeded:
+        if report.outcome == .succeeded {
             do { _ = try stagedLedger.bump(EngineLeaseRegistry.contextKey, reason: .contextChange) } catch {
                 return .failure(.ledger(error))
             }
-            state.lifecycle = state.lifecycle.acknowledgingActivation
-            outcome = .acknowledged(state.transaction.running.revision)
-        case .failed:
-            state.lifecycle = state.lifecycle.endingPreparation
-            outcome = .failed
-        case .partial:
-            state.lifecycle = state.lifecycle.endingPreparation
-            outcome = .partial(unapplied: report.unapplied)
         }
-        var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue(effects: effects) else { return .failure(.queueFull) }
-        state.reviewed = nil
+        let outcome = Self.reportDisposition(report, state: &state)
+        // The canonical ownership ledger is never cloned or rolled back. This
+        // is the last fallible operation; success changes both roles atomically.
+        do { try acceptOwnership(reviewed, replacing: previous, outcome: report.outcome) } catch {
+            return .failure(.plans(error))
+        }
+        if report.outcome == .succeeded {
+            install(reviewed, replacing: previous, in: &state)
+        }
         ledger = stagedLedger
-        queue = stagedQueue
         projects[project] = state
         inFlight[project] = nil
         return .success(outcome)
     }
 
+    private static func reportDisposition(
+        _ report: ActivationCommitReport, state: inout HostProjectState
+    ) -> CommitReportOutcome {
+        switch report.outcome {
+        case .succeeded:
+            state.lifecycle = state.lifecycle.acknowledgingActivation
+            return .acknowledged(state.transaction.running.revision)
+        case .failed:
+            state.lifecycle = state.lifecycle.endingPreparation
+            return .failed
+        case .partial:
+            state.lifecycle = state.lifecycle.endingPreparation
+            return .partial(unapplied: report.unapplied)
+        }
+    }
+
+    private func acceptOwnership(
+        _ binding: PlanBinding, replacing previous: PlanBinding?, outcome: ActivationCommitOutcome
+    ) throws(EnginePlanLedgerRefusal) {
+        switch outcome {
+        case .succeeded: try plans.commitReplacing(binding, previous: previous)
+        case .partial: try plans.committed(binding, outcome: .partial)
+        case .failed: break
+        }
+    }
+
+    private mutating func install(
+        _ binding: PlanBinding, replacing previous: PlanBinding?, in state: inout HostProjectState
+    ) {
+        state.installed = binding
+        state.reviewed = nil
+        if let previous { scheduleRetirement(previous) }
+    }
+
     /// The one place an H5c recovery step's mute is requested: `abandonCommit`
     /// queues it, `withholdCommit` converts it in the withheld commit's place.
-    /// On success it records the mute without moving it out of the FIFO.
     mutating func requestMute(_ step: ActivationRecoveryStep, running: RunningGraph,
                               into staged: inout EngineCommandQueue) -> Bool {
-        guard case .success = staged.enqueue(step, running: running, lease: registry.snapshot?.token) else {
+        guard case .success = staged.enqueue(
+            step, running: running, resident: nil, retiring: nil, lease: registry.snapshot?.token
+        ) else {
             return false
         }
         markFIFOMute()
@@ -193,12 +240,13 @@ extension HostAuthorityBook {
     mutating func nextEngineCommand() -> EngineCommand? {
         if let output = takeOutput() { return output }
         while let command = queue.dequeue() {
+            refillRetirements()
             if case .restore = command {
                 guard admitRestore(command) else { continue }
                 return command
             }
-            if case .discard(let prepared) = command {
-                retireRestoreDiscard(prepared)
+            if case .discard(let binding) = command {
+                retireRestoreDiscard(binding)
                 return command
             }
             guard case .commit(_, let attempt, let token) = command else { return command }

@@ -16,6 +16,29 @@
 //
 
 extension HostAuthorityBook {
+    /// Records a capability loss observed under the exact current holder lease.
+    /// This changes only the holder's lifecycle, or the saved lifecycle base while
+    /// recovery is visible; it never changes transaction, ledger, queues, output,
+    /// authorization, context, or in-flight commit state.
+    mutating func capabilityLost(
+        _ capability: CapabilityID, project: ProjectID, token: EngineLeaseToken
+    ) -> Result<Void, HostAuthorityRefusal> {
+        guard var state = projects[project] else { return .failure(.unknownProject(project)) }
+        guard let held = registry.snapshot else { return .failure(.activation(.leaseNotHeld)) }
+        guard held.token == token else { return .failure(.lease(.staleToken)) }
+        guard held.project == project else {
+            return .failure(.activation(.leaseHeldByOtherProject(held.project)))
+        }
+        if state.lifecycle == .recovering {
+            let settled = (state.recoveryBase ?? .absent).settledLifecycle
+            state.recoveryBase = settled.after(.capabilityLost(capability)).recoveryRunningSet ?? .absent
+        } else {
+            state.lifecycle = state.lifecycle.after(.capabilityLost(capability))
+        }
+        projects[project] = state
+        return .success(())
+    }
+
     /// The holder's lease was lost involuntarily (the engine or the system took it).
     /// Checks, in order: a lease is held (`.lease(.notHeld)`); `token` is its current
     /// token (`.lease(.staleToken)`). Never refused for a delivered commit

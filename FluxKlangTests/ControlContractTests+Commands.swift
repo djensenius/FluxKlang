@@ -29,6 +29,17 @@ private func intent(_ controlClass: ControlClass, host currentHost: HostEpoch = 
     ))
 }
 
+private let composed = PermissionFingerprint(rawValue: "permissions.caf\u{E9}")
+private let decomposed = PermissionFingerprint(rawValue: "permissions.cafe\u{301}")
+
+private func intent(permission fingerprint: PermissionFingerprint) throws -> CommandIntent {
+    try CommandIntent(.init(
+        id: CommandID(validated: "command.test"), commandClass: .live, origin: .human,
+        hostEpoch: hostEpoch, connectionEpoch: connection, revisions: CommandRevisions(),
+        operation: operation(for: .live), permission: fingerprint
+    ))
+}
+
 private func context(_ controlClass: ControlClass, scopes: Set<CommandScope>? = nil,
                      revisions: CommandRevisions = CommandRevisions(),
                      connection currentConnection: ConnectionEpoch? = connection,
@@ -87,6 +98,55 @@ extension ControlContractTests {
             let changed = PermissionFingerprint(rawValue: "permissions.other")
             #expect(try CommandAdmission.admit(intent(controlClass), in: context(controlClass, permission: changed))
                 == .refused(.rejected(.permissionChanged)))
+        }
+
+        @Test func canonicallyEquivalentButByteDifferentFingerprintIsChanged() throws {
+            #expect(try CommandAdmission.admit(intent(permission: composed), in: context(.live, permission: composed))
+                == .admitted)
+            #expect(try CommandAdmission.admit(intent(permission: composed), in: context(.live, permission: decomposed))
+                == .refused(.rejected(.permissionChanged)))
+            #expect(try CommandAdmission.admit(intent(permission: decomposed), in: context(.live, permission: composed))
+                == .refused(.rejected(.permissionChanged)))
+        }
+
+        @Test func malformedHostFingerprintIsDenied() throws {
+            let wellFormed = PermissionFingerprint(rawValue: String(repeating: "\u{E9}", count: 128))
+            let oversized = PermissionFingerprint(rawValue: String(repeating: "e\u{301}", count: 128))
+            #expect(wellFormed.rawValue.utf8.count == 256 && oversized.rawValue.utf8.count == 384)
+            let request = try intent(permission: wellFormed)
+            #expect(CommandAdmission.admit(request, in: try context(.live, permission: wellFormed)) == .admitted)
+            #expect(CommandAdmission.admit(request, in: try context(.live, permission: oversized))
+                == .refused(.rejected(.permissionDenied)))
+            let empty = PermissionFingerprint(rawValue: "")
+            #expect(try CommandAdmission.admit(intent(.live), in: context(.live, permission: empty))
+                == .refused(.rejected(.permissionDenied)))
+            let overlong = PermissionFingerprint(rawValue: String(repeating: "a", count: 257))
+            #expect(try CommandAdmission.admit(intent(.live), in: context(.live, permission: overlong))
+                == .refused(.rejected(.permissionDenied)))
+        }
+
+        @Test func fingerprintIdentityIsByteExact() throws {
+            #expect(composed != decomposed)
+            #expect(Set([composed, decomposed]).count == 2)
+            let keyed = Dictionary([(composed, "composed"), (decomposed, "decomposed")]) { first, _ in first }
+            #expect(keyed.count == 2 && keyed[decomposed] == "decomposed")
+            let bytes = try #require(String(bytes: composed.rawValue.utf8, encoding: .utf8))
+            let copy = PermissionFingerprint(rawValue: bytes)
+            #expect(copy == composed && copy.hashValue == composed.hashValue)
+            #expect(keyed[copy] == "composed")
+        }
+
+        @Test func fingerprintWireFormatIsUnchanged() throws {
+            let expected = [
+                (composed, "{\"rawValue\":\"permissions.caf\u{E9}\"}"),
+                (decomposed, "{\"rawValue\":\"permissions.cafe\u{301}\"}")
+            ]
+            for (fingerprint, json) in expected {
+                let data = try ContractCoding.makeEncoder().encode(fingerprint)
+                #expect(Array(data) == Array(json.utf8))
+                let decoded = try ContractCoding.decode(PermissionFingerprint.self, from: Data(json.utf8))
+                #expect(Array(decoded.rawValue.utf8) == Array(fingerprint.rawValue.utf8))
+            }
         }
 
         @Test func assistantLocalityNeverGrantsActivationAndClassCannotBeRelabelled() throws {
