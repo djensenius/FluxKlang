@@ -148,14 +148,18 @@ actor WingTransport: WingTransporting {
 
     private let localNetworkProbe: LocalNetworkProbe.Check
     private let resolvePeers: @Sendable (String) -> Set<String>
+    private let auditMirror: ProductionAccessAudit?
 
     init(remotePort: UInt16 = WingNetwork.defaultPort,
          localNetworkProbe: @escaping LocalNetworkProbe.Check = LocalNetworkProbe.connectErrno,
-         resolvePeers: @escaping @Sendable (String) -> Set<String> = WingPeerIdentity.ipv4Addresses) {
+         resolvePeers: @escaping @Sendable (String) -> Set<String> = WingPeerIdentity.ipv4Addresses,
+         mirroring audit: ProductionAccessAudit? = nil) {
         self.remotePort = remotePort
         self.localNetworkProbe = localNetworkProbe
         self.resolvePeers = resolvePeers
+        self.auditMirror = audit
         (incoming, continuation) = AsyncStream.makeStream(of: WingIncoming.self)
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .wingTransport, mirroring: audit)
     }
 
     deinit {
@@ -176,7 +180,13 @@ actor WingTransport: WingTransporting {
             guard let code = localNetworkProbe(peer, remotePort) else { continue }
             throw WingTransportError.localNetworkBlocked(errno: code, host: peer)
         }
+        ProductionAccessAudit.shared.record(.attempted, for: .wingTransport, mirroring: auditMirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .wingTransport, mirroring: auditMirror)
+            throw WingTransportError.notAuthorized
+        }
         let expectedPort = remotePort
+        ProductionAccessAudit.shared.record(.apiEntered, for: .wingTransport, mirroring: auditMirror)
         let socket = OSCUDPSocket(
             localPort: localPort,
             remoteHost: remoteHost,
@@ -198,6 +208,7 @@ actor WingTransport: WingTransporting {
                 )
             }
         )
+        ProductionAccessAudit.shared.record(.apiEntered, for: .wingTransport, mirroring: auditMirror)
         try socket.start()
         self.socket = socket
         self.sessionID = sessionID
@@ -219,6 +230,7 @@ actor WingTransport: WingTransporting {
     ) throws {
         guard let socket else { throw WingTransportError.notStarted }
         let values: OSCValues = value.map { [$0.oscValue] } ?? []
+        ProductionAccessAudit.shared.record(.apiEntered, for: .wingTransport, mirroring: auditMirror)
         try socket.send(.message(OSCMessage(address, values: values)), to: host, port: port)
     }
 
@@ -236,7 +248,10 @@ actor WingTransport: WingTransporting {
     }
 
     private func stopSocket() {
-        socket?.stop()
+        if let socket {
+            ProductionAccessAudit.shared.record(.apiEntered, for: .wingTransport, mirroring: auditMirror)
+            socket.stop()
+        }
         socket = nil
         sessionID = nil
         peerHosts = []
