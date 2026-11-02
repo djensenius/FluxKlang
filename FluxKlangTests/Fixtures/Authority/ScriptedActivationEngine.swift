@@ -3,10 +3,10 @@
 //  FluxKlangTests
 //
 //  A scripted activation engine for the HostAuthority tests: it drains the
-//  actor's command queue, records every command and answers prepares from a
+//  actor's command queue, records every command, answers prepares from a
 //  fixed ID sequence and fault script, or under chosen, possibly reused IDs
-//  whose plans it holds until a discard disposes of them. No audio, MIDI,
-//  hardware or I/O.
+//  whose plans it holds until a discard disposes of them, and reports commits
+//  consistently with each plan's nodes. No audio, MIDI, hardware or I/O.
 //
 
 @testable import FluxKlang
@@ -32,6 +32,12 @@ struct ScriptedCommit: Hashable, Sendable {
     let token: EngineLeaseToken
 }
 
+/// One delivered commit report and what the actor made of it.
+struct ScriptedCommitReport: Sendable {
+    let report: ActivationCommitReport
+    let verdict: Result<CommitReportOutcome, HostAuthorityRefusal>
+}
+
 /// A plan the scripted engine prepared under `id` for `attempt` and still holds.
 /// IDs are not unique: the engine may reuse one (`prepare(_:as:)`), as nothing
 /// in the contracts forbids.
@@ -51,6 +57,10 @@ struct ScriptedActivationEngine: Sendable {
     private(set) var pending: [PrepareAttemptID] = []
     /// Commits taken and not yet reported, oldest first.
     private(set) var pendingCommits: [ScriptedCommit] = []
+    /// The node IDs of each prepare taken, until it is answered.
+    private var preparingNodes: [PrepareAttemptID: Set<NodeID>] = [:]
+    /// Report-node coverage for generated IDs; chosen/reused-ID reports are not modeled.
+    private(set) var plannedNodes: [PreparedActivationID: Set<NodeID>] = [:]
     /// Plans prepared with `prepare(_:as:)` and still held, oldest first. A taken
     /// `.discard` disposes of the oldest held plan with its ID, and only of a held plan.
     private(set) var held: [ScriptedHeldPlan] = []
@@ -82,7 +92,9 @@ struct ScriptedActivationEngine: Sendable {
         while let command = await authority.nextEngineCommand() {
             _ = recorder.record(command)
             switch command {
-            case .prepare(_, let attempt): pending.append(attempt)
+            case .prepare(let graph, let attempt):
+                pending.append(attempt)
+                preparingNodes[attempt] = Set(graph.nodes.map(\.id))
             case .commit(let prepared, let attempt, let token):
                 pendingCommits.append(ScriptedCommit(prepared: prepared, attempt: attempt, token: token))
             case .discard(let id): dispose(id)
@@ -105,6 +117,8 @@ struct ScriptedActivationEngine: Sendable {
     mutating func answerNext(_ authority: HostAuthority) async -> ScriptedPrepareAnswer? {
         guard let attempt = withholdNext() else { return nil }
         let answer = scriptedAnswer()
+        if case .success(let id) = answer, let nodes = preparingNodes[attempt] { plannedNodes[id] = nodes }
+        preparingNodes[attempt] = nil
         let verdict = await authority.prepareAnswered(answer, attempt: attempt)
         return ScriptedPrepareAnswer(attempt: attempt, answer: answer, verdict: verdict)
     }
@@ -116,9 +130,32 @@ struct ScriptedActivationEngine: Sendable {
     }
 
     /// Takes the oldest pending commit without reporting it (the report is lost or
-    /// late); H5c-2 adds reporting.
+    /// late); the test may deliver it later, for example with `report(on:_:)`.
     mutating func withholdCommit() -> ScriptedCommit? {
         pendingCommits.isEmpty ? nil : pendingCommits.removeFirst()
+    }
+
+    /// A report on `commit` consistent with its plan's nodes: `.succeeded` applies
+    /// every node, `.failed` none and `.partial` only the lowest node ID (so a
+    /// consistent partial needs a plan of two or more nodes).
+    func report(on commit: ScriptedCommit, _ outcome: ActivationCommitOutcome) -> ActivationCommitReport {
+        let nodes = plannedNodes[commit.prepared] ?? []
+        let applied: Set<NodeID>
+        switch outcome {
+        case .succeeded: applied = nodes
+        case .failed: applied = []
+        case .partial: applied = nodes.min().map { [$0] } ?? []
+        }
+        return ActivationCommitReport(prepared: commit.prepared, attempt: commit.attempt, outcome: outcome,
+                                      applied: applied, unapplied: nodes.subtracting(applied))
+    }
+
+    /// Reports the oldest pending commit with `outcome`; nil when none is pending.
+    mutating func report(_ authority: HostAuthority, _ outcome: ActivationCommitOutcome) async
+    -> ScriptedCommitReport? {
+        guard let commit = withholdCommit() else { return nil }
+        let report = report(on: commit, outcome)
+        return ScriptedCommitReport(report: report, verdict: await authority.commitReported(report))
     }
 
     /// Prepares `attempt`'s plan under the chosen `id` (which may reuse an ID) and
