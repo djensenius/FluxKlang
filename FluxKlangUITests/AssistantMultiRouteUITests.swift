@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class AssistantMultiRouteUITests: XCTestCase {
-    private lazy var app = XCUIApplication()
+    private lazy var app = makeIsolatedUITestApplication()
     private let osmose = "Expressive E Osmose"
     private let solar = "Elta SOLAR 42F"
     private let evilPet = "Endorphin.es EviL Pet"
