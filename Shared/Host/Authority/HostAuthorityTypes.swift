@@ -49,11 +49,15 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
 enum PrepareAnswerOutcome: Hashable, Sendable {
     /// The issuing project's transaction accepted it.
     case routed
-    /// A success for an abandoned attempt, refused by the transaction with `refusal`:
-    /// the engine's plan was queued for discard, exactly once.
-    case discarded(PreparedActivationID, refusal: ActivationRefusal)
-    /// An abandoned attempt's failure, or a success naming a live plan, or a plan
-    /// whose discard is already queued: nothing to discard.
+    /// A success for an abandoned attempt, NOT reclaimed: its bare ID may name a plan
+    /// the engine has since reused for a newer prepare (of this or another project),
+    /// so no `.discard` is queued and the answer never reaches a transaction.
+    /// `refusal` is what the issuing project's transaction would refuse it as, read
+    /// from its phase. Reclaiming the plan needs engine-qualified identity, lifetime
+    /// and ownership checks (#191); until then the engine keeps it.
+    case unreclaimed(PreparedActivationID, refusal: ActivationRefusal)
+    /// An abandoned attempt's failure, or a success naming a live plan or a plan
+    /// whose `.discard` is already queued: nothing is reported as unreclaimed.
     case dropped
 }
 
@@ -81,7 +85,8 @@ extension EngineLifecycle {
     }
 }
 
-/// A prepare attempt `abandonPrepare` gave up on; its late success is discarded.
+/// A prepare attempt `abandonPrepare` gave up on; its first late answer is
+/// recognised exactly once.
 struct AbandonedPrepare: Hashable, Sendable {
     let attempt: PrepareAttemptID
     let project: ProjectID

@@ -286,7 +286,8 @@ extension ControlContractTests.Triggers {
         let outcome = try fixture.drainOne(handle)
         #expect(outcome.result == .fired && outcome.assignedFrame == .max && outcome.frame == .max)
         try outcome.validateMediaShape()
-        // V10's successful musical fallback is B1/B2, not replaced with a default frame here.
+        // V10's successful musical fallback is covered in +SchedulingValidation
+        // (fullRangeSampleFallbackSucceedsFromTheMinimumFrame); no default frame is substituted here.
     }
 
     @Test(arguments: [Int64.min, -1, 0, Int64.max])
