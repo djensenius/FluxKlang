@@ -49,12 +49,42 @@ struct HardwareServiceFactories: Sendable {
     /// Startup-reconnect evidence (see `LocalNetworkGrantEvidence`).
     var localNetworkEvidence: LocalNetworkGrantEvidence = .current
 
-    static let production = HardwareServiceFactories(
-        makeLaunchControlXLInput: { CoreMIDIInput() }, makePermissionProbe: { SystemPermissionProbe() },
-        localNetworkProbe: LocalNetworkProbe.connectErrno,
-        makeWingTransport: { WingTransport(remotePort: $0, localNetworkProbe: $1) },
-        wingDiscoveryBroadcastHosts: WingDiscovery.activeIPv4BroadcastHosts)
+    static let production = productionFactories(mirroring: nil)
     static let inert = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
+
+    /// Observation is additive; callers cannot replace the global audit or the process-selected policy.
+    static func productionFactories(mirroring audit: ProductionAccessAudit?) -> HardwareServiceFactories {
+        HardwareServiceFactories(
+            makeLaunchControlXLInput: {
+                ProductionAccessAudit.shared.record(.attempted, for: .midiInput, mirroring: audit)
+                guard !AppPersistence.isTesting else {
+                    ProductionAccessAudit.shared.record(.denied, for: .midiInput, mirroring: audit)
+                    return InertLaunchControlXLInput()
+                }
+                ProductionAccessAudit.shared.record(.factoryEvaluated, for: .midiInput, mirroring: audit)
+                return CoreMIDIInput()
+            },
+            makePermissionProbe: {
+                ProductionAccessAudit.shared.record(.attempted, for: .permissionProbe, mirroring: audit)
+                guard !AppPersistence.isTesting else {
+                    ProductionAccessAudit.shared.record(.denied, for: .permissionProbe, mirroring: audit)
+                    return InertPermissionProbe()
+                }
+                ProductionAccessAudit.shared.record(.factoryEvaluated, for: .permissionProbe, mirroring: audit)
+                return SystemPermissionProbe()
+            },
+            localNetworkProbe: LocalNetworkProbe.connectErrno,
+            makeWingTransport: { port, probe in
+                ProductionAccessAudit.shared.record(.attempted, for: .wingTransport, mirroring: audit)
+                guard !AppPersistence.isTesting else {
+                    ProductionAccessAudit.shared.record(.denied, for: .wingTransport, mirroring: audit)
+                    return InertWingTransport()
+                }
+                ProductionAccessAudit.shared.record(.factoryEvaluated, for: .wingTransport, mirroring: audit)
+                return WingTransport(remotePort: port, localNetworkProbe: probe)
+            },
+            wingDiscoveryBroadcastHosts: WingDiscovery.activeIPv4BroadcastHosts)
+    }
 
     /// Selected once, alongside `AppPersistence.storage`.
     static let current = select(isTesting: AppPersistence.isTesting, production: .production)

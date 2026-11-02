@@ -2,6 +2,22 @@ import Testing
 @testable import FluxKlang
 
 struct ProductionAccessAuditTests {
+    @Test func mirrorsRemainAdditiveAndSameRecorderIsNotDuplicated() {
+        let primary = ProductionAccessAudit()
+        let mirror = ProductionAccessAudit()
+        primary.record(.attempted, for: .wingTransport, mirroring: mirror)
+        #expect(primary.snapshot().count(.attempted, for: .wingTransport) == 1)
+        #expect(mirror.snapshot().count(.attempted, for: .wingTransport) == 1)
+
+        primary.record(.denied, for: .wingTransport, mirroring: primary)
+        #expect(primary.snapshot().count(.denied, for: .wingTransport) == 1)
+        #expect(mirror.snapshot().count(.denied, for: .wingTransport) == 0)
+
+        primary.record(.factoryEvaluated, for: .wingTransport, mirroring: nil)
+        #expect(primary.snapshot().count(.factoryEvaluated, for: .wingTransport) == 1)
+        #expect(mirror.snapshot().count(.factoryEvaluated, for: .wingTransport) == 0)
+    }
+
     @Test func eventsAndOperationsStayDistinctInIndependentRecorders() {
         let audit = ProductionAccessAudit()
         let other = ProductionAccessAudit()

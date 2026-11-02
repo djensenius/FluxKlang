@@ -13,6 +13,31 @@ import Testing
 
 @MainActor
 struct StartupHardwareIsolationTests {
+    @Test func directProductionConstructorsAreDeniedBeforeEvaluation() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        let factories = HardwareServiceFactories.productionFactories(mirroring: audit)
+        let before = audit.snapshot()
+        for operation in ProductionAccessAudit.Operation.allCases {
+            for event in ProductionAccessAudit.Event.allCases {
+                #expect(before.count(event, for: operation) == 0, "A closure bundle is not a production attempt")
+            }
+        }
+
+        #expect(factories.makeLaunchControlXLInput() is InertLaunchControlXLInput)
+        #expect(factories.makePermissionProbe() is InertPermissionProbe)
+        #expect(factories.makeWingTransport(WingNetwork.defaultPort, factories.localNetworkProbe) is InertWingTransport)
+        let after = audit.snapshot()
+        let constructors: [ProductionAccessAudit.Operation] = [.midiInput, .permissionProbe, .wingTransport]
+        for operation in constructors {
+            #expect(after.count(.attempted, for: operation) == 1)
+            #expect(after.count(.denied, for: operation) == 1)
+            #expect(after.count(.factoryEvaluated, for: operation) == 0)
+            #expect(after.count(.passiveConstruction, for: operation) == 0)
+            #expect(after.count(.apiEntered, for: operation) == 0)
+        }
+    }
+
     @Test func testHostSelectionNeverBuildsOrInvokesProductionFactories() {
         let spy = HardwareFactorySpy()
         let selected = HardwareServiceFactories.select(

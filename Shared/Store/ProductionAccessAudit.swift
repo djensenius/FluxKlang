@@ -45,6 +45,11 @@ final class ProductionAccessAudit: Sendable {
         }
     }
 
+    func record(_ event: Event, for operation: Operation, mirroring mirror: ProductionAccessAudit?) {
+        record(event, for: operation)
+        if let mirror, mirror !== self { mirror.record(event, for: operation) }
+    }
+
     func snapshot() -> Snapshot {
         counts.withLock { Snapshot(counts: $0) }
     }
