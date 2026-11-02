@@ -14,13 +14,20 @@ final class FaderLayoutStore {
     private(set) var layout: FaderLayout = .standard
 
     private let fileName = "fader-layout.json"
+    private let injectedStore: JSONFileStore?
     private var loaded = false
+    @ObservationIgnored private var saveTail: Task<Void, Never>?
+
+    init(store: JSONFileStore? = nil) {
+        injectedStore = store
+    }
 
     /// Loads the persisted layout once, falling back to the standard bank.
     func load() async {
         guard !loaded else { return }
         loaded = true
-        if let saved = await JSONFileStore.shared.load(FaderLayout.self, from: fileName) {
+        let store = injectedStore ?? JSONFileStore.shared
+        if let saved = await store.load(FaderLayout.self, from: fileName) {
             layout = saved
         }
     }
@@ -74,8 +81,24 @@ final class FaderLayoutStore {
         persist()
     }
 
+    /// Awaits the tail captured when this MainActor method begins, including its predecessors.
+    /// Does not await later producers, establish all-producer quiescence, coalesce concurrent
+    /// loads, or guarantee durable persistence success: JSON saves are best-effort.
+    /// Cancelling the waiter does not cancel the save chain.
+    func awaitScheduledSavesSnapshot() async {
+        let tail = saveTail
+        await tail?.value
+    }
+
     private func persist() {
         let snapshot = layout
-        Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
+        let fileName = fileName
+        let injectedStore = injectedStore
+        let previousTail = saveTail
+        saveTail = Task {
+            await previousTail?.value
+            let store = injectedStore ?? JSONFileStore.shared
+            await store.save(snapshot, to: fileName)
+        }
     }
 }

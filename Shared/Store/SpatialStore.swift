@@ -19,7 +19,13 @@ final class SpatialStore {
     private(set) var array: SpeakerArray = .standardQuad
 
     private let fileName = "spatial.json"
+    private let injectedStore: JSONFileStore?
     private var loaded = false
+    @ObservationIgnored private var saveTail: Task<Void, Never>?
+
+    init(store: JSONFileStore? = nil) {
+        injectedStore = store
+    }
 
     private struct Persisted: Codable, Sendable {
         var array: SpeakerArray
@@ -30,7 +36,8 @@ final class SpatialStore {
     func load() async {
         guard !loaded else { return }
         loaded = true
-        if let saved = await JSONFileStore.shared.load(Persisted.self, from: fileName) {
+        let store = injectedStore ?? JSONFileStore.shared
+        if let saved = await store.load(Persisted.self, from: fileName) {
             array = saved.array
         } else {
             persist()
@@ -70,6 +77,15 @@ final class SpatialStore {
         persist()
     }
 
+    /// Awaits the tail captured when this MainActor method begins, including its predecessors.
+    /// Does not await later producers, establish all-producer quiescence, coalesce concurrent
+    /// loads, or guarantee durable persistence success: JSON saves are best-effort.
+    /// Cancelling the waiter does not cancel the save chain.
+    func awaitScheduledSavesSnapshot() async {
+        let tail = saveTail
+        await tail?.value
+    }
+
     // MARK: - Helpers
 
     private func clamp(_ point: CGPoint) -> CGPoint {
@@ -78,6 +94,13 @@ final class SpatialStore {
 
     private func persist() {
         let snapshot = Persisted(array: array)
-        Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
+        let fileName = fileName
+        let injectedStore = injectedStore
+        let previousTail = saveTail
+        saveTail = Task {
+            await previousTail?.value
+            let store = injectedStore ?? JSONFileStore.shared
+            await store.save(snapshot, to: fileName)
+        }
     }
 }

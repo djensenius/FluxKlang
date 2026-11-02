@@ -53,10 +53,13 @@ actor LocalAssistantHistoryBackend: AssistantHistoryBackend {
 
 actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
     private static let recordType = "AssistantConversation"
-    private static let zoneID = CKRecordZone.ID(
-        zoneName: "FluxKlangAssistantHistory",
-        ownerName: CKCurrentUserDefaultName
-    )
+    private static let zoneID: CKRecordZone.ID = {
+        ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory)
+        return CKRecordZone.ID(
+            zoneName: "FluxKlangAssistantHistory",
+            ownerName: CKCurrentUserDefaultName
+        )
+    }()
     private let database: CKDatabase?
     private let mirror: ProductionAccessAudit?
     private var hasEnsuredZone = false
@@ -78,8 +81,8 @@ actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
         database = container.privateCloudDatabase
     }
 
-    // Follow-up: account for allowed private requests, SDK record/zone construction, and shared lazy zone metadata.
-    // This leaf observes capability acquisition and public attempts/refusals only.
+    // Shared lazy zone metadata is counted once; local mirrors omit that shared once-only initialization.
+    // Counters observe API entry, not authorization or global success.
     func loadRecords() async throws -> [AssistantConversationRecord] {
         ProductionAccessAudit.shared.record(.attempted, for: .cloudKitHistory, mirroring: mirror)
         guard !AppPersistence.isTesting, let database else {
@@ -91,8 +94,10 @@ actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
         var changeToken: CKServerChangeToken?
         var moreComing = true
         while moreComing {
+            let zoneID = Self.zoneID
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
             let changes = try await database.recordZoneChanges(
-                inZoneWith: Self.zoneID,
+                inZoneWith: zoneID,
                 since: changeToken,
                 desiredKeys: ["payload"]
             )
@@ -117,15 +122,26 @@ actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
             throw CloudKitAssistantHistoryError.isolatedAccessDenied
         }
         try await ensureZone(database: database)
-        let recordID = CKRecord.ID(recordName: value.id.uuidString, zoneID: Self.zoneID)
-        let record = try await existingRecord(id: recordID, database: database)
-            ?? CKRecord(recordType: Self.recordType, recordID: recordID)
+        let recordName = value.id.uuidString
+        let zoneID = Self.zoneID
+        ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        let record: CKRecord
+        if let existing = try await existingRecord(id: recordID, database: database) {
+            record = existing
+        } else {
+            let recordType = Self.recordType
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
+            record = CKRecord(recordType: recordType, recordID: recordID)
+        }
         record["payload"] = try JSONEncoder().encode(value) as CKRecordValue
+        ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
         _ = try await database.save(record)
     }
 
     private func existingRecord(id: CKRecord.ID, database: CKDatabase) async throws -> CKRecord? {
         do {
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
             return try await database.record(for: id)
         } catch let error as CKError where error.code == .unknownItem {
             return nil
@@ -135,10 +151,17 @@ actor CloudKitAssistantHistoryBackend: AssistantHistoryBackend {
     private func ensureZone(database: CKDatabase) async throws {
         guard !hasEnsuredZone else { return }
         do {
-            _ = try await database.recordZone(for: Self.zoneID)
+            let zoneID = Self.zoneID
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
+            _ = try await database.recordZone(for: zoneID)
         } catch let error as CKError where error.code == .zoneNotFound || error.code == .unknownItem {
+            let zoneID = Self.zoneID
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
+            let zone = CKRecordZone(zoneID: zoneID)
+            let zonesToSave = [zone]
+            ProductionAccessAudit.shared.record(.apiEntered, for: .cloudKitHistory, mirroring: mirror)
             let result = try await database.modifyRecordZones(
-                saving: [CKRecordZone(zoneID: Self.zoneID)],
+                saving: zonesToSave,
                 deleting: []
             )
             guard let saveResult = result.saveResults[Self.zoneID] else {
