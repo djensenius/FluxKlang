@@ -317,119 +317,112 @@ final class FixtureTests {
     }
 }
 
-final class FixtureWorld {
-    let root: URL
-    var manifest: [String: Any]
-    var objects: [String: [String: Any]]
-
-    init(root: URL, annotated: Bool) throws {
-        self.root = root
-        try require(!FileManager.default.fileExists(atPath: root.path), "fixture directory already exists")
-        let spec = "Reviewed fixture source transcription: iOS=Sources/**; macOS=Mac/** + Sources/A.swift\n"
-        manifest = [
-            "schemaVersion": 1, "purpose": "source-registration-only",
-            "specification": ["path": "project.yml", "sha256": digest(Data(spec.utf8)), "review": "REVIEWED"],
-            "pbxPath": "Fixture.xcodeproj/project.pbxproj", "registrations": [],
-            "matrix": ["iOS", "macOS"].flatMap { platform in
-                ["Debug", "Release"].map { config in
-                    let target = platform == "iOS" ? "FluxKlangTests" : "FluxKlangMacTests"
-                    return ["target": target, "module": target, "platform": platform, "configuration": config]
-                }
-            },
-            "sources": [
-                ["target": "FluxKlangTests", "directories": ["Sources"], "files": []],
-                ["target": "FluxKlangMacTests", "directories": ["Mac"], "files": ["Sources/A.swift"]]
-            ]
-        ]
-        objects = Self.pbxObjects()
-        try write("project.yml", spec)
-        try write("Sources/A.swift", (annotated ? "@Suite(.productionAccessAudit)\n" : "") +
-                  "struct Example { @Test func body() {} }\n")
-        try write("Mac/B.swift", "// non-test explicit-directory helper\n")
-        try save()
-    }
-
-    static func json(_ object: Any) throws -> Data {
-        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .prettyPrinted])
-    }
-
-    func write(_ path: String, _ text: String) throws {
-        let url = root.appendingPathComponent(path)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(text.utf8).write(to: url)
-    }
-
-    func save() throws {
-        try Self.json(manifest).write(to: root.appendingPathComponent("fixture.json"))
-        let pbx: [String: Any] = ["objects": objects, "rootObject": "project", "objectVersion": "77",
-                                  "archiveVersion": "1", "classes": [:]]
-        try write("Fixture.xcodeproj/project.pbxproj", Self.openStep(pbx))
-    }
-
-    func register(_ rows: [Registration]) throws {
-        manifest["registrations"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(rows))
-        try save()
-    }
-
-    func run(mode: String = "enforce") -> AuditReport {
-        AuditChecker.run(CheckOptions(root: root.path, manifest: "fixture.json", mode: mode))
-    }
-
-    static func openStep(_ value: Any) throws -> String {
-        if let dictionary = value as? [String: Any] {
-            return try "{\n" + dictionary.keys.sorted().map {
-                guard let value = dictionary[$0] else { throw AuditFailure("missing fixture PBX value") }
-                return try openStep($0) + " = " + openStep(value) + ";"
-            }.joined(separator: "\n") + "\n}"
+extension FixtureTests {
+    func returnTypeCases() {
+        test("Void return alias cannot bypass unknown XCTest ancestry beside registered suites") {
+            try rejectLegacy("return-void-alias", first: """
+            typealias Unit = Void
+            class Legacy: ExternalBase { func testAccess() -> Unit {} }
+            """)
         }
-        if let array = value as? [Any] {
-            return try "(" + array.map(openStep).joined(separator: ",") + ")"
-        }
-        guard let string = value as? String else { throw AuditFailure("unsupported fixture PBX value") }
-        guard let encoded = String(data: try JSONEncoder().encode(string), encoding: .utf8) else {
-            throw AuditFailure("fixture PBX string encoding")
-        }
-        return encoded
-    }
-
-    static func pbxObjects() -> [String: [String: Any]] {
-        var objects: [String: [String: Any]] = [
-            "project": ["isa": "PBXProject", "mainGroup": "main", "targets": ["ios", "mac"],
-                        "buildConfigurationList": "projectConfigs"],
-            "main": ["isa": "PBXGroup", "sourceTree": "<group>", "children": ["sourcesGroup", "macGroup"]],
-            "sourcesGroup": ["isa": "PBXGroup", "path": "Sources", "sourceTree": "<group>", "children": ["fileA"]],
-            "macGroup": ["isa": "PBXGroup", "path": "Mac", "sourceTree": "<group>", "children": ["fileB"]],
-            "fileA": ["isa": "PBXFileReference", "path": "A.swift",
-                      "sourceTree": "<group>", "lastKnownFileType": "sourcecode.swift"],
-            "fileB": ["isa": "PBXFileReference", "path": "B.swift",
-                      "sourceTree": "<group>", "lastKnownFileType": "sourcecode.swift"]
-        ]
-        for prefix in ["project", "ios", "mac"] {
-            objects[prefix + "Configs"] = ["isa": "XCConfigurationList",
-                                           "buildConfigurations": [prefix + "Debug", prefix + "Release"]]
-            for config in ["Debug", "Release"] {
-                var settings: [String: Any] = prefix == "project" ? ["SWIFT_VERSION": "6"] :
-                    ["SDKROOT": prefix == "ios" ? "iphoneos" : "macosx"]
-                if prefix == "project" && config == "Debug" {
-                    settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "DEBUG"
-                }
-                objects[prefix + config] = ["isa": "XCBuildConfiguration", "name": config, "buildSettings": settings]
+        test("parenthesized Void and empty-tuple returns cannot bypass unknown XCTest ancestry") {
+            for (number, result) in ["(Void)", "((Swift.Void))", "(())", "((()))"].enumerated() {
+                try rejectLegacy("return-parenthesized-\(number)",
+                                 first: "class Legacy: ExternalBase { func testAccess() -> \(result) {} }")
             }
         }
-        for prefix in ["ios", "mac"] {
-            objects[prefix] = ["isa": "PBXNativeTarget",
-                               "name": prefix == "ios" ? "FluxKlangTests" : "FluxKlangMacTests",
-                               "productType": "com.apple.product-type.bundle.unit-test", "buildRules": [],
-                               "buildConfigurationList": prefix + "Configs", "buildPhases": [prefix + "Sources"]]
-            objects[prefix + "Sources"] = [
-                "isa": "PBXSourcesBuildPhase", "buildActionMask": "2147483647",
-                "runOnlyForDeploymentPostprocessing": "0",
-                "files": prefix == "ios" ? ["iosA"] : ["macA", "macB"]
-            ]
-            objects[prefix + "A"] = ["isa": "PBXBuildFile", "fileRef": "fileA"]
+        test("cross-file nested and lexical transparent return aliases remain discovery candidates") {
+            try rejectLegacy("return-cross-file", first: "typealias First = Last",
+                             second: """
+                             typealias Last = (Void)
+                             class Legacy: ExternalBase { func testAccess() -> First {} }
+                             """)
+            try rejectLegacy("return-nested", first: "enum Names { typealias Unit = ((Swift.Void)) }",
+                             second: "class Legacy: ExternalBase { func testAccess() -> Names.Unit {} }")
+            try rejectLegacy("return-lexical", first: """
+            class Legacy: ExternalBase {
+                typealias Unit = Next
+                typealias Next = ()
+                func testAccess() async throws -> Unit {}
+            }
+            """)
         }
-        objects["macB"] = ["isa": "PBXBuildFile", "fileRef": "fileB"]
-        return objects
+        test("ambiguous cyclic generic and unresolved return types never establish non-Void evidence") {
+            for (number, source) in [
+                "typealias Unit = Next\ntypealias Next = Unit\nclass Legacy: ExternalBase { func testX() -> Unit {} }",
+                "typealias Unit = Bool\ntypealias Unit = Void\nclass Legacy: ExternalBase { func testX() -> Unit {} }",
+                "class Legacy: ExternalBase { func testX() -> Missing {} }",
+                "typealias Unit<T> = T\nclass Legacy: ExternalBase { func testX() -> Unit<Void> {} }",
+                "typealias Unit = Bool\nclass Legacy<Unit>: ExternalBase { func testX() -> Unit {} }",
+                "class Legacy: ExternalBase { func testX<Bool>() -> Bool {} }",
+                "typealias Bool = Void\nclass Legacy: ExternalBase { func testX() -> Bool {} }",
+                "enum Swift { typealias Bool = Void }\nclass Legacy: ExternalBase { func testX() -> Swift.Bool {} }"
+            ].enumerated() { try rejectLegacy("return-indeterminate-\(number)", first: source) }
+            try rejectLegacy("return-private", first: "private typealias Unit = Bool",
+                             second: "class Legacy: ExternalBase { func testX() -> Unit {} }")
+        }
+        test("return aliases on extension methods cannot bypass unknown inherited ancestry") {
+            try rejectLegacy("return-extension", first: "typealias Unit = (Void)\nclass Legacy: ExternalBase {}",
+                             second: "extension Legacy { func testAccess() -> Unit {} }")
+        }
+        test("supported definitely non-Void helpers preserve canonical registration success") {
+            let fixture = try world("return-nonvoid-control", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            typealias Flag = ((Swift.Bool))
+            struct Value {}
+            typealias StoredValue = Value
+            class Helper: ExternalBase {
+                typealias LocalFlag = Flag
+                func testLocal() -> LocalFlag { false }
+                func testFlag() -> Flag { false }
+                func testCount() -> Int { 0 }
+                func testText() -> String { "" }
+                func testValue() -> StoredValue { Value() }
+                func testTuple() -> (Void, Void) { ((), ()) }
+                func testArray() -> [Void] { [] }
+                func testOptional() -> Void? { nil }
+            }
+            class GenericHelper<T>: ExternalBase { func testFlag<U>() -> Swift.Bool { false } }
+            """)
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
+            try require(report.enforcementSatisfied && report.exitCode == 0, "definitely non-Void helper rejected")
+        }
+        test("transparent return aliases follow consistent target variants and declaration order") {
+            try conditionalReturnCases()
+        }
+    }
+
+    private func conditionalReturnCases() throws {
+        let sources = [("A.swift", """
+        #if DEBUG && canImport(FluxKlangMac) && canImport(FoundationModels)
+        typealias Unit = (Void)
+        #else
+        typealias Unit = Bool
+        #endif
+        """), ("B.swift", "typealias Result = Unit\nclass Legacy: ExternalBase { func testX() -> Result {} }")]
+        for platform in ["iOS", "macOS"] {
+            for configuration in ["Debug", "Release"] {
+                for mac in [false, true] {
+                    for models in [false, true] {
+                        for ordered in [sources, Array(sources.reversed())] {
+                            if configuration == "Debug" && mac && models {
+                                try rejects({
+                                    _ = try sourceReport(ordered, configuration: configuration, platform: platform,
+                                                         macImport: mac, modelsImport: models)
+                                }, containing: "XCTest")
+                            } else {
+                                let report = try sourceReport(ordered, configuration: configuration, platform: platform,
+                                                              macImport: mac, modelsImport: models)
+                                try require(report.exitCode == 0, "definitely non-Void variant rejected")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -448,6 +441,7 @@ enum FixtureMain {
         tests.projectLocationCases()
         tests.reportCases()
         tests.sourceCases()
+        tests.returnTypeCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }

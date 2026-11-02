@@ -250,7 +250,15 @@ struct XCTestDiscoveryGuard {
     }
 
     func validate() throws {
-        var shaped = inventory.legacyContexts
+        var shaped = Set<OwnerContext>()
+        for function in inventory.legacyFunctions {
+            let parameters = SourceInventory.genericNames(function.declaration.genericParameterClause)
+            let scope = returnScope(site: function.site, context: function.parent,
+                                    parameters: parameters)
+            if !definitelyNonVoid(function.declaration.signature.returnClause?.type, scope: scope, visiting: []) {
+                shaped.insert(function.parent)
+            }
+        }
         for (number, extended) in inventory.extensions.enumerated() where shaped.contains(.extended(number)) {
             let choices = lookup(extended.qualified, path: extended.site.path, scope: "")
             try require(choices.count == 1, "unsupported XCTest-shaped extension ownership: \(extended.site)")
@@ -281,6 +289,69 @@ struct XCTestDiscoveryGuard {
             guard let qualified = nodes[$0].qualified else { return false }
             return spellings.contains(qualified) && (!nodes[$0].restricted || nodes[$0].site.path == path)
         }
+    }
+
+    private struct ReturnScope {
+        let path: String
+        let name: String
+        let parameters: Set<String>
+    }
+
+    private func returnScope(
+        site: SourceSite, context: OwnerContext?, parameters: Set<String> = []
+    ) -> ReturnScope {
+        switch context {
+        case .nominal(let index):
+            let nominal = inventory.nominals[index]
+            let outer = returnScope(site: site, context: nominal.parent)
+            return ReturnScope(path: site.path, name: nominal.qualified ?? "",
+                               parameters: parameters.union(nominal.genericParameters).union(outer.parameters))
+        case .extended(let index):
+            let name = inventory.extensions[index].qualified ?? ""
+            let owners = lookup(name, path: site.path, scope: "").filter { $0 < inventory.nominals.count }
+            let inherited = owners.reduce(parameters) {
+                $0.union(returnScope(site: site, context: .nominal($1)).parameters)
+            }
+            return ReturnScope(path: site.path, name: name, parameters: inherited)
+        case .none, .local:
+            return ReturnScope(path: site.path, name: "", parameters: parameters)
+        }
+    }
+
+    // This is a bounded proof of NON-Void, not Swift type checking. Both Void and
+    // indeterminate returns remain discovery candidates. Aliases are resolved in
+    // their declaration scope within this target's single consistent variant.
+    private func definitelyNonVoid(_ type: TypeSyntax?, scope: ReturnScope, visiting: Set<Int>) -> Bool {
+        guard let type else { return false }
+        if let tuple = type.as(TupleTypeSyntax.self) {
+            if tuple.elements.count > 1 { return true }
+            guard let element = tuple.elements.first, element.firstName == nil,
+                  element.secondName == nil, element.ellipsis == nil else { return false }
+            return definitelyNonVoid(element.type, scope: scope, visiting: visiting)
+        }
+        if [.optionalType, .implicitlyUnwrappedOptionalType, .arrayType, .dictionaryType,
+            .functionType, .metatypeType].contains(type.kind) { return true }
+        return namedNonVoid(type, scope: scope, visiting: visiting)
+    }
+
+    private func namedNonVoid(_ type: TypeSyntax, scope: ReturnScope, visiting: Set<Int>) -> Bool {
+        guard let name = SourceInventory.typeName(type),
+              let first = name.split(separator: ".").first.map(String.init),
+              !scope.parameters.contains(first) else { return false }
+        let choices = lookup(name, path: scope.path, scope: scope.name)
+        if !choices.isEmpty {
+            guard choices.count == 1, let choice = choices.first, !visiting.contains(choice) else { return false }
+            if choice < inventory.nominals.count { return true }
+            let alias = inventory.aliases[choice - inventory.nominals.count]
+            if case .local = alias.parent { return false }
+            return definitelyNonVoid(alias.value, scope: returnScope(site: alias.site, context: alias.parent),
+                                     visiting: visiting.union([choice]))
+        }
+        // Do not reinterpret a source namespace named Swift as the standard module.
+        guard lookup(first, path: scope.path, scope: scope.name).isEmpty else { return false }
+        let primitives = ["Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+                          "UInt32", "UInt64", "String", "Character", "Float", "Double", "Never"]
+        return primitives.contains(name) || primitives.contains { name == "Swift." + $0 }
     }
 
     private func lineage(_ number: Int, visiting: Set<Int>) -> Lineage {

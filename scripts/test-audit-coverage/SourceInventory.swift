@@ -112,6 +112,7 @@ struct NominalRecord {
     let unsupported: Bool
     let isClass: Bool
     let bases: [String?]
+    let genericParameters: Set<String>
     let attributes: [AttributeSyntax]
 }
 
@@ -121,6 +122,13 @@ struct TypeAliasRecord {
     let parent: OwnerContext?
     let restricted: Bool
     let target: String?
+    let value: TypeSyntax?
+}
+
+struct LegacyFunctionRecord {
+    let site: SourceSite
+    let parent: OwnerContext
+    let declaration: FunctionDeclSyntax
 }
 
 struct ExtensionRecord {
@@ -183,7 +191,7 @@ struct SourceInventory {
     var functions: [FunctionRecord] = []
     var misplaced: [SourceSite] = []
     var aliases: [TypeAliasRecord] = []
-    var legacyContexts = Set<OwnerContext>()
+    var legacyFunctions: [LegacyFunctionRecord] = []
 
     mutating func add(_ source: ParsedSource) throws {
         try walk(Syntax(source.tree), context: nil, source: source)
@@ -257,7 +265,8 @@ struct SourceInventory {
             aliases.append(TypeAliasRecord(
                 site: site(node, name: name, source: source), qualified: qualified, parent: context,
                 restricted: isPrivate || restricted(context),
-                target: alias.genericParameterClause == nil ? Self.typeName(alias.initializer.value) : nil))
+                target: alias.genericParameterClause == nil ? Self.typeName(alias.initializer.value) : nil,
+                value: alias.genericParameterClause == nil ? alias.initializer.value : nil))
         }
         if node.is(DeclSyntax.self), let attributed = node.asProtocol(WithAttributesSyntax.self) {
             let attrs = try attributes(attributed.attributes)
@@ -276,7 +285,11 @@ struct SourceInventory {
     private mutating func addFunction(
         _ function: FunctionDeclSyntax, context: OwnerContext?, source: ParsedSource
     ) throws {
-        if Self.testShaped(function), let context, context != .local { legacyContexts.insert(context) }
+        if Self.testShaped(function), let context, context != .local {
+            legacyFunctions.append(LegacyFunctionRecord(
+                site: site(Syntax(function), name: sourceName(function.name), source: source),
+                parent: context, declaration: function))
+        }
         let attrs = try attributes(function.attributes)
         if attrs.contains(where: { SourceAttributes.macro($0) != nil }) {
             let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains { $0.text == "some" }
@@ -304,6 +317,8 @@ struct SourceInventory {
             unsupported: !supported || generic || group.genericWhereClause != nil || group.inheritanceClause != nil,
             isClass: node.is(ClassDeclSyntax.self),
             bases: group.inheritanceClause?.inheritedTypes.map { Self.typeName($0.type) } ?? [],
+            genericParameters: Self.genericNames(node.asProtocol(WithGenericParametersSyntax.self)?
+                .genericParameterClause),
             attributes: try attributes(group.attributes))
         let index = nominals.count
         nominals.append(record)
@@ -338,10 +353,13 @@ struct SourceInventory {
     }
 
     private static func testShaped(_ function: FunctionDeclSyntax) -> Bool {
-        guard sourceName(function.name).hasPrefix("test"), function.signature.parameterClause.parameters.isEmpty,
-              !function.modifiers.contains(where: { ["static", "class"].contains($0.name.text) }) else { return false }
-        guard let result = function.signature.returnClause else { return true }
-        return ["Void", "Swift.Void", "()"].contains(sourceTokens(result.type).replacingOccurrences(of: " ", with: ""))
+        // Return types are classified only after all active files have been indexed.
+        sourceName(function.name).hasPrefix("test") && function.signature.parameterClause.parameters.isEmpty &&
+            !function.modifiers.contains(where: { ["static", "class"].contains($0.name.text) })
+    }
+
+    static func genericNames(_ clause: GenericParameterClauseSyntax?) -> Set<String> {
+        Set(clause?.parameters.map { sourceName($0.name) } ?? [])
     }
 }
 

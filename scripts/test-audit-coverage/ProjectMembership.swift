@@ -334,3 +334,123 @@ enum BuildSettings {
         return tokens
     }
 }
+
+#if AUDIT_CHECK_TESTS
+// The unchanged pure PBX fixture builder lives here to keep both fixture files
+// within the existing strict size limit; it is absent from normal CLI builds.
+final class FixtureWorld {
+    let root: URL
+    var manifest: [String: Any]
+    var objects: [String: [String: Any]]
+
+    init(root: URL, annotated: Bool) throws {
+        self.root = root
+        try require(!FileManager.default.fileExists(atPath: root.path), "fixture directory already exists")
+        let spec = "Reviewed fixture source transcription: iOS=Sources/**; macOS=Mac/** + Sources/A.swift\n"
+        manifest = [
+            "schemaVersion": 1, "purpose": "source-registration-only",
+            "specification": ["path": "project.yml", "sha256": digest(Data(spec.utf8)), "review": "REVIEWED"],
+            "pbxPath": "Fixture.xcodeproj/project.pbxproj", "registrations": [],
+            "matrix": ["iOS", "macOS"].flatMap { platform in
+                ["Debug", "Release"].map { config in
+                    let target = platform == "iOS" ? "FluxKlangTests" : "FluxKlangMacTests"
+                    return ["target": target, "module": target, "platform": platform, "configuration": config]
+                }
+            },
+            "sources": [
+                ["target": "FluxKlangTests", "directories": ["Sources"], "files": []],
+                ["target": "FluxKlangMacTests", "directories": ["Mac"], "files": ["Sources/A.swift"]]
+            ]
+        ]
+        objects = Self.pbxObjects()
+        try write("project.yml", spec)
+        try write("Sources/A.swift", (annotated ? "@Suite(.productionAccessAudit)\n" : "") +
+                  "struct Example { @Test func body() {} }\n")
+        try write("Mac/B.swift", "// non-test explicit-directory helper\n")
+        try save()
+    }
+
+    static func json(_ object: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .prettyPrinted])
+    }
+
+    func write(_ path: String, _ text: String) throws {
+        let url = root.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+    }
+
+    func save() throws {
+        try Self.json(manifest).write(to: root.appendingPathComponent("fixture.json"))
+        let pbx: [String: Any] = ["objects": objects, "rootObject": "project", "objectVersion": "77",
+                                  "archiveVersion": "1", "classes": [:]]
+        try write("Fixture.xcodeproj/project.pbxproj", Self.openStep(pbx))
+    }
+
+    func register(_ rows: [Registration]) throws {
+        manifest["registrations"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(rows))
+        try save()
+    }
+
+    func run(mode: String = "enforce") -> AuditReport {
+        AuditChecker.run(CheckOptions(root: root.path, manifest: "fixture.json", mode: mode))
+    }
+
+    static func openStep(_ value: Any) throws -> String {
+        if let dictionary = value as? [String: Any] {
+            return try "{\n" + dictionary.keys.sorted().map {
+                guard let value = dictionary[$0] else { throw AuditFailure("missing fixture PBX value") }
+                return try openStep($0) + " = " + openStep(value) + ";"
+            }.joined(separator: "\n") + "\n}"
+        }
+        if let array = value as? [Any] {
+            return try "(" + array.map(openStep).joined(separator: ",") + ")"
+        }
+        guard let string = value as? String else { throw AuditFailure("unsupported fixture PBX value") }
+        guard let encoded = String(data: try JSONEncoder().encode(string), encoding: .utf8) else {
+            throw AuditFailure("fixture PBX string encoding")
+        }
+        return encoded
+    }
+
+    static func pbxObjects() -> [String: [String: Any]] {
+        var objects: [String: [String: Any]] = [
+            "project": ["isa": "PBXProject", "mainGroup": "main", "targets": ["ios", "mac"],
+                        "buildConfigurationList": "projectConfigs"],
+            "main": ["isa": "PBXGroup", "sourceTree": "<group>", "children": ["sourcesGroup", "macGroup"]],
+            "sourcesGroup": ["isa": "PBXGroup", "path": "Sources", "sourceTree": "<group>", "children": ["fileA"]],
+            "macGroup": ["isa": "PBXGroup", "path": "Mac", "sourceTree": "<group>", "children": ["fileB"]],
+            "fileA": ["isa": "PBXFileReference", "path": "A.swift",
+                      "sourceTree": "<group>", "lastKnownFileType": "sourcecode.swift"],
+            "fileB": ["isa": "PBXFileReference", "path": "B.swift",
+                      "sourceTree": "<group>", "lastKnownFileType": "sourcecode.swift"]
+        ]
+        for prefix in ["project", "ios", "mac"] {
+            objects[prefix + "Configs"] = ["isa": "XCConfigurationList",
+                                           "buildConfigurations": [prefix + "Debug", prefix + "Release"]]
+            for config in ["Debug", "Release"] {
+                var settings: [String: Any] = prefix == "project" ? ["SWIFT_VERSION": "6"] :
+                    ["SDKROOT": prefix == "ios" ? "iphoneos" : "macosx"]
+                if prefix == "project" && config == "Debug" {
+                    settings["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "DEBUG"
+                }
+                objects[prefix + config] = ["isa": "XCBuildConfiguration", "name": config, "buildSettings": settings]
+            }
+        }
+        for prefix in ["ios", "mac"] {
+            objects[prefix] = ["isa": "PBXNativeTarget",
+                               "name": prefix == "ios" ? "FluxKlangTests" : "FluxKlangMacTests",
+                               "productType": "com.apple.product-type.bundle.unit-test", "buildRules": [],
+                               "buildConfigurationList": prefix + "Configs", "buildPhases": [prefix + "Sources"]]
+            objects[prefix + "Sources"] = [
+                "isa": "PBXSourcesBuildPhase", "buildActionMask": "2147483647",
+                "runOnlyForDeploymentPostprocessing": "0",
+                "files": prefix == "ios" ? ["iosA"] : ["macA", "macB"]
+            ]
+            objects[prefix + "A"] = ["isa": "PBXBuildFile", "fileRef": "fileA"]
+        }
+        objects["macB"] = ["isa": "PBXBuildFile", "fileRef": "fileB"]
+        return objects
+    }
+}
+#endif
