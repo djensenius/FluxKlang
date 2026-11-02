@@ -225,3 +225,31 @@ schemes:
       config: Release
     analyze:
       config: Debug
+
+  # Dedicated Test actions preserve the existing schemes' explicit Apple-model opt-in behavior.
+  FluxKlangIsolatedTests:
+    build:
+      targets:
+        FluxKlang: all
+    test:
+      config: Debug
+      environmentVariables:
+        FLUXKLANG_ISOLATED_TESTING: "1"
+        FLUXKLANG_RUN_APPLE_MODEL_TESTS: "0"
+        FLUXKLANG_QUALIFY_APPLE_ROUTING: "0"
+      targets:
+        - FluxKlangTests
+        - FluxKlangUITests
+
+  FluxKlangMacIsolatedTests:
+    build:
+      targets:
+        FluxKlangMac: all
+    test:
+      config: Debug
+      environmentVariables:
+        FLUXKLANG_ISOLATED_TESTING: "1"
+        FLUXKLANG_RUN_APPLE_MODEL_TESTS: "0"
+        FLUXKLANG_QUALIFY_APPLE_ROUTING: "0"
+      targets:
+        - FluxKlangMacTests

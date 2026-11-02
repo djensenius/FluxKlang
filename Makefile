@@ -1,4 +1,4 @@
-.PHONY: generate build build-mac build-for-testing-mac test test-mac lint fault-seam-policy-self-check hardware-inventory-self-check clean
+.PHONY: generate build build-mac build-for-testing build-for-testing-mac test test-mac lint fault-seam-policy-self-check hardware-inventory-self-check clean
 
 REPOSITORY_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
@@ -17,21 +17,29 @@ build-mac:
 	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMac \
 	  build CODE_SIGNING_ALLOWED=NO
 
+# Hosted: launches the iOS app and test runners. Requires the reviewed #60
+# isolation gate and separate execution authorization.
 test:
-	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlang \
+	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests \
 	  -destination '$(IOS_SIM_DESTINATION)' \
 	  test CODE_SIGNING_ALLOWED=NO
 
+# Compile-only: builds the iOS app and both test targets without launching anything.
+build-for-testing:
+	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests \
+	  -destination 'generic/platform=iOS Simulator' \
+	  build-for-testing CODE_SIGNING_ALLOWED=NO
+
 # Compile-only: builds FluxKlangMac and FluxKlangMacTests without launching anything.
 build-for-testing-mac:
-	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMac \
+	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests \
 	  -destination 'platform=macOS' \
 	  build-for-testing CODE_SIGNING_ALLOWED=NO
 
-# Hosted: launches FluxKlangMac.app as the test host. Do not run until hosted
-# Mac execution is qualified by #60 after startup hardware isolation (#51).
+# Hosted: launches FluxKlangMac.app as the test host. Requires the reviewed #60
+# isolation gate after startup hardware isolation (#51), plus separate execution authorization.
 test-mac:
-	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMac \
+	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests \
 	  -destination 'platform=macOS' \
 	  test CODE_SIGNING_ALLOWED=NO
 
