@@ -7,14 +7,17 @@
 //
 
 import Foundation
-import Synchronization
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 @MainActor
 struct StartupHardwareIsolationTests {
     @Test func isolatedMIDIConstructionIsPassive() throws {
-        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
         _ = CoreMIDIInput(mirroring: audit)
         let snapshot = audit.snapshot()
@@ -26,7 +29,7 @@ struct StartupHardwareIsolationTests {
     }
 
     @Test func isolatedMIDIRestartsRetainNoCallbacks() async throws {
-        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
         let input = CoreMIDIInput(mirroring: audit)
         var callbackObjects: [NSObject] = []
@@ -57,7 +60,7 @@ struct StartupHardwareIsolationTests {
     }
 
     @Test func directProductionConstructorsAreDeniedBeforeEvaluation() throws {
-        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
         let factories = HardwareServiceFactories.productionFactories(mirroring: audit)
         let before = audit.snapshot()
@@ -81,7 +84,8 @@ struct StartupHardwareIsolationTests {
         }
     }
 
-    @Test func testHostSelectionNeverBuildsOrInvokesProductionFactories() {
+    @Test func testHostSelectionNeverBuildsOrInvokesProductionFactories() throws {
+        try requireIsolatedStartupProcess()
         let spy = HardwareFactorySpy()
         let selected = HardwareServiceFactories.select(
             isTesting: true,
@@ -109,7 +113,8 @@ struct StartupHardwareIsolationTests {
         #expect(spy.wing.ports == [9000])
     }
 
-    @Test func omittedWingMakerAndDefaultControllerAreInert() async {
+    @Test func omittedWingMakerAndDefaultControllerAreInert() async throws {
+        try requireIsolatedStartupProcess()
         let factories = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
         let transport = factories.makeWingTransport(WingNetwork.defaultPort, factories.localNetworkProbe)
         #expect(transport is InertWingTransport)
@@ -120,10 +125,12 @@ struct StartupHardwareIsolationTests {
             await controller.connect(host: "must-not-resolve.invalid")
             guard case .failed = controller.connection else {
                 Issue.record("An inert controller must refuse connection")
+                await controller.disconnect()
                 continue
             }
             #expect(controller.values.isEmpty)
             #expect(controller.confirmedValues.isEmpty)
+            await controller.disconnect()
         }
     }
 
@@ -156,9 +163,11 @@ struct StartupHardwareIsolationTests {
         #expect(spy.ports == [9000, WingNetwork.defaultPort])
     }
 
-    @Test func appModelDefaultDisconnectAndFailureUseInjectedWingFactory() async {
+    @Test func appModelDefaultDisconnectAndFailureUseInjectedWingFactory() async throws {
+        let owners = try StartupAppModelFixture()
+        defer { owners.cleanUp() }
         let spy = WingFactorySpy()
-        let model = AppModel(hardware: spy.factories)
+        let model = owners.makeModel(hardware: spy.factories)
         let initial = model.wing
         #expect(spy.ports == [WingNetwork.defaultPort])
         #expect(initial.connection == .disconnected)
@@ -172,19 +181,15 @@ struct StartupHardwareIsolationTests {
         #expect(model.wing.mode == .live)
         #expect(model.wing.connection == .failed(reason: "Acceptance test: WING unavailable"))
         #expect(spy.ports == Array(repeating: WingNetwork.defaultPort, count: 3))
+        await owners.finish(model)
     }
 
     @Test(.timeLimit(.minutes(1)))
     func monitorLoadAndControllerReplacementAwaitOwnedTransportStop() async throws {
-        let isTesting = AppPersistence.isTesting
-        let modelFlagDisabled = ProcessInfo.processInfo.environment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] != "1"
-        let routingFlagDisabled = ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] != "1"
-        try #require(isTesting && modelFlagDisabled && routingFlagDisabled)
+        let owners = try StartupAppModelFixture()
+        defer { owners.cleanUp() }
         let fixture = try LaunchControlXLFixture(mode: .monitor)
         defer { fixture.cleanUp() }
-        let suite = "StartupHardwareLifecycle-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         var configuration = fixture.configuration
         configuration.mapping.sourceNameContains = ["Synthetic LCXL \(UUID().uuidString)"]
         await fixture.store.save(configuration, to: "launch-control-xl.json")
@@ -197,11 +202,7 @@ struct StartupHardwareIsolationTests {
         let wingSpy = StartupWingTransportSpy()
         var hardware = spy.factories
         hardware.makeWingTransport = wingSpy.makeTransport
-        let model = AppModel(
-            assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
-            assistantProviderSettings: AssistantProviderSettings(
-                defaults: defaults, credentials: MemoryAssistantCredentialStore()),
-            hardware: hardware, launchControlXLStore: fixture.store)
+        let model = owners.makeModel(hardware: hardware, launchControlXLStore: fixture.store)
         let initial = model.wing
         #expect(spy.inputsMade == 0)
         #expect(wingSpy.transports.count == 1)
@@ -257,16 +258,20 @@ struct StartupHardwareIsolationTests {
         #expect(model.launchControlXL.status == .disabled)
         #expect(spy.input.stops == 1)
         await model.wing.disconnect()
+        await model.awaitDomainScheduledSaveSnapshots()
+        await model.awaitSiriEntityIndexingSnapshot()
         #expect(wingSpy.transports.count == 3, "Cleanup must not replace the final controller")
     }
 
     @Test func explicitWingAndPreviewConstructionDoNotBuildADefaultTransport() async throws {
+        let owners = try StartupAppModelFixture()
+        defer { owners.cleanUp() }
         let spy = WingFactorySpy()
         let wing = WingController(transport: InertWingTransport())
-        let model = AppModel(wing: wing, hardware: spy.factories)
+        let model = owners.makeModel(wing: wing, hardware: spy.factories)
         #expect(model.wing === wing)
         let previewWing = WingController.preview()
-        let preview = AppModel(wing: previewWing, hardware: spy.factories)
+        let preview = owners.makeModel(wing: previewWing, hardware: spy.factories)
         #expect(preview.wing === previewWing)
         #expect(preview.isDemo && preview.isConnected)
         #expect(spy.ports.isEmpty, "An explicit controller must not create a throwaway default")
@@ -274,35 +279,43 @@ struct StartupHardwareIsolationTests {
         #expect(appPreview.isDemo && appPreview.isConnected)
         #expect(!appPreview.wing.values.isEmpty)
         let activePreviewWing = appPreview.wing
-        let actions = try #require(appPreview.assistantChat.actionPlanner as? AssistantActionController)
-        #expect(actions === appPreview.assistantActions)
-        #expect(actions.controller() === activePreviewWing)
-        let mixer = try #require(appPreview.assistantChat.mixerExecutor)
-        let refusal = await mixer.execute(.init(target: .main(1), operation: .mute(true)),
-                                          sessionID: activePreviewWing.sessionID)
-        #expect(refusal.hasPrefix("No changes:"))
-        #expect(refusal.contains("not Demo Mode"))
-        #expect(activePreviewWing.transportWriteCount == 0)
+        do {
+            let actions = try #require(appPreview.assistantChat.actionPlanner as? AssistantActionController)
+            #expect(actions === appPreview.assistantActions)
+            #expect(actions.controller() === activePreviewWing)
+            let mixer = try #require(appPreview.assistantChat.mixerExecutor)
+            let refusal = await mixer.execute(.init(target: .main(1), operation: .mute(true)),
+                                              sessionID: activePreviewWing.sessionID)
+            #expect(refusal.hasPrefix("No changes:"))
+            #expect(refusal.contains("not Demo Mode"))
+            #expect(activePreviewWing.transportWriteCount == 0)
 
-        await appPreview.disconnect()
+            await appPreview.disconnect()
 
-        #expect(appPreview.wing !== activePreviewWing)
-        #expect(appPreview.wing.mode == .live)
-        #expect(appPreview.wing.connection == .disconnected)
-        #expect(actions.controller() === appPreview.wing, "The existing action binding must follow replacement")
-        #expect(appPreview.assistantChat.actionPlanner as? AssistantActionController === actions)
-        #expect(activePreviewWing.transportWriteCount == 0)
-        #expect(appPreview.wing.transportWriteCount == 0)
+            #expect(appPreview.wing !== activePreviewWing)
+            #expect(appPreview.wing.mode == .live)
+            #expect(appPreview.wing.connection == .disconnected)
+            #expect(actions.controller() === appPreview.wing, "The existing action binding must follow replacement")
+            #expect(appPreview.assistantChat.actionPlanner as? AssistantActionController === actions)
+            #expect(activePreviewWing.transportWriteCount == 0)
+            #expect(appPreview.wing.transportWriteCount == 0)
+        } catch {
+            await owners.finish(model, preview, appPreview)
+            throw error
+        }
+        await owners.finish(model, preview, appPreview)
     }
 
     @Test func appModelWiresInjectedFactoriesLazilyIntoLaunchControlXLStartup() async throws {
+        let owners = try StartupAppModelFixture()
+        defer { owners.cleanUp() }
         let fixture = try LaunchControlXLFixture(mode: .monitor)
         defer { fixture.cleanUp() }
         await fixture.seed()
         let spy = HardwareFactorySpy()
         let wing = WingController.preview()
         let writesBefore = wing.transportWriteCount
-        let model = AppModel(wing: wing, hardware: spy.factories, launchControlXLStore: fixture.store)
+        let model = owners.makeModel(wing: wing, hardware: spy.factories, launchControlXLStore: fixture.store)
         #expect(spy.inputsMade == 0, "Construction must not create a MIDI input")
 
         await model.loadLaunchControlXL()
@@ -314,13 +327,19 @@ struct StartupHardwareIsolationTests {
 
         let fader = MIDIControlChange(channel: 16, controller: 5, value: 127)
         spy.input.send([fader])
-        try await waitUntil { model.launchControlXL.lastAction != nil }
+        do {
+            try await waitUntil { model.launchControlXL.lastAction != nil }
+        } catch {
+            await owners.finish(model)
+            throw error
+        }
         // Awaiting receive directly lets any (regressed) dispatch finish before the write check.
         await model.launchControlXL.receive([fader])
 
         #expect(model.launchControlXL.lastAction == .fader(slot: 0, value: 1))
         #expect(model.wing === wing, "Startup must not replace the WING controller")
         #expect(wing.transportWriteCount == writesBefore, "Monitor mode must not write to the WING")
+        await owners.finish(model)
     }
 
     @Test func disabledLoadNeverCreatesMIDIInputAndRestartsReuseOneInput() async throws {
@@ -341,6 +360,7 @@ struct StartupHardwareIsolationTests {
         #expect(spy.input.starts.count == 2)
         #expect(spy.input.stops == 2)
         #expect(controller.status == .waiting)
+        await controller.setMode(.disabled)
     }
 
     @Test func injectedInputStillDrivesMonitorWithoutDispatching() async throws {
@@ -360,104 +380,15 @@ struct StartupHardwareIsolationTests {
         #expect(controller.status == .connected(["Launch Control XL"]))
 
         spy.input.send([MIDIControlChange(channel: 16, controller: 5, value: 127)])
-        try await waitUntil { controller.lastAction != nil }
+        do {
+            try await waitUntil { controller.lastAction != nil }
+        } catch {
+            await controller.setMode(.disabled)
+            throw error
+        }
 
         #expect(controller.lastAction == .fader(slot: 0, value: 1))
         #expect(dispatched.isEmpty)
-    }
-}
-
-@MainActor
-private final class HardwareFactorySpy {
-    let input = RecordingLaunchControlXLInput()
-    let wing = WingFactorySpy()
-    private(set) var inputsMade = 0
-
-    var factories: HardwareServiceFactories {
-        HardwareServiceFactories(makeLaunchControlXLInput: { [self] in
-            inputsMade += 1
-            return input
-        }, makeWingTransport: wing.makeTransport)
-    }
-}
-
-/// All state captured by the @Sendable WING factory is protected by the mutex.
-private final class WingFactorySpy: Sendable {
-    private let recordedPorts = Mutex<[UInt16]>([])
-    var ports: [UInt16] { recordedPorts.withLock { $0 } }
-
-    @MainActor var factories: HardwareServiceFactories {
-        var factories = HardwareServiceFactories.inert
-        factories.makeWingTransport = makeTransport
-        return factories
-    }
-
-    func makeTransport(port: UInt16, probe: @escaping LocalNetworkProbe.Check) -> any WingTransporting {
-        recordedPorts.withLock { $0.append(port) }
-        return InertWingTransport()
-    }
-}
-
-@MainActor
-private final class RecordingLaunchControlXLInput: LaunchControlXLInput {
-    private(set) var starts: [[String]] = []
-    private(set) var stops = 0
-    private var onMessages: (([MIDIControlChange]) -> Void)?
-    private var onSourcesChanged: (([String]) -> Void)?
-
-    func start(
-        sourceNameContains: [String],
-        onMessages: @escaping ([MIDIControlChange]) -> Void,
-        onSourcesChanged: @escaping ([String]) -> Void
-    ) {
-        starts.append(sourceNameContains)
-        self.onMessages = onMessages
-        self.onSourcesChanged = onSourcesChanged
-    }
-
-    func stop() {
-        stops += 1
-        onSourcesChanged?([])
-    }
-
-    func reportSources(_ names: [String]) {
-        onSourcesChanged?(names)
-    }
-
-    func send(_ messages: [MIDIControlChange]) {
-        onMessages?(messages)
-    }
-}
-
-private struct LaunchControlXLFixture {
-    let directory = URL.temporaryDirectory.appendingPathComponent("lcxl-\(UUID().uuidString)", isDirectory: true)
-    let configuration: LaunchControlXLConfiguration
-
-    var store: JSONFileStore { JSONFileStore(directory: directory, cloud: nil) }
-
-    init(mode: LaunchControlXLMode) throws {
-        var configuration = try #require(LaunchControlXLConfiguration.bundled())
-        configuration.mode = mode
-        self.configuration = configuration
-    }
-
-    /// Saves the fixture mode where `AppModel`'s controller loads it, overriding the bundled default.
-    func seed() async {
-        await store.save(configuration, to: "launch-control-xl.json")
-    }
-
-    @MainActor
-    func controller(
-        makeMIDIInput: @escaping @MainActor () -> any LaunchControlXLInput
-    ) -> LaunchControlXLController {
-        LaunchControlXLController(
-            fileStore: store,
-            defaultConfiguration: configuration,
-            makeMIDIInput: makeMIDIInput
-        )
-    }
-
-    func cleanUp() {
-        try? FileManager.default.removeItem(at: directory)
+        await controller.setMode(.disabled)
     }
 }
