@@ -180,6 +180,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Ramps.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Retire.swift
       - path: FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Scratch.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
