@@ -67,6 +67,7 @@
 		1013E41F8BC6E72E9E0706CC /* StudioPatchDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50261467F21BE7920041F0B /* StudioPatchDraft.swift */; };
 		102CA0A84D3521C82BB1E36E /* KernelStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED4989129C837DDD3DC00DD /* KernelStatus.swift */; };
 		1057F8E01461EC3EE2A76F56 /* RealtimeHandoffTests+Scratch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADFC68ABF0D8DFBBE52790E /* RealtimeHandoffTests+Scratch.swift */; };
+		10E2262B688D8BE1864009FF /* AppPersistenceSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13BFABF29B6D419C1F63BAE /* AppPersistenceSelectionTests.swift */; };
 		10E6AA1872E56431B9B385FC /* StudioGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD5C7284F6CC337CFC97B758 /* StudioGraph.swift */; };
 		11903D7D4FA3A0F781BD3500 /* AssistantHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110CE5E446EFE259C137ABA2 /* AssistantHelpView.swift */; };
 		133E0F7BBB9BE7386E3006D5 /* LaunchControlXLController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */; };
@@ -1133,6 +1134,7 @@
 		CFE289DC554F5321E725DA06 /* ControlContractTests+TransportRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+TransportRuntime.swift"; sourceTree = "<group>"; };
 		D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioSetup.swift; sourceTree = "<group>"; };
 		D0913767F35A266A8C18197B /* RealtimeHandoffTests+FanInStress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+FanInStress.swift"; sourceTree = "<group>"; };
+		D13BFABF29B6D419C1F63BAE /* AppPersistenceSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPersistenceSelectionTests.swift; sourceTree = "<group>"; };
 		D2965817A6773C5CF38A18E8 /* HostAuthorityBook+Plans.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityBook+Plans.swift"; sourceTree = "<group>"; };
 		D31B6A889015506D2A5AFACE /* TriggerScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerScheduler.swift; sourceTree = "<group>"; };
 		D43EBFB69DD1868A35638780 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
@@ -1904,6 +1906,7 @@
 				310DCB0992C4136B5DE41B23 /* AcceptanceAssistantSafetyTests.swift */,
 				A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */,
 				882B7F70F65B33BAD91EF6B8 /* AppNavigationTests.swift */,
+				D13BFABF29B6D419C1F63BAE /* AppPersistenceSelectionTests.swift */,
 				3AAACB6391E9BBECE55BA009 /* AskFluxKlangIntentTests.swift */,
 				B52028D438A45A95D1A75079 /* AssistantActionCoordinationTests.swift */,
 				FE48FAEE9D865F783DDE5326 /* AssistantActionIntentValidatorTests.swift */,
@@ -2883,6 +2886,7 @@
 				0DBE91B979FF59D455A5DEB0 /* AcceptanceMigrationTests.swift in Sources */,
 				91C55C3EF1365EABFDDBF1BE /* AdmissionContextFixture.swift in Sources */,
 				D533DB5110B0262A64819E43 /* AppNavigationTests.swift in Sources */,
+				10E2262B688D8BE1864009FF /* AppPersistenceSelectionTests.swift in Sources */,
 				03E7234D715EDE07A83C0AF9 /* AskFluxKlangIntentTests.swift in Sources */,
 				61D8FAD152028C67F8F1F00F /* AssistantActionCoordinationTests.swift in Sources */,
 				F363F7AA76D9A63187D61EE4 /* AssistantActionIntentValidatorTests.swift in Sources */,

@@ -26,14 +26,18 @@ enum AppPersistence {
         }
     }
 
-    static let isTesting: Bool = {
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return true }
+    static let isTesting = detectsTesting(
+        environment: ProcessInfo.processInfo.environment, arguments: ProcessInfo.processInfo.arguments)
+
+    static func detectsTesting(environment: [String: String], arguments: [String]) -> Bool {
+        if environment["FLUXKLANG_ISOLATED_TESTING"] == "1" { return true }
+        if environment["XCTestConfigurationFilePath"] != nil { return true }
         #if DEBUG
-        return ProcessInfo.processInfo.arguments.contains("-ui-testing")
+        return arguments.contains("-ui-testing")
         #else
         return false
         #endif
-    }()
+    }
 
     /// Selected once, before any default store or preference access.
     static let storage = makeStorage(
