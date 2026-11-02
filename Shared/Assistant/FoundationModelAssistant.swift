@@ -3,6 +3,25 @@ import Foundation
 import FoundationModels
 #endif
 
+/// Default services never become live merely because a qualification flag is set.
+enum AssistantServiceIsolation {
+    static let reason = "isolated test mode"
+
+    static var deniesLiveServices: Bool {
+        deniesLiveServices(isTesting: AppPersistence.isTesting, environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func isStrictlyIsolated(in environment: [String: String]) -> Bool {
+        environment["FLUXKLANG_ISOLATED_TESTING"] == "1"
+    }
+
+    static func deniesLiveServices(isTesting: Bool, environment: [String: String]) -> Bool {
+        isTesting || isStrictlyIsolated(in: environment)
+    }
+
+    enum AccessError: Error { case denied }
+}
+
 enum AssistantAuthorizedCapability: Hashable, Sendable {
     case help
     case inspect
@@ -29,6 +48,13 @@ struct AssistantToolAuthorizer: Sendable {
 struct AssistantGeneratorRouter: AssistantGenerating {
     let model: any AssistantGenerating
     let fallback: any AssistantGenerating
+
+    static func defaultGenerator(
+        model: () -> any AssistantGenerating, fallback: any AssistantGenerating
+    ) -> any AssistantGenerating {
+        guard !AssistantServiceIsolation.deniesLiveServices else { return fallback }
+        return AssistantGeneratorRouter(model: model(), fallback: fallback)
+    }
 
     func availability() async -> AssistantModelAvailability {
         await model.availability()
@@ -82,6 +108,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
     var authorizer = AssistantToolAuthorizer.model
 
     func availability() async -> AssistantModelAvailability {
+        guard !AssistantServiceIsolation.deniesLiveServices else { return .deterministic }
         guard #available(iOS 27, macOS 27, *) else { return .unsupportedOS }
         switch SystemLanguageModel.default.availability {
         case .available:
@@ -100,6 +127,9 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            return AsyncThrowingStream { $0.finish(throwing: AssistantServiceIsolation.AccessError.denied) }
+        }
         if AssistantRoutingOwnership.owns(request.question) {
             return AsyncThrowingStream {
                 $0.yield(.text(AssistantRoutingOwnership.clarification))
@@ -120,6 +150,9 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
             let task = Task {
                 do {
                     let initialDraft = await coordinator.pendingStudioDraft
+                    guard !AssistantServiceIsolation.deniesLiveServices else {
+                        throw AssistantServiceIsolation.AccessError.denied
+                    }
                     let tools: [any Tool] = [
                         AssistantHelpFoundationTool(authorizer: authorizer),
                         AssistantContextFoundationTool(
@@ -289,13 +322,16 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
     var authorizer = AssistantToolAuthorizer.model
 
     func availability() async -> AssistantModelAvailability {
-        .unsupportedOS
+        AssistantServiceIsolation.deniesLiveServices ? .deterministic : .unsupportedOS
     }
 
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { $0.finish(throwing: AssistantModelError.unsupportedOS) }
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            return AsyncThrowingStream { $0.finish(throwing: AssistantServiceIsolation.AccessError.denied) }
+        }
+        return AsyncThrowingStream { $0.finish(throwing: AssistantModelError.unsupportedOS) }
     }
 }
 #endif
