@@ -3,7 +3,7 @@ import UIKit
 
 @MainActor
 final class AssistantKeyboardUITests: XCTestCase {
-    private lazy var app = XCUIApplication()
+    private lazy var app = makeIsolatedUITestApplication()
     private lazy var springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
 
     func testCompactPrimaryNavigationIsReachableWhileKeyboardIsVisible() throws {

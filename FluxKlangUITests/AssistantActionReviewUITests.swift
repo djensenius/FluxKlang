@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class AssistantActionReviewUITests: XCTestCase {
-    private lazy var app = XCUIApplication()
+    private lazy var app = makeIsolatedUITestApplication()
 
     func testCandidateSelectionRefreshesReviewAndDisclosesSuggestedAmount() {
         launchReview("candidate")
