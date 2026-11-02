@@ -11,6 +11,7 @@ final class ProductionAccessAudit: Sendable {
         case wingPeerResolution
         case credentialStore
         case assistantHTTP
+        case assistantSpeech
     }
 
     enum Event: Int, CaseIterable, Sendable {

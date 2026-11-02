@@ -56,8 +56,7 @@ final class AssistantChatController {
         generator: (any AssistantGenerating)? = nil,
         actionInterpreter: (any AssistantActionInterpreting)? = nil,
         makeSpeech: @escaping @MainActor () -> (String) -> Void = {
-            let synthesizer = AVSpeechSynthesizer()
-            return { synthesizer.speak(AVSpeechUtterance(string: $0)) }
+            AssistantChatController.makeProductionSpeech()
         }
     ) {
         self.coordinator = coordinator
@@ -403,6 +402,31 @@ final class AssistantChatController {
 }
 
 extension AssistantChatController {
+    static func makeProductionSpeech(mirroring mirror: ProductionAccessAudit? = nil) -> (String) -> Void {
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantSpeech, mirroring: mirror)
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantSpeech, mirroring: mirror)
+            return { _ in
+                ProductionAccessAudit.shared.record(.attempted, for: .assistantSpeech, mirroring: mirror)
+                ProductionAccessAudit.shared.record(.denied, for: .assistantSpeech, mirroring: mirror)
+            }
+        }
+        ProductionAccessAudit.shared.record(.factoryEvaluated, for: .assistantSpeech, mirroring: mirror)
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantSpeech, mirroring: mirror)
+        let synthesizer = AVSpeechSynthesizer()
+        return { text in
+            ProductionAccessAudit.shared.record(.attempted, for: .assistantSpeech, mirroring: mirror)
+            guard !AssistantServiceIsolation.deniesLiveServices else {
+                ProductionAccessAudit.shared.record(.denied, for: .assistantSpeech, mirroring: mirror)
+                return
+            }
+            ProductionAccessAudit.shared.record(.apiEntered, for: .assistantSpeech, mirroring: mirror)
+            let utterance = AVSpeechUtterance(string: text)
+            ProductionAccessAudit.shared.record(.apiEntered, for: .assistantSpeech, mirroring: mirror)
+            synthesizer.speak(utterance)
+        }
+    }
+
     static func defaultActionInterpreter(
         forcesFallback: Bool, live: () -> any AssistantActionInterpreting = { FoundationModelActionInterpreter() }
     ) -> any AssistantActionInterpreting {
