@@ -58,6 +58,67 @@ func ledgerBinding(
 }
 
 struct EnginePlanLedgerTests {
+    @Test(arguments: [false, true])
+    func completeRetiringBindsAtomicallyFromEitherPendingState(reclaim: Bool) throws {
+        let ledger = try EnginePlanLedger(capacity: 1)
+        let attempt = try #require(ledgerAttempts().first)
+        let instance = ledger.currentInstance
+        let name = PreparedActivationID(validated: "prep.refused")
+        try ledger.dispatch(instance: instance, attempt: attempt)
+        if reclaim { try ledger.reclaim(instance: instance, attempt: attempt) }
+        let foreign = try EnginePlanLedger(capacity: 1)
+        ledgerRefusal(.unknownInstance, in: ledger) {
+            try ledger.completeRetiring(instance: foreign.currentInstance, attempt: attempt, prepared: name)
+        }
+        let unknown = try #require(ledgerAttempts().first)
+        ledgerRefusal(.unknownAttempt, in: ledger) {
+            try ledger.completeRetiring(instance: instance, attempt: unknown, prepared: name)
+        }
+        let binding = try ledger.completeRetiring(instance: instance, attempt: attempt, prepared: name)
+        #expect(binding.instance == instance && binding.attempt == attempt && binding.prepared == name)
+        #expect(ledger.pendingRetirements() == [binding] && ledger.count == 1)
+        ledgerRefusal(.notPending, in: ledger) {
+            try ledger.completeRetiring(instance: instance, attempt: attempt, prepared: name)
+        }
+    }
+
+    @Test func replacementValidatesBothRolesBeforeEitherMutation() throws {
+        let ledger = try EnginePlanLedger(capacity: 4)
+        let attempts = try ledgerAttempts(4)
+        let previous = try ledgerBinding(ledger, attempt: attempts[0])
+        let next = try ledgerBinding(ledger, attempt: attempts[1])
+        ledgerRefusal(.notCommitted, in: ledger) { try ledger.commitReplacing(next, previous: previous) }
+        ledgerRefusal(.sameBinding, in: ledger) { try ledger.commitReplacing(next, previous: next) }
+        let foreign = try EnginePlanLedger(capacity: 1)
+        let other = try ledgerBinding(foreign, attempt: attempts[2])
+        ledgerRefusal(.unknownInstance, in: ledger) { try ledger.commitReplacing(next, previous: other) }
+        try ledger.commitReplacing(previous, previous: nil)
+        #expect(ledger.attestCommitted(previous)?.binding == previous && ledger.pendingRetirements().isEmpty)
+        // Even aliasing raw names is safe: both roles are checked by full binding.
+        #expect(next.prepared == previous.prepared && next != previous)
+        try ledger.commitReplacing(next, previous: previous)
+        #expect(ledger.attestCommitted(next)?.binding == next && ledger.attestCommitted(previous) == nil)
+        #expect(ledger.pendingRetirements() == [previous])
+        let held = try ledgerBinding(ledger, attempt: attempts[3])
+        ledgerRefusal(.notCommitted, in: ledger) { try ledger.commitReplacing(held, previous: previous) }
+        ledgerRefusal(.notHeld, in: ledger) { try ledger.commitReplacing(next, previous: held) }
+        #expect(ledger.snapshot().records[0].entries.last?.state == .bound(held, .held))
+    }
+
+    @Test func atomicReplacementRejectsExactBindingMismatch() throws {
+        let ledger = try EnginePlanLedger(capacity: 2)
+        let attempts = try ledgerAttempts(2)
+        let stale = try ledgerBinding(ledger, attempt: attempts[0])
+        try ledger.release(stale)
+        try ledger.acknowledgeRetired(stale)
+        // Defensive out-of-contract reuse probe, NOT a retired-attempt replay guarantee.
+        let actual = try ledgerBinding(ledger, attempt: attempts[0], prepared: .init(validated: "prep.actual"))
+        try ledger.committed(actual, outcome: .succeeded)
+        let next = try ledgerBinding(ledger, attempt: attempts[1])
+        ledgerRefusal(.bindingMismatch, in: ledger) { try ledger.commitReplacing(next, previous: stale) }
+        ledgerRefusal(.bindingMismatch, in: ledger) { try ledger.commitReplacing(stale, previous: next) }
+    }
+
     @Test(arguments: [0, -1, Int.min])
     func invalidCapacity(capacity: Int) {
         #expect(throws: EnginePlanLedgerRefusal.invalidCapacity) { try EnginePlanLedger(capacity: capacity) }
