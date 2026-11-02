@@ -1,7 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Root = RealtimeHandoffTests
 
@@ -140,7 +144,7 @@ extension RealtimeHandoffTests {
             #expect(statuses == [.ok, .ok, .refused(.full)])
             #expect(ledger.deinited.load(ordering: .acquiring) == 0)
             #expect(weakRefused != nil)
-            let record = try #require(faults.acknowledge(Self.scope))
+            let record = try #require(faults.observe(Self.scope).flatMap(faults.acknowledge))
             #expect(record.kind == .retireBacklog)
             #expect(record.count == 1)
             #expect(record.firstFrame == 41)
@@ -299,10 +303,10 @@ extension RealtimeHandoffTests {
             #expect(Self.current(exchange, ledger) == 1)
             #expect(weakOld != nil)
             #expect(queue.refusedCount == 1)
-            #expect(faults.acknowledge(RetireQueueing.scope)?.kind == .retireBacklog)
+            #expect(faults.observe(RetireQueueing.scope).flatMap(faults.acknowledge)?.kind == .retireBacklog)
             #expect(ledger.asRender { exchange.beginCycle(frame: 8) } == .refused(.full))  // nothing adopted
             #expect(Self.current(exchange, ledger) == 1)
-            #expect(faults.acknowledge(RetireQueueing.scope)?.firstFrame == 8)
+            #expect(faults.observe(RetireQueueing.scope).flatMap(faults.acknowledge)?.firstFrame == 8)
             #expect(exchange.reclaim() == 1)  // the intruder
             #expect(weakOld != nil)
             #expect(ledger.asRender { exchange.beginCycle(frame: 9) } == .empty)
@@ -388,7 +392,7 @@ extension RealtimeHandoffTests {
                 #expect(queue.reservedCount == 1)
             }
             #expect(queue.reservedCount == 1)
-            #expect(faults.acknowledge(RetireQueueing.scope)?.kind == .retireBacklog)
+            #expect(faults.observe(RetireQueueing.scope).flatMap(faults.acknowledge)?.kind == .retireBacklog)
             #expect(queue.reclaim() == 2)
             #expect(ledger.live == 0)
             #expect(ledger.allOnControl)

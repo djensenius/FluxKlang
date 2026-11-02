@@ -22,6 +22,12 @@ import Synchronization
 /// - in `reclaim`, after render retired it;
 /// - or in `deinit` (teardown with render detached, D10) if it is still pending, current or stalled.
 ///
+/// These are this exchange's references. Where a payload is destroyed follows `DeferredReleaseQueue`'s
+/// "release versus destruction" notes. Our last release destroys synchronously on control for nonisolated
+/// destruction; an explicitly `isolated deinit` may run inline or later on its executor. An external alias
+/// is released by its holder. Keeping render free of destruction also requires that render hold no strong
+/// alias of its own.
+///
 /// Render never releases. `withCurrent` lends `current` without retaining it (`_withUnsafeGuaranteedRef`).
 /// That is safe because `current` keeps its +1 until render itself retires it in a later `beginCycle`, and
 /// control releases it only after taking it from the retire queue. A `withCurrent` body must therefore never
@@ -65,10 +71,11 @@ import Synchronization
 /// reservedCount <= capacity`, where a pending payload is reserved unless it will be adopted over a nil
 /// `current`. This assumes every direct `retire` was reserved first (see `DeferredReleaseQueue`).
 ///
-/// Progress. Render operations are wait-free and bounded: `beginCycle` makes at most two retires and one
-/// exchange, and `withCurrent` adds only `body`. Neither loops, allocates or releases. Control operations are
-/// wait-free and bounded apart from payload `deinit` time, which is outside render's guarantee: `publish` may
-/// run one `deinit` (a superseded or refused payload), and `reclaim` up to `retire.capacity`.
+/// Progress (source level only). `beginCycle` makes at most two retires and one exchange; `withCurrent` adds `body`.
+/// Retire refusal includes `FaultLatch`'s bounded scope lookup. Atomic lowering and target progress are unqualified.
+/// ARC/allocation/lock checks cover only inspected configurations, not arbitrary caller bodies or runtime callees.
+/// Control `publish` may release one payload; a refusal's release is not last because the caller still owns `next`.
+/// Control `reclaim` releases up to `retire.capacity` payloads; their `deinit` time is outside render's source bound.
 ///
 /// `@unchecked Sendable`: one control thread calls `publish`, `reclaim` and teardown; one render thread calls
 /// `beginCycle` and `withCurrent`. Exchanges sharing a retire queue must all use that same render/control thread
@@ -76,6 +83,9 @@ import Synchronization
 final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable {
     let retire: DeferredReleaseQueue
 
+    /// Unretained alias of `retire` for render. The strong `retire` owns the queue for this exchange's whole
+    /// life, so the alias is valid whenever `self` is. Borrowing through it avoids an `-Onone` retain/release.
+    private let retireRef: Unmanaged<DeferredReleaseQueue>
     private let pending = Atomic<UInt>(0)
     /// Render-owned.
     private var current: UInt
@@ -89,6 +99,7 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
     /// Control-side preparation. Retains `initial`, if any, as render's first `current`.
     init(initial: Payload?, retire: DeferredReleaseQueue) {
         self.retire = retire
+        retireRef = Unmanaged.passUnretained(retire)
         current = initial.map { Self.bits(Unmanaged.passRetained($0)) } ?? 0
         adoptionRetires = initial != nil
     }
@@ -151,16 +162,17 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
 
     /// Render. Lends the current payload to `body` without retaining it. `body` must not let it escape the call,
     /// and must not call `beginCycle` on this exchange (see there). `body` is handed straight to
-    /// `_withUnsafeGuaranteedRef`, with no wrapping closure, so even an `-Onone` build adds no retain/release
-    /// here. (`(Payload?) -> R` converts to `(Payload) -> R` without a thunk: a class payload and its Optional
-    /// share one representation.)
+    /// `_withUnsafeGuaranteedRef`, without a wrapping closure. `withCurrent` itself showed no payload retain/release
+    /// in the inspected configurations, including `-Onone`; `body` may add its own (the probe's `-Onone` body did).
+    /// `(Payload?) -> R` converts to `(Payload) -> R` without a thunk (a class and its Optional share a layout).
     func withCurrent<R>(_ body: (Payload?) -> R) -> R {
         guard let raw = UnsafeRawPointer(bitPattern: current) else { return body(nil) }
         return Unmanaged<Payload>.fromOpaque(raw)._withUnsafeGuaranteedRef(body)
     }
 
-    /// Control. Releases every payload render has retired to the (possibly shared) queue; the only place a
-    /// render-seen payload's `deinit` runs before teardown. Returns how many were released.
+    /// Control. Releases every payload render has retired to the (possibly shared) queue. Before teardown,
+    /// these are this exchange's only releases of render-seen payloads; whether a `deinit` runs here follows
+    /// the type's ownership notes. Returns how many were released.
     @discardableResult
     func reclaim() -> Int {
         retire.reclaim()
@@ -168,7 +180,8 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
 
     private func retireBits(_ bits: UInt, frame: Int64) -> KernelStatus {
         guard let raw = UnsafeRawPointer(bitPattern: bits) else { return .ok }
-        return retire.retire(Unmanaged<AnyObject>.fromOpaque(raw), frame: frame)
+        let object = Unmanaged<AnyObject>.fromOpaque(raw)
+        return retireRef._withUnsafeGuaranteedRef { $0.retire(object, frame: frame) }
     }
 
     private static func bits(_ reference: Unmanaged<Payload>) -> UInt {
