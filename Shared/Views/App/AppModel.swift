@@ -483,17 +483,3 @@ final class AppModel {
         isConnected || lastHost != nil
     }
 }
-
-extension AppModel {
-    private static let sharedConstruction = ProductionAccessAudit.shared.captureConstruction { AppModel() }
-
-    /// The process-wide model used by the app scenes and by App Intents, so a
-    /// Shortcut/Siri action drives the same controller and stores as the UI.
-    static var shared: AppModel { sharedConstruction.value }
-    static var sharedConstructionCheckpoint: ProductionAccessAudit.Checkpoint { sharedConstruction.checkpoint }
-
-    /// An app model whose controller is a populated demo, for SwiftUI previews.
-    static func preview() -> AppModel {
-        AppModel(wing: .preview())
-    }
-}
