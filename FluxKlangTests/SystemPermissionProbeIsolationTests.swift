@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 @MainActor
 struct SystemPermissionProbeIsolationTests {
@@ -10,7 +14,7 @@ struct SystemPermissionProbeIsolationTests {
 
     @Test(arguments: Access.allCases)
     func isolatedAccessIsUnknownWithoutQueryingOrRequesting(_ access: Access) async throws {
-        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
         let probe = SystemPermissionProbe(mirroring: audit)
         let before = audit.snapshot()
@@ -44,7 +48,7 @@ struct SystemPermissionProbeIsolationTests {
 
     @Test(arguments: [PermissionCapability.multicast, .bluetooth])
     func pureCapabilitiesPreserveTheirStatusWithoutProductionAccess(_ capability: PermissionCapability) async throws {
-        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
         let probe = SystemPermissionProbe(mirroring: audit)
         let expected: PermissionStatus = capability == .bluetooth

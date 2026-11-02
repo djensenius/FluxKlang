@@ -168,6 +168,8 @@ The test and build-for-testing recipes select `FluxKlangIsolatedTests` or
 `FluxKlangMacIsolatedTests`. Their Test actions explicitly set
 `FLUXKLANG_ISOLATED_TESTING=1`, `FLUXKLANG_RUN_APPLE_MODEL_TESTS=0` and
 `FLUXKLANG_QUALIFY_APPLE_ROUTING=0`; they retain all existing test targets.
+Once execution is authorized, use these isolated schemes for ordinary Xcode Test
+actions too: startup-boundary fixtures require all three literal values.
 The existing `FluxKlang` and `FluxKlangMac` schemes retain their opt-in behavior
 for separately authorized Apple-model qualification. These isolation settings
 apply to Test actions, not ordinary Run/Profile actions.

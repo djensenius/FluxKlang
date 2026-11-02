@@ -71,12 +71,6 @@ enum AssistantBackendFixture {
 
 enum BackendTestError: Error { case timeout, send }
 
-actor AssistantBackendDraftStore: PendingStudioPatchPersisting {
-    var draft: StudioPatchDraft?
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) { self.draft = draft }
-}
-
 /// Replies and writes exist only in this recording actor. Never opens a socket.
 actor AssistantRecordingWingTransport: WingTransporting {
     nonisolated let incoming: AsyncStream<WingIncoming>
