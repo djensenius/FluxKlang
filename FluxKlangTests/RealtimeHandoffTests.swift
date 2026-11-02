@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 /// Root suite for the #64 realtime kernel (`Shared/Audio/Kernel/**`). Each slice adds a
 /// `RealtimeHandoffTests+<Area>.swift` extension; nested suites must not shadow production type names.

@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private func ramps(_ count: Int) -> RampSlots? {
     try? RampSlots(parameterCount: count)
