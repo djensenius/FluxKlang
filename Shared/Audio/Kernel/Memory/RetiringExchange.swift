@@ -71,11 +71,11 @@ import Synchronization
 /// reservedCount <= capacity`, where a pending payload is reserved unless it will be adopted over a nil
 /// `current`. This assumes every direct `retire` was reserved first (see `DeferredReleaseQueue`).
 ///
-/// Progress. Render operations are wait-free and bounded: `beginCycle` makes at most two retires and one
-/// exchange, and `withCurrent` adds only `body`. Neither loops, allocates or releases. Control operations are
-/// wait-free and bounded apart from payload `deinit` time, which is outside render's guarantee: `publish` makes
-/// at most one release that may run a `deinit` (a superseded payload; a refused publish's release is never
-/// the last, because the caller still holds `next`), and `reclaim` makes up to `retire.capacity` releases.
+/// Progress (source level only). `beginCycle` makes at most two retires and one exchange; `withCurrent` adds `body`.
+/// Retire refusal includes `FaultLatch`'s bounded scope lookup. Atomic lowering and target progress are unqualified.
+/// ARC/allocation/lock checks cover only inspected configurations, not arbitrary caller bodies or runtime callees.
+/// Control `publish` may release one payload; a refusal's release is not last because the caller still owns `next`.
+/// Control `reclaim` releases up to `retire.capacity` payloads; their `deinit` time is outside render's source bound.
 ///
 /// `@unchecked Sendable`: one control thread calls `publish`, `reclaim` and teardown; one render thread calls
 /// `beginCycle` and `withCurrent`. Exchanges sharing a retire queue must all use that same render/control thread
@@ -162,9 +162,9 @@ final class RetiringExchange<Payload: AnyObject & Sendable>: @unchecked Sendable
 
     /// Render. Lends the current payload to `body` without retaining it. `body` must not let it escape the call,
     /// and must not call `beginCycle` on this exchange (see there). `body` is handed straight to
-    /// `_withUnsafeGuaranteedRef`, with no wrapping closure, so even an `-Onone` build adds no retain/release
-    /// here. (`(Payload?) -> R` converts to `(Payload) -> R` without a thunk: a class payload and its Optional
-    /// share one representation.)
+    /// `_withUnsafeGuaranteedRef`, without a wrapping closure. `withCurrent` itself showed no payload retain/release
+    /// in the inspected configurations, including `-Onone`; `body` may add its own (the probe's `-Onone` body did).
+    /// `(Payload?) -> R` converts to `(Payload) -> R` without a thunk (a class and its Optional share a layout).
     func withCurrent<R>(_ body: (Payload?) -> R) -> R {
         guard let raw = UnsafeRawPointer(bitPattern: current) else { return body(nil) }
         return Unmanaged<Payload>.fromOpaque(raw)._withUnsafeGuaranteedRef(body)

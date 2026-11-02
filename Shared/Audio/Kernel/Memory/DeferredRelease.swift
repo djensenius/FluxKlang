@@ -37,9 +37,9 @@ import Synchronization
 /// `reservedCount` is a plain control-owned `Int` in `0...capacity`. It never wraps, and `reclaim` and
 /// `cancelReservation` clamp it at 0. This matters only when unreserved retires have occurred.
 ///
-/// Progress. `retire` is wait-free and bounded on render. `reclaim` makes up to `capacity` releases on control,
-/// each of which may run a payload `deinit` (see above). Their duration is the payload's and lies outside
-/// render's bounded guarantee.
+/// Progress (source level only). `retire` makes one ring push and, on refusal, one bounded fault-scope lookup/raise.
+/// Atomic lowering/target progress is unqualified; ARC/allocation/lock checks cover only inspected configurations.
+/// Control `reclaim` releases up to `capacity` payloads; their `deinit` time is outside render's source-level bound.
 ///
 /// `@unchecked Sendable`: one render thread may call `retire`, and one control thread may call everything else.
 /// Every user of a shared queue (for example several `RetiringExchange`s) must use that same render/control
@@ -111,9 +111,9 @@ final class DeferredReleaseQueue: @unchecked Sendable {
     }
 
     /// Render. Hands `object` (+1) to control. If the queue is full, it raises `.retireBacklog`, returns
-    /// `.refused(.full)` and leaves the +1 with the caller. It never releases and never allocates. Control must
-    /// have `reserve()`d a slot for this retire (see the type's backpressure notes). It borrows the ring and the
-    /// fault latch through their unretained aliases, so it makes no retain/release even at `-Onone`.
+    /// `.refused(.full)` and leaves the +1 with the caller. It never releases; allocation checks are probe-scoped.
+    /// Control must have `reserve()`d a slot (see backpressure). Calls borrow the ring and fault latch through
+    /// unretained aliases; no retain/release was observed in the inspected configurations, including `-Onone`.
     func retire(_ object: Unmanaged<AnyObject>, frame: Int64) -> KernelStatus {
         let bits = UInt(bitPattern: object.toOpaque())
         let status = ringRef._withUnsafeGuaranteedRef { $0.tryPush(bits) }
