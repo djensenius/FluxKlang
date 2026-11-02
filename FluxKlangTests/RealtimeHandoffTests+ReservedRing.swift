@@ -1,7 +1,11 @@
 import Foundation
 import Synchronization
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Root = RealtimeHandoffTests
 private typealias RingError = ReservedCapacityRing<UInt64>.PreparationError
@@ -41,8 +45,9 @@ private func record(_ faults: FaultLatch) -> FaultRecord? {
     return found
 }
 
+/// Pops until empty, capped at `capacity + 1` so a `tryPop` that never reports empty fails assertions, not hangs.
 private func drain(_ ring: ReservedCapacityRing<UInt64>) -> [UInt64] {
-    Array(sequence(state: ring) { $0.tryPop() })
+    Array(sequence(state: ring) { $0.tryPop() }.prefix(ring.capacity + 1))
 }
 
 /// A small deterministic generator so model runs are reproducible.

@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Root = RealtimeHandoffTests
 private typealias FanIn = FanInHandoff<UInt64>
@@ -78,7 +82,8 @@ extension RealtimeHandoffTests {
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope)
                     == FaultRecord(scope: Root.fanInCriticalScope, kind: .criticalExhausted, count: 1, firstFrame: 9))
             // E5 acknowledges the critical scope on its own; the claim record stays latched.
-            #expect(faults.acknowledge(Root.fanInCriticalScope)?.kind == .criticalExhausted)
+            let critical = try #require(faults.observe(Root.fanInCriticalScope))
+            #expect(faults.acknowledge(critical)?.kind == .criticalExhausted)
             #expect(!faults.isLatched(Root.fanInCriticalScope) && faults.isLatched(Root.fanInSlotsScope))
             #expect(!faults.isLatched(Root.fanInNeighbourScope))
         }
@@ -93,7 +98,8 @@ extension RealtimeHandoffTests {
                     == FaultRecord(scope: Root.fanInCriticalScope, kind: .criticalExhausted, count: 1, firstFrame: 4))
             #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)
                     == FaultRecord(scope: Root.fanInSlotsScope, kind: .producerSlotsExhausted, count: 2, firstFrame: 6))
-            #expect(faults.acknowledge(Root.fanInSlotsScope)?.kind == .producerSlotsExhausted)
+            let slots = try #require(faults.observe(Root.fanInSlotsScope))
+            #expect(faults.acknowledge(slots)?.kind == .producerSlotsExhausted)
             #expect(faults.isLatched(Root.fanInCriticalScope) && !faults.isLatched(Root.fanInSlotsScope))
             #expect(!faults.isLatched(Root.fanInNeighbourScope))
         }
