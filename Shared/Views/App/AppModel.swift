@@ -174,6 +174,7 @@ final class AppModel {
         if allowsStartupReconnect(), let lastHost {
             await connect(host: lastHost)
         }
+        await awaitDomainScheduledSaveSnapshots()
     }
 
     /// Begins watching iCloud for changes pushed from the user's other devices,
@@ -201,6 +202,13 @@ final class AppModel {
         await routingSnapshots.reload()
         await spatial.reload()
         scheduleSiriEntityIndexing()
+        await awaitDomainScheduledSaveSnapshots()
+    }
+
+    /// Awaits the Siri indexing task captured when this method starts.
+    func awaitSiriEntityIndexingSnapshot() async {
+        let task = siriIndexingTask
+        await task?.value
     }
 
     private func scheduleSiriEntityIndexing() {
