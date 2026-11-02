@@ -237,3 +237,123 @@ struct CloudSyncTests {
         #expect(reloadedOwner.items == expected)
     }
 }
+
+extension CloudSyncTests {
+    @MainActor
+    @Test func presetMutationsPersistAndReloadThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("presets-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let keepID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B101"))
+        let discardID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B102"))
+        let thirdID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B103"))
+        let externalID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B104"))
+        let keep = Preset(id: keepID, name: "Keep",
+            settings: [WingSetting(address: WingAddress.fader(.channel, 1), value: .float(0.75)),
+                       WingSetting(address: WingAddress.mute(.channel, 2), value: .int(1))], wingScene: 4)
+        let discard = Preset(id: discardID, name: "Discard",
+            settings: [WingSetting(address: WingAddress.fader(.channel, 3), value: .float(0.25))], wingScene: 5)
+        let third = Preset(id: thirdID, name: "Third",
+            settings: [WingSetting(address: WingAddress.mute(.channel, 4), value: .int(0))], wingScene: 6)
+        let external = [Preset(id: externalID, name: "External",
+            settings: [WingSetting(address: WingAddress.fader(.channel, 5), value: .float(0.5))], wingScene: 7)]
+        await store.save([keep, discard], to: "presets.json")
+
+        let owner = PresetStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        #expect(owner.presets == [keep, discard])
+
+        owner.add(third)
+        var renamedKeep = keep
+        renamedKeep.name = "Renamed keep"
+        owner.update(renamedKeep)
+        owner.remove(at: IndexSet(integer: 2))
+        owner.remove(discard)
+        await owner.awaitScheduledSavesSnapshot()
+
+        let expected = [renamedKeep]
+        let fileURL = directory.appendingPathComponent("presets.json")
+        let saved = try JSONDecoder().decode([Preset].self, from: Data(contentsOf: fileURL))
+        #expect(saved == expected)
+        #expect(owner.presets == expected)
+
+        let freshStore = JSONFileStore(directory: directory, cloud: nil)
+        let reloadedOwner = PresetStore(store: freshStore)
+        await reloadedOwner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        let reloaded = try JSONDecoder().decode([Preset].self, from: Data(contentsOf: fileURL))
+        #expect(reloaded == expected)
+        #expect(reloadedOwner.presets == expected)
+
+        await freshStore.save(external, to: "presets.json")
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(owner.presets == expected)
+        await owner.reload()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(owner.presets == external)
+    }
+
+    @MainActor
+    @Test func routingSnapshotMutationsPersistAndReloadThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("routing-snapshots-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let keepID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B201"))
+        let discardID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B202"))
+        let thirdID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B203"))
+        let externalID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B204"))
+        let keep = Preset(id: keepID, name: "Keep routing",
+            settings: [WingSetting(address: WingAddress.channelSourceGroup(1), value: .string("LCL")),
+                       WingSetting(address: WingAddress.channelSourceIndex(1), value: .int(1))], wingScene: 8)
+        let discard = Preset(id: discardID, name: "Discard routing",
+            settings: [WingSetting(address: WingAddress.channelSourceIndex(2), value: .int(2))], wingScene: 9)
+        let third = Preset(id: thirdID, name: "Third routing",
+            settings: [WingSetting(address: WingAddress.channelSourceIndex(3), value: .int(3))], wingScene: 10)
+        let external = [Preset(id: externalID, name: "External routing",
+            settings: [WingSetting(address: WingAddress.channelSourceIndex(4), value: .int(4))], wingScene: 11)]
+        await store.save([keep, discard], to: "routing_snapshots.json")
+
+        let owner = RoutingSnapshotStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        #expect(owner.snapshots == [keep, discard])
+
+        owner.add(third)
+        var renamedKeep = keep
+        renamedKeep.name = "Renamed keep routing"
+        owner.update(renamedKeep)
+        owner.remove(at: IndexSet(integer: 2))
+        owner.remove(discard)
+        await owner.awaitScheduledSavesSnapshot()
+
+        let expected = [renamedKeep]
+        let fileURL = directory.appendingPathComponent("routing_snapshots.json")
+        let saved = try JSONDecoder().decode([Preset].self, from: Data(contentsOf: fileURL))
+        #expect(saved == expected)
+        #expect(owner.snapshots == expected)
+
+        let freshStore = JSONFileStore(directory: directory, cloud: nil)
+        let reloadedOwner = RoutingSnapshotStore(store: freshStore)
+        await reloadedOwner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        let reloaded = try JSONDecoder().decode([Preset].self, from: Data(contentsOf: fileURL))
+        #expect(reloaded == expected)
+        #expect(reloadedOwner.snapshots == expected)
+
+        await freshStore.save(external, to: "routing_snapshots.json")
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(owner.snapshots == expected)
+        await owner.reload()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(owner.snapshots == external)
+    }
+}
