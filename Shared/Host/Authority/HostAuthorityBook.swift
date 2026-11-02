@@ -23,7 +23,8 @@ struct HostAuthorityBook {
     var outstanding: [ProjectID: PrepareAttemptID] = [:]
     var abandoned: [AbandonedPrepare] = []
     var queue = EngineCommandQueue()
-    /// Commits delivered to the engine and not yet reported (H5c-2 clears them on report).
+    /// Commits delivered to the engine and not yet reported; `commitReported` and
+    /// `abandonCommit` clear them.
     var inFlight: [ProjectID: CommitAttemptID] = [:]
     /// The window recorded by `authorize`, re-checked by `commit`; cleared when the
     /// authorization is consumed by `commit` or withdrawn by `cancel`.
