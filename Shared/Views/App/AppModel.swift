@@ -64,7 +64,7 @@ final class AppModel {
     @ObservationIgnored lazy var assistantActions = makeAssistantActionController()
 
     /// Network scanner for finding WING consoles.
-    let discovery = WingDiscovery()
+    let discovery: WingDiscovery
 
     /// Selectable app-icon manager (re-applies the saved icon on launch).
     let appIcon = AppIconManager()
@@ -113,6 +113,7 @@ final class AppModel {
     ) {
         self.wing = wing ?? WingController(hardware: hardware)
         self.hardware = hardware
+        discovery = WingDiscovery(hardware: hardware)
         launchControlXL = LaunchControlXLController(
             fileStore: launchControlXLStore, makeMIDIInput: hardware.makeLaunchControlXLInput)
         self.assistant = assistant
