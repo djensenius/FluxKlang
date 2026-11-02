@@ -65,6 +65,39 @@ enum AudioRoutingTestFixtures {
         )
     }
 
+    static func muteNode(_ muted: Bool, channels: Int = 2) -> GraphNode {
+        GraphNode(id: NodeID(validated: "node.mute"), kind: .audioMute, label: "Mute", ports: [
+            GraphPort(id: PortID(validated: "in"), direction: .input, signal: .audio, channels: channels),
+            GraphPort(id: PortID(validated: "out"), direction: .output, signal: .audio, channels: channels)
+        ], muted: muted)
+    }
+
+    static func muteDocuments(
+        _ muted: Bool, channels: Int = 2, inputChannels: Int? = nil, outputChannels: Int? = nil,
+        inputMap: [[Int]]? = nil, outputMap: [[Int]]? = nil
+    ) -> Documents {
+        var documents = documents(
+            inputChannels: inputChannels ?? channels, outputChannels: outputChannels ?? channels
+        )
+        let mute = muteNode(muted, channels: channels)
+        let direct = documents.graph.edges[0]
+        documents.graph.nodes.append(mute)
+        documents.graph.requiredFeatures = [GraphDocument.constantMuteFeature]
+        documents.graph.edges = [
+            GraphEdge(
+                id: EdgeID(validated: "edge.intoMute"), from: direct.from,
+                to: PortAddress(node: mute.id, port: mute.ports[0].id),
+                conversion: inputMap.map { EdgeConversion(map: $0) }
+            ),
+            GraphEdge(
+                id: EdgeID(validated: "edge.fromMute"),
+                from: PortAddress(node: mute.id, port: mute.ports[1].id), to: direct.to,
+                conversion: outputMap.map { EdgeConversion(map: $0) }
+            )
+        ]
+        return documents
+    }
+
     static func appendEndpoint(
         to documents: inout Documents, input: Bool, suffix: String, channels: Int = 2
     ) throws {

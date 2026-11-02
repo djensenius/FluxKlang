@@ -19,6 +19,7 @@ struct AudioRoutingEndpoint: Equatable {
 
 /// Internal planar Float32 ABI. Each channel has a fixed `maxFrames` stride,
 /// including for short and zero-frame calls. Peaks are per output channel.
+/// Only external role endpoints appear here; mute slabs remain private scratch.
 struct AudioRoutingLayout: Equatable {
     let graph: GraphID
     let revision: ContractRevision

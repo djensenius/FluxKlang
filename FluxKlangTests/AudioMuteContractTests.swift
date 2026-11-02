@@ -372,13 +372,20 @@ extension AudioMuteContractTests {
     }
 
     @Test(arguments: [false, true])
-    func validDisconnectedMuteRemainsUnsupportedByRoutingCompiler(muted: Bool) throws {
+    func validDisconnectedSingleMuteIsAcceptedButPortableMultipleMutesAreNot(muted: Bool) throws {
         var documents = AudioRoutingTestFixtures.documents()
         documents.graph.nodes.append(Self.mute(muted))
         documents.graph.requiredFeatures = [Self.token]
         try documents.graph.validate(strict: true)
         try documents.project.validate(graphs: [documents.graph], strict: true)
         documents.graph = try GraphDocument.decode(from: documents.graph.encoded())
+        let plan = try AudioRoutingTestFixtures.compile(documents)
+        #expect(plan.mute?.muted == muted)
+        var second = Self.mute(!muted)
+        second.id = NodeID(validated: "node.secondMute")
+        documents.graph.nodes.append(second)
+        try documents.graph.validate(strict: true)
+        try documents.project.validate(graphs: [documents.graph], strict: true)
         #expect(throws: AudioRoutingPreparationError.unsupported) {
             try AudioRoutingTestFixtures.compile(documents)
         }
