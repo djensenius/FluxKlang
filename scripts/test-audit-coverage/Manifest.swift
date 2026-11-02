@@ -168,7 +168,9 @@ struct AuditManifest: Decodable {
         try require(specification.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
                     "specification SHA256 must be lowercase hex")
         try SafeInputs.validatePath(pbxPath)
-        try require(pbxPath.hasSuffix(".xcodeproj/project.pbxproj"), "PBX path must name project.pbxproj")
+        try require(pbxPath.split(separator: "/").count == 2 &&
+                    pbxPath.hasSuffix(".xcodeproj/project.pbxproj"),
+                    "PBX path must name one repository-root .xcodeproj/project.pbxproj")
         try require(matrix.count == 4 && Set(matrix).count == 4, "matrix requires four unique rows")
         for platform in ["iOS", "macOS"] {
             let rows = matrix.filter { $0.platform == platform }

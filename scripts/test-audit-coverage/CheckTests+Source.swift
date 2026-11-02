@@ -25,6 +25,8 @@ extension FixtureTests {
         annotationCases()
         syntaxCases()
         u1Cases()
+        legacyDiscoveryCases()
+        observationCases()
     }
 
     func conditionCases() {
@@ -344,6 +346,119 @@ extension FixtureTests {
                             ["ProductionAccessScopeTests", "ProductionAccessScopeSuiteTests"], "wrong U1 roots")
                 try require(report.ownership.allSatisfy { !$0.annotationSatisfied }, "U1 file exemption")
                 try require(report.ownership.reduce(0) { $0 + $1.tests.count } == 9, "U1 test obligations missing")
+            }
+        }
+    }
+
+    func rejectLegacy(_ name: String, first: String, second: String = "") throws {
+        let fixture = try world(name, annotated: true)
+        try fixture.register(fixture.run().derivedRegistrations)
+        try require(fixture.run().enforcementSatisfied, "canonical registered control failed")
+        try fixture.write("Sources/A.swift",
+                          "@Suite(.productionAccessAudit) struct Example { @Test func body() {} }\n" + first)
+        try fixture.write("Mac/B.swift", second)
+        for mode in ["enforce", "inventory"] {
+            let report = fixture.run(mode: mode)
+            try report.encoded().write(to: fixture.root.appendingPathComponent(mode + "-result.json"))
+            try require(report.exitCode == 2 && !report.analysisComplete && !report.enforcementSatisfied &&
+                        report.diagnostics.contains { $0.category == "model" && $0.message.contains("XCTest") },
+                        "unsupported XCTest discovery escaped beside fully registered canonical suites")
+        }
+    }
+
+    func legacyDiscoveryCases() {
+        test("unannotated direct qualified and empty XCTest subclasses fail structurally") {
+            for (number, source) in [
+                "import XCTest\nclass LegacyTests: XCTestCase { func testAccess() {} }",
+                "class LegacyTests: XCTest.XCTestCase { func testAccess() async throws {} }",
+                "class LegacyTests: XCTestCase {}",
+                "class `LegacyTests`: XCTestCase { func `testAccess`() {} }"
+            ].enumerated() { try rejectLegacy("legacy-direct-\(number)", first: source) }
+        }
+        test("cross-file transitive XCTest classes aliases and nested aliases fail structurally") {
+            try rejectLegacy("legacy-transitive", first: "class Base: XCTestCase {}\nclass Middle: Base {}",
+                             second: "class LegacyTests: Middle { func testAccess() {} }")
+            try rejectLegacy("legacy-alias", first: "typealias Base = XCTest.XCTestCase\ntypealias Next = Base",
+                             second: "class LegacyTests: Next { func testAccess() {} }")
+            try rejectLegacy("legacy-nested-alias", first: "enum Names { typealias Base = XCTestCase }",
+                             second: "class LegacyTests: Names.Base { func testAccess() {} }")
+        }
+        test("test-shaped inherited classes fail closed for unresolved ambiguous and cyclic bases") {
+            try rejectLegacy("legacy-unresolved", first: "class LegacyTests: ExternalBase { func testAccess() {} }")
+            try rejectLegacy("legacy-cycle", first: "typealias Base = Next\ntypealias Next = Base",
+                             second: "class LegacyTests: Base { func testAccess() {} }")
+            try rejectLegacy("legacy-ambiguous", first: "class Base {}\nclass Base {}",
+                             second: "class LegacyTests: Base { func testAccess() {} }")
+            try rejectLegacy("legacy-private-alias", first: "private typealias Base = ExternalBase",
+                             second: "class LegacyTests: Base { func testAccess() {} }")
+        }
+        test("test-shaped extension members cannot bypass inherited class checks") {
+            try rejectLegacy("legacy-extension", first: "class LegacyTests: ExternalBase {}",
+                             second: "extension LegacyTests { func testAccess() {} }")
+            try rejectLegacy("legacy-external-extension", first: "extension XCTestCase { func testAccess() {} }")
+        }
+        test("plain inherited and generic helpers plus resolved non-XCTest test-shaped helpers remain valid") {
+            let report = try sourceReport([("A.swift", """
+            class PlainBase {}
+            typealias HelperBase = PlainBase
+            class Helper: HelperBase { func testUtility() {} }
+            class ExternalHelper: UnknownBase { func use() {} }
+            class GenericHelper<T>: UnknownBase { func testValue(_ value: T) {} }
+            class FactoryHelper: UnknownBase { static func testFactory() {} }
+            class ValueHelper: UnknownBase { func testEnabled() -> Bool { false } }
+            struct Plain { func testUtility() {} }
+            extension Plain { func testOther() {} }
+            @Suite(.productionAccessAudit) struct Root { @Test func body() {} }
+            """)])
+            try require(report.exitCode == 0 && report.ownership.count == 1, "plain helpers rejected")
+        }
+        test("legacy inheritance follows consistent conditional variants and reversed declaration order") {
+            let sources = [("A.swift", """
+            #if canImport(FluxKlangMac)
+            typealias Base = XCTestCase
+            #else
+            class Base {}
+            #endif
+            """), ("B.swift", "class Legacy: Base { func testAccess() {} }")]
+            try require(try sourceReport(sources).exitCode == 0, "ordinary variant rejected")
+            for ordered in [sources, Array(sources.reversed())] {
+                try rejects({ _ = try sourceReport(ordered, macImport: true) }, containing: "XCTest")
+            }
+        }
+    }
+
+    func observationCases() {
+        test("standard Testing source-location expression remains bounded and does not create obligations") {
+            let report = try sourceReport([("A.swift", """
+            import Testing
+            func expectRefusal(sourceLocation: SourceLocation = #_sourceLocation) {}
+            @Suite(.productionAccessAudit) struct Root { @Test func body() { expectRefusal() } }
+            """)])
+            try require(report.exitCode == 0 && report.ownership.count == 1, "standard source-location rejected")
+            for source in ["let value = #_sourceLocation(injected: true)", "let value = #_sourceLocationAlias"] {
+                try rejects { _ = try sourceReport([("A.swift", source)]) }
+            }
+        }
+        test("actual Observation helpers preserve imports and remain ordinary helpers") {
+            let names = ["AssistantMixerExecutionTests.swift", "AssistantActionPlanningTests.swift"]
+            let sources = try names.map {
+                ("FluxKlangTests/" + $0, try String(contentsOf: u1Root.appendingPathComponent($0), encoding: .utf8))
+            }
+            let report = try sourceReport(sources)
+            try require(report.exitCode == 1 && report.analysisComplete && report.ownership.count == 2,
+                        "standard Observable helpers changed source obligations")
+        }
+        test("standard qualified Observable is bounded; conflicting or opaque macros still fail closed") {
+            let valid = try sourceReport([("A.swift", """
+            import Observation
+            @Observation.Observable final class Helper { var count = 0 }
+            @Suite(.productionAccessAudit) struct Root { @Test func body() {} }
+            """)])
+            try require(valid.exitCode == 0 && valid.ownership.count == 1, "qualified Observable failed")
+            for source in ["@Other.Observable class Helper {}", "@ObservableWrapper class Helper {}",
+                           "@Observable(injected: true) class Helper {}", "@Observable struct Wrong {}",
+                           "macro Observable() = #externalMacro(module: \"Other\", type: \"Opaque\")"] {
+                try rejects { _ = try sourceReport([("A.swift", source)]) }
             }
         }
     }

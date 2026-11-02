@@ -114,6 +114,7 @@ struct SourceOwnership {
     }
 
     func analyze() throws -> (rows: [InventoryRow], diagnostics: [AuditDiagnostic]) {
+        try XCTestDiscoveryGuard(inventory).validate()
         var rootTests: [Int: [SourceSite]] = [:]
         var freeTests: [FunctionRecord] = []
         var annotations: [Int: [String]] = [:]
@@ -217,5 +218,88 @@ struct SourceOwnership {
 
     private func diagnostic(_ category: String, _ message: String, site: SourceSite) -> AuditDiagnostic {
         AuditDiagnostic(category: category, message: message, registration: nil, site: site)
+    }
+}
+
+// This is a rejection guard, not XCTest discovery or general Swift semantic
+// resolution. Unknown/ambiguous ancestry is never evidence that a test-shaped
+// inherited class is a helper. Plain helpers without discovery-shaped members
+// remain valid unless their supported ancestry actually reaches XCTestCase.
+struct XCTestDiscoveryGuard {
+    enum Lineage { case ordinary, xctest, unknown }
+    struct Node {
+        let site: SourceSite
+        let qualified: String?
+        let restricted: Bool
+        let parent: OwnerContext?
+        let bases: [String?]
+    }
+
+    let inventory: SourceInventory
+    let nodes: [Node]
+
+    init(_ inventory: SourceInventory) {
+        self.inventory = inventory
+        nodes = inventory.nominals.map {
+            Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
+                 parent: $0.parent, bases: $0.isClass ? $0.bases : [])
+        } + inventory.aliases.map {
+            Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
+                 parent: $0.parent, bases: [$0.target])
+        }
+    }
+
+    func validate() throws {
+        var shaped = inventory.legacyContexts
+        for (number, extended) in inventory.extensions.enumerated() where shaped.contains(.extended(number)) {
+            let choices = lookup(extended.qualified, path: extended.site.path, scope: "")
+            try require(choices.count == 1, "unsupported XCTest-shaped extension ownership: \(extended.site)")
+            guard let owner = choices.first else { throw AuditFailure("unresolved XCTest-shaped extension") }
+            try require(lineage(owner, visiting: []) == .ordinary,
+                        "unsupported XCTest-shaped extension ancestry: \(extended.site)")
+            if owner < inventory.nominals.count { shaped.insert(.nominal(owner)) }
+        }
+        for (number, nominal) in inventory.nominals.enumerated() where nominal.isClass {
+            let ancestry = lineage(number, visiting: [])
+            try require(ancestry != .xctest, "unsupported XCTest discovery-bearing class: \(nominal.site)")
+            if !nominal.bases.isEmpty && shaped.contains(.nominal(number)) {
+                try require(ancestry == .ordinary,
+                            "unresolved/ambiguous XCTest-shaped class ancestry: \(nominal.site)")
+            }
+        }
+    }
+
+    private func lookup(_ name: String?, path: String, scope: String) -> [Int] {
+        guard let name else { return [] }
+        var prefixes = scope.split(separator: ".").map(String.init)
+        var spellings: Set<String> = [name]
+        while !prefixes.isEmpty {
+            spellings.insert(prefixes.joined(separator: ".") + "." + name)
+            prefixes.removeLast()
+        }
+        return nodes.indices.filter {
+            guard let qualified = nodes[$0].qualified else { return false }
+            return spellings.contains(qualified) && (!nodes[$0].restricted || nodes[$0].site.path == path)
+        }
+    }
+
+    private func lineage(_ number: Int, visiting: Set<Int>) -> Lineage {
+        guard !visiting.contains(number) else { return .unknown }
+        let node = nodes[number]
+        let visited = visiting.union([number])
+        let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
+        let parents = node.bases.map { base -> Lineage in
+            if base == "XCTestCase" || base == "XCTest.XCTestCase" { return .xctest }
+            let choices = lookup(base, path: node.site.path, scope: scope)
+            guard choices.count == 1, let choice = choices.first else { return .unknown }
+            return lineage(choice, visiting: visited)
+        }
+        if parents.contains(.xctest) { return .xctest }
+        if parents.contains(.unknown) { return .unknown }
+        // Aliases/types declared in local or extension scopes are not semantically
+        // resolved by this guard; they cannot establish safe ancestry for tests.
+        if case .extended = node.parent { return .unknown }
+        if case .local = node.parent { return .unknown }
+        return .ordinary
     }
 }

@@ -165,6 +165,28 @@ final class FixtureTests {
         membershipMechanismCases()
     }
 
+    func projectLocationCases() {
+        test("nested PBX cannot bind a different repository-root source with the same spelling") {
+            let fixture = try world("nested-pbx", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try require(fixture.run().enforcementSatisfied, "root PBX control did not pass")
+            try fixture.write("Nested/Sources/A.swift", "struct Hidden { @Test func hidden() {} }")
+            try fixture.write("Nested/Mac/B.swift", "// distinct nested project helper")
+            let nested = "Nested/Fixture.xcodeproj/project.pbxproj"
+            fixture.manifest["pbxPath"] = nested
+            try fixture.save()
+            let original = fixture.root.appendingPathComponent("Fixture.xcodeproj/project.pbxproj")
+            try fixture.write(nested, String(contentsOf: original, encoding: .utf8))
+            for mode in ["enforce", "inventory"] {
+                let report = fixture.run(mode: mode)
+                try report.encoded().write(to: fixture.root.appendingPathComponent(mode + "-result.json"))
+                try require(report.exitCode == 2 && !report.analysisComplete &&
+                            report.diagnostics.contains { $0.message.contains("repository-root") },
+                            "nested PBX was analyzed using the wrong source root")
+            }
+        }
+    }
+
     func membershipMechanismCases() {
         test("unsupported conditional compiler settings and xcconfig") {
             for key in ["OTHER_SWIFT_FLAGS", "EXCLUDED_SOURCE_FILE_NAMES", "INCLUDED_SOURCE_FILE_NAMES",
@@ -423,6 +445,7 @@ enum FixtureMain {
                                  u1Root: URL(fileURLWithPath: arguments[3]))
         tests.inputCases()
         tests.membershipCases()
+        tests.projectLocationCases()
         tests.reportCases()
         tests.sourceCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")

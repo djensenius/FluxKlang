@@ -110,7 +110,17 @@ struct NominalRecord {
     let parent: OwnerContext?
     let restricted: Bool
     let unsupported: Bool
+    let isClass: Bool
+    let bases: [String?]
     let attributes: [AttributeSyntax]
+}
+
+struct TypeAliasRecord {
+    let site: SourceSite
+    let qualified: String?
+    let parent: OwnerContext?
+    let restricted: Bool
+    let target: String?
 }
 
 struct ExtensionRecord {
@@ -152,8 +162,14 @@ struct ParsedSource {
                     "unsupported declaration-producing macro: \(path)")
         if let macro = node.as(MacroExpansionExprSyntax.self) {
             try require(["expect", "require", "file", "fileID", "filePath", "line", "column", "function",
-                         "isolation", "dsohandle", "selector", "keyPath"].contains(macro.macroName.text),
+                         "isolation", "dsohandle", "selector", "keyPath", "_sourceLocation"]
+                .contains(macro.macroName.text),
                         "unsupported expression/declaration macro: \(path): \(macro.macroName.text)")
+            if macro.macroName.text == "_sourceLocation" {
+                try require(macro.arguments.isEmpty && macro.trailingClosure == nil &&
+                            macro.additionalTrailingClosures.isEmpty && macro.genericArgumentClause == nil,
+                            "unsupported Testing source-location macro arguments")
+            }
         }
         if let attribute = node.as(AttributeSyntax.self) { try SourceAttributes.validateName(attribute) }
         for child in node.children(viewMode: .all) { try preflight(child) }
@@ -166,6 +182,8 @@ struct SourceInventory {
     var extensions: [ExtensionRecord] = []
     var functions: [FunctionRecord] = []
     var misplaced: [SourceSite] = []
+    var aliases: [TypeAliasRecord] = []
+    var legacyContexts = Set<OwnerContext>()
 
     mutating func add(_ source: ParsedSource) throws {
         try walk(Syntax(source.tree), context: nil, source: source)
@@ -229,18 +247,17 @@ struct SourceInventory {
             return
         }
         if let function = node.as(FunctionDeclSyntax.self) {
-            let attrs = try attributes(function.attributes)
-            if attrs.contains(where: { SourceAttributes.macro($0) != nil }) {
-                let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains { $0.text == "some" }
-                let generic = function.genericParameterClause != nil || function.genericWhereClause != nil || opaque
-                let name = sourceName(function.name) + " " + sourceTokens(function.signature)
-                functions.append(FunctionRecord(site: site(node, name: name, source: source), parent: context,
-                                                unsupported: generic, attributes: attrs))
-            }
-            for child in node.children(viewMode: .sourceAccurate) {
-                try walk(child, context: .local, source: source)
-            }
+            try addFunction(function, context: context, source: source)
             return
+        }
+        if let alias = node.as(TypeAliasDeclSyntax.self) {
+            let name = sourceName(alias.name)
+            let qualified = prefix(context).map { $0.isEmpty ? name : $0 + "." + name }
+            let isPrivate = alias.modifiers.contains { ["private", "fileprivate"].contains($0.name.text) }
+            aliases.append(TypeAliasRecord(
+                site: site(node, name: name, source: source), qualified: qualified, parent: context,
+                restricted: isPrivate || restricted(context),
+                target: alias.genericParameterClause == nil ? Self.typeName(alias.initializer.value) : nil))
         }
         if node.is(DeclSyntax.self), let attributed = node.asProtocol(WithAttributesSyntax.self) {
             let attrs = try attributes(attributed.attributes)
@@ -256,6 +273,23 @@ struct SourceInventory {
         }
     }
 
+    private mutating func addFunction(
+        _ function: FunctionDeclSyntax, context: OwnerContext?, source: ParsedSource
+    ) throws {
+        if Self.testShaped(function), let context, context != .local { legacyContexts.insert(context) }
+        let attrs = try attributes(function.attributes)
+        if attrs.contains(where: { SourceAttributes.macro($0) != nil }) {
+            let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains { $0.text == "some" }
+            let generic = function.genericParameterClause != nil || function.genericWhereClause != nil || opaque
+            let name = sourceName(function.name) + " " + sourceTokens(function.signature)
+            functions.append(FunctionRecord(site: site(Syntax(function), name: name, source: source), parent: context,
+                                            unsupported: generic, attributes: attrs))
+        }
+        for child in function.children(viewMode: .sourceAccurate) {
+            try walk(child, context: .local, source: source)
+        }
+    }
+
     private mutating func addNominal(
         _ node: Syntax, group: any DeclGroupSyntax, name: String, context: OwnerContext?, source: ParsedSource
     ) throws {
@@ -268,6 +302,8 @@ struct SourceInventory {
             site: site(node, name: name, source: source), qualified: qualified, parent: context,
             restricted: isPrivate || restricted(context),
             unsupported: !supported || generic || group.genericWhereClause != nil || group.inheritanceClause != nil,
+            isClass: node.is(ClassDeclSyntax.self),
+            bases: group.inheritanceClause?.inheritedTypes.map { Self.typeName($0.type) } ?? [],
             attributes: try attributes(group.attributes))
         let index = nominals.count
         nominals.append(record)
@@ -300,6 +336,13 @@ struct SourceInventory {
         }
         return nil
     }
+
+    private static func testShaped(_ function: FunctionDeclSyntax) -> Bool {
+        guard sourceName(function.name).hasPrefix("test"), function.signature.parameterClause.parameters.isEmpty,
+              !function.modifiers.contains(where: { ["static", "class"].contains($0.name.text) }) else { return false }
+        guard let result = function.signature.returnClause else { return true }
+        return ["Void", "Swift.Void", "()"].contains(sourceTokens(result.type).replacingOccurrences(of: " ", with: ""))
+    }
 }
 
 enum SourceAttributes {
@@ -313,6 +356,18 @@ enum SourceAttributes {
     static func validateName(_ attribute: AttributeSyntax) throws {
         if macro(attribute) != nil { return }
         let name = sourceTokens(attribute.attributeName).replacingOccurrences(of: " ", with: "")
+        if ["Observable", "Observation.Observable"].contains(name) {
+            // Standard Observation expansion produces observation helpers, not test declarations.
+            // No custom names, arguments, or non-class application are inferred to be equivalent.
+            try require(attribute.parent?.parent?.is(ClassDeclSyntax.self) == true,
+                        "unsupported Observable declaration context")
+            if let arguments = attribute.arguments {
+                guard case .argumentList(let list) = arguments, list.isEmpty else {
+                    throw AuditFailure("unsupported Observable arguments")
+                }
+            }
+            return
+        }
         let allowed = ["MainActor", "available", "testable", "Sendable", "TaskLocal", "discardableResult",
                        "inlinable", "usableFromInline", "inline", "preconcurrency", "escaping", "autoclosure",
                        "unchecked", "_transparent", "_alwaysEmitIntoClient", "_spi", "convention"]
