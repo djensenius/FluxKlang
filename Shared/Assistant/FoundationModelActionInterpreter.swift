@@ -19,14 +19,23 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     }
 
     private let liveTestPurpose: LiveTestPurpose?
+    private let mirror: ProductionAccessAudit?
 
-    init() { liveTestPurpose = nil }
+    init(mirroring mirror: ProductionAccessAudit? = nil) {
+        liveTestPurpose = nil
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .assistantActionInterpreter, mirroring: mirror)
+    }
 
-    private init(liveTestPurpose: LiveTestPurpose) { self.liveTestPurpose = liveTestPurpose }
+    private init(liveTestPurpose: LiveTestPurpose, mirroring mirror: ProductionAccessAudit? = nil) {
+        self.liveTestPurpose = liveTestPurpose
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .assistantActionInterpreter, mirroring: mirror)
+    }
 
     /// Only the two existing qualification callers opt in; ordinary construction always stays isolated.
-    static func forLiveTesting(_ purpose: LiveTestPurpose) -> Self {
-        Self(liveTestPurpose: purpose)
+    static func forLiveTesting(_ purpose: LiveTestPurpose, mirroring mirror: ProductionAccessAudit? = nil) -> Self {
+        Self(liveTestPurpose: purpose, mirroring: mirror)
     }
 
     private var deniesModelAccess: Bool {
@@ -39,10 +48,17 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     }
 
     func availability() async -> AssistantActionInterpreterAvailability {
-        guard !deniesModelAccess else { return .unavailable(AssistantServiceIsolation.reason) }
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantActionInterpreter, mirroring: mirror)
+        guard !deniesModelAccess else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantActionInterpreter, mirroring: mirror)
+            return .unavailable(AssistantServiceIsolation.reason)
+        }
         #if canImport(FoundationModels)
         guard #available(iOS 27, macOS 27, *) else { return .unavailable("requires OS 27") }
-        switch SystemLanguageModel.default.availability {
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
+        let model = SystemLanguageModel.default
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
+        switch model.availability {
         case .available: return .available
         case .unavailable(.deviceNotEligible): return .unavailable("this device is not eligible")
         case .unavailable(.appleIntelligenceNotEnabled): return .unavailable("Apple Intelligence is turned off")
