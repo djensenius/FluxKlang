@@ -9,3 +9,11 @@ identifier_name:
   excluded:
     - id
     - to
+custom_rules:
+  fault_latch_test_seams:
+    name: FaultLatch test seams
+    regex: '(?<!func )(?<!func `)\b(?:admitRaiseForTesting|finishRaiseForTesting|addRaiseForTesting|publishRaiseForTesting|withControlLockForTesting|seedForTesting|stateForTesting|seedUnknownScopeFaultsForTesting)\b'
+    match_kinds:
+      - identifier
+    message: FaultLatch seams are restricted to root tests.
+    severity: error
