@@ -223,7 +223,59 @@ struct PermissionStateTests {
         #expect(!evidence.hasGrant)
     }
 
-    @Test func manualIPConnectReportsLocalNetworkDenialInsteadOfConnecting() async {
+    @Test func isolatedTransportConstructionIsPassive() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        let transport = WingTransport(mirroring: audit)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.passiveConstruction, for: .wingTransport) == 1)
+        #expect(snapshot.count(.factoryEvaluated, for: .wingTransport) == 0)
+        #expect(snapshot.count(.attempted, for: .wingTransport) == 0)
+        #expect(snapshot.count(.denied, for: .wingTransport) == 0)
+        #expect(snapshot.count(.apiEntered, for: .wingTransport) == 0)
+        _ = transport
+    }
+
+    @Test(arguments: [(false, false), (true, false), (true, true)])
+    func isolatedTransportDeniesSocketCreation(broadcast: Bool, emptyPeers: Bool) async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        let calls = Mutex<[String]>([])
+        let peers: Set<String> = emptyPeers ? [] : [Self.host, "192.0.2.11"]
+        let remoteHost = broadcast ? "255.255.255.255" : Self.host
+        let transport = WingTransport(localNetworkProbe: { host, port in
+            calls.withLock { $0.append("probe \(host):\(port)") }
+            return nil
+        }, resolvePeers: { host in
+            calls.withLock { $0.append("resolve \(host)") }
+            return peers
+        }, mirroring: audit)
+
+        await #expect(throws: WingTransportError.notAuthorized) {
+            try await transport.start(remoteHost: remoteHost, broadcast: broadcast)
+        }
+        let expected = ["resolve \(remoteHost)"] + (broadcast ? [] : peers.sorted().map {
+            "probe \($0):\(WingNetwork.defaultPort)"
+        })
+        #expect(calls.withLock { $0 } == expected)
+        #expect(await transport.sessionID == nil)
+        #expect(await transport.peerHosts.isEmpty)
+        await #expect(throws: WingTransportError.notStarted) {
+            try await transport.send("/ch/1/fdr")
+        }
+        await transport.stop()
+        await transport.stop()
+        #expect(await transport.sessionID == nil)
+        #expect(await transport.peerHosts.isEmpty)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingTransport) == 1)
+        #expect(snapshot.count(.denied, for: .wingTransport) == 1)
+        #expect(snapshot.count(.apiEntered, for: .wingTransport) == 0)
+    }
+
+    @Test func manualIPConnectReportsLocalNetworkDenialInsteadOfConnecting() async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
         let calls = Mutex<[String]>([])
         let transport = WingTransport(localNetworkProbe: { host, port in
             calls.withLock { $0.append("probe \(host):\(port)") }
@@ -232,7 +284,7 @@ struct PermissionStateTests {
             calls.withLock { $0.append("resolve \(host)") }
             // Deliberately unordered peers; lexical sorting puts .10 before .11 and .2.
             return ["192.0.2.2", host, "192.0.2.11"]
-        })
+        }, mirroring: audit)
         let controller = WingController(transport: transport)
 
         await controller.connect(host: Self.host)
@@ -247,10 +299,17 @@ struct PermissionStateTests {
         #expect(await transport.peerHosts.isEmpty)
         #expect(calls.withLock { $0 } == ["resolve \(Self.host)", "probe \(Self.host):\(WingNetwork.defaultPort)"],
                 "Resolve first, probe the first sorted peer, then stop immediately on denial")
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingTransport) == 0)
+        #expect(snapshot.count(.denied, for: .wingTransport) == 0)
+        #expect(snapshot.count(.apiEntered, for: .wingTransport) == 0)
     }
 
-    @Test func blockedProbeThrowsBeforeAnySocketOpens() async {
-        let transport = WingTransport(localNetworkProbe: { _, _ in ECONNREFUSED }, resolvePeers: { [$0] })
+    @Test func blockedProbeThrowsBeforeAnySocketOpens() async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        let transport = WingTransport(localNetworkProbe: { _, _ in ECONNREFUSED }, resolvePeers: { [$0] },
+                                      mirroring: audit)
         await #expect(throws: WingTransportError.localNetworkBlocked(errno: ECONNREFUSED, host: Self.host)) {
             try await transport.start(remoteHost: Self.host, localPort: nil, broadcast: false)
         }
@@ -261,17 +320,28 @@ struct PermissionStateTests {
         await #expect(throws: WingTransportError.notStarted) {
             try await transport.send("/ch/1/fdr")
         }
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingTransport) == 0)
+        #expect(snapshot.count(.denied, for: .wingTransport) == 0)
+        #expect(snapshot.count(.apiEntered, for: .wingTransport) == 0)
     }
 
-    @Test func unresolvedPeerStillFailsBeforeThePermissionProbe() async {
+    @Test func unresolvedPeerStillFailsBeforeThePermissionProbe() async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
         let transport = WingTransport(localNetworkProbe: { _, _ in
             Issue.record("An unresolved peer must not reach the permission probe")
             return EHOSTUNREACH
-        }, resolvePeers: { _ in [] })
+        }, resolvePeers: { _ in [] }, mirroring: audit)
         await #expect(throws: WingTransportError.unresolvedPeer) {
             try await transport.start(remoteHost: "unresolved.invalid")
         }
         #expect(await transport.sessionID == nil)
+        #expect(await transport.peerHosts.isEmpty)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingTransport) == 0)
+        #expect(snapshot.count(.denied, for: .wingTransport) == 0)
+        #expect(snapshot.count(.apiEntered, for: .wingTransport) == 0)
     }
 
     @Test func unentitledDiscoveryExplainsItselfWithoutScanning() async {
