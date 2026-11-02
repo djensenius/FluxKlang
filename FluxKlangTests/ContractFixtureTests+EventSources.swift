@@ -408,7 +408,11 @@ extension ContractFixtureTests {
             #expect(!ordered.hasRestartObligations && ordered.resume == .afterRestart(previousFrame: 96_000))
             let anchorStale = try FixtureEventApplier.apply(try Self.deliver(&swapped), ledger: &ordered,
                                                             readiness: &orderedReadiness)
-            #expect(anchorStale.isEmpty)
+            // Stateless policy: the restart point itself, delivered after that later anchor, is accepted too.
+            let point = ClockAnchor(sample: record.start, host: record.host)
+            let pointStale = try FixtureEventApplier.apply(.anchor(point, nominalRate: Self.rate), ledger: &ordered,
+                                                           readiness: &orderedReadiness)
+            #expect(anchorStale.isEmpty && pointStale.isEmpty)
 
             let restarted = anchor.sample.generation
             let disagreeing = ClockAnchor(sample: SampleStamp(clock: anchor.sample.clock, generation: restarted,
