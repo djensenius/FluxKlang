@@ -99,5 +99,64 @@ extension ContractFixtureTests {
                                                             ledger: &ledger, readiness: &readiness)
             #expect(anchorStale.isEmpty && ReadyAction(ids[0], readiness, ledger) == ready)
         }
+
+        @Test func restartWithoutTransportCompletesWithItsRecord() throws {
+            let ids = try Fixture.actions(1)
+            var ledger = try GenerationLedger(primaryClock: ContractFixtureIDs.primaryClock, musicalClock: nil,
+                                              nominalRate: Fixture.rate, declaring: [Fixture.context])
+            var readiness = ActionReadiness()
+            try Fixture.prepare(ids[0], on: [Fixture.context], ledger: ledger, readiness: &readiness)
+            let ready = ReadyAction(ids[0], readiness, ledger)
+            #expect(ready.state == .ready && ready.readyEntry == 1 && ready.invalidatedBy == [Fixture.context])
+
+            let bumpStale = try FixtureEventApplier.apply(.bump(Fixture.primary, .deviceRestart), ledger: &ledger,
+                                                          readiness: &readiness)
+            #expect(bumpStale.isEmpty && ledger.hasRestartObligations && !ledger.awaitingTransportBump)
+            let (record, anchor) = try Fixture.restartEvents()
+            Fixture.expectRefusal(.firstAnchorRestartIncomplete, applying: .anchor(anchor, nominalRate: Fixture.rate),
+                                  ledger: &ledger, readiness: &readiness)
+            // There is no transport to bump, so the record alone completes the restart.
+            Fixture.expectRefusal(.ledger(.undeclaredMusicalClock(Fixture.transport)),
+                                  applying: .bump(Fixture.transport, .clockRestart),
+                                  ledger: &ledger, readiness: &readiness)
+            let recordStale = try FixtureEventApplier.apply(.restartRecord(record), ledger: &ledger,
+                                                            readiness: &readiness)
+            #expect(recordStale.isEmpty && ledger.restartRecord == record && !ledger.hasRestartObligations)
+            #expect(ledger.resume == nil)
+            let anchorStale = try FixtureEventApplier.apply(.anchor(anchor, nominalRate: Fixture.rate),
+                                                            ledger: &ledger, readiness: &readiness)
+            #expect(anchorStale.isEmpty && ReadyAction(ids[0], readiness, ledger) == ready)
+        }
+
+        @Test func transportBumpInvalidatesEveryTransportDependentSorted() throws {
+            let ids = try Fixture.actions(3)
+            var ledger = try Fixture.makeLedger()
+            var readiness = ActionReadiness()
+            // Prepared in reverse ID order, so a sorted result is not just insertion order.
+            for id in [ids[1], ids[0]] {
+                try Fixture.prepare(id, on: [Fixture.transport], ledger: ledger, readiness: &readiness)
+            }
+            try Fixture.prepare(ids[2], on: [Fixture.context], ledger: ledger, readiness: &readiness)
+            let dependents = ids[0...1].map { ReadyAction($0, readiness, ledger) }
+            #expect(dependents.allSatisfy { $0.state == .ready && $0.invalidatedBy == [Fixture.transport] })
+            let unrelated = ReadyAction(ids[2], readiness, ledger)
+            #expect(unrelated.state == .ready && unrelated.readyEntry == 1 && unrelated.isCurrent)
+
+            let (record, _) = try Fixture.restartEvents()
+            var source = try ScriptedEventSource(capacity: 3, events: [
+                .bump(Fixture.primary, .deviceRestart), .restartRecord(record),
+                .bump(Fixture.transport, .clockRestart)
+            ])
+            var stale: [[ActionID]] = []
+            for _ in 0..<3 {
+                let event = try Fixture.deliver(&source)
+                stale.append(try FixtureEventApplier.apply(event, ledger: &ledger, readiness: &readiness))
+            }
+            #expect(stale == [[], [], [ids[0], ids[1]]] && !ledger.hasRestartObligations)
+            for id in ids[0...1] {
+                #expect(readiness.state(id) == .invalidated && readiness.reasons[id] == .sourceChanged)
+            }
+            #expect(ReadyAction(ids[2], readiness, ledger) == unrelated)
+        }
     }
 }
