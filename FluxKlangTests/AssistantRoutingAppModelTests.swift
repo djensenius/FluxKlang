@@ -5,108 +5,94 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AssistantRoutingAppModelTests {
-    private func model(fixture: AssistantRoutingFixture,
-                       store: any PendingStudioPatchPersisting = RoutingTestDraftStore()) async throws -> AppModel {
-        let model = AppModel(assistant: AssistantCoordinator(draftStore: store), wing: .preview())
-        await model.equipment.load()
-        for gear in fixture.equipment {
-            if model.equipment.items.contains(where: { $0.id == gear.id }) {
-                model.equipment.update(gear)
-            } else {
-                model.equipment.add(gear)
-            }
-        }
-        await model.environments.load()
-        _ = model.environments.addEnvironment(named: "Apple routing fixture \(UUID())")
-        model.environments.add(fixture.effect)
-        await model.studioConnections.load(equipment: model.equipment.items,
-            environments: model.environments.environments, activeID: model.environments.activeID)
-        try await model.studioConnections.replaceHome(fixture.connections.home, equipment: model.equipment.items)
-        return model
-    }
-
     @Test func naturalSiriUsesSameApplePlanAndLocalAcceptanceRetainsAllPaths() async throws {
         let fixture = AssistantRoutingFixture()
-        let model = try await model(fixture: fixture)
-        let before = model.environments.activeStudioGraph
-        let writes = model.wing.transportWriteCount
-        let interpreter = RoutingTestInterpreter()
-        let spoken = await SiriDraftStudioAction.execute(request: "Tell Flux Klang to " + AssistantRoutingFixture.text,
-                                                        model: model, interpreter: interpreter)
-        #expect(await interpreter.requests.map(\.text) == [AssistantRoutingFixture.text])
-        #expect(model.environments.activeStudioGraph == before)
-        #expect(model.assistant.pendingStudioDraft?.request.additionalRoutes.count == 2)
-        #expect(model.assistant.navigationTarget == .reviewPendingDraft)
-        #expect(spoken.contains(fixture.osmose.name))
-        #expect(spoken.contains(fixture.solar.name))
-        #expect(spoken.contains(fixture.opxy.name))
-        #expect(model.wing.transportWriteCount == writes)
-        let result = try #require(await model.acceptPendingAssistantDraft())
-        fixture.checkPaths(graph: result.graph, endpoints: result.endpoints)
-        #expect(model.assistant.pendingStudioDraft == nil)
-        #expect(model.wing.transportWriteCount == writes)
+        try await withRoutingAppModel(fixture: fixture) { model, _ in
+            let before = model.environments.activeStudioGraph
+            let writes = model.wing.transportWriteCount
+            let interpreter = RoutingTestInterpreter()
+            let spoken = await SiriDraftStudioAction.execute(
+                request: "Tell Flux Klang to " + AssistantRoutingFixture.text, model: model, interpreter: interpreter)
+            #expect(await interpreter.requests.map(\.text) == [AssistantRoutingFixture.text])
+            #expect(model.environments.activeStudioGraph == before)
+            #expect(model.assistant.pendingStudioDraft?.request.additionalRoutes.count == 2)
+            #expect(model.assistant.navigationTarget == .reviewPendingDraft)
+            #expect(spoken.contains(fixture.osmose.name))
+            #expect(spoken.contains(fixture.solar.name))
+            #expect(spoken.contains(fixture.opxy.name))
+            #expect(model.wing.transportWriteCount == writes)
+            let result = try #require(await model.acceptPendingAssistantDraft())
+            fixture.checkPaths(graph: result.graph, endpoints: result.endpoints)
+            #expect(model.assistant.pendingStudioDraft == nil)
+            #expect(model.wing.transportWriteCount == writes)
+        }
     }
 
     @Test func changedDeskGroupBeforeAcceptanceBlocksWithoutWritesOrOldConnectorReuse() async throws {
         let fixture = AssistantRoutingFixture()
-        let model = try await model(fixture: fixture)
-        _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
-                                               model: model, interpreter: RoutingTestInterpreter())
-        let original = try #require(model.assistant.pendingStudioDraft)
-        var movedOutputs = fixture.connections.home
-        movedOutputs.outputs[2].connector = 1
-        movedOutputs.outputs[3].connector = 2
-        try await model.studioConnections.replaceHome(movedOutputs, equipment: model.equipment.items)
-        let before = model.environments.activeStudioGraph
-        #expect(await model.acceptPendingAssistantDraft() == nil)
-        #expect(model.environments.activeStudioGraph == before)
-        #expect(model.assistant.pendingStudioDraft?.id == original.id)
-        #expect(model.assistant.pendingStudioDraft?.validation.contains { $0.code == "destination-changed" } == true)
-        #expect(model.wing.transportWriteCount == 0)
+        try await withRoutingAppModel(fixture: fixture) { model, _ in
+            _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                                   model: model, interpreter: RoutingTestInterpreter())
+            let original = try #require(model.assistant.pendingStudioDraft)
+            var movedOutputs = fixture.connections.home
+            movedOutputs.outputs[2].connector = 1
+            movedOutputs.outputs[3].connector = 2
+            try await model.studioConnections.replaceHome(movedOutputs, equipment: model.equipment.items)
+            let before = model.environments.activeStudioGraph
+            #expect(await model.acceptPendingAssistantDraft() == nil)
+            #expect(model.environments.activeStudioGraph == before)
+            #expect(model.assistant.pendingStudioDraft?.id == original.id)
+            #expect(model.assistant.pendingStudioDraft?.validation.contains {
+                $0.code == "destination-changed"
+            } == true)
+            #expect(model.wing.transportWriteCount == 0)
+        }
     }
 
     @Test func failedSiriPreparationLeavesExistingPendingGraphAndWritesUntouched() async throws {
         let fixture = AssistantRoutingFixture()
-        let model = try await model(fixture: fixture)
-        _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
-                                               model: model, interpreter: RoutingTestInterpreter())
-        let prior = try #require(model.assistant.pendingStudioDraft)
-        let graph = model.environments.activeStudioGraph
-        for interpreter in [RoutingTestInterpreter(.answer), RoutingTestInterpreter(fails: true),
-                            RoutingTestInterpreter(available: .unavailable("disabled"))] {
+        try await withRoutingAppModel(fixture: fixture) { model, _ in
             _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
-                                                   model: model, interpreter: interpreter)
-            #expect(model.assistant.pendingStudioDraft == prior)
-            #expect(model.environments.activeStudioGraph == graph)
-            #expect(model.wing.transportWriteCount == 0)
+                                                   model: model, interpreter: RoutingTestInterpreter())
+            let prior = try #require(model.assistant.pendingStudioDraft)
+            let graph = model.environments.activeStudioGraph
+            for interpreter in [RoutingTestInterpreter(.answer), RoutingTestInterpreter(fails: true),
+                                RoutingTestInterpreter(available: .unavailable("disabled"))] {
+                _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                                       model: model, interpreter: interpreter)
+                #expect(model.assistant.pendingStudioDraft == prior)
+                #expect(model.environments.activeStudioGraph == graph)
+                #expect(model.wing.transportWriteCount == 0)
+            }
         }
     }
 
     @Test func graphChangesAfterPreparationBlockAcceptanceAndPreserveCurrentGraph() async throws {
         let fixture = AssistantRoutingFixture()
         for useEffect in [false, true] {
-            let model = try await model(fixture: fixture)
-            _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
-                                                   model: model, interpreter: RoutingTestInterpreter())
-            let prior = try #require(model.assistant.pendingStudioDraft)
-            let changed: StudioGraph
-            if useEffect {
-                changed = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Now in use")])
-            } else {
-                let direct = StudioWiringAdvisor.build(request: .init(sourceInstrumentIDs: [fixture.solar.id]),
-                    equipment: fixture.equipment, effects: [fixture.effect], connections: fixture.connections,
-                    currentGraph: StudioGraph(), environmentID: model.environments.activeID)
-                changed = StudioGraph(nodes: direct.fragment.nodes.map(\.node),
-                                      edges: direct.fragment.edges.map(\.edge))
+            try await withRoutingAppModel(fixture: fixture) { model, _ in
+                _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                                       model: model, interpreter: RoutingTestInterpreter())
+                let prior = try #require(model.assistant.pendingStudioDraft)
+                let changed: StudioGraph
+                if useEffect {
+                    changed = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Now in use")])
+                } else {
+                    let direct = StudioWiringAdvisor.build(request: .init(sourceInstrumentIDs: [fixture.solar.id]),
+                        equipment: fixture.equipment, effects: [fixture.effect], connections: fixture.connections,
+                        currentGraph: StudioGraph(), environmentID: model.environments.activeID)
+                    changed = StudioGraph(nodes: direct.fragment.nodes.map(\.node),
+                                          edges: direct.fragment.edges.map(\.edge))
+                }
+                model.environments.replaceStudio(graph: changed, endpoints: [])
+                #expect(await model.acceptPendingAssistantDraft() == nil)
+                #expect(model.environments.activeStudioGraph == changed)
+                #expect(model.assistant.pendingStudioDraft?.id == prior.id)
+                #expect(model.assistant.pendingStudioDraft?.validation.contains {
+                    $0.code == "routing-graph-changed"
+                } == true)
+                #expect(model.wing.transportWriteCount == 0)
             }
-            model.environments.replaceStudio(graph: changed, endpoints: [])
-            #expect(await model.acceptPendingAssistantDraft() == nil)
-            #expect(model.environments.activeStudioGraph == changed)
-            #expect(model.assistant.pendingStudioDraft?.id == prior.id)
-            #expect(model.assistant.pendingStudioDraft?.validation.contains {
-                $0.code == "routing-graph-changed"
-            } == true)
-            #expect(model.wing.transportWriteCount == 0)
         }
     }
 
@@ -190,49 +176,49 @@ struct AssistantRoutingAppModelTests {
     @Test(arguments: 0...4)
     func contextChangesDuringValidationSaveBlockAcceptance(change: Int) async throws {
         let fixture = AssistantRoutingFixture()
-        let store = PausingRoutingDraftStore()
-        let model = try await model(fixture: fixture, store: store)
-        _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
-                                               model: model, interpreter: RoutingTestInterpreter())
-        let prior = try #require(model.assistant.pendingStudioDraft)
-        if change == 4 {
-            let endpoint = StudioEndpoint(name: "Existing endpoint", destination: .space)
-            let graph = StudioGraph(nodes: [.init(kind: .endpoint(endpoint.id), title: endpoint.name)])
-            model.environments.replaceStudio(graph: graph, endpoints: [endpoint])
+        try await withRoutingAppModel(fixture: fixture, assignsBeforePause: true) { model, owner in
+            let store = owner.store
+            _ = await SiriDraftStudioAction.execute(request: AssistantRoutingFixture.text,
+                                                   model: model, interpreter: RoutingTestInterpreter())
+            let prior = try #require(model.assistant.pendingStudioDraft)
+            if change == 4 {
+                let endpoint = StudioEndpoint(name: "Existing endpoint", destination: .space)
+                let graph = StudioGraph(nodes: [.init(kind: .endpoint(endpoint.id), title: endpoint.name)])
+                model.environments.replaceStudio(graph: graph, endpoints: [endpoint])
+            }
+            await store.pauseNextSave()
+            let acceptance = try owner.start { await model.acceptPendingAssistantDraft() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !(await store.isWaiting) {
+                try #require(ContinuousClock.now < deadline)
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            switch change {
+            case 0:
+                _ = model.environments.addEnvironment(named: "Changed during validation")
+            case 1:
+                let graph = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Keep this edit")])
+                model.environments.replaceStudio(graph: graph, endpoints: [])
+            case 2:
+                var gear = fixture.osmose
+                gear.name = "Changed during validation"
+                model.equipment.update(gear)
+            case 3:
+                model.environments.add(Effect(name: "Changed during validation"))
+            default:
+                var endpoints = model.environments.activeStudioEndpoints
+                endpoints[0].name = "Keep this endpoint edit"
+                model.environments.replaceStudio(graph: model.environments.activeStudioGraph, endpoints: endpoints)
+            }
+            let current = model.assistantToolContext()
+            await store.resume()
+            #expect(await acceptance.value == nil)
+            #expect(model.environments.activeID == current.activeEnvironmentID)
+            #expect(model.environments.activeStudioGraph == current.graph)
+            #expect(model.environments.activeStudioEndpoints == current.endpoints)
+            #expect(model.assistant.pendingStudioDraft?.id == prior.id)
+            #expect(model.wing.transportWriteCount == 0)
         }
-        await store.pauseNextSave()
-        let acceptance = Task { await model.acceptPendingAssistantDraft() }
-        defer { Task { await store.resume() } }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !(await store.isPaused) {
-            try #require(ContinuousClock.now < deadline)
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        switch change {
-        case 0:
-            _ = model.environments.addEnvironment(named: "Changed during validation")
-        case 1:
-            let graph = StudioGraph(nodes: [.init(kind: .effect(fixture.effect.id), title: "Keep this edit")])
-            model.environments.replaceStudio(graph: graph, endpoints: [])
-        case 2:
-            var gear = fixture.osmose
-            gear.name = "Changed during validation"
-            model.equipment.update(gear)
-        case 3:
-            model.environments.add(Effect(name: "Changed during validation"))
-        default:
-            var endpoints = model.environments.activeStudioEndpoints
-            endpoints[0].name = "Keep this endpoint edit"
-            model.environments.replaceStudio(graph: model.environments.activeStudioGraph, endpoints: endpoints)
-        }
-        let current = model.assistantToolContext()
-        await store.resume()
-        #expect(await acceptance.value == nil)
-        #expect(model.environments.activeID == current.activeEnvironmentID)
-        #expect(model.environments.activeStudioGraph == current.graph)
-        #expect(model.environments.activeStudioEndpoints == current.endpoints)
-        #expect(model.assistant.pendingStudioDraft?.id == prior.id)
-        #expect(model.wing.transportWriteCount == 0)
     }
 
     @Test func relabeledDeskPairCannotAlsoBeUsedAsAnIndependentMainsDestination() throws {
@@ -370,97 +356,86 @@ struct AssistantRoutingReviewRegressionTests {
 
     @Test func revalidationDoesNotTransferOwnershipOfACancelledSave() async throws {
         let fixture = AssistantRoutingFixture()
-        let store = RoutingTestDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let prior = try fixture.prepared()
-        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-            preparedContext: fixture.context, currentContext: fixture.context))
-        let draft = try fixture.prepared()
-        await store.pauseNextSave()
-        let submission = Task { await coordinator.commitPreparedRouting(draft, expectedPending: prior,
-            preparedContext: fixture.context, currentContext: fixture.context) }
-        try await AssistantBackendFixture.waitAsync { await store.isWaiting }
-        var changed = fixture.context
-        changed.equipment.removeAll { $0.id == fixture.solar.id }
-        _ = await coordinator.perform(.validatePendingStudioDraft, context: changed)
-        #expect(coordinator.pendingStudioDraft != draft)
-        submission.cancel()
-        await store.resume()
-        #expect(!(await submission.value))
-        #expect(coordinator.pendingStudioDraft == prior)
-        #expect(await store.draft == prior)
+        try await withRoutingAppModelFixture { owner in
+            let store = owner.store
+            let coordinator = owner.coordinator
+            let prior = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                preparedContext: fixture.context, currentContext: fixture.context))
+            let draft = try fixture.prepared()
+            await store.pauseNextSave()
+            let submission = try owner.start { await coordinator.commitPreparedRouting(draft, expectedPending: prior,
+                preparedContext: fixture.context, currentContext: fixture.context) }
+            try await AssistantBackendFixture.waitAsync { await store.isWaiting }
+            var changed = fixture.context
+            changed.equipment.removeAll { $0.id == fixture.solar.id }
+            _ = await coordinator.perform(.validatePendingStudioDraft, context: changed)
+            #expect(coordinator.pendingStudioDraft != draft)
+            submission.cancel()
+            await store.resume()
+            #expect(!(await submission.value))
+            #expect(coordinator.pendingStudioDraft == prior)
+            #expect(await store.draft == prior)
+        }
     }
 
     @Test func overlappingCancelledSubmissionsCannotRestoreAnAbortedDraft() async throws {
         let fixture = AssistantRoutingFixture()
-        let store = RoutingTestDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let prior = try fixture.prepared()
-        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-            preparedContext: fixture.context, currentContext: fixture.context))
-        let first = try fixture.prepared()
-        await store.pauseNextSave()
-        let firstTask = Task { await coordinator.commitPreparedRouting(first, expectedPending: prior,
-            preparedContext: fixture.context, currentContext: fixture.context) }
-        try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 1 }
-        firstTask.cancel()
-        let second = try fixture.prepared()
-        await store.pauseNextSave()
-        let secondTask = Task { await coordinator.commitPreparedRouting(second, expectedPending: first,
-            preparedContext: fixture.context, currentContext: fixture.context) }
-        try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 2 }
-        await store.resume()
-        #expect(!(await firstTask.value))
-        secondTask.cancel()
-        await store.resume()
-        #expect(!(await secondTask.value))
-        #expect(coordinator.pendingStudioDraft == prior)
-        #expect(await store.draft == prior)
+        try await withRoutingAppModelFixture { owner in
+            let store = owner.store
+            let coordinator = owner.coordinator
+            let prior = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                preparedContext: fixture.context, currentContext: fixture.context))
+            let first = try fixture.prepared()
+            await store.pauseNextSave()
+            let firstTask = try owner.start { await coordinator.commitPreparedRouting(first, expectedPending: prior,
+                preparedContext: fixture.context, currentContext: fixture.context) }
+            try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 1 }
+            firstTask.cancel()
+            let second = try fixture.prepared()
+            await store.pauseNextSave()
+            let secondTask = try owner.start { await coordinator.commitPreparedRouting(second, expectedPending: first,
+                preparedContext: fixture.context, currentContext: fixture.context) }
+            try await AssistantBackendFixture.waitAsync { await store.waitingSaves == 2 }
+            await store.resume()
+            #expect(!(await firstTask.value))
+            secondTask.cancel()
+            await store.resume()
+            #expect(!(await secondTask.value))
+            #expect(coordinator.pendingStudioDraft == prior)
+            #expect(await store.draft == prior)
+        }
     }
 
     @Test(arguments: [false, true])
     func cancelledSaveRestoresPriorReviewWithoutOverwritingANewerDraft(replaced: Bool) async throws {
         let fixture = AssistantRoutingFixture()
-        let store = RoutingTestDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let prior = try fixture.prepared()
-        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-            preparedContext: fixture.context, currentContext: fixture.context))
-        let chat = AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: RoutingTestHistory(), cloud: nil),
-            generator: RoutingTestGenerator(), actionInterpreter: RoutingTestInterpreter())
-        await store.pauseNextSave()
-        chat.composer = AssistantRoutingFixture.text
-        chat.send(context: fixture.context)
-        try await AssistantBackendFixture.waitAsync { await store.isWaiting }
-        chat.cancel()
-        var expected = prior
-        if replaced {
-            expected = try fixture.prepared()
-            #expect(await coordinator.commitPreparedRouting(expected, expectedPending: coordinator.pendingStudioDraft,
+        try await withRoutingAppModelFixture { owner in
+            let store = owner.store
+            let coordinator = owner.coordinator
+            let prior = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
                 preparedContext: fixture.context, currentContext: fixture.context))
-        }
-        await store.resume()
-        try await AssistantBackendFixture.waitAsync { await store.saves >= (replaced ? 4 : 3) }
-        #expect(coordinator.pendingStudioDraft == expected)
-        #expect(await store.draft == expected)
-        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
-    }
-}
-
-private actor PausingRoutingDraftStore: PendingStudioPatchPersisting {
-    private var draft: StudioPatchDraft?
-    private var pauses = false
-    private var gate: CheckedContinuation<Void, Never>?
-    var isPaused: Bool { gate != nil }
-    func load() -> StudioPatchDraft? { draft }
-    func pauseNextSave() { pauses = true }
-    func resume() { gate?.resume(); gate = nil }
-    func save(_ draft: StudioPatchDraft?) async {
-        self.draft = draft
-        if pauses {
-            pauses = false
-            await withCheckedContinuation { gate = $0 }
+            let chat = try owner.makeChat()
+            await store.pauseNextSave()
+            chat.composer = AssistantRoutingFixture.text
+            chat.send(context: fixture.context)
+            try await AssistantBackendFixture.waitAsync { await store.isWaiting }
+            chat.cancel()
+            var expected = prior
+            if replaced {
+                expected = try fixture.prepared()
+                #expect(await coordinator.commitPreparedRouting(
+                    expected, expectedPending: coordinator.pendingStudioDraft,
+                    preparedContext: fixture.context, currentContext: fixture.context))
+            }
+            await store.resume()
+            // Normal completion, before teardown cancellation can change the review under test.
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(coordinator.pendingStudioDraft == expected)
+            #expect(await store.draft == expected)
+            #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
         }
     }
 }
