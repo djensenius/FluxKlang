@@ -16,8 +16,8 @@ extension HostAuthorityTests {
     struct ActorAuthorize {
         @Test(arguments: [CommandOrigin.assistant, .controller])
         func gestureOriginNotRequestOriginAuthorizes(_ origin: CommandOrigin) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.review(authority, &engine)
             let before = await authority.snapshot()
             // The request's origin is `.human`; only the gesture's origin counts.
@@ -30,8 +30,10 @@ extension HostAuthorityTests {
 
         @Test(arguments: NonRenderingWindow.allCases)
         func nonRenderingWindowCannotAuthorize(_ window: NonRenderingWindow) async throws {
-            let authority = try await Bench.makeAuthority(holding: window == .detachedWindow ? Bench.windowA : nil)
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(
+                &engine, holding: window == .detachedWindow ? Bench.windowA : nil
+            )
             _ = try await Bench.review(authority, &engine)
             let gesture: ActivationGesture
             let role: WindowRenderRole
@@ -54,8 +56,8 @@ extension HostAuthorityTests {
 
         @Test(arguments: CommitRefusalCase.allCases)
         func commitRefusalsQueueNothing(_ refusalCase: CommitRefusalCase) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.review(authority, &engine)
             let authorization = try await authority.authorize(project: Bench.projectA, gesture: Bench.gesture()).get()
             let expected = try await prepare(refusalCase, authority, authorization)
@@ -66,8 +68,9 @@ extension HostAuthorityTests {
         }
 
         @Test func commitWhileRecoveringIsRefused() async throws {
-            let authority = try await Bench.makeAuthority(lifecycleA: .recovering, recoveryBaseA: .running)
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine, lifecycleA: .recovering,
+                                                         recoveryBaseA: .absent)
             _ = try await Bench.review(authority, &engine)
             let authorization = try await authority.authorize(project: Bench.projectA, gesture: Bench.gesture()).get()
             let before = await authority.snapshot()
@@ -77,8 +80,8 @@ extension HostAuthorityTests {
         }
 
         @Test func commitRefusesWhenAuthorizingWindowStopsRendering() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.review(authority, &engine)
             _ = try await authority.attach(Bench.windowA2, project: Bench.projectA).get()
             let stale = try await authority.authorize(project: Bench.projectA,
@@ -94,8 +97,8 @@ extension HostAuthorityTests {
         }
 
         @Test func authorizedWindowIsPerProjectAndCleared() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.review(authority, &engine)
             _ = try await authority.authorize(project: Bench.projectA, gesture: Bench.gesture()).get()
             #expect(await authority.snapshot().authorizedWindows == [Bench.projectA: Bench.windowA])

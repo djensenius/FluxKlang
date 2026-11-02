@@ -27,6 +27,46 @@ class MediaContractRegressionTests(unittest.TestCase):
         errors = self.errors(doc, name)
         self.assertTrue(any(message in error for error in errors), errors)
 
+    def restart_trace(self):
+        doc, name = self.example("01")
+        doc["covers"] = ["fixedRateDefault"]
+        initial, sample, transport, restart, first = [
+            copy.deepcopy(doc["timeline"][i]) for i in (0, 3, 5, 6, 7)
+        ]
+        initial["hostTicks"] = 0
+        sample["reason"] = "wake"
+        del sample["nominalRate"]
+        restart.update(hostTicks=1000000, previousFrame=0)
+        first.update(frame=48, hostTicks=1000000, musicalTicks=0)
+        doc["timeline"] = [initial, sample, transport, restart, first]
+        for seq, record in enumerate(doc["timeline"], 1):
+            record["seq"] = seq
+        return doc, name
+
+    def test_restart_drift_stays_bound_to_restart_stamp(self):
+        for frame in (49, 50, 97):
+            with self.subTest(frame=frame):
+                doc, name = self.restart_trace()
+                doc["timeline"].append({
+                    "seq": 6, "kind": "anchor", "sampleClock": "smp.main",
+                    "generation": 2, "frame": frame, "hostTicks": 1000500
+                })
+                if frame == 49:
+                    self.assertEqual(self.errors(doc, name), [])
+                else:
+                    self.assert_rejected(doc, name, "their clockRestart stamp")
+
+    def test_restart_anchors_still_advance_after_first_observation(self):
+        for frame, host in ((24, 1001000), (23, 1001000), (25, 1000500), (25, 1000250)):
+            with self.subTest(frame=frame, host=host):
+                doc, name = self.restart_trace()
+                doc["timeline"][-1].update(frame=24, hostTicks=1000500)
+                doc["timeline"].append({
+                    "seq": 6, "kind": "anchor", "sampleClock": "smp.main",
+                    "generation": 2, "frame": frame, "hostTicks": host
+                })
+                self.assert_rejected(doc, name, "anchors advance")
+
     def test_foreign_transport_cannot_discharge_primary_restart(self):
         doc, name = self.example("01")
         doc["initialGenerations"]["transport/mus.other"] = 1

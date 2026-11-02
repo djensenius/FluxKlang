@@ -7,33 +7,25 @@
 //  orders and bounds commands, and performs nothing itself.
 //
 
-/// One instruction for the activation engine.
+/// One instruction for the activation engine. The eventual executor MUST check
+/// the addressed instance at delivery (H5d/M6/G2); these values perform no engine
+/// operation and do not certify quiescence, freshness or safe destruction.
 enum EngineCommand: Hashable, Sendable {
     /// Prepare exactly the validated graph, unknown fields and extensions included.
-    case prepare(GraphDocument, PrepareAttemptID)
+    case prepare(GraphDocument, EngineInstanceID, PrepareAttemptID)
     /// Commit the prepared plan; the owner delivers it only under this lease token.
-    case commit(PreparedActivationID, CommitAttemptID, EngineLeaseToken)
+    case commit(PlanBinding, CommitAttemptID, EngineLeaseToken)
     /// Release a prepared plan the engine holds.
-    case discard(PreparedActivationID)
-    /// Return to the running graph at this revision under this lease token; acknowledge
-    /// only with this restore attempt's identity.
-    case restore(RestoreAttemptID, ContractRevision, PreparedActivationID?, EngineLeaseToken)
+    case discard(PlanBinding)
+    /// Return to this exact engine-instance target at this revision under the lease.
+    case restore(RestoreAttemptID, ContractRevision, RestoreTarget, EngineLeaseToken)
     /// Keep the partly applied plan active as the running graph.
-    case keepActivePartial(PreparedActivationID)
+    case keepActivePartial(CommittedResident)
     /// Keep these nodes silent placeholders (not bypassed) and raise diagnostics.
     /// One command per run of consecutive `missingPlaceholder` decisions, in
     /// decision order; never empty.
     case placeholders([NodeID])
     case setOutputsMuted(Bool)
-
-    /// `.prepare` carries `validated.graph` itself, never a graph rebuilt from the request.
-    init(_ effect: ActivationEffect) {
-        switch effect {
-        case .prepare(let validated, let attempt): self = .prepare(validated.graph, attempt)
-        case .commit(let prepared, let attempt, let token): self = .commit(prepared, attempt, token)
-        case .discard(let prepared): self = .discard(prepared)
-        }
-    }
 }
 
 /// Why a batch was refused. Every refusal leaves the queue unchanged.
@@ -48,6 +40,11 @@ enum EngineCommandQueueRefusal: Error, Hashable, Sendable {
     case runningMismatch
     /// A restore decision must carry the book-issued identity of its admitted attempt.
     case restoreAttemptRequired
+}
+
+private struct QueueRestoreIdentity {
+    let target: RestoreTarget?
+    let attempt: RestoreAttemptID?
 }
 
 /// A bounded FIFO of engine commands. A batch (one transition's effects, or one
@@ -85,11 +82,10 @@ struct EngineCommandQueue: Hashable, Sendable {
         count >= 0 && count <= capacity - pending.count
     }
 
-    /// Queues one transition's effects in the order they were emitted, whole or
-    /// not at all. The transition already happened: `.full` does not undo it, so
-    /// call `canAccept(effects.count)` first, or treat `.full` as fail-closed.
-    mutating func enqueue(effects: [ActivationEffect]) -> Result<Void, EngineCommandQueueRefusal> {
-        append(effects.map(EngineCommand.init))
+    /// Queues already-qualified commands, whole or not at all. The host selects
+    /// their exact role bindings and stages this queue before publishing a transition.
+    mutating func enqueue(_ commands: [EngineCommand]) -> Result<Void, EngineCommandQueueRefusal> {
+        append(commands)
     }
 
     /// Queues `step`: its decisions in order, then its effects in order
@@ -101,15 +97,35 @@ struct EngineCommandQueue: Hashable, Sendable {
     /// `running` is the transaction's running graph after the step; `lease` is the
     /// token a restore is performed under.
     ///
-    /// Check order, per decision in order, before anything is queued: revision
-    /// (and the named plan against `running` and the step's discards), then lease;
-    /// then capacity for the whole step. Any refusal leaves the queue unchanged.
+    /// Check order: discard-only effects (at most one), retiring presence/name,
+    /// distinct resident/retiring bindings, then refusal of an unused resident.
+    /// Next, per decision in order: restore revision, resident presence/name
+    /// consistency with `running`, and finally the restore lease (`leaseRequired`).
+    /// All role/revision/plan failures are `runningMismatch`; whole-step capacity
+    /// is checked last. Role authority belongs to the host: equal raw names cannot
+    /// reveal wrongly supplied roles. Any refusal leaves the queue unchanged.
     /// The step's transition already happened and is not undone: call
     /// `canAccept(maxRecoveryStepSlots)` before it, or treat `.full` as fail-closed.
     mutating func enqueue(
-        _ step: ActivationRecoveryStep, running: RunningGraph, lease: EngineLeaseToken?,
-        restoreAttempt: RestoreAttemptID? = nil
+        _ step: ActivationRecoveryStep, running: RunningGraph, resident: CommittedResident?,
+        retiring: PlanBinding?, lease: EngineLeaseToken?,
+        restoreAttempt: RestoreAttemptID? = nil, restoreTarget: RestoreTarget? = nil
     ) -> Result<Void, EngineCommandQueueRefusal> {
+        // Roles come from the private host, NOT a raw-name lookup. Equal names
+        // cannot distinguish incorrectly supplied roles; these are consistency checks.
+        let discards = step.effects.compactMap { effect -> PreparedActivationID? in
+            if case .discard(let prepared) = effect { return prepared }
+            return nil
+        }
+        guard discards.count == step.effects.count, discards.count <= 1,
+              discards.first == retiring?.prepared else { return .failure(.runningMismatch) }
+        let target = restoreTarget ?? resident.map(RestoreTarget.resident)
+        guard Self.validRestoreTarget(resident: resident, target: target, explicitTarget: restoreTarget,
+                                      retiring: retiring) else {
+            return .failure(.runningMismatch)
+        }
+        let usesTarget = step.decisions.contains(where: Self.usesTarget)
+        guard usesTarget || target == nil else { return .failure(.runningMismatch) }
         var commands: [EngineCommand] = []
         var run: [NodeID] = []
         for decision in step.decisions {
@@ -118,14 +134,34 @@ struct EngineCommandQueue: Hashable, Sendable {
                 continue
             }
             Self.flush(&run, into: &commands)
-            switch Self.command(for: decision, running: running, lease: lease,
-                                restoreAttempt: restoreAttempt, discarding: step.effects) {
+            switch Self.command(for: decision, running: running, resident: resident, lease: lease,
+                                identity: QueueRestoreIdentity(target: target, attempt: restoreAttempt)) {
             case .success(let command): commands.append(command)
             case .failure(let refusal): return .failure(refusal)
             }
         }
         Self.flush(&run, into: &commands)
-        return append(commands + step.effects.map(EngineCommand.init))
+        if let retiring { commands.append(.discard(retiring)) }
+        return append(commands)
+    }
+
+    private static func usesTarget(_ decision: RecoveryDecision) -> Bool {
+        switch decision {
+        case .restorePrevious, .keepActivePartial: true
+        case .missingPlaceholder, .recover: false
+        }
+    }
+
+    private static func validRestoreTarget(
+        resident: CommittedResident?, target: RestoreTarget?, explicitTarget: RestoreTarget?,
+        retiring: PlanBinding?
+    ) -> Bool {
+        if let resident, resident.binding == retiring { return false }
+        if let retiring, let target {
+            if case .resident(let targetResident) = target, targetResident.binding == retiring { return false }
+        }
+        if let explicitTarget, let resident, explicitTarget != .resident(resident) { return false }
+        return true
     }
 
     /// Ends a run of consecutive `missingPlaceholder` decisions as one command, if any.
@@ -140,12 +176,12 @@ struct EngineCommandQueue: Hashable, Sendable {
         pending.isEmpty ? nil : pending.removeFirst()
     }
 
-    /// Extracts the selected discards while preserving every other command's FIFO order.
-    mutating func extractDiscards(_ preparedIDs: Set<PreparedActivationID>) -> [PreparedActivationID] {
-        var extracted: [PreparedActivationID] = []
+    /// Extracts exact selected discards while preserving every other command's FIFO order.
+    mutating func extractDiscards(_ bindings: Set<PlanBinding>) -> [PlanBinding] {
+        var extracted: [PlanBinding] = []
         pending.removeAll { command in
-            guard case .discard(let prepared) = command, preparedIDs.contains(prepared) else { return false }
-            extracted.append(prepared)
+            guard case .discard(let binding) = command, bindings.contains(binding) else { return false }
+            extracted.append(binding)
             return true
         }
         return extracted
@@ -159,27 +195,28 @@ struct EngineCommandQueue: Hashable, Sendable {
         return .success(())
     }
 
-    /// Checks run in order: revision and named plan (not discarded by `effects`), then lease.
+    /// After enqueue's batch-role checks: revision and target/name consistency,
+    /// then the current lease and unique attempt. Keep requires a resident.
     private static func command(
-        for decision: RecoveryDecision, running: RunningGraph, lease: EngineLeaseToken?,
-        restoreAttempt: RestoreAttemptID?, discarding effects: [ActivationEffect]
+        for decision: RecoveryDecision, running: RunningGraph, resident: CommittedResident?,
+        lease: EngineLeaseToken?, identity: QueueRestoreIdentity
     ) -> Result<EngineCommand, EngineCommandQueueRefusal> {
         switch decision {
         case .restorePrevious(let revision):
             guard revision == running.revision else { return .failure(.runningMismatch) }
-            if let prepared = running.prepared, effects.contains(.discard(prepared)) {
+            guard let target = identity.target, target.prepared == running.prepared else {
                 return .failure(.runningMismatch)
             }
             guard let lease else { return .failure(.leaseRequired) }
-            guard let restoreAttempt else { return .failure(.restoreAttemptRequired) }
-            return .success(.restore(restoreAttempt, revision, running.prepared, lease))
+            guard let attempt = identity.attempt else { return .failure(.restoreAttemptRequired) }
+            return .success(.restore(attempt, revision, target, lease))
         case .keepActivePartial:
-            guard let prepared = running.prepared, !effects.contains(.discard(prepared)) else {
+            guard let resident, resident.binding.prepared == running.prepared else {
                 return .failure(.runningMismatch)
             }
-            return .success(.keepActivePartial(prepared))
+            return .success(.keepActivePartial(resident))
         case .missingPlaceholder(let node):
-            // `enqueue(_:running:lease:)` folds runs before reaching here; a lone node is a run of one.
+            // The recovery enqueue folds runs before reaching here; a lone node is a run of one.
             return .success(.placeholders([node]))
         case .recover(let muteOutputs):
             return .success(.setOutputsMuted(muteOutputs))

@@ -39,16 +39,16 @@ enum AuthorityBench {
     }
 
     /// One output node; `withAux` adds a second node, for consistent partial reports.
-    static func candidate(withAux: Bool = false) -> GraphDocument {
+    static func candidate(withAux: Bool = false, revision: ContractRevision = .initial) -> GraphDocument {
         let out = GraphNode(id: nodeOut, kind: .plugin, label: "Out", requiredCapabilities: [audio])
         let aux = GraphNode(id: nodeAux, kind: .plugin, label: "Aux", requiredCapabilities: [audio])
-        return GraphDocument(id: graphID, revision: .initial,
+        return GraphDocument(id: graphID, revision: revision,
                              capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
                              nodes: withAux ? [out, aux] : [out])
     }
 
-    static func request() -> ActivationRequest {
-        ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: .initial,
+    static func request(base: ContractRevision = .initial) -> ActivationRequest {
+        ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: base,
                           hostEpoch: hostEpoch, permission: permission,
                           digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human)
     }
@@ -57,24 +57,102 @@ enum AuthorityBench {
         ActivationGesture(origin: origin, window: window)
     }
 
-    /// Opens A (with `lifecycleA`) and B; A acquires the lease on `window` unless it is nil.
+    /// Opens A and B; any resident is created and installed through public host APIs.
+    static func makeAuthority(_ engine: inout ScriptedActivationEngine, holding window: WindowID? = windowA,
+                              lifecycleA: EngineLifecycle? = nil,
+                              recoveryBaseA: RunningSetState? = nil,
+                              planCapacity: Int = 512) async throws -> HostAuthority {
+        let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
+                                          nominalRate: 48_000)
+        let authority = try HostAuthority(host: ledger, live: try liveState(), planCapacity: planCapacity)
+        let recoveryBase = lifecycleA == .recovering ? recoveryBaseA : nil
+        let hasKnownRecoveryBase: Bool
+        switch recoveryBase {
+        case .running, .degraded: hasKnownRecoveryBase = true
+        case .absent, nil: hasKnownRecoveryBase = false
+        }
+        let canBootstrap = lifecycleA != .recovering || hasKnownRecoveryBase
+        let opening: EngineLifecycle = lifecycleA == .recovering && !canBootstrap ? .recovering : .stopped
+        try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: nil),
+                                 lifecycle: opening,
+                                 recoveryBase: opening == .recovering ? recoveryBase : nil).get()
+        try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
+        if canBootstrap && lifecycleA != .stopped {
+            try await bootstrap(authority, engine: &engine, lifecycle: lifecycleA, recoveryBase: recoveryBase)
+        }
+        try await configureLease(authority, holding: window)
+        return authority
+    }
+
+    private static func bootstrap(
+        _ authority: HostAuthority, engine: inout ScriptedActivationEngine,
+        lifecycle: EngineLifecycle?, recoveryBase: RunningSetState?
+    ) async throws {
+        _ = try await authority.acquire(project: projectA, window: windowA).get()
+        try await authority.begin(request(), candidate: candidate(), project: projectA).get()
+        await engine.drain(authority)
+        let taken = try engine.requireNext()
+        let answer = engine.prepare(taken, as: runningPlan)
+        _ = try await authority.prepareAnswered(answer, instance: taken.instance, attempt: taken.attempt).get()
+        let authorization = try await authority.authorize(project: projectA, gesture: gesture()).get()
+        try await authority.commit(project: projectA, authorization: authorization).get()
+        await engine.drain(authority)
+        _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
+        #expect(await authority.snapshot().queue.isEmpty)
+        for capability in lostCapabilities(lifecycle, recoveryBase: recoveryBase) {
+            try await authority.capabilityLost(capability, project: projectA,
+                                                token: try await leaseToken(authority)).get()
+        }
+        if lifecycle == .recovering {
+            try await authority.leaseLost(try await leaseToken(authority)).get()
+        }
+    }
+
+    private static func lostCapabilities(
+        _ lifecycle: EngineLifecycle?, recoveryBase: RunningSetState?
+    ) -> [CapabilityID] {
+        switch lifecycle {
+        case .degraded(let lost): return lost
+        case .recovering:
+            if case .degraded(let lost)? = recoveryBase { return lost }
+            return []
+        default: return []
+        }
+    }
+
+    private static func configureLease(_ authority: HostAuthority, holding window: WindowID?) async throws {
+        if let window {
+            if await authority.snapshot().lease == nil {
+                _ = try await authority.acquire(project: projectA, window: window).get()
+            } else if window != windowA, await authority.snapshot().lease?.windows.contains(windowA) == true {
+                try await authority.release(project: projectA).get()
+                _ = try await authority.acquire(project: projectA, window: window).get()
+            }
+        } else if await authority.snapshot().lease != nil {
+            try await authority.release(project: projectA).get()
+        }
+    }
+
+    /// Convenience only for tests that never hand engine work to a second double.
     static func makeAuthority(holding window: WindowID? = windowA,
                               lifecycleA: EngineLifecycle? = nil,
                               recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
-        let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
-                                          nominalRate: 48_000)
-        let authority = try HostAuthority(host: ledger, live: try liveState())
-        try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
-                                 lifecycle: lifecycleA, recoveryBase: recoveryBaseA).get()
-        try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
-        if let window { _ = try await authority.acquire(project: projectA, window: window).get() }
-        return authority
+        var engine = try ScriptedActivationEngine()
+        return try await makeAuthority(&engine, holding: window, lifecycleA: lifecycleA,
+                                       recoveryBaseA: recoveryBaseA)
+    }
+
+    static func begin(_ authority: HostAuthority, project: ProjectID = projectA,
+                      withAux: Bool = false) async throws {
+        let revision = try await state(authority, project).running.revision
+        try await authority.begin(request(base: revision), candidate: candidate(withAux: withAux, revision: revision),
+                                  project: project).get()
     }
 
     /// Begins `project`, drains the queue and routes the engine's success; returns the reviewed plan.
     static func review(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
                        project: ProjectID = projectA, withAux: Bool = false) async throws -> PreparedActivationID {
-        try await authority.begin(request(), candidate: candidate(withAux: withAux), project: project).get()
+        try await begin(authority, project: project, withAux: withAux)
         await engine.drain(authority)
         let answer = try #require(await engine.answerNext(authority))
         #expect(answer.verdict == .success(.routed))

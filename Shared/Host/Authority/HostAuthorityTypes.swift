@@ -35,6 +35,10 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
     case invalidRecoveryBase
     case lease(EngineLeaseError)
     case ledger(GenerationLedgerError)
+    case plans(EnginePlanLedgerRefusal)
+    case unqualifiedResident
+    case unboundPlan
+    case retirementQueued
     /// The engine command queue cannot take the transition's commands; nothing moved.
     case queueFull
     /// Only a window that renders the project (`WindowRenderRole.renders`) may
@@ -53,11 +57,12 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
 enum PrepareAnswerOutcome: Hashable, Sendable {
     /// The issuing project's transaction accepted it.
     case routed
-    /// A success for an abandoned attempt, refused by the transaction with `refusal`:
-    /// the engine's plan was queued for discard, exactly once.
-    case discarded(PreparedActivationID, refusal: ActivationRefusal)
-    /// An abandoned attempt's failure, or a success naming a live plan, or a plan
-    /// whose discard is already queued: nothing to discard.
+    /// An abandoned success consumed once, with qualified disposal scheduled.
+    case reclaimed(PlanBinding)
+    /// The transaction refused this success, but the answer was consumed and its
+    /// resource retired. This is intentionally NOT a state-preserving refusal.
+    case refusedReclaimed(PlanBinding, refusal: ActivationRefusal)
+    /// An abandoned attempt's terminal, cleaned-up failure consumed once.
     case dropped
 }
 
@@ -106,10 +111,10 @@ extension RunningSetState {
     }
 }
 
-/// A prepare attempt `abandonPrepare` gave up on; its late success is discarded.
-struct AbandonedPrepare: Hashable, Sendable {
+/// The exact engine preparation, never a raw plan-name ownership lookup.
+struct HostPrepare: Hashable, Sendable {
+    let instance: EngineInstanceID
     let attempt: PrepareAttemptID
-    let project: ProjectID
 }
 
 /// One open project: its only transaction copy and its engine lifecycle.
@@ -122,9 +127,6 @@ struct HostProjectState: Hashable {
     var lifecycle: EngineLifecycle
     /// The rendering/degradation base saved on first entry to recovery; `nil` outside recovery.
     var recoveryBase: RunningSetState?
-    /// The plan the engine prepared for the current review; meaningful only
-    /// while the transaction is awaiting review or committing.
-    var reviewed: PreparedActivationID?
 
     /// Preserve the first pre-recovery rendering state across repeated recovery entries.
     mutating func enterRecovery() {
@@ -133,6 +135,9 @@ struct HostProjectState: Hashable {
         }
         lifecycle = .recovering
     }
+    /// Retained through failed/partial reports until H5d resolves ownership.
+    var reviewed: PlanBinding?
+    var installed: PlanBinding?
 }
 
 @available(*, unavailable, message: "a project's transaction never leaves HostAuthority")
@@ -162,7 +167,8 @@ struct HostProjectSnapshot: Hashable, Sendable {
     let lifecycle: EngineLifecycle
     /// Saved rendering/degradation state during recovery; `.absent` for an unknown imported baseline.
     let recoveryBase: RunningSetState?
-    let reviewed: PreparedActivationID?
+    let reviewed: PlanBinding?
+    let installed: PlanBinding?
     let record: TransactionRecord
 
     /// Internal so the actor can build its snapshot; `TransactionRecord.init`
@@ -175,6 +181,7 @@ struct HostProjectSnapshot: Hashable, Sendable {
         lifecycle = state.lifecycle
         recoveryBase = state.recoveryBase
         reviewed = state.reviewed
+        installed = state.installed
         record = TransactionRecord(state.transaction)
     }
 }
@@ -188,9 +195,9 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     let live: HostLiveState
     let projects: [ProjectID: HostProjectSnapshot]
     /// The one unanswered, not abandoned prepare of each preparing project.
-    let outstanding: [ProjectID: PrepareAttemptID]
-    /// Abandoned and unanswered, oldest first; at most `abandonedPrepareLimit`.
-    let abandoned: [AbandonedPrepare]
+    let outstanding: [ProjectID: HostPrepare]
+    let plans: EnginePlanLedgerSnapshot
+    let retirementOutbox: [PlanBinding]
     let queue: EngineCommandQueue
     /// Commits delivered to the engine and not yet reported, by project.
     let inFlight: [ProjectID: CommitAttemptID]
@@ -203,7 +210,27 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     /// The one uniquely identified restore queued or delivered under the current lease.
     let restoring: RestoreRecord?
     /// Discards held until their project's next current-token restore is queued.
-    let deferredRestoreDiscards: [ProjectID: [PreparedActivationID]]
+    let deferredRestoreDiscards: [ProjectID: [PlanBinding]]
+}
+
+/// Exact target for a restore in the current engine instance. Empty is qualified too.
+enum RestoreTarget: Hashable, Sendable {
+    case empty(EngineInstanceID)
+    case resident(CommittedResident)
+
+    var instance: EngineInstanceID {
+        switch self {
+        case .empty(let instance): instance
+        case .resident(let resident): resident.binding.instance
+        }
+    }
+
+    var prepared: PreparedActivationID? {
+        switch self {
+        case .empty: nil
+        case .resident(let resident): resident.binding.prepared
+        }
+    }
 }
 
 /// One attempt to restore the running graph. Its retained object identity cannot
@@ -226,11 +253,11 @@ struct RestoreRecord: Hashable, Sendable {
     let attempt: RestoreAttemptID
     let project: ProjectID
     let revision: ContractRevision
-    let prepared: PreparedActivationID?
+    let target: RestoreTarget
     let token: EngineLeaseToken
     var delivered: Bool
     /// Discards emitted after this restore, held back if its lease is invalidated.
-    var discardAfterRestore: [PreparedActivationID]
+    var discardAfterRestore: [PlanBinding]
 }
 
 /// What recovery resolution scheduled.

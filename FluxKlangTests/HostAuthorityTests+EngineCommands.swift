@@ -1,48 +1,34 @@
-import Foundation
 import Testing
 @testable import FluxKlang
 
-// The same host, graph and plans as the `TransactionBench` defaults.
-private let projectA = ProjectID(validated: "prj.a")
-private let graphID = GraphID(validated: "graph.main")
-private let audio = CapabilityID(validated: "cap.audio")
-private let runningPlan = PreparedActivationID(validated: "prep.running")
-private let planID = PreparedActivationID(validated: "prep.next")
-private let planP = PreparedActivationID(validated: "prep.p")
-private let planQ = PreparedActivationID(validated: "prep.q")
 private let nodes = [NodeID(validated: "node.fx"), NodeID(validated: "node.eq"), NodeID(validated: "node.out")]
 
-private func report(_ outcome: ActivationCommitOutcome, prepared: PreparedActivationID = planID) -> CommitReportDraft {
-    switch outcome {
-    case .succeeded: CommitReportDraft(prepared: prepared, outcome: outcome, applied: Set(nodes), unapplied: [])
-    case .failed: CommitReportDraft(prepared: prepared, outcome: outcome, applied: [], unapplied: Set(nodes))
-    case .partial: CommitReportDraft(prepared: prepared, outcome: outcome, applied: [nodes[0]],
-                                     unapplied: [nodes[1], nodes[2]])
+/// Real ledger operations mint every binding/resident. Never an ownership lookup by raw ID.
+private struct QueuePlans {
+    let ledger: EnginePlanLedger
+    let previous: PlanBinding
+    let reviewed: PlanBinding
+    let resident: CommittedResident
+    let token: EngineLeaseToken
+
+    init(alias: Bool = false) throws {
+        ledger = try EnginePlanLedger(capacity: 4)
+        let attempts = try ledgerAttempts(2)
+        previous = try ledgerBinding(ledger, attempt: attempts[0], prepared: .init(validated: "prep.previous"))
+        reviewed = try ledgerBinding(ledger, attempt: attempts[1],
+                                     prepared: .init(validated: alias ? "prep.previous" : "prep.reviewed"))
+        try ledger.committed(previous, outcome: .succeeded)
+        resident = try #require(ledger.attestCommitted(previous))
+        var registry = EngineLeaseRegistry()
+        token = try registry.acquire(project: .init(validated: "prj.queue"),
+                                     window: .init(validated: "win.queue")).snapshot.token
     }
+
+    var running: RunningGraph { RunningGraph(revision: .initial, prepared: previous.prepared) }
 }
 
-/// A decoded graph carrying unknown fields at the root and on a node, plus extensions.
-private func extendedGraph() throws -> GraphDocument {
-    var graph = GraphDocument(
-        id: graphID, capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
-        nodes: [GraphNode(id: nodes[0], kind: .plugin, label: "FX", requiredCapabilities: [audio]),
-                GraphNode(id: nodes[1], kind: .plugin, label: "EQ")],
-        extensions: ["vendor": .object(["k": .bool(true)])]
-    )
-    graph.unknownFields = ["future": .object(["x": .array([.int(1), .double(2.5)])])]
-    graph.nodes[1].unknownFields = ["x-node": .string("kept")]
-    return try GraphDocument.decode(from: graph.encoded())
-}
-
-/// `count` discard effects with distinct plan IDs, in order.
-private func discards(_ count: Int, from start: Int = 0) throws -> [ActivationEffect] {
-    try (start..<(start + count)).map { .discard(try PreparedActivationID("prep.d\($0)")) }
-}
-
-private func drain(_ queue: inout EngineCommandQueue) -> [EngineCommand] {
-    var commands: [EngineCommand] = []
-    while let next = queue.dequeue() { commands.append(next) }
-    return commands
+private func step(_ decisions: [RecoveryDecision], _ effects: [ActivationEffect] = []) -> ActivationRecoveryStep {
+    ActivationRecoveryStep(cause: .leaseLost, decisions: decisions, effects: effects)
 }
 
 private func refusal(_ result: Result<Void, EngineCommandQueueRefusal>) -> EngineCommandQueueRefusal? {
@@ -50,7 +36,16 @@ private func refusal(_ result: Result<Void, EngineCommandQueueRefusal>) -> Engin
     return nil
 }
 
-/// Every `RecoveryDecision` case; a new case fails to compile here.
+private func drain(_ queue: inout EngineCommandQueue) -> [EngineCommand] {
+    var commands: [EngineCommand] = []
+    while let command = queue.dequeue() { commands.append(command) }
+    return commands
+}
+
+private func fillers(_ count: Int) -> [EngineCommand] {
+    (0..<count).map { .setOutputsMuted($0.isMultiple(of: 2)) }
+}
+
 private enum DecisionKind: CaseIterable {
     case restorePrevious, keepActivePartial, missingPlaceholder, recover
 
@@ -64,7 +59,6 @@ private enum DecisionKind: CaseIterable {
     }
 }
 
-/// Every `EngineCommand` case; a new case fails to compile here.
 private enum CommandKind: CaseIterable {
     case prepare, commit, discard, restore, keepActivePartial, placeholders, setOutputsMuted
 
@@ -81,364 +75,277 @@ private enum CommandKind: CaseIterable {
     }
 }
 
-/// A hand-built step. The queue ignores `cause` (diagnostics only); this is
-/// the one place that builds a step with a `cause`.
-private func step(_ decisions: [RecoveryDecision], _ effects: [ActivationEffect] = []) -> ActivationRecoveryStep {
-    ActivationRecoveryStep(cause: .leaseLost, decisions: decisions, effects: effects)
-}
-
-/// `ProjectGraphLimits.nodes` distinct node IDs, built deterministically.
-private func maximumNodes() throws -> Set<NodeID> {
-    Set(try (0..<ProjectGraphLimits.nodes).map { try NodeID("node.p\($0)") })
-}
-
-private func hasEmptyPlaceholders(_ commands: [EngineCommand]) -> Bool {
-    commands.contains { $0 == .placeholders([]) }
-}
-
-/// Every `ActivationEffect` case; a new case fails to compile here.
-private enum EffectKind: CaseIterable {
-    case prepare, commit, discard
-
-    init(_ effect: ActivationEffect) {
-        switch effect {
-        case .prepare: self = .prepare
-        case .commit: self = .commit
-        case .discard: self = .discard
-        }
-    }
-}
-
-extension TransactionBench {
-    /// Commits the default plan, has the engine report `outcome` and resolves it
-    /// under the held lease, returning the recovery step.
-    fileprivate mutating func resolved(_ outcome: ActivationCommitOutcome) throws -> ActivationRecoveryStep {
-        let attempt = try committedAttempt()
-        _ = try transaction.acknowledged(report(outcome)).get()
-        return try transaction.resolveRecovery(attempt, lease: registry.snapshot).get()
-    }
-
-    fileprivate var token: EngineLeaseToken {
-        get throws { try #require(registry.snapshot).token }
-    }
-}
-
 extension HostAuthorityTests {
     struct EngineCommands {
-        @Test func effectsDequeueInEmissionOrder() throws {
+        @Test func qualifiedCommandsDequeueInEmissionOrder() throws {
+            let plans = try QueuePlans()
             var host = try TransactionBench()
-            try host.acquire(projectA)
-            var emitted = [try host.begin()]
-            _ = try host.transaction.prepared(.success(planP)).get()
-            emitted.append(try host.transaction.cancel().get())
-            emitted.append(try host.begin())
-            _ = try host.transaction.prepared(.success(planQ)).get()
-            emitted.append(try host.commit(try host.authorize()).get())
-            emitted.append(try host.transaction.acknowledged(report(.succeeded, prepared: planQ)).get())
-            guard case .prepare(let first, let firstAttempt) = try #require(emitted[0].first),
-                  case .prepare(let second, let secondAttempt) = try #require(emitted[2].first) else {
-                Issue.record("Expected prepares, got \(emitted)")
-                return
-            }
-            #expect(firstAttempt != secondAttempt)
-            let expected: [EngineCommand] = [
-                .prepare(first.graph, firstAttempt), .discard(planP), .prepare(second.graph, secondAttempt),
-                .commit(planQ, try #require(host.transaction.lastAttempt), try host.token), .discard(runningPlan)
+            let attempt = try host.committedAttempt()
+            let graph = AuthorityBench.candidate()
+            let commands: [EngineCommand] = [
+                .prepare(graph, plans.reviewed.instance, plans.reviewed.attempt), .discard(plans.reviewed),
+                .commit(plans.previous, attempt, plans.token)
             ]
-            // One batch per transition, with a dequeue in between: FIFO across batches.
-            let later = try discards(1)
-            var perTransition = EngineCommandQueue()
-            for effects in emitted { try perTransition.enqueue(effects: effects).get() }
-            #expect(perTransition.count == expected.count)
-            let oldest = perTransition.dequeue()
-            #expect(oldest == expected[0])
-            try perTransition.enqueue(effects: later).get()
-            let rest = drain(&perTransition)
-            #expect(rest == Array(expected.dropFirst()) + later.map(EngineCommand.init))
-            // The whole sequence as one multi-effect batch keeps its emission order too.
-            var oneBatch = EngineCommandQueue()
-            try oneBatch.enqueue(effects: emitted.flatMap { $0 }).get()
-            #expect(oneBatch.pending == expected)
-            let drained = drain(&oneBatch)
-            let afterLast = oneBatch.dequeue()
-            #expect(drained == expected && oneBatch.isEmpty && afterLast == nil)
+            var queue = EngineCommandQueue()
+            for command in commands { try queue.enqueue([command]).get() }
+            #expect(queue.dequeue() == commands[0])
+            try queue.enqueue([.setOutputsMuted(true)]).get()
+            #expect(drain(&queue) == Array(commands.dropFirst()) + [.setOutputsMuted(true)])
+            var batch = EngineCommandQueue()
+            try batch.enqueue(commands).get()
+            #expect(drain(&batch) == commands && batch.isEmpty && batch.dequeue() == nil)
         }
 
         @Test func recoveryDecisionsPrecedeEffects() throws {
-            var failed = try TransactionBench()
-            let restore = try failed.resolved(.failed)
-            var partial = try TransactionBench()
-            let keep = try partial.resolved(.partial)
-            #expect(keep.decisions.count == 3 && keep.effects.count == 1)
-            let earlier = try discards(1)
-            let failedToken = try failed.token
-            let restoreAttempt = RestoreAttemptID()
+            let plans = try QueuePlans()
+            let restore = ActivationRecovery.restore(plans.running, discarding: plans.reviewed.prepared,
+                                                      cause: .commitFailed)
             var queue = EngineCommandQueue()
-            try queue.enqueue(effects: earlier).get()
-            try queue.enqueue(restore, running: failed.transaction.running, lease: failedToken,
-                              restoreAttempt: restoreAttempt).get()
-            try queue.enqueue(keep, running: partial.transaction.running, lease: try partial.token).get()
-            // restorePrevious → discard; keepActivePartial → placeholders (sorted) → discard of the replaced plan.
-            let recovered = drain(&queue)
-            #expect(recovered == earlier.map(EngineCommand.init) + [
-                .restore(restoreAttempt, .initial, runningPlan, failedToken), .discard(planID),
-                .keepActivePartial(planID), .placeholders([nodes[1], nodes[2]]), .discard(runningPlan)
+            try queue.enqueue([.setOutputsMuted(false)]).get()
+            let restoreAttempt = RestoreAttemptID()
+            try queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                              retiring: plans.reviewed, lease: plans.token, restoreAttempt: restoreAttempt,
+                              restoreTarget: .resident(plans.resident)).get()
+            try plans.ledger.committed(plans.reviewed, outcome: .partial)
+            let kept = try #require(plans.ledger.attestCommitted(plans.reviewed))
+            let keep = ActivationRecovery.keepPartial(unapplied: [nodes[1], nodes[2]], replacing: plans.running)
+            let running = RunningGraph(revision: try ContractRevision.initial.next(), prepared: plans.reviewed.prepared)
+            try queue.enqueue(keep, running: running, resident: kept, retiring: plans.previous, lease: nil).get()
+            #expect(drain(&queue) == [
+                .setOutputsMuted(false),
+                .restore(restoreAttempt, .initial, .resident(plans.resident), plans.token), .discard(plans.reviewed),
+                .keepActivePartial(kept), .placeholders([nodes[1], nodes[2]]), .discard(plans.previous)
             ])
-            // A fail-closed exit is a decision only: mute, nothing discarded.
-            var unknown = try TransactionBench()
-            let attempt = try unknown.committedAttempt()
-            let muted = try unknown.transaction.abandonCommit(attempt, reason: .outcomeUnknown).get()
-            try queue.enqueue(muted, running: unknown.transaction.running, lease: nil).get()
+            // Mute over a NONEMPTY graph has no resident role to supply.
+            let mute = ActivationRecovery.enterRecovery(.commitOutcomeUnknown, running: plans.running)
+            try queue.enqueue(mute, running: plans.running, resident: nil, retiring: nil, lease: nil).get()
             #expect(queue.pending == [.setOutputsMuted(true)])
-            // Within a step, decisions and effects each keep their own order.
-            let ordered = step([.missingPlaceholder(nodes[2]), .recover(muteOutputs: true)],
-                               [.discard(planQ), .discard(planP)])
-            var fresh = EngineCommandQueue()
-            try fresh.enqueue(ordered, running: unknown.transaction.running, lease: nil).get()
-            #expect(fresh.pending == [.placeholders([nodes[2]]), .setOutputsMuted(true), .discard(planQ),
-                                      .discard(planP)])
+            let before = queue
+            let two = step([.recover(muteOutputs: true)], [.discard(plans.reviewed.prepared),
+                                                         .discard(plans.previous.prepared)])
+            #expect(refusal(queue.enqueue(two, running: plans.running, resident: nil,
+                                           retiring: plans.reviewed, lease: nil)) == .runningMismatch)
+            #expect(queue == before)
         }
 
         @Test func queueRefusesWholeBatchBeyondCapacity() throws {
-            #expect(EngineCommandQueue.capacity == 256 && EngineCommandQueue().capacity == 256)
-            let all = try discards(260)
-            var empty = EngineCommandQueue()
-            let tooMany = empty.enqueue(effects: Array(all.prefix(257)))
-            #expect(refusal(tooMany) == .full(requested: 257, available: 256))
-            #expect(empty == EngineCommandQueue())
-            #expect(!empty.canAccept(-1) && empty.canAccept(0) && empty.canAccept(256) && !empty.canAccept(257))
-            // Exactly at capacity is accepted, in order; then nothing more fits.
-            var full = EngineCommandQueue()
-            try full.enqueue(effects: Array(all.prefix(256))).get()
-            #expect(full.count == 256 && full.canAccept(0) && !full.canAccept(1))
-            let before = full
-            let oneMore = full.enqueue(effects: [all[256]])
-            #expect(refusal(oneMore) == .full(requested: 1, available: 0))
-            #expect(full == before)
-            let drained = drain(&full)
-            #expect(drained == all.prefix(256).map(EngineCommand.init))
-            // One slot short: a three-effect batch and a three-command keep step are refused whole.
-            var host = try TransactionBench()
-            let keep = try host.resolved(.partial)
-            let (running, token) = (host.transaction.running, try host.token)
-            var nearlyFull = EngineCommandQueue()
-            try nearlyFull.enqueue(effects: Array(all.prefix(254))).get()
-            let snapshot = nearlyFull
-            let batch = nearlyFull.enqueue(effects: Array(all.suffix(3)))
-            #expect(refusal(batch) == .full(requested: 3, available: 2))
-            #expect(nearlyFull == snapshot)
-            let refusedStep = nearlyFull.enqueue(keep, running: running, lease: token)
-            #expect(refusal(refusedStep) == .full(requested: 3, available: 2))
-            #expect(nearlyFull == snapshot)
-            // A dequeue frees a slot, and the step then fills the queue exactly, after the older commands.
-            let oldest = nearlyFull.dequeue()
-            #expect(oldest == EngineCommand(all[0]))
-            try nearlyFull.enqueue(keep, running: running, lease: token).get()
-            #expect(nearlyFull.count == 256 && !nearlyFull.canAccept(1))
-            #expect(Array(nearlyFull.pending.suffix(4)) == [
-                EngineCommand(all[253]), .keepActivePartial(planID), .placeholders([nodes[1], nodes[2]]),
-                .discard(runningPlan)
-            ])
+            var queue = EngineCommandQueue()
+            #expect(EngineCommandQueue.capacity == 256 && queue.capacity == 256)
+            #expect(!queue.canAccept(-1) && queue.canAccept(0) && queue.canAccept(256) && !queue.canAccept(257))
+            #expect(refusal(queue.enqueue(fillers(257))) == .full(requested: 257, available: 256))
+            #expect(queue.isEmpty)
+            try queue.enqueue(fillers(256)).get()
+            let before = queue
+            #expect(refusal(queue.enqueue(fillers(1))) == .full(requested: 1, available: 0))
+            #expect(queue == before && queue.canAccept(0) && !queue.canAccept(1))
+            #expect(drain(&queue) == fillers(256))
+            try queue.enqueue(fillers(254)).get()
+            let nearlyFull = queue
+            #expect(refusal(queue.enqueue(fillers(3))) == .full(requested: 3, available: 2))
+            #expect(queue == nearlyFull)
         }
 
-        @Test func restoreAndKeepNeedTheirLeaseAndRunningPlan() throws {
-            var host = try TransactionBench()
-            let beforeRestore = host.transaction.running
-            let restore = try host.resolved(.failed)
-            let (running, token) = (host.transaction.running, try host.token)
-            // A rollback leaves the running graph as it was, so a real restore step cannot name a discarded plan.
-            #expect(beforeRestore == running)
+        @Test func restoreAndKeepNeedTheirLeaseAndQualifiedRunningPlan() throws {
+            let plans = try QueuePlans()
+            let restore = step([.restorePrevious(.initial)], [.discard(plans.reviewed.prepared)])
             var queue = EngineCommandQueue()
-            try queue.enqueue(effects: try discards(1)).get()
+            try queue.enqueue(fillers(1)).get()
             let before = queue
-            let missingAttempt = queue.enqueue(restore, running: running, lease: token)
+            let missingAttempt = queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                               retiring: plans.reviewed, lease: plans.token,
+                                               restoreTarget: .resident(plans.resident))
             #expect(refusal(missingAttempt) == .restoreAttemptRequired)
             #expect(queue == before)
-            let unleased = queue.enqueue(restore, running: running, lease: nil)
-            #expect(refusal(unleased) == .leaseRequired)
-            let moved = RunningGraph(revision: try running.revision.next(), prepared: running.prepared)
-            let otherRevision = queue.enqueue(restore, running: moved, lease: token)
-            #expect(refusal(otherRevision) == .runningMismatch)
-            let keep = step([.keepActivePartial])
-            let bare = RunningGraph(revision: .initial, prepared: nil)
-            let planless = queue.enqueue(keep, running: bare, lease: token)
-            #expect(refusal(planless) == .runningMismatch)
-            // The pre-step running graph names the plan the real keep step discards: refused.
-            var partial = try TransactionBench()
-            let preStep = partial.transaction.running
-            let realKeep = try partial.resolved(.partial)
-            #expect(realKeep.effects == [.discard(try #require(preStep.prepared))])
-            let stale = queue.enqueue(realKeep, running: preStep, lease: try partial.token)
-            #expect(refusal(stale) == .runningMismatch)
-            // The same for a (hand-built) restore that would discard the plan it restores.
-            let selfDiscard = step([.restorePrevious(.initial)], [.discard(runningPlan)])
-            let restoreStale = queue.enqueue(selfDiscard, running: preStep, lease: token)
-            #expect(refusal(restoreStale) == .runningMismatch)
-            #expect(queue == before)
-            // A running graph without a plan is restored as such.
             let restoreAttempt = RestoreAttemptID()
-            try queue.enqueue(restore, running: bare, lease: token, restoreAttempt: restoreAttempt).get()
-            #expect(Array(queue.pending.dropFirst()) == [
-                .restore(restoreAttempt, .initial, nil, token), .discard(planID)
+            let unleased = queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                         retiring: plans.reviewed, lease: nil, restoreAttempt: restoreAttempt,
+                                         restoreTarget: .resident(plans.resident))
+            #expect(refusal(unleased) == .leaseRequired)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: plans.reviewed, lease: nil)) == .leaseRequired)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: nil,
+                                           retiring: plans.reviewed, lease: plans.token)) == .runningMismatch)
+            let moved = RunningGraph(revision: try ContractRevision.initial.next(), prepared: plans.previous.prepared)
+            #expect(refusal(queue.enqueue(restore, running: moved, resident: plans.resident,
+                                           retiring: plans.reviewed, lease: plans.token)) == .runningMismatch)
+            let bare = RunningGraph(revision: .initial, prepared: nil)
+            #expect(refusal(queue.enqueue(step([.keepActivePartial]), running: bare, resident: nil,
+                                           retiring: nil, lease: plans.token)) == .runningMismatch)
+            let selfDiscard = step([.restorePrevious(.initial)], [.discard(plans.previous.prepared)])
+            #expect(refusal(queue.enqueue(selfDiscard, running: plans.running, resident: plans.resident,
+                                           retiring: plans.previous, lease: plans.token)) == .runningMismatch)
+            try plans.ledger.committed(plans.reviewed, outcome: .partial)
+            let wrongRole = try #require(plans.ledger.attestCommitted(plans.reviewed))
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: wrongRole,
+                                           retiring: plans.previous, lease: plans.token)) == .runningMismatch)
+            #expect(queue == before)
+            let emptyTarget = RestoreTarget.empty(plans.ledger.currentInstance)
+            try queue.enqueue(restore, running: bare, resident: nil, retiring: plans.reviewed, lease: plans.token,
+                              restoreAttempt: restoreAttempt, restoreTarget: emptyTarget).get()
+            let expected: [EngineCommand] = [
+                .restore(restoreAttempt, .initial, emptyTarget, plans.token), .discard(plans.reviewed)
+            ]
+            #expect(Array(queue.pending.dropFirst()) == expected)
+        }
+
+        @Test func explicitRestoreTargetCannotDiscardItsResident() throws {
+            let plans = try QueuePlans()
+            let restore = step([.restorePrevious(.initial)], [.discard(plans.previous.prepared)])
+            let target = RestoreTarget.resident(plans.resident)
+            var queue = EngineCommandQueue()
+            try queue.enqueue(fillers(1)).get()
+            let before = queue
+
+            let refused = queue.enqueue(
+                restore, running: plans.running, resident: nil, retiring: plans.previous,
+                lease: plans.token, restoreAttempt: RestoreAttemptID(), restoreTarget: target
+            )
+            #expect(refusal(refused) == .runningMismatch)
+            #expect(queue == before)
+        }
+
+        @Test func retirementAndResidentAreExactOptionalRoles() throws {
+            let plans = try QueuePlans(alias: true)
+            let restore = step([.restorePrevious(.initial)], [.discard(plans.reviewed.prepared)])
+            var queue = EngineCommandQueue()
+            // Same raw name, different qualified preparations: allowed. Role authority belongs to the host.
+            let restoreAttempt = RestoreAttemptID()
+            let target = RestoreTarget.resident(plans.resident)
+            try queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                              retiring: plans.reviewed, lease: plans.token, restoreAttempt: restoreAttempt,
+                              restoreTarget: target).get()
+            #expect(queue.pending == [
+                .restore(restoreAttempt, .initial, target, plans.token), .discard(plans.reviewed)
             ])
+            let before = queue
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: plans.token)) == .runningMismatch)
+            let mute = step([.recover(muteOutputs: true)])
+            #expect(refusal(queue.enqueue(mute, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: nil)) == .runningMismatch)
+            #expect(refusal(queue.enqueue(mute, running: plans.running, resident: nil,
+                                           retiring: plans.reviewed, lease: nil)) == .runningMismatch)
+            #expect(queue == before)
         }
 
         @Test func maximumPartialKeepNeedsThreeSlots() throws {
-            let unapplied = try maximumNodes()
-            #expect(unapplied.count == ProjectGraphLimits.nodes && EngineCommandQueue.maxRecoveryStepSlots == 3)
-            let previous = RunningGraph(revision: .initial, prepared: runningPlan)
-            let keep = ActivationRecovery.keepPartial(unapplied: unapplied, replacing: previous)
-            let running = RunningGraph(revision: try ContractRevision.initial.next(), prepared: planID)
-            var host = try TransactionBench()
-            try host.acquire(projectA)
-            let (token, fillers) = (try host.token, try discards(254))
-            // Full minus two: refused whole.
-            var minusTwo = EngineCommandQueue()
-            try minusTwo.enqueue(effects: fillers).get()
-            let before = minusTwo
-            let refused = minusTwo.enqueue(keep, running: running, lease: token)
-            #expect(refusal(refused) == .full(requested: 3, available: 2))
-            #expect(minusTwo == before)
-            // Full minus three: exactly keep, one placeholders command (sorted by the policy), discard.
-            var minusThree = EngineCommandQueue()
-            try minusThree.enqueue(effects: Array(fillers.prefix(253))).get()
-            #expect(minusThree.canAccept(EngineCommandQueue.maxRecoveryStepSlots))
-            try minusThree.enqueue(keep, running: running, lease: token).get()
-            #expect(minusThree.count == EngineCommandQueue.capacity)
-            // The largest step the policy produces uses exactly the documented per-step budget.
-            var empty = EngineCommandQueue()
-            try empty.enqueue(keep, running: running, lease: token).get()
-            #expect(empty.count == EngineCommandQueue.maxRecoveryStepSlots)
-            #expect(Array(minusThree.pending.suffix(3)) == [
-                .keepActivePartial(planID), .placeholders(unapplied.sorted()), .discard(runningPlan)
+            let plans = try QueuePlans()
+            try plans.ledger.committed(plans.reviewed, outcome: .partial)
+            let resident = try #require(plans.ledger.attestCommitted(plans.reviewed))
+            let unapplied = Set(try (0..<ProjectGraphLimits.nodes).map { try NodeID("node.p\($0)") })
+            let keep = ActivationRecovery.keepPartial(unapplied: unapplied, replacing: plans.running)
+            let running = RunningGraph(revision: try ContractRevision.initial.next(), prepared: plans.reviewed.prepared)
+            var queue = EngineCommandQueue()
+            try queue.enqueue(fillers(254)).get()
+            let before = queue
+            #expect(refusal(queue.enqueue(keep, running: running, resident: resident,
+                                           retiring: plans.previous, lease: nil)) == .full(requested: 3, available: 2))
+            #expect(queue == before)
+            #expect(queue.dequeue() == .setOutputsMuted(true))
+            try queue.enqueue(keep, running: running, resident: resident, retiring: plans.previous, lease: nil).get()
+            #expect(queue.count == EngineCommandQueue.capacity)
+            #expect(Array(queue.pending.suffix(3)) == [
+                .keepActivePartial(resident), .placeholders(unapplied.sorted()), .discard(plans.previous)
             ])
+            var empty = EngineCommandQueue()
+            try empty.enqueue(keep, running: running, resident: resident, retiring: plans.previous, lease: nil).get()
+            #expect(empty.count == EngineCommandQueue.maxRecoveryStepSlots && empty.count == 3)
         }
 
         @Test func refusalPartWayThroughStepLeavesQueueUnchanged() throws {
-            var host = try TransactionBench()
-            try host.acquire(projectA)
-            let token = try host.token
-            let running = RunningGraph(revision: .initial, prepared: runningPlan)
+            let plans = try QueuePlans()
             let wrong = try ContractRevision.initial.next()
             var queue = EngineCommandQueue()
-            try queue.enqueue(effects: try discards(1)).get()
+            try queue.enqueue(fillers(256)).get()
             let before = queue
-            // Earlier decisions map fine; the last one is refused, and nothing of the step is queued.
             let late = step([.missingPlaceholder(nodes[0]), .recover(muteOutputs: true), .restorePrevious(wrong)],
-                            [.discard(planP)])
-            let mismatch = queue.enqueue(late, running: running, lease: token)
-            #expect(refusal(mismatch) == .runningMismatch)
-            let unleased = queue.enqueue(step([.recover(muteOutputs: true), .restorePrevious(.initial)]),
-                                         running: running, lease: nil)
-            #expect(refusal(unleased) == .leaseRequired)
-            #expect(queue == before)
-            // Check order: revision, then lease, then capacity.
-            let bothWrong = queue.enqueue(step([.restorePrevious(wrong)]), running: running, lease: nil)
-            #expect(refusal(bothWrong) == .runningMismatch)
-            var full = EngineCommandQueue()
-            try full.enqueue(effects: try discards(EngineCommandQueue.capacity)).get()
-            let unleasedFull = full.enqueue(step([.restorePrevious(.initial)]), running: running, lease: nil)
-            #expect(refusal(unleasedFull) == .leaseRequired)
+                            [.discard(plans.reviewed.prepared)])
+            #expect(refusal(queue.enqueue(late, running: plans.running, resident: plans.resident,
+                                           retiring: plans.reviewed, lease: nil)) == .runningMismatch)
+            let restore = step([.recover(muteOutputs: true), .restorePrevious(.initial)])
+            // Revision -> plan -> lease -> whole-batch capacity.
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: nil,
+                                           retiring: nil, lease: nil)) == .runningMismatch)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: nil)) == .leaseRequired)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: plans.token)) == .restoreAttemptRequired)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: plans.token,
+                                           restoreAttempt: RestoreAttemptID())) == .full(requested: 2, available: 0))
             #expect(queue == before)
         }
 
         @Test func placeholderRunsFoldWithoutCrossingDecisions() throws {
-            let running = RunningGraph(revision: .initial, prepared: runningPlan)
-            // The policy's own crash decision: one node, one command.
-            let crash = step(ActivationRecovery.decisions(for: .processorCrashed(nodes[1]), running: running))
+            let plans = try QueuePlans()
+            let crash = step(ActivationRecovery.decisions(for: .processorCrashed(nodes[1]), running: plans.running))
             var queue = EngineCommandQueue()
-            try queue.enqueue(crash, running: running, lease: nil).get()
-            #expect(queue.pending == [.placeholders([nodes[1]])])
-            // Two runs split by a decision stay two commands; each keeps decision order and duplicates.
+            try queue.enqueue(crash, running: plans.running, resident: nil, retiring: nil, lease: nil).get()
             let split = step([.missingPlaceholder(nodes[2]), .missingPlaceholder(nodes[0]), .recover(muteOutputs: true),
-                              .missingPlaceholder(nodes[1]), .missingPlaceholder(nodes[1])], [.discard(planP)])
-            var twoRuns = EngineCommandQueue()
-            try twoRuns.enqueue(split, running: running, lease: nil).get()
-            #expect(twoRuns.pending == [
-                .placeholders([nodes[2], nodes[0]]), .setOutputsMuted(true), .placeholders([nodes[1], nodes[1]]),
-                .discard(planP)
-            ])
-            // Runs never merge across steps, and no step emits an empty run.
-            try queue.enqueue(step([.missingPlaceholder(nodes[2])]), running: running, lease: nil).get()
-            try queue.enqueue(step([.recover(muteOutputs: true)], [.discard(planQ)]), running: running,
-                              lease: nil).get()
-            try queue.enqueue(step([]), running: running, lease: nil).get()
+                              .missingPlaceholder(nodes[1]), .missingPlaceholder(nodes[1])],
+                             [.discard(plans.reviewed.prepared)])
+            try queue.enqueue(split, running: plans.running, resident: nil, retiring: plans.reviewed, lease: nil).get()
+            try queue.enqueue(step([.missingPlaceholder(nodes[2])]), running: plans.running,
+                              resident: nil, retiring: nil, lease: nil).get()
+            try queue.enqueue(step([]), running: plans.running, resident: nil, retiring: nil, lease: nil).get()
             #expect(queue.pending == [
-                .placeholders([nodes[1]]), .placeholders([nodes[2]]), .setOutputsMuted(true), .discard(planQ)
+                .placeholders([nodes[1]]), .placeholders([nodes[2], nodes[0]]), .setOutputsMuted(true),
+                .placeholders([nodes[1], nodes[1]]), .discard(plans.reviewed), .placeholders([nodes[2]])
             ])
-            #expect(!hasEmptyPlaceholders(queue.pending) && !hasEmptyPlaceholders(twoRuns.pending))
+            #expect(!queue.pending.contains(.placeholders([])))
         }
 
-        @Test func prepareCarriesValidatedGraphBytes() throws {
-            let graph = try extendedGraph()
-            #expect(!graph.unknownFields.isEmpty && !graph.nodes[1].unknownFields.isEmpty && graph.extensions != nil)
-            var host = try TransactionBench()
-            try host.acquire(projectA)
-            let effects = try host.begin(candidate: graph)
-            let validated = try #require(host.transaction.validated)
-            var queue = EngineCommandQueue()
-            try queue.enqueue(effects: effects).get()
-            let first = queue.dequeue()
-            guard case .prepare(let sent, let attempt) = try #require(first) else {
-                Issue.record("Expected a prepare, got \(effects)")
+        @Test func prepareCarriesValidatedGraphBytes() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await AuthorityBench.makeAuthority(&engine)
+            let revision = try await AuthorityBench.state(authority).running.revision
+            var graph = AuthorityBench.candidate(revision: revision)
+            graph.unknownFields = ["future": .array([.int(1), .double(2.5)])]
+            graph.nodes[0].unknownFields = ["x-node": .string("kept")]
+            graph.extensions = ["vendor": .object(["k": .bool(true)])]
+            let decoded = try GraphDocument.decode(from: graph.encoded())
+            try await authority.begin(AuthorityBench.request(base: revision), candidate: decoded,
+                                      project: AuthorityBench.projectA).get()
+            let first = try #require(await authority.nextEngineCommand())
+            guard case .prepare(let sent, let instance, let attempt) = first else {
+                Issue.record("Expected prepare")
                 return
             }
-            #expect(attempt == host.transaction.lastPrepareAttempt)
-            #expect(try sent.encoded() == validated.graph.encoded())
-            #expect(try sent.encoded() == graph.encoded())
+            #expect(try sent.encoded() == decoded.encoded())
             #expect(sent.unknownFields == graph.unknownFields && sent.extensions == graph.extensions)
-            #expect(sent.node(nodes[1])?.unknownFields == ["x-node": .string("kept")])
+            #expect(sent.nodes[0].unknownFields == ["x-node": .string("kept")])
+            #expect(await authority.snapshot().outstanding[AuthorityBench.projectA]
+                    == HostPrepare(instance: instance, attempt: attempt))
         }
 
-        @Test func everyDecisionAndEffectMapsToExactlyOneCommand() throws {
-            var host = try TransactionBench()
-            let attempt = try host.committedAttempt()
-            let token = try host.token
-            let running = RunningGraph(revision: .initial, prepared: runningPlan)
+        @Test func everyDecisionMapsToItsQualifiedCommand() throws {
+            let plans = try QueuePlans()
             let restoreAttempt = RestoreAttemptID()
-            let decisions: [(RecoveryDecision, EngineCommand)] = [
-                (.restorePrevious(.initial), .restore(restoreAttempt, .initial, runningPlan, token)),
-                (.keepActivePartial, .keepActivePartial(runningPlan)),
+            let target = RestoreTarget.resident(plans.resident)
+            let cases: [(RecoveryDecision, EngineCommand)] = [
+                (.restorePrevious(.initial), .restore(restoreAttempt, .initial, target, plans.token)),
+                (.keepActivePartial, .keepActivePartial(plans.resident)),
                 (.missingPlaceholder(nodes[2]), .placeholders([nodes[2]])),
                 (.recover(muteOutputs: true), .setOutputsMuted(true)),
                 (.recover(muteOutputs: false), .setOutputsMuted(false))
             ]
-            #expect(Set(decisions.map { DecisionKind($0.0) }) == Set(DecisionKind.allCases))
-            // Each decision kind maps to one command kind; only placeholder runs fold.
-            let kinds: [DecisionKind: CommandKind] = [
-                .restorePrevious: .restore, .keepActivePartial: .keepActivePartial,
-                .missingPlaceholder: .placeholders, .recover: .setOutputsMuted
-            ]
-            for (decision, command) in decisions {
+            #expect(Set(cases.map { DecisionKind($0.0) }) == Set(DecisionKind.allCases))
+            var kinds: Set<CommandKind> = [.prepare, .commit, .discard]
+            for (decision, expected) in cases {
                 var queue = EngineCommandQueue()
-                let admissionID: RestoreAttemptID?
-                if case .restorePrevious = decision {
-                    admissionID = restoreAttempt
-                } else {
-                    admissionID = nil
+                let resident: CommittedResident?
+                switch decision {
+                case .restorePrevious, .keepActivePartial: resident = plans.resident
+                case .recover, .missingPlaceholder: resident = nil
                 }
-                try queue.enqueue(step([decision]), running: running, lease: token,
-                                  restoreAttempt: admissionID).get()
-                #expect(queue.pending == [command])
-                #expect(kinds[DecisionKind(decision)] == CommandKind(command))
+                try queue.enqueue(step([decision]), running: plans.running, resident: resident,
+                                  retiring: nil, lease: plans.token,
+                                  restoreAttempt: decision == .restorePrevious(.initial) ? restoreAttempt : nil,
+                                  restoreTarget: decision == .restorePrevious(.initial) ? target : nil).get()
+                #expect(queue.pending == [expected])
+                kinds.insert(CommandKind(expected))
             }
-            var preparing = try TransactionBench()
-            try preparing.acquire(projectA)
-            let began = try preparing.begin()
-            let prepare = try #require(began.first)
-            let validated = try #require(preparing.transaction.validated)
-            let prepareAttempt = try #require(preparing.transaction.lastPrepareAttempt)
-            let effects: [(ActivationEffect, EngineCommand)] = [
-                (prepare, .prepare(validated.graph, prepareAttempt)),
-                (.commit(planID, attempt, token), .commit(planID, attempt, token)),
-                (.discard(planP), .discard(planP))
-            ]
-            #expect(Set(effects.map { EffectKind($0.0) }) == Set(EffectKind.allCases))
-            for (effect, command) in effects {
-                var queue = EngineCommandQueue()
-                try queue.enqueue(effects: [effect]).get()
-                #expect(queue.pending == [command])
-            }
+            #expect(kinds == Set(CommandKind.allCases))
         }
     }
 }
