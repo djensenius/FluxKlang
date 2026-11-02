@@ -81,7 +81,7 @@ struct HardwareServiceFactories: Sendable {
                     return InertWingTransport()
                 }
                 ProductionAccessAudit.shared.record(.factoryEvaluated, for: .wingTransport, mirroring: audit)
-                return WingTransport(remotePort: port, localNetworkProbe: probe)
+                return WingTransport(remotePort: port, localNetworkProbe: probe, mirroring: audit)
             },
             wingDiscoveryBroadcastHosts: WingDiscovery.activeIPv4BroadcastHosts)
     }
