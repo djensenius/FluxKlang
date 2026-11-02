@@ -3,8 +3,8 @@
 //  FluxKlangTests
 //
 //  A bounded, scripted stream of generation, restart and anchor events with
-//  injectable delivery faults. Every event a fault removes is counted and kept
-//  in a bounded record, so a lost event is never silent.
+//  injectable delivery faults. Lost-event counters saturate; the record retains
+//  only the first `capacity` losses for inspection.
 //
 
 @testable import FluxKlang
