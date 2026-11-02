@@ -1,4 +1,6 @@
-.PHONY: generate build build-mac build-for-testing-mac test test-mac lint hardware-inventory-self-check clean
+.PHONY: generate build build-mac build-for-testing-mac test test-mac lint fault-seam-policy-self-check hardware-inventory-self-check clean
+
+REPOSITORY_ROOT := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
 IOS_SIM_DESTINATION ?= platform=iOS Simulator,name=iPhone 17 Pro
 
@@ -34,7 +36,10 @@ test-mac:
 	  test CODE_SIGNING_ALLOWED=NO
 
 lint:
-	swiftlint --strict
+	cd "$(REPOSITORY_ROOT)" && swiftlint --strict
+
+fault-seam-policy-self-check:
+	cd "$(REPOSITORY_ROOT)" && python3 scripts/test-seam-policy/check.py
 
 # Defence-in-depth tripwire for the passive hardware inventory lister (#67); runs nothing on hardware.
 # --require-symbols: fail if the lister cannot be compiled and symbol-checked (needs a Swift toolchain).
