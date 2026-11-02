@@ -662,6 +662,7 @@
 		DC1193550C7DB905D32E372D /* EffectEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C7D45D2618BA7418E7F0F12 /* EffectEditor.swift */; };
 		DD04C8403BEA5DCB98DE4D26 /* SceneButtonsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E470C74DDAD45D6C32ABCF5C /* SceneButtonsView.swift */; };
 		DD89C75BCD0319E71EF2FDE5 /* ProjectPackageManifestValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F48ABB0F051144C2D459093A /* ProjectPackageManifestValidation.swift */; };
+		DE1130BB7039BA4B2E9A055F /* AppModel+StoreLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7C4047DE6D500AF3A4955B8 /* AppModel+StoreLifecycle.swift */; };
 		DE57C1505C13F8971FF29618 /* HostAuthorityTests+BookCommitReports.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCE1B699942029232011E8B /* HostAuthorityTests+BookCommitReports.swift */; };
 		DE9570D49DFAE3B2420A5BBA /* ProjectDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0E6972E214A8389AA5D337 /* ProjectDocument.swift */; };
 		DEC5E99ADD669638198D373F /* GraphEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BD89A407AC6D00A9502EC3 /* GraphEdge.swift */; };
@@ -728,6 +729,7 @@
 		F1477A8B8AC9ED9C9396AC56 /* Revisions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 158B6C4F77C258FE0615A162 /* Revisions.swift */; };
 		F20CC4ECAA479DE230EDE19B /* MusicalTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47E2C2B6DF6A7753D8377377 /* MusicalTimeline.swift */; };
 		F2140B7BB6B895C00439C50F /* StudioSignalCompiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 443BC949EB9A1CCE391A5D33 /* StudioSignalCompiler.swift */; };
+		F241F95FD172247BCB96FC76 /* AppModelStoreLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A381FD2C0B4084935B698A7 /* AppModelStoreLifecycleTests.swift */; };
 		F273C54B1BCFA5EBC442D177 /* HostAuthorityTests+EngineCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 880CCB258FEC3EAD7C30102A /* HostAuthorityTests+EngineCommands.swift */; };
 		F2AB6700C06FF7B8FA47A00F /* HostAuthorityTests+RestoreReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD214011A11D4DCD874A9B45 /* HostAuthorityTests+RestoreReview.swift */; };
 		F2C7C633F9AB0630890C69E1 /* AssistantRoutingOutputResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C89456A19B66239EF672C0D /* AssistantRoutingOutputResolver.swift */; };
@@ -761,6 +763,7 @@
 		FEF78D21F1F541D551F9DA4F /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43EBFB69DD1868A35638780 /* Preset.swift */; };
 		FF4E21BBEE9EC76C24B83B00 /* WingAddressBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA76996BED7330A44E3DDDF /* WingAddressBook.swift */; };
 		FFDB3F2E97FBFF72AE445156 /* PermissionProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7594B598C18B762404A9705 /* PermissionProbe.swift */; };
+		FFFFE1FD59DB8A233312EC56 /* AppModel+StoreLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7C4047DE6D500AF3A4955B8 /* AppModel+StoreLifecycle.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -942,6 +945,7 @@
 		582533B0649437667E8E9E32 /* TelemetrySlots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetrySlots.swift; sourceTree = "<group>"; };
 		5922EF0D5D10CCBA7895AF02 /* ContractFixtureTests+StateMatrix.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContractFixtureTests+StateMatrix.swift"; sourceTree = "<group>"; };
 		5932A8319C2B122F05FFC3C1 /* launch-control-xl.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "launch-control-xl.json"; sourceTree = "<group>"; };
+		5A381FD2C0B4084935B698A7 /* AppModelStoreLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelStoreLifecycleTests.swift; sourceTree = "<group>"; };
 		5A720B12AF7724D7C8CC0209 /* ProjectGraphLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectGraphLimits.swift; sourceTree = "<group>"; };
 		5B0C58809B54E7219DC7642B /* SpatialRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialRouting.swift; sourceTree = "<group>"; };
 		5B1446B9522076E60C8EF64B /* TemporaryDeviceMove.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryDeviceMove.swift; sourceTree = "<group>"; };
@@ -1181,6 +1185,7 @@
 		D64BD7BCB392D3013AF8EF17 /* AssistantActionPlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionPlanningTests.swift; sourceTree = "<group>"; };
 		D6B297784BD0D3C40CCC4900 /* HostAuthorityTests+ActorRestoreDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityTests+ActorRestoreDependencies.swift"; sourceTree = "<group>"; };
 		D77E7718C94E0A74F0E2D651 /* ControlContractTests+Media.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+Media.swift"; sourceTree = "<group>"; };
+		D7C4047DE6D500AF3A4955B8 /* AppModel+StoreLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+StoreLifecycle.swift"; sourceTree = "<group>"; };
 		D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchControlXLController.swift; sourceTree = "<group>"; };
 		DB768C5EFED482B9915578A5 /* StudioWiringAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioWiringAdvisor.swift; sourceTree = "<group>"; };
 		DCAD482DF583CD29F6E56C36 /* ExtensionFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionFields.swift; sourceTree = "<group>"; };
@@ -1444,6 +1449,7 @@
 				EFB4B221ABC938A3BC766A7C /* AppModel+AssistantMixer.swift */,
 				BDCA2E10C818A6626C459D2B /* AppModel+Permissions.swift */,
 				D0A3635A77DCCE77523F046D /* AppModel+Spatial.swift */,
+				D7C4047DE6D500AF3A4955B8 /* AppModel+StoreLifecycle.swift */,
 				2F960D84BD1E20CF0D4653FB /* AppModel+StudioApply.swift */,
 				7829A1C698F339C5D662010C /* AppRootView.swift */,
 				8921F279F702C0BAA1564282 /* CloudChangeObserver.swift */,
@@ -1948,6 +1954,7 @@
 				A7E84F03041D94FBE985741E /* AcceptanceMigrationTests.swift */,
 				53C4605FE5850B0F72C47C46 /* AppModelConversationOwnershipTests.swift */,
 				5F4DD18B23D5827E1C74381E /* AppModelPersistenceOwnershipTests.swift */,
+				5A381FD2C0B4084935B698A7 /* AppModelStoreLifecycleTests.swift */,
 				882B7F70F65B33BAD91EF6B8 /* AppNavigationTests.swift */,
 				D13BFABF29B6D419C1F63BAE /* AppPersistenceSelectionTests.swift */,
 				3AAACB6391E9BBECE55BA009 /* AskFluxKlangIntentTests.swift */,
@@ -2372,6 +2379,7 @@
 				2EB7C13476B99BB354C31955 /* AppModel+AssistantMixer.swift in Sources */,
 				6E4DE418AE433BD97D20E4F0 /* AppModel+Permissions.swift in Sources */,
 				279A4089FAC97C1C7707EDE3 /* AppModel+Spatial.swift in Sources */,
+				FFFFE1FD59DB8A233312EC56 /* AppModel+StoreLifecycle.swift in Sources */,
 				36012A098524D59BDF611FC5 /* AppModel+StudioApply.swift in Sources */,
 				160716D7E47B6E17A4330916 /* AppModel.swift in Sources */,
 				EF2E5447D42AEE6CEB340EE5 /* AppRootView.swift in Sources */,
@@ -2655,6 +2663,7 @@
 				77BA2205742AA1141E9B7CBC /* AppModel+AssistantMixer.swift in Sources */,
 				537B4DBCD56B793EC6F1C50D /* AppModel+Permissions.swift in Sources */,
 				C4FF30B14A1C07C75C412AFC /* AppModel+Spatial.swift in Sources */,
+				DE1130BB7039BA4B2E9A055F /* AppModel+StoreLifecycle.swift in Sources */,
 				E7970AE43B12A58ACE557A79 /* AppModel+StudioApply.swift in Sources */,
 				133F6DADCC26847A9B0F95C5 /* AppModel.swift in Sources */,
 				CEA8051019D22B78C3FF0424 /* AppRootView.swift in Sources */,
@@ -2950,6 +2959,7 @@
 				91C55C3EF1365EABFDDBF1BE /* AdmissionContextFixture.swift in Sources */,
 				B873291F205589C78203AD2E /* AppModelConversationOwnershipTests.swift in Sources */,
 				AC67F0F4570D0106F5B5198E /* AppModelPersistenceOwnershipTests.swift in Sources */,
+				F241F95FD172247BCB96FC76 /* AppModelStoreLifecycleTests.swift in Sources */,
 				D533DB5110B0262A64819E43 /* AppNavigationTests.swift in Sources */,
 				10E2262B688D8BE1864009FF /* AppPersistenceSelectionTests.swift in Sources */,
 				03E7234D715EDE07A83C0AF9 /* AskFluxKlangIntentTests.swift in Sources */,
