@@ -44,7 +44,10 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     }
 
     private func requireModelAccess() throws {
-        guard !deniesModelAccess else { throw InterpretationError.unavailable }
+        guard !deniesModelAccess else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantActionInterpreter, mirroring: mirror)
+            throw InterpretationError.unavailable
+        }
     }
 
     func availability() async -> AssistantActionInterpreterAvailability {
@@ -72,6 +75,7 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
 
     func interpret(_ request: AssistantActionInterpretationRequest) async throws -> AssistantActionInterpretation {
         try Task.checkCancellation()
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantActionInterpreter, mirroring: mirror)
         try requireModelAccess()
         guard request.text.count <= AssistantActionInterpretationAdapter.maximumTextLength else {
             return .clarification("No changes were made. Submit a request of at most 2,000 characters.")
@@ -88,9 +92,13 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         if AssistantRoutingOwnership.owns(request.text) {
             return try await interpretRouting(request.text)
         }
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
+        let model = SystemLanguageModel.default
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
         let session = LanguageModelSession(
-            model: SystemLanguageModel.default, tools: [], instructions: Self.instructions)
+            model: model, tools: [], instructions: Self.instructions)
         // Never publish partial generated snapshots. Completed content is still untrusted evidence.
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
         let content = try await session.respond(
             to: prompt, generating: GuidedActionOutput.self,
             options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 512)).content
@@ -125,8 +133,12 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     @available(iOS 27, macOS 27, *)
     private func interpretRouting(_ text: String) async throws -> AssistantActionInterpretation {
         try requireModelAccess()
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
+        let model = SystemLanguageModel.default
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
         let session = LanguageModelSession(
-            model: SystemLanguageModel.default, tools: [], instructions: Self.routingInstructions)
+            model: model, tools: [], instructions: Self.routingInstructions)
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantActionInterpreter, mirroring: mirror)
         let content = try await session.respond(to: text, generating: GuidedRoutingOutput.self,
             options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: 1_600)).content
         try Task.checkCancellation()
