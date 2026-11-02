@@ -398,7 +398,7 @@ extension FixtureTests {
             try rejectLegacy("legacy-external-extension", first: "extension XCTestCase { func testAccess() {} }")
         }
         test("plain inherited and generic helpers plus resolved non-XCTest test-shaped helpers remain valid") {
-            let report = try sourceReport([("A.swift", """
+            let source = """
             class PlainBase {}
             typealias HelperBase = PlainBase
             class Helper: HelperBase { func testUtility() {} }
@@ -409,7 +409,12 @@ extension FixtureTests {
             struct Plain { func testUtility() {} }
             extension Plain { func testOther() {} }
             @Suite(.productionAccessAudit) struct Root { @Test func body() {} }
-            """)])
+            """
+            // The former UnknownBase/Bool positive guessed inherited Bool was
+            // absent. Retain it as a rejection, then prove the known-base control.
+            try rejects({ _ = try sourceReport([("A.swift", source)]) }, containing: "XCTest")
+            let known = source.replacingOccurrences(of: "ValueHelper: UnknownBase", with: "ValueHelper: PlainBase")
+            let report = try sourceReport([("A.swift", known)])
             try require(report.exitCode == 0 && report.ownership.count == 1, "plain helpers rejected")
         }
         test("legacy inheritance follows consistent conditional variants and reversed declaration order") {

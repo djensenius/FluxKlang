@@ -293,8 +293,8 @@ struct XCTestDiscoveryGuard {
 
     private struct ReturnScope {
         let path: String
-        let name: String
         let parameters: Set<String>
+        let context: OwnerContext?
     }
 
     private func returnScope(
@@ -304,17 +304,18 @@ struct XCTestDiscoveryGuard {
         case .nominal(let index):
             let nominal = inventory.nominals[index]
             let outer = returnScope(site: site, context: nominal.parent)
-            return ReturnScope(path: site.path, name: nominal.qualified ?? "",
-                               parameters: parameters.union(nominal.genericParameters).union(outer.parameters))
+            return ReturnScope(path: site.path,
+                               parameters: parameters.union(nominal.genericParameters).union(outer.parameters),
+                               context: context)
         case .extended(let index):
             let name = inventory.extensions[index].qualified ?? ""
             let owners = lookup(name, path: site.path, scope: "").filter { $0 < inventory.nominals.count }
             let inherited = owners.reduce(parameters) {
                 $0.union(returnScope(site: site, context: .nominal($1)).parameters)
             }
-            return ReturnScope(path: site.path, name: name, parameters: inherited)
+            return ReturnScope(path: site.path, parameters: inherited, context: context)
         case .none, .local:
-            return ReturnScope(path: site.path, name: "", parameters: parameters)
+            return ReturnScope(path: site.path, parameters: parameters, context: context)
         }
     }
 
@@ -338,7 +339,10 @@ struct XCTestDiscoveryGuard {
         guard let name = SourceInventory.typeName(type),
               let first = name.split(separator: ".").first.map(String.init),
               !scope.parameters.contains(first) else { return false }
-        let choices = lookup(name, path: scope.path, scope: scope.name)
+        // A lexical/global spelling is not proof while an inherited binding could
+        // shadow its first component, including a source nominal or module name.
+        guard let firstChoices = scopedChoices(first, path: scope.path, context: scope.context),
+              let choices = qualifiedChoices(name, first: firstChoices, path: scope.path) else { return false }
         if !choices.isEmpty {
             guard choices.count == 1, let choice = choices.first, !visiting.contains(choice) else { return false }
             if choice < inventory.nominals.count { return true }
@@ -348,20 +352,115 @@ struct XCTestDiscoveryGuard {
                                      visiting: visiting.union([choice]))
         }
         // Do not reinterpret a source namespace named Swift as the standard module.
-        guard lookup(first, path: scope.path, scope: scope.name).isEmpty else { return false }
+        guard firstChoices.isEmpty else { return false }
         let primitives = ["Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
                           "UInt32", "UInt64", "String", "Character", "Float", "Double", "Never"]
         return primitives.contains(name) || primitives.contains { name == "Swift." + $0 }
+    }
+
+    // nil means indeterminate, [] means absence proved within the supported
+    // source model. Never fall through an unknown base to a global/builtin name.
+    private func scopedChoices(_ name: String, path: String, context: OwnerContext?) -> [Int]? {
+        switch context {
+        case .nominal(let number):
+            guard let members = memberChoices(name, owner: number, path: path, visiting: []) else { return nil }
+            if !members.isEmpty { return members }
+            return scopedChoices(name, path: path, context: inventory.nominals[number].parent)
+        case .extended(let number):
+            let extended = inventory.extensions[number]
+            guard !extended.unsupported else { return nil }
+            let owners = lookup(extended.qualified, path: path, scope: "")
+            guard owners.count == 1, let owner = owners.first,
+                  let members = memberChoices(name, owner: owner, path: path, visiting: []) else { return nil }
+            if !members.isEmpty { return members }
+            return exactChoices(name, path: path)
+        case .none: return exactChoices(name, path: path)
+        case .local: return nil
+        }
+    }
+
+    private func exactChoices(_ name: String, path: String) -> [Int]? {
+        let matches = nodes.indices.filter { nodes[$0].qualified == name }
+        for match in matches {
+            if nodes[match].restricted && nodes[match].site.path != path { return nil }
+            if case .extended(let number) = nodes[match].parent,
+               inventory.extensions[number].unsupported { return nil }
+        }
+        return matches
+    }
+
+    private func qualifiedChoices(_ name: String, first: [Int], path: String) -> [Int]? {
+        if first.isEmpty { return [] }
+        var choices = first
+        for component in name.split(separator: ".").dropFirst() {
+            guard choices.count == 1, let owner = choices.first,
+                  let members = memberChoices(String(component), owner: owner, path: path, visiting: []) else {
+                return nil
+            }
+            choices = members
+        }
+        return choices
+    }
+
+    private func memberChoices(_ name: String, owner: Int, path: String, visiting: Set<Int>) -> [Int]? {
+        guard !visiting.contains(owner) else { return nil }
+        let visited = visiting.union([owner])
+        let node = nodes[owner]
+        if owner >= inventory.nominals.count {
+            // Only transparent top-level ancestry aliases are expanded here.
+            // Nested/generic ancestry binding requires unsupported semantics.
+            guard node.parent == nil, let target = node.bases.first else { return nil }
+            let choices = lookup(target, path: node.site.path, scope: "")
+            guard choices.count == 1, let choice = choices.first else { return nil }
+            return memberChoices(name, owner: choice, path: path, visiting: visited)
+        }
+        let nominal = inventory.nominals[owner]
+        guard !nominal.genericParameters.contains(name), let qualified = nominal.qualified,
+              let own = exactChoices(qualified + "." + name, path: path) else { return nil }
+        if !visiting.isEmpty && !nominal.genericParameters.isEmpty { return nil }
+        // Records conservatively combine private/fileprivate. A restricted
+        // inherited member cannot establish a binding even in the same file.
+        if !visiting.isEmpty && own.contains(where: { nodes[$0].restricted }) { return nil }
+        if !own.isEmpty { return own }
+        if !nominal.isClass && nominal.unsupported { return nil }
+        return inheritedChoices(name, owner: owner, path: path, visiting: visited)
+    }
+
+    private func inheritedChoices(_ name: String, owner: Int, path: String, visiting: Set<Int>) -> [Int]? {
+        var result: [Int] = []
+        for base in inventory.nominals[owner].bases {
+            let choices = baseChoices(base, owner: owner)
+            guard choices.count == 1, let choice = choices.first,
+                  let members = memberChoices(name, owner: choice, path: path, visiting: visiting) else { return nil }
+            result += members
+        }
+        return result
+    }
+
+    private func baseChoices(_ base: String?, owner: Int) -> [Int] {
+        guard let first = base?.split(separator: ".").first.map(String.init) else { return [] }
+        var context: OwnerContext? = owner < inventory.nominals.count ? .nominal(owner) : nodes[owner].parent
+        while let current = context {
+            guard case .nominal(let number) = current else { return [] }
+            let nominal = inventory.nominals[number]
+            // Do not bind a base through a generic parameter or assume absence
+            // of inherited names in an enclosing type/extension.
+            if nominal.genericParameters.contains(first) { return [] }
+            if number != owner && !nominal.bases.isEmpty { return [] }
+            context = nominal.parent
+        }
+        let node = nodes[owner]
+        let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
+        return lookup(base, path: node.site.path, scope: scope)
     }
 
     private func lineage(_ number: Int, visiting: Set<Int>) -> Lineage {
         guard !visiting.contains(number) else { return .unknown }
         let node = nodes[number]
         let visited = visiting.union([number])
-        let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
         let parents = node.bases.map { base -> Lineage in
             if base == "XCTestCase" || base == "XCTest.XCTestCase" { return .xctest }
-            let choices = lookup(base, path: node.site.path, scope: scope)
+            let choices = baseChoices(base, owner: number)
             guard choices.count == 1, let choice = choices.first else { return .unknown }
             return lineage(choice, visiting: visited)
         }

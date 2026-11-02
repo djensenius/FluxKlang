@@ -1,5 +1,126 @@
 import Foundation
 
+#if AUDIT_CHECK_TESTS
+extension FixtureTests {
+    func inheritedReturnCases() {
+        test("inherited primitive alias shadows fallback beside registered canonical suites") {
+            try rejectLegacy("inherited-primitive", first: """
+            class Base: ExternalBase { typealias Int = Void }
+            class Legacy: Base { func testAccess() -> Int {} }
+            """)
+        }
+        test("inherited aliases shadow source nominals in methods and cross-file extensions") {
+            try rejectLegacy("inherited-nominal", first: """
+            struct Value {}
+            class Base: ExternalBase { typealias Value = Void }
+            class Legacy: Base { func testAccess() -> Value {} }
+            """)
+            try rejectLegacy("inherited-extension", first: """
+            struct Value {}
+            class Base: ExternalBase { typealias Int = (); typealias Value = Void }
+            class Legacy: Base {}
+            """, second: "extension Legacy { func testInt() -> Int {}; func testValue() -> Value {} }")
+        }
+        test("transitive inherited aliases and reversed file order cannot evade ancestry refusal") {
+            try rejectLegacy("inherited-transitive", first: """
+            class Base: ExternalBase { typealias Int = Void }
+            typealias Middle = Base
+            class Next: Middle {}
+            """, second: "class Legacy: Next { func testAccess() -> Int {} }")
+            let sources = [("A.swift", "class Base: ExternalBase { typealias Int = Void }"),
+                           ("B.swift", "class Legacy: Base { func testAccess() -> Int {} }")]
+            for ordered in [sources, Array(sources.reversed())] {
+                try rejects({ _ = try sourceReport(ordered) }, containing: "XCTest")
+            }
+        }
+        test("ambiguous inaccessible generic and cyclic inheritance cannot prove non-Void returns") {
+            for (number, source) in [
+                """
+                class First: ExternalBase { typealias Int = [Void] }
+                class Second { typealias Int = Void }
+                class Legacy: First, Second { func testAccess() -> Int {} }
+                """,
+                """
+                class Base<T>: ExternalBase { typealias Int = T }
+                class Legacy: Base<Void> { func testAccess() -> Int {} }
+                """,
+                """
+                class Safe { typealias Int = [Void] }
+                class Outer: ExternalBase { class Legacy: Safe { func testAccess() -> Int {} } }
+                """,
+                "class Safe {}\nclass Legacy<Safe>: Safe { func testAccess() -> Int {} }",
+                """
+                typealias Value = Void
+                class Base: ExternalBase { private typealias Value = [Void] }
+                class Legacy: Base { func testAccess() -> Value {} }
+                """,
+                "typealias Base = Next\ntypealias Next = Base\nclass Legacy: Base { func testAccess() -> Int {} }"
+            ].enumerated() { try rejectLegacy("inherited-uncertain-\(number)", first: source) }
+            try rejectLegacy("inherited-private", first: """
+            class Base: ExternalBase { private typealias Int = Void }
+            """, second: "class Legacy: Base { func testAccess() -> Int {} }")
+        }
+        test("unknown ancestry cannot establish absence of primitive nominal or module-name shadowing") {
+            for (number, result) in ["Bool", "Value", "Swift.Bool"].enumerated() {
+                try rejectLegacy("inherited-unknown-\(number)", first: """
+                struct Value {}
+                class Legacy: ExternalBase { func testAccess() -> \(result) {} }
+                """)
+            }
+        }
+        test("explicit genuinely non-Void inherited aliases remain valid helpers with unknown ancestry") {
+            let fixture = try world("inherited-nonvoid", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            struct Value {}
+            class Base: ExternalBase {
+                typealias Int = [Void]
+                typealias Value = (Void, Void)
+            }
+            typealias Middle = Base
+            class Legacy: Middle {
+                func testInt() -> Int { [] }
+                func testValue() -> Value { ((), ()) }
+            }
+            """)
+            try fixture.write("Mac/B.swift", "extension Legacy { func testExtension() -> Int { [] } }")
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
+            try require(report.enforcementSatisfied && report.exitCode == 0,
+                        "proved inherited non-Void aliases rejected")
+        }
+        test("inherited return aliases use consistent conditional variants") {
+            try inheritedConditionalCases()
+        }
+    }
+
+    private func inheritedConditionalCases() throws {
+        let sources = [("A.swift", """
+        class Base: ExternalBase {
+        #if canImport(FluxKlangMac) && canImport(FoundationModels)
+            typealias Int = ()
+        #else
+            typealias Int = [Void]
+        #endif
+        }
+        """), ("B.swift", "class Legacy: Base { func testAccess() -> Int {} }")]
+        for mac in [false, true] {
+            for models in [false, true] {
+                if mac && models {
+                    try rejects({
+                        _ = try sourceReport(sources, macImport: mac, modelsImport: models)
+                    }, containing: "XCTest")
+                } else {
+                    let report = try sourceReport(sources, macImport: mac, modelsImport: models)
+                    try require(report.exitCode == 0, "proved inherited non-Void variant rejected")
+                }
+            }
+        }
+    }
+}
+#endif
+
 struct InventoryRow: Codable {
     let registration: Registration
     let line: Int

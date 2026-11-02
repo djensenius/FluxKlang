@@ -388,7 +388,15 @@ extension FixtureTests {
             """)
             let report = fixture.run()
             try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
-            try require(report.enforcementSatisfied && report.exitCode == 0, "definitely non-Void helper rejected")
+            // Named returns under ExternalBase were not provably non-Void:
+            // that base can shadow Flag, Int, StoredValue, or even Swift.
+            try require(report.exitCode == 2 && !report.analysisComplete, "unproved old helper positive escaped")
+            let known = try world("return-nonvoid-known", annotated: true)
+            try known.register(known.run().derivedRegistrations)
+            let source = try String(contentsOf: fixture.root.appendingPathComponent("Sources/A.swift"), encoding: .utf8)
+            try known.write("Sources/A.swift", "class KnownBase {}\n" +
+                            source.replacingOccurrences(of: "ExternalBase", with: "KnownBase"))
+            try require(known.run().enforcementSatisfied, "provable non-Void helper control rejected")
         }
         test("transparent return aliases follow consistent target variants and declaration order") {
             try conditionalReturnCases()
@@ -408,16 +416,12 @@ extension FixtureTests {
                 for mac in [false, true] {
                     for models in [false, true] {
                         for ordered in [sources, Array(sources.reversed())] {
-                            if configuration == "Debug" && mac && models {
-                                try rejects({
-                                    _ = try sourceReport(ordered, configuration: configuration, platform: platform,
-                                                         macImport: mac, modelsImport: models)
-                                }, containing: "XCTest")
-                            } else {
-                                let report = try sourceReport(ordered, configuration: configuration, platform: platform,
-                                                              macImport: mac, modelsImport: models)
-                                try require(report.exitCode == 0, "definitely non-Void variant rejected")
-                            }
+                            // Even the old Bool branch cannot prove that
+                            // ExternalBase lacks an inherited Result binding.
+                            try rejects({
+                                _ = try sourceReport(ordered, configuration: configuration, platform: platform,
+                                                     macImport: mac, modelsImport: models)
+                            }, containing: "XCTest")
                         }
                     }
                 }
@@ -442,6 +446,7 @@ enum FixtureMain {
         tests.reportCases()
         tests.sourceCases()
         tests.returnTypeCases()
+        tests.inheritedReturnCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }
