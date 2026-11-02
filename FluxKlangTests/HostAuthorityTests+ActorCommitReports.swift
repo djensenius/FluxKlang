@@ -13,22 +13,20 @@ enum ReportBumpCase: CaseIterable, Sendable { case succeeded, failed, partial, r
 
 /// The lifecycle before the commit (none: B runs nothing), the outcome, and the lifecycle after.
 enum ReportLifecycleCase: CaseIterable, Sendable {
-    case absentSucceeded, absentFailed, absentPartial, runningSucceeded, runningPartial, degradedSucceeded
-    case degradedFailed
+    case absentSucceeded, absentFailed, absentPartial, runningSucceeded, runningFailed, runningPartial
 
     var outcome: ActivationCommitOutcome {
         switch self {
-        case .absentSucceeded, .runningSucceeded, .degradedSucceeded: .succeeded
-        case .absentFailed, .degradedFailed: .failed
+        case .absentSucceeded, .runningSucceeded: .succeeded
+        case .absentFailed, .runningFailed: .failed
         case .absentPartial, .runningPartial: .partial
         }
     }
 
     var expected: EngineLifecycle {
         switch self {
-        case .absentSucceeded, .runningSucceeded, .runningPartial: .running
+        case .absentSucceeded, .runningSucceeded, .runningFailed, .runningPartial: .running
         case .absentFailed, .absentPartial: .stopped
-        case .degradedSucceeded, .degradedFailed: .degraded([AuthorityBench.audio])
         }
     }
 }
@@ -37,24 +35,26 @@ extension HostAuthorityTests {
     /// The engine's commit reports: D-ctx, the lifecycle and the end of the flight (H5c-2).
     struct ActorCommitReports {
         @Test func acknowledgedCommitAdvancesRunningAndDiscardsReplaced() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            let previous = try #require(try await Bench.state(authority).installed)
             let reviewed = try await Bench.commitDelivered(authority, &engine)
-            let revision = try ContractRevision.initial.next()
+            let revision = try await Bench.state(authority).running.revision.next()
             let reported = try #require(await engine.report(authority, .succeeded))
             #expect(reported.verdict == .success(.acknowledged(revision)))
             let after = await authority.snapshot()
             let state = try #require(after.projects[Bench.projectA])
             #expect(state.running == RunningGraph(revision: revision, prepared: reviewed))
             #expect(state.phase == .acknowledged(revision) && state.lifecycle == .running && state.reviewed == nil)
-            #expect(after.inFlight.isEmpty && after.queue.pending == [.discard(Bench.runningPlan)])
-            #expect(await engine.drain(authority) == [.discard(Bench.runningPlan)])
+            #expect(state.installed?.prepared == reviewed)
+            #expect(after.inFlight.isEmpty && after.queue.pending == [.discard(previous)])
+            #expect(await engine.drain(authority) == [.discard(previous)])
         }
 
         @Test(arguments: [ActivationCommitOutcome.failed, .partial])
         func failedAndPartialReportsQueueNothing(_ outcome: ActivationCommitOutcome) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let reviewed = try await Bench.commitDelivered(authority, &engine, withAux: true)
             let before = await authority.snapshot()
             let reported = try #require(await engine.report(authority, outcome))
@@ -70,17 +70,23 @@ extension HostAuthorityTests {
             #expect(after.queue.pending.isEmpty && after.inFlight.isEmpty)
             #expect(Bench.context(after) == Bench.context(before))
             #expect(state.running == before.projects[Bench.projectA]?.running && state.lifecycle == .running)
-            // The plan stays live until H5d resolves it: no project may adopt it.
+            #expect(state.reviewed == before.projects[Bench.projectA]?.reviewed)
+            #expect(state.installed == before.projects[Bench.projectA]?.installed)
+            let binding = try #require(state.reviewed)
+            let expectedPhase: EnginePlanPhase = outcome == .partial ? .committed : .held
+            let owned = after.plans.records.flatMap(\.entries).first { $0.attempt == binding.attempt }
+            #expect(owned?.state == .bound(binding, expectedPhase))
+            // Unqualified boot adoption is forbidden, whatever the raw name.
             let adopt = await authority.open(project: Bench.projectC,
                                              running: RunningGraph(revision: .initial, prepared: reviewed))
-            #expect(Bench.refusal(adopt) == .activation(.preparedIDInUse))
+            #expect(Bench.refusal(adopt) == .unqualifiedResident)
             #expect(await engine.drain(authority).isEmpty)
         }
 
         @Test(arguments: StaleReportCase.allCases)
         func staleCommitReportQueuesNothing(_ staleCase: StaleReportCase) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let (report, expected) = try await stale(staleCase, authority, &engine)
             let before = await authority.snapshot()
             let refused = await authority.commitReported(report)
@@ -89,8 +95,8 @@ extension HostAuthorityTests {
         }
 
         @Test func fullQueueRefusesTheReportBeforeItsChecks() async throws {
-            let authority = try await Bench.makeAuthority()
-            var engine = try ScriptedActivationEngine()
+            var engine = try ScriptedActivationEngine(trackedLimit: 512)
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitDelivered(authority, &engine)
             let withheld = engine.withholdCommit()
             let commit = try #require(withheld)
@@ -105,14 +111,14 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot() == before)
             // Nothing moved, so the engine re-delivers the same report once the queue drains.
             await engine.drain(authority)
-            let revision = try ContractRevision.initial.next()
+            let revision = try await Bench.state(authority).running.revision.next()
             #expect(await authority.commitReported(report) == .success(.acknowledged(revision)))
         }
 
         @Test(arguments: ReportBumpCase.allCases)
         func acknowledgedActivationBumpsContext(_ bumpCase: ReportBumpCase) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitDelivered(authority, &engine, withAux: true)
             let before = try #require(Bench.context(await authority.snapshot()))
             switch bumpCase {
@@ -137,14 +143,11 @@ extension HostAuthorityTests {
             let project: ProjectID
             switch lifecycleCase {
             case .absentSucceeded, .absentFailed, .absentPartial:
-                authority = try await Bench.makeAuthority(holding: nil)
+                authority = try await Bench.makeAuthority(&engine, holding: nil)
                 _ = try await authority.acquire(project: Bench.projectB, window: Bench.windowB).get()
                 project = Bench.projectB
-            case .runningSucceeded, .runningPartial:
-                authority = try await Bench.makeAuthority()
-                project = Bench.projectA
-            case .degradedSucceeded, .degradedFailed:
-                authority = try await Bench.makeAuthority(lifecycleA: .degraded([Bench.audio]))
+            case .runningSucceeded, .runningFailed, .runningPartial:
+                authority = try await Bench.makeAuthority(&engine)
                 project = Bench.projectA
             }
             let window = project == Bench.projectB ? Bench.windowB : Bench.windowA
@@ -165,8 +168,8 @@ extension HostAuthorityTests {
 
         @Test(arguments: [ActivationCommitOutcome.succeeded, .failed, .partial])
         func releaseAndTransferAllowedAfterReport(_ outcome: ActivationCommitOutcome) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitDelivered(authority, &engine, withAux: true)
             #expect(Bench.refusal(await authority.release(project: Bench.projectA)) == .activation(.busy))
             _ = try #require(await engine.report(authority, outcome)).verdict.get()
@@ -188,8 +191,8 @@ extension HostAuthorityTests {
                 return (reported.report, .activation(.staleReport))
             case .foreignAuthority:
                 _ = try await Bench.commitDelivered(authority, &engine)
-                let foreign = try await Bench.makeAuthority()
                 var foreignEngine = try ScriptedActivationEngine()
+                let foreign = try await Bench.makeAuthority(&foreignEngine)
                 _ = try await Bench.commitDelivered(foreign, &foreignEngine)
                 let withheld = foreignEngine.withholdCommit()
                 let commit = try #require(withheld)

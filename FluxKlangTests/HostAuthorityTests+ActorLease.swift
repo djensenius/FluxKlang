@@ -1,10 +1,6 @@
 import Testing
 @testable import FluxKlang
 
-private let host = HostID(validated: "host.lease")
-private let hostEpoch = HostEpoch(host: host, generation: .initial)
-private let permission = PermissionFingerprint(rawValue: "permissions.current")
-private let graphID = GraphID(validated: "graph.main")
 private let audio = CapabilityID(validated: "cap.audio")
 private let projectA = ProjectID(validated: "prj.a")
 private let projectB = ProjectID(validated: "prj.b")
@@ -13,40 +9,10 @@ private let runningPlan = PreparedActivationID(validated: "prep.running")
 private let windowA = WindowID(validated: "win.a")
 private let windowA2 = WindowID(validated: "win.a2")
 private let windowB = WindowID(validated: "win.b")
-private let node = NodeID(validated: "node.out")
-
-private func liveState() throws -> HostLiveState {
-    let device = try DeviceDescriptor(
-        id: DeviceID(validated: "dev.interface"), kind: .audioInterface,
-        layout: ChannelLayout(inputs: 2, outputs: 2, sampleRate: 48_000), binding: .reported,
-        identity: DeviceIdentity(.init(uid: "physical-interface-1", evidence: [.deviceUID])),
-        presence: .present, capabilities: [audio]
-    )
-    let document = try DeviceCapabilityDocument(revision: .initial, host: host, hostEpoch: hostEpoch.generation,
-                                                devices: [device], routes: [])
-    return HostLiveState(hostEpoch: hostEpoch, permission: permission, capabilities: document)
-}
-
-private func request() -> ActivationRequest {
-    ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: .initial,
-                      hostEpoch: hostEpoch, permission: permission,
-                      digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human)
-}
-
-private func candidate() -> GraphDocument {
-    GraphDocument(id: graphID, revision: .initial, capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
-                  nodes: [GraphNode(id: node, kind: .plugin, label: "Out", requiredCapabilities: [audio])])
-}
 
 /// Project A runs `prep.running` (opened with `lifecycleA`); project B runs nothing.
 private func makeAuthority(_ lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
-    let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
-                                      nominalRate: 48_000)
-    let authority = try HostAuthority(host: ledger, live: try liveState())
-    try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
-                             lifecycle: lifecycleA).get()
-    try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
-    return authority
+    try await AuthorityBench.makeAuthority(holding: nil, lifecycleA: lifecycleA)
 }
 
 private func refusal<Success>(_ result: Result<Success, HostAuthorityRefusal>) -> HostAuthorityRefusal? {
@@ -62,11 +28,7 @@ private func context(_ authority: HostAuthority) async -> Generation? {
 /// Begins project A and routes the engine's success; returns the reviewed plan.
 private func review(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine) async throws
 -> PreparedActivationID {
-    try await authority.begin(request(), candidate: candidate(), project: projectA).get()
-    await engine.drain(authority)
-    let answer = try #require(await engine.answerNext(authority))
-    #expect(answer.verdict == .success(.routed))
-    return try answer.answer.get()
+    try await AuthorityBench.review(authority, &engine)
 }
 
 extension HostAuthorityTests {
@@ -74,16 +36,19 @@ extension HostAuthorityTests {
         @Test func acquireBumpsContextExactlyOnce() async throws {
             let authority = try await makeAuthority()
             let before = try #require(await context(authority))
+            let lastIssued = try #require(await authority.snapshot().lastIssuedLease)
             let held = try await authority.acquire(project: projectA, window: windowA).get()
             let after = await authority.snapshot()
             #expect(held.project == projectA && held.windows == [windowA])
-            #expect(after.lease == held && after.lastIssuedLease == .initial)
+            let nextIssued = try lastIssued.next()
+            #expect(after.lease == held && after.lastIssuedLease == nextIssued)
             #expect(after.ledger[EngineLeaseRegistry.contextKey] == (try before.next()))
         }
 
         @Test func attachAndDetachNeverBumpContext() async throws {
             let authority = try await makeAuthority()
             let held = try await authority.acquire(project: projectA, window: windowA).get()
+            let issued = await authority.snapshot().lastIssuedLease
             let granted = await context(authority)
             let attached = try await authority.attach(windowA2, project: projectA).get()
             #expect(attached.token == held.token && attached.windows == [windowA, windowA2])
@@ -95,7 +60,7 @@ extension HostAuthorityTests {
             let empty = try await authority.detach(windowA2).get()
             #expect(empty.token == held.token && empty.windows.isEmpty && empty.project == projectA)
             #expect(await context(authority) == granted)
-            #expect(await authority.snapshot().lastIssuedLease == .initial)
+            #expect(await authority.snapshot().lastIssuedLease == issued)
         }
 
         @Test func leaseRefusalsChangeNothing() async throws {
@@ -169,35 +134,35 @@ extension HostAuthorityTests {
             let before = await authority.snapshot()
             let opened = await authority.open(project: projectC,
                                               running: RunningGraph(revision: .initial, prepared: runningPlan))
-            #expect(refusal(opened) == .activation(.preparedIDInUse))
+            #expect(refusal(opened) == .unqualifiedResident)
             #expect(await authority.snapshot() == before)
         }
 
         @Test func openRefusesAnotherProjectsReviewedPlan() async throws {
-            let authority = try await makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await AuthorityBench.makeAuthority(&engine, holding: nil)
             let reviewed = try await review(authority, &engine)
             let before = await authority.snapshot()
             let opened = await authority.open(project: projectC,
                                               running: RunningGraph(revision: .initial, prepared: reviewed))
-            #expect(refusal(opened) == .activation(.preparedIDInUse))
+            #expect(refusal(opened) == .unqualifiedResident)
             #expect(await authority.snapshot() == before)
         }
 
         @Test func openRefusesAPlanWhoseDiscardIsQueued() async throws {
-            let authority = try await makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await AuthorityBench.makeAuthority(&engine, holding: nil)
             let reviewed = try await review(authority, &engine)
+            let binding = try #require(await authority.snapshot().projects[projectA]?.reviewed)
             try await authority.cancel(project: projectA).get()
             let before = await authority.snapshot()
-            #expect(before.queue.pending == [.discard(reviewed)])
+            #expect(before.queue.pending == [.discard(binding)])
             let running = RunningGraph(revision: .initial, prepared: reviewed)
-            #expect(refusal(await authority.open(project: projectC, running: running)) == .activation(.preparedIDInUse))
+            #expect(refusal(await authority.open(project: projectC, running: running)) == .unqualifiedResident)
             #expect(await authority.snapshot() == before)
-            // Once the engine has taken the discard, the ID is free again.
-            #expect(await engine.drain(authority) == [.discard(reviewed)])
-            try await authority.open(project: projectC, running: running).get()
-            #expect(await authority.snapshot().projects[projectC]?.running == running)
+            // Taking the discard never authorizes raw boot adoption.
+            #expect(await engine.drain(authority) == [.discard(binding)])
+            #expect(refusal(await authority.open(project: projectC, running: running)) == .unqualifiedResident)
         }
     }
 }

@@ -1,475 +1,348 @@
-import Foundation
 import Testing
 @testable import FluxKlang
 
-private let host = HostID(validated: "host.actor")
-private let hostEpoch = HostEpoch(host: host, generation: .initial)
-private let permission = PermissionFingerprint(rawValue: "permissions.current")
-private let graphID = GraphID(validated: "graph.main")
-private let audio = CapabilityID(validated: "cap.audio")
-private let draftID = DraftID(validated: "draft.main")
-private let digest = ActivationDigest(rawValue: "sha256:activation")
-private let projectA = ProjectID(validated: "prj.a")
-private let projectB = ProjectID(validated: "prj.b")
-private let projectC = ProjectID(validated: "prj.c")
-private let runningPlan = PreparedActivationID(validated: "prep.running")
-private let planB = PreparedActivationID(validated: "prep.b")
-private let nodes = [NodeID(validated: "node.fx"), NodeID(validated: "node.out")]
+private typealias Bench = AuthorityBench
 
-private func liveState(epoch: HostEpoch = hostEpoch,
-                       permission granted: PermissionFingerprint? = permission) throws -> HostLiveState {
-    let device = try DeviceDescriptor(
-        id: DeviceID(validated: "dev.interface"), kind: .audioInterface,
-        layout: ChannelLayout(inputs: 2, outputs: 2, sampleRate: 48_000), binding: .reported,
-        identity: DeviceIdentity(.init(uid: "physical-interface-1", evidence: [.deviceUID])),
-        presence: .present, capabilities: [audio]
-    )
-    let document = try DeviceCapabilityDocument(revision: .initial, host: epoch.host, hostEpoch: epoch.generation,
-                                                devices: [device], routes: [])
-    return HostLiveState(hostEpoch: epoch, permission: granted, capabilities: document)
+private func pendingCount(_ snapshot: HostAuthoritySnapshot) -> Int {
+    snapshot.plans.records.flatMap(\.entries).filter {
+        if case .pending = $0.state { true } else { false }
+    }.count
 }
 
-private func candidate(id: GraphID = graphID) -> GraphDocument {
-    GraphDocument(id: id, revision: .initial, capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
-                  nodes: [GraphNode(id: nodes[0], kind: .plugin, label: "FX", requiredCapabilities: [audio]),
-                          GraphNode(id: nodes[1], kind: .plugin, label: "Out")])
-}
-
-private func request(base: ContractRevision = .initial, epoch: HostEpoch = hostEpoch,
-                     permission granted: PermissionFingerprint = permission,
-                     digest requested: ActivationDigest = digest, origin: CommandOrigin = .human) -> ActivationRequest {
-    ActivationRequest(draft: draftID, graph: graphID, baseRevision: base, hostEpoch: epoch, permission: granted,
-                      digest: requested, origin: origin)
-}
-
-/// One host whose project A runs `prep.running` and whose other projects run nothing yet.
-private func makeAuthority(_ others: [ProjectID] = []) async throws -> HostAuthority {
-    let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
-                                      nominalRate: 48_000)
-    let authority = try HostAuthority(host: ledger, live: try liveState())
-    try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan)).get()
-    for project in others {
-        try await authority.open(project: project, running: RunningGraph(revision: .initial, prepared: nil)).get()
-    }
-    return authority
-}
-
-private func begin(_ authority: HostAuthority, _ project: ProjectID = projectA,
-                   _ request: ActivationRequest = request(),
-                   candidate document: GraphDocument = candidate()) async -> Result<Void, HostAuthorityRefusal> {
-    await authority.begin(request, candidate: document, project: project)
-}
-
-private func refusal<Success>(_ result: Result<Success, HostAuthorityRefusal>) -> HostAuthorityRefusal? {
-    if case .failure(let refusal) = result { return refusal }
-    return nil
-}
-
-private func state(_ authority: HostAuthority, _ project: ProjectID) async throws -> HostProjectSnapshot {
-    try #require(await authority.snapshot().projects[project])
-}
-
-/// The project's outstanding prepare attempt, read without taking the queued command.
-private func outstanding(_ authority: HostAuthority, _ project: ProjectID) async throws -> PrepareAttemptID {
-    try #require(try await state(authority, project).lastPrepareAttempt)
-}
-
-/// Begins `project` and abandons the prepare without answering it; returns the attempt.
-private func beginAndAbandon(_ authority: HostAuthority, _ project: ProjectID = projectA) async throws
--> PrepareAttemptID {
-    try await begin(authority, project).get()
-    let attempt = try await outstanding(authority, project)
+private func beginAndAbandon(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                             project: ProjectID = Bench.projectA) async throws -> HostPrepare {
+    try await Bench.begin(authority, project: project)
+    await engine.drain(authority)
+    let preparation = try engine.requireNext()
     try await authority.abandonPrepare(project: project).get()
-    return attempt
+    return preparation
 }
 
-/// No prepare attempt is outstanding or remembered as abandoned.
-private func noAttempts(_ snapshot: HostAuthoritySnapshot) -> Bool {
-    snapshot.outstanding.isEmpty && snapshot.abandoned.isEmpty
+private func answer(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                    _ preparation: HostPrepare, as id: PreparedActivationID) async
+-> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
+    let result = engine.prepare(preparation, as: id)
+    return await authority.prepareAnswered(result, instance: preparation.instance, attempt: preparation.attempt)
 }
 
-/// One begin the transaction rejects before anything reaches the engine.
-private struct ActorRejectedBegin {
-    let request: ActivationRequest
-    let reason: ActivationRejection
-    let document: GraphDocument
-
-    init(_ request: ActivationRequest, _ reason: ActivationRejection, document: GraphDocument? = nil) {
-        self.request = request
-        self.reason = reason
-        self.document = document ?? candidate()
+private func reclaimed(_ outcome: Result<PrepareAnswerOutcome, HostAuthorityRefusal>) throws -> PlanBinding {
+    guard case .success(.reclaimed(let binding)) = outcome else {
+        Issue.record("Expected qualified reclamation, got \(outcome)")
+        throw ActorTestError.notReclaimed
     }
+    return binding
 }
 
-/// Takes the engine's oldest pending prepare without answering it.
-private func withheld(_ engine: inout ScriptedActivationEngine) throws -> PrepareAttemptID {
-    let attempt = engine.withholdNext()
-    return try #require(attempt)
-}
-
-/// Project A's lifecycle while preparing its first next revision over its running plan.
-private func firstPreparing() throws -> EngineLifecycle {
-    .preparing(try ContractRevision.initial.next(), over: .running)
-}
+private enum ActorTestError: Error { case notReclaimed }
 
 extension HostAuthorityTests {
     struct Actor {
-        @Test func abandonedPrepareSuccessIsUnreclaimedOnce() async throws {
-            let authority = try await makeAuthority()
+        @Test func abandonedPrepareSuccessIsReclaimedOnce() async throws {
             var engine = try ScriptedActivationEngine()
-            try await begin(authority).get()
-            let preparing = try firstPreparing()
-            #expect(try await state(authority, projectA).lifecycle == preparing)
-            let taken = await engine.drain(authority)
-            let attempt = try withheld(&engine)
-            guard taken.count == 1, case .prepare(_, attempt) = taken[0] else {
-                Issue.record("Expected one prepare, got \(taken)")
-                return
-            }
-            try await authority.abandonPrepare(project: projectA).get()
-            #expect(try await state(authority, projectA).lifecycle == .running)
-            // The late success arrives while idle: handled once, unreclaimed, never discarded (#191).
-            let late = engine.scriptedAnswer()
-            let id = try late.get()
-            let verdict = await authority.prepareAnswered(late, attempt: attempt)
-            #expect(verdict == .success(.unreclaimed(id, refusal: .unexpectedPhase(.idle))))
+            let authority = try await Bench.makeAuthority(&engine)
+            let attempt = try await beginAndAbandon(authority, &engine)
+            let id = PreparedActivationID(validated: "prep.late")
+            let binding = try reclaimed(await answer(authority, &engine, attempt, as: id))
             let before = await authority.snapshot()
-            let duplicate = await authority.prepareAnswered(late, attempt: attempt)
-            #expect(refusal(duplicate) == .activation(.stalePrepareResponse))
-            let after = await authority.snapshot()
-            #expect(after == before && noAttempts(after))
-            await engine.drain(authority)
-            #expect(engine.discarded.isEmpty)
-            #expect(try await state(authority, projectA).phase == .idle)
+            let duplicate = await authority.prepareAnswered(.success(id), instance: attempt.instance,
+                                                             attempt: attempt.attempt)
+            #expect(Bench.refusal(duplicate) == .activation(.stalePrepareResponse))
+            #expect(await authority.snapshot() == before && pendingCount(before) == 0)
+            #expect(try await Bench.state(authority).lifecycle == .running)
+            #expect(await engine.drain(authority) == [.discard(binding)])
+            #expect(engine.disposed.last?.matches(binding) == true)
+            #expect(try await Bench.state(authority).phase == .idle)
         }
 
-        @Test func lateSuccessAfterRebeginIsUnreclaimed() async throws {
-            let authority = try await makeAuthority()
+        @Test func lateSuccessAfterRebeginDoesNotChangeTheReview() async throws {
             var engine = try ScriptedActivationEngine()
-            try await begin(authority).get()
+            let authority = try await Bench.makeAuthority(&engine)
+            let first = try await beginAndAbandon(authority, &engine)
+            let second = try await beginAndAbandon(authority, &engine)
+            try await Bench.begin(authority)
             await engine.drain(authority)
-            let first = try withheld(&engine)
-            try await authority.abandonPrepare(project: projectA).get()
-            try await begin(authority).get()
-            await engine.drain(authority)
-            let second = try withheld(&engine)
-            try await authority.abandonPrepare(project: projectA).get()
-            try await begin(authority).get()
-            await engine.drain(authority)
-            let third = try withheld(&engine)
+            let third = try engine.requireNext()
             #expect(Set([first, second, third]).count == 3)
-            // A new prepare is out: the first attempt's success is stale, and unreclaimed.
-            let firstLate = engine.scriptedAnswer()
-            let firstID = try firstLate.get()
-            let firstVerdict = await authority.prepareAnswered(firstLate, attempt: first)
-            #expect(firstVerdict == .success(.unreclaimed(firstID, refusal: .stalePrepareResponse)))
-            let current = engine.scriptedAnswer()
-            let routed = await authority.prepareAnswered(current, attempt: third)
-            #expect(routed == .success(.routed))
-            let (review, currentID) = (try await state(authority, projectA), try current.get())
-            #expect(review.phase == .awaitingReview && review.reviewed == currentID)
-            // A new plan is in review: the second attempt's success is stale too, and unreclaimed.
-            let secondLate = engine.scriptedAnswer()
-            let secondID = try secondLate.get()
-            let secondVerdict = await authority.prepareAnswered(secondLate, attempt: second)
-            #expect(secondVerdict == .success(.unreclaimed(secondID, refusal: .unexpectedPhase(.awaitingReview))))
-            await engine.drain(authority)
-            #expect(engine.discarded.isEmpty)
-            let (reviewing, preparing) = (try await state(authority, projectA), try firstPreparing())
-            #expect(reviewing.phase == .awaitingReview && reviewing.lifecycle == preparing)
-            // Only the transaction's own cancel discards, and only its reviewed plan.
-            try await authority.cancel(project: projectA).get()
-            await engine.drain(authority)
-            #expect(engine.discarded == [currentID])
-            #expect(try await state(authority, projectA).lifecycle == .running)
+            let firstBinding = try reclaimed(await answer(
+                authority, &engine, first, as: PreparedActivationID(validated: "prep.first")
+            ))
+            let currentID = PreparedActivationID(validated: "prep.current")
+            #expect(await answer(authority, &engine, third, as: currentID) == .success(.routed))
+            let before = try await Bench.state(authority)
+            let secondBinding = try reclaimed(await answer(
+                authority, &engine, second, as: PreparedActivationID(validated: "prep.second")
+            ))
+            #expect(try await Bench.state(authority) == before)
+            let current = try #require(before.reviewed)
+            #expect(current.prepared == currentID && before.phase == .awaitingReview)
+            #expect(before.lifecycle == .preparing(try before.running.revision.next(), over: .running))
+            try await authority.cancel(project: Bench.projectA).get()
+            let expected: [EngineCommand] = [.discard(firstBinding), .discard(secondBinding), .discard(current)]
+            #expect(await engine.drain(authority) == expected)
+            #expect(try await Bench.state(authority).reviewed == nil)
+            #expect(try await Bench.state(authority).lifecycle == .running)
         }
 
         @Test func foreignOrDuplicateStaleAnswerNeverDiscards() async throws {
-            let authority = try await makeAuthority()
-            let other = try await makeAuthority()
             var engine = try ScriptedActivationEngine()
-            try await begin(other).get()
-            let foreign = try await outstanding(other, projectA)
-            let abandoned = try await beginAndAbandon(authority)
+            let authority = try await Bench.makeAuthority(&engine)
+            var otherEngine = try ScriptedActivationEngine()
+            let other = try await Bench.makeAuthority(&otherEngine)
+            let foreign = try await beginAndAbandon(other, &otherEngine)
+            let own = try await beginAndAbandon(authority, &engine)
             let before = await authority.snapshot()
-            // Another instance's attempt (even while this one has an abandoned attempt) is unknown here.
-            let crossed = await authority.prepareAnswered(.success(planB), attempt: foreign)
-            #expect(refusal(crossed) == .activation(.stalePrepareResponse))
-            #expect(await authority.snapshot() == before)
-            // An abandoned attempt's failure discards nothing, and ends the attempt.
-            let failed = await authority.prepareAnswered(.failure(.engineRefused), attempt: abandoned)
-            #expect(failed == .success(.dropped))
-            let afterFailure = await authority.snapshot()
-            #expect(noAttempts(afterFailure) && afterFailure.queue == before.queue)
-            let lateSuccess = await authority.prepareAnswered(.success(planB), attempt: abandoned)
-            #expect(refusal(lateSuccess) == .activation(.stalePrepareResponse))
-            // A duplicate answer to a routed attempt is stale, not a discard.
-            try await begin(authority).get()
-            let routedAttempt = try await outstanding(authority, projectA)
-            let answer = engine.scriptedAnswer()
-            #expect(await authority.prepareAnswered(answer, attempt: routedAttempt) == .success(.routed))
-            let reviewed = await authority.snapshot()
-            let duplicate = await authority.prepareAnswered(answer, attempt: routedAttempt)
-            #expect(refusal(duplicate) == .activation(.stalePrepareResponse))
-            #expect(await authority.snapshot() == reviewed)
-            await engine.drain(authority)
-            #expect(engine.discarded.isEmpty)
+            let id = PreparedActivationID(validated: "prep.foreign")
+            for key in [foreign, HostPrepare(instance: foreign.instance, attempt: own.attempt)] {
+                let crossed = await authority.prepareAnswered(
+                    .success(id), instance: key.instance, attempt: key.attempt
+                )
+                #expect(Bench.refusal(crossed) == .activation(.stalePrepareResponse))
+                #expect(await authority.snapshot() == before)
+            }
+            let failed = engine.terminalFailure(own, reason: .engineRefused)
+            #expect(await authority.prepareAnswered(failed, instance: own.instance,
+                                                     attempt: own.attempt) == .success(.dropped))
+            let after = await authority.snapshot()
+            #expect(pendingCount(after) == 0 && after.queue == before.queue)
+            #expect(Bench.refusal(await authority.prepareAnswered(.success(id), instance: own.instance,
+                                                                  attempt: own.attempt))
+                    == .activation(.stalePrepareResponse))
+            let reviewedID = try await Bench.review(authority, &engine)
+            let reviewed = try #require(try await Bench.state(authority).reviewed)
+            let reviewedSnapshot = await authority.snapshot()
+            #expect(Bench.refusal(await authority.prepareAnswered(.success(reviewedID), instance: reviewed.instance,
+                                                                  attempt: reviewed.attempt))
+                    == .activation(.stalePrepareResponse))
+            #expect(await authority.snapshot() == reviewedSnapshot && engine.discarded.isEmpty)
         }
 
-        @Test func staleAnswerNamingLivePlanIsNotDiscarded() async throws {
-            let authority = try await makeAuthority([projectB])
+        @Test func staleAnswerAliasingLivePlansDisposesOnlyItsOwnPreparation() async throws {
             var engine = try ScriptedActivationEngine()
-            try await begin(authority, projectB).get()
-            let reviewAttempt = try await outstanding(authority, projectB)
-            #expect(await authority.prepareAnswered(.success(planB), attempt: reviewAttempt) == .success(.routed))
-            // A's late answers name A's running plan, then B's plan in review: both stay with the engine.
-            for live in [runningPlan, planB] {
-                let attempt = try await beginAndAbandon(authority)
-                let verdict = await authority.prepareAnswered(.success(live), attempt: attempt)
-                #expect(verdict == .success(.dropped))
+            let authority = try await Bench.makeAuthority(&engine)
+            let planB = try await Bench.review(authority, &engine, project: Bench.projectB)
+            let beforeB = try await Bench.state(authority, Bench.projectB)
+            var bindings: [PlanBinding] = []
+            for name in [Bench.runningPlan, planB] {
+                let late = try await beginAndAbandon(authority, &engine)
+                bindings.append(try reclaimed(await answer(authority, &engine, late, as: name)))
             }
-            // An unrelated late success is unreclaimed: reported, never discarded.
-            let attempt = try await beginAndAbandon(authority)
-            let unrelated = engine.scriptedAnswer()
-            let unrelatedID = try unrelated.get()
-            let verdict = await authority.prepareAnswered(unrelated, attempt: attempt)
-            #expect(verdict == .success(.unreclaimed(unrelatedID, refusal: .unexpectedPhase(.idle))))
             await engine.drain(authority)
-            #expect(engine.discarded.isEmpty)
-            #expect(noAttempts(await authority.snapshot()))
+            #expect(engine.discarded == bindings)
+            let after = await authority.snapshot()
+            #expect(engine.held.count == 2 && pendingCount(after) == 0)
+            #expect(try await Bench.state(authority, Bench.projectB) == beforeB)
         }
 
         @Test func rejectedBeginsNeverReachEngine() async throws {
-            let authority = try await makeAuthority()
-            let wrongEpoch = HostEpoch(host: host, generation: try Generation.initial.next())
-            let next = try ContractRevision.initial.next()
-            let cases: [ActorRejectedBegin] = [
-                ActorRejectedBegin(request(epoch: wrongEpoch), .staleHostEpoch),
-                ActorRejectedBegin(request(permission: PermissionFingerprint(rawValue: "permissions.old")),
-                              .permissionChanged),
-                ActorRejectedBegin(request(origin: .assistant), .originCannotActivate(.assistant)),
-                ActorRejectedBegin(request(digest: ActivationDigest(rawValue: "")), .invalidDigest),
-                ActorRejectedBegin(request(base: next), .staleBase(expected: .initial, found: next)),
-                ActorRejectedBegin(request(), .graphMismatch,
-                                   document: candidate(id: GraphID(validated: "graph.other")))
+            var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            let revision = try await Bench.state(authority).running.revision
+            let graph = Bench.candidate(revision: revision)
+            let next = try revision.next()
+            let wrongEpoch = HostEpoch(host: Bench.host, generation: try Generation.initial.next())
+            func request(base: ContractRevision? = nil, epoch: HostEpoch = Bench.hostEpoch,
+                         permission: PermissionFingerprint = Bench.permission, origin: CommandOrigin = .human,
+                         digest: String = "sha256:activation") -> ActivationRequest {
+                ActivationRequest(draft: DraftID(validated: "draft.main"), graph: Bench.graphID,
+                                  baseRevision: base ?? revision, hostEpoch: epoch, permission: permission,
+                                  digest: ActivationDigest(rawValue: digest), origin: origin)
+            }
+            let cases: [(ActivationRequest, ActivationRejection)] = [
+                (request(epoch: wrongEpoch), .staleHostEpoch),
+                (request(permission: PermissionFingerprint(rawValue: "old")), .permissionChanged),
+                (request(origin: .assistant), .originCannotActivate(.assistant)),
+                (request(digest: ""), .invalidDigest),
+                (request(base: next), .staleBase(expected: revision, found: next))
             ]
             let before = await authority.snapshot()
-            for rejected in cases {
-                #expect(refusal(await begin(authority, projectA, rejected.request, candidate: rejected.document))
-                        == .activation(.rejected(rejected.reason)))
+            for (request, rejection) in cases {
+                #expect(Bench.refusal(await authority.begin(request, candidate: graph, project: Bench.projectA))
+                        == .activation(.rejected(rejection)))
             }
-            #expect(refusal(await begin(authority, projectC)) == .unknownProject(projectC))
+            let wrongGraph = GraphDocument(id: GraphID(validated: "graph.other"), revision: revision)
+            #expect(Bench.refusal(await authority.begin(request(), candidate: wrongGraph, project: Bench.projectA))
+                    == .activation(.rejected(.graphMismatch)))
+            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectC))
+                    == .unknownProject(Bench.projectC))
             #expect(await authority.snapshot() == before)
-            // The context is the actor's live state, never the request's own claims.
-            try await authority.updateLive(liveState(permission: PermissionFingerprint(rawValue: "permissions.new")))
-            #expect(refusal(await begin(authority)) == .activation(.rejected(.permissionChanged)))
-            try await authority.updateLive(liveState(permission: nil))
-            #expect(refusal(await begin(authority)) == .activation(.rejected(.permissionDenied)))
-            try await authority.updateLive(liveState(epoch: wrongEpoch))
-            #expect(refusal(await begin(authority)) == .activation(.rejected(.staleHostEpoch)))
-            try await authority.updateLive(liveState())
+            let live = try Bench.liveState()
+            for (permission, rejection): (PermissionFingerprint?, ActivationRejection) in [
+                (PermissionFingerprint(rawValue: "new"), .permissionChanged), (nil, .permissionDenied)
+            ] {
+                await authority.updateLive(HostLiveState(hostEpoch: live.hostEpoch, permission: permission,
+                                                         capabilities: live.capabilities))
+                #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+                        == .activation(.rejected(rejection)))
+            }
+            await authority.updateLive(try Bench.liveState(epoch: wrongEpoch))
+            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+                    == .activation(.rejected(.staleHostEpoch)))
+            await authority.updateLive(live)
             #expect(await authority.nextEngineCommand() == nil)
-            // Busy while preparing (the transaction's own refusal).
-            try await begin(authority).get()
+            try await Bench.begin(authority)
             let preparing = await authority.snapshot()
-            #expect(refusal(await begin(authority)) == .activation(.busy))
+            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+                    == .activation(.busy))
             #expect(await authority.snapshot() == preparing)
         }
 
-        @Test func lostAnswersNeverMakeTheHostBusy() async throws {
-            let authority = try await makeAuthority()
-            let limit = HostAuthority.abandonedPrepareLimit
-            var lost: [PrepareAttemptID] = []
-            for _ in 0..<(limit + 2) { lost.append(try await beginAndAbandon(authority)) }
-            // The FIFO keeps the newest `limit` abandons; the two oldest were evicted.
-            let full = await authority.snapshot()
-            #expect(full.abandoned == lost.suffix(limit).map { AbandonedPrepare(attempt: $0, project: projectA) })
-            // Abandoning with nothing outstanding is refused before it can evict anything.
-            #expect(refusal(await authority.abandonPrepare(project: projectA)) == .activation(.unexpectedPhase(.idle)))
-            #expect(await authority.snapshot() == full)
-            try await begin(authority).get()
-            let preparing = await authority.snapshot()
-            // An evicted attempt's success is stale: nothing changes.
-            for evicted in lost.prefix(2) {
-                let verdict = await authority.prepareAnswered(.success(PreparedActivationID(validated: "prep.evicted")),
-                                                              attempt: evicted)
-                #expect(refusal(verdict) == .activation(.stalePrepareResponse))
-            }
-            #expect(await authority.snapshot() == preparing)
-            // The oldest remembered attempt's success is still recognised, once, and unreclaimed.
-            let kept = PreparedActivationID(validated: "prep.kept")
-            let verdict = await authority.prepareAnswered(.success(kept), attempt: lost[2])
-            #expect(verdict == .success(.unreclaimed(kept, refusal: .stalePrepareResponse)))
-            #expect(await authority.snapshot().abandoned.count == limit - 1)
-            #expect(await authority.snapshot().queue == preparing.queue)
-        }
-
-        @Test func routedSuccessNamingAnotherProjectsPlanIsRefused() async throws {
-            let authority = try await makeAuthority([projectB])
+        @Test func lostAnswersConsumeCapacityWithoutEviction() async throws {
             var engine = try ScriptedActivationEngine()
-            try await begin(authority, projectB).get()
-            let reviewB = try await outstanding(authority, projectB)
-            #expect(await authority.prepareAnswered(.success(planB), attempt: reviewB) == .success(.routed))
-            try await begin(authority).get()
-            let attemptA = try await outstanding(authority, projectA)
-            let before = await authority.snapshot()
-            // A's answer naming B's reviewed plan (or A's running plan) is never adopted by A.
-            for live in [planB, runningPlan] {
-                let verdict = await authority.prepareAnswered(.success(live), attempt: attemptA)
-                #expect(refusal(verdict) == .activation(.preparedIDInUse))
-                #expect(await authority.snapshot() == before)
-            }
-            // A's own plan routes, and cancelling A discards only A's plan.
-            let planA = PreparedActivationID(validated: "prep.a")
-            #expect(await authority.prepareAnswered(.success(planA), attempt: attemptA) == .success(.routed))
-            try await authority.cancel(project: projectA).get()
+            let authority = try await Bench.makeAuthority(&engine, planCapacity: 4)
+            var lost: [HostPrepare] = []
+            for _ in 0..<3 { lost.append(try await beginAndAbandon(authority, &engine)) }
+            let full = await authority.snapshot()
+            let revision = try await Bench.state(authority).running.revision
+            #expect(pendingCount(full) == 3 && full.plans.capacity == 4)
+            #expect(Bench.refusal(await authority.begin(Bench.request(base: revision),
+                                                        candidate: Bench.candidate(revision: revision),
+                                                        project: Bench.projectA)) == .plans(.capacityReached))
+            #expect(Bench.refusal(await authority.abandonPrepare(project: Bench.projectA))
+                    == .activation(.unexpectedPhase(.idle)))
+            #expect(await authority.snapshot() == full)
+            let binding = try reclaimed(await answer(
+                authority, &engine, lost[0], as: PreparedActivationID(validated: "prep.oldest")
+            ))
+            #expect(Bench.refusal(await authority.retired(binding)) == .retirementQueued)
+            #expect(await authority.snapshot().plans.records[0].entries.count == 4)
             await engine.drain(authority)
-            #expect(engine.discarded == [planA])
-            #expect(try await state(authority, projectB).reviewed == planB)
+            try await Bench.begin(authority)
+            #expect(pendingCount(await authority.snapshot()) == 3)
         }
 
-        @Test func openResumesOnlySettledLifecycles() async throws {
-            let authority = try await makeAuthority()
+        @Test func crossProjectAliasesAreAllowedButSameProjectCollisionIsConsumed() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            try await Bench.begin(authority, project: Bench.projectB)
+            await engine.drain(authority)
+            let attemptB = try engine.requireNext()
+            #expect(await answer(authority, &engine, attemptB, as: Bench.runningPlan) == .success(.routed))
+            let reviewB = try #require(try await Bench.state(authority, Bench.projectB).reviewed)
+            let installed = try #require(try await Bench.state(authority).installed)
+            #expect(reviewB != installed && reviewB.prepared == installed.prepared)
+            try await Bench.begin(authority)
+            await engine.drain(authority)
+            let attemptA = try engine.requireNext()
+            let verdict = await answer(authority, &engine, attemptA, as: Bench.runningPlan)
+            guard case .success(.refusedReclaimed(let refused, refusal: .preparedIDInUse)) = verdict else {
+                Issue.record("Same-project collision must be consumed and reclaimed")
+                return
+            }
+            #expect(try await Bench.state(authority).phase == .idle)
+            #expect(await authority.snapshot().outstanding.isEmpty)
+            try await authority.cancel(project: Bench.projectB).get()
+            #expect(await engine.drain(authority) == [.discard(refused), .discard(reviewB)])
+            #expect(engine.held.count == 1 && engine.held[0].matches(installed))
+        }
+
+        @Test func openResumesOnlySettledPlanlessLifecycles() async throws {
+            let authority = try await Bench.makeAuthority()
             let before = await authority.snapshot()
             let idle = RunningGraph(revision: .initial, prepared: nil)
-            let transient: [EngineLifecycle] = [.preparing(try ContractRevision.initial.next(), over: .absent),
-                                                .heldByOther(projectA)]
-            for lifecycle in transient {
-                let opened = await authority.open(project: projectB, running: idle, lifecycle: lifecycle)
-                #expect(refusal(opened) == .lifecycleNotResumable(lifecycle))
+            let invalid: [EngineLifecycle] = [
+                .preparing(try ContractRevision.initial.next(), over: .absent), .heldByOther(Bench.projectA),
+                .running, .degraded([Bench.audio])
+            ]
+            for lifecycle in invalid {
+                let opened = await authority.open(project: Bench.projectC, running: idle, lifecycle: lifecycle)
+                #expect(Bench.refusal(opened)
+                        == .lifecycleNotResumable(lifecycle))
             }
-            // A rendering lifecycle needs a running plan.
-            for rendering: EngineLifecycle in [.running, .degraded([audio])] {
-                let opened = await authority.open(project: projectB, running: idle, lifecycle: rendering)
-                #expect(refusal(opened) == .lifecycleNotResumable(rendering))
+            // Lifecycle validation still precedes raw-resident rejection.
+            for lifecycle in invalid.prefix(2) {
+                let raw = RunningGraph(revision: .initial, prepared: Bench.runningPlan)
+                let opened = await authority.open(project: Bench.projectC, running: raw, lifecycle: lifecycle)
+                #expect(Bench.refusal(opened) == .lifecycleNotResumable(lifecycle))
+            }
+            for lifecycle in [EngineLifecycle.running, .degraded([Bench.audio]), .stopped, .recovering] {
+                let raw = RunningGraph(revision: .initial, prepared: Bench.runningPlan)
+                #expect(Bench.refusal(await authority.open(project: Bench.projectC, running: raw, lifecycle: lifecycle))
+                        == .unqualifiedResident)
             }
             #expect(await authority.snapshot() == before)
-            let renderingB = RunningGraph(revision: .initial, prepared: planB)
-            try await authority.open(project: projectB, running: renderingB, lifecycle: .degraded([audio])).get()
-            #expect(try await state(authority, projectB).lifecycle == .degraded([audio]))
-            // A stopped engine may hold a running set it does not render; recovery may have none.
-            let storedC = RunningGraph(revision: .initial, prepared: PreparedActivationID(validated: "prep.c"))
-            try await authority.open(project: projectC, running: storedC, lifecycle: .stopped).get()
-            #expect(try await state(authority, projectC).lifecycle == .stopped)
+            try await authority.open(project: Bench.projectC, running: idle, lifecycle: .stopped).get()
+            #expect(try await Bench.state(authority, Bench.projectC).lifecycle == .stopped)
         }
 
-        @Test func lateSuccessNamingAQueuedDiscardIsDropped() async throws {
-            let authority = try await makeAuthority()
-            let cancelled = PreparedActivationID(validated: "prep.cancelled")
-            let late = try await beginAndAbandon(authority)
-            try await begin(authority).get()
-            let review = try await outstanding(authority, projectA)
-            #expect(await authority.prepareAnswered(.success(cancelled), attempt: review) == .success(.routed))
-            try await authority.cancel(project: projectA).get()
-            let before = await authority.snapshot()
-            // The cancel's own discard is queued; a late success naming that plan is dropped, never a second discard.
-            #expect(await authority.prepareAnswered(.success(cancelled), attempt: late) == .success(.dropped))
-            let after = await authority.snapshot()
-            #expect(after.queue.pending.filter { $0 == .discard(cancelled) }.count == 1 && after.queue == before.queue)
-            #expect(after.abandoned == before.abandoned.filter { $0.attempt != late } && noAttempts(after))
-            #expect(after.projects == before.projects && after.ledger == before.ledger && after.lease == before.lease)
-            // With the queue full, it is still `.dropped`, never `.queueFull`.
-            var newest = late
-            while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
-                newest = try await beginAndAbandon(authority)
-            }
-            let full = await authority.snapshot()
-            #expect(await authority.prepareAnswered(.success(cancelled), attempt: newest) == .success(.dropped))
-            let drained = await authority.snapshot()
-            #expect(drained.queue == full.queue && !drained.abandoned.contains { $0.attempt == newest })
-        }
-
-        @Test func planWithQueuedDiscardIsNotAdopted() async throws {
-            let authority = try await makeAuthority([projectB])
+        @Test func queuedDiscardDoesNotPoisonQualifiedReuse() async throws {
             var engine = try ScriptedActivationEngine()
-            let reused = PreparedActivationID(validated: "prep.reused")
-            try await begin(authority, projectB).get()
-            let reviewB = try await outstanding(authority, projectB)
-            #expect(await authority.prepareAnswered(.success(reused), attempt: reviewB) == .success(.routed))
-            try await authority.cancel(project: projectB).get()
-            try await begin(authority).get()
-            let attempt = try await outstanding(authority, projectA)
-            let before = await authority.snapshot()
-            // The engine reuses the cancelled plan's ID while its discard is still queued: never adopted.
-            let reusedVerdict = await authority.prepareAnswered(.success(reused), attempt: attempt)
-            #expect(refusal(reusedVerdict) == .activation(.preparedIDInUse))
-            #expect(await authority.snapshot() == before)
-            // Once the discard has been taken by the engine, the ID may be prepared again.
+            let authority = try await Bench.makeAuthority(&engine)
+            let late = try await beginAndAbandon(authority, &engine)
+            let name = try await Bench.review(authority, &engine, project: Bench.projectB)
+            let cancelled = try #require(try await Bench.state(authority, Bench.projectB).reviewed)
+            try await Bench.begin(authority)
             await engine.drain(authority)
-            #expect(engine.discarded == [reused])
-            #expect(await authority.prepareAnswered(.success(reused), attempt: attempt) == .success(.routed))
-            #expect(try await state(authority, projectA).reviewed == reused)
+            let current = try engine.requireNext()
+            try await authority.cancel(project: Bench.projectB).get()
+            let old = try reclaimed(await answer(authority, &engine, late, as: name))
+            #expect(await authority.snapshot().queue.pending == [.discard(cancelled), .discard(old)])
+            // The new answer is adopted while BOTH aliasing discards remain queued.
+            #expect(await answer(authority, &engine, current, as: name) == .success(.routed))
+            #expect(await authority.snapshot().queue.pending == [.discard(cancelled), .discard(old)])
+            await engine.drain(authority)
+            #expect(engine.discarded == [cancelled, old])
+            #expect(try await Bench.state(authority).reviewed?.prepared == name)
+            #expect(engine.held.contains(.init(preparation: current, id: name)))
         }
 
         @Test func beginAtTheLastRevisionOverflowsBeforeTheTransition() async throws {
-            let authority = try await makeAuthority()
+            let authority = try await Bench.makeAuthority()
             let last = try ContractRevision(ContractRevision.maximumValue)
-            try await authority.open(project: projectB, running: RunningGraph(revision: last, prepared: nil)).get()
+            try await authority.open(
+                project: Bench.projectC, running: RunningGraph(revision: last, prepared: nil)
+            ).get()
             let before = await authority.snapshot()
-            #expect(refusal(await begin(authority, projectB, request(base: last))) == .activation(.overflow))
+            #expect(Bench.refusal(await authority.begin(Bench.request(base: last), candidate: Bench.candidate(),
+                                                        project: Bench.projectC)) == .activation(.overflow))
             #expect(await authority.snapshot() == before)
         }
 
-        @Test func prepareAnswerRoutesByAttempt() async throws {
-            let authority = try await makeAuthority([projectB])
+        @Test func prepareAnswerRoutesByQualifiedAttempt() async throws {
             var engine = try ScriptedActivationEngine(failing: [2: .prepareFailed])
-            try await begin(authority).get()
-            try await begin(authority, projectB).get()
+            let authority = try await Bench.makeAuthority(&engine)
+            try await Bench.begin(authority)
+            try await Bench.begin(authority, project: Bench.projectB)
             await engine.drain(authority)
-            let attemptA = try withheld(&engine)
-            let attemptB = try withheld(&engine)
-            let firstOverNothing = EngineLifecycle.preparing(try ContractRevision.initial.next(), over: .absent)
-            #expect(try await state(authority, projectB).lifecycle == firstOverNothing)
+            let attemptA = try engine.requireNext()
+            let attemptB = try engine.requireNext()
             let answerB = engine.scriptedAnswer()
-            #expect(await authority.prepareAnswered(answerB, attempt: attemptB) == .success(.routed))
-            let stateA = try await state(authority, projectA)
-            let stateB = try await state(authority, projectB)
-            let (preparing, planIDB) = (try firstPreparing(), try answerB.get())
-            #expect(stateA.phase == .preparing && stateA.lifecycle == preparing)
-            #expect(stateB.phase == .awaitingReview && stateB.reviewed == planIDB)
-            // The scripted fault answers A's prepare: only A fails, back to what it renders.
+            #expect(await answer(authority, &engine, attemptB, as: try answerB.get()) == .success(.routed))
+            let stateA = try await Bench.state(authority)
+            #expect(stateA.phase == .preparing)
+            #expect(stateA.lifecycle == .preparing(try stateA.running.revision.next(), over: .running))
+            #expect(try await Bench.state(authority, Bench.projectB).lifecycle
+                    == .preparing(try ContractRevision.initial.next(), over: .absent))
             let answerA = engine.scriptedAnswer()
             #expect(answerA == .failure(.engineRefused))
-            #expect(await authority.prepareAnswered(answerA, attempt: attemptA) == .success(.routed))
-            let failedA = try await state(authority, projectA)
-            #expect(failedA.phase == .prepareFailed(.engineRefused) && failedA.lifecycle == .running)
-            #expect(try await state(authority, projectB).phase == .awaitingReview)
-            #expect(noAttempts(await authority.snapshot()))
+            let cleaned = engine.terminalFailure(attemptA, reason: .engineRefused)
+            #expect(await authority.prepareAnswered(cleaned, instance: attemptA.instance,
+                                                     attempt: attemptA.attempt) == .success(.routed))
+            #expect(try await Bench.state(authority).phase == .prepareFailed(.engineRefused))
+            #expect(try await Bench.state(authority).lifecycle == .running)
+            #expect(try await Bench.state(authority, Bench.projectB).phase == .awaitingReview)
+            #expect(pendingCount(await authority.snapshot()) == 0)
         }
 
-        @Test func fullQueueRefusesBeforeTheTransition() async throws {
-            let authority = try await makeAuthority([projectB, projectC])
-            // Each abandoned prepare takes one slot; its late success, if any, takes none.
-            for _ in 0..<(EngineCommandQueue.capacity - 2) { _ = try await beginAndAbandon(authority) }
-            try await begin(authority).get()
-            let review = try await outstanding(authority, projectA)
-            _ = try await authority.prepareAnswered(.success(planB), attempt: review).get()
-            try await begin(authority, projectB).get()
+        @Test func fullQueueRefusesBeginAndCancelUnchanged() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
+            _ = try await Bench.review(authority, &engine)
+            try await Bench.fillQueue(authority)
             let full = await authority.snapshot()
             #expect(full.queue.count == EngineCommandQueue.capacity)
-            #expect(refusal(await begin(authority, projectC)) == .queueFull)
-            #expect(refusal(await authority.cancel(project: projectA)) == .queueFull)
+            #expect(Bench.refusal(await authority.begin(Bench.request(), candidate: Bench.candidate(),
+                                                        project: Bench.projectB)) == .queueFull)
+            #expect(Bench.refusal(await authority.cancel(project: Bench.projectA)) == .queueFull)
             #expect(await authority.snapshot() == full)
-            // A late success needs no room: handled at once, unreclaimed, queue unchanged.
-            let stale = try await outstanding(authority, projectB)
-            try await authority.abandonPrepare(project: projectB).get()
-            let abandoned = await authority.snapshot()
-            let late = PreparedActivationID(validated: "prep.waiting")
-            let verdict = await authority.prepareAnswered(.success(late), attempt: stale)
-            #expect(verdict == .success(.unreclaimed(late, refusal: .unexpectedPhase(.idle))))
-            let after = await authority.snapshot()
-            #expect(after.queue == abandoned.queue && after.projects == abandoned.projects)
         }
 
         @Test func recoveringEngineNeverShowsPreparing() async throws {
-            let authority = try await makeAuthority()
-            try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil),
-                                     lifecycle: .recovering).get()
-            try await begin(authority, projectB).get()
-            let preparing = try await state(authority, projectB)
-            #expect(preparing.phase == .preparing && preparing.lifecycle == .recovering)
-            try await authority.abandonPrepare(project: projectB).get()
-            #expect(try await state(authority, projectB).lifecycle == .recovering)
+            let authority = try await Bench.makeAuthority(lifecycleA: .recovering)
+            try await Bench.begin(authority)
+            #expect(try await Bench.state(authority).phase == .preparing)
+            #expect(try await Bench.state(authority).lifecycle == .recovering)
+            try await authority.abandonPrepare(project: Bench.projectA).get()
+            #expect(try await Bench.state(authority).lifecycle == .recovering)
         }
     }
 }
