@@ -53,7 +53,9 @@ extension HostAuthorityTests {
             let heldByOther = await otherHolder.resolveRecovery(project: Bench.projectA)
             #expect(Bench.refusal(heldByOther) == .activation(.leaseHeldByOtherProject(Bench.projectB)))
             #expect(await otherHolder.snapshot() == beforeOtherHolder)
-            #expect(await otherHolder.snapshot().restoring == nil)
+            #expect(beforeOtherHolder.restoring?.project == Bench.projectB)
+            #expect(beforeOtherHolder.projects[Bench.projectB]?.lifecycle == .recovering)
+            #expect(beforeOtherHolder.outputsMuted)
         }
 
         @Test func explicitResolveQueuesOneRestore() async throws {
@@ -230,6 +232,7 @@ extension HostAuthorityTests {
                 .restore(restore.attempt, restore.revision, restore.target, token)
             ])
             _ = try await Bench.review(authority, &engine)
+            let reviewed = try #require(try await Bench.state(authority).reviewed)
             let running = try await Bench.state(authority).running
             let preparing = EngineLifecycle.preparing(try running.revision.next(), over: .running)
             #expect(await engine.completeRestore(authority) == .success(preparing))
@@ -244,7 +247,10 @@ extension HostAuthorityTests {
                                               reason: .outcomeUnknown).get()
             let abandoned = await authority.snapshot()
             #expect(abandoned.outputsMuted && abandoned.pendingOutput == nil)
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            let replacement = try await Bench.restore(authority)
+            #expect(replacement.attempt != restore.attempt)
+            #expect(await engine.drain(authority) ==
+                    [.setOutputsMuted(true), Bench.restoreCommand(replacement), .discard(reviewed)])
         }
 
         @Test func resolvingWhileRestoreIsPendingIsBusy() async throws {

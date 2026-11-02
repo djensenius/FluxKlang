@@ -205,11 +205,64 @@ enum AuthorityBench {
         try #require(await authority.snapshot().lease?.token)
     }
 
+    /// The exact queued or delivered restore, including its opaque identity.
+    static func restore(_ authority: HostAuthority) async throws -> RestoreRecord {
+        try #require(await authority.snapshot().restoring)
+    }
+
+    static func restoreCommand(_ record: RestoreRecord) -> EngineCommand {
+        .restore(record.attempt, record.revision, record.target, record.token)
+    }
+
+    static func planPhase(_ binding: PlanBinding, in snapshot: HostAuthoritySnapshot) -> EnginePlanPhase? {
+        for entry in snapshot.plans.records.flatMap(\.entries) {
+            if case .bound(let actual, let phase) = entry.state, actual == binding { return phase }
+        }
+        return nil
+    }
+
+    /// Explicit replay/early acknowledgement for refusal tests; normal completion uses the engine fixture.
+    static func acknowledge(_ record: RestoreRecord, on authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        await authority.restoreCompleted(attempt: record.attempt, revision: record.revision,
+                                         target: record.target, token: record.token)
+    }
+
+    /// Adversarial adapter scheduling: answer without draining earlier commands.
+    /// Prepare-answer admission does not require pull/delivery bookkeeping. This
+    /// reaches already-admitted commit interleavings through the real actor API.
+    static func commitWithoutDrain(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                                   project: ProjectID, window: WindowID,
+                                   prepared: PreparedActivationID, withAux: Bool = false) async throws {
+        try await begin(authority, project: project, withAux: withAux)
+        _ = try await engine.answerQueued(authority, project: project, as: prepared)
+        let authorization = try await authority.authorize(project: project, gesture: gesture(window)).get()
+        try await authority.commit(project: project, authorization: authorization).get()
+    }
+
     /// Fills the command queue with `project`'s prepares, abandoning each.
     static func fillQueue(_ authority: HostAuthority, with project: ProjectID = projectB) async throws {
         while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
             try await authority.begin(request(), candidate: candidate(), project: project).get()
             try await authority.abandonPrepare(project: project).get()
         }
+
+    }
+
+    /// Install B through the same engine and canonical host, then return the lease to A.
+    static func installB(
+        _ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+        lifecycle: EngineLifecycle = .running
+    ) async throws {
+        #expect(lifecycle != .stopped)
+        let token = try await authority.transfer(to: projectB, window: windowB).get().token
+        _ = try await commitDelivered(authority, &engine, project: projectB, window: windowB)
+        _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
+        if case .degraded(let lost) = lifecycle {
+            for capability in lost {
+                try await authority.capabilityLost(capability, project: projectB, token: token).get()
+            }
+        }
+        _ = try await authority.transfer(to: projectA, window: windowA).get()
     }
 }

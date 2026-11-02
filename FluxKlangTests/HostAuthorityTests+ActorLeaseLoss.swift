@@ -10,7 +10,7 @@ enum LeaseLossPhase: CaseIterable, Sendable {
 
     func engine() throws -> ScriptedActivationEngine {
         self == .prepareFailed ? try ScriptedActivationEngine(failing: [1: .prepareFailed])
-            : try ScriptedActivationEngine()
+            : try ScriptedActivationEngine(trackedLimit: 512)
     }
 
     /// Whether A holds a reviewed binding in this phase (committing ones, and failed or partial reports, keep it).
@@ -60,6 +60,12 @@ enum LeaseLossPhase: CaseIterable, Sendable {
             return .prepareFailed(.engineRefused)
         case .recovering:
             let reviewed = try await Bench.commitQueued(authority, &engine)
+            // Leave room for the mute but not Rule M's automatic restore, so
+            // this row still starts in the transaction's recovering phase.
+            for _ in 1..<(EngineCommandQueue.capacity - 3) {
+                try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+                try await authority.abandonPrepare(project: Bench.projectB).get()
+            }
             try await authority.abandonCommit(try await Bench.attempt(authority), reason: .outcomeUnknown).get()
             await engine.drain(authority)
             return .recovering(reviewed, cause: .commitOutcomeUnknown)
@@ -218,9 +224,7 @@ extension HostAuthorityTests {
                                                               gesture: Bench.gesture(Bench.windowB)).get()
             let acquired = await authority.snapshot()
             let refused = Bench.refusal(await authority.commit(project: Bench.projectB, authorization: authorization))
-            // H5d-2's Rule G turns B `.recovering`; until then the context bump stales B's plan.
-            let stale: [HostAuthorityRefusal] = [.activation(.staleContext), .lifecycleRejectsChanges(.recovering)]
-            #expect(refused.map { stale.contains($0) } == true)
+            #expect(refused == .lifecycleRejectsChanges(.recovering))
             #expect(await authority.snapshot() == acquired)
         }
 

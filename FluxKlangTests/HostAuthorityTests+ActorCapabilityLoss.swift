@@ -107,7 +107,7 @@ extension HostAuthorityTests {
                     == .preparing(try runningRevision.next(), over: .degraded([Bench.audio])))
 
             try await authority.abandonCommit(attempt, reason: .outcomeUnknown).get()
-            #expect(await engine.drain(authority) == [.setOutputsMuted(true)])
+            #expect(await authority.nextEngineCommand() == .setOutputsMuted(true))
             let midi = CapabilityID(validated: "cap.midi")
             try await authority.capabilityLost(midi, project: Bench.projectA, token: token).get()
             let retained = [Bench.audio, midi].sorted()
@@ -116,9 +116,10 @@ extension HostAuthorityTests {
             #expect(recovering.projects[Bench.projectA]?.recoveryBase == .degraded(retained))
             #expect(recovering.inFlight.isEmpty && recovering.outputsMuted)
 
-            #expect(await authority.resolveRecovery(project: Bench.projectA)
-                    == .success(.restoring(runningRevision)))
+            #expect(Bench.refusal(await authority.resolveRecovery(project: Bench.projectA)) == .activation(.busy))
+            #expect(await authority.snapshot() == recovering)
             let restore = try #require(await authority.snapshot().restoring)
+            #expect(restore.revision == runningRevision)
             #expect(await engine.drain(authority) == [
                 .restore(restore.attempt, restore.revision, restore.target, token),
                 .discard(try #require(before.projects[Bench.projectA]?.reviewed))

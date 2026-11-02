@@ -65,6 +65,8 @@ struct ScriptedActivationEngine: Sendable {
     private(set) var held: [ScriptedHeldPlan] = []
     private(set) var disposed: [ScriptedHeldPlan] = []
     private(set) var anomalies: [String] = []
+    /// Answers issued from a real queued command before the normal FIFO pull.
+    private var earlyPreparations: Set<HostPrepare> = []
 
     init(failing: [Int: FixtureFault] = [:], answerLimit: Int = 512,
          recordCapacity: Int = 1_024, trackedLimit: Int = 256) throws(ScriptedEngineError) {
@@ -116,6 +118,7 @@ struct ScriptedActivationEngine: Sendable {
     }
 
     private mutating func takePreparation(_ graph: GraphDocument, key: HostPrepare) {
+        if earlyPreparations.remove(key) != nil { return }
         if plannedNodes[key] != nil {
             anomaly("duplicate prepare dispatch")
         } else if room(plannedNodes.count, "tracked preparations"), room(pending.count, "pending prepares") {
@@ -151,6 +154,46 @@ struct ScriptedActivationEngine: Sendable {
             answer, instance: preparation.instance, attempt: preparation.attempt
         )
         return ScriptedPrepareAnswer(preparation: preparation, answer: answer, verdict: verdict)
+    }
+
+    /// Adversarial adapter scheduling, not actor-state injection. The identity
+    /// comes from the actual admitted command; the canonical host binds the answer.
+    mutating func answerQueued(
+        _ authority: HostAuthority, project: ProjectID, as id: PreparedActivationID
+    ) async throws -> PlanBinding {
+        let snapshot = await authority.snapshot()
+        let preparation = try #require(snapshot.outstanding[project])
+        let command = try #require(snapshot.queue.pending.first {
+            if case .prepare(_, preparation.instance, preparation.attempt) = $0 { true } else { false }
+        })
+        guard case .prepare(let graph, _, _) = command else {
+            throw ScriptedEngineError.invalidTrackedLimit
+        }
+        takePreparation(graph, key: preparation)
+        #expect(withholdNext() == preparation)
+        let answer = prepare(preparation, as: id)
+        let verdict = await authority.prepareAnswered(answer, instance: preparation.instance,
+                                                      attempt: preparation.attempt)
+        #expect(try verdict.get() == .routed)
+        earlyPreparations.insert(preparation)
+        return try #require(await authority.snapshot().projects[project]?.reviewed)
+    }
+
+    /// Cleanup of deliberately abandoned pressure preparations is terminal and
+    /// truthful, rather than dropping callbacks and stranding canonical capacity.
+    mutating func finishAbandoned(_ authority: HostAuthority) async throws {
+        let snapshot = await authority.snapshot()
+        let abandoned = Set(snapshot.plans.records.flatMap { record in
+            record.entries.compactMap { entry -> HostPrepare? in
+                guard entry.state == .pending(reclaim: true) else { return nil }
+                return HostPrepare(instance: record.instance, attempt: entry.attempt)
+            }
+        })
+        for preparation in pending where abandoned.contains(preparation) {
+            let result = terminalFailure(preparation, reason: .engineRefused)
+            #expect(try await authority.prepareAnswered(result, instance: preparation.instance,
+                                                        attempt: preparation.attempt).get() == .dropped)
+        }
     }
 
     mutating func withholdNext() -> HostPrepare? {
