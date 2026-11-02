@@ -7,6 +7,7 @@
 //  and migrates pre-existing local state up to the cloud on first sync.
 //
 
+import CoreGraphics
 import Foundation
 import Testing
 @testable import FluxKlang
@@ -355,5 +356,102 @@ extension CloudSyncTests {
         await owner.awaitScheduledSavesSnapshot()
         await reloadedOwner.awaitScheduledSavesSnapshot()
         #expect(owner.snapshots == external)
+    }
+}
+
+private struct SpatialFixture: Codable, Sendable {
+    var array: SpeakerArray
+}
+
+extension CloudSyncTests {
+    @MainActor
+    @Test func faderMutationsPersistAndReloadThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("faders-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let monoID = UUID()
+        let stereoID = UUID()
+        let mono = FaderStrip(id: monoID, node: .channel(1), customLabel: "Lead")
+        let stereo = FaderStrip(id: stereoID, node: .channel(3), rightNode: .channel(4), customLabel: "Keys")
+        let seed = FaderLayout(strips: [mono, stereo])
+        await store.save(seed, to: "fader-layout.json")
+
+        let owner = FaderLayoutStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        #expect(owner.layout.strips == seed.strips)
+
+        owner.setLabel("Interim", for: monoID)
+        owner.setLabel("Final", for: monoID)
+        owner.move(fromOffsets: IndexSet(integer: 1), toOffset: 0)
+        var finalMono = mono
+        finalMono.customLabel = "Final"
+        let expected = [stereo, finalMono]
+        await owner.awaitScheduledSavesSnapshot()
+
+        let fileURL = directory.appendingPathComponent("fader-layout.json")
+        let saved = try JSONDecoder().decode(FaderLayout.self, from: Data(contentsOf: fileURL))
+        #expect(saved.strips == expected)
+        #expect(owner.layout.strips == expected)
+
+        let freshStore = JSONFileStore(directory: directory, cloud: nil)
+        let reloadedOwner = FaderLayoutStore(store: freshStore)
+        await reloadedOwner.reload()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(reloadedOwner.layout.strips == expected)
+    }
+
+    @MainActor
+    @Test func spatialSeedAndMutationsPersistAndReloadThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("spatial-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let initialOwner = SpatialStore(store: store)
+        let initial = initialOwner.array
+        await initialOwner.load()
+        await initialOwner.awaitScheduledSavesSnapshot()
+
+        let fileURL = directory.appendingPathComponent("spatial.json")
+        let seeded = try JSONDecoder().decode(SpatialFixture.self, from: Data(contentsOf: fileURL))
+        #expect(seeded.array == initial)
+        #expect(initialOwner.array == initial)
+
+        let leftID = UUID()
+        let rightID = UUID()
+        let pairID = UUID()
+        let left = Speaker(id: leftID, name: "Left fixture", node: .bus(5), position: CGPoint(x: 0.2, y: 0.3))
+        let right = Speaker(id: rightID, name: "Right fixture", node: .bus(6), position: CGPoint(x: 0.8, y: 0.7))
+        let pair = SpeakerPair(id: pairID, name: "Fixture pair", left: leftID, right: rightID)
+        let custom = SpeakerArray(speakers: [left, right], pairs: [pair])
+        await store.save(SpatialFixture(array: custom), to: "spatial.json")
+
+        let owner = SpatialStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+        #expect(owner.array == custom)
+
+        owner.setSpeakerName(leftID, to: " Interim ")
+        owner.setSpeakerName(leftID, to: " Front fixture ")
+        owner.setSpeakerNode(leftID, to: .bus(7))
+        owner.setSpeakerPosition(leftID, to: CGPoint(x: -0.25, y: 1.25))
+        var expected = custom
+        expected.speakers[0].name = "Front fixture"
+        expected.speakers[0].node = .bus(7)
+        expected.speakers[0].position = CGPoint(x: 0, y: 1)
+        await initialOwner.awaitScheduledSavesSnapshot()
+        await owner.awaitScheduledSavesSnapshot()
+
+        let saved = try JSONDecoder().decode(SpatialFixture.self, from: Data(contentsOf: fileURL))
+        #expect(saved.array == expected)
+        #expect(owner.array == expected)
+
+        let freshStore = JSONFileStore(directory: directory, cloud: nil)
+        let reloadedOwner = SpatialStore(store: freshStore)
+        await reloadedOwner.reload()
+        await initialOwner.awaitScheduledSavesSnapshot()
+        await owner.awaitScheduledSavesSnapshot()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+        #expect(reloadedOwner.array == expected)
     }
 }
