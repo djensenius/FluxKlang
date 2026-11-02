@@ -16,6 +16,7 @@ final class ProductionAccessAudit: Sendable {
         case assistantActionInterpreter
         case ubiquitousCloudStore
         case cloudChangeObserver
+        case cloudKitHistory
     }
 
     enum Event: Int, CaseIterable, Sendable {

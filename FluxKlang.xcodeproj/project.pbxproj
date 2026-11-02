@@ -696,6 +696,7 @@
 		EAAAB1FA4F7BA57E529E0619 /* StudioConnectionCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B60A5380CC8B1E1091A0283 /* StudioConnectionCodable.swift */; };
 		EAAE402C4D7AA59D43EDAD9F /* MusicalTimeline+Index.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED4BE846ED9D3431C2F4865C /* MusicalTimeline+Index.swift */; };
 		EAE303949CDBBA424FD40704 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B436AA6246D1F6CA5C6EECC /* Assets.xcassets */; };
+		EC17E7D814156E866EAE1FE6 /* CloudKitHistoryIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA83D110EBA11F507E1C0888 /* CloudKitHistoryIsolationTests.swift */; };
 		EC2250AB395D97A5F1B53833 /* RealtimeHandoffTests+Deadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60C345B9915578A8F9BC862 /* RealtimeHandoffTests+Deadline.swift */; };
 		EC356F93649C2694412B464C /* AssistantSpeechIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8AC605EEEBDDA03E27FFA04 /* AssistantSpeechIsolationTests.swift */; };
 		EC7181152CB0108099D31C5D /* ContractID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70DF305609475BA00086393C /* ContractID.swift */; };
@@ -1142,6 +1143,7 @@
 		C8F2D81E0B10679454625837 /* HandoffPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffPolicy.swift; sourceTree = "<group>"; };
 		C9899793683B875EE6DD06CE /* UbiquitousCloudStoreIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UbiquitousCloudStoreIsolationTests.swift; sourceTree = "<group>"; };
 		CA349F0ED5CEBA0CFB8F3C76 /* AssistantActionInterpretationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionInterpretationAdapter.swift; sourceTree = "<group>"; };
+		CA83D110EBA11F507E1C0888 /* CloudKitHistoryIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitHistoryIsolationTests.swift; sourceTree = "<group>"; };
 		CA9769A67EE74D4DD298756E /* AssistantLiveWingAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantLiveWingAppModelTests.swift; sourceTree = "<group>"; };
 		CACED8B2ABA64555DD48CE6F /* AssistantActionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionReviewView.swift; sourceTree = "<group>"; };
 		CBBC0C1EAC2C6DB8A4B87E4F /* AssistantCredentialIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCredentialIsolationTests.swift; sourceTree = "<group>"; };
@@ -1966,6 +1968,7 @@
 				49DFA949DDCD2BDD22125945 /* CapabilityIdentityTests.swift */,
 				9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */,
 				0540E765F2D3779208764CE7 /* CloudChangeObserverIsolationTests.swift */,
+				CA83D110EBA11F507E1C0888 /* CloudKitHistoryIsolationTests.swift */,
 				3B70C637A38B3F0402F46DA5 /* CloudSyncTests.swift */,
 				337B4181D64BE707919C49DF /* ContractCoreTests.swift */,
 				0564648294637C2DA51D8F16 /* ContractFixtureTests.swift */,
@@ -2963,6 +2966,7 @@
 				3CEE5622C503B520F6FE5A1A /* CapabilitySnapshotFixture.swift in Sources */,
 				5568BD9CDE2B52271879495A /* ChainTests.swift in Sources */,
 				5973F497503AA44E7362B557 /* CloudChangeObserverIsolationTests.swift in Sources */,
+				EC17E7D814156E866EAE1FE6 /* CloudKitHistoryIsolationTests.swift in Sources */,
 				85744D5A8BA0689DA9F76593 /* CloudSyncTests.swift in Sources */,
 				0A368850EAE2571159F1B765 /* ContractCoreTests.swift in Sources */,
 				A8D790CD978CC69AD7CD1B78 /* ContractFixtureIDs.swift in Sources */,
