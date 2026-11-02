@@ -61,106 +61,112 @@ struct SiriAppIntentsTests {
     }
 
     @Test func draftIntentPreservesEffectOrderPersistsAndOpensReviewWithoutWrites() async throws {
-        let store = MemorySiriDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let model = AppModel(assistant: coordinator, wing: .preview())
-        let source = model.equipment.items[0]
-        _ = model.environments.addEnvironment(named: "Siri Test")
-        let first = Effect(name: "Delay")
-        let second = Effect(name: "Reverb")
-        model.environments.add(first)
-        model.environments.add(second)
-        try await model.studioConnections.replaceHome(
-            StudioHomeConnections(inputs: [
-                StudioInputConnection(connector: 1, equipmentID: source.id, outputPort: 0),
-                StudioInputConnection(connector: 2, equipmentID: source.id, outputPort: 1)
-            ]),
-            equipment: model.equipment.items
-        )
-        let before = model.wing.values
-        let writesBefore = model.wing.transportWriteCount
+        try await withSiriAppModelFixture { fixture in
+            let store = MemorySiriDraftStore()
+            let coordinator = AssistantCoordinator(draftStore: store)
+            let model = try fixture.makeModel(coordinator: coordinator)
+            let source = model.equipment.items[0]
+            _ = model.environments.addEnvironment(named: "Siri Test")
+            let first = Effect(name: "Delay")
+            let second = Effect(name: "Reverb")
+            model.environments.add(first)
+            model.environments.add(second)
+            try await model.studioConnections.replaceHome(
+                StudioHomeConnections(inputs: [
+                    StudioInputConnection(connector: 1, equipmentID: source.id, outputPort: 0),
+                    StudioInputConnection(connector: 2, equipmentID: source.id, outputPort: 1)
+                ]),
+                equipment: model.equipment.items
+            )
+            let before = model.wing.values
+            let writesBefore = model.wing.transportWriteCount
 
-        let spoken = await SiriDraftStudioAction.execute(
-            sourceGear: [EquipmentEntity(id: source.id, name: source.name)],
-            effects: [
-                EffectEntity(id: second.id, name: second.name),
-                EffectEntity(id: first.id, name: first.name)
-            ],
-            destination: .space,
-            model: model
-        )
+            let spoken = await SiriDraftStudioAction.execute(
+                sourceGear: [EquipmentEntity(id: source.id, name: source.name)],
+                effects: [
+                    EffectEntity(id: second.id, name: second.name),
+                    EffectEntity(id: first.id, name: first.name)
+                ],
+                destination: .space,
+                model: model
+            )
 
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [source.id])
-        #expect(draft.request.effectChainIDs == [second.id, first.id])
-        #expect(draft.request.destination == .space)
-        #expect(await store.load()?.id == draft.id)
-        #expect(spoken.contains("Drafted \(source.name)"))
-        #expect(spoken.contains("Review"))
-        #expect(model.section == .studio)
-        #expect(coordinator.navigationTarget == .reviewPendingDraft)
-        #expect(model.wing.values == before)
-        #expect(model.wing.transportWriteCount == writesBefore)
+            let draft = try #require(coordinator.pendingStudioDraft)
+            #expect(draft.request.sourceInstrumentIDs == [source.id])
+            #expect(draft.request.effectChainIDs == [second.id, first.id])
+            #expect(draft.request.destination == .space)
+            #expect(await store.load()?.id == draft.id)
+            #expect(spoken.contains("Drafted \(source.name)"))
+            #expect(spoken.contains("Review"))
+            #expect(model.section == .studio)
+            #expect(coordinator.navigationTarget == .reviewPendingDraft)
+            #expect(model.wing.values == before)
+            #expect(model.wing.transportWriteCount == writesBefore)
+        }
     }
 
     @Test func unavailableAppleNaturalSiriNeverUsesLegacyWiringParser() async throws {
-        let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
-        let model = AppModel(assistant: coordinator, wing: .preview())
-        let source = model.equipment.items[0]
-        _ = model.environments.addEnvironment(named: "Siri Natural Language")
-        let effect = Effect(name: "Tape Delay")
-        model.environments.add(effect)
-        let beforeGraph = model.environments.activeStudioGraph
-        let beforeValues = model.wing.values
-        let writesBefore = model.wing.transportWriteCount
+        try await withSiriAppModelFixture { fixture in
+            let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
+            let model = try fixture.makeModel(coordinator: coordinator)
+            let source = model.equipment.items[0]
+            _ = model.environments.addEnvironment(named: "Siri Natural Language")
+            let effect = Effect(name: "Tape Delay")
+            model.environments.add(effect)
+            let beforeGraph = model.environments.activeStudioGraph
+            let beforeValues = model.wing.values
+            let writesBefore = model.wing.transportWriteCount
 
-        let spoken = await SiriDraftStudioAction.execute(
-            request: "Tell Flux Klang to wire \(source.name) through Tape Delay to speakers",
-            model: model,
-            interpreter: AssistantUnavailableActionInterpreter(reason: "disabled for deterministic test")
-        )
+            let spoken = await SiriDraftStudioAction.execute(
+                request: "Tell Flux Klang to wire \(source.name) through Tape Delay to speakers",
+                model: model,
+                interpreter: AssistantUnavailableActionInterpreter(reason: "disabled for deterministic test")
+            )
 
-        #expect(coordinator.pendingStudioDraft == nil)
-        #expect(spoken == AssistantRoutingOwnership.clarification)
-        #expect(coordinator.navigationTarget == nil)
-        #expect(model.environments.activeStudioGraph == beforeGraph)
-        #expect(model.wing.values == beforeValues)
-        #expect(model.wing.transportWriteCount == writesBefore)
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(spoken == AssistantRoutingOwnership.clarification)
+            #expect(coordinator.navigationTarget == nil)
+            #expect(model.environments.activeStudioGraph == beforeGraph)
+            #expect(model.wing.values == beforeValues)
+            #expect(model.wing.transportWriteCount == writesBefore)
+        }
     }
 
     @Test func draftIntentDropsMissingAndDuplicateParametersWithoutApplyingRouting() async throws {
-        let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
-        let model = AppModel(assistant: coordinator, wing: .preview())
-        let source = model.equipment.items[0]
-        _ = model.environments.addEnvironment(named: "Siri Mapping")
-        let effect = Effect(name: "Delay")
-        model.environments.add(effect)
-        let unknownID = UUID()
-        let beforeGraph = model.environments.activeStudioGraph
-        let beforeValues = model.wing.values
-        let writesBefore = model.wing.transportWriteCount
+        try await withSiriAppModelFixture { fixture in
+            let coordinator = AssistantCoordinator(draftStore: MemorySiriDraftStore())
+            let model = try fixture.makeModel(coordinator: coordinator)
+            let source = model.equipment.items[0]
+            _ = model.environments.addEnvironment(named: "Siri Mapping")
+            let effect = Effect(name: "Delay")
+            model.environments.add(effect)
+            let unknownID = UUID()
+            let beforeGraph = model.environments.activeStudioGraph
+            let beforeValues = model.wing.values
+            let writesBefore = model.wing.transportWriteCount
 
-        _ = await SiriDraftStudioAction.execute(
-            sourceGear: [
-                EquipmentEntity(id: source.id, name: source.name),
-                EquipmentEntity(id: source.id, name: source.name),
-                EquipmentEntity(id: unknownID, name: "Missing")
-            ],
-            effects: [
-                EffectEntity(id: effect.id, name: effect.name),
-                EffectEntity(id: effect.id, name: effect.name),
-                EffectEntity(id: unknownID, name: "Missing")
-            ],
-            destination: .finalMix,
-            model: model
-        )
+            _ = await SiriDraftStudioAction.execute(
+                sourceGear: [
+                    EquipmentEntity(id: source.id, name: source.name),
+                    EquipmentEntity(id: source.id, name: source.name),
+                    EquipmentEntity(id: unknownID, name: "Missing")
+                ],
+                effects: [
+                    EffectEntity(id: effect.id, name: effect.name),
+                    EffectEntity(id: effect.id, name: effect.name),
+                    EffectEntity(id: unknownID, name: "Missing")
+                ],
+                destination: .finalMix,
+                model: model
+            )
 
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.sourceInstrumentIDs == [source.id])
-        #expect(draft.request.effectChainIDs == [effect.id])
-        #expect(model.environments.activeStudioGraph == beforeGraph)
-        #expect(model.wing.values == beforeValues)
-        #expect(model.wing.transportWriteCount == writesBefore)
+            let draft = try #require(coordinator.pendingStudioDraft)
+            #expect(draft.request.sourceInstrumentIDs == [source.id])
+            #expect(draft.request.effectChainIDs == [effect.id])
+            #expect(model.environments.activeStudioGraph == beforeGraph)
+            #expect(model.wing.values == beforeValues)
+            #expect(model.wing.transportWriteCount == writesBefore)
+        }
     }
 
     @Test func spokenOutputReportsValidationAndBaselineQueriesRemainAvailable() {
@@ -183,6 +189,58 @@ struct SiriAppIntentsTests {
 
         #expect(SiriDraftStudioAction.spokenSummary(for: draft).contains("Review 1 issue"))
         #expect(DestinationEntityQuery.entities(for: [DestinationEntity.space.id]) == [.space])
+    }
+}
+
+@MainActor
+private func withSiriAppModelFixture(
+    _ body: @MainActor (SiriAppModelFixture) async throws -> Void
+) async throws {
+    try await withAssistantFixtureResources { resources in
+        let fixture = SiriAppModelFixture(resources: resources)
+        resources.onFinish { await fixture.finish() }
+        try await body(fixture)
+    }
+}
+
+@MainActor
+private final class SiriAppModelFixture {
+    private let resources: AssistantFixtureResources
+    private var model: AppModel?
+
+    init(resources: AssistantFixtureResources) {
+        self.resources = resources
+    }
+
+    func makeModel(coordinator: AssistantCoordinator) throws -> AppModel {
+        let settings = AssistantProviderSettings(
+            defaults: try resources.defaults("provider"), credentials: MemoryAssistantCredentialStore())
+        settings.provider = .deterministic
+        let model = AppModel(
+            assistant: coordinator, assistantProviderSettings: settings, wing: .preview(), hardware: .inert,
+            launchControlXLStore: JSONFileStore(
+                directory: resources.root.appendingPathComponent("launch-control-xl"), cloud: nil),
+            domainStore: JSONFileStore(directory: resources.root.appendingPathComponent("domain"), cloud: nil),
+            assistantConversationStore: AssistantConversationStore(
+                local: LocalAssistantHistoryBackend(
+                    directory: resources.root.appendingPathComponent("history", isDirectory: true),
+                    legacyFileURL: resources.root.appendingPathComponent("absent-legacy-history.json")),
+                cloud: nil),
+            assistantSpokenRepliesDefaults: try resources.defaults("spoken"))
+        // Retain before the caller can mutate stores or await a throwing replaceHome.
+        self.model = model
+        return model
+    }
+
+    func finish() async {
+        model?.assistantChat.cancel()
+        await model?.assistantChat.awaitOwnedWorkSnapshot()
+        // Finite current-work snapshots, not future/global/durable or fake-worker joins.
+        await model?.awaitDomainScheduledSaveSnapshots()
+        await model?.awaitSiriEntityIndexingSnapshot()
+        model = nil
+        // No fake workers or hardware connections are started by this family.
+        // The resource wrapper removes only owned suites/root after this returns.
     }
 }
 
