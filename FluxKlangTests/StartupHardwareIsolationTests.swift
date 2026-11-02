@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -22,7 +23,11 @@ struct StartupHardwareIsolationTests {
         #expect(AppPersistence.isTesting)
         #expect(selected.makeLaunchControlXLInput() is InertLaunchControlXLInput)
         #expect(HardwareServiceFactories.current.makeLaunchControlXLInput() is InertLaunchControlXLInput)
+        #expect(selected.makeWingTransport(WingNetwork.defaultPort, selected.localNetworkProbe) is InertWingTransport)
+        let current = HardwareServiceFactories.current
+        #expect(current.makeWingTransport(WingNetwork.defaultPort, current.localNetworkProbe) is InertWingTransport)
         #expect(spy.inputsMade == 0)
+        #expect(spy.wing.ports.isEmpty)
     }
 
     @Test func productionSelectionStillUsesProductionFactories() {
@@ -31,6 +36,109 @@ struct StartupHardwareIsolationTests {
 
         #expect(selected.makeLaunchControlXLInput() === spy.input)
         #expect(spy.inputsMade == 1)
+        #expect(spy.wing.ports.isEmpty, "Selection must not eagerly build a transport")
+        _ = selected.makeWingTransport(9000, selected.localNetworkProbe)
+        #expect(spy.wing.ports == [9000])
+    }
+
+    @Test func omittedWingMakerAndDefaultControllerAreInert() async {
+        let factories = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
+        let transport = factories.makeWingTransport(WingNetwork.defaultPort, factories.localNetworkProbe)
+        #expect(transport is InertWingTransport)
+        for controller in [WingController(), WingController(hardware: factories)] {
+            #expect(controller.mode == .live)
+            #expect(controller.port == WingNetwork.defaultPort)
+            #expect(controller.connection == .disconnected)
+            await controller.connect(host: "must-not-resolve.invalid")
+            guard case .failed = controller.connection else {
+                Issue.record("An inert controller must refuse connection")
+                continue
+            }
+            #expect(controller.values.isEmpty)
+            #expect(controller.confirmedValues.isEmpty)
+        }
+    }
+
+    @Test func inertTransportRefusesStartAndSendWithoutProducingData() async {
+        let transport = InertWingTransport()
+        await #expect(throws: WingTransportError.notStarted) {
+            try await transport.start(remoteHost: "must-not-resolve.invalid", localPort: nil, broadcast: true)
+        }
+        await #expect(throws: WingTransportError.notStarted) {
+            try await transport.send("/ch/1/fdr", .float(1))
+        }
+        await transport.stop()
+        await transport.stop()
+        #expect(await transport.sessionID == nil)
+        #expect(await transport.peerHosts.isEmpty)
+        var messages = transport.incoming.makeAsyncIterator()
+        #expect(await messages.next() == nil)
+    }
+
+    @Test func controllerConstructionAndFailureUseInjectedWingFactory() {
+        let spy = WingFactorySpy()
+        let controller = WingController(port: 9000, hardware: spy.factories)
+        #expect(controller.mode == .live)
+        #expect(controller.port == 9000)
+        #expect(controller.connection == .disconnected)
+        let failure = WingController.acceptanceFailure(reason: "Unavailable", hardware: spy.factories)
+        #expect(failure.mode == .live)
+        #expect(failure.connection == .failed(reason: "Unavailable"))
+        #expect(failure.values.isEmpty)
+        #expect(spy.ports == [9000, WingNetwork.defaultPort])
+    }
+
+    @Test func appModelDefaultDisconnectAndFailureUseInjectedWingFactory() async {
+        let spy = WingFactorySpy()
+        let model = AppModel(hardware: spy.factories)
+        let initial = model.wing
+        #expect(spy.ports == [WingNetwork.defaultPort])
+        #expect(initial.connection == .disconnected)
+
+        await model.disconnect()
+        #expect(model.wing !== initial)
+        #expect(model.wing.connection == .disconnected)
+        #expect(spy.ports.count == 2)
+
+        await model.showAcceptanceConnectionFailure()
+        #expect(model.wing.mode == .live)
+        #expect(model.wing.connection == .failed(reason: "Acceptance test: WING unavailable"))
+        #expect(spy.ports == Array(repeating: WingNetwork.defaultPort, count: 3))
+    }
+
+    @Test func explicitWingAndPreviewConstructionDoNotBuildADefaultTransport() async throws {
+        let spy = WingFactorySpy()
+        let wing = WingController(transport: InertWingTransport())
+        let model = AppModel(wing: wing, hardware: spy.factories)
+        #expect(model.wing === wing)
+        let previewWing = WingController.preview()
+        let preview = AppModel(wing: previewWing, hardware: spy.factories)
+        #expect(preview.wing === previewWing)
+        #expect(preview.isDemo && preview.isConnected)
+        #expect(spy.ports.isEmpty, "An explicit controller must not create a throwaway default")
+        let appPreview = AppModel.preview()
+        #expect(appPreview.isDemo && appPreview.isConnected)
+        #expect(!appPreview.wing.values.isEmpty)
+        let activePreviewWing = appPreview.wing
+        let actions = try #require(appPreview.assistantChat.actionPlanner as? AssistantActionController)
+        #expect(actions === appPreview.assistantActions)
+        #expect(actions.controller() === activePreviewWing)
+        let mixer = try #require(appPreview.assistantChat.mixerExecutor)
+        let refusal = await mixer.execute(.init(target: .main(1), operation: .mute(true)),
+                                          sessionID: activePreviewWing.sessionID)
+        #expect(refusal.hasPrefix("No changes:"))
+        #expect(refusal.contains("not Demo Mode"))
+        #expect(activePreviewWing.transportWriteCount == 0)
+
+        await appPreview.disconnect()
+
+        #expect(appPreview.wing !== activePreviewWing)
+        #expect(appPreview.wing.mode == .live)
+        #expect(appPreview.wing.connection == .disconnected)
+        #expect(actions.controller() === appPreview.wing, "The existing action binding must follow replacement")
+        #expect(appPreview.assistantChat.actionPlanner as? AssistantActionController === actions)
+        #expect(activePreviewWing.transportWriteCount == 0)
+        #expect(appPreview.wing.transportWriteCount == 0)
     }
 
     @Test func appModelWiresInjectedFactoriesLazilyIntoLaunchControlXLStartup() async throws {
@@ -108,13 +216,31 @@ struct StartupHardwareIsolationTests {
 @MainActor
 private final class HardwareFactorySpy {
     let input = RecordingLaunchControlXLInput()
+    let wing = WingFactorySpy()
     private(set) var inputsMade = 0
 
     var factories: HardwareServiceFactories {
-        HardwareServiceFactories { [self] in
+        HardwareServiceFactories(makeLaunchControlXLInput: { [self] in
             inputsMade += 1
             return input
-        }
+        }, makeWingTransport: wing.makeTransport)
+    }
+}
+
+/// All state captured by the @Sendable WING factory is protected by the mutex.
+private final class WingFactorySpy: Sendable {
+    private let recordedPorts = Mutex<[UInt16]>([])
+    var ports: [UInt16] { recordedPorts.withLock { $0 } }
+
+    @MainActor var factories: HardwareServiceFactories {
+        var factories = HardwareServiceFactories.inert
+        factories.makeWingTransport = makeTransport
+        return factories
+    }
+
+    func makeTransport(port: UInt16, probe: @escaping LocalNetworkProbe.Check) -> any WingTransporting {
+        recordedPorts.withLock { $0.append(port) }
+        return InertWingTransport()
     }
 }
 

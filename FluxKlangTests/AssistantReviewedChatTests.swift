@@ -4,6 +4,36 @@ import Testing
 
 @MainActor
 struct AssistantReviewedChatTests {
+    @Test func isolatedConfigurableDefaultsPreserveExplicitGeneratorsAndHTTPClients() async throws {
+        try #require(AssistantServiceIsolation.deniesLiveServices)
+        let suite = "isolated-assistant-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AssistantProviderSettings(defaults: defaults, credentials: ReviewedChatCredentials())
+        let coordinator = AssistantCoordinator(draftStore: AssistantBackendDraftStore())
+        let apple = AssistantBackendGenerator()
+        let fallback = AssistantBackendGenerator()
+        let generator = ConfigurableAssistantGenerator(settings: settings, coordinator: coordinator,
+            appleGenerator: apple, fallback: fallback)
+        #expect(await generator.availability() == .ready)
+        let request = AssistantGenerationRequest(question: "Hello", recentMessages: [], summary: "",
+                                                 context: AssistantBackendFixture.context())
+        for try await _ in generator.stream(request) {}
+        #expect(apple.calls == 1)
+        settings.provider = .githubCopilot
+        #expect(await generator.availability() == .deterministic)
+        for try await _ in generator.stream(request) {}
+        #expect(fallback.calls == 1)
+        let http = ReviewedChatHTTPSpy()
+        let copilot = CopilotAssistantGenerator(configuration: .init(token: "offline", model: "fake"),
+            coordinator: coordinator, httpClient: http)
+        #expect(await copilot.availability() == .externalProviderReady("GitHub Copilot"))
+        await #expect(throws: BackendTestError.self) {
+            for try await _ in copilot.stream(request) {}
+        }
+        #expect(await http.calls == 1)
+    }
+
     @Test func ownerUtterancesReachInterpreterBeforeMixerAndDraftPreflightWithoutExecution() async throws {
         let examples: [(String, AssistantActionIntent)] = [
             ("turn down the volume of my Astrolab", .init(targetMention: "Astrolab", action: .lower, amount: nil,
