@@ -16,5 +16,10 @@ struct FluxKlangApp: App {
             AppRootView()
                 .environment(appModel)
         }
+        #if DEBUG && os(iOS)
+        .commands {
+            UIAuditCaptureCommands()
+        }
+        #endif
     }
 }
