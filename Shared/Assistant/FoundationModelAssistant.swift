@@ -105,12 +105,32 @@ struct AssistantGeneratorRouter: AssistantGenerating {
 #if canImport(FoundationModels)
 struct FoundationModelAssistantGenerator: AssistantGenerating {
     let coordinator: AssistantCoordinator
-    var authorizer = AssistantToolAuthorizer.model
+    var authorizer: AssistantToolAuthorizer
+    private let mirror: ProductionAccessAudit?
+
+    /// Passive construction only; framework access stays behind the entry guards.
+    init(
+        coordinator: AssistantCoordinator,
+        authorizer: AssistantToolAuthorizer = .model,
+        mirroring mirror: ProductionAccessAudit? = nil
+    ) {
+        self.coordinator = coordinator
+        self.authorizer = authorizer
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .assistantModelGenerator, mirroring: mirror)
+    }
 
     func availability() async -> AssistantModelAvailability {
-        guard !AssistantServiceIsolation.deniesLiveServices else { return .deterministic }
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantModelGenerator, mirroring: mirror)
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
+            return .deterministic
+        }
         guard #available(iOS 27, macOS 27, *) else { return .unsupportedOS }
-        switch SystemLanguageModel.default.availability {
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
+        let model = SystemLanguageModel.default
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
+        switch model.availability {
         case .available:
             return .ready
         case .unavailable(.deviceNotEligible):
@@ -127,7 +147,9 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantModelGenerator, mirroring: mirror)
         guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
             return AsyncThrowingStream { $0.finish(throwing: AssistantServiceIsolation.AccessError.denied) }
         }
         if AssistantRoutingOwnership.owns(request.question) {
@@ -151,6 +173,7 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                 do {
                     let initialDraft = await coordinator.pendingStudioDraft
                     guard !AssistantServiceIsolation.deniesLiveServices else {
+                        ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
                         throw AssistantServiceIsolation.AccessError.denied
                     }
                     let tools: [any Tool] = [
@@ -160,8 +183,11 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                             authorizer: authorizer
                         )
                     ]
+                    ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
+                    let model = SystemLanguageModel.default
+                    ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
                     let session = LanguageModelSession(
-                        model: SystemLanguageModel.default,
+                        model: model,
                         tools: tools,
                         instructions: """
                         You are FluxKlang's focused, on-device assistant. Answer only about this app and the \
@@ -174,7 +200,9 @@ struct FoundationModelAssistantGenerator: AssistantGenerating {
                         instrument. Describe uncertainty; never invent equipment, connections, or validation.
                         """
                     )
-                    for try await snapshot in session.streamResponse(to: boundedPrompt(request)) {
+                    let prompt = boundedPrompt(request)
+                    ProductionAccessAudit.shared.record(.apiEntered, for: .assistantModelGenerator, mirroring: mirror)
+                    for try await snapshot in session.streamResponse(to: prompt) {
                         try Task.checkCancellation()
                         continuation.yield(.text(snapshot.content))
                     }
@@ -319,16 +347,36 @@ struct AssistantDraftFoundationTool: Tool {
 #else
 struct FoundationModelAssistantGenerator: AssistantGenerating {
     let coordinator: AssistantCoordinator
-    var authorizer = AssistantToolAuthorizer.model
+    var authorizer: AssistantToolAuthorizer
+    private let mirror: ProductionAccessAudit?
+
+    /// Passive construction only; no framework access.
+    init(
+        coordinator: AssistantCoordinator,
+        authorizer: AssistantToolAuthorizer = .model,
+        mirroring mirror: ProductionAccessAudit? = nil
+    ) {
+        self.coordinator = coordinator
+        self.authorizer = authorizer
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .assistantModelGenerator, mirroring: mirror)
+    }
 
     func availability() async -> AssistantModelAvailability {
-        AssistantServiceIsolation.deniesLiveServices ? .deterministic : .unsupportedOS
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantModelGenerator, mirroring: mirror)
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
+            return .deterministic
+        }
+        return .unsupportedOS
     }
 
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantModelGenerator, mirroring: mirror)
         guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantModelGenerator, mirroring: mirror)
             return AsyncThrowingStream { $0.finish(throwing: AssistantServiceIsolation.AccessError.denied) }
         }
         return AsyncThrowingStream { $0.finish(throwing: AssistantModelError.unsupportedOS) }
