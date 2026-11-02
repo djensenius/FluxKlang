@@ -164,6 +164,8 @@ targets:
       - path: FluxKlangTests/StartupHardwareIsolationTests.swift
       - path: FluxKlangTests/StartupHardwareLifecycleFixtures.swift
       - path: FluxKlangTests/SystemPermissionProbeIsolationTests.swift
+      - path: FluxKlangTests/ProductionAccessScope.swift
+      - path: FluxKlangTests/ProductionAccessScopeTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
