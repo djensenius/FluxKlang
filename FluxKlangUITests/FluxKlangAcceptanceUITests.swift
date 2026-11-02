@@ -67,7 +67,7 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
             "-ui-test-force-fallback",
             "-ui-test-connection-failure"
         ]
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
 
         let status = app.buttons["connection.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
@@ -92,7 +92,7 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
             "-ui-test-seed-acceptance",
             "-ui-test-demo"
         ]
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
     }
 
     private func element(_ identifier: String) -> XCUIElement {

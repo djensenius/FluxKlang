@@ -128,7 +128,7 @@ final class StudioCanvasUITests: XCTestCase {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
         if longCanvas { app.launchArguments.append("-ui-test-long-canvas") }
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
         if longCanvas {
             XCTAssertTrue(element("studio.canvas").waitForExistence(timeout: 10))
             return
