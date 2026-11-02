@@ -167,6 +167,7 @@
 		353E14B98A725BC6F6B18E62 /* FaderLayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B86F0B22FC6369747BC33F52 /* FaderLayoutStore.swift */; };
 		3578365380BA64A3CD0ABA28 /* TemporaryMoveVerification.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83DCB12052D27CCC4E859DC3 /* TemporaryMoveVerification.swift */; };
 		36012A098524D59BDF611FC5 /* AppModel+StudioApply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F960D84BD1E20CF0D4653FB /* AppModel+StudioApply.swift */; };
+		3789C24985F7BE35CE52B871 /* UbiquitousCloudStoreIsolationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9899793683B875EE6DD06CE /* UbiquitousCloudStoreIsolationTests.swift */; };
 		37AE8A123B68CFF7EEE9C4B9 /* StudioSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0013FC6EFE5B9B1BB2D96AB /* StudioSetup.swift */; };
 		37D3B634659B53A2CDD650FD /* AssistantProviderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10826D11DB5EF1A80BD6006 /* AssistantProviderSettings.swift */; };
 		394C68755C74F7934967136C /* ProductionAccessAudit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3CEBDC14F2252386C1D4C1E /* ProductionAccessAudit.swift */; };
@@ -1137,6 +1138,7 @@
 		C7B40CF9621D53E9EA088E10 /* AssistantLiveWingContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantLiveWingContext.swift; sourceTree = "<group>"; };
 		C896442DF134BCA52AA883A7 /* RoutingSnapshotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingSnapshotsView.swift; sourceTree = "<group>"; };
 		C8F2D81E0B10679454625837 /* HandoffPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffPolicy.swift; sourceTree = "<group>"; };
+		C9899793683B875EE6DD06CE /* UbiquitousCloudStoreIsolationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UbiquitousCloudStoreIsolationTests.swift; sourceTree = "<group>"; };
 		CA349F0ED5CEBA0CFB8F3C76 /* AssistantActionInterpretationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionInterpretationAdapter.swift; sourceTree = "<group>"; };
 		CA9769A67EE74D4DD298756E /* AssistantLiveWingAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantLiveWingAppModelTests.swift; sourceTree = "<group>"; };
 		CACED8B2ABA64555DD48CE6F /* AssistantActionReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionReviewView.swift; sourceTree = "<group>"; };
@@ -2085,6 +2087,7 @@
 				B6F112CFB0FC86FF5E927948 /* SystemPermissionProbeIsolationTests.swift */,
 				2DF3190E29940EE07ED501B6 /* TemporaryDeviceMoveTests.swift */,
 				E11CF5F3C9CDE69281FF4772 /* TestSupport.swift */,
+				C9899793683B875EE6DD06CE /* UbiquitousCloudStoreIsolationTests.swift */,
 				6C79A0FF3F8B5007142D1155 /* WingAddressTests.swift */,
 				759860AEA22209D1049CD83E /* WingApplyVerificationTests.swift */,
 				CF3B5F7F94FCCF5C784FE018 /* WingDiscoveryTests.swift */,
@@ -3091,6 +3094,7 @@
 				A96B257593E72B1941CA497B /* SystemPermissionProbeIsolationTests.swift in Sources */,
 				8726E6E28E7ACB69E0D7A9AC /* TemporaryDeviceMoveTests.swift in Sources */,
 				5CA07F389BC239BD9B5769FC /* TestSupport.swift in Sources */,
+				3789C24985F7BE35CE52B871 /* UbiquitousCloudStoreIsolationTests.swift in Sources */,
 				A469C963335F0DCF658DFBA8 /* WingAddressTests.swift in Sources */,
 				5E90D7577BBBF371C676D7AF /* WingApplyVerificationTests.swift in Sources */,
 				CB19842B27C432A04CFEEE42 /* WingDiscoveryTests.swift in Sources */,

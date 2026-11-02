@@ -14,6 +14,7 @@ final class ProductionAccessAudit: Sendable {
         case assistantSpeech
         case assistantModelGenerator
         case assistantActionInterpreter
+        case ubiquitousCloudStore
     }
 
     enum Event: Int, CaseIterable, Sendable {
