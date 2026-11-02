@@ -44,13 +44,16 @@ struct HardwareServiceFactories: Sendable {
     var makeWingTransport: @Sendable (UInt16, @escaping LocalNetworkProbe.Check) -> any WingTransporting = { _, _ in
         InertWingTransport()
     }
+    /// Enumerates only when discovery scans. Defaults to no interfaces, without system calls.
+    var wingDiscoveryBroadcastHosts: @Sendable () -> [String] = { [] }
     /// Startup-reconnect evidence (see `LocalNetworkGrantEvidence`).
     var localNetworkEvidence: LocalNetworkGrantEvidence = .current
 
     static let production = HardwareServiceFactories(
         makeLaunchControlXLInput: { CoreMIDIInput() }, makePermissionProbe: { SystemPermissionProbe() },
         localNetworkProbe: LocalNetworkProbe.connectErrno,
-        makeWingTransport: { WingTransport(remotePort: $0, localNetworkProbe: $1) })
+        makeWingTransport: { WingTransport(remotePort: $0, localNetworkProbe: $1) },
+        wingDiscoveryBroadcastHosts: WingDiscovery.activeIPv4BroadcastHosts)
     static let inert = HardwareServiceFactories(makeLaunchControlXLInput: { InertLaunchControlXLInput() })
 
     /// Selected once, alongside `AppPersistence.storage`.

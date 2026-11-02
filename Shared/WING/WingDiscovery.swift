@@ -108,11 +108,14 @@ final class WingDiscovery {
 
     private let port: UInt16
     private let broadcastPermission: PermissionState
+    private let hardware: HardwareServiceFactories
 
     init(port: UInt16 = WingNetwork.defaultPort,
-         broadcastPermission: PermissionState = LocalNetworkAccess.currentBroadcastDiscovery) {
+         broadcastPermission: PermissionState = LocalNetworkAccess.currentBroadcastDiscovery,
+         hardware: HardwareServiceFactories = .current) {
         self.port = port
         self.broadcastPermission = broadcastPermission
+        self.hardware = hardware
     }
 
     /// Broadcasts an info request and collects responders for `duration`.
@@ -127,14 +130,14 @@ final class WingDiscovery {
         }
         isScanning = true
 
-        let broadcastHosts = Self.activeIPv4BroadcastHosts()
+        let broadcastHosts = hardware.wingDiscoveryBroadcastHosts()
         guard let firstBroadcastHost = broadcastHosts.first else {
             unavailableReason = "No Wi-Fi or Ethernet network is active. "
                 + "Join the WING's network or enter its IP address."
             isScanning = false
             return
         }
-        let transport = WingTransport(remotePort: port)
+        let transport = hardware.makeWingTransport(port, hardware.localNetworkProbe)
         do {
             try await transport.start(remoteHost: firstBroadcastHost, localPort: port, broadcast: true)
         } catch {
@@ -179,7 +182,7 @@ final class WingDiscovery {
         isScanning = false
     }
 
-    private static func activeIPv4BroadcastHosts() -> [String] {
+    nonisolated static func activeIPv4BroadcastHosts() -> [String] {
         var interfaceList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&interfaceList) == 0, let firstInterface = interfaceList else {
             return []
