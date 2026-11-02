@@ -25,31 +25,31 @@ final class AppModel {
     private(set) var wing: WingController
 
     /// Persisted configurable fader bank.
-    let faderLayout = FaderLayoutStore()
+    let faderLayout: FaderLayoutStore
 
     /// USB MIDI integration for the Novation Launch Control XL 3.
     let launchControlXL: LaunchControlXLController
 
     /// User-editable equipment library for the chain builder.
-    let equipment = EquipmentStore()
+    let equipment: EquipmentStore
 
     /// Named, switchable routing setups. Each environment bundles outboard
     /// effects, how instruments feed them, and its own drag-and-drop canvas
     /// graph; switching pushes the whole rig.
-    let environments = EnvironmentStore()
+    let environments: EnvironmentStore
 
     /// The single global Home map of equipment ports to WING local connectors.
-    let studioConnections = StudioConnectionsStore()
+    let studioConnections: StudioConnectionsStore
 
     /// Saved presets / scene snapshots.
-    let presets = PresetStore()
+    let presets: PresetStore
 
     /// Named routing snapshots — the patchbay's Flock PATCH-style capture of the
     /// whole input/output patch, recalled instantly and independently of levels.
-    let routingSnapshots = RoutingSnapshotStore()
+    let routingSnapshots: RoutingSnapshotStore
 
     /// Speaker layout and spatially-placed instruments for surround mixing.
-    let spatial = SpatialStore()
+    let spatial: SpatialStore
 
     /// Shared read-only assistant domain plus local pending Studio drafts.
     let assistant: AssistantCoordinator
@@ -67,7 +67,7 @@ final class AppModel {
     let discovery: WingDiscovery
 
     /// Selectable app-icon manager (re-applies the saved icon on launch).
-    let appIcon = AppIconManager()
+    let appIcon: AppIconManager
 
     private let lastHostKey = "fluxklang.lastHost"
     /// Service seams; the live WING transport and Local Network evidence come from here.
@@ -109,8 +109,22 @@ final class AppModel {
         assistantProviderSettings: AssistantProviderSettings = AssistantProviderSettings(),
         wing: WingController? = nil,
         hardware: HardwareServiceFactories = .current,
-        launchControlXLStore: JSONFileStore = .shared
+        launchControlXLStore: JSONFileStore = .shared,
+        domainStore: JSONFileStore? = nil,
+        assistantConversationStore: AssistantConversationStore? = nil
     ) {
+        faderLayout = FaderLayoutStore(store: domainStore)
+        equipment = EquipmentStore(store: domainStore)
+        environments = EnvironmentStore(store: domainStore)
+        if let domainStore {
+            studioConnections = StudioConnectionsStore(fileStore: domainStore)
+        } else {
+            studioConnections = StudioConnectionsStore()
+        }
+        presets = PresetStore(store: domainStore)
+        routingSnapshots = RoutingSnapshotStore(store: domainStore)
+        spatial = SpatialStore(store: domainStore)
+        appIcon = AppIconManager()
         self.wing = wing ?? WingController(hardware: hardware)
         self.hardware = hardware
         discovery = WingDiscovery(hardware: hardware)
@@ -119,15 +133,18 @@ final class AppModel {
         self.assistant = assistant
         self.assistantProviderSettings = assistantProviderSettings
         let fallback = AssistantFallbackGenerator(coordinator: assistant)
-        self.assistantChat = AssistantChatController(
+        let generator = ConfigurableAssistantGenerator(
+            settings: assistantProviderSettings,
             coordinator: assistant,
-            generator: ConfigurableAssistantGenerator(
-                settings: assistantProviderSettings,
-                coordinator: assistant,
-                appleGenerator: FoundationModelAssistantGenerator(coordinator: assistant),
-                fallback: fallback
-            )
+            appleGenerator: FoundationModelAssistantGenerator(coordinator: assistant),
+            fallback: fallback
         )
+        if let assistantConversationStore {
+            self.assistantChat = AssistantChatController(
+                coordinator: assistant, store: assistantConversationStore, generator: generator)
+        } else {
+            self.assistantChat = AssistantChatController(coordinator: assistant, generator: generator)
+        }
         configureAssistantMixer()
         configureAssistantActions()
     }
@@ -409,36 +426,6 @@ final class AppModel {
         assistantActions.cancel()
         await wing.disconnect()
         wing = .acceptanceFailure(reason: "Acceptance test: WING unavailable", hardware: hardware)
-    }
-
-    // MARK: - Spatial
-
-    /// Pushes a placed voice's surround bus sends to the WING live, used while
-    /// dragging it around the spatial field.
-    func applyVoicePlacement(_ placed: PlacedVoice) async {
-        guard let source = placed.voice.spatialSource(position: placed.position, width: placed.width) else { return }
-        await wing.apply(SpatialRouting.settings(for: source, speakers: spatial.array.speakers))
-    }
-
-    /// Re-applies every placed voice of the active environment. Used by the
-    /// spatial screen's "Apply" action.
-    func applyAllPlacements() async {
-        await wing.apply(environmentSpatialSettings())
-    }
-
-    /// Sets a stereo speaker pair's level (normalised), with an optional balance
-    /// offset (`-1...1`) trimming left versus right.
-    func setSpeakerPair(_ pair: SpeakerPair, position: Float, balance: Float = 0) async {
-        guard let left = spatial.array.speaker(pair.left)?.node else { return }
-        let right = spatial.array.speaker(pair.right)?.node
-        await wing.setFaderPair(left, right, position: position, balance: balance)
-    }
-
-    /// Mutes or unmutes both speakers in a pair.
-    func setSpeakerPairMuted(_ pair: SpeakerPair, muted: Bool) async {
-        guard let left = spatial.array.speaker(pair.left)?.node else { return }
-        let right = spatial.array.speaker(pair.right)?.node
-        await wing.setMutePair(left, right, muted: muted)
     }
 
     // MARK: - Selection & navigation
