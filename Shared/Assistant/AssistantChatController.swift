@@ -11,6 +11,9 @@ final class AssistantChatController {
     private let generator: any AssistantGenerating
     private let actionInterpreter: any AssistantActionInterpreting
     private let coordinator: AssistantCoordinator
+    private let spokenRepliesDefaults: UserDefaults
+    private let producerWork = AssistantChatWorkLifetime()
+    private let historyWork = AssistantChatWorkLifetime()
     private var responseTask: Task<Void, Never>?
     private var activeResponseID: UUID?
     private var hasLoaded = false
@@ -39,7 +42,7 @@ final class AssistantChatController {
     var suggestedPrompt: String?
     var spokenRepliesEnabled: Bool {
         didSet {
-            AppPersistence.defaults.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
+            spokenRepliesDefaults.set(spokenRepliesEnabled, forKey: Self.spokenRepliesKey)
         }
     }
 
@@ -55,12 +58,14 @@ final class AssistantChatController {
         store: AssistantConversationStore = .live(),
         generator: (any AssistantGenerating)? = nil,
         actionInterpreter: (any AssistantActionInterpreting)? = nil,
+        spokenRepliesDefaults: UserDefaults = AppPersistence.defaults,
         makeSpeech: @escaping @MainActor () -> (String) -> Void = {
             AssistantChatController.makeProductionSpeech()
         }
     ) {
         self.coordinator = coordinator
         self.store = store
+        self.spokenRepliesDefaults = spokenRepliesDefaults
         self.makeSpeech = makeSpeech
         self.actionInterpreter = actionInterpreter
             ?? Self.defaultActionInterpreter(forcesFallback: Self.forcesFallbackForUITesting)
@@ -84,7 +89,7 @@ final class AssistantChatController {
                 )
             )
         }
-        spokenRepliesEnabled = AppPersistence.defaults.bool(forKey: Self.spokenRepliesKey)
+        spokenRepliesEnabled = spokenRepliesDefaults.bool(forKey: Self.spokenRepliesKey)
     }
 
     var selectedConversation: AssistantConversation? {
@@ -105,11 +110,24 @@ final class AssistantChatController {
         modelAvailability = await generator.availability()
     }
 
+    /// Awaits one producer snapshot, then one history snapshot after those producers finish.
+    /// Not a durability guarantee or a drain of later producers or generator-internal work.
+    func awaitOwnedWorkSnapshot() async {
+        let producers = producerWork.snapshot()
+        for task in producers { await task.value }
+        let history = historyWork.snapshot()
+        for task in history { await task.value }
+    }
+
     func newConversation() {
         let conversation = AssistantConversation()
         conversations.insert(conversation, at: 0)
         selectedConversationID = conversation.id
-        Task { await store.save(conversation) }
+        let workID = UUID()
+        historyWork.register(Task {
+            defer { historyWork.remove(workID) }
+            await store.save(conversation)
+        }, id: workID)
     }
 
     func renameConversation(id: UUID, to title: String) {
@@ -124,7 +142,11 @@ final class AssistantChatController {
         stopStreaming()
         conversations.removeAll { $0.id == id }
         selectedConversationID = conversations.first?.id
-        Task { await store.delete(id: id) }
+        let workID = UUID()
+        historyWork.register(Task {
+            defer { historyWork.remove(workID) }
+            await store.delete(id: id)
+        }, id: workID)
     }
 
     func clearAll() {
@@ -132,7 +154,11 @@ final class AssistantChatController {
         let removed = conversations
         conversations = []
         selectedConversationID = nil
-        Task { await store.clearAll(removed) }
+        let workID = UUID()
+        historyWork.register(Task {
+            defer { historyWork.remove(workID) }
+            await store.clearAll(removed)
+        }, id: workID)
     }
 
     func submitSuggestedPrompt(_ prompt: String) {
@@ -200,7 +226,9 @@ final class AssistantChatController {
         actionPlanner?.cancel()
         ensureConversation()
         guard let id = selectedConversationID else { return }
-        Task {
+        let workID = UUID()
+        producerWork.register(Task {
+            defer { producerWork.remove(workID) }
             let result = await coordinator.perform(
                 .buildStudioDraft(StudioWiringRequest(
                     sourceInstrumentIDs: sourceIDs,
@@ -223,7 +251,7 @@ final class AssistantChatController {
                 destination: destination,
                 context: context
             )
-        }
+        }, id: workID)
     }
 
     // swiftlint:disable:next cyclomatic_complexity
@@ -260,7 +288,9 @@ final class AssistantChatController {
         actionPlanner?.cancel()
         isStreaming = true
         activeResponseID = responseID
-        responseTask = Task {
+        let workID = UUID()
+        responseTask = producerWork.register(Task {
+            defer { producerWork.remove(workID) }
             if AssistantRoutingOwnership.owns(question) {
                 await handleRoutingSubmission(question: question, context: context,
                                               conversationID: conversationID, responseID: responseID)
@@ -314,7 +344,7 @@ final class AssistantChatController {
                     responseTask = nil
                 }
             }
-        }
+        }, id: workID)
     }
 
     private func apply(
@@ -389,7 +419,11 @@ final class AssistantChatController {
         conversation.modifiedAt = Date()
         conversations[index] = conversation
         conversations.sort { $0.modifiedAt > $1.modifiedAt }
-        Task { await store.save(conversation) }
+        let workID = UUID()
+        historyWork.register(Task {
+            defer { historyWork.remove(workID) }
+            await store.save(conversation)
+        }, id: workID)
     }
 
     private func updateStreamingConversation(

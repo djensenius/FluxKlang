@@ -111,7 +111,8 @@ final class AppModel {
         hardware: HardwareServiceFactories = .current,
         launchControlXLStore: JSONFileStore = .shared,
         domainStore: JSONFileStore? = nil,
-        assistantConversationStore: AssistantConversationStore? = nil
+        assistantConversationStore: AssistantConversationStore? = nil,
+        assistantSpokenRepliesDefaults: UserDefaults? = nil
     ) {
         faderLayout = FaderLayoutStore(store: domainStore)
         equipment = EquipmentStore(store: domainStore)
@@ -141,9 +142,12 @@ final class AppModel {
         )
         if let assistantConversationStore {
             self.assistantChat = AssistantChatController(
-                coordinator: assistant, store: assistantConversationStore, generator: generator)
+                coordinator: assistant, store: assistantConversationStore, generator: generator,
+                spokenRepliesDefaults: assistantSpokenRepliesDefaults ?? AppPersistence.defaults)
         } else {
-            self.assistantChat = AssistantChatController(coordinator: assistant, generator: generator)
+            self.assistantChat = AssistantChatController(
+                coordinator: assistant, generator: generator,
+                spokenRepliesDefaults: assistantSpokenRepliesDefaults ?? AppPersistence.defaults)
         }
         configureAssistantMixer()
         configureAssistantActions()
