@@ -185,6 +185,11 @@ extension ContractFixtureTests {
                     try ScriptedEventSource(capacity: capacity, events: [])
                 }
             }
+            for capacity in [1, ScriptedEventSource.maximumCapacity] {
+                let events = Array(repeating: bump, count: capacity)
+                let filled = try ScriptedEventSource(capacity: capacity, events: events)
+                #expect(filled.capacity == capacity && filled.pending.count == capacity)
+            }
 
             var source = try ScriptedEventSource(capacity: 2, events: [bump, .bump(Self.context, .contextChange)])
             let full = source
@@ -211,6 +216,7 @@ extension ContractFixtureTests {
 
             let empty = source
             #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.drop) }
+            #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.duplicate) }
             #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.overflow) }
             #expect(throws: ScriptedEventSourceError.nothingToSwap) { try source.inject(.swapNext) }
             #expect(source == empty)
