@@ -34,9 +34,9 @@ import Synchronization
 /// trails the inner head, so an admitted slot's last read happens before its rewrite). Only the inner tail's
 /// release/acquire publishes elements to the consumer. Sequential consistency is not needed.
 ///
-/// Progress. `tryPush`, `tryPop` and `producerOccupancy` are wait-free: no retry loops, one acquiring load of
-/// `popped`, one inner operation (itself wait-free), relaxed counter updates and, on critical exhaustion, one
-/// wait-free `FaultLatch.raise`. `popAll` is bounded by `limit` and `capacity`. Nothing allocates after `init`.
+/// Progress (source level only). `tryPush`, `tryPop` and `producerOccupancy` have no source-level retry loops.
+/// They perform bounded source-level work; atomic lowering and target progress, including `FaultLatch.raise`,
+/// remain unqualified. `popAll` is bounded by `limit` and `capacity`. Nothing allocates after `init`.
 ///
 /// Reference counting. `ring` and `faults` are strong `let`s that own the inner ring and the latch for this
 /// object's lifetime. Hot-path calls go through unretained copies (`ringRef`, `faultsRef`) with
@@ -153,9 +153,9 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
 
     deinit { popScratch.deallocate() }
 
-    /// Producer only; wait-free. Appends `value`, or refuses it whole: a general event with `.refused(.full)`
-    /// at `generalLimit`, a critical event with `.refused(.criticalExhausted)` at `capacity`, which also raises
-    /// `.criticalExhausted` on `scope` at `frame`. Refusals are counted per class.
+    /// Producer only; bounded source-level work (target progress unqualified; see Progress). Appends or refuses whole.
+    /// Refuses general events with `.refused(.full)` at `generalLimit`, critical with `.refused(.criticalExhausted)`
+    /// at `capacity`, also raising `.criticalExhausted` on `scope` at `frame`. Refusals are counted per class.
     func tryPush(_ value: Element, class eventClass: EventClass, frame: Int64) -> KernelStatus {
         let occupancy = pushed &- popped.load(ordering: .acquiring)
         switch eventClass {
@@ -174,7 +174,7 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         return .ok
     }
 
-    /// Consumer only; wait-free. Removes and returns the oldest element, or `nil` without side effects.
+    /// Consumer only; bounded source-level work (see Progress). Pops the oldest element, or `nil` with no side effects.
     ///
     /// The inner `popAll(limit: 1)` hands the element to a closure that copies it into `popScratch`. It has the
     /// same protocol as the inner `tryPop`: one acquiring tail load, and the slot is read and the head published
@@ -208,7 +208,7 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
         }
     }
 
-    /// Producer only; wait-free. The producer's conservative occupancy, `0...capacity`: at least the true
+    /// Producer only; bounded source-level work (see Progress). Conservative occupancy, `0...capacity`: at least true
     /// occupancy, because the consumer's count may be stale. It reads the producer-local, non-atomic `pushed`,
     /// so it is not safe from control, UI or the consumer; it is not a telemetry source.
     var producerOccupancy: Int { Int(truncatingIfNeeded: pushed &- popped.load(ordering: .acquiring)) }
