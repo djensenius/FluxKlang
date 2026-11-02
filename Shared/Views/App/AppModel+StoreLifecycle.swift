@@ -49,6 +49,11 @@ extension AppModel {
     }
 
     #if DEBUG
+    /// Reads the first root await-boundary observation without capturing a new snapshot.
+    static var completedRootAwaitedWorkObservation: UIStartupObservation.RootWork? {
+        firstUIRootWorkObservation
+    }
+
     static func captureUIConstructionObservation() -> UIStartupObservation.Construction {
         if let observation = firstUIConstructionObservation { return observation }
         let checkpoint = completedSharedConstructionCheckpoint
