@@ -74,6 +74,7 @@ extension HostAuthorityTests {
                 try await authority.abandonPrepare(project: Bench.projectC).get()
             }
             _ = try await Bench.commitQueued(authority, &engine)
+            let dependent = try #require(try await Bench.state(authority).reviewed)
             let attemptA = try await Bench.attempt(authority)
             try await authority.abandonCommit(attemptA, reason: .outcomeUnknown).get()
             // A stale commit followed by a mute exercises the multi-dequeue path.
@@ -94,7 +95,7 @@ extension HostAuthorityTests {
             #expect(after.retirementOutbox == Array(retired.dropFirst(2)))
             #expect(Array(after.queue.pending.suffix(2)) == Array(retired.prefix(2)).map(EngineCommand.discard))
             await engine.drain(authority)
-            #expect(engine.discarded == retired && engine.disposed.count == 3)
+            #expect(engine.discarded == [dependent] + retired && engine.disposed.count == 4)
             #expect(await authority.snapshot().retirementOutbox.isEmpty)
         }
 

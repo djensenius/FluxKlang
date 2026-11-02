@@ -34,6 +34,14 @@ struct ScriptedCommitReport: Sendable {
     let verdict: Result<CommitReportOutcome, HostAuthorityRefusal>
 }
 
+/// One delivered restore that the engine has not acknowledged.
+struct ScriptedRestore: Hashable, Sendable {
+    let attempt: RestoreAttemptID
+    let revision: ContractRevision
+    let target: RestoreTarget
+    let token: EngineLeaseToken
+}
+
 struct ScriptedHeldPlan: Hashable, Sendable {
     let preparation: HostPrepare
     let id: PreparedActivationID
@@ -50,11 +58,15 @@ struct ScriptedActivationEngine: Sendable {
     let trackedLimit: Int
     private(set) var pending: [HostPrepare] = []
     private(set) var pendingCommits: [ScriptedCommit] = []
+    /// Restores taken and not yet acknowledged, oldest first.
+    private(set) var pendingRestores: [ScriptedRestore] = []
     /// Kept for lost answers too. Both chosen and generated answers use this exact key.
     private(set) var plannedNodes: [HostPrepare: Set<NodeID>] = [:]
     private(set) var held: [ScriptedHeldPlan] = []
     private(set) var disposed: [ScriptedHeldPlan] = []
     private(set) var anomalies: [String] = []
+    /// Answers issued from a real queued command before the normal FIFO pull.
+    private var earlyPreparations: Set<HostPrepare> = []
 
     init(failing: [Int: FixtureFault] = [:], answerLimit: Int = 512,
          recordCapacity: Int = 1_024, trackedLimit: Int = 256) throws(ScriptedEngineError) {
@@ -75,25 +87,38 @@ struct ScriptedActivationEngine: Sendable {
         var taken: [EngineCommand] = []
         while let command = await authority.nextEngineCommand() {
             if !recorder.record(command) { anomaly("command history capacity") }
-            switch command {
-            case .prepare(let graph, let instance, let attempt):
-                takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
-            case .commit(let binding, let attempt, let token):
-                takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
-            case .discard(let binding):
-                if dispose(binding) {
-                    if case .failure(let refusal) = await authority.retired(binding) {
-                        anomaly("retirement acknowledgement refused: \(refusal)")
-                    }
-                }
-            default: break
-            }
+            await handle(command, by: authority)
             if room(taken.count, "drain history") { taken.append(command) }
         }
         return taken
     }
 
+    private mutating func handle(_ command: EngineCommand, by authority: HostAuthority) async {
+        switch command {
+        case .prepare(let graph, let instance, let attempt):
+            takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
+        case .commit(let binding, let attempt, let token):
+            takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
+        case .discard(let binding):
+            await retire(binding, through: authority)
+        case .restore(let attempt, let revision, let target, let token):
+            if room(pendingRestores.count, "pending restores") {
+                pendingRestores.append(ScriptedRestore(attempt: attempt, revision: revision,
+                                                       target: target, token: token))
+            }
+        case .keepActivePartial, .placeholders, .setOutputsMuted: break
+        }
+    }
+
+    private mutating func retire(_ binding: PlanBinding, through authority: HostAuthority) async {
+        guard dispose(binding) else { return }
+        if case .failure(let refusal) = await authority.retired(binding) {
+            anomaly("retirement acknowledgement refused: \(refusal)")
+        }
+    }
+
     private mutating func takePreparation(_ graph: GraphDocument, key: HostPrepare) {
+        if earlyPreparations.remove(key) != nil { return }
         if plannedNodes[key] != nil {
             anomaly("duplicate prepare dispatch")
         } else if room(plannedNodes.count, "tracked preparations"), room(pending.count, "pending prepares") {
@@ -131,6 +156,46 @@ struct ScriptedActivationEngine: Sendable {
         return ScriptedPrepareAnswer(preparation: preparation, answer: answer, verdict: verdict)
     }
 
+    /// Adversarial adapter scheduling, not actor-state injection. The identity
+    /// comes from the actual admitted command; the canonical host binds the answer.
+    mutating func answerQueued(
+        _ authority: HostAuthority, project: ProjectID, as id: PreparedActivationID
+    ) async throws -> PlanBinding {
+        let snapshot = await authority.snapshot()
+        let preparation = try #require(snapshot.outstanding[project])
+        let command = try #require(snapshot.queue.pending.first {
+            if case .prepare(_, preparation.instance, preparation.attempt) = $0 { true } else { false }
+        })
+        guard case .prepare(let graph, _, _) = command else {
+            throw ScriptedEngineError.invalidTrackedLimit
+        }
+        takePreparation(graph, key: preparation)
+        #expect(withholdNext() == preparation)
+        let answer = prepare(preparation, as: id)
+        let verdict = await authority.prepareAnswered(answer, instance: preparation.instance,
+                                                      attempt: preparation.attempt)
+        #expect(try verdict.get() == .routed)
+        earlyPreparations.insert(preparation)
+        return try #require(await authority.snapshot().projects[project]?.reviewed)
+    }
+
+    /// Cleanup of deliberately abandoned pressure preparations is terminal and
+    /// truthful, rather than dropping callbacks and stranding canonical capacity.
+    mutating func finishAbandoned(_ authority: HostAuthority) async throws {
+        let snapshot = await authority.snapshot()
+        let abandoned = Set(snapshot.plans.records.flatMap { record in
+            record.entries.compactMap { entry -> HostPrepare? in
+                guard entry.state == .pending(reclaim: true) else { return nil }
+                return HostPrepare(instance: record.instance, attempt: entry.attempt)
+            }
+        })
+        for preparation in pending where abandoned.contains(preparation) {
+            let result = terminalFailure(preparation, reason: .engineRefused)
+            #expect(try await authority.prepareAnswered(result, instance: preparation.instance,
+                                                        attempt: preparation.attempt).get() == .dropped)
+        }
+    }
+
     mutating func withholdNext() -> HostPrepare? {
         pending.isEmpty ? nil : pending.removeFirst()
     }
@@ -165,6 +230,15 @@ struct ScriptedActivationEngine: Sendable {
         guard let commit = withholdCommit() else { return nil }
         let report = report(on: commit, outcome)
         return ScriptedCommitReport(report: report, verdict: await authority.commitReported(report))
+    }
+
+    /// Acknowledges the oldest delivered restore; nil when none is pending.
+    mutating func completeRestore(_ authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal>? {
+        guard !pendingRestores.isEmpty else { return nil }
+        let restore = pendingRestores.removeFirst()
+        return await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
+                                                target: restore.target, token: restore.token)
     }
 
     mutating func prepare(_ preparation: HostPrepare,

@@ -10,9 +10,12 @@ private let windowA = WindowID(validated: "win.a")
 private let windowA2 = WindowID(validated: "win.a2")
 private let windowB = WindowID(validated: "win.b")
 
-/// Project A runs `prep.running` (opened with `lifecycleA`); project B runs nothing.
-private func makeAuthority(_ lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
-    try await AuthorityBench.makeAuthority(holding: nil, lifecycleA: lifecycleA)
+/// Projects open without raw resident import; A is bootstrapped by the public fixture.
+private func makeAuthority(_ lifecycleA: EngineLifecycle? = nil,
+                           recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
+    var engine = try ScriptedActivationEngine()
+    return try await AuthorityBench.makeAuthority(&engine, holding: nil, lifecycleA: lifecycleA,
+                                                  recoveryBaseA: recoveryBaseA)
 }
 
 private func refusal<Success>(_ result: Result<Success, HostAuthorityRefusal>) -> HostAuthorityRefusal? {
@@ -119,7 +122,7 @@ extension HostAuthorityTests {
         }
 
         @Test func recoveringHolderStaysRecoveringOffTheLease() async throws {
-            let authority = try await makeAuthority(.recovering)
+            let authority = try await makeAuthority(.recovering, recoveryBaseA: .running)
             #expect(await authority.lifecycle(of: projectA, window: windowA) == .recovering)
             try await authority.acquire(project: projectA, window: windowA).get()
             #expect(await authority.lifecycle(of: projectA, window: windowA) == .recovering)

@@ -57,41 +57,89 @@ enum AuthorityBench {
         ActivationGesture(origin: origin, window: window)
     }
 
-    /// Opens A (with `lifecycleA`) and B; A acquires the lease on `window` unless it is nil.
+    /// Opens A and B; any resident is created and installed through public host APIs.
     static func makeAuthority(_ engine: inout ScriptedActivationEngine, holding window: WindowID? = windowA,
                               lifecycleA: EngineLifecycle? = nil,
+                              recoveryBaseA: RunningSetState? = nil,
                               planCapacity: Int = 512) async throws -> HostAuthority {
         let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                           nominalRate: 48_000)
         let authority = try HostAuthority(host: ledger, live: try liveState(), planCapacity: planCapacity)
+        let recoveryBase = lifecycleA == .recovering ? recoveryBaseA : nil
+        let hasKnownRecoveryBase: Bool
+        switch recoveryBase {
+        case .running, .degraded: hasKnownRecoveryBase = true
+        case .absent, nil: hasKnownRecoveryBase = false
+        }
+        let canBootstrap = lifecycleA != .recovering || hasKnownRecoveryBase
+        let opening: EngineLifecycle = lifecycleA == .recovering && !canBootstrap ? .recovering : .stopped
         try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: nil),
-                                 lifecycle: lifecycleA).get()
+                                 lifecycle: opening,
+                                 recoveryBase: opening == .recovering ? recoveryBase : nil).get()
         try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
-        if lifecycleA != .recovering {
-            _ = try await authority.acquire(project: projectA, window: windowA).get()
-            try await authority.begin(request(), candidate: candidate(), project: projectA).get()
-            await engine.drain(authority)
-            let taken = try engine.requireNext()
-            let answer = engine.prepare(taken, as: runningPlan)
-            _ = try await authority.prepareAnswered(answer, instance: taken.instance, attempt: taken.attempt).get()
-            let authorization = try await authority.authorize(project: projectA, gesture: gesture()).get()
-            try await authority.commit(project: projectA, authorization: authorization).get()
-            await engine.drain(authority)
-            _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
-            #expect(await authority.snapshot().queue.isEmpty)
-            if window != windowA { try await authority.release(project: projectA).get() }
+        if canBootstrap && lifecycleA != .stopped {
+            try await bootstrap(authority, engine: &engine, lifecycle: lifecycleA, recoveryBase: recoveryBase)
         }
-        if let window, await authority.snapshot().lease == nil {
-            _ = try await authority.acquire(project: projectA, window: window).get()
-        }
+        try await configureLease(authority, holding: window)
         return authority
+    }
+
+    private static func bootstrap(
+        _ authority: HostAuthority, engine: inout ScriptedActivationEngine,
+        lifecycle: EngineLifecycle?, recoveryBase: RunningSetState?
+    ) async throws {
+        _ = try await authority.acquire(project: projectA, window: windowA).get()
+        try await authority.begin(request(), candidate: candidate(), project: projectA).get()
+        await engine.drain(authority)
+        let taken = try engine.requireNext()
+        let answer = engine.prepare(taken, as: runningPlan)
+        _ = try await authority.prepareAnswered(answer, instance: taken.instance, attempt: taken.attempt).get()
+        let authorization = try await authority.authorize(project: projectA, gesture: gesture()).get()
+        try await authority.commit(project: projectA, authorization: authorization).get()
+        await engine.drain(authority)
+        _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
+        #expect(await authority.snapshot().queue.isEmpty)
+        for capability in lostCapabilities(lifecycle, recoveryBase: recoveryBase) {
+            try await authority.capabilityLost(capability, project: projectA,
+                                                token: try await leaseToken(authority)).get()
+        }
+        if lifecycle == .recovering {
+            try await authority.leaseLost(try await leaseToken(authority)).get()
+        }
+    }
+
+    private static func lostCapabilities(
+        _ lifecycle: EngineLifecycle?, recoveryBase: RunningSetState?
+    ) -> [CapabilityID] {
+        switch lifecycle {
+        case .degraded(let lost): return lost
+        case .recovering:
+            if case .degraded(let lost)? = recoveryBase { return lost }
+            return []
+        default: return []
+        }
+    }
+
+    private static func configureLease(_ authority: HostAuthority, holding window: WindowID?) async throws {
+        if let window {
+            if await authority.snapshot().lease == nil {
+                _ = try await authority.acquire(project: projectA, window: window).get()
+            } else if window != windowA, await authority.snapshot().lease?.windows.contains(windowA) == true {
+                try await authority.release(project: projectA).get()
+                _ = try await authority.acquire(project: projectA, window: window).get()
+            }
+        } else if await authority.snapshot().lease != nil {
+            try await authority.release(project: projectA).get()
+        }
     }
 
     /// Convenience only for tests that never hand engine work to a second double.
     static func makeAuthority(holding window: WindowID? = windowA,
-                              lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
+                              lifecycleA: EngineLifecycle? = nil,
+                              recoveryBaseA: RunningSetState? = nil) async throws -> HostAuthority {
         var engine = try ScriptedActivationEngine()
-        return try await makeAuthority(&engine, holding: window, lifecycleA: lifecycleA)
+        return try await makeAuthority(&engine, holding: window, lifecycleA: lifecycleA,
+                                       recoveryBaseA: recoveryBaseA)
     }
 
     static func begin(_ authority: HostAuthority, project: ProjectID = projectA,
@@ -157,11 +205,64 @@ enum AuthorityBench {
         try #require(await authority.snapshot().lease?.token)
     }
 
+    /// The exact queued or delivered restore, including its opaque identity.
+    static func restore(_ authority: HostAuthority) async throws -> RestoreRecord {
+        try #require(await authority.snapshot().restoring)
+    }
+
+    static func restoreCommand(_ record: RestoreRecord) -> EngineCommand {
+        .restore(record.attempt, record.revision, record.target, record.token)
+    }
+
+    static func planPhase(_ binding: PlanBinding, in snapshot: HostAuthoritySnapshot) -> EnginePlanPhase? {
+        for entry in snapshot.plans.records.flatMap(\.entries) {
+            if case .bound(let actual, let phase) = entry.state, actual == binding { return phase }
+        }
+        return nil
+    }
+
+    /// Explicit replay/early acknowledgement for refusal tests; normal completion uses the engine fixture.
+    static func acknowledge(_ record: RestoreRecord, on authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        await authority.restoreCompleted(attempt: record.attempt, revision: record.revision,
+                                         target: record.target, token: record.token)
+    }
+
+    /// Adversarial adapter scheduling: answer without draining earlier commands.
+    /// Prepare-answer admission does not require pull/delivery bookkeeping. This
+    /// reaches already-admitted commit interleavings through the real actor API.
+    static func commitWithoutDrain(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+                                   project: ProjectID, window: WindowID,
+                                   prepared: PreparedActivationID, withAux: Bool = false) async throws {
+        try await begin(authority, project: project, withAux: withAux)
+        _ = try await engine.answerQueued(authority, project: project, as: prepared)
+        let authorization = try await authority.authorize(project: project, gesture: gesture(window)).get()
+        try await authority.commit(project: project, authorization: authorization).get()
+    }
+
     /// Fills the command queue with `project`'s prepares, abandoning each.
     static func fillQueue(_ authority: HostAuthority, with project: ProjectID = projectB) async throws {
         while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
             try await authority.begin(request(), candidate: candidate(), project: project).get()
             try await authority.abandonPrepare(project: project).get()
         }
+
+    }
+
+    /// Install B through the same engine and canonical host, then return the lease to A.
+    static func installB(
+        _ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
+        lifecycle: EngineLifecycle = .running
+    ) async throws {
+        #expect(lifecycle != .stopped)
+        let token = try await authority.transfer(to: projectB, window: windowB).get().token
+        _ = try await commitDelivered(authority, &engine, project: projectB, window: windowB)
+        _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
+        if case .degraded(let lost) = lifecycle {
+            for capability in lost {
+                try await authority.capabilityLost(capability, project: projectB, token: token).get()
+            }
+        }
+        _ = try await authority.transfer(to: projectA, window: windowA).get()
     }
 }
