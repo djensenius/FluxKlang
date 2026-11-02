@@ -144,6 +144,9 @@ struct OfflineAudioRoutingProcessor: ~Copyable {
     }
 }
 
+@available(*, unavailable)
+extension OfflineAudioRoutingProcessor: Sendable {}
+
 /// Checked half-open byte interval; empty slabs never overlap.
 private struct AudioRoutingByteInterval {
     let start: UInt
