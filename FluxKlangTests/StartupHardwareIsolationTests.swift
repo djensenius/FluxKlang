@@ -174,6 +174,92 @@ struct StartupHardwareIsolationTests {
         #expect(spy.ports == Array(repeating: WingNetwork.defaultPort, count: 3))
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func monitorLoadAndControllerReplacementAwaitOwnedTransportStop() async throws {
+        let isTesting = AppPersistence.isTesting
+        let modelFlagDisabled = ProcessInfo.processInfo.environment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] != "1"
+        let routingFlagDisabled = ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] != "1"
+        try #require(isTesting && modelFlagDisabled && routingFlagDisabled)
+        let fixture = try LaunchControlXLFixture(mode: .monitor)
+        defer { fixture.cleanUp() }
+        let suite = "StartupHardwareLifecycle-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var configuration = fixture.configuration
+        configuration.mapping.sourceNameContains = ["Synthetic LCXL \(UUID().uuidString)"]
+        await fixture.store.save(configuration, to: "launch-control-xl.json")
+        let data = try Data(contentsOf: fixture.directory.appendingPathComponent("launch-control-xl.json"))
+        #expect(try JSONDecoder().decode(LaunchControlXLConfiguration.self, from: data) == configuration)
+        let reloaded = await fixture.store.load(LaunchControlXLConfiguration.self, from: "launch-control-xl.json")
+        #expect(reloaded == configuration)
+
+        let spy = HardwareFactorySpy()
+        let wingSpy = StartupWingTransportSpy()
+        var hardware = spy.factories
+        hardware.makeWingTransport = wingSpy.makeTransport
+        let model = AppModel(
+            assistant: AssistantCoordinator(draftStore: AssistantBackendDraftStore()),
+            assistantProviderSettings: AssistantProviderSettings(
+                defaults: defaults, credentials: MemoryAssistantCredentialStore()),
+            hardware: hardware, launchControlXLStore: fixture.store)
+        let initial = model.wing
+        #expect(spy.inputsMade == 0)
+        #expect(wingSpy.transports.count == 1)
+
+        await model.loadLaunchControlXL()
+        #expect(model.wing === initial)
+        #expect(model.launchControlXL.configuration == configuration)
+        #expect(model.launchControlXL.status == .waiting)
+        #expect(spy.inputsMade == 1)
+        #expect(spy.input.starts == [configuration.mapping.sourceNameContains])
+
+        for showsFailure in [false, true] {
+            let previous = model.wing
+            let previousCount = wingSpy.transports.count
+            guard let transport = wingSpy.transports.last else {
+                Issue.record("The injected factory must retain each controller's transport")
+                break
+            }
+            let replacement = Task { @MainActor in
+                if showsFailure {
+                    await model.showAcceptanceConnectionFailure()
+                } else {
+                    await model.disconnect()
+                }
+            }
+            let entered = await transport.waitForStopEntry()
+            #expect(entered, "Replacement must enter the old transport's stop")
+            #expect(model.wing === previous)
+            #expect(wingSpy.transports.count == previousCount)
+            #expect(await transport.stopsStarted == 1)
+            #expect(await transport.stopsCompleted == 0)
+            await transport.releaseStop()
+            await replacement.value
+            #expect(await transport.stopsCompleted == 1)
+            #expect(model.wing !== previous)
+            #expect(wingSpy.transports.count == previousCount + 1)
+            #expect(model.wing.mode == .live)
+            #expect(model.wing.connection == (showsFailure
+                ? .failed(reason: "Acceptance test: WING unavailable") : .disconnected))
+            #expect(model.wing.values.isEmpty && model.wing.confirmedValues.isEmpty)
+            #expect(previous.transportWriteCount == 0 && model.wing.transportWriteCount == 0)
+            #expect(spy.inputsMade == 1)
+            #expect(spy.input.starts == [configuration.mapping.sourceNameContains])
+        }
+
+        #expect(wingSpy.transports.count == 3)
+        for transport in wingSpy.transports {
+            await transport.releaseStop()
+            #expect(await transport.starts == 0)
+            #expect(await transport.sends == 0)
+        }
+        await model.launchControlXL.setMode(.disabled)
+        #expect(model.launchControlXL.status == .disabled)
+        #expect(spy.input.stops == 1)
+        await model.wing.disconnect()
+        #expect(wingSpy.transports.count == 3, "Cleanup must not replace the final controller")
+    }
+
     @Test func explicitWingAndPreviewConstructionDoNotBuildADefaultTransport() async throws {
         let spy = WingFactorySpy()
         let wing = WingController(transport: InertWingTransport())
