@@ -145,6 +145,7 @@
 		2C04035F5F3F58F0E2B02586 /* InputPatchbayGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9E4AE594A5341C8F4D4DE9C /* InputPatchbayGrid.swift */; };
 		2CE62A73DF86129921F23F34 /* AssistantCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34732F18AA61295C6C5D3A24 /* AssistantCoreTests.swift */; };
 		2D11C771D0829E79F5ED09FD /* HostAuthorityBook+Prepare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD55C66DCED946D29C62AE8 /* HostAuthorityBook+Prepare.swift */; };
+		2D60234E4E9F3F01661C8AFA /* StartupHardwareLifecycleFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F1A85189E0B527945C8F54B /* StartupHardwareLifecycleFixtures.swift */; };
 		2D86AB5F9C7DFC8673996074 /* HostAuthorityBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AE563D9C31339CC0E3B0CC /* HostAuthorityBook.swift */; };
 		2D90278C9718E9CD82BEAE26 /* ChainGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB960472C09D7AC845BF0DA3 /* ChainGraph.swift */; };
 		2D9254E989BC8F3F64080EC9 /* ContractID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70DF305609475BA00086393C /* ContractID.swift */; };
@@ -831,6 +832,7 @@
 		1C89456A19B66239EF672C0D /* AssistantRoutingOutputResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantRoutingOutputResolver.swift; sourceTree = "<group>"; };
 		1DFCE8AA440C3D6E84D343A6 /* AssistantLiveWingContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantLiveWingContextTests.swift; sourceTree = "<group>"; };
 		1E3522BF245D2D0277C68FFB /* EnginePlanLedgerTests+Instances.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EnginePlanLedgerTests+Instances.swift"; sourceTree = "<group>"; };
+		1F1A85189E0B527945C8F54B /* StartupHardwareLifecycleFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupHardwareLifecycleFixtures.swift; sourceTree = "<group>"; };
 		1F3E8AC676CC42C21FD388D5 /* ProjectPackageManifestValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPackageManifestValidationTests.swift; sourceTree = "<group>"; };
 		201D1AC5DDC73E345FD61126 /* WingValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingValue.swift; sourceTree = "<group>"; };
 		20263BDC08FF6D024B55237F /* RampSlots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RampSlots.swift; sourceTree = "<group>"; };
@@ -2083,6 +2085,7 @@
 				A33C53C69E74C297B6FB6160 /* SiriAppIntentsTests.swift */,
 				BDEC454C8E9B9862280CC236 /* SpatialTests.swift */,
 				312B315E1B2F14F2988BD85B /* StartupHardwareIsolationTests.swift */,
+				1F1A85189E0B527945C8F54B /* StartupHardwareLifecycleFixtures.swift */,
 				2604E5BCB8AB121B3246373C /* StudioCanvasGeometryTests.swift */,
 				B17E516E1112364021E312C2 /* StudioConnectionMigrationTests.swift */,
 				0325249A945B2C6126F18AFD /* StudioGraphTests.swift */,
@@ -3092,6 +3095,7 @@
 				1C79FC5F6E4018C85424A1FF /* SiriAppIntentsTests.swift in Sources */,
 				5153C768FB6DB37A1BED68B3 /* SpatialTests.swift in Sources */,
 				C37353E615D4E91CECA1DB6B /* StartupHardwareIsolationTests.swift in Sources */,
+				2D60234E4E9F3F01661C8AFA /* StartupHardwareLifecycleFixtures.swift in Sources */,
 				2094D1996080FF6E4B610A39 /* StudioCanvasGeometryTests.swift in Sources */,
 				ED04F8DC337892B8BDFD5865 /* StudioConnectionMigrationTests.swift in Sources */,
 				09E0C360BA79813CDB0DD2CA /* StudioGraphTests.swift in Sources */,
