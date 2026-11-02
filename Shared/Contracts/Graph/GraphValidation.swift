@@ -13,6 +13,13 @@ import Foundation
 enum GraphValidationError: Error, Hashable, Sendable {
     case bounds(ProjectGraphLimitError)
     case reviewRequired
+    /// The exact declaration must be empty without mute nodes, or the one mute token with them.
+    case invalidRequiredFeatures([String])
+    case requiredFeaturesCollision
+    /// Missing mute state, inappropriate typed legacy state, or an unknown-field collision.
+    case invalidMuteState(NodeID)
+    /// A mute needs one audio input/output pair of equal width and no references.
+    case invalidMuteShape(NodeID)
     case invalidPosition(NodeID)
     case duplicateNode(NodeID)
     case duplicatePort(NodeID, PortID)
@@ -56,6 +63,7 @@ extension GraphDocument {
     /// `strict` also rejects unknown members, so drift is caught.
     func validationErrors(strict: Bool = false) -> [GraphValidationError] {
         do { try checkCollectionBounds() } catch { return [.bounds(error)] }
+        do { try checkRequiredFeatures() } catch { return [error] }
         var errors = nodeErrors()
         if requiresReview { errors.insert(.reviewRequired, at: 0) }
         // Match node(_:)/port(_:) first-occurrence semantics without scanning for each endpoint.
@@ -111,6 +119,8 @@ extension GraphDocument {
             }
             if !node.kind.isRoutable, !node.ports.isEmpty { errors.append(.nonRoutableNodeHasPorts(node.id)) }
             if let field = node.missingReferenceField { errors.append(.missingReference(node: node.id, field: field)) }
+            if let error = node.muteStateError { errors.append(error) }
+            if node.kind == .audioMute, !node.hasValidMuteShape { errors.append(.invalidMuteShape(node.id)) }
             errors += portErrors(node)
             for capability in node.requiredCapabilities + node.advisoryCapabilities
             where !defined.contains(capability) {
@@ -224,6 +234,14 @@ extension GraphDocument {
 }
 
 extension GraphNode {
+    var hasValidMuteShape: Bool {
+        guard role == nil, asset == nil, graph == nil, ports.count == 2,
+              let input = ports.first(where: { $0.direction == .input }),
+              let output = ports.first(where: { $0.direction == .output }) else { return false }
+        return input.signal == .audio && output.signal == .audio
+            && input.hasValidChannels && output.hasValidChannels && input.channels == output.channels
+    }
+
     /// The reference this node's kind requires but lacks, if any.
     var missingReferenceField: String? {
         if kind.requiresRole, role == nil { return "role" }

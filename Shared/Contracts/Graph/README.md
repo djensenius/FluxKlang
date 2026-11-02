@@ -28,6 +28,42 @@ Unknown optional members survive at their original nesting level through Core
 rejects stray unknown fields but permits extension bags. Unknown nonempty
 `requiredFeatures` and unsupported versions reject rather than becoming optional data.
 
+## Constant mute syntax profile (execution unsupported)
+
+`audioMute.constant.v1` is one opt-in, fail-closed graph v1 syntax profile.
+`requiredFeatures` stores the exact supplied candidate array: it must be `[]`
+without mute nodes, or exactly `["audioMute.constant.v1"]` with one or more
+`audioMute` nodes. Construction and mutation never infer, sort, deduplicate,
+insert or remove features; validation, decoding and encoding reject mismatches.
+Missing, null and empty wire lists normalize to `[]` and are invalid with mutes.
+Empty lists are omitted on encoding to retain base-v1 canonical bytes.
+An unknown-field `requiredFeatures` collision rejects rather than being dropped.
+Unsupported headers reject before node decoding; feature/node consistency runs
+after bounded node decoding, before topology validation.
+
+An `audioMute` requires an explicit Boolean `muted`, exactly one audio input and
+one audio output with matching 1–64 channel widths, and no role, asset or graph
+reference. Missing, null and non-Boolean state reject; there is no default.
+State is constant per prepared graph; changing it requires a newly prepared graph.
+False means a bit-preserving channelwise copy. True means channelwise positive
+zero, **not multiplication by zero**. Neither state may suppress upstream work,
+nonfinite-input refusal or intermediate-overflow refusal.
+
+`muted` is known only on `audioMute`. Every older kind preserves arbitrary
+unknown `muted` data (including null) through lenient canonical round trips;
+strict validation still reports that unknown node path. Manually assigned typed
+state on an older kind, or an unknown `muted` collision on a mute, rejects
+validation and encoding rather than silently losing data.
+
+Recognizing this syntax does not mean executor support. The current offline
+routing compiler remains unchanged and refuses every mute as `unsupported`,
+including disconnected mutes. This contract adds no DSP execution, live control,
+physical-mute acknowledgement or activation authority. Older graph readers
+reject the feature marker before interpreting the new kind; they do not support
+the profile. Project and package envelopes still reject all nonempty features,
+including this graph token. Integer-major checks are unchanged; `minorVersion`
+remains unknown optional data, not feature negotiation.
+
 Each document is at most 4 MiB. Graphs allow 4,096 nodes, 16,384 edges, 256 ports
 per node and 1,024 capability definitions/references per node. Limits apply before
 topology validation and during coding. Graph topology checks are iterative.
