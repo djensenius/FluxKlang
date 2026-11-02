@@ -7,10 +7,30 @@ import Synchronization
 /// `handoff` is the issuing handoff's identity and `generation` the lane's claim generation. Neither is ever
 /// reused, so a released token, a token for another lane or a token from another handoff never matches a live
 /// claim (see `FanInHandoff`, Tokens).
+///
+/// Issuer-only. Only `FanInHandoff.claimProducer` makes a token. The one initializer is `fileprivate` to this file
+/// and the stored fields are `private` behind read-only accessors, so no other code, in this module or in a
+/// `@testable` client, can build a token or set a field, not even from an extension initializer. Copying an issued
+/// token is safe: a copy carries the same claim, and the single-producer rule binds every copy (see `FanInHandoff`,
+/// Contracts). Reinterpreting raw memory as a token (`unsafeBitCast`, unsafe pointers) is outside this contract.
 struct ProducerToken: Sendable, BitwiseCopyable, Equatable {
-    let handoff: UInt64
-    let generation: UInt64
-    let lane: UInt8
+    /// The issuing handoff's identity.
+    var handoff: UInt64 { issuedHandoff }
+    /// The lane's claim generation.
+    var generation: UInt64 { issuedGeneration }
+    /// The claimed lane.
+    var lane: UInt8 { issuedLane }
+
+    private let issuedHandoff: UInt64
+    private let issuedGeneration: UInt64
+    private let issuedLane: UInt8
+
+    /// `FanInHandoff.claimProducer` only.
+    fileprivate init(handoff: UInt64, generation: UInt64, lane: UInt8) {
+        issuedHandoff = handoff
+        issuedGeneration = generation
+        issuedLane = lane
+    }
 }
 
 /// Lane state words: `phase | generation`, the phase in the top two bits (see `FanInLaneWord`).
@@ -92,12 +112,26 @@ enum FanInLaneWord {
     static func generation(_ word: UInt64) -> UInt64 { word & generationMask }
 }
 
-/// A multi-writer event counter that saturates instead of wrapping. Any context; target progress unqualified.
+/// A multi-writer event counter that clamps at `cap` instead of wrapping, under the caller contract below. Any
+/// context; target progress unqualified. Reference model; not RT-certified.
 ///
-/// `bump` adds 1 only below `cap`; writers that pass that check together can overshoot it by at most their
-/// number, far below `UInt64.max`, and `count` clamps, so the count never wraps.
+/// `bump` loads relaxed and, only below `cap`, adds 1 with one relaxed `wrappingAdd`: no retry loop, no lock, and
+/// no count below `cap` is lost. `count` clamps to `cap`. The check alone does not bound the raw value: every
+/// `bump` whose load saw a value below `cap` adds 1, so with no bound on such callers the raw value could wrap past
+/// `UInt64.max` and `count` would fall. Saturation is conditional on this contract, never unconditional.
+///
+/// Caller contract (not enforced here). Every `bump` on one counter belongs to one logical chain, and:
+/// - over its whole lifetime the counter has at most K < 2^39 chains;
+/// - a chain's `bump` calls never overlap (no reentry), and each completed `bump` happens before the chain's next
+///   one; a chain moves to another thread only through a real happens-before handoff.
+/// Then, by coherence, a chain's next load reads at least the value its own previous add wrote, so each chain makes
+/// at most one stale admitted add past saturation (its load saw a value below `cap`; the add lands above it). With
+/// `cap = 2^63 − 1` the raw value stays at most `max(initial, cap + K) < 2^64`: it never wraps and `count` never
+/// falls. Nothing else bounds K: not the lane count, not the number of threads at any moment and not `FaultLatch`
+/// (see `FanInHandoff`, Refusal counting). This is reference-model acceptance only (this argument and a
+/// reduced-width interleaving test); #190 must prove the chain bound for the real callers before any hot use.
 struct FanInRefusalCounter: ~Copyable, Sendable {
-    /// Where the count stops: `UInt64.max / 2`.
+    /// Where `count` clamps: `UInt64.max / 2`, 2^63 − 1.
     static var cap: UInt64 { refusalCap }
 
     private let raw: Atomic<UInt64>
@@ -110,7 +144,7 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
     /// The count, at most `cap`.
     var count: UInt64 { min(raw.load(ordering: .relaxed), refusalCap) }
 
-    /// Counts one event unless the count has reached `cap`.
+    /// Counts one event unless the count has reached `cap`. Callers keep the caller contract above.
     func bump() {
         if raw.load(ordering: .relaxed) < refusalCap { raw.wrappingAdd(1, ordering: .relaxed) }
     }
@@ -144,13 +178,25 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
 /// the previous producer's events. With no lane claimable, `claimProducer` returns `nil`, counts the refusal and
 /// raises `.producerSlotsExhausted` on `producerSlotsScope`.
 ///
-/// Tokens. A token matches only while its lane is `claimed` with its exact generation and its `handoff` is this
-/// handoff's `identity`; stale, forged and foreign tokens are refused with `.refused(.notOwner)` and counted and
-/// never act as the owner. Nothing wraps, so nothing is reused. Every `init` takes a fresh identity from one
-/// private `FanInIdentityAllocator`, which issues 1 up to `UInt64.max` and then makes `init` throw
-/// `.identitiesExhausted`; no initializer takes another source, so no two handoffs share an identity. A lane's
-/// generation only grows, from 1 up to `FanInLaneWord.finalGeneration` (2^62 − 1), after which that lane is
-/// never claimed again. Nothing outside these transitions sets an identity, a generation or a counter.
+/// Tokens. Tokens come only from `claimProducer` (see `ProducerToken`, Issuer-only). A token matches only while
+/// its lane is `claimed` with its exact generation and its `handoff` is this handoff's `identity`; stale and
+/// foreign tokens, and copies of them, are refused with `.refused(.notOwner)` and counted and never act as the
+/// owner. An issued token with this handoff's identity always names an in-range lane and a generation that
+/// `FanInLaneWord.held(by:)` accepts, so those two checks are defense in depth. Nothing wraps, so nothing is reused.
+/// Every `init` takes a fresh identity from one private `FanInIdentityAllocator`, which issues 1 up to `UInt64.max`
+/// and then makes `init` throw `.identitiesExhausted`; no initializer takes another source, so no two handoffs share
+/// an identity. A lane's generation only grows, from 1 up to `FanInLaneWord.finalGeneration` (2^62 − 1), after
+/// which that lane is never claimed again. Nothing outside these transitions sets an identity, a generation or a
+/// counter.
+///
+/// Refusal counting. `refusedClaimCount` counts every failed `claimProducer`; `refusedNotOwnerCount` counts every
+/// refused `tryPush` and every refused `releaseProducer`, each time: stale, foreign and repeated attempts all count.
+/// Both are `FanInRefusalCounter`s, so each count's callers over this handoff's whole lifetime must keep that type's
+/// caller contract (at most K < 2^39 logical chains, each non-reentrant and happens-before ordered). The lane count
+/// does not bound these callers: any thread may call `claimProducer`, and any thread holding any token, stale or
+/// foreign, may push or release with it. The invalid-token paths raise no `FaultLatch` fault, so the latch neither
+/// limits nor reports them; a failed claim does raise `.producerSlotsExhausted`, but the count's bound does not rely
+/// on it. Reference model only: #190 must prove the chain bound for the real callers before any hot use.
 ///
 /// Fair drain. `drain` visits lanes from a rotating start lane and takes at most `perLaneQuota` from each until
 /// every lane is visited or `total` is spent. The next drain starts after the last lane visited, or at that lane
@@ -181,10 +227,10 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
 /// `_withUnsafeGuaranteedRef`, valid because each call runs inside a method of `self`, which the caller keeps
 /// alive.
 ///
-/// Contracts. One producer thread uses a token at a time and stops pushing before it (or a thread ordered after
-/// it) releases the token; a copied token used concurrently breaks the lane's single-producer rule. Only one
-/// consumer calls `drain`, and its `body` must not call `drain` (doing so is memory-safe but makes the fairness
-/// order unspecified).
+/// Contracts. One producer thread uses a token, counting every copy of it, at a time and stops pushing before it
+/// (or a thread ordered after it) releases the token; a copied token used concurrently breaks the lane's
+/// single-producer rule. Only one consumer calls `drain`, and its `body` must not call `drain` (doing so is
+/// memory-safe but makes the fairness order unspecified). Refused calls keep the chain bound in Refusal counting.
 ///
 /// `@unchecked Sendable`: lane producer state is guarded by the claim protocol above, `cursor` is consumer-only,
 /// and the state words and counters are atomics.
@@ -300,7 +346,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     }
 
     /// Any producer context (see Progress). Claims the lowest claimable lane, or returns `nil` after counting the
-    /// refusal and raising `.producerSlotsExhausted` on `producerSlotsScope` at `frame`.
+    /// refusal (see Refusal counting) and raising `.producerSlotsExhausted` on `producerSlotsScope` at `frame`.
     func claimProducer(frame: Int64 = 0) -> ProducerToken? {
         var lane = 0
         while lane < laneCount {
@@ -322,11 +368,11 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
 
     /// After the token's last push, on its producer or an ordered-after thread (see Progress). Retires the lane;
     /// the next `drain` that finds it empty frees it for a new claim. Any token that does not own its lane is
-    /// refused with `.refused(.notOwner)` and counted.
+    /// refused with `.refused(.notOwner)` and counted (see Refusal counting); no fault is raised.
     @discardableResult
     func releaseProducer(_ token: ProducerToken) -> KernelStatus {
         let lane = Int(token.lane)
-        // `held(by:)` refuses a generation that would carry phase bits into the word.
+        // Defense in depth (see Tokens): `held(by:)` refuses a generation that would carry phase bits into the word.
         // Releasing: publishes this producer's pushes and lane state to the consumer (see Ordering).
         guard token.handoff == identity, lane < laneCount, let held = FanInLaneWord.held(by: token.generation),
               (states + lane).pointee.compareExchange(
@@ -342,7 +388,8 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// The token's producer only (see Progress). Appends `value` to its lane with M4 admission: a general
     /// event is refused with `.refused(.full)` at the lane's general limit, a critical one with
     /// `.refused(.criticalExhausted)` at lane capacity, which also raises `.criticalExhausted` on `criticalScope`.
-    /// A token that does not own its lane is refused with `.refused(.notOwner)` and counted.
+    /// A token that does not own its lane is refused with `.refused(.notOwner)` and counted (see Refusal counting);
+    /// no fault is raised.
     func tryPush(_ value: Element, class eventClass: EventClass, frame: Int64, token: ProducerToken) -> KernelStatus {
         let lane = Int(token.lane)
         guard token.handoff == identity, lane < laneCount, let held = FanInLaneWord.held(by: token.generation),
@@ -391,10 +438,12 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         return total &- remaining
     }
 
-    /// Pushes and releases refused because the token did not own its lane; saturates at `UInt64.max / 2`.
+    /// Pushes and releases refused because the token did not own its lane. Clamps at `FanInRefusalCounter.cap`
+    /// (2^63 − 1) under that type's caller contract (see Refusal counting).
     var refusedNotOwnerCount: UInt64 { refusedNotOwner.count }
 
-    /// Claims refused because every lane was claimed or retiring; saturates at `UInt64.max / 2`.
+    /// Claims refused because every lane was claimed or retiring. Clamps at `FanInRefusalCounter.cap` (2^63 − 1)
+    /// under that type's caller contract (see Refusal counting).
     var refusedClaimCount: UInt64 { refusedClaims.count }
 
     /// One lane's refusals of `eventClass` (M4 counters), or `nil` for an out-of-range lane. Any context.

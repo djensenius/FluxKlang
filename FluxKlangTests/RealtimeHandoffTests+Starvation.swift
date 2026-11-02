@@ -168,14 +168,17 @@ private struct ModelRun {
     let handoff: FanInHandoff<UInt64>
     /// Live claims on another handoff (lane 0...2), never valid here.
     let foreign: [ProducerToken]
+    /// Live claims on a third handoff with two more lanes (lane 0...4), never valid here.
+    let wide: [ProducerToken]
     var random: SeededMix
     var model: FanInModel
     var live: [ProducerToken?]
     var stale: [ProducerToken] = []
 
-    init(handoff: FanInHandoff<UInt64>, foreign: [ProducerToken], random: SeededMix) {
+    init(handoff: FanInHandoff<UInt64>, foreign: [ProducerToken], wide: [ProducerToken], random: SeededMix) {
         self.handoff = handoff
         self.foreign = foreign
+        self.wide = wide
         self.random = random
         model = FanInModel(laneCount: handoff.laneCount, laneCapacity: handoff.laneCapacity,
                            reserved: handoff.reserved)
@@ -207,7 +210,8 @@ private struct ModelRun {
         }
     }
 
-    /// Pushes through a random live token (7 in 10), or a stale, foreign or forged one.
+    /// Pushes through a random live token (7 in 10), or an issued token that is not live here: one of this
+    /// handoff's stale tokens, or a live token of another handoff.
     mutating func push(_ value: UInt64, frame: Int64) {
         let liveTokens = liveTokens
         let critical = random.below(4) == 0
@@ -219,17 +223,15 @@ private struct ModelRun {
                     == model.push(value, critical: critical, lane: Int(token.lane), frame: frame))
             return
         }
-        // Phase bits in the generation, or handoff identity 0 (never issued): no forgery can match.
-        let anchor = stale.last?.generation ?? liveTokens.first?.generation ?? 1
-        let lane = UInt8(random.below(model.laneCount + 2))
-        let forged = random.below(2) == 0
-            ? ProducerToken(handoff: handoff.identity, generation: anchor | 1 << 62, lane: lane)
-            : ProducerToken(handoff: 0, generation: anchor, lane: lane)
+        // An older stale token, or another handoff's token at any lane up to two past this handoff's lanes.
+        let lane = random.below(model.laneCount + 2)
+        let olderStale = random.below(2) == 0
+        let other = olderStale && !stale.isEmpty ? stale[lane % stale.count] : wide[lane]
         let token: ProducerToken
         switch kind {
-        case 7: token = stale.last ?? forged
+        case 7: token = stale.last ?? other
         case 8: token = foreign[random.below(foreign.count)]
-        default: token = forged
+        default: token = other
         }
         #expect(handoff.tryPush(value, class: eventClass, frame: frame, token: token) == model.refuseNotOwner())
     }
@@ -365,7 +367,9 @@ extension RealtimeHandoffTests {
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 18)
             let elsewhere = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 18)
-            var run = ModelRun(handoff: handoff, foreign: try claimAll(elsewhere), random: SeededMix(state: seed))
+            let wider = try Root.makeFanIn(faults, lanes: lanes + 2, laneCapacity: 18)
+            var run = ModelRun(handoff: handoff, foreign: try claimAll(elsewhere), wide: try claimAll(wider),
+                               random: SeededMix(state: seed))
             for step in 0..<3_000 {
                 switch run.random.below(20) {
                 case 0..<3: run.claim(frame: Int64(step))

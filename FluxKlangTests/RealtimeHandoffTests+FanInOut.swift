@@ -215,38 +215,82 @@ extension RealtimeHandoffTests {
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 2)
             let elsewhere = try Root.makeFanIn(faults, lanes: 2)
+            let wide = try Root.makeFanIn(faults, lanes: 64, laneCapacity: 17)
             let owner = try #require(handoff.claimProducer())
             let foreign = try #require(elsewhere.claimProducer())
             #expect(owner.lane == 0 && foreign.lane == 0 && owner.generation == foreign.generation)
             #expect(owner.handoff == handoff.identity && foreign.handoff == elsewhere.identity)
-            #expect(owner.handoff != foreign.handoff)
-            let (id, generation) = (owner.handoff, owner.generation)
-            let forged = [
-                foreign,
-                ProducerToken(handoff: id, generation: generation &+ 1, lane: 0),
-                // Phase bits in the generation must not alias the lane's claimed state word.
-                ProducerToken(handoff: id, generation: generation | 1 << 62, lane: 0),
-                ProducerToken(handoff: id, generation: generation | 3 << 62, lane: 0),
-                ProducerToken(handoff: 0, generation: generation, lane: 0),
-                ProducerToken(handoff: id, generation: generation, lane: 1),
-                ProducerToken(handoff: id, generation: generation, lane: 2),
-                ProducerToken(handoff: id, generation: generation, lane: .max)
-            ]
-            for (index, token) in forged.enumerated() {
+            #expect(owner.handoff != foreign.handoff && handoff.identity != 0)
+            // Only issued tokens (malformed words are `FanInLaneWord`'s): other handoffs' live and released tokens,
+            // at this handoff's lanes and past them, and this handoff's own released lane-1 token.
+            let foreignSecond = try #require(elsewhere.claimProducer())
+            #expect(elsewhere.releaseProducer(foreign) == .ok)
+            #expect(Root.drained(elsewhere, quota: 8, total: 64).isEmpty)
+            let foreignLater = try #require(elsewhere.claimProducer())
+            #expect(foreignLater.lane == 0 && foreignLater.generation == owner.generation + 1)
+            let wideTokens = (0..<64).compactMap { _ in wide.claimProducer() }
+            #expect(wideTokens.map(\.lane) == Array(0..<64))
+            let staleSecond = try #require(handoff.claimProducer())
+            #expect(staleSecond.lane == 1 && handoff.releaseProducer(staleSecond) == .ok)
+            #expect(Root.drained(handoff, quota: 8, total: 64).isEmpty)
+            let others = [foreign, foreignSecond, foreignLater, staleSecond] + [0, 1, 2, 63].map { wideTokens[$0] }
+            for (index, token) in others.enumerated() {
                 for eventClass in EventClass.allCases {
                     #expect(handoff.tryPush(UInt64(100 + index), class: eventClass, frame: 0, token: token)
                             == .refused(.notOwner))
                 }
                 #expect(handoff.releaseProducer(token) == .refused(.notOwner))
             }
-            #expect(handoff.refusedNotOwnerCount == UInt64(forged.count * 3))
+            #expect(handoff.refusedNotOwnerCount == UInt64(others.count * 3))
             #expect(elsewhere.refusedNotOwnerCount == 0 && handoff.refusedClaimCount == 0)
             #expect(handoff.tryPush(7, class: .general, frame: 0, token: owner) == .ok)
             #expect(Root.drained(handoff, quota: 8, total: 64) == [.init(lane: 0, value: 7)])
             #expect(Root.drained(elsewhere, quota: 8, total: 64).isEmpty)
-            // The forged releases freed nothing: lane 1 is the only free lane.
+            // The refused releases freed nothing: lane 1 is the only free lane.
             #expect(handoff.claimProducer()?.lane == 1 && handoff.claimProducer() == nil)
             #expect(!faults.isLatched(Root.fanInNeighbourScope))
+        }
+
+        /// Two live lanes at the same generation, the shape a manufactured token once crossed: each issued token and
+        /// its copies act on their own lane only, and no other handoff's token for either lane is accepted.
+        @Test func twoLiveLanesActOnlyThroughTheirOwnTokens() throws {
+            let faults = try Root.fanInLatch()
+            let handoff = try Root.makeFanIn(faults, lanes: 2)
+            let elsewhere = try Root.makeFanIn(faults, lanes: 2)
+            let (first, second) = (try #require(handoff.claimProducer()), try #require(handoff.claimProducer()))
+            let foreign = [try #require(elsewhere.claimProducer()), try #require(elsewhere.claimProducer())]
+            #expect(first.lane == 0 && second.lane == 1 && first.generation == 1 && second.generation == 1)
+            #expect(foreign.map(\.lane) == [0, 1] && foreign.allSatisfy { $0.generation == 1 })
+            let (firstCopy, secondCopy) = (first, second)
+            #expect(handoff.tryPush(10, class: .general, frame: 0, token: firstCopy) == .ok)
+            #expect(handoff.tryPush(20, class: .critical, frame: 0, token: secondCopy) == .ok)
+            #expect(handoff.tryPush(11, class: .critical, frame: 0, token: first) == .ok)
+            #expect(handoff.tryPush(21, class: .general, frame: 0, token: second) == .ok)
+            for token in foreign {
+                #expect(handoff.tryPush(90, class: .general, frame: 0, token: token) == .refused(.notOwner))
+                #expect(handoff.releaseProducer(token) == .refused(.notOwner))
+            }
+            let both = Root.drained(handoff, quota: 8, total: 64)
+            #expect(both.count == 4 && both.filter { $0.lane == 0 }.map(\.value) == [10, 11])
+            #expect(both.filter { $0.lane == 1 }.map(\.value) == [20, 21])
+
+            // Releasing through a copy ends lane 1's claim for every copy and leaves lane 0's claim alone.
+            #expect(handoff.releaseProducer(secondCopy) == .ok)
+            #expect(handoff.tryPush(22, class: .general, frame: 0, token: second) == .refused(.notOwner))
+            #expect(handoff.releaseProducer(second) == .refused(.notOwner))
+            #expect(handoff.tryPush(12, class: .general, frame: 0, token: firstCopy) == .ok)
+            #expect(Root.drained(handoff, quota: 8, total: 64) == [.init(lane: 0, value: 12)])
+            let reclaimed = try #require(handoff.claimProducer())
+            #expect(reclaimed.lane == 1 && reclaimed.generation == 2 && reclaimed != second)
+            for token in [second, secondCopy, foreign[1]] {
+                #expect(handoff.tryPush(23, class: .critical, frame: 0, token: token) == .refused(.notOwner))
+            }
+            #expect(handoff.tryPush(24, class: .general, frame: 0, token: reclaimed) == .ok)
+            #expect(handoff.tryPush(13, class: .general, frame: 0, token: first) == .ok)
+            #expect(handoff.refusedNotOwnerCount == 9 && elsewhere.refusedNotOwnerCount == 0)
+            let last = Root.drained(handoff, quota: 8, total: 64)
+            #expect(last.count == 2 && Set(last) == [.init(lane: 0, value: 13), .init(lane: 1, value: 24)])
+            #expect(handoff.refusedClaimCount == 0 && !faults.isLatched(Root.fanInSlotsScope))
         }
 
         /// The counter type behind both refusal counts, checked directly near its cap (no live handoff is seeded),
@@ -263,7 +307,8 @@ extension RealtimeHandoffTests {
             #expect(nearCap.count == cap)
             nearCap.bump()
             #expect(nearCap.count == cap)
-            // Concurrent overshoot past the cap is clamped on read and never wraps.
+            // A raw value past the cap (one stale admitted add per caller chain, under the counter's caller contract)
+            // reads as the cap, and `bump` adds nothing there.
             let overshot = FanInRefusalCounter(.max - 1)
             #expect(overshot.count == cap)
             for _ in 0..<3 { overshot.bump() }
@@ -272,7 +317,7 @@ extension RealtimeHandoffTests {
             let faults = try Root.fanInLatch()
             let handoff = try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17)
             let token = try #require(handoff.claimProducer())
-            let stray = ProducerToken(handoff: handoff.identity, generation: 1, lane: 9)
+            let stray = try #require(try Root.makeFanIn(faults, lanes: 1, laneCapacity: 17).claimProducer())
             for round in UInt64(1)...2 {
                 #expect(handoff.claimProducer() == nil)
                 #expect(handoff.refusedClaimCount == round && handoff.refusedNotOwnerCount == round &- 1)
@@ -282,13 +327,19 @@ extension RealtimeHandoffTests {
             #expect(handoff.releaseProducer(token) == .ok)
         }
 
-        @Test func valuesAreBitwiseCopyable() {
+        @Test func valuesAreBitwiseCopyable() throws {
             Root.requireBitwise(ProducerToken.self)
             Root.requireBitwise(FanOutResult.self)
-            let token = ProducerToken(handoff: 2, generation: 9, lane: 3)
-            #expect(token == ProducerToken(handoff: 2, generation: 9, lane: 3))
-            #expect(token != ProducerToken(handoff: 2, generation: 8, lane: 3))
-            #expect(token != ProducerToken(handoff: 1, generation: 9, lane: 3))
+            let faults = try Root.fanInLatch()
+            let (handoff, elsewhere) = (try Root.makeFanIn(faults, lanes: 2), try Root.makeFanIn(faults, lanes: 2))
+            let token = try #require(handoff.claimProducer())
+            let (copy, neighbour) = (token, try #require(handoff.claimProducer()))
+            let foreign = try #require(elsewhere.claimProducer())
+            #expect(handoff.releaseProducer(token) == .ok && Root.drained(handoff, quota: 8, total: 64).isEmpty)
+            let next = try #require(handoff.claimProducer())
+            #expect(next.lane == token.lane && next.generation == token.generation + 1)
+            #expect(foreign.lane == token.lane && foreign.generation == token.generation)
+            #expect(copy == token && token != next && token != neighbour && token != foreign)
         }
     }
 
