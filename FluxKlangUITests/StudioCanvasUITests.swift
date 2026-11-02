@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class StudioCanvasUITests: XCTestCase {
-    private lazy var app = XCUIApplication()
+    private lazy var app = makeIsolatedUITestApplication()
 
     func testBlankCanvasPansToControlsAndLastAddedNodeCanBeRemoved() {
         // Seed the same persisted node layout without 24 menu interactions;
