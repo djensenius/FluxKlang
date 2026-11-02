@@ -5,18 +5,38 @@ protocol AssistantHTTPClient: Sendable {
 }
 
 struct URLSessionAssistantHTTPClient: AssistantHTTPClient {
+    private let mirror: ProductionAccessAudit?
+
+    init(mirroring mirror: ProductionAccessAudit? = nil) {
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .assistantHTTP, mirroring: mirror)
+    }
+
+    static func defaultClient(mirroring mirror: ProductionAccessAudit? = nil) -> (any AssistantHTTPClient)? {
+        defaultClient(live: {
+            ProductionAccessAudit.shared.record(.attempted, for: .assistantHTTP, mirroring: mirror)
+            ProductionAccessAudit.shared.record(.factoryEvaluated, for: .assistantHTTP, mirroring: mirror)
+            return URLSessionAssistantHTTPClient(mirroring: mirror)
+        })
+    }
+
     static func defaultClient(
-        live: () -> any AssistantHTTPClient = { URLSessionAssistantHTTPClient() }
+        live: () -> any AssistantHTTPClient
     ) -> (any AssistantHTTPClient)? {
         guard !AssistantServiceIsolation.deniesLiveServices else { return nil }
         return live()
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        ProductionAccessAudit.shared.record(.attempted, for: .assistantHTTP, mirroring: mirror)
         guard !AssistantServiceIsolation.deniesLiveServices else {
+            ProductionAccessAudit.shared.record(.denied, for: .assistantHTTP, mirroring: mirror)
             throw AssistantServiceIsolation.AccessError.denied
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantHTTP, mirroring: mirror)
+        let session = URLSession.shared
+        ProductionAccessAudit.shared.record(.apiEntered, for: .assistantHTTP, mirroring: mirror)
+        let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw CopilotAssistantError.invalidResponse
         }
