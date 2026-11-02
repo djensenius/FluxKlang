@@ -128,9 +128,9 @@ struct FaultObservation: Sendable {
 /// proved it are unsupported, and app hot-path integration must prove it or use a different design. That proof is open
 /// in #190; #64's acceptance is not waived.
 ///
-/// Test seams. The `…ForTesting` members are test-only by contract. They are compiled into the app modules, and
-/// neither their names nor current lint keep app code from calling them (`seedForTesting` can clear a latched
-/// scope without recovery). Enforcing that is open in #192 and, with #190, required before production integration.
+/// Test seams. The eight named members are restricted to root tests by SwiftLint source policy (#192), not
+/// compiler access control; they remain compiled into app modules. Use root-cwd lint with default config discovery.
+/// See README for declaration formatting and suppression limits. #190 and full #64 qualification remain required.
 ///
 /// Saturation (under the contract). By induction over `tally`'s modification order: while nothing has carried, `count`
 /// only grows within a generation and the generation cannot step once `count >= countCap` (a saturated observation is
@@ -277,7 +277,7 @@ final class FaultLatch: @unchecked Sendable {
         fileprivate let frame: Int64
     }
 
-    /// Test-only by contract (enforcement pending #192): runs `raise`'s own cap check and stops before the
+    /// Test-only (SwiftLint source policy, not compiler isolation): runs `raise`'s own cap check and stops before the
     /// add; `nil` when the scope is unprepared or the check refuses (count at the cap). Every admission held
     /// open is one stalled raiser, so hold only a few (each may overshoot the cap by one).
     func admitRaiseForTesting(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> AdmittedRaiseForTesting? {
@@ -285,7 +285,7 @@ final class FaultLatch: @unchecked Sendable {
         return AdmittedRaiseForTesting(owner: self, index: index, kind: kind, frame: frame)
     }
 
-    /// Test-only by contract (enforcement pending #192): completes an admitted raise with `raise`'s own
+    /// Test-only (SwiftLint source policy, not compiler isolation): completes an admitted raise with `raise`'s own
     /// transition, without re-checking the cap; `false` (nothing changes) for another latch's admission.
     func finishRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> Bool {
         guard admitted.owner === self else { return false }
@@ -305,7 +305,7 @@ final class FaultLatch: @unchecked Sendable {
         var isFirstRaiser: Bool { Bits.count(old) == 0 }
     }
 
-    /// Test-only by contract (enforcement pending #192): runs `raise`'s own add for an admitted raise and
+    /// Test-only (SwiftLint source policy, not compiler isolation): runs `raise`'s own add for an admitted raise and
     /// stops before its publication; `nil` (nothing changes) for another latch's admission.
     func addRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> UnpublishedRaiseForTesting? {
         guard admitted.owner === self else { return nil }
@@ -313,7 +313,7 @@ final class FaultLatch: @unchecked Sendable {
                                           frame: admitted.frame, old: increment(admitted.index))
     }
 
-    /// Test-only by contract (enforcement pending #192): resumes a paused raise with `raise`'s own
+    /// Test-only (SwiftLint source policy, not compiler isolation): resumes a paused raise with `raise`'s own
     /// publication; `false` (nothing changes) for another latch's raise.
     func publishRaiseForTesting(_ added: consuming UnpublishedRaiseForTesting) -> Bool {
         guard added.owner === self else { return false }
@@ -394,7 +394,7 @@ final class FaultLatch: @unchecked Sendable {
         return (tally, claim)
     }
 
-    /// Test-only by contract (enforcement pending #192): runs `body` while holding the control lock, to
+    /// Test-only (SwiftLint source policy, not compiler isolation): runs `body` while holding the control lock, to
     /// show that `acknowledge` and `pending` wait for it. `body` must not call `observe`, `acknowledge`,
     /// `pending` or `seedForTesting`.
     func withControlLockForTesting(_ body: () -> Void) {
@@ -407,7 +407,7 @@ final class FaultLatch: @unchecked Sendable {
     /// counter. A per-scope or per-generation bound alone would not imply this lifetime bound.
     var unknownScopeFaults: UInt64 { min(unknown.load(ordering: .relaxed), Bits.unknownCap) }
 
-    /// Test-only by contract (enforcement pending #192): overwrites a scope's raw state while no other
+    /// Test-only (SwiftLint source policy, not compiler isolation): overwrites a scope's raw state while no other
     /// thread raises against it. Under the control lock it first steps the scope's epoch, as an acknowledge
     /// would, so every earlier observation of the scope is refused even if the seed restores the exact `tally`
     /// and `first` it saw. At `epochLimit` it fails closed: `false`, nothing changes. `false` for an unprepared
@@ -427,7 +427,7 @@ final class FaultLatch: @unchecked Sendable {
         }
     }
 
-    /// Test-only by contract (enforcement pending #192): a scope's raw generation, unclamped count and
+    /// Test-only (SwiftLint source policy, not compiler isolation): a scope's raw generation, unclamped count and
     /// claim generation, or `nil` for an unprepared scope.
     func stateForTesting(_ scope: FaultScope) -> TestState? {
         guard let index = index(of: scope) else { return nil }
@@ -436,7 +436,7 @@ final class FaultLatch: @unchecked Sendable {
                          claimGeneration: Bits.claimGeneration(firsts[index].load(ordering: .acquiring)))
     }
 
-    /// Test-only by contract (enforcement pending #192): sets the raw unknown-scope counter.
+    /// Test-only (SwiftLint source policy, not compiler isolation): sets the raw unknown-scope counter.
     func seedUnknownScopeFaultsForTesting(_ count: UInt64) {
         unknown.store(count, ordering: .relaxed)
     }

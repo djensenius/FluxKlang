@@ -147,13 +147,30 @@ open FluxKlang.xcodeproj
 
 ```sh
 # Run these through the pins: prefix with `mise exec --`, or activate mise / put its shims first on PATH.
-make lint                   # swiftlint --strict
+make lint                   # root-cwd SwiftLint, including FaultLatch seam policy
+make fault-seam-policy-self-check # positive/negative policy regression checks; no app launch
 make build                  # iOS simulator build
 make build-mac              # native macOS build
 make build-for-testing-mac  # compile Mac app + FluxKlangMacTests (no launch)
 make test                   # unit tests
 make test-mac               # hosted Mac tests; gated by #60 (startup isolation #51)
 ```
+
+`make lint` establishes the repository root as its working directory. Use default
+SwiftLint configuration discovery: explicit `--config` ignores the nested
+`FluxKlangTests/.swiftlint.yml` exemption. The `fault_latch_test_seams` ERROR rule
+rejects calls and references to the eight named FaultLatch test seams outside root
+`FluxKlangTests/`, including uses inside FaultLatch itself; only declaration-name
+tokens are exempt. Other lint rules remain enabled in tests.
+
+This is type-blind source policy, not compiler access control or an adversarial
+boundary: the seams remain compiled into app modules. Same-name unrelated
+identifiers may be rejected. Declarations must use exactly one ASCII space after
+`func` (backtick names are supported); other spacing fails closed. Inline
+suppressions, config edits and unlinted files are outside this policy's guarantee.
+The self-check consumes the actual repository configurations in isolated temporary
+fixtures and must fail if the rule is removed. It does not qualify FaultLatch's
+caller-ordering/lifetime bounds (#190) or the remaining realtime guarantees (#64).
 
 ## Final acceptance status — September 10, 2026
 
