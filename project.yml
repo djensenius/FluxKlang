@@ -173,6 +173,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FanInOut.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FanInStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Starvation.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Ramps.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Retire.swift
       - path: FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
