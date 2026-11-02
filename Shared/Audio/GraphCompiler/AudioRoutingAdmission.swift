@@ -7,6 +7,10 @@ enum AudioRoutingAdmission {
         let outputChannels: Int
         let termCount: Int
         let inputSamples: Int
+        let muteChannels: Int
+        let muteResultOffset: Int
+        let outputOffset: Int
+        let peakOffset: Int
         let outputSamples: Int
         let scratchFloats: Int
         let scratchBytes: Int
@@ -35,7 +39,17 @@ enum AudioRoutingAdmission {
         try collectionBounds(project: project, graph: graph)
         var inputs = 0
         var outputs = 0
+        var muteChannels = 0
         for node in graph.nodes {
+            if node.kind == .audioMute {
+                guard muteChannels == 0, node.hasValidMuteShape, node.muted != nil,
+                      node.requiredCapabilities.isEmpty, node.advisoryCapabilities.isEmpty,
+                      let channels = node.ports.first?.channels else {
+                    throw AudioRoutingPreparationError.unsupported
+                }
+                muteChannels = channels
+                continue
+            }
             guard node.kind == .roleInput || node.kind == .roleOutput, node.ports.count == 1,
                   node.role != nil, node.asset == nil, node.graph == nil,
                   node.requiredCapabilities.isEmpty, node.advisoryCapabilities.isEmpty,
@@ -55,12 +69,16 @@ enum AudioRoutingAdmission {
         }
         let terms = try countTerms(graph, maximum: limits.maxTerms)
         let inputSamples = try multiply(inputs, limits.maxFrames)
+        let muteSamples = try multiply(muteChannels, limits.maxFrames)
+        let muteResultOffset = try add(inputSamples, muteSamples)
+        let outputOffset = try add(muteResultOffset, muteSamples)
         let outputSamples = try multiply(outputs, limits.maxFrames)
-        let samples = try add(inputSamples, outputSamples)
-        let scratchFloats = max(1, try add(samples, outputs))
+        let peakOffset = try add(outputOffset, outputSamples)
+        let scratchFloats = max(1, try add(peakOffset, outputs))
         let scratchBytes = try multiply(scratchFloats, MemoryLayout<Float>.stride)
-        // M * (2I + T + 4O) + 2O, measured in sample operations.
-        let perFrame = try add(add(multiply(2, inputs), terms), multiply(4, outputs))
+        // F * (2I + T + 4O + 4C) + 2O, including disconnected/true mute work.
+        let routingWork = try add(add(multiply(2, inputs), terms), multiply(4, outputs))
+        let perFrame = try add(routingWork, multiply(4, muteChannels))
         let work = try add(multiply(limits.maxFrames, perFrame), multiply(2, outputs))
         guard scratchBytes <= limits.maxScratchBytes, scratchBytes <= ScratchArena.maximumByteCapacity,
               work <= limits.maxSampleWork else {
@@ -68,7 +86,9 @@ enum AudioRoutingAdmission {
         }
         return Geometry(
             inputChannels: inputs, outputChannels: outputs, termCount: terms,
-            inputSamples: inputSamples, outputSamples: outputSamples,
+            inputSamples: inputSamples, muteChannels: muteChannels,
+            muteResultOffset: muteResultOffset, outputOffset: outputOffset, peakOffset: peakOffset,
+            outputSamples: outputSamples,
             scratchFloats: scratchFloats, scratchBytes: scratchBytes, sampleWork: work
         )
     }
@@ -110,7 +130,7 @@ enum AudioRoutingAdmission {
             } else {
                 // Linear bounded lookup deliberately avoids a pre-preflight dictionary.
                 guard let destination = graph.nodes.first(where: { $0.id == edge.to.node }),
-                      let port = destination.ports.first, port.id == edge.to.port,
+                      let port = destination.ports.first(where: { $0.id == edge.to.port }),
                       let channels = port.channels else {
                     throw AudioRoutingPreparationError.unsupported
                 }
@@ -162,7 +182,7 @@ enum AudioRoutingAdmission {
         // Supported capability set is empty: preflight rejects both required and
         // advisory dependencies. Unused valid definitions have no routing meaning.
         var bindings: Set<RoleID> = []
-        for node in graph.nodes {
+        for node in graph.nodes where node.kind == .roleInput || node.kind == .roleOutput {
             guard let role = node.role, bindings.insert(role).inserted else {
                 throw AudioRoutingPreparationError.unsupported
             }
@@ -170,7 +190,11 @@ enum AudioRoutingAdmission {
         let nodes = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.id, $0) })
         var destinations: Set<AudioRoutingPortKey> = []
         for edge in graph.edges {
-            guard nodes[edge.from.node]?.kind == .roleInput, nodes[edge.to.node]?.kind == .roleOutput,
+            let source = nodes[edge.from.node]?.kind
+            let destination = nodes[edge.to.node]?.kind
+            let supported = source == .roleInput && (destination == .roleOutput || destination == .audioMute)
+                || source == .audioMute && destination == .roleOutput
+            guard supported,
                   destinations.insert(AudioRoutingPortKey(edge.to)).inserted else {
                 throw AudioRoutingPreparationError.unsupported
             }

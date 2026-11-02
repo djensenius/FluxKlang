@@ -44,6 +44,10 @@ struct OfflineAudioRoutingProcessor: ~Copyable {
             silence(frames: frames, output: output, peaks: peaks)
             return .refused(refusal)
         }
+        if let refusal = materializeMute(frames: frames, scratch: scratch) {
+            silence(frames: frames, output: output, peaks: peaks)
+            return .refused(refusal)
+        }
         if let refusal = compute(frames: frames, scratch: scratch) {
             silence(frames: frames, output: output, peaks: peaks)
             return .refused(refusal)
@@ -87,6 +91,39 @@ struct OfflineAudioRoutingProcessor: ~Copyable {
                     guard value.isFinite else { return .nonFiniteInput }
                     scratch.baseAddress?.advanced(by: offset + frame).initialize(to: value)
                 }
+            }
+        }
+        return nil
+    }
+
+    private func materializeMute(
+        frames: Int, scratch: UnsafeMutableBufferPointer<Float>
+    ) -> AudioRoutingProcessRefusal? {
+        guard let mute = plan.mute else { return nil }
+        let stride = plan.layout.maxFrames
+        // Materialize every input channel before executing the primitive, even
+        // for true, unused channels, no consumers or a wholly disconnected mute.
+        for channel in 0..<mute.rows.count {
+            let row = mute.rows[channel]
+            let offset = mute.inputOffset + channel * stride
+            for frame in 0..<frames {
+                var sample: Float = 0
+                if row.isIdentity {
+                    sample = scratch[plan.terms[row.firstTerm] + frame]
+                } else {
+                    for term in row.firstTerm..<(row.firstTerm + row.termCount) {
+                        sample += scratch[plan.terms[term] + frame]
+                        guard sample.isFinite else { return .nonFiniteSum }
+                    }
+                }
+                scratch.baseAddress?.advanced(by: offset + frame).initialize(to: sample)
+            }
+        }
+        for channel in 0..<mute.rows.count {
+            let offset = channel * stride
+            for frame in 0..<frames {
+                let sample: Float = mute.muted ? 0 : scratch[mute.inputOffset + offset + frame]
+                scratch.baseAddress?.advanced(by: mute.resultOffset + offset + frame).initialize(to: sample)
             }
         }
         return nil
