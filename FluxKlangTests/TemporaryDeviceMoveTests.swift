@@ -245,8 +245,11 @@ struct TemporaryDeviceMoveTests {
 
     @MainActor
     @Test func activeMovePersistsThroughGlobalCloudStoreReload() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("temporary-moves-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
-        let fileStore = JSONFileStore(cloud: cloud)
+        let fileStore = JSONFileStore(directory: directory, cloud: cloud)
         let fileName = "temporary-moves-\(UUID().uuidString).json"
         let synth = Equipment(name: "Synth", outputs: ["Out"])
         let home = StudioHomeConnections(inputs: [
@@ -275,10 +278,13 @@ struct TemporaryDeviceMoveTests {
 
     @MainActor
     @Test func homeEditCannotTakeConnectorReservedByActiveMove() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("temporary-home-edit-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let first = Equipment(name: "First", outputs: ["Out"])
         let second = Equipment(name: "Second", outputs: ["Out"])
         let store = StudioConnectionsStore(
-            fileStore: JSONFileStore(cloud: MemoryCloudStore()),
+            fileStore: JSONFileStore(directory: directory, cloud: MemoryCloudStore()),
             fileName: "temporary-home-edit-\(UUID().uuidString).json"
         )
         let home = StudioHomeConnections(inputs: [
@@ -309,10 +315,13 @@ struct TemporaryDeviceMoveTests {
 
     @MainActor
     @Test func readyToReturnMoveDoesNotReserveTemporaryConnectorForHomeEdits() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("temporary-return-home-edit-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let first = Equipment(name: "First", outputs: ["Out"])
         let second = Equipment(name: "Second", outputs: ["Out"])
         let store = StudioConnectionsStore(
-            fileStore: JSONFileStore(cloud: MemoryCloudStore()),
+            fileStore: JSONFileStore(directory: directory, cloud: MemoryCloudStore()),
             fileName: "temporary-return-home-edit-\(UUID().uuidString).json"
         )
         let home = StudioHomeConnections(inputs: [
