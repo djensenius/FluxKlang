@@ -46,3 +46,18 @@ extension WingTransporting {
         try await send(address, value, to: nil, port: nil)
     }
 }
+
+/// No I/O, tasks, or simulated console data. Isolation is not a successful connection.
+struct InertWingTransport: WingTransporting {
+    let incoming = AsyncStream<WingIncoming> { $0.finish() }
+
+    func start(remoteHost: String, localPort: UInt16?, broadcast: Bool) async throws {
+        throw WingTransportError.notStarted
+    }
+
+    func stop() async {}
+
+    func send(_ address: String, _ value: WingValue?, to host: String?, port: UInt16?) async throws {
+        throw WingTransportError.notStarted
+    }
+}

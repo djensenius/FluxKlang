@@ -4,6 +4,106 @@ import Testing
 
 @MainActor
 struct InAppAssistantTests {
+    @Test func strictIsolationOverridesBothClosedLiveTestPurposes() {
+        let modelOnly = ["FLUXKLANG_RUN_APPLE_MODEL_TESTS": "1"]
+        let routingOnly = ["FLUXKLANG_QUALIFY_APPLE_ROUTING": "1"]
+        #expect(FoundationModelActionInterpreter.LiveTestPurpose.model.isPermitted(environment: modelOnly))
+        #expect(!FoundationModelActionInterpreter.LiveTestPurpose.model.isPermitted(environment: routingOnly))
+        #expect(FoundationModelActionInterpreter.LiveTestPurpose.routing.isPermitted(environment: routingOnly))
+        #expect(!FoundationModelActionInterpreter.LiveTestPurpose.routing.isPermitted(environment: modelOnly))
+        #expect(!FoundationModelActionInterpreter.LiveTestPurpose.model.isPermitted(environment: [:]))
+        #expect(!FoundationModelActionInterpreter.LiveTestPurpose.routing.isPermitted(environment: [:]))
+        #expect(!AssistantServiceIsolation.deniesLiveServices(isTesting: false, environment: [:]))
+        for var environment in [[:], modelOnly, routingOnly, modelOnly.merging(routingOnly) { first, _ in first }] {
+            #expect(AssistantServiceIsolation.deniesLiveServices(isTesting: true, environment: environment))
+            environment["FLUXKLANG_ISOLATED_TESTING"] = "1"
+            #expect(AssistantServiceIsolation.deniesLiveServices(isTesting: false, environment: environment))
+            for purpose in FoundationModelActionInterpreter.LiveTestPurpose.allCases {
+                #expect(!purpose.isPermitted(environment: environment))
+            }
+        }
+    }
+
+    @Test func isolatedDefaultFactoriesAreNotEvaluated() async throws {
+        try #require(AssistantServiceIsolation.deniesLiveServices)
+        var constructions = 0
+        let fallback = StubGenerator(availability: .unsupportedOS, text: "fallback")
+        let generator = AssistantGeneratorRouter.defaultGenerator(model: {
+            constructions += 1
+            return StubGenerator(availability: .ready, text: "model")
+        }, fallback: fallback)
+        let interpreter = AssistantChatController.defaultActionInterpreter(forcesFallback: false, live: {
+            constructions += 1
+            return ReviewedChatInterpreter(result: .answer)
+        })
+        let client = URLSessionAssistantHTTPClient.defaultClient(live: {
+            constructions += 1
+            return IsolationHTTPClient()
+        })
+        #expect(await generator.availability() == .unsupportedOS)
+        #expect(await interpreter.availability() == .unavailable(AssistantServiceIsolation.reason))
+        #expect(client == nil)
+        #expect(constructions == 0)
+    }
+
+    @Test func isolatedLoadRefreshAndSpokenFallbackNeverConstructSpeech() async throws {
+        try #require(AssistantServiceIsolation.deniesLiveServices)
+        let backend = MemoryHistoryBackend()
+        var constructions = 0
+        var speechCalls = 0
+        let chat = AssistantChatController(
+            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
+            store: AssistantConversationStore(local: backend, cloud: nil),
+            makeSpeech: { constructions += 1; return { _ in speechCalls += 1 } })
+        let previousSpokenReplies = chat.spokenRepliesEnabled
+        defer { chat.spokenRepliesEnabled = previousSpokenReplies }
+        chat.spokenRepliesEnabled = true
+        await chat.load()
+        await chat.refreshAvailability()
+        #expect(await backend.loadCount == 1)
+        #expect(chat.modelAvailability == .unsupportedOS)
+        chat.composer = "Help"
+        chat.send(context: emptyContext())
+        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+        #expect(chat.selectedConversation?.messages.last?.text.isEmpty == false)
+        let planner = ReviewedChatPlanner()
+        chat.actionPlanner = planner
+        chat.composer = "lower channel 7 by 3 dB"
+        chat.send(context: emptyContext())
+        try await waitUntil { !chat.isStreaming }
+        #expect(planner.intents.count == 1)
+        #expect(planner.confirmations == 0)
+        #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
+        #expect(constructions == 0)
+        #expect(speechCalls == 0)
+    }
+
+    @Test func directDefaultModelAndHTTPEntriesDenyAccess() async throws {
+        try #require(AssistantServiceIsolation.deniesLiveServices)
+        let coordinator = AssistantCoordinator(draftStore: MemoryDraftStore())
+        let request = AssistantGenerationRequest(question: "Help", recentMessages: [], summary: "",
+                                                 context: emptyContext())
+        let generators: [any AssistantGenerating] = [
+            FoundationModelAssistantGenerator(coordinator: coordinator),
+            CopilotAssistantGenerator(configuration: .init(token: "offline", model: "fake"), coordinator: coordinator)
+        ]
+        for generator in generators {
+            #expect(await generator.availability() == .deterministic)
+            await #expect(throws: AssistantServiceIsolation.AccessError.self) {
+                for try await _ in generator.stream(request) {}
+            }
+        }
+        let interpreter = FoundationModelActionInterpreter()
+        #expect(await interpreter.availability() == .unavailable(AssistantServiceIsolation.reason))
+        await #expect(throws: FoundationModelActionInterpreter.InterpretationError.self) {
+            try await interpreter.interpret(.init(text: "lower channel 7 by 3 dB"))
+        }
+        let url = try #require(URL(string: "https://example.invalid"))
+        await #expect(throws: AssistantServiceIsolation.AccessError.self) {
+            try await URLSessionAssistantHTTPClient().data(for: URLRequest(url: url))
+        }
+    }
+
     @Test func unavailableModelUsesDeterministicFallback() async throws {
         let router = AssistantGeneratorRouter(
             model: StubGenerator(availability: .deviceNotEligible, text: "model"),
@@ -389,4 +489,10 @@ private actor MemoryDraftStore: PendingStudioPatchPersisting {
 
     func load() async -> StudioPatchDraft? { draft }
     func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
+}
+
+private struct IsolationHTTPClient: AssistantHTTPClient {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        throw AssistantServiceIsolation.AccessError.denied
+    }
 }

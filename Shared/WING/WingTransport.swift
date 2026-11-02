@@ -131,11 +131,14 @@ actor WingTransport: WingTransporting {
     private(set) var peerHosts: Set<String> = []
 
     private let localNetworkProbe: LocalNetworkProbe.Check
+    private let resolvePeers: @Sendable (String) -> Set<String>
 
     init(remotePort: UInt16 = WingNetwork.defaultPort,
-         localNetworkProbe: @escaping LocalNetworkProbe.Check = LocalNetworkProbe.connectErrno) {
+         localNetworkProbe: @escaping LocalNetworkProbe.Check = LocalNetworkProbe.connectErrno,
+         resolvePeers: @escaping @Sendable (String) -> Set<String> = WingPeerIdentity.ipv4Addresses) {
         self.remotePort = remotePort
         self.localNetworkProbe = localNetworkProbe
+        self.resolvePeers = resolvePeers
         (incoming, continuation) = AsyncStream.makeStream(of: WingIncoming.self)
     }
 
@@ -149,7 +152,7 @@ actor WingTransport: WingTransporting {
         stopSocket()
         let continuation = continuation
         let sessionID = UUID()
-        let peers = WingPeerIdentity.ipv4Addresses(for: remoteHost)
+        let peers = resolvePeers(remoteHost)
         guard broadcast || !peers.isEmpty else { throw WingTransportError.unresolvedPeer }
         // A manual IP takes the same checked path as discovery: a denial is reported, not bypassed.
         // The first failing address aborts the connect, even if another address could work.
