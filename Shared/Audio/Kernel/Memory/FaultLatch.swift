@@ -1,6 +1,8 @@
 // #64 fault latch (owner default D14): a fault scope is a handoff × output/stream slot, and a raised fault
-// stays latched until control acknowledges it. Raising is wait-free and allocation-free from any context.
-// Reference model; not RT-certified.
+// stays latched until control acknowledges it. Raising takes no lock and has no source-level retry loop; target
+// atomic lowering and progress are unqualified (see Progress). Functional correctness, including fail-closed
+// saturation, is conditional on the caller contract (see Raise-context contract); callers that have not proved it
+// are unsupported. Reference model; not RT-certified.
 import Synchronization
 
 #if !_pointerBitWidth(_64)
@@ -22,8 +24,8 @@ struct FaultScope: Hashable, Sendable, BitwiseCopyable {
 /// A latched fault since the scope was last armed. Reference model; not RT-certified.
 struct FaultRecord: Sendable, BitwiseCopyable, Equatable {
     let scope: FaultScope
-    /// The first kind raised since the scope was armed; later raises of other kinds are counted but do not
-    /// replace it. A hint only: recovery must cover the whole scope.
+    /// The first kind raised since the scope was armed; later raises of other kinds do not replace it (they add to
+    /// `count` until it saturates). A hint only: recovery must cover the whole scope.
     let kind: FaultKind
     /// Raises since the scope was armed, saturating at `FaultLatch.countCap` (2^39).
     let count: UInt64
@@ -71,14 +73,19 @@ struct FaultObservation: Sendable {
 /// `observe` and `pending` read `tally`, then `first`. If `count > 0` but `first` does not yet hold `g`, the
 /// first raiser is still publishing: both skip the scope (`observe` returns `nil`), so a fault raised just now can
 /// appear on the next poll rather than this one. Otherwise `first` is final for `g`. Reported counts are
-/// `min(count, countCap)`.
+/// `min(count, countCap)`. `addRaiseForTesting` and `publishRaiseForTesting` pause a real first raiser there.
 ///
 /// Acknowledging. Control observes a scope, recovers the whole scope off-thread, then passes the observation to
 /// `acknowledge`, which makes at most one compare-exchange from the exact observed `tally` to `(0, g + 1)` and
 /// returns the record only if it succeeds. It refuses (`nil`, nothing changed) an observation from another latch,
 /// one made before the scope's last acknowledge (per-scope `epoch`), a saturated one, or any whose `tally` has
-/// moved, that is, any raise since the observation; the scope stays latched and control observes and recovers
-/// again. Proof that success means no raise since the observation went unrecovered:
+/// moved, that is, any raise since the observation. `nil` means only that this call changed nothing and re-armed
+/// nothing; it says nothing about the scope's current state, nor (for a foreign observation) about this latch. The
+/// scope may already be acknowledged and unlatched (for example, the observation was acknowledged before) or may
+/// still be latched (new raises, saturation). `nil` grants no authority to resume: the caller reconciles with the
+/// current state (`isLatched`, `observe`) and, only while the scope is still latched, observes and recovers again;
+/// an `observe` of `nil` while `isLatched` is `true` is still not "no fault" (see `observe`).
+/// Proof that success means no raise since the observation went unrecovered:
 /// - Owner: the observation holds its latch strongly, so no other latch can reuse that address while it exists;
 ///   a foreign observation is refused before its index is used.
 /// - Epoch: each scope's `epoch` steps exactly when an acknowledge of it succeeds, in the same `control` critical
@@ -86,28 +93,56 @@ struct FaultObservation: Sendable {
 ///   `epochLimit` instead of wrapping (then the scope fails closed).
 ///   Equal epochs mean no acknowledge of the scope has succeeded since the observation, so its generation has not
 ///   stepped, even if the packed 24-bit generation has since wrapped back to the same value (ABA).
-/// - Count: within a generation `count` only grows, by raises. An unchanged `tally` (same generation) therefore
-///   means no raise was counted since the observation, and with `count < countCap` at the observation every raise
-///   since was counted (a raise skips its add only at the cap). A saturated count cannot prove that, so a
-///   saturated observation is never acknowledgeable: the scope stays latched until the latch is replaced.
+/// - Count: within a generation `count` only grows, by raises. An unchanged `tally` (same generation) therefore means
+///   no raise was counted since the observation. A later raise may skip its add, when its cap check reads
+///   `count >= countCap` (e.g. after another raise takes `countCap - 1` to the cap). But if the observation was below
+///   the cap, a saturated `tally` comes later in its modification order and cannot return to the observed one (a
+///   saturated generation never steps; see Saturation), so any skip follows a counted raise that changed the exact
+///   `tally`, and the compare-exchange fails. A saturated observation cannot rule out skips, so it is never
+///   acknowledgeable: the scope stays latched until the latch is replaced.
 /// An add after the successful compare-exchange is the first raise of a new latched record.
 ///
 /// Serialization. `observe`, `acknowledge` and `pending`'s read of each scope run under `control`, a control-side
 /// `Mutex`, which also guards the plain `epoch` words; `raise` and `isLatched` never take it. Only `acknowledge`
 /// steps a generation, so a control operation never pairs an old count with a new claim. Each holds `control` for
-/// a bounded time: one scope's reads and at most one compare-exchange, no retry loop. The `Mutex` is control-side
-/// only: the render paths (`raise`, `isLatched`) stay lock-free and never take it, and X1's lint must allow
-/// `Mutex` only in `FaultLatch` control paths.
+/// one scope's reads and at most one compare-exchange call, with no source-level retry loop (target lowering
+/// unqualified; see Progress). The `Mutex` is control-side only: the render paths (`raise`, `isLatched`) never
+/// take it, and X1's lint must allow `Mutex` only in `FaultLatch` control paths.
 ///
-/// Progress. `raise` and `isLatched` have no retry loops and no lock: one load, at most one wrapping add and at
-/// most one 128-bit release store (`stp` on arm64 macOS; on arm64 iOS and x86_64 a value-comparing
-/// compare-exchange loop that ends within two iterations, because every concurrent access to `first` is a
-/// value-preserving read). `observe`, `acknowledge` and `pending` run on control, where the lock is acceptable;
+/// Progress (source level only). `raise` and `isLatched` take no lock and have no source-level retry loop: one
+/// load, at most one wrapping add and at most one 128-bit release store, each one `Synchronization.Atomic`
+/// operation. That fixed operation count is not target-level wait-freedom. The protocol relies on `Atomic`'s
+/// documented semantics (single-copy atomicity of `UInt64` and `WordPair` at the stated orderings); whether a
+/// target lowers each operation to a bounded, non-spuriously-failing sequence is not proved here, so target atomic
+/// lowering and progress are unqualified. The no-allocation/no-lock and call-graph checks hold only for the
+/// targets and configurations they ran on. This slice does not accept or waive #64's final-target hot-path
+/// qualification. `observe`, `acknowledge` and `pending` run on control, where the lock is acceptable;
 /// under a continuous stream of raises an acknowledge may keep being refused, which fails safe (still latched).
 ///
-/// Saturation. Raisers that pass the cap check concurrently can overshoot `countCap` by at most the number of
-/// concurrent raisers, far below the 2^39 of headroom, so `count` never carries into `generation`. Reads clamp to
-/// `countCap`, and a saturated scope stays latched and fails closed. `admitRaiseForTesting` forces that race.
+/// Raise-context contract (a functional precondition, separate from Progress). Over the latch's whole lifetime, every
+/// `raise` call, on any scope, prepared or not, must belong to one global set of K < 2^39 logical chains (one condition
+/// for the whole latch, not one per scope or generation). Within a chain, calls are non-reentrant and each completed
+/// `raise` happens before the chain's next `raise` begins (its cap check). A chain may migrate between threads only
+/// through a real happens-before handoff (release/acquire, a lock, a join); a call from an unsynchronized or re-entered
+/// context starts a new chain. This reference model neither checks nor proves the contract: callers that have not
+/// proved it are unsupported, and app hot-path integration must prove it or use a different design. That proof is open
+/// in #190; #64's acceptance is not waived.
+///
+/// Test seams. The `…ForTesting` members are test-only by contract. They are compiled into the app modules, and
+/// neither their names nor current lint keep app code from calling them (`seedForTesting` can clear a latched
+/// scope without recovery). Enforcing that is open in #192 and, with #190, required before production integration.
+///
+/// Saturation (under the contract). By induction over `tally`'s modification order: while nothing has carried, `count`
+/// only grows within a generation and the generation cannot step once `count >= countCap` (a saturated observation is
+/// never acknowledgeable, and an earlier one's exact-`tally` compare-exchange fails). A raise overshoots when its add
+/// sees `count >= countCap`; it writes at least `countCap + 1`, so any later raise on its chain, whose cap check
+/// happens after that add, reads that value or a later one and is refused. Each chain therefore overshoots at most once
+/// for this tally, the overshoot is at most K, and the raw count stays below `countCap + 2^39 = 2^40`, so the first
+/// carry into `generation` can never occur. This bounds cumulative overshoot by chains, not by raisers running at one
+/// moment: unsynchronized contexts calling one after another are separate chains. Reads clamp to `countCap`, and a
+/// saturated scope stays latched and fails closed. `admitRaiseForTesting` forces two admitted raisers to overshoot
+/// together. Without the contract, an unbounded number of stale admissions can carry into `generation` and corrupt the
+/// scope.
 ///
 /// Ordering: acquire/release. Each successful write to `tally` reads the one before it (RMW), and readers
 /// acquire `tally` before `first`, which is enough for every argument above. Relaxed is unsound because it
@@ -191,8 +226,11 @@ final class FaultLatch: @unchecked Sendable {
         keys.deallocate()
     }
 
-    /// Any context; wait-free. `.ok` when counted against a prepared scope; an unprepared scope is counted in
-    /// `unknownScopeFaults` and refused with `.slotOutOfRange`.
+    /// Any context that satisfies the raise-context contract; no lock or source-level retry loop (target progress
+    /// unqualified; see Progress). `.ok` only identifies a prepared scope: it does not mean this call was counted
+    /// (the count saturates; see Saturation) or that the scope is still latched on return (a concurrent `acknowledge`
+    /// may re-arm it). An unprepared scope is always refused with `.slotOutOfRange`; it adds to `unknownScopeFaults`
+    /// until the reported value saturates.
     func raise(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> KernelStatus {
         guard let index = index(of: scope) else {
             if unknown.load(ordering: .relaxed) < Bits.unknownCap {
@@ -210,16 +248,24 @@ final class FaultLatch: @unchecked Sendable {
         Bits.count((tallies + index).pointee.load(ordering: .acquiring)) < Bits.countCap
     }
 
-    /// `raise`'s transition: one wrapping add; the first raiser of the generation publishes `first`.
+    /// `raise`'s transition: one wrapping add, then the first raiser of the generation publishes `first`.
     private func count(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
-        let tally = tallies + index
-        let old = tally.pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
-        if Bits.count(old) == 0 {
-            let meta = Bits.generation(old) &<< 8 | UInt64(kind.rawValue)
-            (firsts + index).pointee.store(
-                WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
-                ordering: .releasing)
-        }
+        publish(index, increment(index), kind, frame)
+    }
+
+    /// `raise`'s add; returns the old tally.
+    private func increment(_ index: Int) -> UInt64 {
+        (tallies + index).pointee.wrappingAdd(1, ordering: .acquiringAndReleasing).oldValue
+    }
+
+    /// `raise`'s publication: only the raise whose add saw count 0 (the generation's unique first raiser) stores
+    /// `first`, for the generation of `old`.
+    private func publish(_ index: Int, _ old: UInt64, _ kind: FaultKind, _ frame: Int64) {
+        guard Bits.count(old) == 0 else { return }
+        let meta = Bits.generation(old) &<< 8 | UInt64(kind.rawValue)
+        (firsts + index).pointee.store(
+            WordPair(first: UInt(truncatingIfNeeded: frame), second: UInt(truncatingIfNeeded: meta)),
+            ordering: .releasing)
     }
 
     /// Test-only: one `raise` stopped between its cap check and its add, as a raiser preempted there. It is
@@ -231,7 +277,7 @@ final class FaultLatch: @unchecked Sendable {
         fileprivate let frame: Int64
     }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): runs `raise`'s own cap check and stops before the
+    /// Test-only by contract (enforcement pending #192): runs `raise`'s own cap check and stops before the
     /// add; `nil` when the scope is unprepared or the check refuses (count at the cap). Every admission held
     /// open is one stalled raiser, so hold only a few (each may overshoot the cap by one).
     func admitRaiseForTesting(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> AdmittedRaiseForTesting? {
@@ -239,11 +285,39 @@ final class FaultLatch: @unchecked Sendable {
         return AdmittedRaiseForTesting(owner: self, index: index, kind: kind, frame: frame)
     }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): completes an admitted raise with `raise`'s own
+    /// Test-only by contract (enforcement pending #192): completes an admitted raise with `raise`'s own
     /// transition, without re-checking the cap; `false` (nothing changes) for another latch's admission.
     func finishRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> Bool {
         guard admitted.owner === self else { return false }
         count(admitted.index, admitted.kind, admitted.frame)
+        return true
+    }
+
+    /// Test-only: one `raise` stopped after its add and before its publication, as a raiser preempted there.
+    /// Noncopyable, so it publishes at most once; holds its latch strongly.
+    struct UnpublishedRaiseForTesting: ~Copyable {
+        fileprivate let owner: FaultLatch
+        fileprivate let index: Int
+        fileprivate let kind: FaultKind
+        fileprivate let frame: Int64
+        fileprivate let old: UInt64
+        /// `true` when this raise's add saw count 0, so it alone publishes the generation's `first`.
+        var isFirstRaiser: Bool { Bits.count(old) == 0 }
+    }
+
+    /// Test-only by contract (enforcement pending #192): runs `raise`'s own add for an admitted raise and
+    /// stops before its publication; `nil` (nothing changes) for another latch's admission.
+    func addRaiseForTesting(_ admitted: consuming AdmittedRaiseForTesting) -> UnpublishedRaiseForTesting? {
+        guard admitted.owner === self else { return nil }
+        return UnpublishedRaiseForTesting(owner: self, index: admitted.index, kind: admitted.kind,
+                                          frame: admitted.frame, old: increment(admitted.index))
+    }
+
+    /// Test-only by contract (enforcement pending #192): resumes a paused raise with `raise`'s own
+    /// publication; `false` (nothing changes) for another latch's raise.
+    func publishRaiseForTesting(_ added: consuming UnpublishedRaiseForTesting) -> Bool {
+        guard added.owner === self else { return false }
+        publish(added.index, added.old, added.kind, added.frame)
         return true
     }
 
@@ -289,7 +363,8 @@ final class FaultLatch: @unchecked Sendable {
 
     /// Control; takes the control lock, so never call from render. Run off-thread recovery of the whole scope
     /// first. Re-arms the scope and returns `observation.record` only if nothing was raised or acknowledged on
-    /// the scope since `observe`; otherwise `nil`, nothing changes and the scope stays latched: observe and
+    /// the scope since `observe`; otherwise `nil`: this call changed nothing, and the scope may already be unlatched
+    /// or may still be latched. Reconcile with the current state and, only if it is still latched, observe and
     /// recover again. At most one compare-exchange (see Acknowledging).
     func acknowledge(_ observation: FaultObservation) -> FaultRecord? {
         guard observation.owner === self, observation.isAcknowledgeable else { return nil }
@@ -319,17 +394,20 @@ final class FaultLatch: @unchecked Sendable {
         return (tally, claim)
     }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): runs `body` while holding the control lock, to
+    /// Test-only by contract (enforcement pending #192): runs `body` while holding the control lock, to
     /// show that `acknowledge` and `pending` wait for it. `body` must not call `observe`, `acknowledge`,
     /// `pending` or `seedForTesting`.
     func withControlLockForTesting(_ body: () -> Void) {
         control.withLock { _ in body() }
     }
 
-    /// Raises against scopes that were never prepared, saturating at `unknownCap`.
+    /// Raises against scopes that were never prepared, saturating at `unknownCap`. Under the raise-context
+    /// contract the same per-chain argument as Saturation holds over the latch's lifetime (relaxed ordering keeps
+    /// write-read coherence), so the overshoot is at most K < 2^39, far below the 2^63 + 1 that would wrap the
+    /// counter. A per-scope or per-generation bound alone would not imply this lifetime bound.
     var unknownScopeFaults: UInt64 { min(unknown.load(ordering: .relaxed), Bits.unknownCap) }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): overwrites a scope's raw state while no other
+    /// Test-only by contract (enforcement pending #192): overwrites a scope's raw state while no other
     /// thread raises against it. Under the control lock it first steps the scope's epoch, as an acknowledge
     /// would, so every earlier observation of the scope is refused even if the seed restores the exact `tally`
     /// and `first` it saw. At `epochLimit` it fails closed: `false`, nothing changes. `false` for an unprepared
@@ -349,7 +427,7 @@ final class FaultLatch: @unchecked Sendable {
         }
     }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): a scope's raw generation, unclamped count and
+    /// Test-only by contract (enforcement pending #192): a scope's raw generation, unclamped count and
     /// claim generation, or `nil` for an unprepared scope.
     func stateForTesting(_ scope: FaultScope) -> TestState? {
         guard let index = index(of: scope) else { return nil }
@@ -358,7 +436,7 @@ final class FaultLatch: @unchecked Sendable {
                          claimGeneration: Bits.claimGeneration(firsts[index].load(ordering: .acquiring)))
     }
 
-    /// Test-only (X1 denies `ForTesting(` outside test targets): sets the raw unknown-scope counter.
+    /// Test-only by contract (enforcement pending #192): sets the raw unknown-scope counter.
     func seedUnknownScopeFaultsForTesting(_ count: UInt64) {
         unknown.store(count, ordering: .relaxed)
     }
