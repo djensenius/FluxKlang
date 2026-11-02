@@ -1,0 +1,123 @@
+# Mac audit-run preparation (partial regression only)
+
+`prepare.py` is an external, Python-standard-library metadata preparer, **never a
+launcher**. It generates a fresh UUID4 before any hypothetical future launch.
+It imports no app/production modules and performs no subprocess, network,
+test-host, UI-event, service, or hardware execution. There is no in-app fallback
+or conditional audit no-op.
+
+## One closed profile
+
+`mac-isolated-unit` supports only the reviewed Debug hosted-Mac XML plist
+FormatVersion **1** layout:
+
+- Exactly `FluxKlangMacTests` and `__xctestrun_metadata__` at the top level.
+- Scheme `FluxKlangMacIsolatedTests` in both metadata and
+  `TestingEnvironmentVariables.XCODE_SCHEME_NAME`; exact module/provider/host
+  identities and `IsAppHostedTestBundle = true`.
+- Host `__TESTROOT__/Debug/FluxKlangMac.app`, bundle
+  `__TESTHOST__/Contents/PlugIns/FluxKlangMacTests.xctest`, and the two matching
+  observed `DependentProductPaths`.
+- Literal strings `FLUXKLANG_ISOLATED_TESTING=1`,
+  `FLUXKLANG_QUALIFY_APPLE_ROUTING=0`, and `FLUXKLANG_RUN_APPLE_MODEL_TESTS=0`
+  already present in the actual target `EnvironmentVariables`. Preparation adds
+  only `FLUXKLANG_AUDIT_RUN_ID` there; it does not fix missing/wrong flags.
+
+The complete reviewed key/value/type allowlist is `OBSERVED` in `prepare.py`.
+It intentionally requires **all observed values**, including unrelated diagnostic,
+logging, environment, timeout, language, and attachment fields. Their parsed
+values and supported Xcode path placeholders are preserved exactly; XML
+formatting/key order need not be byte-identical. No placeholder is expanded and
+no referenced product is opened. No arbitrary configuration switches exist.
+
+Unknown/missing fields, changed values, alternate layouts, binary plists,
+FormatVersion2, duplicate plist/JSON keys, unsupported scalar types, ambiguous
+metadata, filters (even empty), extra targets, UI-runner markers, alternate audit
+environments, conflicting schemes, and unresolved audit placeholders are refused,
+not silently dropped. Any preexisting run identity is refused, including a valid
+UUID, an empty value, or a malformed value. Even matching audit keys in
+`TestingEnvironmentVariables` are outside this profile.
+
+**Explicit exclusions:** iOS, UI/full-regression, Release, live Apple
+qualification, and any other target composition. Existing app/UI targets are
+unchanged; this utility never removes tests or presents skipped tests as green.
+The retained layout specimens are read-only metadata examples, **not
+execution-ready artifacts**.
+
+## Commands
+
+From the repository root, with a separately selected compile-produced input and
+its explicitly reviewed lowercase SHA256 (replace the example paths/hash):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-audit-run/prepare.py prepare \
+  --input /absolute/Build/Products/MacIsolated.xctestrun \
+  --expected-sha256 REVIEWED_64_CHARACTER_LOWERCASE_SHA256 \
+  --profile mac-isolated-unit
+```
+
+Do not derive a new pin merely to bypass a refusal. Success prints JSON containing
+the run ID and exact absolute output/intent paths. For input `MacIsolated.xctestrun`
+the new siblings are `MacIsolated.audit-run-UUID.xctestrun` and
+`MacIsolated.audit-run-UUID.intent.json`. Preparation uses exclusive creation and
+never overwrites the input or a previous output; collisions fail rather than
+retrying with a repaired identity. The intent is written last, binding schema,
+profile, partial-regression label, target set, run ID, its own path, and input/
+output paths and byte digests.
+
+Separate **read-only** validation (use the exact paths printed by preparation):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-audit-run/prepare.py validate \
+  --input /absolute/Build/Products/MacIsolated.xctestrun \
+  --expected-sha256 REVIEWED_64_CHARACTER_LOWERCASE_SHA256 \
+  --profile mac-isolated-unit \
+  --output /absolute/Build/Products/MacIsolated.audit-run-UUID.xctestrun \
+  --intent /absolute/Build/Products/MacIsolated.audit-run-UUID.intent.json
+```
+
+Validation generates nothing and never repairs UUIDs, flags, intent, or files.
+It rechecks the pinned original and output hashes, canonical UUID4, all parsed
+identities and environment values, exact sibling names/locations, and the entire
+parsed output against the original plus only the authorized run-key addition.
+Final-component file symlinks are refused; resolved parent paths are recorded.
+An orphan or partially written pair cannot validate. Exit status is `0` for
+metadata success, `1` for refusal/I/O failure, and `2` for invalid CLI arguments.
+
+On caught preparation failures, newly created files are removed (intent first);
+preexisting paths are never removed. Use a stable caller-controlled directory.
+This is not a concurrent-writer, crash-atomic two-file transaction or a durability
+guarantee: abrupt termination or filesystem cleanup errors may leave artifacts.
+They must not be treated as prepared without separate successful validation.
+
+## Limits and follow-ups
+
+Hashes and metadata consistency do **not** prove product closure, destination
+binding, immutable Build contents, child-process delivery, execution readiness,
+preflight integration, receipt retention, or runtime coverage. Intent is neither
+a signature nor an execution receipt. Sibling placement preserves metadata path
+resolution, not the existence or immutability of any referenced native product.
+
+Current Makefile launch recipes and raw Cmd+U remain unchanged and unvalidated.
+No command here runs `xcodebuild` or `test-without-building`. Runner integration,
+canonical scope adoption, checker/live extraction, iOS/UI/live profiles, and
+retained runtime results require separate review/authorization.
+
+Bounded contract question for review: should any presently fixed unrelated
+diagnostic/language/logging values be allowed to vary? Until separately reviewed,
+the implementation conservatively refuses that drift; it does not infer a wider
+supported shape.
+
+## Pure fixture checks
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s scripts/test-audit-run -p 'test_prepare.py' -v
+```
+
+Tests use independently transcribed specimen metadata, `TemporaryDirectory`, and
+only the current Python interpreter for CLI subprocess tests. They do not read
+or mutate native products, original specimens, Build trees, or repository files.
+They cover successful preparation/preservation, distinct identities, non-clobber,
+failure cleanup, read-only validation, digest/path binding, and adversarial
+layout/environment/parser/identity refusals. No Xcode builds are needed.
