@@ -13,6 +13,7 @@ final class ProductionAccessAudit: Sendable {
         case assistantHTTP
         case assistantSpeech
         case assistantModelGenerator
+        case assistantActionInterpreter
     }
 
     enum Event: Int, CaseIterable, Sendable {
