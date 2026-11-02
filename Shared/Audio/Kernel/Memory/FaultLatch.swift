@@ -24,8 +24,8 @@ struct FaultScope: Hashable, Sendable, BitwiseCopyable {
 /// A latched fault since the scope was last armed. Reference model; not RT-certified.
 struct FaultRecord: Sendable, BitwiseCopyable, Equatable {
     let scope: FaultScope
-    /// The first kind raised since the scope was armed; later raises of other kinds are counted but do not
-    /// replace it. A hint only: recovery must cover the whole scope.
+    /// The first kind raised since the scope was armed; later raises of other kinds do not replace it (they add to
+    /// `count` until it saturates). A hint only: recovery must cover the whole scope.
     let kind: FaultKind
     /// Raises since the scope was armed, saturating at `FaultLatch.countCap` (2^39).
     let count: UInt64
@@ -93,10 +93,13 @@ struct FaultObservation: Sendable {
 ///   `epochLimit` instead of wrapping (then the scope fails closed).
 ///   Equal epochs mean no acknowledge of the scope has succeeded since the observation, so its generation has not
 ///   stepped, even if the packed 24-bit generation has since wrapped back to the same value (ABA).
-/// - Count: within a generation `count` only grows, by raises. An unchanged `tally` (same generation) therefore
-///   means no raise was counted since the observation, and with `count < countCap` at the observation every raise
-///   since was counted (a raise skips its add only at the cap). A saturated count cannot prove that, so a
-///   saturated observation is never acknowledgeable: the scope stays latched until the latch is replaced.
+/// - Count: within a generation `count` only grows, by raises. An unchanged `tally` (same generation) therefore means
+///   no raise was counted since the observation. A later raise may skip its add, when its cap check reads
+///   `count >= countCap` (e.g. after another raise takes `countCap - 1` to the cap). But if the observation was below
+///   the cap, a saturated `tally` comes later in its modification order and cannot return to the observed one (a
+///   saturated generation never steps; see Saturation), so any skip follows a counted raise that changed the exact
+///   `tally`, and the compare-exchange fails. A saturated observation cannot rule out skips, so it is never
+///   acknowledgeable: the scope stays latched until the latch is replaced.
 /// An add after the successful compare-exchange is the first raise of a new latched record.
 ///
 /// Serialization. `observe`, `acknowledge` and `pending`'s read of each scope run under `control`, a control-side
@@ -224,8 +227,10 @@ final class FaultLatch: @unchecked Sendable {
     }
 
     /// Any context that satisfies the raise-context contract; no lock or source-level retry loop (target progress
-    /// unqualified; see Progress). `.ok` when counted against a prepared scope; an unprepared scope is counted in
-    /// `unknownScopeFaults` and refused with `.slotOutOfRange`.
+    /// unqualified; see Progress). `.ok` only identifies a prepared scope: it does not mean this call was counted
+    /// (the count saturates; see Saturation) or that the scope is still latched on return (a concurrent `acknowledge`
+    /// may re-arm it). An unprepared scope is always refused with `.slotOutOfRange`; it adds to `unknownScopeFaults`
+    /// until the reported value saturates.
     func raise(_ scope: FaultScope, _ kind: FaultKind, frame: Int64) -> KernelStatus {
         guard let index = index(of: scope) else {
             if unknown.load(ordering: .relaxed) < Bits.unknownCap {
