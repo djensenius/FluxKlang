@@ -173,6 +173,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Ramps.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
     settings:
