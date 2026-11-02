@@ -61,6 +61,15 @@ struct SysExMessageRef: Sendable, BitwiseCopyable, Equatable {
 /// Progress: `accept` is wait-free (no loops beyond a copy of at most `maximumMessageBytes`); it never blocks,
 /// retries or allocates. The consumer methods are wait-free too.
 ///
+/// Producer borrows. `accept` reaches the pool, the fault latch and the output ring only through immutable
+/// `Unmanaged` aliases made in `init`, each used inside a synchronous `_withUnsafeGuaranteedRef` that never
+/// escapes, so it adds no retain or release even unoptimised. `pool`, `faults`, `output` and the claimed producer
+/// endpoint stay the strong owners; the borrows rely only on the caller keeping the assembler alive across each
+/// call and tearing it down from a quiescent control context. The push calls `SPSCRing.tryPush` on `output`
+/// directly (which SPSCRing permits for composed handoffs) instead of the endpoint's forwarder, whose stored
+/// strong `ring` would be retained; the endpoint is still claimed and held, so "Exclusive production" is
+/// unchanged. The consumer methods still use the strong owners.
+///
 /// `@unchecked Sendable`: staging and per-source state are producer-only, and the pool is split as documented.
 final class SysExAssembler: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
@@ -95,9 +104,15 @@ final class SysExAssembler: @unchecked Sendable {
     let scopeBase: UInt16
     let output: SPSCRing<SysExMessageRef>
 
+    /// The claimed producer endpoint, held for life so no other `makeProducer()` claim succeeds; pushes go through
+    /// `outputRef` (see "Producer borrows").
     private let producer: SPSCRing<SysExMessageRef>.Producer
     private let faults: FaultLatch
     private let pool: SysExPool
+    /// Producer borrows of `output`, `faults` and `pool`; never retained or released.
+    private let outputRef: Unmanaged<SPSCRing<SysExMessageRef>>
+    private let faultsRef: Unmanaged<FaultLatch>
+    private let poolRef: Unmanaged<SysExPool>
     /// `sources × maximumMessageBytes`; source `s` stages at `s * maximumMessageBytes`.
     private let staging: UnsafeMutablePointer<UInt8>
     private let lengths: UnsafeMutablePointer<Int>
@@ -135,7 +150,11 @@ final class SysExAssembler: @unchecked Sendable {
         self.scopeBase = scopeBase
         self.output = output
         self.faults = faults
-        pool = SysExPool(capacity: poolBytes, startingCursor: startingCursor)
+        let pool = SysExPool(capacity: poolBytes, startingCursor: startingCursor)
+        self.pool = pool
+        outputRef = .passUnretained(output)
+        faultsRef = .passUnretained(faults)
+        poolRef = .passUnretained(pool)
         nextDelivery = startingCursor
         nextAcknowledgement = startingCursor
         staging = .allocate(capacity: sources * maximumMessageBytes)
@@ -260,16 +279,19 @@ final class SysExAssembler: @unchecked Sendable {
     }
 
     /// Appends `count` (≤ 6) bytes to `index`'s staging, or returns `false` without writing when they would exceed
-    /// `maximumMessageBytes`.
+    /// `maximumMessageBytes`. Six count-guarded scalar stores, not a closure over the tuple, which would capture
+    /// `self` and, unoptimised, instantiate the tuple's metadata.
     private func append(_ index: Int, _ bytes: SysExChunkBytes, _ count: UInt8) -> Bool {
         let length = lengths[index]
         let added = Int(count)
         guard added <= maximumMessageBytes &- length else { return false }
-        withUnsafeBytes(of: bytes) { raw in
-            guard let base = raw.baseAddress, added > 0 else { return }
-            UnsafeMutableRawPointer(staging + (index &* maximumMessageBytes &+ length))
-                .copyMemory(from: base, byteCount: added)
-        }
+        let target = staging + (index &* maximumMessageBytes &+ length)
+        if added > 0 { target[0] = bytes.0 }
+        if added > 1 { target[1] = bytes.1 }
+        if added > 2 { target[2] = bytes.2 }
+        if added > 3 { target[3] = bytes.3 }
+        if added > 4 { target[4] = bytes.4 }
+        if added > 5 { target[5] = bytes.5 }
         lengths[index] = length &+ added
         return true
     }
@@ -280,23 +302,27 @@ final class SysExAssembler: @unchecked Sendable {
         return .refused(.invalidLength)
     }
 
-    /// Copies the staged message into the pool and pushes its ref; the source returns to idle either way.
+    /// Copies the staged message into the pool and pushes its ref; the source returns to idle either way. Order:
+    /// reserve, write, push, then commit and advance; a refusal moves neither the pool cursor nor `sequence`. The
+    /// borrow closures capture only precomputed values, never `self`.
     private func deliver(_ index: Int, _ frame: Int64) -> KernelStatus {
         let length = lengths[index]
         states[index] = .idle
         lengths[index] = 0
-        guard let start = pool.reserve(length: length) else {
+        guard let start = poolRef._withUnsafeGuaranteedRef({ $0.reserve(length: length) }) else {
             discard(index, .sysexOverflow, frame)
             return .refused(.full)
         }
-        pool.write(staging + index &* maximumMessageBytes, count: length, at: start)
+        let staged = UnsafePointer(staging + index &* maximumMessageBytes)
+        poolRef._withUnsafeGuaranteedRef { $0.write(staged, count: length, at: start) }
         let ref = SysExMessageRef(sequence: nextDelivery, offset: start, length: UInt32(truncatingIfNeeded: length),
                                   source: UInt32(truncatingIfNeeded: index))
-        guard producer.tryPush(ref) == .ok else {
+        guard outputRef._withUnsafeGuaranteedRef({ $0.tryPush(ref) }) == .ok else {
             discard(index, .sysexOverflow, frame)
             return .refused(.full)
         }
-        pool.commit(end: start &+ UInt64(truncatingIfNeeded: length))
+        let end = start &+ UInt64(truncatingIfNeeded: length)
+        poolRef._withUnsafeGuaranteedRef { $0.commit(end: end) }
         nextDelivery &+= 1
         emitted.wrappingAdd(1, ordering: .relaxed)
         return .ok
@@ -309,6 +335,7 @@ final class SysExAssembler: @unchecked Sendable {
     }
 
     private func raise(_ index: Int, _ kind: FaultKind, _ frame: Int64) {
-        _ = faults.raise(FaultScope(handoff: scopeBase, target: UInt32(truncatingIfNeeded: index)), kind, frame: frame)
+        let scope = FaultScope(handoff: scopeBase, target: UInt32(truncatingIfNeeded: index))
+        _ = faultsRef._withUnsafeGuaranteedRef { $0.raise(scope, kind, frame: frame) }
     }
 }

@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Root = RealtimeHandoffTests
 
@@ -29,7 +33,7 @@ struct SysExFixture {
     func takeFaults() -> [FaultRecord] {
         var scopes: [FaultScope] = []
         _ = faults.pending { scopes.append($0.scope) }
-        return scopes.compactMap { faults.acknowledge($0) }
+        return scopes.compactMap { faults.observe($0).flatMap(faults.acknowledge) }
     }
 
     /// Sends `message` as UMP SysEx7 chunks of at most six bytes and returns each chunk's status.
@@ -108,6 +112,21 @@ extension RealtimeHandoffTests {
             #expect(messages.allSatisfy { $0.ref.source == 0 } && fixture.takeFaults().isEmpty)
         }
 
+        /// Every chunk count on the start, continue and end paths: each data lane lands at its own position and
+        /// the length grows by exactly `count` per chunk (0x55 pads the unused lanes).
+        @Test(arguments: 0...6)
+        func eachChunkCountAppendsExactlyItsBytes(count: Int) throws {
+            let fixture = try SysExFixture()
+            let message = Root.sysexMessage(UInt64(count), length: count * 3)
+            let parts = [message[0..<count], message[count..<count * 2], message[(count * 2)...]]
+            #expect(zip([SysExChunkStatus.start, .continue, .end], parts).map { status, part in
+                fixture.chunk(status, Array(part))
+            } == [.ok, .ok, .ok])
+            let delivered = try #require(fixture.drain().first)
+            #expect(delivered.bytes == message && Int(delivered.ref.length) == count * 3)
+            #expect(fixture.takeFaults().isEmpty)
+        }
+
         @Test func sourcesAreIsolated() throws {
             let fixture = try SysExFixture()
             let first = Root.sysexMessage(1, length: 14)
@@ -161,6 +180,21 @@ extension RealtimeHandoffTests {
             #expect(fixture.send(Root.sysexMessage(3, length: 11), source: 2).allSatisfy { $0 == .ok })
             #expect(fixture.drain().map(\.bytes) == [Root.sysexMessage(3, length: 11)])
             #expect(fixture.assembler.discardedCount == 2)
+        }
+
+        /// The bounds check precedes every store: an overflowing chunk on source 0 leaves source 1's adjacent staging
+        /// row intact, and one on the last source writes nothing past the staging allocation (ASan-observable).
+        @Test func overflowWritesNothingOutsideItsStagingRow() throws {
+            let fixture = try SysExFixture(sources: 2, maximum: 8)
+            #expect(fixture.chunk(.start, [10, 11, 12, 13, 14, 15], source: 1) == .ok)
+            #expect(fixture.chunk(.start, [1, 2, 3, 4, 5, 6]) == .ok)
+            #expect(fixture.chunk(.continue, [7, 8, 9, 7, 8, 9]) == .refused(.invalidLength))
+            #expect(fixture.chunk(.end, [16], source: 1) == .ok)
+            #expect(fixture.drain().map(\.bytes) == [[10, 11, 12, 13, 14, 15, 16]])
+            #expect(fixture.chunk(.start, [1, 2, 3, 4, 5, 6], source: 1) == .ok)
+            #expect(fixture.chunk(.end, [7, 8, 9, 7, 8, 9], source: 1) == .refused(.invalidLength))
+            #expect(fixture.drain().isEmpty)
+            #expect(fixture.takeFaults().map(\.kind) == [.sysexOverflow, .sysexOverflow])
         }
 
         @Test func startWhileAssemblingAbortsPreviousVisibly() throws {
@@ -293,7 +327,10 @@ extension RealtimeHandoffTests {
             #expect(fixture.assembler.withMessage(first) { Array($0) } == Root.sysexMessage(1, length: 8))
             #expect(fixture.assembler.release(first) == .ok)
             #expect(fixture.send([3, 4], source: 1) == [.ok])
-            #expect(fixture.drain().map(\.bytes) == [Root.sysexMessage(2, length: 7), [3, 4]])
+            // Neither pool refusal consumed a sequence: the deliveries are numbered 0, 1, 2 without a gap.
+            let rest = fixture.drain()
+            #expect(rest.map(\.bytes) == [Root.sysexMessage(2, length: 7), [3, 4]])
+            #expect(rest.map(\.ref.sequence) == [first.sequence + 1, first.sequence + 2])
         }
 
         @Test func outputRingFullRefusesAndKeepsAssemblerConsistent() throws {
@@ -304,10 +341,11 @@ extension RealtimeHandoffTests {
             #expect(fixture.assembler.discardedCount == 1)
             let first = try #require(fixture.drain().first)
             #expect(first.bytes == [1, 2, 3])
-            // The refused message took no pool space: the next one starts where the first ended.
+            // The refused message took no pool space or sequence: the next one starts where the first ended.
             #expect(fixture.send([7, 8]) == [.ok])
             let next = try #require(fixture.drain().first)
             #expect(next.ref.offset == first.ref.offset + 3)
+            #expect(next.ref.sequence == first.ref.sequence + 1)
             #expect(next.bytes == [7, 8])
         }
 
