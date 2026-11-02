@@ -151,6 +151,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
     }
     func pauseStart() { gateStart = true }
     func releaseStart() {
+        gateStart = false
         startWaiting = false
         startGate?.resume()
         startGate = nil
@@ -163,6 +164,7 @@ actor AssistantRecordingWingTransport: WingTransporting {
         await withCheckedContinuation { bindingGate = $0 }
     }
     func releaseBindingRead() {
+        gatedBindingRead = nil
         bindingReadWaiting = false
         bindingGate?.resume()
         bindingGate = nil
