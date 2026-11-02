@@ -129,7 +129,7 @@ targets:
     platform: iOS
     sources:
       - path: FluxKlangTests
-        excludes: ["**/.DS_Store"]
+        excludes: ["**/.DS_Store", ".swiftlint.yml"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.tests

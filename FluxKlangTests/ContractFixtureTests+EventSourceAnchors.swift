@@ -24,6 +24,32 @@ private struct ReadyAction: Equatable {
     }
 }
 
+/// Every readable ledger field and every action's `ReadyAction`, for checking accepted events.
+/// The private `restartPositionSuperseded` flag is left out: it only shows through a restart record,
+/// a ledger with no pending restart refuses records, and the next primary bump resets the flag.
+/// Use it only where `pendingRestart` is nil. Refusals use the full `EventSources` snapshot instead.
+private struct NoRestartState: Equatable {
+    let current: [GenerationKey: Generation]
+    let pendingRestart: Generation?
+    let restartRecord: ClockRestartRecord?
+    let awaitingTransportBump: Bool
+    let resume: TransportResume?
+    let nominalRate: Int
+    let actions: [ActionID: ReadyAction]
+
+    init(_ ledger: GenerationLedger, _ readiness: ActionReadiness) {
+        current = ledger.current
+        pendingRestart = ledger.pendingRestart
+        restartRecord = ledger.restartRecord
+        awaitingTransportBump = ledger.awaitingTransportBump
+        resume = ledger.resume
+        nominalRate = ledger.nominalRate
+        actions = Dictionary(uniqueKeysWithValues: readiness.states.keys.map { action in
+            (action, ReadyAction(action, readiness, ledger))
+        })
+    }
+}
+
 extension ContractFixtureTests {
     /// Restart-record and anchor events through the real applier, each anchor checked on its own as a
     /// first-anchor candidate. Setup and refusal checks are shared with `EventSources`.
@@ -157,6 +183,50 @@ extension ContractFixtureTests {
                 #expect(readiness.state(id) == .invalidated && readiness.reasons[id] == .sourceChanged)
             }
             #expect(ReadyAction(ids[2], readiness, ledger) == unrelated)
+        }
+
+        @Test func startingGenerationAnchorIsAcceptedAtAnyRate() throws {
+            let ids = try Fixture.actions(1)
+            var ledger = try Fixture.makeLedger()
+            var readiness = ActionReadiness()
+            try Fixture.prepare(ids[0], on: [Fixture.primary], ledger: ledger, readiness: &readiness)
+            let before = NoRestartState(ledger, readiness)
+            #expect(before.pendingRestart == nil && before.actions[ids[0]]?.state == .ready)
+            #expect(before.actions[ids[0]]?.readyEntry == 1 && before.actions[ids[0]]?.isCurrent == true)
+
+            // Fixture policy: the starting generation has no restart point, so its rate is not checked.
+            var clock = try FixtureHostClock(startTicks: 0, step: 1_000_000)
+            _ = try clock.tick()
+            let anchor = clock.anchor(frame: 96, generation: .initial)
+            let stale = try FixtureEventApplier.apply(.anchor(anchor, nominalRate: 96_000), ledger: &ledger,
+                                                      readiness: &readiness)
+            #expect(stale.isEmpty && NoRestartState(ledger, readiness) == before)
+            #expect(ledger.nominalRate == Fixture.rate)
+        }
+
+        @Test func anchorAfterADroppedPrimaryBumpIsStale() throws {
+            let ids = try Fixture.actions(1)
+            var ledger = try Fixture.makeLedger()
+            var readiness = ActionReadiness()
+            try Fixture.prepare(ids[0], on: [Fixture.primary], ledger: ledger, readiness: &readiness)
+            let ready = ReadyAction(ids[0], readiness, ledger)
+            #expect(ready.state == .ready && ready.readyEntry == 1 && ready.isCurrent)
+
+            // The anchor belongs to generation 2, but the bump that would start it is lost.
+            let (_, anchor) = try Fixture.restartEvents()
+            let bump = ContractFixtureEvent.bump(Fixture.primary, .deviceRestart)
+            let newer = ContractFixtureEvent.anchor(anchor, nominalRate: Fixture.rate)
+            var source = try ScriptedEventSource(capacity: 2, events: [bump, newer])
+            try source.inject(.drop)
+            #expect(source.pending == [newer] && source.lost.entries == [bump])
+            #expect(source.droppedCount == 1 && source.overflowCount == 0 && source.deliveredCount == 0)
+
+            let delivered = try Fixture.deliver(&source)
+            #expect(delivered == newer && source.deliveredCount == 1 && source.next() == nil)
+            #expect(ledger.pendingRestart == nil && ledger.generation(Fixture.primary) == .initial)
+            #expect(anchor.sample.generation == (try Generation.initial.next()))
+            Fixture.expectRefusal(.staleAnchor, applying: delivered, ledger: &ledger, readiness: &readiness)
+            #expect(ReadyAction(ids[0], readiness, ledger) == ready)
         }
     }
 }
