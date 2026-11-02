@@ -103,10 +103,9 @@ No command here runs `xcodebuild` or `test-without-building`. Runner integration
 canonical scope adoption, checker/live extraction, iOS/UI/live profiles, and
 retained runtime results require separate review/authorization.
 
-Bounded contract question for review: should any presently fixed unrelated
-diagnostic/language/logging values be allowed to vary? Until separately reviewed,
-the implementation conservatively refuses that drift; it does not infer a wider
-supported shape.
+The initial profile deliberately fixes unrelated diagnostic/language/logging
+values as well. Broader acceptance requires separate review; this implementation
+conservatively refuses that drift rather than inferring a wider supported shape.
 
 ## Pure fixture checks
 
