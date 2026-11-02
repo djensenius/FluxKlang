@@ -185,6 +185,11 @@ extension ContractFixtureTests {
                     try ScriptedEventSource(capacity: capacity, events: [])
                 }
             }
+            for capacity in [1, ScriptedEventSource.maximumCapacity] {
+                let events = Array(repeating: bump, count: capacity)
+                let filled = try ScriptedEventSource(capacity: capacity, events: events)
+                #expect(filled.capacity == capacity && filled.pending.count == capacity)
+            }
 
             var source = try ScriptedEventSource(capacity: 2, events: [bump, .bump(Self.context, .contextChange)])
             let full = source
@@ -211,9 +216,19 @@ extension ContractFixtureTests {
 
             let empty = source
             #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.drop) }
+            #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.duplicate) }
             #expect(throws: ScriptedEventSourceError.noPendingEvent) { try source.inject(.overflow) }
             #expect(throws: ScriptedEventSourceError.nothingToSwap) { try source.inject(.swapNext) }
             #expect(source == empty)
+
+            // One pending event with earlier loss and delivery history: the swap is refused and nothing changes.
+            var single = try ScriptedEventSource(capacity: 3, events: [bump, first, duplicate])
+            try single.inject(.drop)
+            _ = single.next()
+            let singleton = single
+            #expect(throws: ScriptedEventSourceError.nothingToSwap) { try single.inject(.swapNext) }
+            #expect(single == singleton && single.pending == [duplicate] && single.deliveredCount == 1)
+            #expect(single.droppedCount == 1 && single.overflowCount == 0 && single.lost.entries == [bump])
         }
 
         @Test func duplicateIsDeliveredNextToItsOriginal() throws {
@@ -393,7 +408,11 @@ extension ContractFixtureTests {
             #expect(!ordered.hasRestartObligations && ordered.resume == .afterRestart(previousFrame: 96_000))
             let anchorStale = try FixtureEventApplier.apply(try Self.deliver(&swapped), ledger: &ordered,
                                                             readiness: &orderedReadiness)
-            #expect(anchorStale.isEmpty)
+            // Stateless policy: the restart point itself, delivered after that later anchor, is accepted too.
+            let point = ClockAnchor(sample: record.start, host: record.host)
+            let pointStale = try FixtureEventApplier.apply(.anchor(point, nominalRate: Self.rate), ledger: &ordered,
+                                                           readiness: &orderedReadiness)
+            #expect(anchorStale.isEmpty && pointStale.isEmpty)
 
             let restarted = anchor.sample.generation
             let disagreeing = ClockAnchor(sample: SampleStamp(clock: anchor.sample.clock, generation: restarted,

@@ -61,8 +61,7 @@ struct CommandIntentFields: ControlFields {
     let permission: PermissionFingerprint
 
     func validate() throws {
-        guard connectionEpoch.map({ $0.host == hostEpoch.host }) ?? true,
-              !permission.rawValue.isEmpty, permission.rawValue.utf8.count <= 256 else {
+        guard connectionEpoch.map({ $0.host == hostEpoch.host }) ?? true, permission.isWellFormed else {
             throw ControlValidationError.invalid("Command connection or permission identity is invalid")
         }
         switch operation {
@@ -122,7 +121,9 @@ enum CommandAdmission {
     static func admit(_ intent: CommandIntent, in context: AdmissionContext) -> AdmissionDecision {
         guard intent.hostEpoch == context.hostEpoch else { return .refused(.stale(.hostEpoch)) }
         guard intent.connectionEpoch == context.connectionEpoch else { return .refused(.stale(.connectionEpoch)) }
-        guard let permission = context.permission else { return .refused(.rejected(.permissionDenied)) }
+        guard let permission = context.permission, permission.isWellFormed else {
+            return .refused(.rejected(.permissionDenied))
+        }
         guard permission == intent.permission else { return .refused(.rejected(.permissionChanged)) }
         guard intent.revisions == context.revisions else { return .refused(.rejected(.revisionChanged)) }
         guard context.allowedScopes.contains(intent.operation.scope) else { return .refused(.rejected(.scopeDenied)) }
