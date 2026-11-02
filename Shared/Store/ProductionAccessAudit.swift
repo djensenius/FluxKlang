@@ -8,6 +8,7 @@ final class ProductionAccessAudit: Sendable {
         case permissionProbe
         case localNetworkProbe
         case discoveryInterfaces
+        case wingPeerResolution
     }
 
     enum Event: Int, CaseIterable, Sendable {

@@ -10,6 +10,16 @@ import Testing
 @testable import FluxKlang
 
 struct WingDiscoveryTests {
+    @Test func directInterfaceEnumerationIsDeniedBeforeAPIAccess() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        #expect(WingDiscovery.activeIPv4BroadcastHosts(mirroring: audit).isEmpty)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .discoveryInterfaces) == 1)
+        #expect(snapshot.count(.denied, for: .discoveryInterfaces) == 1)
+        #expect(snapshot.count(.apiEntered, for: .discoveryInterfaces) == 0)
+    }
+
     @Test func recognisesInfoReplyAddresses() {
         #expect(WingDiscoveryParser.isInfoReply("/?"))
         #expect(WingDiscoveryParser.isInfoReply("/*"))

@@ -183,7 +183,17 @@ final class WingDiscovery {
     }
 
     nonisolated static func activeIPv4BroadcastHosts() -> [String] {
+        activeIPv4BroadcastHosts(mirroring: nil)
+    }
+
+    nonisolated static func activeIPv4BroadcastHosts(mirroring audit: ProductionAccessAudit?) -> [String] {
+        ProductionAccessAudit.shared.record(.attempted, for: .discoveryInterfaces, mirroring: audit)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .discoveryInterfaces, mirroring: audit)
+            return []
+        }
         var interfaceList: UnsafeMutablePointer<ifaddrs>?
+        ProductionAccessAudit.shared.record(.apiEntered, for: .discoveryInterfaces, mirroring: audit)
         guard getifaddrs(&interfaceList) == 0, let firstInterface = interfaceList else {
             return []
         }
@@ -201,6 +211,7 @@ final class WingDiscovery {
                 continue
             }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            ProductionAccessAudit.shared.record(.apiEntered, for: .discoveryInterfaces, mirroring: audit)
             guard getnameinfo(
                 address,
                 socklen_t(address.pointee.sa_len),

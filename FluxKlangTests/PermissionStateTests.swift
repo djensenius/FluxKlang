@@ -27,6 +27,40 @@ private struct Wrapped: Error { let underlying: any Error }
 struct PermissionStateTests {
     private static let host = "192.0.2.10"
 
+    @Test func literalAndMalformedPeerInputsNeverAttemptDNS() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        #expect(WingPeerIdentity.ipv4Addresses(for: Self.host, mirroring: audit) == [Self.host])
+        for host in ["", "invalid host", "192.0.2.10\n", "192.0.2.10\u{0}ignored"] {
+            #expect(WingPeerIdentity.ipv4Addresses(for: host, mirroring: audit).isEmpty)
+        }
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingPeerResolution) == 0)
+        #expect(snapshot.count(.denied, for: .wingPeerResolution) == 0)
+        #expect(snapshot.count(.apiEntered, for: .wingPeerResolution) == 0)
+    }
+
+    @Test func isolatedHostnameResolutionDoesNotEnterDNS() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        #expect(WingPeerIdentity.ipv4Addresses(for: "must-not-resolve.invalid", mirroring: audit).isEmpty)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .wingPeerResolution) == 1)
+        #expect(snapshot.count(.denied, for: .wingPeerResolution) == 1)
+        #expect(snapshot.count(.apiEntered, for: .wingPeerResolution) == 0)
+    }
+
+    @Test func isolatedUDPProbeRefusesBeforeAnySocketAPI() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        #expect(LocalNetworkProbe.connectErrno(
+            ipv4: Self.host, port: WingNetwork.defaultPort, mirroring: audit) == ENETUNREACH)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .localNetworkProbe) == 1)
+        #expect(snapshot.count(.denied, for: .localNetworkProbe) == 1)
+        #expect(snapshot.count(.apiEntered, for: .localNetworkProbe) == 0)
+    }
+
     @Test func onlyGrantedStatesAreUsableAndNoStateClaimsMoreThanIsKnown() {
         #expect(PermissionState(capability: .microphone, status: .granted).isUsable)
         let statuses: [PermissionStatus] = [.notDetermined, .denied, .possiblyDenied, .unreachable,
