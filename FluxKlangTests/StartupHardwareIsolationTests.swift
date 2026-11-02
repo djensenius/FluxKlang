@@ -34,6 +34,39 @@ struct StartupHardwareIsolationTests {
         }
     }
 
+    #if DEBUG && os(iOS)
+    @Test func completedRootAwaitedWorkRecordsNoProductionEvaluationOrAPIEntry() async throws {
+        try requireIsolatedStartupProcess()
+        let checkpoint = try #require(
+            AppModel.completedSharedConstructionCheckpoint,
+            "The host must have published an already-completed shared construction checkpoint"
+        )
+        for operation in ProductionAccessAudit.Operation.allCases {
+            try #require(checkpoint.before.count(.factoryEvaluated, for: operation) == 0)
+            try #require(checkpoint.before.count(.apiEntered, for: operation) == 0)
+            try #require(checkpoint.after.count(.factoryEvaluated, for: operation) == 0)
+            try #require(checkpoint.after.count(.apiEntered, for: operation) == 0)
+        }
+        try await waitUntil(timeout: .seconds(10)) {
+            AppModel.completedRootAwaitedWorkObservation != nil
+        }
+        let observation = try #require(
+            AppModel.completedRootAwaitedWorkObservation,
+            "The actual host root must publish its awaited-work observation before the deadline"
+        )
+        try #require(!observation.cancelled, "The first observed root task must not be cancelled")
+        let operations = ProductionAccessAudit.Operation.allCases
+        try #require(observation.counts.count == operations.count)
+        try #require(Set(observation.counts.map(\.operation)) == Set(operations.map(\.rawValue)))
+        for counts in observation.counts {
+            #expect(counts.factoryEvaluated == 0,
+                    "Root factoryEvaluated must be zero for operation \(counts.operation)")
+            #expect(counts.apiEntered == 0,
+                    "Root apiEntered must be zero for operation \(counts.operation)")
+        }
+    }
+    #endif
+
     @Test func isolatedMIDIConstructionIsPassive() throws {
         try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
