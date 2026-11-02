@@ -19,6 +19,22 @@ enum ProjectGraphEnvelope {
     }
 
     static func requireCurrent(from decoder: any Decoder, supported: ContractVersion) throws {
+        let required = try requiredFeatures(from: decoder, supported: supported)
+        guard required.isEmpty else { throw ProjectGraphVersionError.unsupportedRequiredFeatures(required) }
+    }
+
+    /// One fixed graph syntax profile, not a registry or an executor capability.
+    fileprivate static func requireCurrentGraph(from decoder: any Decoder) throws -> [String] {
+        let required = try requiredFeatures(from: decoder, supported: GraphDocument.currentVersion)
+        guard required.isEmpty || required == [GraphDocument.constantMuteFeature] else {
+            throw ProjectGraphVersionError.unsupportedRequiredFeatures(required)
+        }
+        return required
+    }
+
+    private static func requiredFeatures(
+        from decoder: any Decoder, supported: ContractVersion
+    ) throws -> [String] {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let contract = try container.decodeIfPresent(String.self, forKey: .contract)
         let version = try container.decodeIfPresent(Int.self, forKey: .version)
@@ -30,8 +46,7 @@ enum ProjectGraphEnvelope {
                     + "import it through the legacy adapter or a migration"
             ))
         }
-        let required = try container.decodeIfPresent([String].self, forKey: .requiredFeatures) ?? []
-        guard required.isEmpty else { throw ProjectGraphVersionError.unsupportedRequiredFeatures(required) }
+        return try container.decodeIfPresent([String].self, forKey: .requiredFeatures) ?? []
     }
 
     static func encode(_ supported: ContractVersion, to encoder: any Encoder) throws {
@@ -48,6 +63,7 @@ enum ProjectGraphVersionError: Error, Equatable {
 /// A neutral, typed signal graph with no console or engine handles.
 struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
     static let currentVersion = ContractVersion(contract: "fluxklang.graph", version: 1)
+    static let constantMuteFeature = "audioMute.constant.v1"
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case contract
@@ -71,6 +87,8 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
     var edges: [GraphEdge]
     var extensions: [String: JSONValue]?
     var requiresReview: Bool
+    /// Exact candidate declaration; never inferred or repaired from node kinds.
+    var requiredFeatures: [String]
     var unknownFields: [String: JSONValue] = [:]
 
     init(
@@ -81,7 +99,8 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
         nodes: [GraphNode] = [],
         edges: [GraphEdge] = [],
         extensions: [String: JSONValue]? = nil,
-        requiresReview: Bool = false
+        requiresReview: Bool = false,
+        requiredFeatures: [String] = []
     ) {
         self.id = id
         self.revision = revision
@@ -91,10 +110,11 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
         self.edges = edges
         self.extensions = extensions
         self.requiresReview = requiresReview
+        self.requiredFeatures = requiredFeatures
     }
 
     init(from decoder: any Decoder) throws {
-        try ProjectGraphEnvelope.requireCurrent(from: decoder, supported: Self.currentVersion)
+        requiredFeatures = try ProjectGraphEnvelope.requireCurrentGraph(from: decoder)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(GraphID.self, forKey: .id)
         revision = try container.decode(ContractRevision.self, forKey: .revision)
@@ -106,10 +126,12 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
         requiresReview = try container.decodeIfPresent(Bool.self, forKey: .requiresReview) ?? false
         unknownFields = try ExtensionFields.decode(from: decoder, knownKeys: CodingKeys.self)
         try checkCollectionBounds()
+        try checkRequiredFeatures()
     }
 
     func encode(to encoder: any Encoder) throws {
         try checkCollectionBounds()
+        try checkRequiredFeatures()
         try ProjectGraphEnvelope.encode(Self.currentVersion, to: encoder)
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -122,6 +144,7 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
         try container.encode(edges, forKey: .edges)
         try container.encodeIfPresent(extensions, forKey: .extensions)
         if requiresReview { try container.encode(true, forKey: .requiresReview) }
+        if !requiredFeatures.isEmpty { try container.encode(requiredFeatures, forKey: .requiredFeatures) }
         try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: CodingKeys.self)
     }
 
@@ -143,5 +166,17 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
 
     func port(at address: PortAddress) -> GraphPort? {
         node(address.node)?.port(address.port)
+    }
+
+    /// Called only after collection bounds, before topology/lookup allocation.
+    /// Decode's header check rejects unsupported syntax before decoding nodes.
+    func checkRequiredFeatures() throws(GraphValidationError) {
+        guard unknownFields["requiredFeatures"] == nil else {
+            throw .requiredFeaturesCollision
+        }
+        let hasMute = nodes.contains { $0.kind == .audioMute }
+        guard hasMute ? requiredFeatures == [Self.constantMuteFeature] : requiredFeatures.isEmpty else {
+            throw .invalidRequiredFeatures(requiredFeatures)
+        }
     }
 }

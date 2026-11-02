@@ -4,8 +4,11 @@
 //
 //  The `{contract, version}` envelope every versioned contract carries, and the
 //  compatibility policy readers apply to it. Versions are integer majors; within
-//  a major version changes are additive and optional only, so a reader of
-//  version N accepts any version-N document and preserves unknown optional data.
+//  a base major version changes are additive and optional, preserving unknown
+//  optional data. Opt-in required-feature profiles must fail closed in their
+//  owning envelope before interpreting new syntax: older readers reject the
+//  marker, not support the profile. A matching integer major alone is not
+//  feature acceptance; optional minorVersion data is not negotiation.
 //
 
 import Foundation

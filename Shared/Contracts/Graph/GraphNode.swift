@@ -71,6 +71,8 @@ enum NodeKind: String, Codable, Hashable, Sendable, CaseIterable {
     case spatialBus
     /// A hosted processor or instrument.
     case plugin
+    /// Constant channelwise mute intent; syntax support is not executor support.
+    case audioMute
     /// Outboard gear through a send and return; compensation is #68's seam.
     case externalInsert
     /// Plays a project asset (needs `asset`).
@@ -93,6 +95,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         case role
         case asset
         case graph
+        case muted
         case ports
         case requiredCapabilities
         case advisoryCapabilities
@@ -106,6 +109,10 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
     var role: RoleID?
     var asset: AssetID?
     var graph: GraphID?
+    /// Required only for audioMute; constant for a prepared graph. False copies
+    /// channelwise, bit for bit; true writes positive zero, never multiplies by
+    /// zero or suppresses upstream work, nonfinite-input or overflow refusal.
+    var muted: Bool?
     var ports: [GraphPort]
     /// Capabilities whose absence blocks activation.
     var requiredCapabilities: [CapabilityID]
@@ -127,7 +134,8 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         requiredCapabilities: [CapabilityID] = [],
         advisoryCapabilities: [CapabilityID] = [],
         position: GraphPoint? = nil,
-        extensions: [String: JSONValue]? = nil
+        extensions: [String: JSONValue]? = nil,
+        muted: Bool? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -135,6 +143,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         self.role = role
         self.asset = asset
         self.graph = graph
+        self.muted = muted
         self.ports = ports
         self.requiredCapabilities = requiredCapabilities
         self.advisoryCapabilities = advisoryCapabilities
@@ -146,6 +155,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(NodeID.self, forKey: .id)
         kind = try container.decode(NodeKind.self, forKey: .kind)
+        muted = kind == .audioMute ? try container.decode(Bool.self, forKey: .muted) : nil
         label = try container.decode(String.self, forKey: .label)
         role = try container.decodeIfPresent(RoleID.self, forKey: .role)
         asset = try container.decodeIfPresent(AssetID.self, forKey: .asset)
@@ -159,10 +169,11 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         ) ?? []
         position = try container.decodeIfPresent(GraphPoint.self, forKey: .position)
         extensions = try container.decodeIfPresent([String: JSONValue].self, forKey: .extensions)
-        unknownFields = try ExtensionFields.decode(from: decoder, knownKeys: CodingKeys.self)
+        unknownFields = try ExtensionFields.decode(from: decoder, knownKeys: knownKeyNames)
     }
 
     func encode(to encoder: any Encoder) throws {
+        if let error = muteStateError { throw error }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(kind, forKey: .kind)
@@ -170,6 +181,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         try container.encodeIfPresent(role, forKey: .role)
         try container.encodeIfPresent(asset, forKey: .asset)
         try container.encodeIfPresent(graph, forKey: .graph)
+        if kind == .audioMute { try container.encode(muted, forKey: .muted) }
         try container.encode(ports, forKey: .ports)
         if !requiredCapabilities.isEmpty {
             try container.encode(requiredCapabilities, forKey: .requiredCapabilities)
@@ -179,7 +191,19 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         }
         try container.encodeIfPresent(position, forKey: .position)
         try container.encodeIfPresent(extensions, forKey: .extensions)
-        try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: CodingKeys.self)
+        try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: knownKeyNames)
+    }
+
+    /// Legacy kinds retain arbitrary unknown `muted` data on both coding paths.
+    private var knownKeyNames: Set<String> {
+        Set(CodingKeys.allCases.filter { $0 != .muted || kind == .audioMute }.map(\.stringValue))
+    }
+
+    var muteStateError: GraphValidationError? {
+        if kind == .audioMute {
+            return muted == nil || unknownFields["muted"] != nil ? .invalidMuteState(id) : nil
+        }
+        return muted == nil ? nil : .invalidMuteState(id)
     }
 
     func port(_ id: PortID) -> GraphPort? {
