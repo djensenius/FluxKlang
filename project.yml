@@ -167,6 +167,8 @@ targets:
       - path: FluxKlangTests/ProductionAccessScope.swift
       - path: FluxKlangTests/ProductionAccessScopeTests.swift
       - path: FluxKlangTests/UIAuditCaptureStateTests.swift
+      - path: FluxKlangTests/UIAuditReceiptValidator.swift
+      - path: FluxKlangTests/UIAuditReceiptValidatorTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
