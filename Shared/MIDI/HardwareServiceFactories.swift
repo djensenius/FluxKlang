@@ -71,7 +71,7 @@ struct HardwareServiceFactories: Sendable {
                     return InertPermissionProbe()
                 }
                 ProductionAccessAudit.shared.record(.factoryEvaluated, for: .permissionProbe, mirroring: audit)
-                return SystemPermissionProbe()
+                return SystemPermissionProbe(mirroring: audit)
             },
             localNetworkProbe: LocalNetworkProbe.connectErrno,
             makeWingTransport: { port, probe in

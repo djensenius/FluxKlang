@@ -26,15 +26,24 @@ extension PermissionProbe {
 
 @MainActor
 final class SystemPermissionProbe: PermissionProbe {
-    private let localNetworkEvidence: LocalNetworkGrantEvidence
+    private let localNetworkEvidence: LocalNetworkGrantEvidence?
+    private let auditMirror: ProductionAccessAudit?
 
-    init(localNetworkEvidence: LocalNetworkGrantEvidence = .current) {
+    init(localNetworkEvidence: LocalNetworkGrantEvidence? = nil, mirroring audit: ProductionAccessAudit? = nil) {
         self.localNetworkEvidence = localNetworkEvidence
+        auditMirror = audit
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .permissionProbe, mirroring: audit)
     }
 
     func status(of capability: PermissionCapability) -> PermissionStatus {
         switch capability {
         case .microphone:
+            ProductionAccessAudit.shared.record(.attempted, for: .permissionProbe, mirroring: auditMirror)
+            guard !AppPersistence.isTesting else {
+                ProductionAccessAudit.shared.record(.denied, for: .permissionProbe, mirroring: auditMirror)
+                return .unknown
+            }
+            ProductionAccessAudit.shared.record(.apiEntered, for: .permissionProbe, mirroring: auditMirror)
             switch AVAudioApplication.shared.recordPermission {
             case .granted: return .granted
             case .denied: return .denied
@@ -42,9 +51,15 @@ final class SystemPermissionProbe: PermissionProbe {
             @unknown default: return .unknown
             }
         case .localNetwork:
+            ProductionAccessAudit.shared.record(.attempted, for: .permissionProbe, mirroring: auditMirror)
+            guard !AppPersistence.isTesting else {
+                ProductionAccessAudit.shared.record(.denied, for: .permissionProbe, mirroring: auditMirror)
+                return .unknown
+            }
             // Evidence only (a past successful connect, possibly to a routed host); never queried
             // from the OS, which has no API for it. Not used by production code paths today.
-            return localNetworkEvidence.hasGrant ? .granted : .unknown
+            ProductionAccessAudit.shared.record(.apiEntered, for: .permissionProbe, mirroring: auditMirror)
+            return (localNetworkEvidence ?? .current).hasGrant ? .granted : .unknown
         case .multicast:
             return LocalNetworkAccess.currentBroadcastDiscovery.status
         case .bluetooth:
@@ -55,6 +70,12 @@ final class SystemPermissionProbe: PermissionProbe {
     func request(_ capability: PermissionCapability) async -> PermissionStatus {
         // Local Network has no request API (TN3179): the user-initiated connect is the request.
         guard capability == .microphone else { return status(of: capability) }
+        ProductionAccessAudit.shared.record(.attempted, for: .permissionProbe, mirroring: auditMirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .permissionProbe, mirroring: auditMirror)
+            return .unknown
+        }
+        ProductionAccessAudit.shared.record(.apiEntered, for: .permissionProbe, mirroring: auditMirror)
         return await AVAudioApplication.requestRecordPermission() ? .granted : .denied
     }
 }
