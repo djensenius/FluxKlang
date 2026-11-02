@@ -44,6 +44,9 @@ struct AppRootView: View {
             rootWork: rootWorkObservation
         ))
         #endif
+        #if DEBUG && os(iOS)
+        .modifier(UIAuditCaptureRootBridge())
+        #endif
         .sheet(isPresented: helpPresented) {
             if case .help(let topic) = assistant.navigationTarget {
                 AssistantHelpView(entry: FluxKlangHelpCatalog.entry(for: topic))
