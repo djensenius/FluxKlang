@@ -107,11 +107,11 @@ final class AppModel {
     init(
         assistant: AssistantCoordinator = AssistantCoordinator(),
         assistantProviderSettings: AssistantProviderSettings = AssistantProviderSettings(),
-        wing: WingController = WingController(),
+        wing: WingController? = nil,
         hardware: HardwareServiceFactories = .current,
         launchControlXLStore: JSONFileStore = .shared
     ) {
-        self.wing = wing
+        self.wing = wing ?? WingController(hardware: hardware)
         self.hardware = hardware
         launchControlXL = LaunchControlXLController(
             fileStore: launchControlXLStore, makeMIDIInput: hardware.makeLaunchControlXLInput)
@@ -401,13 +401,13 @@ final class AppModel {
     func disconnect() async {
         assistantActions.cancel()
         await wing.disconnect()
-        wing = WingController()
+        wing = WingController(hardware: hardware)
     }
 
     func showAcceptanceConnectionFailure() async {
         assistantActions.cancel()
         await wing.disconnect()
-        wing = .acceptanceFailure(reason: "Acceptance test: WING unavailable")
+        wing = .acceptanceFailure(reason: "Acceptance test: WING unavailable", hardware: hardware)
     }
 
     // MARK: - Spatial
@@ -491,8 +491,6 @@ extension AppModel {
 
     /// An app model whose controller is a populated demo, for SwiftUI previews.
     static func preview() -> AppModel {
-        let model = AppModel()
-        model.wing = .preview()
-        return model
+        AppModel(wing: .preview())
     }
 }

@@ -9,6 +9,7 @@
 
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -189,7 +190,15 @@ struct PermissionStateTests {
     }
 
     @Test func manualIPConnectReportsLocalNetworkDenialInsteadOfConnecting() async {
-        let transport = WingTransport(localNetworkProbe: { _, _ in EHOSTUNREACH })
+        let calls = Mutex<[String]>([])
+        let transport = WingTransport(localNetworkProbe: { host, port in
+            calls.withLock { $0.append("probe \(host):\(port)") }
+            return EHOSTUNREACH
+        }, resolvePeers: { host in
+            calls.withLock { $0.append("resolve \(host)") }
+            // Deliberately unordered peers; lexical sorting puts .10 before .11 and .2.
+            return ["192.0.2.2", host, "192.0.2.11"]
+        })
         let controller = WingController(transport: transport)
 
         await controller.connect(host: Self.host)
@@ -201,16 +210,34 @@ struct PermissionStateTests {
         #expect(reason == LocalNetworkAccess.connectFailureReason(errno: EHOSTUNREACH, host: Self.host))
         #expect(controller.transportWriteCount == 0)
         #expect(await transport.sessionID == nil, "No socket may open after a blocked probe")
+        #expect(await transport.peerHosts.isEmpty)
+        #expect(calls.withLock { $0 } == ["resolve \(Self.host)", "probe \(Self.host):\(WingNetwork.defaultPort)"],
+                "Resolve first, probe the first sorted peer, then stop immediately on denial")
     }
 
     @Test func blockedProbeThrowsBeforeAnySocketOpens() async {
-        let transport = WingTransport(localNetworkProbe: { _, _ in ECONNREFUSED })
+        let transport = WingTransport(localNetworkProbe: { _, _ in ECONNREFUSED }, resolvePeers: { [$0] })
         await #expect(throws: WingTransportError.localNetworkBlocked(errno: ECONNREFUSED, host: Self.host)) {
             try await transport.start(remoteHost: Self.host, localPort: nil, broadcast: false)
         }
         let message = WingTransportError.localNetworkBlocked(errno: ECONNREFUSED, host: Self.host)
             .localizedDescription
         #expect(message.hasPrefix("Couldn't open a network path to 192.0.2.10"))
+        #expect(await transport.sessionID == nil)
+        await #expect(throws: WingTransportError.notStarted) {
+            try await transport.send("/ch/1/fdr")
+        }
+    }
+
+    @Test func unresolvedPeerStillFailsBeforeThePermissionProbe() async {
+        let transport = WingTransport(localNetworkProbe: { _, _ in
+            Issue.record("An unresolved peer must not reach the permission probe")
+            return EHOSTUNREACH
+        }, resolvePeers: { _ in [] })
+        await #expect(throws: WingTransportError.unresolvedPeer) {
+            try await transport.start(remoteHost: "unresolved.invalid")
+        }
+        #expect(await transport.sessionID == nil)
     }
 
     @Test func unentitledDiscoveryExplainsItselfWithoutScanning() async {
@@ -228,7 +255,17 @@ struct PermissionStateTests {
         let probe = HardwareServiceFactories.current.makePermissionProbe()
         #expect(probe is InertPermissionProbe)
         #expect(HardwareServiceFactories.inert.makePermissionProbe() is InertPermissionProbe)
-        #expect(HardwareServiceFactories.production.makePermissionProbe() is SystemPermissionProbe)
+        var makes = 0
+        let injected = InertPermissionProbe()
+        var factories = HardwareServiceFactories.inert
+        factories.makePermissionProbe = { makes += 1; return injected }
+        let isolated = HardwareServiceFactories.select(isTesting: true, production: factories)
+        #expect(isolated.makePermissionProbe() !== injected)
+        #expect(makes == 0)
+        let selected = HardwareServiceFactories.select(isTesting: false, production: factories)
+        #expect(makes == 0, "Selection must not construct a permission probe")
+        #expect(selected.makePermissionProbe() === injected)
+        #expect(makes == 1)
         #expect(probe.state(of: .microphone).status == .unknown)
         let inert = InertPermissionProbe()
         _ = await inert.request(.microphone)
@@ -286,6 +323,11 @@ struct PermissionStateTests {
         var factories = HardwareServiceFactories.inert
         factories.localNetworkEvidence = evidence
         factories.localNetworkProbe = probe
+        // Exercise the real denial/evidence logic, but replace peer resolution with a pure double.
+        // Callers here supply a failing probe; successful connects use a recording transport instead.
+        factories.makeWingTransport = {
+            WingTransport(remotePort: $0, localNetworkProbe: $1, resolvePeers: { [$0] })
+        }
         return factories
     }
 }
