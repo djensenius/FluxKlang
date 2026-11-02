@@ -170,6 +170,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
       - path: FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
