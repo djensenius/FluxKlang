@@ -13,6 +13,49 @@ import Testing
 
 @MainActor
 struct StartupHardwareIsolationTests {
+    @Test func isolatedMIDIConstructionIsPassive() throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        _ = CoreMIDIInput(mirroring: audit)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.passiveConstruction, for: .midiInput) == 1)
+        #expect(snapshot.count(.factoryEvaluated, for: .midiInput) == 0)
+        #expect(snapshot.count(.attempted, for: .midiInput) == 0)
+        #expect(snapshot.count(.denied, for: .midiInput) == 0)
+        #expect(snapshot.count(.apiEntered, for: .midiInput) == 0)
+    }
+
+    @Test func isolatedMIDIRestartsRetainNoCallbacks() async throws {
+        try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
+        let audit = ProductionAccessAudit()
+        let input = CoreMIDIInput(mirroring: audit)
+        var callbackObjects: [NSObject] = []
+        weak var callbackOwner: NSObject?
+        func start() {
+            let owner = NSObject()
+            callbackOwner = owner
+            input.start(sourceNameContains: ["Synthetic MIDI source"],
+                        onMessages: { _ in callbackObjects.append(owner) },
+                        onSourcesChanged: { _ in callbackObjects.append(owner) })
+        }
+
+        for _ in 0..<2 {
+            start()
+            #expect(callbackOwner == nil, "A denied start must not retain either callback")
+        }
+        input.stop()
+        input.stop()
+        start()
+        #expect(callbackOwner == nil)
+        input.stop()
+        await Task.yield()
+        #expect(callbackObjects.isEmpty)
+        let snapshot = audit.snapshot()
+        #expect(snapshot.count(.attempted, for: .midiInput) == 3)
+        #expect(snapshot.count(.denied, for: .midiInput) == 3)
+        #expect(snapshot.count(.apiEntered, for: .midiInput) == 0)
+    }
+
     @Test func directProductionConstructorsAreDeniedBeforeEvaluation() throws {
         try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
         let audit = ProductionAccessAudit()

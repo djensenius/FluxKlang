@@ -62,7 +62,7 @@ struct HardwareServiceFactories: Sendable {
                     return InertLaunchControlXLInput()
                 }
                 ProductionAccessAudit.shared.record(.factoryEvaluated, for: .midiInput, mirroring: audit)
-                return CoreMIDIInput()
+                return CoreMIDIInput(mirroring: audit)
             },
             makePermissionProbe: {
                 ProductionAccessAudit.shared.record(.attempted, for: .permissionProbe, mirroring: audit)
