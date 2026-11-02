@@ -54,7 +54,7 @@ struct GraphCompilerTests {
     }
 
     @Test func rejectsEveryUnsupportedKindEvenDisconnected() {
-        for kind in NodeKind.allCases where kind != .roleInput && kind != .roleOutput {
+        for kind in NodeKind.allCases where kind != .roleInput && kind != .roleOutput && kind != .audioMute {
             var documents = Fixtures.documents()
             documents.graph.nodes.append(GraphNode(
                 id: NodeID(validated: "node.disconnected"), kind: kind, label: "Not executable"
@@ -62,7 +62,133 @@ struct GraphCompilerTests {
             #expect(throws: AudioRoutingPreparationError.unsupported) { try Fixtures.compile(documents) }
         }
     }
+}
 
+extension GraphCompilerTests {
+    @Test func malformedMuteAndUnsupportedMuteMetadataRefuse() {
+        let mutations: [(inout GraphNode) -> Void] = [
+            { $0.muted = nil }, { $0.ports = [] }, { $0.ports.removeLast() },
+            { $0.ports[0].direction = .output }, { $0.ports[1].signal = .midi },
+            { $0.ports[0].channels = 0 }, { $0.ports[1].channels = 65 },
+            { $0.ports[1].channels = 1 }, { $0.ports[0].channels = nil },
+            { $0.ports[1].id = $0.ports[0].id },
+            { $0.role = RoleID(validated: "role.source") },
+            { $0.asset = AssetID(validated: "asset.extra") },
+            { $0.graph = GraphID(validated: "graph.extra") },
+            { $0.requiredCapabilities = [CapabilityID(validated: "cap.extra")] },
+            { $0.advisoryCapabilities = [CapabilityID(validated: "cap.extra")] },
+            { $0.unknownFields = ["muted": .bool(true)] },
+            { $0.extensions = ["future": .bool(true)] },
+            { $0.ports[1].extensions = ["future": .bool(true)] }
+        ]
+        for mutate in mutations {
+            var documents = Fixtures.muteDocuments(false)
+            mutate(&documents.graph.nodes[2])
+            #expect(throws: AudioRoutingPreparationError.self) { try Fixtures.compile(documents) }
+        }
+        var documents = Fixtures.muteDocuments(false)
+        documents.graph.requiredFeatures = []
+        #expect(throws: AudioRoutingPreparationError.self) { try Fixtures.compile(documents) }
+    }
+
+    @Test func multipleIndependentDisconnectedAndChainedMutesRefuse() throws {
+        for topology in 0..<3 {
+            var documents = Fixtures.muteDocuments(false)
+            var second = Fixtures.muteNode(true)
+            second.id = NodeID(validated: "node.secondMute")
+            documents.graph.nodes.append(second)
+            if topology == 1 {
+                var incoming = documents.graph.edges[0]
+                incoming.id = EdgeID(validated: "edge.independent")
+                incoming.to.node = second.id
+                documents.graph.edges.append(incoming)
+            } else if topology == 2 {
+                var chain = documents.graph.edges[0]
+                chain.id = EdgeID(validated: "edge.chain")
+                chain.from = documents.graph.edges[1].from
+                chain.to.node = second.id
+                documents.graph.edges.append(chain)
+            }
+            try documents.project.validate(graphs: [documents.graph], strict: true)
+            #expect(throws: AudioRoutingPreparationError.unsupported) { try Fixtures.compile(documents) }
+        }
+    }
+
+    @Test func muteCyclesFeedbackAndAmbiguousIncomingRefuse() throws {
+        var documents = Fixtures.muteDocuments(false)
+        documents.graph.edges[0].from = documents.graph.edges[1].from
+        #expect(throws: AudioRoutingPreparationError.self) { try Fixtures.compile(documents) }
+        documents.graph.edges[0].feedback = EdgeFeedback(gainCeilingDb: -3)
+        #expect(throws: AudioRoutingPreparationError.unsupported) { try Fixtures.compile(documents) }
+        documents = Fixtures.muteDocuments(false)
+        try Fixtures.appendEndpoint(to: &documents, input: true, suffix: "second")
+        var incoming = documents.graph.edges[0]
+        incoming.id = EdgeID(validated: "edge.second")
+        incoming.from.node = documents.graph.nodes[3].id
+        documents.graph.edges.append(incoming)
+        #expect(throws: AudioRoutingPreparationError.unsupported) { try Fixtures.compile(documents) }
+    }
+
+    @Test func muteExactBudgetsAndAllEdgeTermsAreCharged() throws {
+        for muted in [false, true] {
+            let documents = Fixtures.muteDocuments(muted)
+            let plan = try Fixtures.compile(
+                documents, limits: Fixtures.limits(inputs: 2, outputs: 2, terms: 4, scratch: 520, work: 388)
+            )
+            #expect(plan.scratchFloats == 130 && plan.scratchBytes == 520 && plan.sampleWork == 388)
+            #expect(plan.terms.count == 4)
+            for limits in [Fixtures.limits(terms: 3), Fixtures.limits(scratch: 519), Fixtures.limits(work: 387)] {
+                #expect(throws: AudioRoutingPreparationError.resourceLimit) {
+                    try Fixtures.compile(documents, limits: limits)
+                }
+            }
+            var disconnected = documents
+            disconnected.graph.edges = []
+            let isolated = try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: 0, work: 324))
+            #expect(isolated.scratchBytes == 520 && isolated.sampleWork == 324 && isolated.terms.isEmpty)
+            #expect(throws: AudioRoutingPreparationError.resourceLimit) {
+                try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: 0, work: 323))
+            }
+        }
+        var fanout = Fixtures.muteDocuments(false, inputMap: [[1, 0, 1], []], outputMap: [[0], [0, 0]])
+        try Fixtures.appendEndpoint(to: &fanout, input: false, suffix: "second")
+        var edge = fanout.graph.edges[1]
+        edge.id = EdgeID(validated: "edge.fanout")
+        edge.to.node = fanout.graph.nodes[3].id
+        fanout.graph.edges.append(edge)
+        let plan = try Fixtures.compile(fanout, limits: Fixtures.limits(terms: 9))
+        #expect(plan.terms.count == 9)
+        #expect(throws: AudioRoutingPreparationError.resourceLimit) {
+            try Fixtures.compile(fanout, limits: Fixtures.limits(terms: 8))
+        }
+    }
+
+    @Test func muteCheckedOverflowAndMapPreflightPrecedeInvalidIndices() {
+        for frames in [Int.max, Int.max / 8] {
+            #expect(throws: AudioRoutingPreparationError.arithmeticOverflow) {
+                try Fixtures.compile(
+                    Fixtures.muteDocuments(false),
+                    limits: Fixtures.limits(frames: frames, scratch: Int.max, work: Int.max)
+                )
+            }
+        }
+        #expect(throws: AudioRoutingPreparationError.arithmeticOverflow) {
+            try Fixtures.compile(
+                Fixtures.muteDocuments(false, inputMap: [Array(repeating: 0, count: 30), []]),
+                limits: Fixtures.limits(frames: Int.max / 52 + 1, scratch: Int.max, work: Int.max)
+            )
+        }
+        for edge in 0..<2 {
+            for map in [Array(repeating: [Int.max], count: 65), [Array(repeating: Int.max, count: 33), []]] {
+                var documents = Fixtures.muteDocuments(false)
+                documents.graph.edges[edge].conversion = EdgeConversion(map: map)
+                #expect(throws: AudioRoutingPreparationError.resourceLimit) { try Fixtures.compile(documents) }
+            }
+        }
+    }
+}
+
+extension GraphCompilerTests {
     @Test func rejectsUnsupportedSemanticsAndInvalidContracts() {
         let mutations: [Mutation] = [
             { $0.graph.nodes[0].asset = AssetID(validated: "asset.extra") },

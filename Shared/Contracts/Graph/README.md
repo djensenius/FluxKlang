@@ -28,7 +28,7 @@ Unknown optional members survive at their original nesting level through Core
 rejects stray unknown fields but permits extension bags. Unknown nonempty
 `requiredFeatures` and unsupported versions reject rather than becoming optional data.
 
-## Constant mute syntax profile (execution unsupported)
+## Constant mute syntax profile
 
 `audioMute.constant.v1` is one opt-in, fail-closed graph v1 syntax profile.
 `requiredFeatures` stores the exact supplied candidate array: it must be `[]`
@@ -55,14 +55,57 @@ strict validation still reports that unknown node path. Manually assigned typed
 state on an older kind, or an unknown `muted` collision on a mute, rejects
 validation and encoding rather than silently losing data.
 
-Recognizing this syntax does not mean executor support. The current offline
-routing compiler remains unchanged and refuses every mute as `unsupported`,
-including disconnected mutes. This contract adds no DSP execution, live control,
-physical-mute acknowledgement or activation authority. Older graph readers
+Recognizing this syntax does not mean general executor support. The bounded
+offline subset below adds no live control, physical-mute acknowledgement or
+activation authority. Older graph readers
 reject the feature marker before interpreting the new kind; they do not support
 the profile. Project and package envelopes still reject all nonempty features,
 including this graph token. Integer-major checks are unchanged; `minorVersion`
 remains unknown optional data, not feature negotiation.
+
+### Bounded offline routing execution
+
+The offline routing compiler retains its no-mute subset and accepts **at most
+one** valid constant `audioMute`. Edges may only be role-input → role-output,
+role-input → mute, or mute → role-output, with at most one incoming edge per
+destination. Role bindings are unique among role endpoints. Identity edges and
+ordered explicit maps (including duplicate terms) work on every allowed edge.
+Fanout, direct routes beside the mute and disconnected endpoints are allowed.
+Two or more mutes refuse even when independent or disconnected; chains,
+cycles/feedback, other node kinds, unsupported metadata, capabilities or
+references, malformed contracts and over-budget graphs refuse. Portable syntax
+validation alone does not grant this narrower executor's support.
+
+All external active inputs, even unused ones, are staged and finite-checked.
+Every mute input channel/frame is then materialized through its incoming map;
+an unconnected input is positive zero. A separate result slab bit-copies that
+mapped input for false or stores positive zero for true. This work is never
+skipped for true, unused channels, absent consumers or a wholly disconnected
+mute. Output maps read the result, never substitute upstream sources or flatten
+across the primitive. Identity copies preserve negative zero; explicit maps
+add in declared Float32 order from positive zero, even a single-term `[[0]]`,
+and check every intermediate sum. False's bit-copy promise applies to the
+primitive input, not surrounding maps. Prepared state is immutable; document
+changes require new preparation.
+
+Geometry and all full-slab overlap checks (including padding) precede audio
+access. Valid zero-frame calls only zero peaks. Outputs and peaks commit in
+stable endpoint order only after all computations succeed. Numerical refusal
+silences all active external outputs/peaks, leaves padding untouched and permits
+same-instance recovery; geometry refusal touches nothing.
+
+Caller limits are unchanged. For maximum frames `F`, external channels `I/O`,
+mute width `C` (zero without a mute), and `T` terms across **all** edges including
+duplicates and every fanout, scratch floats are `max(1, F*(I+2*C+O)+O)` in
+input | mute-input | mute-result | output | peak order. Sample work is
+`F*(2*I+T+4*O+4*C)+2*O`, identically charged for either state and disconnected
+mutes; primitive work is separate from the term limit. Arithmetic, slab offsets
+and term boundaries are checked before arena allocation. Collection/map
+preflight precedes dictionaries, sorting, full validation and lowering.
+Two-channel, 16-frame identity costs 264 bytes/228 work/2 terms; inserting a
+two-channel mute with identity edges costs 520 bytes/388 work/4 terms.
+This is allocated-buffer offline execution only, not RT qualification, a backend
+seam, activation custody, live routing or hardware evidence.
 
 Each document is at most 4 MiB. Graphs allow 4,096 nodes, 16,384 edges, 256 ports
 per node and 1,024 capability definitions/references per node. Limits apply before

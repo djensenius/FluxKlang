@@ -6,6 +6,13 @@ struct PreparedAudioRoutingPlan {
         let isIdentity: Bool
     }
 
+    struct Mute {
+        let muted: Bool
+        let inputOffset: Int
+        let resultOffset: Int
+        let rows: [Row]
+    }
+
     let layout: AudioRoutingLayout
     let bounds: AudioRoutingLimits
     let scratchFloats: Int
@@ -14,21 +21,23 @@ struct PreparedAudioRoutingPlan {
     let peakScratchOffset: Int
     let sampleWork: Int
     let rows: [Row]
-    /// Input channel sample offsets, in declared order including duplicates.
+    let mute: Mute?
+    /// Staged input or materialized mute-result offsets, in declared order including duplicates.
     let terms: [Int]
 
     fileprivate init(
         layout: AudioRoutingLayout, bounds: AudioRoutingLimits, geometry: AudioRoutingAdmission.Geometry,
-        peakScratchOffset: Int, rows: [Row], terms: [Int]
+        mute: Mute?, rows: [Row], terms: [Int]
     ) {
         self.layout = layout
         self.bounds = bounds
         scratchFloats = geometry.scratchFloats
         scratchBytes = geometry.scratchBytes
-        outputScratchOffset = geometry.inputSamples
-        self.peakScratchOffset = peakScratchOffset
+        outputScratchOffset = geometry.outputOffset
+        peakScratchOffset = geometry.peakOffset
         sampleWork = geometry.sampleWork
         self.rows = rows
+        self.mute = mute
         self.terms = terms
     }
 }
@@ -41,8 +50,9 @@ enum AudioRoutingCompiler {
         try AudioRoutingAdmission.validateSelectedContext(project: project, graph: selectedGraph)
         let inputs = try endpoints(selectedGraph, kind: .roleInput)
         let outputs = try endpoints(selectedGraph, kind: .roleOutput)
-        let sources = Dictionary(uniqueKeysWithValues: inputs.map {
-            (AudioRoutingPortKey(node: $0.node, port: $0.port), $0)
+        var sources = try Dictionary(uniqueKeysWithValues: inputs.map {
+            (AudioRoutingPortKey(node: $0.node, port: $0.port),
+             try AudioRoutingAdmission.multiply($0.firstChannel, limits.maxFrames))
         })
         let incoming = Dictionary(uniqueKeysWithValues: selectedGraph.edges.map {
             (AudioRoutingPortKey($0.to), $0)
@@ -51,24 +61,28 @@ enum AudioRoutingCompiler {
         var terms: [Int] = []
         rows.reserveCapacity(geometry.outputChannels)
         terms.reserveCapacity(geometry.termCount)
+        var mute: PreparedAudioRoutingPlan.Mute?
+        if let node = selectedGraph.nodes.first(where: { $0.kind == .audioMute }) {
+            guard let input = node.ports.first(where: { $0.direction == .input }),
+                  let output = node.ports.first(where: { $0.direction == .output }),
+                  let muted = node.muted else {
+                throw AudioRoutingPreparationError.unsupported
+            }
+            let muteRows = try lowerRows(
+                edge: incoming[AudioRoutingPortKey(node: node.id, port: input.id)],
+                channels: geometry.muteChannels, sources: sources, stride: limits.maxFrames, terms: &terms
+            )
+            mute = PreparedAudioRoutingPlan.Mute(
+                muted: muted, inputOffset: geometry.inputSamples,
+                resultOffset: geometry.muteResultOffset, rows: muteRows
+            )
+            sources[AudioRoutingPortKey(node: node.id, port: output.id)] = geometry.muteResultOffset
+        }
         for output in outputs {
             let edge = incoming[AudioRoutingPortKey(node: output.node, port: output.port)]
-            for channel in 0..<output.channels {
-                let start = terms.count
-                if let edge, let source = sources[AudioRoutingPortKey(edge.from)] {
-                    if let conversion = edge.conversion {
-                        for index in conversion.map[channel] {
-                            terms.append(try sampleOffset(source.firstChannel, index, stride: limits.maxFrames))
-                        }
-                    } else {
-                        terms.append(try sampleOffset(source.firstChannel, channel, stride: limits.maxFrames))
-                    }
-                }
-                rows.append(PreparedAudioRoutingPlan.Row(
-                    firstTerm: start, termCount: terms.count - start,
-                    isIdentity: edge != nil && edge?.conversion == nil
-                ))
-            }
+            rows.append(contentsOf: try lowerRows(
+                edge: edge, channels: output.channels, sources: sources, stride: limits.maxFrames, terms: &terms
+            ))
         }
         let layout = AudioRoutingLayout(
             graph: selectedGraph.id, revision: selectedGraph.revision, maxFrames: limits.maxFrames,
@@ -77,13 +91,35 @@ enum AudioRoutingCompiler {
         )
         return PreparedAudioRoutingPlan(
             layout: layout, bounds: limits, geometry: geometry,
-            peakScratchOffset: try AudioRoutingAdmission.add(geometry.inputSamples, geometry.outputSamples),
-            rows: rows, terms: terms
+            mute: mute, rows: rows, terms: terms
         )
     }
 
-    private static func sampleOffset(_ first: Int, _ channel: Int, stride: Int) throws -> Int {
-        try AudioRoutingAdmission.multiply(AudioRoutingAdmission.add(first, channel), stride)
+    private static func lowerRows(
+        edge: GraphEdge?, channels: Int, sources: [AudioRoutingPortKey: Int],
+        stride: Int, terms: inout [Int]
+    ) throws -> [PreparedAudioRoutingPlan.Row] {
+        var rows: [PreparedAudioRoutingPlan.Row] = []
+        for channel in 0..<channels {
+            let start = terms.count
+            if let edge {
+                guard let source = sources[AudioRoutingPortKey(edge.from)] else {
+                    throw AudioRoutingPreparationError.unsupported
+                }
+                let indices = edge.conversion?.map[channel] ?? [channel]
+                _ = try AudioRoutingAdmission.add(start, indices.count)
+                for index in indices {
+                    terms.append(try AudioRoutingAdmission.add(
+                        source, AudioRoutingAdmission.multiply(index, stride)
+                    ))
+                }
+            }
+            rows.append(PreparedAudioRoutingPlan.Row(
+                firstTerm: start, termCount: terms.count - start,
+                isIdentity: edge != nil && edge?.conversion == nil
+            ))
+        }
+        return rows
     }
 
     private static func endpoints(_ graph: GraphDocument, kind: NodeKind) throws -> [AudioRoutingEndpoint] {
