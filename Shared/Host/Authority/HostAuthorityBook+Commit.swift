@@ -4,7 +4,8 @@
 //
 //  The commit path of `HostAuthorityBook` (#62 H5c-1): authorizing from a
 //  rendering window's gesture, committing against the live context and lease
-//  built at commit, abandoning a commit whose outcome is unknown, and the delivery
+//  built at commit, abandoning a commit whose outcome is unknown, recording the
+//  engine's report on a delivered commit (H5c-2), and the delivery
 //  guard with its private `withholdCommit`. `release` and `transfer` (sharing
 //  `acquire`'s private lease staging) live in `HostAuthorityBook.swift`. Every
 //  refusal leaves the whole book unchanged.
@@ -100,6 +101,62 @@ extension HostAuthorityBook {
         projects[project] = state
         inFlight[project] = nil
         return .success(())
+    }
+
+    /// Records the engine's report on a delivered commit. Checks, in order, all
+    /// before anything moves:
+    /// 1. routing by attempt: the project whose last commit attempt is
+    ///    `report.attempt` (else `.activation(.staleReport)`; a project is never
+    ///    found from the plan);
+    /// 2. the attempt was delivered and is still unreported (`inFlight`), else
+    ///    `.activation(.staleReport)`: a queued, withheld, abandoned or already
+    ///    reported commit has no report;
+    /// 3. queue room for the replaced plan's `.discard` (`.queueFull`, before the transition);
+    /// 4. the transaction's checks (plan, node sets) on a copy;
+    /// 5. only for `.succeeded`, one `ctx.engine` bump on a staged ledger
+    ///    (`.ledger(error)` with nothing changed: the commit stays in flight and
+    ///    may be abandoned as `.outcomeUnknown`).
+    /// Then state, ledger and queue change together: the commit leaves `inFlight`,
+    /// the reviewed plan is cleared and the lifecycle moves
+    /// (`acknowledgingActivation`; `endingPreparation` on `.failed`/`.partial`,
+    /// which H5d resolves).
+    mutating func commitReported(
+        _ report: ActivationCommitReport
+    ) -> Result<CommitReportOutcome, HostAuthorityRefusal> {
+        guard let project = projects.first(where: { $0.value.transaction.lastAttempt == report.attempt })?.key,
+              var state = projects[project], inFlight[project] == report.attempt else {
+            return .failure(.activation(.staleReport))
+        }
+        guard queue.canAccept(1) else { return .failure(.queueFull) }
+        let effects: [ActivationEffect]
+        switch state.transaction.acknowledged(report) {
+        case .failure(let refusal): return .failure(.activation(refusal))
+        case .success(let emitted): effects = emitted
+        }
+        var stagedLedger = ledger
+        let outcome: CommitReportOutcome
+        switch report.outcome {
+        case .succeeded:
+            do { _ = try stagedLedger.bump(EngineLeaseRegistry.contextKey, reason: .contextChange) } catch {
+                return .failure(.ledger(error))
+            }
+            state.lifecycle = state.lifecycle.acknowledgingActivation
+            outcome = .acknowledged(state.transaction.running.revision)
+        case .failed:
+            state.lifecycle = state.lifecycle.endingPreparation
+            outcome = .failed
+        case .partial:
+            state.lifecycle = state.lifecycle.endingPreparation
+            outcome = .partial(unapplied: report.unapplied)
+        }
+        var stagedQueue = queue
+        guard case .success = stagedQueue.enqueue(effects: effects) else { return .failure(.queueFull) }
+        state.reviewed = nil
+        ledger = stagedLedger
+        queue = stagedQueue
+        projects[project] = state
+        inFlight[project] = nil
+        return .success(outcome)
     }
 
     /// The one place an H5c recovery step's mute is requested: `abandonCommit`

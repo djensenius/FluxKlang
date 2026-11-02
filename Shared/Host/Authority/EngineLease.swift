@@ -112,7 +112,7 @@ struct EngineLeaseGrant: Hashable, Sendable {
 /// A discarded staged copy's tokens never match the committed registry.
 struct EngineLeaseRegistry: Sendable {
     static let windowLimit = 64
-    /// The per-host engine context counter that every lease change bumps.
+    /// The per-host engine context counter that lease changes and acknowledged activations bump.
     static let contextKey = GenerationKey(.context, GenerationSubject(validated: "ctx.engine"))
 
     private(set) var snapshot: EngineLeaseSnapshot?
