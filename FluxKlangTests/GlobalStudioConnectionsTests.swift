@@ -213,8 +213,11 @@ struct GlobalStudioConnectionsTests {
 
     @MainActor
     @Test func storeMirrorsCloudAndDoesNotRemigrateInitializedEmptyState() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("studio-connections-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = MemoryCloudStore()
-        let fileStore = JSONFileStore(cloud: cloud)
+        let fileStore = JSONFileStore(directory: directory, cloud: cloud)
         let fileName = "studio-connections-\(UUID().uuidString).json"
         let synth = Equipment(name: "Synth")
         let legacy = RoutingEnvironment(
