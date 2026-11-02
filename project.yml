@@ -166,6 +166,10 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestValidationTests.swift
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
+      - path: FluxKlangTests/RealtimeHandoffTests.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
