@@ -16,6 +16,24 @@ import Testing
 
 @MainActor
 struct StartupHardwareIsolationTests {
+    @Test func completedSharedConstructionRecordsNoProductionEvaluationOrAPIEntry() throws {
+        try requireIsolatedStartupProcess()
+        let checkpoint = try #require(
+            AppModel.completedSharedConstructionCheckpoint,
+            "The host must have published an already-completed shared construction checkpoint"
+        )
+        for operation in ProductionAccessAudit.Operation.allCases {
+            #expect(checkpoint.before.count(.factoryEvaluated, for: operation) == 0,
+                    "checkpoint.before factoryEvaluated must be zero for \(operation)")
+            #expect(checkpoint.before.count(.apiEntered, for: operation) == 0,
+                    "checkpoint.before apiEntered must be zero for \(operation)")
+            #expect(checkpoint.after.count(.factoryEvaluated, for: operation) == 0,
+                    "checkpoint.after factoryEvaluated must be zero for \(operation)")
+            #expect(checkpoint.after.count(.apiEntered, for: operation) == 0,
+                    "checkpoint.after apiEntered must be zero for \(operation)")
+        }
+    }
+
     @Test func isolatedMIDIConstructionIsPassive() throws {
         try requireIsolatedStartupProcess()
         let audit = ProductionAccessAudit()
