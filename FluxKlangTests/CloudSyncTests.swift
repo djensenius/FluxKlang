@@ -172,4 +172,68 @@ struct CloudSyncTests {
         let loaded = await store.load(Model.self, from: uniqueName())
         #expect(loaded == nil)
     }
+
+    @MainActor
+    @Test func equipmentLoadMergePersistsThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("equipment-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let customID = try #require(UUID(uuidString: "B0894B9D-99C0-4D4C-A472-B0DF11E3B001"))
+        let custom = Equipment(id: customID, name: "Custom fixture synth", outputs: ["Mono"])
+        await store.save([custom], to: "equipment.json")
+
+        let owner = EquipmentStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+
+        let expected = [custom] + Equipment.confirmedLiveAdditions
+        let fileURL = directory.appendingPathComponent("equipment.json")
+        let saved = try JSONDecoder().decode([Equipment].self, from: Data(contentsOf: fileURL))
+        #expect(saved == expected)
+        #expect(owner.items == expected)
+
+        let reloadedOwner = EquipmentStore(store: store)
+        await reloadedOwner.load()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let reloaded = try JSONDecoder().decode([Equipment].self, from: Data(contentsOf: fileURL))
+        #expect(reloaded == expected)
+        #expect(reloadedOwner.items == expected)
+    }
+
+    @MainActor
+    @Test func equipmentMutationsPersistLatestSnapshotThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("equipment-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        await store.save(Equipment.confirmedLiveAdditions, to: "equipment.json")
+
+        let owner = EquipmentStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+
+        var equipmentA = Equipment(name: "Fixture A", outputs: ["Out"])
+        let equipmentB = Equipment(name: "Fixture B", outputs: ["Out"])
+        owner.add(equipmentA)
+        equipmentA.name = "Updated fixture A"
+        equipmentA.outputs = ["Updated mono out"]
+        owner.update(equipmentA)
+        owner.add(equipmentB)
+        owner.remove(equipmentB)
+        await owner.awaitScheduledSavesSnapshot()
+
+        let expected = Equipment.confirmedLiveAdditions + [equipmentA]
+        let fileURL = directory.appendingPathComponent("equipment.json")
+        let saved = try JSONDecoder().decode([Equipment].self, from: Data(contentsOf: fileURL))
+        #expect(saved == expected)
+        #expect(owner.items == expected)
+
+        let reloadedOwner = EquipmentStore(store: store)
+        await reloadedOwner.load()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let reloaded = try JSONDecoder().decode([Equipment].self, from: Data(contentsOf: fileURL))
+        #expect(reloaded == expected)
+        #expect(reloadedOwner.items == expected)
+    }
 }
