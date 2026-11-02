@@ -50,6 +50,33 @@ def write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
+def resolve_swiftlint(selected):
+    selected = Path(selected).absolute()
+    target = selected.resolve()
+    if target.name != "mise":
+        # Preserve argv[0] for ordinary executable symlinks, too.
+        return str(selected)
+    # A mise shim is a symlink to mise, not a SwiftLint executable. Ask mise
+    # for the repository's selected binary BEFORE entering the fixture cwd;
+    # invoking the shim there would instead use that directory's tool selection.
+    try:
+        result = subprocess.run(
+            [str(target), "which", "swiftlint"], cwd=REPOSITORY,
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("repository SwiftLint resolution timed out") from error
+    executable = Path(result.stdout.strip())
+    if (result.returncode != 0 or not executable.is_absolute()
+            or executable.resolve().name == "mise"
+            or shutil.which(str(executable)) is None):
+        raise RuntimeError(
+            "cannot resolve repository SwiftLint through mise: "
+            + (result.stderr.strip() or result.stdout.strip() or "no executable returned")
+        )
+    return str(executable)
+
+
 class Fixture:
     def __init__(self, path):
         self.path = path
@@ -256,6 +283,7 @@ def main():
         parser.error("swiftlint is missing from PATH; run with the caller's pinned toolchain")
     temporary = None
     try:
+        swiftlint = resolve_swiftlint(swiftlint)
         if args.keep_evidence:
             evidence = args.keep_evidence.resolve()
             if evidence == REPOSITORY or REPOSITORY in evidence.parents:
@@ -265,7 +293,7 @@ def main():
         else:
             temporary = tempfile.TemporaryDirectory(prefix="fluxklang-test-seam-policy-")
             evidence = Path(temporary.name).resolve()
-        check = Check(evidence, str(Path(swiftlint).resolve()))
+        check = Check(evidence, swiftlint)
         try:
             check.execute()
         finally:

@@ -39,6 +39,7 @@ lint:
 	cd "$(REPOSITORY_ROOT)" && swiftlint --strict
 
 fault-seam-policy-self-check:
+	cd "$(REPOSITORY_ROOT)" && python3 -B -m unittest discover -s scripts/test-seam-policy -p 'test_*.py'
 	cd "$(REPOSITORY_ROOT)" && python3 scripts/test-seam-policy/check.py
 
 # Defence-in-depth tripwire for the passive hardware inventory lister (#67); runs nothing on hardware.
