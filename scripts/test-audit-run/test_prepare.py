@@ -110,6 +110,25 @@ def set_field(value, path, replacement):
     value[path[-1]] = replacement
 
 
+def malformed_xml_variants(raw):
+    doctype = (
+        b'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        b'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+    )
+    without_doctype = raw.replace(doctype, b"", 1)
+    return {
+        "doctype inside root": without_doctype.replace(b"<dict>", b"<dict>" + doctype, 1),
+        "doctype after root": without_doctype + doctype,
+        "UTF-8 bytes declaring UTF-16": raw.replace(b'encoding="UTF-8"', b'encoding="UTF-16"'),
+        "non-UTF-8 declaration": raw.replace(b'encoding="UTF-8"', b'encoding="ISO-8859-1"'),
+        "unknown encoding": raw.replace(b'encoding="UTF-8"', b'encoding="not-an-encoding"'),
+        "UTF-16 without BOM": raw.decode("utf-8").replace(
+            'encoding="UTF-8"', 'encoding="UTF-16"',
+        ).encode("utf-16-le"),
+        "invalid UTF-8 bytes": raw + b"\xff",
+    }
+
+
 class PreparationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="mac-audit-preparer-")
@@ -381,6 +400,41 @@ class PreparationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn("refused:", result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_preparation_rejects_malformed_xml_without_normalization_or_writes(self):
+        for name, data in malformed_xml_variants(self.source.read_bytes()).items():
+            with self.subTest(variant=name):
+                self.source.write_bytes(data)
+                self.pin = sha256(data)
+                before = self.snapshot()
+                result = self.cli("prepare")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("refused:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+                with self.assertRaises(prepare.Refusal):
+                    self.prepare()
+                self.assertEqual(self.snapshot(), before)
+
+    def test_validation_rejects_rehashed_malformed_xml_without_repair_or_writes(self):
+        record = self.prepare()
+        raw = Path(record["output"]["path"]).read_bytes()
+        for name, data in malformed_xml_variants(raw).items():
+            with self.subTest(variant=name):
+                self.rewrite_output(record, data)
+                before = self.snapshot()
+                result = self.cli(
+                    "validate", "--output", record["output"]["path"],
+                    "--intent", record["intent_path"],
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("refused:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
+                with mock.patch.object(prepare.uuid, "uuid4", side_effect=AssertionError("repair")):
+                    with self.assertRaises(prepare.Refusal):
+                        self.validate(record)
                 self.assertEqual(self.snapshot(), before)
 
     def test_nonclobbering_output_intent_and_dangling_symlink_collisions(self):

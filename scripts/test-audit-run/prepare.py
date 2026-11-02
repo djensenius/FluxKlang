@@ -133,13 +133,28 @@ def require_equal(actual, expected, location):
 
 def parse_plist(data):
     """Parse only unambiguous UTF-8 XML plist containers and scalar types."""
-    text = data.decode("utf-8")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise Refusal("plist must be UTF-8 XML") from error
+    encoding = re.match(
+        r"""\ufeff?<\?xml\s+[^?]*\bencoding\s*=\s*(['"])([^'"]+)\1""", text,
+    )
+    # Also refuse BOM-less UTF-16/32 bytes that happen to decode as UTF-8.
+    if "\x00" in text or (encoding and encoding.group(2).lower() != "utf-8"):
+        raise Refusal("plist must use UTF-8 encoding")
     # No entity declarations, internal subsets, or alternative external DTDs.
-    # ElementTree does not fetch the standard DTD; strip it before parsing.
-    text = text.replace(DOCTYPE, "", 1)
-    if "<!" in text:
+    # Inspect only: ElementTree does not fetch the standard DTD, and must see
+    # its original position and the original bytes to reject malformed XML.
+    declarations = [match.start() for match in re.finditer("<!", text)]
+    if len(declarations) > 1 or any(
+        not text.startswith(DOCTYPE, index) for index in declarations
+    ):
         raise Refusal("unsupported XML declaration or comment")
-    root = ET.fromstring(text)
+    try:
+        root = ET.fromstring(data)
+    except (ET.ParseError, LookupError, ValueError) as error:
+        raise Refusal(f"invalid plist XML: {error}") from error
 
     def whitespace(text):
         return not text or not text.strip()
