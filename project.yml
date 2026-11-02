@@ -171,6 +171,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
       - path: FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
     settings:
