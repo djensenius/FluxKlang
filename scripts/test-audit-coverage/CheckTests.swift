@@ -447,6 +447,7 @@ enum FixtureMain {
         tests.sourceCases()
         tests.returnTypeCases()
         tests.inheritedReturnCases()
+        tests.extensionAccessCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }

@@ -95,6 +95,66 @@ extension FixtureTests {
         }
     }
 
+    func extensionAccessCases() {
+        for access in ["private", "fileprivate"] {
+            test("\(access) extension alias cannot prove cross-file non-Void return") {
+                try rejectLegacy("extension-access-alias-\(access)", first: """
+                class Base: ExternalBase {}
+                \(access) extension Base { typealias Result = [Void] }
+                """, second: "typealias Result = Void\nclass Legacy: Base { func testAccess() -> Result {} }")
+            }
+            test("\(access) extension nominal cannot prove cross-file non-Void return") {
+                try rejectLegacy("extension-access-nominal-\(access)", first: """
+                class Base: ExternalBase {}
+                \(access) extension Base { struct Result {} }
+                """, second: "typealias Result = Void\nclass Legacy: Base { func testAccess() -> Result {} }")
+            }
+        }
+        test("unrestricted extension aliases and nominals remain valid cross-file non-Void bindings") {
+            let fixture = try world("extension-access-unrestricted", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            class Base: ExternalBase {}
+            extension Base { typealias Result = [Void]; struct Value {} }
+            """)
+            try fixture.write("Mac/B.swift", """
+            typealias Result = Void
+            typealias Value = Void
+            class Legacy: Base {
+                func testAccess() -> Result { [] }
+                func testValue() -> Value { Value() }
+            }
+            """)
+            for mode in ["enforce", "inventory"] {
+                let report = fixture.run(mode: mode)
+                try report.encoded().write(to: fixture.root.appendingPathComponent(mode + "-result.json"))
+                try require(report.exitCode == 0 && report.enforcementSatisfied, "unrestricted extension rejected")
+            }
+        }
+        test("effective extension restriction reaches nested nominal and alias records") {
+            for access in ["private", "fileprivate", ""] {
+                let matrix = MatrixRow(target: "FixtureTests", module: "FixtureTests",
+                                       platform: "iOS", configuration: "Debug")
+                var inventory = SourceInventory(variant: SourceVariant(
+                    matrix: matrix, macImport: false, modelsImport: false))
+                try inventory.add(ParsedSource(path: "A.swift", text: """
+                class Base {}
+                \(access) extension Base {
+                    typealias Result = [Void]
+                    struct Container { typealias Nested = [Void]; struct Inner {} }
+                }
+                """))
+                let members = inventory.nominals.filter { $0.parent != nil }
+                let expected = !access.isEmpty
+                try require(members.count == 2 && inventory.aliases.count == 2, "missing nested fixture members")
+                try require(members.allSatisfy { $0.restricted == expected } &&
+                            inventory.aliases.allSatisfy { $0.restricted == expected },
+                            "effective extension access was lost")
+            }
+        }
+    }
+
     private func inheritedConditionalCases() throws {
         let sources = [("A.swift", """
         class Base: ExternalBase {

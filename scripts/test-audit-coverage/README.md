@@ -67,7 +67,7 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 75 checks, including regressions
+existing fixture world. The suite has 81 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots and standard macro handling.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.

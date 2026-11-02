@@ -134,6 +134,7 @@ struct LegacyFunctionRecord {
 struct ExtensionRecord {
     let site: SourceSite
     let qualified: String?
+    let restricted: Bool
     let unsupported: Bool
     let attributes: [AttributeSyntax]
 }
@@ -235,6 +236,7 @@ struct SourceInventory {
 
     private func restricted(_ context: OwnerContext?) -> Bool {
         if case .nominal(let index) = context { return nominals[index].restricted }
+        if case .extended(let index) = context { return extensions[index].restricted }
         return false
     }
 
@@ -330,9 +332,11 @@ struct SourceInventory {
         _ extended: ExtensionDeclSyntax, context: OwnerContext?, source: ParsedSource
     ) throws {
         let qualified = Self.typeName(extended.extendedType)
+        let isPrivate = extended.modifiers.contains { ["private", "fileprivate"].contains($0.name.text) }
         let record = ExtensionRecord(
             site: site(Syntax(extended), name: qualified ?? "<unsupported extended type>", source: source),
             qualified: qualified,
+            restricted: isPrivate || restricted(context),
             unsupported: context != nil || extended.genericWhereClause != nil || extended.inheritanceClause != nil,
             attributes: try attributes(extended.attributes))
         let index = extensions.count
