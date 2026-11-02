@@ -61,6 +61,30 @@ enum PrepareAnswerOutcome: Hashable, Sendable {
     case dropped
 }
 
+/// What an accepted engine commit report did (`HostAuthority.commitReported`).
+enum CommitReportOutcome: Hashable, Sendable {
+    /// The plan is now running at this revision; the plan it replaced is queued for discard.
+    case acknowledged(ContractRevision)
+    /// The plan did not take effect (`commitFailed`); H5d resolves it.
+    case failed
+    /// Only some nodes were applied (`partial`); H5d resolves it.
+    case partial(unapplied: Set<NodeID>)
+}
+
+extension EngineLifecycle {
+    /// The lifecycle once the engine acknowledged an activation: a preparation over
+    /// nothing or a running graph renders `.running`; over a degraded graph it stays
+    /// `.degraded` with the same lost capabilities; `.recovering` stays (fail closed:
+    /// unmuting is H5d's). Any other state is not preparing and is kept.
+    var acknowledgingActivation: EngineLifecycle {
+        switch self {
+        case .preparing(_, over: .absent), .preparing(_, over: .running): .running
+        case .preparing(_, over: .degraded(let lost)): .degraded(lost)
+        case .recovering, .stopped, .running, .degraded, .heldByOther: self
+        }
+    }
+}
+
 /// A prepare attempt `abandonPrepare` gave up on; its first late answer is
 /// recognised exactly once.
 struct AbandonedPrepare: Hashable, Sendable {
