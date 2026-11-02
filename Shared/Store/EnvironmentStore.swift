@@ -24,7 +24,9 @@ final class EnvironmentStore {
     private let fileName = "environments.json"
     private let legacyFileName = "effects.json"
     private let legacyChainFileName = "chain.json"
+    private let injectedStore: JSONFileStore?
     private var loaded = false
+    @ObservationIgnored private var saveTail: Task<Void, Never>?
     /// Whether the one-time fold of the old global `chain.json` into the active
     /// environment's graph has happened. Persisted so it runs at most once.
     private var migratedChain = false
@@ -37,6 +39,10 @@ final class EnvironmentStore {
         var activeID: RoutingEnvironment.ID?
         var migratedChain: Bool?
         var migratedEffectEquipmentLinks: Bool?
+    }
+
+    init(store: JSONFileStore? = nil) {
+        injectedStore = store
     }
 
     // MARK: - Active environment
@@ -58,12 +64,12 @@ final class EnvironmentStore {
     func load() async {
         guard !loaded else { return }
         loaded = true
-        if let saved = await JSONFileStore.shared.load(Persisted.self, from: fileName) {
+        if let saved = await (injectedStore ?? JSONFileStore.shared).load(Persisted.self, from: fileName) {
             environments = saved.environments
             activeID = saved.activeID
             migratedChain = saved.migratedChain ?? false
             migratedEffectEquipmentLinks = saved.migratedEffectEquipmentLinks ?? false
-        } else if let legacy = await JSONFileStore.shared.load([Effect].self, from: legacyFileName) {
+        } else if let legacy = await (injectedStore ?? JSONFileStore.shared).load([Effect].self, from: legacyFileName) {
             let migrated = RoutingEnvironment(name: "Default", effects: legacy)
             environments = [migrated]
             activeID = migrated.id
@@ -80,7 +86,7 @@ final class EnvironmentStore {
     /// the active environment has no graph yet, so it never clobbers newer work.
     private func migrateLegacyChainIfNeeded() async {
         guard !migratedChain else { return }
-        if let legacy = await JSONFileStore.shared.load(ChainGraph.self, from: legacyChainFileName),
+        if let legacy = await (injectedStore ?? JSONFileStore.shared).load(ChainGraph.self, from: legacyChainFileName),
            !legacy.nodes.isEmpty,
            let index = activeIndex(),
            environments[index].graph.nodes.isEmpty {
@@ -426,6 +432,15 @@ final class EnvironmentStore {
         activeID = environments.first?.id
     }
 
+    /// Awaits the tail captured when this MainActor method begins, including its predecessors.
+    /// Does not await later producers, establish all-producer quiescence, coalesce concurrent
+    /// loads, or guarantee durable persistence success: JSON saves are best-effort.
+    /// Cancelling the waiter does not cancel the save chain.
+    func awaitScheduledSavesSnapshot() async {
+        let tail = saveTail
+        await tail?.value
+    }
+
     private func persist() {
         let snapshot = Persisted(
             environments: environments,
@@ -433,7 +448,14 @@ final class EnvironmentStore {
             migratedChain: migratedChain,
             migratedEffectEquipmentLinks: migratedEffectEquipmentLinks
         )
-        Task { await JSONFileStore.shared.save(snapshot, to: fileName) }
+        let fileName = fileName
+        let injectedStore = injectedStore
+        let previousTail = saveTail
+        saveTail = Task {
+            await previousTail?.value
+            let store = injectedStore ?? JSONFileStore.shared
+            await store.save(snapshot, to: fileName)
+        }
     }
 
     private static func clamp(_ point: CGPoint) -> CGPoint {

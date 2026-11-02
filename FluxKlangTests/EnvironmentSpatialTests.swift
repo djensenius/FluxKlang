@@ -173,3 +173,170 @@ struct EnvironmentSpatialTests {
         #expect(copy.graph.nodes.contains { $0.kind == .wingOutput(5) })
     }
 }
+
+private struct EnvironmentPersistenceEnvelope: Codable, Sendable {
+    var environments: [RoutingEnvironment]
+    var activeID: RoutingEnvironment.ID?
+    var migratedChain: Bool?
+    var migratedEffectEquipmentLinks: Bool?
+
+    static func read(from directory: URL) throws -> Self {
+        let fileURL = directory.appendingPathComponent("environments.json")
+        return try JSONDecoder().decode(Self.self, from: Data(contentsOf: fileURL))
+    }
+}
+
+extension EnvironmentSpatialTests {
+    @MainActor
+    @Test func legacyEffectsAndChainPersistThroughSnapshotCompletion() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("environments-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let reverb = Effect(name: "Legacy reverb", sendOutputs: [3, 4], returnInputs: [5, 6])
+        let delay = Effect(name: "Legacy delay", isStereo: false, sendOutputs: [7], returnInputs: [8],
+                           sourceInstruments: [UUID()], destinationEffectID: reverb.id)
+        let effects = [reverb, delay]
+        let bus = ChainNode(kind: .wingBus(2), title: "Send", position: CGPoint(x: 10, y: 20))
+        let output = ChainNode(kind: .wingOutput(3), title: "Out", position: CGPoint(x: 200, y: 20))
+        var graph = ChainGraph(nodes: [bus, output])
+        graph.connect(from: ChainPortRef(nodeID: bus.id, side: .output, port: 0),
+                      to: ChainPortRef(nodeID: output.id, side: .input, port: 0))
+        try JSONEncoder().encode(effects).write(to: directory.appendingPathComponent("effects.json"))
+        try JSONEncoder().encode(graph).write(to: directory.appendingPathComponent("chain.json"))
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("environments.json").path))
+
+        let owner = EnvironmentStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+
+        let saved = try EnvironmentPersistenceEnvelope.read(from: directory)
+        let environment = try #require(saved.environments.first)
+        #expect(saved.environments.count == 1)
+        #expect(environment.name == "Default")
+        #expect(saved.activeID == environment.id)
+        #expect(owner.activeID == environment.id)
+        #expect(environment.effects == effects)
+        #expect(environment.graph == graph)
+        #expect(saved.migratedChain == true)
+        #expect(owner.environments == saved.environments)
+
+        let reloadedOwner = EnvironmentStore(store: store)
+        await reloadedOwner.load()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let reloaded = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(reloaded.environments == [environment])
+        #expect(reloaded.activeID == environment.id)
+        #expect(reloaded.migratedChain == true)
+        #expect(reloadedOwner.environments == [environment])
+        #expect(reloadedOwner.activeID == environment.id)
+    }
+
+    @MainActor
+    @Test func endpointNormalizationPersistsWithoutChainMigrationWrite() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("environments-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let connector = WingOutputConnector(index: 3)
+        let canonical = StudioEndpoint(name: "Desk", destination: .custom, outputConnectors: [connector])
+        let duplicate = StudioEndpoint(name: "Duplicate desk", destination: .custom, outputConnectors: [connector])
+        let unused = StudioEndpoint(name: "Unused", destination: .custom, outputConnectors: [.init(index: 4)])
+        let canonicalNode = StudioNode(kind: .endpoint(canonical.id), title: "Desk",
+                                       position: CGPoint(x: 10, y: 20))
+        let duplicateNode = StudioNode(kind: .endpoint(duplicate.id), title: "Duplicate desk",
+                                       position: CGPoint(x: 100, y: 20))
+        let first = RoutingEnvironment(name: "Not selected")
+        let selected = RoutingEnvironment(
+            name: "Selected", studioGraph: StudioGraph(nodes: [canonicalNode, duplicateNode]),
+            studioEndpoints: [canonical, duplicate, unused]
+        )
+        // The chain flag prevents an unrelated migration write from masking a missing normalization save.
+        let seed = EnvironmentPersistenceEnvelope(environments: [first, selected], activeID: selected.id,
+                                                  migratedChain: true, migratedEffectEquipmentLinks: false)
+        try JSONEncoder().encode(seed).write(to: directory.appendingPathComponent("environments.json"))
+
+        let owner = EnvironmentStore(store: store)
+        await owner.load()
+        await owner.awaitScheduledSavesSnapshot()
+
+        var expected = selected
+        expected.studioGraph = StudioGraph(nodes: [canonicalNode])
+        expected.studioEndpoints = [canonical]
+        let saved = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(saved.environments == [first, expected])
+        #expect(saved.activeID == selected.id)
+        #expect(saved.migratedChain == true)
+        #expect(saved.migratedEffectEquipmentLinks == false)
+        #expect(owner.environments == [first, expected])
+        #expect(owner.activeID == selected.id)
+
+        let reloadedOwner = EnvironmentStore(store: store)
+        await reloadedOwner.load()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let reloaded = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(reloaded.environments == [first, expected])
+        #expect(reloaded.activeID == selected.id)
+        #expect(reloaded.migratedChain == true)
+        #expect(reloadedOwner.environments == [first, expected])
+        #expect(reloadedOwner.activeID == selected.id)
+    }
+
+    @MainActor
+    @Test func orderedMutationsPersistEquipmentLinkAndRespectDeliberateClear() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent("environments-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = JSONFileStore(directory: directory, cloud: nil)
+        let owner = EnvironmentStore(store: store)
+        let equipment = Equipment(name: "Reverb")
+        let effect = Effect(name: "  REVERB ")
+        #expect(effect.id != equipment.id)
+
+        let environmentID = owner.addEnvironment(named: "Before")
+        owner.add(effect)
+        owner.renameActive(to: "Final")
+        owner.migrateEffectEquipmentLinks(using: [equipment])
+        await owner.awaitScheduledSavesSnapshot()
+
+        var linkedEffect = effect
+        linkedEffect.equipmentID = equipment.id
+        var expected = RoutingEnvironment(id: environmentID, name: "Final", effects: [linkedEffect])
+        let saved = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(saved.environments == [expected])
+        #expect(saved.activeID == environmentID)
+        #expect(saved.migratedEffectEquipmentLinks == true)
+        #expect(owner.environments == [expected])
+
+        linkedEffect.equipmentID = nil
+        owner.update(linkedEffect)
+        await owner.awaitScheduledSavesSnapshot()
+
+        expected.effects = [effect]
+        let cleared = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(cleared.environments == [expected])
+        #expect(cleared.activeID == environmentID)
+        #expect(cleared.migratedEffectEquipmentLinks == true)
+
+        let reloadedOwner = EnvironmentStore(store: store)
+        await reloadedOwner.load()
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let reloaded = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(reloaded.environments == [expected])
+        #expect(reloaded.activeID == environmentID)
+        #expect(reloaded.migratedEffectEquipmentLinks == true)
+        #expect(reloadedOwner.environments == [expected])
+        #expect(reloadedOwner.activeID == environmentID)
+
+        reloadedOwner.migrateEffectEquipmentLinks(using: [equipment])
+        await reloadedOwner.awaitScheduledSavesSnapshot()
+
+        let remigrated = try EnvironmentPersistenceEnvelope.read(from: directory)
+        #expect(remigrated.environments == [expected])
+        #expect(remigrated.activeID == environmentID)
+        #expect(remigrated.migratedEffectEquipmentLinks == true)
+        #expect(reloadedOwner.environments == [expected])
+    }
+}
