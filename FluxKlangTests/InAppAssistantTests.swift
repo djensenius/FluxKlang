@@ -27,10 +27,10 @@ struct InAppAssistantTests {
     @Test func isolatedDefaultFactoriesAreNotEvaluated() async throws {
         try #require(AssistantServiceIsolation.deniesLiveServices)
         var constructions = 0
-        let fallback = StubGenerator(availability: .unsupportedOS, text: "fallback")
+        let fallback = InAppStubGenerator(availability: .unsupportedOS, text: "fallback")
         let generator = AssistantGeneratorRouter.defaultGenerator(model: {
             constructions += 1
-            return StubGenerator(availability: .ready, text: "model")
+            return InAppStubGenerator(availability: .ready, text: "model")
         }, fallback: fallback)
         let interpreter = AssistantChatController.defaultActionInterpreter(forcesFallback: false, live: {
             constructions += 1
@@ -38,7 +38,7 @@ struct InAppAssistantTests {
         })
         let client = URLSessionAssistantHTTPClient.defaultClient(live: {
             constructions += 1
-            return IsolationHTTPClient()
+            return InAppIsolationHTTPClient()
         })
         #expect(await generator.availability() == .unsupportedOS)
         #expect(await interpreter.availability() == .unavailable(AssistantServiceIsolation.reason))
@@ -47,40 +47,42 @@ struct InAppAssistantTests {
     }
 
     @Test func isolatedLoadRefreshAndSpokenFallbackNeverConstructSpeech() async throws {
-        try #require(AssistantServiceIsolation.deniesLiveServices)
-        let backend = MemoryHistoryBackend()
-        var constructions = 0
-        var speechCalls = 0
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: backend, cloud: nil),
-            makeSpeech: { constructions += 1; return { _ in speechCalls += 1 } })
-        let previousSpokenReplies = chat.spokenRepliesEnabled
-        defer { chat.spokenRepliesEnabled = previousSpokenReplies }
-        chat.spokenRepliesEnabled = true
-        await chat.load()
-        await chat.refreshAvailability()
-        #expect(await backend.loadCount == 1)
-        #expect(chat.modelAvailability == .unsupportedOS)
-        chat.composer = "Help"
-        chat.send(context: emptyContext())
-        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
-        #expect(chat.selectedConversation?.messages.last?.text.isEmpty == false)
-        let planner = ReviewedChatPlanner()
-        chat.actionPlanner = planner
-        chat.composer = "lower channel 7 by 3 dB"
-        chat.send(context: emptyContext())
-        try await waitUntil { !chat.isStreaming }
-        #expect(planner.intents.count == 1)
-        #expect(planner.confirmations == 0)
-        #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
-        #expect(constructions == 0)
-        #expect(speechCalls == 0)
+        try await withInAppAssistantFixture { fixture in
+            try #require(AssistantServiceIsolation.deniesLiveServices)
+            let backend = InAppMemoryHistoryBackend()
+            var constructions = 0
+            var speechCalls = 0
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: backend, cloud: nil),
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken"),
+                makeSpeech: { constructions += 1; return { _ in speechCalls += 1 } })
+            fixture.chat = chat
+            chat.spokenRepliesEnabled = true
+            await chat.load()
+            await chat.refreshAvailability()
+            #expect(await backend.loadCount == 1)
+            #expect(chat.modelAvailability == .unsupportedOS)
+            chat.composer = "Help"
+            chat.send(context: emptyContext())
+            try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+            #expect(chat.selectedConversation?.messages.last?.text.isEmpty == false)
+            let planner = ReviewedChatPlanner()
+            chat.actionPlanner = planner
+            chat.composer = "lower channel 7 by 3 dB"
+            chat.send(context: emptyContext())
+            try await waitUntil { !chat.isStreaming }
+            #expect(planner.intents.count == 1)
+            #expect(planner.confirmations == 0)
+            #expect(chat.selectedConversation?.messages.last?.text.contains("local exact-command grammar") == true)
+            #expect(constructions == 0)
+            #expect(speechCalls == 0)
+        }
     }
 
     @Test func directDefaultModelAndHTTPEntriesDenyAccess() async throws {
         try #require(AssistantServiceIsolation.deniesLiveServices)
-        let coordinator = AssistantCoordinator(draftStore: MemoryDraftStore())
+        let coordinator = AssistantCoordinator(draftStore: InAppMemoryDraftStore())
         let request = AssistantGenerationRequest(question: "Help", recentMessages: [], summary: "",
                                                  context: emptyContext())
         let generators: [any AssistantGenerating] = [
@@ -106,8 +108,8 @@ struct InAppAssistantTests {
 
     @Test func unavailableModelUsesDeterministicFallback() async throws {
         let router = AssistantGeneratorRouter(
-            model: StubGenerator(availability: .deviceNotEligible, text: "model"),
-            fallback: StubGenerator(availability: .unsupportedOS, text: "fallback")
+            model: InAppStubGenerator(availability: .deviceNotEligible, text: "model"),
+            fallback: InAppStubGenerator(availability: .unsupportedOS, text: "fallback")
         )
         let request = AssistantGenerationRequest(
             question: "Help",
@@ -126,19 +128,23 @@ struct InAppAssistantTests {
         #expect(text == "fallback")
     }
 
-    @Test func concurrentLoadsShareOneHistoryLoad() async {
-        let backend = MemoryHistoryBackend(loadDelay: .milliseconds(50))
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: backend, cloud: nil),
-            generator: StubGenerator(availability: .ready, text: "Ready")
-        )
+    @Test func concurrentLoadsShareOneHistoryLoad() async throws {
+        try await withInAppAssistantFixture { fixture in
+            let backend = InAppMemoryHistoryBackend(loadDelay: .milliseconds(50))
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: backend, cloud: nil),
+                generator: InAppStubGenerator(availability: .ready, text: "Ready"),
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
 
-        async let first: Void = chat.load()
-        async let second: Void = chat.load()
-        _ = await (first, second)
+            async let first: Void = chat.load()
+            async let second: Void = chat.load()
+            _ = await (first, second)
 
-        #expect(await backend.loadCount == 1)
+            #expect(await backend.loadCount == 1)
+        }
     }
 
     @Test func modelToolAuthorizationNeverPermitsWingWrites() throws {
@@ -155,175 +161,222 @@ struct InAppAssistantTests {
     }
 
     @Test func cancellingStreamingResponseMarksVisibleMessageCancelled() async throws {
-        let coordinator = AssistantCoordinator(draftStore: MemoryDraftStore())
-        let store = AssistantConversationStore(
-            local: MemoryHistoryBackend(),
-            cloud: nil
-        )
-        let chat = AssistantChatController(
-            coordinator: coordinator,
-            store: store,
-            generator: CancellableGenerator()
-        )
-        chat.newConversation()
-        chat.composer = "Stream"
-        chat.send(context: emptyContext())
-        try await waitUntil {
-            chat.selectedConversation?.messages.last?.text == "partial"
-        }
+        try await withInAppAssistantFixture { fixture in
+            let coordinator = AssistantCoordinator(draftStore: InAppMemoryDraftStore())
+            let store = AssistantConversationStore(local: InAppMemoryHistoryBackend(), cloud: nil)
+            let generator = InAppCancellableGenerator()
+            fixture.generator = generator
+            let chat = AssistantChatController(
+                coordinator: coordinator,
+                store: store,
+                generator: generator,
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            chat.composer = "Stream"
+            chat.send(context: emptyContext())
+            try await waitUntil {
+                chat.selectedConversation?.messages.last?.text == "partial"
+            }
 
-        chat.cancel()
-        try await waitUntil {
-            chat.selectedConversation?.messages.last?.state == .cancelled
-        }
+            chat.cancel()
+            try await waitUntil {
+                chat.selectedConversation?.messages.last?.state == .cancelled
+            }
 
-        #expect(chat.isStreaming == false)
+            #expect(chat.isStreaming == false)
+        }
     }
 
     @Test func deletingStreamingConversationClearsBusyStateImmediately() async throws {
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
-            generator: CancellableGenerator()
-        )
-        chat.newConversation()
-        let conversationID = try #require(chat.selectedConversationID)
-        chat.composer = "Stream"
-        chat.send(context: emptyContext())
-        try await waitUntil { chat.selectedConversation?.messages.last?.text == "partial" }
+        try await withInAppAssistantFixture { fixture in
+            let generator = InAppCancellableGenerator()
+            fixture.generator = generator
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: InAppMemoryHistoryBackend(), cloud: nil),
+                generator: generator,
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            let conversationID = try #require(chat.selectedConversationID)
+            chat.composer = "Stream"
+            chat.send(context: emptyContext())
+            try await waitUntil { chat.selectedConversation?.messages.last?.text == "partial" }
 
-        chat.deleteConversation(id: conversationID)
+            chat.deleteConversation(id: conversationID)
 
-        #expect(chat.isStreaming == false)
-        #expect(chat.selectedConversation == nil)
+            #expect(chat.isStreaming == false)
+            #expect(chat.selectedConversation == nil)
+        }
     }
 
     @Test func generationHistoryExcludesTheCurrentQuestion() async throws {
-        let generator = RecordingGenerator()
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
-            generator: generator
-        )
-        chat.newConversation()
-        chat.composer = "How is this wired?"
-        chat.send(context: emptyContext())
-        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+        try await withInAppAssistantFixture { fixture in
+            let generator = InAppRecordingGenerator()
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: InAppMemoryHistoryBackend(), cloud: nil),
+                generator: generator,
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            chat.composer = "How is this wired?"
+            chat.send(context: emptyContext())
+            try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
 
-        let request = try #require(generator.latestRequest())
-        #expect(request.question == "How is this wired?")
-        #expect(request.recentMessages.isEmpty)
+            let request = try #require(generator.latestRequest())
+            #expect(request.question == "How is this wired?")
+            #expect(request.recentMessages.isEmpty)
+        }
     }
 
     @Test func sendingWithNilSelectionReusesExistingConversation() async throws {
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
-            generator: StubGenerator(availability: .ready, text: "Ready")
-        )
-        chat.newConversation()
-        let conversationID = try #require(chat.selectedConversationID)
-        chat.selectedConversationID = nil
-        chat.composer = "Continue"
+        try await withInAppAssistantFixture { fixture in
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: InAppMemoryHistoryBackend(), cloud: nil),
+                generator: InAppStubGenerator(availability: .ready, text: "Ready"),
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            let conversationID = try #require(chat.selectedConversationID)
+            chat.selectedConversationID = nil
+            chat.composer = "Continue"
 
-        chat.send(context: emptyContext())
-        try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
+            chat.send(context: emptyContext())
+            try await waitUntil { chat.selectedConversation?.messages.last?.state == .complete }
 
-        #expect(chat.selectedConversationID == conversationID)
-        #expect(chat.conversations.count == 1)
+            #expect(chat.selectedConversationID == conversationID)
+            #expect(chat.conversations.count == 1)
+        }
     }
 
     @Test func noOpConversationUpdatesDoNotPersistOrReorderHistory() async throws {
-        let backend = MemoryHistoryBackend()
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: backend, cloud: nil),
-            generator: StubGenerator(availability: .ready, text: "Ready")
-        )
-        chat.newConversation()
-        let olderID = try #require(chat.selectedConversationID)
-        try await waitForSaveCount(1, backend: backend)
-        chat.newConversation()
-        try await waitForSaveCount(2, backend: backend)
-        let originalOrder = chat.conversations.map(\.id)
+        try await withInAppAssistantFixture { fixture in
+            let backend = InAppMemoryHistoryBackend()
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: backend, cloud: nil),
+                generator: InAppStubGenerator(availability: .ready, text: "Ready"),
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            let olderID = try #require(chat.selectedConversationID)
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(await backend.saveCount == 1)
+            chat.newConversation()
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(await backend.saveCount == 2)
+            let originalOrder = chat.conversations.map(\.id)
 
-        chat.renameConversation(id: olderID, to: "New Conversation")
-        chat.renameConversation(id: olderID, to: "   ")
-        try await Task.sleep(for: .milliseconds(50))
+            chat.renameConversation(id: olderID, to: "New Conversation")
+            chat.renameConversation(id: olderID, to: "   ")
+            await chat.awaitOwnedWorkSnapshot()
 
-        #expect(chat.conversations.map(\.id) == originalOrder)
-        #expect(await backend.saveCount == 2)
+            #expect(chat.conversations.map(\.id) == originalOrder)
+            #expect(await backend.saveCount == 2)
+        }
     }
 
     @Test func retryReusesTheExistingUserMessage() async throws {
-        let generator = FailingRecordingGenerator()
-        let chat = AssistantChatController(
-            coordinator: AssistantCoordinator(draftStore: MemoryDraftStore()),
-            store: AssistantConversationStore(local: MemoryHistoryBackend(), cloud: nil),
-            generator: generator
-        )
-        chat.newConversation()
-        chat.composer = "Try this"
-        chat.send(context: emptyContext())
-        try await waitUntil { chat.selectedConversation?.messages.last?.state == .failed }
-        let failedID = try #require(chat.selectedConversation?.messages.last?.id)
+        try await withInAppAssistantFixture { fixture in
+            let generator = InAppFailingRecordingGenerator()
+            let chat = AssistantChatController(
+                coordinator: AssistantCoordinator(draftStore: InAppMemoryDraftStore()),
+                store: AssistantConversationStore(local: InAppMemoryHistoryBackend(), cloud: nil),
+                generator: generator,
+                spokenRepliesDefaults: try fixture.resources.defaults("spoken")
+            )
+            fixture.chat = chat
+            chat.newConversation()
+            chat.composer = "Try this"
+            chat.send(context: emptyContext())
+            try await waitUntil { chat.selectedConversation?.messages.last?.state == .failed }
+            let failedID = try #require(chat.selectedConversation?.messages.last?.id)
 
-        chat.retry(messageID: failedID, context: emptyContext())
-        try await waitUntil { generator.requestCount == 2 }
+            chat.retry(messageID: failedID, context: emptyContext())
+            try await waitUntil { generator.requestCount == 2 }
 
-        #expect(chat.selectedConversation?.messages.filter { $0.role == .user }.count == 1)
+            #expect(chat.selectedConversation?.messages.filter { $0.role == .user }.count == 1)
+        }
     }
 
     @Test func historyMigratesSyncsAndPropagatesDeletionTombstones() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("assistant-history-\(UUID().uuidString)", isDirectory: true)
-        let legacyURL = root.appendingPathComponent("legacy.json")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let legacy = AssistantConversation(title: "Legacy")
-        try JSONEncoder().encode([legacy]).write(to: legacyURL)
+        try await withAssistantFixtureResources { resources in
+            let root = resources.root
+            let legacyURL = root.appendingPathComponent("legacy.json")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let legacy = AssistantConversation(title: "Legacy")
+            try JSONEncoder().encode([legacy]).write(to: legacyURL)
 
-        let local = LocalAssistantHistoryBackend(
-            directory: root.appendingPathComponent("records", isDirectory: true),
-            legacyFileURL: legacyURL
-        )
-        let cloud = MemoryHistoryBackend()
-        let store = AssistantConversationStore(local: local, cloud: cloud)
+            let local = LocalAssistantHistoryBackend(
+                directory: root.appendingPathComponent("records", isDirectory: true),
+                legacyFileURL: legacyURL
+            )
+            let cloud = InAppMemoryHistoryBackend()
+            let store = AssistantConversationStore(local: local, cloud: cloud)
 
-        let loaded = await store.load()
-        #expect(loaded.map(\.id) == [legacy.id])
-        #expect(await cloud.record(id: legacy.id)?.conversation?.title == "Legacy")
-        let initialCloudSaves = await cloud.saveCount
-        _ = await store.load()
-        #expect(await cloud.saveCount == initialCloudSaves)
+            let loaded = await store.load()
+            #expect(loaded.map(\.id) == [legacy.id])
+            #expect(await cloud.record(id: legacy.id)?.conversation?.title == "Legacy")
+            let initialCloudSaves = await cloud.saveCount
+            _ = await store.load()
+            #expect(await cloud.saveCount == initialCloudSaves)
 
-        await store.delete(id: legacy.id, at: Date(timeIntervalSince1970: 500))
-        let afterDelete = await store.load()
-        #expect(afterDelete.isEmpty)
-        #expect(await cloud.record(id: legacy.id)?.deletedAt != nil)
+            await store.delete(id: legacy.id, at: Date(timeIntervalSince1970: 500))
+            let afterDelete = await store.load()
+            #expect(afterDelete.isEmpty)
+            #expect(await cloud.record(id: legacy.id)?.deletedAt != nil)
+        }
     }
 
     @Test func assistantDraftPathCannotChangeWingValues() async throws {
-        let coordinator = AssistantCoordinator(draftStore: MemoryDraftStore())
-        let model = AppModel(assistant: coordinator, wing: .preview())
-        let synth = model.equipment.items[0]
-        _ = model.environments.addEnvironment(named: "Assistant Safety")
-        try await model.studioConnections.replaceHome(
-            StudioHomeConnections(inputs: [
-                StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0)
-            ]),
-            equipment: model.equipment.items
-        )
-        let before = model.wing.values
+        try await withInAppAssistantFixture { fixture in
+            let resources = fixture.resources
+            let coordinator = AssistantCoordinator(draftStore: InAppMemoryDraftStore())
+            let settings = AssistantProviderSettings(
+                defaults: try resources.defaults("provider"), credentials: MemoryAssistantCredentialStore())
+            let model = AppModel(
+                assistant: coordinator, assistantProviderSettings: settings, wing: .preview(),
+                hardware: .inert,
+                launchControlXLStore: JSONFileStore(
+                    directory: resources.root.appendingPathComponent("launch-control-xl"), cloud: nil),
+                domainStore: JSONFileStore(
+                    directory: resources.root.appendingPathComponent("domain"), cloud: nil),
+                assistantConversationStore: AssistantConversationStore(
+                    local: LocalAssistantHistoryBackend(
+                        directory: resources.root.appendingPathComponent("history", isDirectory: true),
+                        legacyFileURL: resources.root.appendingPathComponent("absent-legacy-history.json")),
+                    cloud: nil),
+                assistantSpokenRepliesDefaults: try resources.defaults("spoken")
+            )
+            fixture.model = model
+            let synth = model.equipment.items[0]
+            _ = model.environments.addEnvironment(named: "Assistant Safety")
+            try await model.studioConnections.replaceHome(
+                StudioHomeConnections(inputs: [
+                    StudioInputConnection(connector: 1, equipmentID: synth.id, outputPort: 0)
+                ]),
+                equipment: model.equipment.items
+            )
+            let before = model.wing.values
 
-        model.assistantChat.createWiringDraft(
-            sourceIDs: [synth.id],
-            effectIDs: [],
-            destination: .finalMix,
-            context: model.assistantToolContext()
-        )
-        try await waitUntil { coordinator.pendingStudioDraft != nil }
+            model.assistantChat.createWiringDraft(
+                sourceIDs: [synth.id],
+                effectIDs: [],
+                destination: .finalMix,
+                context: model.assistantToolContext()
+            )
+            try await waitUntil { coordinator.pendingStudioDraft != nil }
 
-        #expect(model.wing.values == before)
+            #expect(model.wing.values == before)
+        }
     }
 
     private func emptyContext() -> AssistantToolContext {
@@ -344,155 +397,5 @@ struct InAppAssistantTests {
             effects: [],
             globalConnections: GlobalStudioConnections()
         )
-    }
-
-    private func waitForSaveCount(
-        _ expectedCount: Int,
-        backend: MemoryHistoryBackend
-    ) async throws {
-        for _ in 0..<100 {
-            if await backend.saveCount == expectedCount { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw AssistantTestError.persistenceTimedOut
-    }
-}
-
-private struct StubGenerator: AssistantGenerating {
-    let availabilityValue: AssistantModelAvailability
-    let text: String
-
-    init(availability: AssistantModelAvailability, text: String) {
-        availabilityValue = availability
-        self.text = text
-    }
-
-    func availability() async -> AssistantModelAvailability {
-        availabilityValue
-    }
-
-    func stream(
-        _ request: AssistantGenerationRequest
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            continuation.yield(.text(text))
-            continuation.finish()
-        }
-    }
-}
-
-private struct CancellableGenerator: AssistantGenerating {
-    func availability() async -> AssistantModelAvailability { .ready }
-
-    func stream(
-        _ request: AssistantGenerationRequest
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                continuation.yield(.text("partial"))
-                do {
-                    try await Task.sleep(for: .seconds(30))
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
-    }
-}
-
-private final class RecordingGenerator: AssistantGenerating, @unchecked Sendable {
-    private let lock = NSLock()
-    private var requests: [AssistantGenerationRequest] = []
-
-    func availability() async -> AssistantModelAvailability { .ready }
-
-    func stream(
-        _ request: AssistantGenerationRequest
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        lock.lock()
-        requests.append(request)
-        lock.unlock()
-        return AsyncThrowingStream { continuation in
-            continuation.yield(.text("Done"))
-            continuation.finish()
-        }
-    }
-
-    func latestRequest() -> AssistantGenerationRequest? {
-        lock.lock()
-        defer { lock.unlock() }
-        return requests.last
-    }
-}
-
-private final class FailingRecordingGenerator: AssistantGenerating, @unchecked Sendable {
-    private let lock = NSLock()
-    private var requests = 0
-
-    var requestCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return requests
-    }
-
-    func availability() async -> AssistantModelAvailability { .ready }
-
-    func stream(
-        _ request: AssistantGenerationRequest
-    ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
-        lock.lock()
-        requests += 1
-        lock.unlock()
-        return AsyncThrowingStream { continuation in
-            continuation.finish(throwing: AssistantTestError.generationFailed)
-        }
-    }
-}
-
-private enum AssistantTestError: Error {
-    case generationFailed
-    case persistenceTimedOut
-}
-
-private actor MemoryHistoryBackend: AssistantHistoryBackend {
-    private var records: [UUID: AssistantConversationRecord] = [:]
-    private(set) var saveCount = 0
-    private(set) var loadCount = 0
-    private let loadDelay: Duration?
-
-    init(loadDelay: Duration? = nil) {
-        self.loadDelay = loadDelay
-    }
-
-    func loadRecords() async -> [AssistantConversationRecord] {
-        loadCount += 1
-        if let loadDelay {
-            try? await Task.sleep(for: loadDelay)
-        }
-        return Array(records.values)
-    }
-
-    func save(_ record: AssistantConversationRecord) async {
-        records[record.id] = record
-        saveCount += 1
-    }
-
-    func record(id: UUID) -> AssistantConversationRecord? {
-        records[id]
-    }
-}
-
-private actor MemoryDraftStore: PendingStudioPatchPersisting {
-    private var draft: StudioPatchDraft?
-
-    func load() async -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) async { self.draft = draft }
-}
-
-private struct IsolationHTTPClient: AssistantHTTPClient {
-    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        throw AssistantServiceIsolation.AccessError.denied
     }
 }
