@@ -13,6 +13,11 @@ import Testing
 @testable import FluxKlangMac
 
 struct MacPureModelSmokeTests {
+    @Test func testHostSelectsMemoryCredentials() throws {
+        try #require(AppPersistence.isTesting)
+        #expect(AssistantCredentialStores.current is MemoryAssistantCredentialStore)
+    }
+
     @Test func faderMathKeepsUnityAndClampsOutOfRangeInputs() {
         #expect(FaderMath.position(fromDecibels: 0) == FaderMath.unityPosition)
         #expect(FaderMath.decibels(fromPosition: FaderMath.unityPosition) == 0)
