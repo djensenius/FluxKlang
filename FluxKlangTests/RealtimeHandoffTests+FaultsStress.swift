@@ -31,6 +31,8 @@ private final class StressState: Sendable {
     let mispaired = Atomic<Int>(0)
     let empty = Atomic<Int>(0)
     let refused = Atomic<Int>(0)
+    /// Unknown-scope raises that returned anything but `.refused(.slotOutOfRange)`.
+    let wrongStatus = Atomic<Int>(0)
     /// `acknowledge` calls that returned `nil` (control-lock test).
     let nilAcknowledges = Atomic<Int>(0)
     /// First frames of all reported records; frames are unique per raise, so a repeat is a double report.
@@ -343,6 +345,112 @@ extension RealtimeHandoffTests {
             let frames = state.frames.withLock { $0 }
             #expect(Set(frames).count == frames.count)
             FaultLatching.expectInvariant(latch, scopes)
+        }
+    }
+}
+
+/// A real first raiser paused between its add and its publication (`raise`'s own `increment` and `publish`, run
+/// separately through the seam), then resumed. Deterministic and single-threaded.
+extension RealtimeHandoffTests.FaultLatching {
+    /// Resumes a paused raise; records an issue if the latch refuses it.
+    fileprivate static func resume(_ latch: FaultLatch,
+                                   _ paused: consuming FaultLatch.UnpublishedRaiseForTesting) -> Bool {
+        let resumed = latch.publishRaiseForTesting(paused)
+        if !resumed { Issue.record("the paused raise belongs to this latch") }
+        return resumed
+    }
+
+    /// Generation 0 latched `.retireBacklog` at frame 11 and was acknowledged, so a misread would report that stale
+    /// claim. While generation 1's first raiser is paused after its add, another raise lands and control observes:
+    /// the scope is latched, but `observe`, `pending` and acknowledging (including generation 0's observation) all
+    /// refuse it. Once resumed, the record carries the paused raiser's kind and frame and both raises' count.
+    @Test func pausedFirstRaiserBlocksAcknowledgeUntilPublished() throws {
+        let latch = try FaultLatch(scopes: Self.scopes)
+        #expect(latch.raise(Self.scope, .retireBacklog, frame: 11) == .ok)
+        let previous = try #require(latch.observe(Self.scope))
+        #expect(latch.acknowledge(previous) != nil)
+        guard let admitted = latch.admitRaiseForTesting(Self.scope, .sysexOverflow, frame: .min),
+              let paused = latch.addRaiseForTesting(admitted) else {
+            Issue.record("generation 1's first raise must be admitted and added")
+            return
+        }
+        let isFirst = paused.isFirstRaiser
+        #expect(isFirst)
+        // Paused between the add and the publication:
+        #expect(latch.raise(Self.scope, .staleClock, frame: 42) == .ok)
+        let publishing = FaultLatch.TestState(generation: 1, count: 2, claimGeneration: 0)
+        #expect(latch.stateForTesting(Self.scope) == publishing)
+        #expect(latch.isLatched(Self.scope))
+        #expect(latch.observe(Self.scope) == nil)
+        #expect(Self.pendingRecords(latch).isEmpty)
+        #expect(latch.acknowledge(previous) == nil)
+        #expect(Self.acknowledge(latch, Self.scope) == nil)
+        #expect(latch.stateForTesting(Self.scope) == publishing)
+        Self.expectInvariant(latch)
+        guard Self.resume(latch, paused) else { return }
+        let record = FaultRecord(scope: Self.scope, kind: .sysexOverflow, count: 2, firstFrame: .min)
+        #expect(Self.pendingRecords(latch) == [record])
+        let observation = try #require(latch.observe(Self.scope))
+        #expect(observation.record == record && observation.isAcknowledgeable)
+        #expect(latch.acknowledge(observation) == record)
+        #expect(!latch.isLatched(Self.scope))
+        #expect(latch.stateForTesting(Self.scope) == .init(generation: 2, count: 0, claimGeneration: 1))
+        Self.expectInvariant(latch)
+    }
+}
+
+/// The unknown-scope counter's own relaxed path under contention (TSan: `--filter Stress`). A finite, bounded run on
+/// this host; it is not proof about real callers (raise-context contract, #190) or about target atomic progress.
+extension RealtimeHandoffTests.FaultLatchingStress {
+    static let unknownScopes = [FaultScope(handoff: 9, target: 1), FaultScope(handoff: 0, target: .max),
+                                FaultScope(handoff: .max, target: 0)]
+
+    /// Raises unknown scopes `raisesPerThread` times, stopping early if cancelled; counts every result other than
+    /// `.refused(.slotOutOfRange)`.
+    fileprivate static func raiseUnknown(_ latch: FaultLatch, thread: Int, _ state: StressState) {
+        for raise in 0..<raisesPerThread {
+            if state.cancelled.load(ordering: .relaxed) { return }
+            let frame = Int64(thread * raisesPerThread + raise)
+            let scope = unknownScopes[(thread + raise) % unknownScopes.count]
+            if latch.raise(scope, kind(for: frame), frame: frame) != .refused(.slotOutOfRange) {
+                state.wrongStatus.add(1, ordering: .relaxed)
+            }
+        }
+        state.finishedRaisers.add(1, ordering: .releasing)
+    }
+
+    /// Every concurrent unknown-scope raise is refused with `.slotOutOfRange` and counted exactly once; a lost
+    /// update leaves the counter below `total`. No prepared scope latches.
+    @Test(.timeLimit(.minutes(1))) func concurrentUnknownRaisesAreAllCounted() throws {
+        let prepared = [FaultScope(handoff: 9, target: 0)]
+        let latch = try FaultLatch(scopes: prepared)
+        let state = StressState()
+        guard Self.run(threads: Self.raisers, state, { Self.raiseUnknown(latch, thread: $0, state) }) else { return }
+        #expect(state.finishedRaisers.load(ordering: .acquiring) == Self.raisers)
+        #expect(state.wrongStatus.load(ordering: .relaxed) == 0)
+        #expect(latch.unknownScopeFaults == Self.total)
+        #expect(!latch.isLatched(prepared[0]))
+        #expect(latch.pending { _ in } == 0)
+        RealtimeHandoffTests.FaultLatching.expectInvariant(latch, prepared)
+    }
+
+    /// Near the cap. The counter is seeded while quiescent (before the workers start) exactly `total` below
+    /// `unknownCap`, so every raise of the first run is counted and the counter must reach the cap exactly (a
+    /// lost update leaves it below). The second run's threads start after the first run's adds (the controller
+    /// acquired every exit), so each cap check reads the cap and does not add; every raise is still refused with
+    /// `.slotOutOfRange` and the report stays at the cap.
+    @Test(.timeLimit(.minutes(1))) func concurrentUnknownRaisesSaturateAtTheCap() throws {
+        let latch = try FaultLatch(scopes: [FaultScope(handoff: 9, target: 0)])
+        let cap = FaultLatch.unknownCap
+        latch.seedUnknownScopeFaultsForTesting(cap - Self.total)
+        for phase in ["to the cap", "at the cap"] {
+            let state = StressState()
+            guard Self.run(threads: Self.raisers, state, { Self.raiseUnknown(latch, thread: $0, state) }) else {
+                return
+            }
+            #expect(state.finishedRaisers.load(ordering: .acquiring) == Self.raisers, "\(phase)")
+            #expect(state.wrongStatus.load(ordering: .relaxed) == 0, "\(phase)")
+            #expect(latch.unknownScopeFaults == cap, "\(phase)")
         }
     }
 }

@@ -26,6 +26,8 @@ jobs:
             echo "::error::swiftlint '$have' is not the mise.toml pin '$want'"; exit 1
           fi
       - name: Lint
-        run: swiftlint --strict
+        run: make lint
+      - name: FaultLatch test-seam policy self-check
+        run: make fault-seam-policy-self-check
       - name: Hardware inventory self-check
         run: bash scripts/hardware-inventory/passive-inventory.sh --self-check --require-symbols

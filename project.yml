@@ -129,7 +129,7 @@ targets:
     platform: iOS
     sources:
       - path: FluxKlangTests
-        excludes: ["**/.DS_Store"]
+        excludes: ["**/.DS_Store", ".swiftlint.yml"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.tests
@@ -159,8 +159,16 @@ targets:
         excludes: ["**/.DS_Store"]
       # Platform-neutral helper shared with FluxKlangTests; it must not import an app module.
       - path: FluxKlangTests/TestSupport.swift
-      - path: FluxKlangTests
-        includes: ["RealtimeHandoffTests*.swift"]
+      - path: FluxKlangTests/ProjectPackagePathTests.swift
+      - path: FluxKlangTests/ProjectPackageAdmissionTests.swift
+      - path: FluxKlangTests/ProjectPackageStreamTests.swift
+      - path: FluxKlangTests/MIDIProtocolTests.swift
+      - path: FluxKlangTests/RealtimeHandoffTests.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Faults.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+Ownership.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
