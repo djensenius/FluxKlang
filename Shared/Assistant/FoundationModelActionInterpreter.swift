@@ -5,7 +5,41 @@ import FoundationModels
 
 /// On-device interpretation only: a fresh tool-free session receives no history or app capabilities.
 struct FoundationModelActionInterpreter: AssistantActionInterpreting {
+    enum LiveTestPurpose: Sendable, CaseIterable {
+        case model
+        case routing
+
+        func isPermitted(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+            guard !AssistantServiceIsolation.isStrictlyIsolated(in: environment) else { return false }
+            switch self {
+            case .model: return environment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] == "1"
+            case .routing: return environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"
+            }
+        }
+    }
+
+    private let liveTestPurpose: LiveTestPurpose?
+
+    init() { liveTestPurpose = nil }
+
+    private init(liveTestPurpose: LiveTestPurpose) { self.liveTestPurpose = liveTestPurpose }
+
+    /// Only the two existing qualification callers opt in; ordinary construction always stays isolated.
+    static func forLiveTesting(_ purpose: LiveTestPurpose) -> Self {
+        Self(liveTestPurpose: purpose)
+    }
+
+    private var deniesModelAccess: Bool {
+        if let liveTestPurpose { return !liveTestPurpose.isPermitted() }
+        return AssistantServiceIsolation.deniesLiveServices
+    }
+
+    private func requireModelAccess() throws {
+        guard !deniesModelAccess else { throw InterpretationError.unavailable }
+    }
+
     func availability() async -> AssistantActionInterpreterAvailability {
+        guard !deniesModelAccess else { return .unavailable(AssistantServiceIsolation.reason) }
         #if canImport(FoundationModels)
         guard #available(iOS 27, macOS 27, *) else { return .unavailable("requires OS 27") }
         switch SystemLanguageModel.default.availability {
@@ -22,6 +56,7 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
 
     func interpret(_ request: AssistantActionInterpretationRequest) async throws -> AssistantActionInterpretation {
         try Task.checkCancellation()
+        try requireModelAccess()
         guard request.text.count <= AssistantActionInterpretationAdapter.maximumTextLength else {
             return .clarification("No changes were made. Submit a request of at most 2,000 characters.")
         }
@@ -33,6 +68,7 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
         #if canImport(FoundationModels)
         guard #available(iOS 27, macOS 27, *) else { throw InterpretationError.unavailable }
         guard await availability() == .available else { throw InterpretationError.unavailable }
+        try requireModelAccess()
         if AssistantRoutingOwnership.owns(request.text) {
             return try await interpretRouting(request.text)
         }
@@ -72,6 +108,7 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     #if canImport(FoundationModels)
     @available(iOS 27, macOS 27, *)
     private func interpretRouting(_ text: String) async throws -> AssistantActionInterpretation {
+        try requireModelAccess()
         let session = LanguageModelSession(
             model: SystemLanguageModel.default, tools: [], instructions: Self.routingInstructions)
         let content = try await session.respond(to: text, generating: GuidedRoutingOutput.self,
@@ -155,7 +192,7 @@ struct FoundationModelActionInterpreter: AssistantActionInterpreting {
     }
 }
 
-/// Explicit deterministic UI-test mode, never a cloud or alternate interpretation provider.
+/// Deterministic isolated/UI-test mode, never a cloud or alternate interpretation provider.
 struct AssistantUnavailableActionInterpreter: AssistantActionInterpreting {
     let reason: String
     func availability() async -> AssistantActionInterpreterAvailability { .unavailable(reason) }

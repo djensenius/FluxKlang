@@ -449,7 +449,7 @@ struct AssistantRoutingChatTests {
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"))
     func optInNativeOwnerAndPriorMonoQualification() async throws {
-        let interpreter = FoundationModelActionInterpreter()
+        let interpreter = FoundationModelActionInterpreter.forLiveTesting(.routing)
         #expect(await interpreter.availability() == .available)
         let routing = try await interpreter.interpret(.init(text: AssistantRoutingFixture.text))
         #expect(routing == .routing(AssistantRoutingFixture.intent))

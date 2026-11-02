@@ -5,7 +5,17 @@ protocol AssistantHTTPClient: Sendable {
 }
 
 struct URLSessionAssistantHTTPClient: AssistantHTTPClient {
+    static func defaultClient(
+        live: () -> any AssistantHTTPClient = { URLSessionAssistantHTTPClient() }
+    ) -> (any AssistantHTTPClient)? {
+        guard !AssistantServiceIsolation.deniesLiveServices else { return nil }
+        return live()
+    }
+
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        guard !AssistantServiceIsolation.deniesLiveServices else {
+            throw AssistantServiceIsolation.AccessError.denied
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw CopilotAssistantError.invalidResponse
@@ -19,13 +29,14 @@ struct ConfigurableAssistantGenerator: AssistantGenerating {
     let coordinator: AssistantCoordinator
     let appleGenerator: any AssistantGenerating
     let fallback: any AssistantGenerating
-    var httpClient: any AssistantHTTPClient = URLSessionAssistantHTTPClient()
+    var httpClient: (any AssistantHTTPClient)? = URLSessionAssistantHTTPClient.defaultClient()
 
     func availability() async -> AssistantModelAvailability {
         switch await settings.provider {
         case .appleIntelligence:
             return await appleGenerator.availability()
         case .githubCopilot:
+            guard httpClient != nil else { return .deterministic }
             return await settings.copilotConfiguration() == nil
                 ? .failed("GitHub Copilot token is not configured.")
                 : .externalProviderReady("GitHub Copilot")
@@ -50,7 +61,7 @@ struct ConfigurableAssistantGenerator: AssistantGenerating {
                 case .appleIntelligence:
                     AssistantGeneratorRouter(model: appleGenerator, fallback: fallback)
                 case .githubCopilot:
-                    if let configuration = await settings.copilotConfiguration() {
+                    if let httpClient, let configuration = await settings.copilotConfiguration() {
                         AssistantGeneratorRouter(
                             model: CopilotAssistantGenerator(
                                 configuration: configuration,
@@ -84,15 +95,18 @@ struct CopilotAssistantGenerator: AssistantGenerating {
     let configuration: CopilotAssistantConfiguration
     let coordinator: AssistantCoordinator
     var authorizer = AssistantToolAuthorizer.model
-    var httpClient: any AssistantHTTPClient = URLSessionAssistantHTTPClient()
+    var httpClient: (any AssistantHTTPClient)? = URLSessionAssistantHTTPClient.defaultClient()
 
     func availability() async -> AssistantModelAvailability {
-        .externalProviderReady("GitHub Copilot")
+        httpClient == nil ? .deterministic : .externalProviderReady("GitHub Copilot")
     }
 
     func stream(
         _ request: AssistantGenerationRequest
     ) -> AsyncThrowingStream<AssistantStreamEvent, any Error> {
+        guard httpClient != nil else {
+            return AsyncThrowingStream { $0.finish(throwing: AssistantServiceIsolation.AccessError.denied) }
+        }
         if AssistantRoutingOwnership.owns(request.question) {
             return AsyncThrowingStream {
                 $0.yield(.text(AssistantRoutingOwnership.clarification))
@@ -161,6 +175,7 @@ struct CopilotAssistantGenerator: AssistantGenerating {
     }
 
     private func completion(messages: [CopilotMessage]) async throws -> CopilotResponse {
+        guard let httpClient else { throw AssistantServiceIsolation.AccessError.denied }
         guard let url = URL(string: "https://api.githubcopilot.com/chat/completions") else {
             throw CopilotAssistantError.invalidResponse
         }
