@@ -208,7 +208,8 @@ private final class ChatLifetimeFixture {
         try #require(environment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] == "0")
         try #require(environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "0")
         try #require(AssistantServiceIsolation.deniesLiveServices)
-        suite = "AssistantChatLifetime-\(UUID().uuidString)"
+        let suite = "AssistantChatLifetime-\(UUID().uuidString)"
+        self.suite = suite
         defaults = try #require(UserDefaults(suiteName: suite))
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
         history = ChatLifetimeHistory(local: LocalAssistantHistoryBackend(
