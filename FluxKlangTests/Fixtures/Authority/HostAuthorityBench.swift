@@ -39,16 +39,16 @@ enum AuthorityBench {
     }
 
     /// One output node; `withAux` adds a second node, for consistent partial reports.
-    static func candidate(withAux: Bool = false) -> GraphDocument {
+    static func candidate(withAux: Bool = false, revision: ContractRevision = .initial) -> GraphDocument {
         let out = GraphNode(id: nodeOut, kind: .plugin, label: "Out", requiredCapabilities: [audio])
         let aux = GraphNode(id: nodeAux, kind: .plugin, label: "Aux", requiredCapabilities: [audio])
-        return GraphDocument(id: graphID, revision: .initial,
+        return GraphDocument(id: graphID, revision: revision,
                              capabilities: [CapabilityDefinition(id: audio, label: "Audio")],
                              nodes: withAux ? [out, aux] : [out])
     }
 
-    static func request() -> ActivationRequest {
-        ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: .initial,
+    static func request(base: ContractRevision = .initial) -> ActivationRequest {
+        ActivationRequest(draft: DraftID(validated: "draft.main"), graph: graphID, baseRevision: base,
                           hostEpoch: hostEpoch, permission: permission,
                           digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human)
     }
@@ -58,22 +58,53 @@ enum AuthorityBench {
     }
 
     /// Opens A (with `lifecycleA`) and B; A acquires the lease on `window` unless it is nil.
-    static func makeAuthority(holding window: WindowID? = windowA,
-                              lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
+    static func makeAuthority(_ engine: inout ScriptedActivationEngine, holding window: WindowID? = windowA,
+                              lifecycleA: EngineLifecycle? = nil,
+                              planCapacity: Int = 512) async throws -> HostAuthority {
         let ledger = try GenerationLedger(primaryClock: ClockID(validated: "smp.main"), musicalClock: nil,
                                           nominalRate: 48_000)
-        let authority = try HostAuthority(host: ledger, live: try liveState())
-        try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: runningPlan),
+        let authority = try HostAuthority(host: ledger, live: try liveState(), planCapacity: planCapacity)
+        try await authority.open(project: projectA, running: RunningGraph(revision: .initial, prepared: nil),
                                  lifecycle: lifecycleA).get()
         try await authority.open(project: projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
-        if let window { _ = try await authority.acquire(project: projectA, window: window).get() }
+        if lifecycleA != .recovering {
+            _ = try await authority.acquire(project: projectA, window: windowA).get()
+            try await authority.begin(request(), candidate: candidate(), project: projectA).get()
+            await engine.drain(authority)
+            let taken = try engine.requireNext()
+            let answer = engine.prepare(taken, as: runningPlan)
+            _ = try await authority.prepareAnswered(answer, instance: taken.instance, attempt: taken.attempt).get()
+            let authorization = try await authority.authorize(project: projectA, gesture: gesture()).get()
+            try await authority.commit(project: projectA, authorization: authorization).get()
+            await engine.drain(authority)
+            _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
+            #expect(await authority.snapshot().queue.isEmpty)
+            if window != windowA { try await authority.release(project: projectA).get() }
+        }
+        if let window, await authority.snapshot().lease == nil {
+            _ = try await authority.acquire(project: projectA, window: window).get()
+        }
         return authority
+    }
+
+    /// Convenience only for tests that never hand engine work to a second double.
+    static func makeAuthority(holding window: WindowID? = windowA,
+                              lifecycleA: EngineLifecycle? = nil) async throws -> HostAuthority {
+        var engine = try ScriptedActivationEngine()
+        return try await makeAuthority(&engine, holding: window, lifecycleA: lifecycleA)
+    }
+
+    static func begin(_ authority: HostAuthority, project: ProjectID = projectA,
+                      withAux: Bool = false) async throws {
+        let revision = try await state(authority, project).running.revision
+        try await authority.begin(request(base: revision), candidate: candidate(withAux: withAux, revision: revision),
+                                  project: project).get()
     }
 
     /// Begins `project`, drains the queue and routes the engine's success; returns the reviewed plan.
     static func review(_ authority: HostAuthority, _ engine: inout ScriptedActivationEngine,
                        project: ProjectID = projectA, withAux: Bool = false) async throws -> PreparedActivationID {
-        try await authority.begin(request(), candidate: candidate(withAux: withAux), project: project).get()
+        try await begin(authority, project: project, withAux: withAux)
         await engine.drain(authority)
         let answer = try #require(await engine.answerNext(authority))
         #expect(answer.verdict == .success(.routed))

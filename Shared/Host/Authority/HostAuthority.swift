@@ -12,12 +12,9 @@
 
 actor HostAuthority {
     static let projectLimit = 16
-    /// Abandoned attempts remembered for discarding their late success. When the
-    /// FIFO is full, abandoning evicts the oldest: a success arriving later for an
-    /// evicted attempt is `stalePrepareResponse` and is NOT discarded, so the engine
-    /// may keep that plan (a bounded engine-side leak; H5d may add an engine reset
-    /// that clears it). Abandons alone never make `begin` refuse.
-    static let abandonedPrepareLimit = 64
+    /// A control-contract bound, not a runtime sizing conclusion. Lost answers
+    /// retain capacity indefinitely; no abandoned FIFO evicts ownership.
+    static let planCapacity = 64
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access
     // from outside the actor: module code may `await` a read of any internal
@@ -32,8 +29,9 @@ actor HostAuthority {
     private var book: HostAuthorityBook
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
-    init(host ledger: GenerationLedger, live: HostLiveState) throws(GenerationLedgerError) {
-        book = try HostAuthorityBook(host: ledger, live: live)
+    init(host ledger: GenerationLedger, live: HostLiveState,
+         planCapacity: Int = HostAuthority.planCapacity) throws(HostAuthorityRefusal) {
+        book = try HostAuthorityBook(host: ledger, live: live, planCapacity: planCapacity)
     }
 
     func snapshot() -> HostAuthoritySnapshot {
@@ -86,10 +84,16 @@ actor HostAuthority {
         book.begin(request, candidate: candidate, project: project)
     }
 
-    /// `HostAuthorityBook.prepareAnswered(_:attempt:)`.
+    /// `HostAuthorityBook.prepareAnswered(_:instance:attempt:)`.
     func prepareAnswered(_ result: Result<PreparedActivationID, PrepareFailure>,
+                         instance: EngineInstanceID,
                          attempt: PrepareAttemptID) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
-        book.prepareAnswered(result, attempt: attempt)
+        book.prepareAnswered(result, instance: instance, attempt: attempt)
+    }
+
+    /// Truthful executor acknowledgement remains a G2 caller premise.
+    func retired(_ binding: PlanBinding) -> Result<Void, HostAuthorityRefusal> {
+        book.retired(binding)
     }
 
     /// `HostAuthorityBook.abandonPrepare(project:)`.

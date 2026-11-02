@@ -2,129 +2,154 @@
 //  ScriptedActivationEngine.swift
 //  FluxKlangTests
 //
-//  A scripted activation engine for the HostAuthority tests: it drains the
-//  actor's command queue, records every command, answers prepares from a
-//  fixed ID sequence and fault script, and reports commits consistently with
-//  each plan's nodes. No audio, MIDI, hardware or I/O.
+//  Qualified, bounded contract double. No audio, hardware or executor safety proof.
 //
 
+import Testing
 @testable import FluxKlang
 
-/// Why the scripted engine could not be created.
 enum ScriptedEngineError: Error, Equatable, Sendable {
     case faults(FaultScriptError)
     case recorder(BoundedRecorderError)
     case ids(FixtureIDSequenceError)
+    case invalidTrackedLimit
 }
 
-/// One delivered prepare answer and what the actor made of it.
 struct ScriptedPrepareAnswer: Sendable {
-    let attempt: PrepareAttemptID
+    let preparation: HostPrepare
     let answer: Result<PreparedActivationID, PrepareFailure>
     let verdict: Result<PrepareAnswerOutcome, HostAuthorityRefusal>
+    var attempt: PrepareAttemptID { preparation.attempt }
 }
 
-/// One `.commit` the engine took and has not reported.
 struct ScriptedCommit: Hashable, Sendable {
-    let prepared: PreparedActivationID
+    let binding: PlanBinding
     let attempt: CommitAttemptID
     let token: EngineLeaseToken
+    var prepared: PreparedActivationID { binding.prepared }
 }
 
-/// One delivered commit report and what the actor made of it.
 struct ScriptedCommitReport: Sendable {
     let report: ActivationCommitReport
     let verdict: Result<CommitReportOutcome, HostAuthorityRefusal>
 }
 
+struct ScriptedHeldPlan: Hashable, Sendable {
+    let preparation: HostPrepare
+    let id: PreparedActivationID
+
+    func matches(_ binding: PlanBinding) -> Bool {
+        preparation.instance == binding.instance && preparation.attempt == binding.attempt && id == binding.prepared
+    }
+}
+
 struct ScriptedActivationEngine: Sendable {
-    /// Fails exactly the scripted prepare answers (1-based, in answer order).
     private(set) var faults: FaultScript
-    /// Every command taken from the actor, in order.
     private(set) var recorder: BoundedRecorder<EngineCommand>
-    /// Prepared plan IDs `fx.prep.1`, `fx.prep.2`, … in answer order.
     private(set) var ids: FixtureIDSequence<PreparedActivationTag>
-    /// Prepares taken and not yet answered, oldest first.
-    private(set) var pending: [PrepareAttemptID] = []
-    /// Commits taken and not yet reported, oldest first.
+    let trackedLimit: Int
+    private(set) var pending: [HostPrepare] = []
     private(set) var pendingCommits: [ScriptedCommit] = []
-    /// The node IDs of each prepare taken, until it is answered.
-    private var preparingNodes: [PrepareAttemptID: Set<NodeID>] = [:]
-    /// The node IDs of each plan this engine prepared (answered with success).
-    private(set) var plannedNodes: [PreparedActivationID: Set<NodeID>] = [:]
+    /// Kept for lost answers too. Both chosen and generated answers use this exact key.
+    private(set) var plannedNodes: [HostPrepare: Set<NodeID>] = [:]
+    private(set) var held: [ScriptedHeldPlan] = []
+    private(set) var disposed: [ScriptedHeldPlan] = []
+    private(set) var anomalies: [String] = []
 
     init(failing: [Int: FixtureFault] = [:], answerLimit: Int = 512,
-         recordCapacity: Int = 1_024) throws(ScriptedEngineError) {
+         recordCapacity: Int = 1_024, trackedLimit: Int = 256) throws(ScriptedEngineError) {
+        guard trackedLimit > 0 else { throw .invalidTrackedLimit }
+        self.trackedLimit = trackedLimit
         do { faults = try FaultScript(failing: failing, callLimit: answerLimit) } catch { throw .faults(error) }
         do { recorder = try BoundedRecorder(capacity: recordCapacity) } catch { throw .recorder(error) }
         do { ids = try FixtureIDSequence(prefix: "prep", limit: answerLimit) } catch { throw .ids(error) }
     }
 
     var commands: [EngineCommand] { recorder.entries }
-
-    /// The discards taken so far, in order.
-    var discarded: [PreparedActivationID] {
-        commands.compactMap { command in
-            if case .discard(let id) = command { return id }
-            return nil
-        }
+    var discarded: [PlanBinding] {
+        commands.compactMap { if case .discard(let binding) = $0 { binding } else { nil } }
     }
 
-    /// Takes every queued command, recording each and remembering each prepare and commit.
-    /// Returns the commands taken by this call.
     @discardableResult
     mutating func drain(_ authority: HostAuthority) async -> [EngineCommand] {
         var taken: [EngineCommand] = []
         while let command = await authority.nextEngineCommand() {
-            _ = recorder.record(command)
+            if !recorder.record(command) { anomaly("command history capacity") }
             switch command {
-            case .prepare(let graph, let attempt):
-                pending.append(attempt)
-                preparingNodes[attempt] = Set(graph.nodes.map(\.id))
-            case .commit(let prepared, let attempt, let token):
-                pendingCommits.append(ScriptedCommit(prepared: prepared, attempt: attempt, token: token))
+            case .prepare(let graph, let instance, let attempt):
+                takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
+            case .commit(let binding, let attempt, let token):
+                takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
+            case .discard(let binding):
+                if dispose(binding) {
+                    if case .failure(let refusal) = await authority.retired(binding) {
+                        anomaly("retirement acknowledgement refused: \(refusal)")
+                    }
+                }
             default: break
             }
-            taken.append(command)
+            if room(taken.count, "drain history") { taken.append(command) }
         }
         return taken
     }
 
-    /// The scripted answer to the next prepare, without delivering it: the next
-    /// fixture ID, or `.engineRefused` for a scripted fault. A call past the
-    /// limit or the ID sequence's end also fails closed as `.engineRefused`.
+    private mutating func takePreparation(_ graph: GraphDocument, key: HostPrepare) {
+        if plannedNodes[key] != nil {
+            anomaly("duplicate prepare dispatch")
+        } else if room(plannedNodes.count, "tracked preparations"), room(pending.count, "pending prepares") {
+            plannedNodes[key] = Set(graph.nodes.map(\.id))
+            pending.append(key)
+        }
+    }
+
+    private mutating func takeCommit(_ commit: ScriptedCommit) {
+        if !held.contains(where: { $0.matches(commit.binding) }) { anomaly("commit of unknown binding") }
+        if room(pendingCommits.count, "pending commits") { pendingCommits.append(commit) }
+    }
+
     mutating func scriptedAnswer() -> Result<PreparedActivationID, PrepareFailure> {
-        do { try faults.nextCall() } catch { return .failure(.engineRefused) }
-        do { return .success(try ids.next()) } catch { return .failure(.engineRefused) }
+        do { try faults.nextCall() } catch {
+            if error == .callLimitExceeded { anomaly("answer script capacity") }
+            return .failure(.engineRefused)
+        }
+        do { return .success(try ids.next()) } catch {
+            anomaly("answer ID capacity")
+            return .failure(.engineRefused)
+        }
     }
 
-    /// Answers the oldest pending prepare with the scripted answer; nil when nothing is pending.
     mutating func answerNext(_ authority: HostAuthority) async -> ScriptedPrepareAnswer? {
-        guard let attempt = withholdNext() else { return nil }
-        let answer = scriptedAnswer()
-        if case .success(let id) = answer, let nodes = preparingNodes[attempt] { plannedNodes[id] = nodes }
-        preparingNodes[attempt] = nil
-        let verdict = await authority.prepareAnswered(answer, attempt: attempt)
-        return ScriptedPrepareAnswer(attempt: attempt, answer: answer, verdict: verdict)
+        guard let preparation = withholdNext() else { return nil }
+        let answer: Result<PreparedActivationID, PrepareFailure>
+        switch scriptedAnswer() {
+        case .success(let id): answer = prepare(preparation, as: id)
+        case .failure(let failure): answer = terminalFailure(preparation, reason: failure)
+        }
+        let verdict = await authority.prepareAnswered(
+            answer, instance: preparation.instance, attempt: preparation.attempt
+        )
+        return ScriptedPrepareAnswer(preparation: preparation, answer: answer, verdict: verdict)
     }
 
-    /// Takes the oldest pending prepare without answering it (the answer is lost
-    /// or late); the test delivers it later, for example with `scriptedAnswer()`.
-    mutating func withholdNext() -> PrepareAttemptID? {
+    mutating func withholdNext() -> HostPrepare? {
         pending.isEmpty ? nil : pending.removeFirst()
     }
 
-    /// Takes the oldest pending commit without reporting it (the report is lost or
-    /// late); the test may deliver it later, for example with `report(on:_:)`.
+    mutating func requireNext() throws -> HostPrepare {
+        let next = withholdNext()
+        return try #require(next)
+    }
+
     mutating func withholdCommit() -> ScriptedCommit? {
         pendingCommits.isEmpty ? nil : pendingCommits.removeFirst()
     }
 
-    /// A report on `commit` consistent with its plan's nodes: `.succeeded` applies
-    /// every node, `.failed` none and `.partial` only the lowest node ID (so a
-    /// consistent partial needs a plan of two or more nodes).
     func report(on commit: ScriptedCommit, _ outcome: ActivationCommitOutcome) -> ActivationCommitReport {
-        let nodes = plannedNodes[commit.prepared] ?? []
+        let key = HostPrepare(instance: commit.binding.instance, attempt: commit.binding.attempt)
+        if plannedNodes[key] == nil || !held.contains(where: { $0.matches(commit.binding) }) {
+            Issue.record("report for unknown qualified preparation")
+        }
+        let nodes = plannedNodes[key] ?? []
         let applied: Set<NodeID>
         switch outcome {
         case .succeeded: applied = nodes
@@ -135,11 +160,58 @@ struct ScriptedActivationEngine: Sendable {
                                       applied: applied, unapplied: nodes.subtracting(applied))
     }
 
-    /// Reports the oldest pending commit with `outcome`; nil when none is pending.
     mutating func report(_ authority: HostAuthority, _ outcome: ActivationCommitOutcome) async
     -> ScriptedCommitReport? {
         guard let commit = withholdCommit() else { return nil }
         let report = report(on: commit, outcome)
         return ScriptedCommitReport(report: report, verdict: await authority.commitReported(report))
+    }
+
+    mutating func prepare(_ preparation: HostPrepare,
+                          as id: PreparedActivationID) -> Result<PreparedActivationID, PrepareFailure> {
+        guard plannedNodes[preparation] != nil, !held.contains(where: { $0.preparation == preparation }) else {
+            anomaly("unknown or duplicate preparation answer")
+            return .failure(.engineRefused)
+        }
+        guard room(held.count, "held plans") else {
+            plannedNodes[preparation] = nil
+            return .failure(.engineRefused)
+        }
+        held.append(ScriptedHeldPlan(preparation: preparation, id: id))
+        return .success(id)
+    }
+
+    /// Simulated terminal cleanup, including the preparation's node bookkeeping.
+    mutating func terminalFailure(
+        _ preparation: HostPrepare, reason: PrepareFailure
+    ) -> Result<PreparedActivationID, PrepareFailure> {
+        held.removeAll { $0.preparation == preparation }
+        plannedNodes[preparation] = nil
+        pending.removeAll { $0 == preparation }
+        return .failure(reason)
+    }
+
+    private mutating func dispose(_ binding: PlanBinding) -> Bool {
+        guard let index = held.firstIndex(where: { $0.matches(binding) }) else {
+            anomaly("discard of unknown qualified binding")
+            return false
+        }
+        let plan = held.remove(at: index)
+        plannedNodes[plan.preparation] = nil
+        if room(disposed.count, "disposal history") { disposed.append(plan) }
+        return true
+    }
+
+    private mutating func room(_ count: Int, _ collection: String) -> Bool {
+        guard count < trackedLimit else {
+            anomaly("\(collection) capacity")
+            return false
+        }
+        return true
+    }
+
+    private mutating func anomaly(_ message: String) {
+        Issue.record(Comment(rawValue: message))
+        if anomalies.count < trackedLimit { anomalies.append(message) }
     }
 }

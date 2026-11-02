@@ -10,24 +10,25 @@ extension HostAuthorityTests {
     /// The delivery guard, commit abandonment, and lease release and transfer (H5c-1).
     struct ActorCommit {
         @Test func commitWithCurrentLeaseIsDelivered() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let reviewed = try await Bench.commitQueued(authority, &engine)
+            let binding = try #require(try await Bench.state(authority).reviewed)
             let attempt = try await Bench.attempt(authority)
             let token = try #require(await authority.snapshot().lease?.token)
-            #expect(await engine.drain(authority) == [.commit(reviewed, attempt, token)])
-            #expect(engine.pendingCommits == [ScriptedCommit(prepared: reviewed, attempt: attempt, token: token)])
+            #expect(await engine.drain(authority) == [.commit(binding, attempt, token)])
+            #expect(engine.pendingCommits == [ScriptedCommit(binding: binding, attempt: attempt, token: token)])
             let after = await authority.snapshot()
             #expect(after.inFlight == [Bench.projectA: attempt] && after.authorizedWindows.isEmpty)
             let state = try await Bench.state(authority)
-            #expect(state.phase == .committing && state.reviewed == reviewed)
-            #expect(state.lifecycle == .preparing(try ContractRevision.initial.next(), over: .running))
+            #expect(state.phase == .committing && state.reviewed?.prepared == reviewed)
+            #expect(state.lifecycle == .preparing(try state.running.revision.next(), over: .running))
         }
 
         @Test(arguments: CommitLeaseChange.allCases)
         func commitWithReplacedLeaseIsNotDelivered(_ change: CommitLeaseChange) async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let reviewed = try await Bench.commitQueued(authority, &engine)
             let committed = try #require(Bench.context(await authority.snapshot()))
             let bumps: Generation
@@ -49,20 +50,20 @@ extension HostAuthorityTests {
             let prepareB = try #require(try await Bench.state(authority, Bench.projectB).lastPrepareAttempt)
             let taken = await engine.drain(authority)
             #expect(taken.count == 2 && taken.first == .setOutputsMuted(true))
-            guard taken.count == 2, case .prepare(_, prepareB) = taken[1] else {
+            guard taken.count == 2, case .prepare(_, _, prepareB) = taken[1] else {
                 Issue.record("Expected the mute, then B's prepare; got \(taken)")
                 return
             }
             #expect(engine.pendingCommits.isEmpty && engine.discarded.isEmpty)
             let state = try await Bench.state(authority)
             #expect(state.phase == .recovering(reviewed, cause: .leaseLost))
-            #expect(state.lifecycle == .recovering && state.reviewed == reviewed)
+            #expect(state.lifecycle == .recovering && state.reviewed?.prepared == reviewed)
             #expect(await authority.snapshot().inFlight.isEmpty)
         }
 
         @Test func abandonedCommitIsNeverDelivered() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let reviewed = try await Bench.commitQueued(authority, &engine)
             let attempt = try await Bench.attempt(authority)
             try await authority.abandonCommit(attempt, reason: .outcomeUnknown).get()
@@ -76,8 +77,8 @@ extension HostAuthorityTests {
         }
 
         @Test func abandoningADeliveredCommitEndsItsFlight() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitQueued(authority, &engine)
             await engine.drain(authority)
             let attempt = try await Bench.attempt(authority)
@@ -90,12 +91,12 @@ extension HostAuthorityTests {
         }
 
         @Test func abandonCommitRefusalsChangeNothing() async throws {
-            let authority = try await Bench.makeAuthority()
-            var engine = try ScriptedActivationEngine()
+            var engine = try ScriptedActivationEngine(trackedLimit: 512)
+            let authority = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitQueued(authority, &engine)
             let attempt = try await Bench.attempt(authority)
-            let foreign = try await Bench.makeAuthority()
             var foreignEngine = try ScriptedActivationEngine()
+            let foreign = try await Bench.makeAuthority(&foreignEngine)
             _ = try await Bench.commitQueued(foreign, &foreignEngine)
             let foreignAttempt = try await Bench.attempt(foreign)
             let before = await authority.snapshot()
@@ -123,14 +124,14 @@ extension HostAuthorityTests {
 
         @Test func releaseRefusedWhileDeliveredCommitUnreported() async throws {
             // Only queued: release is allowed, and the guard then withholds the commit.
-            let queued = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let queued = try await Bench.makeAuthority(&engine)
             _ = try await Bench.commitQueued(queued, &engine)
             try await queued.release(project: Bench.projectA).get()
             #expect(await engine.drain(queued) == [.setOutputsMuted(true)])
 
-            let delivered = try await Bench.makeAuthority()
             var deliveredEngine = try ScriptedActivationEngine()
+            let delivered = try await Bench.makeAuthority(&deliveredEngine)
             _ = try await Bench.commitQueued(delivered, &deliveredEngine)
             await deliveredEngine.drain(delivered)
             let before = await delivered.snapshot()
@@ -162,15 +163,15 @@ extension HostAuthorityTests {
         }
 
         @Test func openRefusesARecoveringPlan() async throws {
-            let authority = try await Bench.makeAuthority()
             var engine = try ScriptedActivationEngine()
+            let authority = try await Bench.makeAuthority(&engine)
             let reviewed = try await Bench.commitQueued(authority, &engine)
             try await authority.abandonCommit(try await Bench.attempt(authority), reason: .outcomeUnknown).get()
             await engine.drain(authority)
             let before = await authority.snapshot()
             let opened = await authority.open(project: Bench.projectC,
                                               running: RunningGraph(revision: .initial, prepared: reviewed))
-            #expect(Bench.refusal(opened) == .activation(.preparedIDInUse))
+            #expect(Bench.refusal(opened) == .unqualifiedResident)
             #expect(await authority.snapshot() == before)
         }
     }

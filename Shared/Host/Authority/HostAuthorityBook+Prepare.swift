@@ -2,17 +2,10 @@
 //  HostAuthorityBook+Prepare.swift
 //  FluxKlang
 //
-//  The prepare path of `HostAuthorityBook` (#62 H5b): beginning an activation,
-//  routing the engine's answers, abandoning a prepare and cancelling a review.
-//  Every refusal leaves the whole book unchanged.
+//  Stage transaction and queue checks before the canonical ledger's one mutation.
 //
 
 extension HostAuthorityBook {
-    /// Validates and begins `request` against the live context the actor builds
-    /// itself. Checks, in order: project, queue room for the `.prepare` (before the
-    /// transition; `.queueFull` moves nothing), the running revision can advance
-    /// (`.activation(.overflow)`, so the lifecycle never shows a revision that cannot
-    /// be prepared), then the transaction's own checks (`.busy` while preparing).
     mutating func begin(_ request: ActivationRequest, candidate: GraphDocument,
                         project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
@@ -28,61 +21,67 @@ extension HostAuthorityBook {
         case .failure(let refusal): return .failure(.activation(refusal))
         case .success(let emitted): effects = emitted
         }
-        // Unreachable unless the transaction breaks its contract (a successful begin issues an attempt).
-        guard let attempt = state.transaction.lastPrepareAttempt else { return .failure(.activation(.busy)) }
+        guard effects.count == 1, case .prepare(let validated, let attempt) = effects[0] else {
+            return .failure(.unboundPlan)
+        }
+        let instance = plans.currentInstance
         var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue(effects: effects) else { return .failure(.queueFull) }
+        guard case .success = stagedQueue.enqueue([.prepare(validated.graph, instance, attempt)]) else {
+            return .failure(.queueFull)
+        }
+        do { try plans.dispatch(instance: instance, attempt: attempt) } catch { return .failure(.plans(error)) }
         state.lifecycle = state.lifecycle.startingPreparation(of: target)
         queue = stagedQueue
-        outstanding[project] = attempt
+        outstanding[project] = HostPrepare(instance: instance, attempt: attempt)
         projects[project] = state
         return .success(())
     }
 
-    /// Routes the engine's answer to the project that issued `attempt`.
-    /// - An outstanding attempt is routed to its project's transaction. A success
-    ///   naming any live plan (any project's running, reviewed or held plan) or a
-    ///   plan whose `.discard` is still queued is refused as `preparedIDInUse`
-    ///   first, with nothing changed: adopting it would let that discard destroy it.
-    /// - An abandoned attempt's success is discarded exactly once, unless it names
-    ///   a live plan or a plan whose `.discard` is already queued; its failure, a
-    ///   live plan or an already queued discard is `.dropped` (never `.queueFull`).
-    /// - An unknown, foreign, evicted or already answered attempt is
-    ///   `stalePrepareResponse` and never discards.
-    ///
-    /// Re-delivery: on `.queueFull` nothing changed, the attempt is still
-    /// remembered, and the engine must deliver the same answer again after the
-    /// queue drains; otherwise that plan is never discarded.
-    mutating func prepareAnswered(_ result: Result<PreparedActivationID, PrepareFailure>,
-                                  attempt: PrepareAttemptID) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
-        if let project = outstanding.first(where: { $0.value == attempt })?.key {
-            return route(result, attempt: attempt, project: project)
+    /// Answers carry the actual engine instance even when the attempt is known.
+    /// Lost answers stay pending and consume capacity; late answers need no queue room.
+    mutating func prepareAnswered(
+        _ result: Result<PreparedActivationID, PrepareFailure>, instance: EngineInstanceID, attempt: PrepareAttemptID
+    ) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
+        let preparation = HostPrepare(instance: instance, attempt: attempt)
+        if let project = outstanding.first(where: { $0.value == preparation })?.key {
+            return route(result, preparation: preparation, project: project)
         }
-        if let index = abandoned.firstIndex(where: { $0.attempt == attempt }) {
-            return discardLate(result, abandonedAt: index)
+        guard let record = plans.snapshot().records.first(where: { $0.instance == instance }),
+              record.entries.contains(where: { $0.attempt == attempt && $0.state == .pending(reclaim: true) }) else {
+            return .failure(.activation(.stalePrepareResponse))
         }
-        return .failure(.activation(.stalePrepareResponse))
+        let completion: EnginePlanCompletion
+        do { completion = try plans.complete(instance: instance, attempt: attempt, result: result) } catch {
+            return .failure(.plans(error))
+        }
+        switch completion {
+        case .retiring(let binding):
+            scheduleRetirement(binding)
+            return .success(.reclaimed(binding))
+        case .failed: return .success(.dropped)
+        case .held: return .success(.routed) // Unreachable: the checked entry is pending-reclaim.
+        }
     }
 
-    /// Gives up on `project`'s outstanding prepare. Its late success is discarded,
-    /// unless `abandonedPrepareLimit` later abandons evict it first.
     mutating func abandonPrepare(project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
-        guard let attempt = outstanding[project], state.transaction.lastPrepareAttempt == attempt else {
+        guard let preparation = outstanding[project],
+              state.transaction.lastPrepareAttempt == preparation.attempt else {
             return .failure(.activation(.unexpectedPhase(state.transaction.phase)))
         }
-        if case .failure(let refusal) = state.transaction.abandonPrepare(attempt) {
+        if case .failure(let refusal) = state.transaction.abandonPrepare(preparation.attempt) {
             return .failure(.activation(refusal))
+        }
+        do { try plans.reclaim(instance: preparation.instance, attempt: preparation.attempt) } catch {
+            return .failure(.plans(error))
         }
         state.lifecycle = state.lifecycle.endingPreparation
         projects[project] = state
         outstanding[project] = nil
-        if abandoned.count >= HostAuthority.abandonedPrepareLimit { abandoned.removeFirst() }
-        abandoned.append(AbandonedPrepare(attempt: attempt, project: project))
         return .success(())
     }
 
-    /// Withdraws the plan awaiting review and queues its discard (room checked first).
+    /// Queue-room preflight remains deliberate: a full-queue cancel refuses unchanged.
     mutating func cancel(project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         guard queue.canAccept(1) else { return .failure(.queueFull) }
@@ -91,55 +90,57 @@ extension HostAuthorityBook {
         case .failure(let refusal): return .failure(.activation(refusal))
         case .success(let emitted): effects = emitted
         }
-        var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue(effects: effects) else { return .failure(.queueFull) }
+        guard let binding = state.reviewed, effects == [.discard(binding.prepared)],
+              phase(of: binding) == .held else { return .failure(.unboundPlan) }
+        do { try plans.release(binding) } catch { return .failure(.plans(error)) }
         state.lifecycle = state.lifecycle.endingPreparation
         state.reviewed = nil
-        queue = stagedQueue
         projects[project] = state
         authorizedWindows[project] = nil
+        scheduleRetirement(binding)
         return .success(())
     }
 
-    private mutating func route(_ result: Result<PreparedActivationID, PrepareFailure>, attempt: PrepareAttemptID,
-                                project: ProjectID) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
+    private mutating func route(
+        _ result: Result<PreparedActivationID, PrepareFailure>, preparation: HostPrepare, project: ProjectID
+    ) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.activation(.stalePrepareResponse)) }
-        if case .success(let id) = result, livePlans().contains(id) || queue.pending.contains(.discard(id)) {
-            return .failure(.activation(.preparedIDInUse))
+        // Defensive: abandonPrepare removes outstanding before a reclaiming answer can route here.
+        // Refuse inconsistent ownership before advancing the transaction or mutating the ledger.
+        guard let record = plans.snapshot().records.first(where: { $0.instance == preparation.instance }),
+              record.entries.contains(where: {
+                  $0.attempt == preparation.attempt && $0.state == .pending(reclaim: false)
+              }) else { return .failure(.unboundPlan) }
+        if case .failure(let refusal) = state.transaction.prepared(result, attempt: preparation.attempt) {
+            guard case .success(let prepared) = result else { return .failure(.activation(refusal)) }
+            if case .failure(let abandoned) = state.transaction.abandonPrepare(preparation.attempt) {
+                return .failure(.activation(abandoned))
+            }
+            let binding: PlanBinding
+            do {
+                binding = try plans.completeRetiring(
+                    instance: preparation.instance, attempt: preparation.attempt, prepared: prepared
+                )
+            } catch { return .failure(.plans(error)) }
+            state.lifecycle = state.lifecycle.endingPreparation
+            projects[project] = state
+            outstanding[project] = nil
+            scheduleRetirement(binding)
+            return .success(.refusedReclaimed(binding, refusal: refusal))
         }
-        if case .failure(let refusal) = state.transaction.prepared(result, attempt: attempt) {
-            return .failure(.activation(refusal))
-        }
-        switch result {
-        case .success(let id): state.reviewed = id
-        case .failure: state.lifecycle = state.lifecycle.endingPreparation
+        let completion: EnginePlanCompletion
+        do {
+            completion = try plans.complete(
+                instance: preparation.instance, attempt: preparation.attempt, result: result
+            )
+        } catch { return .failure(.plans(error)) }
+        switch completion {
+        case .held(let binding): state.reviewed = binding
+        case .failed: state.lifecycle = state.lifecycle.endingPreparation
+        case .retiring(let binding): scheduleRetirement(binding)
         }
         projects[project] = state
         outstanding[project] = nil
         return .success(.routed)
-    }
-
-    /// The transaction copy only supplies the refusal reported with the discard.
-    private mutating func discardLate(_ result: Result<PreparedActivationID, PrepareFailure>,
-                                      abandonedAt index: Int) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
-        let entry = abandoned[index]
-        guard case .success(let id) = result, !livePlans().contains(id) else {
-            abandoned.remove(at: index)
-            return .success(.dropped)
-        }
-        // Its discard is already queued: never queue a second one (nor refuse `.queueFull` for it).
-        guard !queue.pending.contains(.discard(id)) else {
-            abandoned.remove(at: index)
-            return .success(.dropped)
-        }
-        var copy = projects[entry.project]?.transaction
-        let refusal: ActivationRefusal
-        switch copy?.prepared(result, attempt: entry.attempt) {
-        case .failure(let reason): refusal = reason
-        case .success, nil: refusal = .stalePrepareResponse
-        }
-        guard case .success = queue.enqueue(effects: [.discard(id)]) else { return .failure(.queueFull) }
-        abandoned.remove(at: index)
-        return .success(.discarded(id, refusal: refusal))
     }
 }

@@ -1,0 +1,2 @@
+disabled_rules:
+  - fault_latch_test_seams

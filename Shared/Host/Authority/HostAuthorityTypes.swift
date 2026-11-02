@@ -33,6 +33,10 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
     case lifecycleNotResumable(EngineLifecycle)
     case lease(EngineLeaseError)
     case ledger(GenerationLedgerError)
+    case plans(EnginePlanLedgerRefusal)
+    case unqualifiedResident
+    case unboundPlan
+    case retirementQueued
     /// The engine command queue cannot take the transition's commands; nothing moved.
     case queueFull
     /// Only a window that renders the project (`WindowRenderRole.renders`) may
@@ -49,11 +53,12 @@ enum HostAuthorityRefusal: Error, Equatable, Sendable {
 enum PrepareAnswerOutcome: Hashable, Sendable {
     /// The issuing project's transaction accepted it.
     case routed
-    /// A success for an abandoned attempt, refused by the transaction with `refusal`:
-    /// the engine's plan was queued for discard, exactly once.
-    case discarded(PreparedActivationID, refusal: ActivationRefusal)
-    /// An abandoned attempt's failure, or a success naming a live plan, or a plan
-    /// whose discard is already queued: nothing to discard.
+    /// An abandoned success consumed once, with qualified disposal scheduled.
+    case reclaimed(PlanBinding)
+    /// The transaction refused this success, but the answer was consumed and its
+    /// resource retired. This is intentionally NOT a state-preserving refusal.
+    case refusedReclaimed(PlanBinding, refusal: ActivationRefusal)
+    /// An abandoned attempt's terminal, cleaned-up failure consumed once.
     case dropped
 }
 
@@ -81,10 +86,10 @@ extension EngineLifecycle {
     }
 }
 
-/// A prepare attempt `abandonPrepare` gave up on; its late success is discarded.
-struct AbandonedPrepare: Hashable, Sendable {
+/// The exact engine preparation, never a raw plan-name ownership lookup.
+struct HostPrepare: Hashable, Sendable {
+    let instance: EngineInstanceID
     let attempt: PrepareAttemptID
-    let project: ProjectID
 }
 
 /// One open project: its only transaction copy and its engine lifecycle.
@@ -95,9 +100,9 @@ struct HostProjectState: Hashable {
     var transaction: ActivationTransaction
     /// What this project's windows on the lease observe (`EngineLifecycle.observed`).
     var lifecycle: EngineLifecycle
-    /// The plan the engine prepared for the current review; meaningful only
-    /// while the transaction is awaiting review or committing.
-    var reviewed: PreparedActivationID?
+    /// Retained through failed/partial reports until H5d resolves ownership.
+    var reviewed: PlanBinding?
+    var installed: PlanBinding?
 }
 
 @available(*, unavailable, message: "a project's transaction never leaves HostAuthority")
@@ -125,7 +130,8 @@ struct HostProjectSnapshot: Hashable, Sendable {
     /// The last issued commit attempt, for routing `abandonCommit` and diagnostics.
     let lastCommitAttempt: CommitAttemptID?
     let lifecycle: EngineLifecycle
-    let reviewed: PreparedActivationID?
+    let reviewed: PlanBinding?
+    let installed: PlanBinding?
     let record: TransactionRecord
 
     /// Internal so the actor can build its snapshot; `TransactionRecord.init`
@@ -137,6 +143,7 @@ struct HostProjectSnapshot: Hashable, Sendable {
         lastCommitAttempt = state.transaction.lastAttempt
         lifecycle = state.lifecycle
         reviewed = state.reviewed
+        installed = state.installed
         record = TransactionRecord(state.transaction)
     }
 }
@@ -150,9 +157,9 @@ struct HostAuthoritySnapshot: Hashable, Sendable {
     let live: HostLiveState
     let projects: [ProjectID: HostProjectSnapshot]
     /// The one unanswered, not abandoned prepare of each preparing project.
-    let outstanding: [ProjectID: PrepareAttemptID]
-    /// Abandoned and unanswered, oldest first; at most `abandonedPrepareLimit`.
-    let abandoned: [AbandonedPrepare]
+    let outstanding: [ProjectID: HostPrepare]
+    let plans: EnginePlanLedgerSnapshot
+    let retirementOutbox: [PlanBinding]
     let queue: EngineCommandQueue
     /// Commits delivered to the engine and not yet reported, by project.
     let inFlight: [ProjectID: CommitAttemptID]
