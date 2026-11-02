@@ -92,7 +92,7 @@ enum FanInLaneWord {
     static func generation(_ word: UInt64) -> UInt64 { word & generationMask }
 }
 
-/// A multi-writer event counter that saturates instead of wrapping. Any context; wait-free.
+/// A multi-writer event counter that saturates instead of wrapping. Any context; target progress unqualified.
 ///
 /// `bump` adds 1 only below `cap`; writers that pass that check together can overshoot it by at most their
 /// number, far below `UInt64.max`, and `count` clamps, so the count never wraps.
@@ -171,10 +171,10 @@ struct FanInRefusalCounter: ~Copyable, Sendable {
 /// relaxed: only the owner leaves `claimed(g)`, and by coherence the owner's own load sees its claim and, after
 /// it releases, its release. Sequential consistency is not needed.
 ///
-/// Progress. `claimProducer` is wait-free (at most `laneCount` loads and compare-exchanges, one wait-free fault
-/// raise); `releaseProducer` and `tryPush` are wait-free (one compare-exchange or load, then one M4 operation);
-/// `drain` is bounded by `total` and `laneCount`. Nothing allocates after `init`. Hot paths call lanes and the
-/// latch through unretained references, so they retain and release nothing (see Reference counting).
+/// Progress (source level only). Claims scan at most `laneCount` slots and may raise one fault; release and push
+/// use bounded atomic/M4 work. `drain` is bounded by `total` and `laneCount`. Atomic lowering and target progress,
+/// including `FaultLatch.raise`, remain unqualified. Nothing allocates after `init`; hot paths use unretained
+/// references and retain/release nothing in the inspected configurations (see Reference counting).
 ///
 /// Reference counting. `owners` and `faults` are strong `let`s that keep every lane and the latch alive for this
 /// object's lifetime; hot paths use the unretained `lanes` buffer and `faultsRef` with
@@ -299,7 +299,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         states.deallocate()
     }
 
-    /// Any producer context; wait-free. Claims the lowest claimable lane, or returns `nil` after counting the
+    /// Any producer context (see Progress). Claims the lowest claimable lane, or returns `nil` after counting the
     /// refusal and raising `.producerSlotsExhausted` on `producerSlotsScope` at `frame`.
     func claimProducer(frame: Int64 = 0) -> ProducerToken? {
         var lane = 0
@@ -320,7 +320,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         return nil
     }
 
-    /// The token's producer, after its last push (or any thread ordered after it); wait-free. Retires the lane;
+    /// After the token's last push, on its producer or an ordered-after thread (see Progress). Retires the lane;
     /// the next `drain` that finds it empty frees it for a new claim. Any token that does not own its lane is
     /// refused with `.refused(.notOwner)` and counted.
     @discardableResult
@@ -339,7 +339,7 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         return .ok
     }
 
-    /// The token's producer only; wait-free. Appends `value` to the token's lane with M4 admission: a general
+    /// The token's producer only (see Progress). Appends `value` to its lane with M4 admission: a general
     /// event is refused with `.refused(.full)` at the lane's general limit, a critical one with
     /// `.refused(.criticalExhausted)` at lane capacity, which also raises `.criticalExhausted` on `criticalScope`.
     /// A token that does not own its lane is refused with `.refused(.notOwner)` and counted.

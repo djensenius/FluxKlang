@@ -14,7 +14,7 @@ struct FanOutResult: Sendable, BitwiseCopyable, Equatable {
 
 /// One producer, up to 64 consumers, each with a private `SPSCRing`. Reference model; not RT-certified.
 ///
-/// `publish` offers the value to every ring in consumer order, exactly once each, and never waits or retries: a
+/// `publish` offers the value to every ring in consumer order, exactly once each, without retrying an offer. A
 /// slow consumer whose ring is full is refused alone (its bit in `FanOutResult.refused`, plus its ring's
 /// `refusedCount`), and every other consumer still receives the value. Nothing is skipped silently and no
 /// consumer blocks another. Each consumer drains its own ring through `ring(_:)`.
@@ -22,9 +22,9 @@ struct FanOutResult: Sendable, BitwiseCopyable, Equatable {
 /// Policies. One validated SPSC policy per consumer (M2 rules: refusing, FIFO, one producer); all must declare
 /// the same producer context, because one producer feeds every ring. Capacities and consumers may differ.
 ///
-/// Progress. `publish` is wait-free: one M2 `tryPush` per consumer, no loops beyond the consumer count. Nothing
-/// allocates after `init`. Hot paths call the rings through unretained references (`rings` owns them), so they
-/// retain and release nothing.
+/// Progress (source level only). `publish` makes one M2 `tryPush` per consumer; atomic lowering and target progress
+/// remain unqualified. No source-level allocation follows `init`. Unretained ring references (`rings` owns them)
+/// avoid reference counting in the inspected configurations; this is not final-target qualification.
 ///
 /// `@unchecked Sendable`: each ring is safe under its own SPSC contract; this type only adds immutable state.
 final class FanOutHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
@@ -79,7 +79,7 @@ final class FanOutHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
         ringRefs.deallocate()
     }
 
-    /// The producer only; wait-free. Offers `value` once to every consumer's ring and reports which took it.
+    /// The producer only (see Progress). Offers `value` once to every consumer's ring and reports which took it.
     func publish(_ value: Element) -> FanOutResult {
         var accepted: UInt64 = 0
         var refused: UInt64 = 0
