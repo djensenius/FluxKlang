@@ -102,15 +102,18 @@ extension HostAuthorityTests {
                                                       cause: .commitFailed)
             var queue = EngineCommandQueue()
             try queue.enqueue([.setOutputsMuted(false)]).get()
+            let restoreAttempt = RestoreAttemptID()
             try queue.enqueue(restore, running: plans.running, resident: plans.resident,
-                              retiring: plans.reviewed, lease: plans.token).get()
+                              retiring: plans.reviewed, lease: plans.token, restoreAttempt: restoreAttempt,
+                              restoreTarget: .resident(plans.resident)).get()
             try plans.ledger.committed(plans.reviewed, outcome: .partial)
             let kept = try #require(plans.ledger.attestCommitted(plans.reviewed))
             let keep = ActivationRecovery.keepPartial(unapplied: [nodes[1], nodes[2]], replacing: plans.running)
             let running = RunningGraph(revision: try ContractRevision.initial.next(), prepared: plans.reviewed.prepared)
             try queue.enqueue(keep, running: running, resident: kept, retiring: plans.previous, lease: nil).get()
             #expect(drain(&queue) == [
-                .setOutputsMuted(false), .restore(.initial, plans.resident, plans.token), .discard(plans.reviewed),
+                .setOutputsMuted(false),
+                .restore(restoreAttempt, .initial, .resident(plans.resident), plans.token), .discard(plans.reviewed),
                 .keepActivePartial(kept), .placeholders([nodes[1], nodes[2]]), .discard(plans.previous)
             ])
             // Mute over a NONEMPTY graph has no resident role to supply.
@@ -148,6 +151,16 @@ extension HostAuthorityTests {
             var queue = EngineCommandQueue()
             try queue.enqueue(fillers(1)).get()
             let before = queue
+            let missingAttempt = queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                               retiring: plans.reviewed, lease: plans.token,
+                                               restoreTarget: .resident(plans.resident))
+            #expect(refusal(missingAttempt) == .restoreAttemptRequired)
+            #expect(queue == before)
+            let restoreAttempt = RestoreAttemptID()
+            let unleased = queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                         retiring: plans.reviewed, lease: nil, restoreAttempt: restoreAttempt,
+                                         restoreTarget: .resident(plans.resident))
+            #expect(refusal(unleased) == .leaseRequired)
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
                                            retiring: plans.reviewed, lease: nil)) == .leaseRequired)
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: nil,
@@ -166,9 +179,29 @@ extension HostAuthorityTests {
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: wrongRole,
                                            retiring: plans.previous, lease: plans.token)) == .runningMismatch)
             #expect(queue == before)
-            try queue.enqueue(restore, running: bare, resident: nil, retiring: plans.reviewed, lease: plans.token).get()
-            let expected: [EngineCommand] = [.restore(.initial, nil, plans.token), .discard(plans.reviewed)]
+            let emptyTarget = RestoreTarget.empty(plans.ledger.currentInstance)
+            try queue.enqueue(restore, running: bare, resident: nil, retiring: plans.reviewed, lease: plans.token,
+                              restoreAttempt: restoreAttempt, restoreTarget: emptyTarget).get()
+            let expected: [EngineCommand] = [
+                .restore(restoreAttempt, .initial, emptyTarget, plans.token), .discard(plans.reviewed)
+            ]
             #expect(Array(queue.pending.dropFirst()) == expected)
+        }
+
+        @Test func explicitRestoreTargetCannotDiscardItsResident() throws {
+            let plans = try QueuePlans()
+            let restore = step([.restorePrevious(.initial)], [.discard(plans.previous.prepared)])
+            let target = RestoreTarget.resident(plans.resident)
+            var queue = EngineCommandQueue()
+            try queue.enqueue(fillers(1)).get()
+            let before = queue
+
+            let refused = queue.enqueue(
+                restore, running: plans.running, resident: nil, retiring: plans.previous,
+                lease: plans.token, restoreAttempt: RestoreAttemptID(), restoreTarget: target
+            )
+            #expect(refusal(refused) == .runningMismatch)
+            #expect(queue == before)
         }
 
         @Test func retirementAndResidentAreExactOptionalRoles() throws {
@@ -176,9 +209,14 @@ extension HostAuthorityTests {
             let restore = step([.restorePrevious(.initial)], [.discard(plans.reviewed.prepared)])
             var queue = EngineCommandQueue()
             // Same raw name, different qualified preparations: allowed. Role authority belongs to the host.
+            let restoreAttempt = RestoreAttemptID()
+            let target = RestoreTarget.resident(plans.resident)
             try queue.enqueue(restore, running: plans.running, resident: plans.resident,
-                              retiring: plans.reviewed, lease: plans.token).get()
-            #expect(queue.pending == [.restore(.initial, plans.resident, plans.token), .discard(plans.reviewed)])
+                              retiring: plans.reviewed, lease: plans.token, restoreAttempt: restoreAttempt,
+                              restoreTarget: target).get()
+            #expect(queue.pending == [
+                .restore(restoreAttempt, .initial, target, plans.token), .discard(plans.reviewed)
+            ])
             let before = queue
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
                                            retiring: nil, lease: plans.token)) == .runningMismatch)
@@ -231,7 +269,10 @@ extension HostAuthorityTests {
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
                                            retiring: nil, lease: nil)) == .leaseRequired)
             #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
-                                           retiring: nil, lease: plans.token)) == .full(requested: 2, available: 0))
+                                           retiring: nil, lease: plans.token)) == .restoreAttemptRequired)
+            #expect(refusal(queue.enqueue(restore, running: plans.running, resident: plans.resident,
+                                           retiring: nil, lease: plans.token,
+                                           restoreAttempt: RestoreAttemptID())) == .full(requested: 2, available: 0))
             #expect(queue == before)
         }
 
@@ -279,8 +320,10 @@ extension HostAuthorityTests {
 
         @Test func everyDecisionMapsToItsQualifiedCommand() throws {
             let plans = try QueuePlans()
+            let restoreAttempt = RestoreAttemptID()
+            let target = RestoreTarget.resident(plans.resident)
             let cases: [(RecoveryDecision, EngineCommand)] = [
-                (.restorePrevious(.initial), .restore(.initial, plans.resident, plans.token)),
+                (.restorePrevious(.initial), .restore(restoreAttempt, .initial, target, plans.token)),
                 (.keepActivePartial, .keepActivePartial(plans.resident)),
                 (.missingPlaceholder(nodes[2]), .placeholders([nodes[2]])),
                 (.recover(muteOutputs: true), .setOutputsMuted(true)),
@@ -296,7 +339,9 @@ extension HostAuthorityTests {
                 case .recover, .missingPlaceholder: resident = nil
                 }
                 try queue.enqueue(step([decision]), running: plans.running, resident: resident,
-                                  retiring: nil, lease: plans.token).get()
+                                  retiring: nil, lease: plans.token,
+                                  restoreAttempt: decision == .restorePrevious(.initial) ? restoreAttempt : nil,
+                                  restoreTarget: decision == .restorePrevious(.initial) ? target : nil).get()
                 #expect(queue.pending == [expected])
                 kinds.insert(CommandKind(expected))
             }

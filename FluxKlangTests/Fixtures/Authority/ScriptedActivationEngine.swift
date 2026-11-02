@@ -34,6 +34,14 @@ struct ScriptedCommitReport: Sendable {
     let verdict: Result<CommitReportOutcome, HostAuthorityRefusal>
 }
 
+/// One delivered restore that the engine has not acknowledged.
+struct ScriptedRestore: Hashable, Sendable {
+    let attempt: RestoreAttemptID
+    let revision: ContractRevision
+    let target: RestoreTarget
+    let token: EngineLeaseToken
+}
+
 struct ScriptedHeldPlan: Hashable, Sendable {
     let preparation: HostPrepare
     let id: PreparedActivationID
@@ -50,6 +58,8 @@ struct ScriptedActivationEngine: Sendable {
     let trackedLimit: Int
     private(set) var pending: [HostPrepare] = []
     private(set) var pendingCommits: [ScriptedCommit] = []
+    /// Restores taken and not yet acknowledged, oldest first.
+    private(set) var pendingRestores: [ScriptedRestore] = []
     /// Kept for lost answers too. Both chosen and generated answers use this exact key.
     private(set) var plannedNodes: [HostPrepare: Set<NodeID>] = [:]
     private(set) var held: [ScriptedHeldPlan] = []
@@ -75,22 +85,34 @@ struct ScriptedActivationEngine: Sendable {
         var taken: [EngineCommand] = []
         while let command = await authority.nextEngineCommand() {
             if !recorder.record(command) { anomaly("command history capacity") }
-            switch command {
-            case .prepare(let graph, let instance, let attempt):
-                takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
-            case .commit(let binding, let attempt, let token):
-                takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
-            case .discard(let binding):
-                if dispose(binding) {
-                    if case .failure(let refusal) = await authority.retired(binding) {
-                        anomaly("retirement acknowledgement refused: \(refusal)")
-                    }
-                }
-            default: break
-            }
+            await handle(command, by: authority)
             if room(taken.count, "drain history") { taken.append(command) }
         }
         return taken
+    }
+
+    private mutating func handle(_ command: EngineCommand, by authority: HostAuthority) async {
+        switch command {
+        case .prepare(let graph, let instance, let attempt):
+            takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
+        case .commit(let binding, let attempt, let token):
+            takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
+        case .discard(let binding):
+            await retire(binding, through: authority)
+        case .restore(let attempt, let revision, let target, let token):
+            if room(pendingRestores.count, "pending restores") {
+                pendingRestores.append(ScriptedRestore(attempt: attempt, revision: revision,
+                                                       target: target, token: token))
+            }
+        case .keepActivePartial, .placeholders, .setOutputsMuted: break
+        }
+    }
+
+    private mutating func retire(_ binding: PlanBinding, through authority: HostAuthority) async {
+        guard dispose(binding) else { return }
+        if case .failure(let refusal) = await authority.retired(binding) {
+            anomaly("retirement acknowledgement refused: \(refusal)")
+        }
     }
 
     private mutating func takePreparation(_ graph: GraphDocument, key: HostPrepare) {
@@ -165,6 +187,15 @@ struct ScriptedActivationEngine: Sendable {
         guard let commit = withholdCommit() else { return nil }
         let report = report(on: commit, outcome)
         return ScriptedCommitReport(report: report, verdict: await authority.commitReported(report))
+    }
+
+    /// Acknowledges the oldest delivered restore; nil when none is pending.
+    mutating func completeRestore(_ authority: HostAuthority) async
+    -> Result<EngineLifecycle, HostAuthorityRefusal>? {
+        guard !pendingRestores.isEmpty else { return nil }
+        let restore = pendingRestores.removeFirst()
+        return await authority.restoreCompleted(attempt: restore.attempt, revision: restore.revision,
+                                                target: restore.target, token: restore.token)
     }
 
     mutating func prepare(_ preparation: HostPrepare,

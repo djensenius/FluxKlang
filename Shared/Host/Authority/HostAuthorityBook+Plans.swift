@@ -19,8 +19,13 @@ extension HostAuthorityBook {
     /// Only call on a real transition into retiring, after all fallible work.
     /// The future H5d whole-recovery batch is the only separate discard path.
     mutating func scheduleRetirement(_ binding: PlanBinding) {
-        if retirementOutbox.isEmpty, case .success = queue.enqueue([.discard(binding)]) { return }
-        retirementOutbox.append(binding)
+        let queued: Bool
+        if retirementOutbox.isEmpty, case .success = queue.enqueue([.discard(binding)]) {
+            queued = true
+        } else {
+            queued = false
+        }
+        if !queued { retirementOutbox.append(binding) }
     }
 
     /// Called after EACH dequeue, including a stale commit's loop continue.
@@ -31,7 +36,10 @@ extension HostAuthorityBook {
     }
 
     mutating func retired(_ binding: PlanBinding) -> Result<Void, HostAuthorityRefusal> {
-        guard !retirementOutbox.contains(binding), !queue.pending.contains(.discard(binding)) else {
+        let restoreDependsOnBinding = restoring?.discardAfterRestore.contains(binding) == true
+        let deferred = deferredRestoreDiscards.values.contains { $0.contains(binding) }
+        guard !retirementOutbox.contains(binding), !queue.pending.contains(.discard(binding)),
+              !restoreDependsOnBinding, !deferred else {
             return .failure(.retirementQueued)
         }
         do { try plans.acknowledgeRetired(binding) } catch { return .failure(.plans(error)) }

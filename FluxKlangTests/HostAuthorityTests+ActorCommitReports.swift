@@ -31,6 +31,46 @@ enum ReportLifecycleCase: CaseIterable, Sendable {
     }
 }
 
+private func actorPlanPhase(
+    _ binding: PlanBinding, in snapshot: HostAuthoritySnapshot
+) -> EnginePlanPhase? {
+    for record in snapshot.plans.records where record.instance == binding.instance {
+        for entry in record.entries where entry.attempt == binding.attempt {
+            if case .bound(let actual, let phase) = entry.state, actual == binding { return phase }
+        }
+    }
+    return nil
+}
+
+private struct DegradedActorReportSeed {
+    var engine: ScriptedActivationEngine
+    let authority: HostAuthority
+    let installed: PlanBinding
+    let context: Generation
+}
+
+private func degradedActorReportSeed() async throws -> DegradedActorReportSeed {
+    var engine = try ScriptedActivationEngine()
+    let authority = try await AuthorityBench.makeAuthority(&engine, lifecycleA: .degraded([AuthorityBench.audio]))
+    let initial = await authority.snapshot()
+    let project = try #require(initial.projects[AuthorityBench.projectA])
+    let installed = try #require(project.installed)
+    let context = try #require(AuthorityBench.context(initial))
+    #expect(project.lifecycle == .degraded([AuthorityBench.audio]))
+    #expect(installed.instance == initial.plans.currentInstance)
+    #expect(actorPlanPhase(installed, in: initial) == .committed)
+    #expect(initial.lease?.project == AuthorityBench.projectA)
+    #expect(initial.lease?.windows.contains(AuthorityBench.windowA) == true)
+    #expect(initial.queue.isEmpty && initial.retirementOutbox.isEmpty && initial.inFlight.isEmpty)
+    #expect(await authority.lifecycle(of: AuthorityBench.projectA, window: AuthorityBench.windowA)
+            == .degraded([AuthorityBench.audio]))
+    #expect(await authority.lifecycle(of: AuthorityBench.projectA, window: AuthorityBench.windowA2)
+            == .heldByOther(AuthorityBench.projectA))
+    #expect(await authority.lifecycle(of: AuthorityBench.projectB, window: AuthorityBench.windowB)
+            == .heldByOther(AuthorityBench.projectA))
+    return DegradedActorReportSeed(engine: engine, authority: authority, installed: installed, context: context)
+}
+
 extension HostAuthorityTests {
     /// The engine's commit reports: D-ctx, the lifecycle and the end of the flight (H5c-2).
     struct ActorCommitReports {
@@ -154,6 +194,71 @@ extension HostAuthorityTests {
             _ = try await Bench.commitDelivered(authority, &engine, project: project, window: window, withAux: true)
             _ = try #require(await engine.report(authority, lifecycleCase.outcome)).verdict.get()
             #expect(try await Bench.state(authority, project).lifecycle == lifecycleCase.expected)
+        }
+
+        @Test(arguments: [ActivationCommitOutcome.succeeded, .failed])
+        func degradedActorReportsPreserveCanonicalOwnership(_ outcome: ActivationCommitOutcome) async throws {
+            var seed = try await degradedActorReportSeed()
+            let authority = seed.authority
+            let reviewed = try await Bench.commitDelivered(authority, &seed.engine, withAux: true)
+            let before = await authority.snapshot()
+            let beforeProject = try #require(before.projects[Bench.projectA])
+            let attempt = try #require(before.inFlight[Bench.projectA])
+            let reviewedBinding = try #require(beforeProject.reviewed)
+            #expect(beforeProject.phase == .committing && beforeProject.reviewed?.prepared == reviewed)
+            #expect(beforeProject.installed == seed.installed && actorPlanPhase(reviewedBinding, in: before) == .held)
+            #expect(Bench.context(before) == seed.context)
+            #expect(before.queue.isEmpty && before.retirementOutbox.isEmpty)
+
+            let withheld = seed.engine.withholdCommit()
+            let commit = try #require(withheld)
+            let report = seed.engine.report(on: commit, outcome)
+            #expect(report.prepared == reviewed && report.attempt == attempt)
+            let wrong = ActivationCommitReport(prepared: seed.installed.prepared, attempt: attempt,
+                                               outcome: outcome, applied: report.applied,
+                                               unapplied: report.unapplied)
+            #expect(Bench.refusal(await authority.commitReported(wrong)) == .activation(.reportMismatch))
+            #expect(await authority.snapshot() == before)
+            let result = try await authority.commitReported(report).get()
+            let after = await authority.snapshot()
+            let project = try #require(after.projects[Bench.projectA])
+            #expect(project.lifecycle == .degraded([Bench.audio]))
+            #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA)
+                    == .degraded([Bench.audio]))
+            #expect(await authority.lifecycle(of: Bench.projectA, window: Bench.windowA2)
+                    == .heldByOther(Bench.projectA))
+            #expect(after.inFlight.isEmpty && after.retirementOutbox.isEmpty)
+
+            if outcome == .succeeded {
+                let revision = try beforeProject.running.revision.next()
+                #expect(result == .acknowledged(revision))
+                #expect(project.phase == .acknowledged(revision) && project.running.prepared == reviewed)
+                #expect(project.installed == reviewedBinding && project.reviewed == nil)
+                #expect(actorPlanPhase(seed.installed, in: after) == .retiring)
+                #expect(actorPlanPhase(reviewedBinding, in: after) == .committed)
+                #expect(Bench.context(after) == (try seed.context.next()))
+                #expect(after.queue.pending == [.discard(seed.installed)])
+                let refusedSnapshot = await authority.snapshot()
+                #expect(Bench.refusal(await authority.retired(seed.installed)) == .retirementQueued)
+                #expect(await authority.snapshot() == refusedSnapshot)
+                #expect(await seed.engine.drain(authority) == [.discard(seed.installed)])
+                let retiredSnapshot = await authority.snapshot()
+                #expect(actorPlanPhase(seed.installed, in: retiredSnapshot) == nil)
+                #expect(actorPlanPhase(reviewedBinding, in: retiredSnapshot) == .committed)
+                #expect(Bench.refusal(await authority.retired(seed.installed)) == .plans(.unknownAttempt))
+                #expect(await authority.snapshot() == retiredSnapshot)
+            } else {
+                #expect(result == .failed && project.phase == .commitFailed(reviewed))
+                #expect(project.running == beforeProject.running)
+                #expect(project.installed == seed.installed && project.reviewed == reviewedBinding)
+                #expect(actorPlanPhase(seed.installed, in: after) == .committed)
+                #expect(actorPlanPhase(reviewedBinding, in: after) == .held)
+                #expect(Bench.context(after) == seed.context && after.queue.isEmpty)
+                let refusedSnapshot = await authority.snapshot()
+                #expect(Bench.refusal(await authority.retired(seed.installed)) == .plans(.notRetiring))
+                #expect(await authority.snapshot() == refusedSnapshot)
+                #expect(await seed.engine.drain(authority).isEmpty)
+            }
         }
 
         @Test func acknowledgingActivationKeepsSettledStates() throws {

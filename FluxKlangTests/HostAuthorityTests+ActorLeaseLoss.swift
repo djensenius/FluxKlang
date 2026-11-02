@@ -183,8 +183,9 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().authorizedWindows == [Bench.projectA: Bench.windowA])
             try await authority.leaseLost(try await Bench.leaseToken(authority)).get()
             #expect(await authority.snapshot().authorizedWindows.isEmpty)
-            _ = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
+            let reacquired = try await authority.acquire(project: Bench.projectA, window: Bench.windowA).get()
             let held = await authority.snapshot()
+            let restore = try #require(held.restoring)
             let refused = await authority.commit(project: Bench.projectA, authorization: authorization)
             #expect(Bench.refusal(refused) == .lifecycleRejectsChanges(.recovering))
             #expect(await authority.snapshot() == held)
@@ -192,11 +193,10 @@ extension HostAuthorityTests {
             let binding = try #require(try await Bench.state(authority).reviewed)
             #expect(binding.prepared == reviewed && heldPhase(of: binding, in: held) == .held)
             try await authority.cancel(project: Bench.projectA).get()
-            // After the reacquire, H5d-2's Rule G may add `.restore` commands; this asserts nothing about them.
-            // The lane's mute still goes first, and every other command is exactly the qualified discard.
-            let drained = await engine.drain(authority)
-            #expect(drained.first == .setOutputsMuted(true))
-            #expect(withoutRestores(drained) == [.setOutputsMuted(true), .discard(binding)])
+            #expect(await engine.drain(authority) == [
+                .setOutputsMuted(true), .restore(restore.attempt, restore.revision, restore.target, reacquired.token),
+                .discard(binding)
+            ])
         }
 
         @Test func lossKeepsOtherProjectsAndStalesTheirPlans() async throws {
@@ -298,11 +298,6 @@ extension HostAuthorityTests {
             #expect(await engine.drain(authority).isEmpty)
         }
     }
-}
-
-/// `commands` without any `.restore`, whose presence after a reacquire is H5d-2's Rule G to decide.
-private func withoutRestores(_ commands: [EngineCommand]) -> [EngineCommand] {
-    commands.filter { if case .restore = $0 { false } else { true } }
 }
 
 /// The canonical ledger's phase for exactly `binding`, read from an inert snapshot.

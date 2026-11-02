@@ -8,7 +8,8 @@
 //  The actor stores it as `private var book` in `HostAuthority.swift`, so neither
 //  an `await` nor a function taking `isolated HostAuthority` can reach it: the
 //  members here are internal only so the book's own extensions
-//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`) can share them. A book a
+//  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`,
+//  `+Restore.swift`) can share them. A book a
 //  module caller builds itself is a separate value and never touches an actor's.
 //  Every refusal leaves the whole book unchanged.
 //
@@ -37,6 +38,10 @@ struct HostAuthorityBook {
     var pendingOutput: Bool?
     /// Engine-global (one engine per host): set by every mute, in the lane or the FIFO.
     var outputsMuted = false
+    /// H5d-2: the one restore queued or delivered under the current lease.
+    var restoring: RestoreRecord?
+    /// Discards from an invalidated restore step; requeued only after its next restore.
+    var deferredRestoreDiscards: [ProjectID: [PlanBinding]] = [:]
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState,
@@ -56,24 +61,45 @@ struct HostAuthorityBook {
                               outstanding: outstanding, plans: plans.snapshot(),
                               retirementOutbox: retirementOutbox, queue: queue,
                               inFlight: inFlight, authorizedWindows: authorizedWindows,
-                              pendingOutput: pendingOutput, outputsMuted: outputsMuted)
+                              pendingOutput: pendingOutput, outputsMuted: outputsMuted, restoring: restoring,
+                              deferredRestoreDiscards: deferredRestoreDiscards)
     }
 
-    /// Opens `project` over its running graph. `lifecycle` defaults to `.running`
-    /// over a running plan, else `.stopped`; pass one only to resume a settled state.
+    /// Opens `project` over an empty, unqualified running graph; prepared residents
+    /// must be installed through this book's canonical plan ledger. `lifecycle`
+    /// defaults to `.stopped`; pass a settled state only when consistent with that graph.
     /// Refused as `lifecycleNotResumable`: `.preparing` (no prepare is outstanding
     /// yet), `.heldByOther` (derived from the lease by `lifecycle(of:window:)`), and
-    /// a rendering `.running`/`.degraded` with no running plan. `.stopped` over a
-    /// running plan is accepted: a stopped engine stores the running set without
-    /// rendering (`EngineLifecycle.acceptsRunningSetChanges`), and `endingPreparation`
-    /// returns to `.stopped` whatever the running graph holds. `.recovering` is
+    /// a rendering `.running`/`.degraded` with no book-owned resident. `.stopped` is
+    /// accepted over an empty graph. `.recovering` is
     /// accepted either way: unresolved recovery outlives the running set.
-    /// Raw boot residents are refused. Bootstrap through real prepare/commit
-    /// operations so this canonical ledger owns every installed binding.
+    /// Pass `recoveryBase` when resuming a known recovery snapshot; rendering/degraded
+    /// bases require an installed resident, which raw `open` cannot import. Without
+    /// saved provenance, recovery opens over `.absent` and settles stopped rather
+    /// than inferring a running lifecycle from a stored plan. Bootstrap through real
+    /// prepare/commit operations so this canonical ledger owns every installed binding.
     mutating func open(project: ProjectID, running: RunningGraph,
-                       lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
+                       lifecycle: EngineLifecycle? = nil,
+                       recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
         guard projects[project] == nil else { return .failure(.projectAlreadyOpen(project)) }
         guard projects.count < HostAuthority.projectLimit else { return .failure(.projectLimit) }
+        let opening: (lifecycle: EngineLifecycle, recoveryBase: RunningSetState?)
+        switch openingLifecycle(running: running, lifecycle: lifecycle, recoveryBase: recoveryBase) {
+        case .success(let validated): opening = validated
+        case .failure(let refusal): return .failure(refusal)
+        }
+        projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),
+                                             lifecycle: opening.lifecycle,
+                                             recoveryBase: opening.recoveryBase)
+        return .success(())
+    }
+
+    /// Validates explicit lifecycle and saved recovery provenance before `open` mutates the book.
+    private func openingLifecycle(
+        running: RunningGraph,
+        lifecycle: EngineLifecycle?,
+        recoveryBase: RunningSetState?
+    ) -> Result<(lifecycle: EngineLifecycle, recoveryBase: RunningSetState?), HostAuthorityRefusal> {
         if let lifecycle {
             switch lifecycle {
             case .stopped, .recovering: break
@@ -84,9 +110,14 @@ struct HostAuthorityBook {
         }
         guard running.prepared == nil else { return .failure(.unqualifiedResident) }
         let initial = lifecycle ?? (running.prepared == nil ? .stopped : .running)
-        projects[project] = HostProjectState(transaction: ActivationTransaction(project: project, running: running),
-                                             lifecycle: initial)
-        return .success(())
+        if let recoveryBase {
+            guard initial == .recovering else { return .failure(.invalidRecoveryBase) }
+            if recoveryBase != .absent, running.prepared == nil {
+                return .failure(.invalidRecoveryBase)
+            }
+        }
+        let savedBase = initial == .recovering ? recoveryBase ?? .absent : nil
+        return .success((initial, savedBase))
     }
 
     /// Grants `project`'s `window` a new lease (one context bump), staged by
@@ -156,7 +187,7 @@ struct HostAuthorityBook {
 
     /// The one place a lease is granted (`acquire`, `transfer`): staged on registry
     /// and ledger copies, so both change or neither does, and the grant's context
-    /// change is applied exactly once. Later lease hooks belong here.
+    /// change is applied exactly once. Lease lifecycle hooks run after both staged values commit.
     private mutating func grantLease(
         _ grant: (inout EngineLeaseRegistry) throws(EngineLeaseError) -> EngineLeaseGrant
     ) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
@@ -167,6 +198,8 @@ struct HostAuthorityBook {
         do { try granted.context.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
         registry = stagedRegistry
         ledger = stagedLedger
+        leaseChanged()
+        leaseGranted(to: granted.snapshot.project)
         return .success(granted.snapshot)
     }
 
@@ -179,6 +212,7 @@ struct HostAuthorityBook {
         do { try change.apply(to: &stagedLedger) } catch { return .failure(.ledger(error)) }
         registry = stagedRegistry
         ledger = stagedLedger
+        leaseChanged()
         return .success(())
     }
 

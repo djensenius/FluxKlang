@@ -43,10 +43,11 @@ actor HostAuthority {
         book.lifecycle(of: project, window: window)
     }
 
-    /// `HostAuthorityBook.open(project:running:lifecycle:)`.
+    /// `HostAuthorityBook.open(project:running:lifecycle:recoveryBase:)`.
     func open(project: ProjectID, running: RunningGraph,
-              lifecycle: EngineLifecycle? = nil) -> Result<Void, HostAuthorityRefusal> {
-        book.open(project: project, running: running, lifecycle: lifecycle)
+              lifecycle: EngineLifecycle? = nil,
+              recoveryBase: RunningSetState? = nil) -> Result<Void, HostAuthorityRefusal> {
+        book.open(project: project, running: running, lifecycle: lifecycle, recoveryBase: recoveryBase)
     }
 
     /// `HostAuthorityBook.acquire(project:window:)`.
@@ -125,6 +126,31 @@ actor HostAuthority {
     /// `HostAuthorityBook.leaseLost(_:)`.
     func leaseLost(_ token: EngineLeaseToken) -> Result<ProjectID, HostAuthorityRefusal> {
         book.leaseLost(token)
+    }
+
+    /// `HostAuthorityBook.capabilityLost(_:project:token:)`.
+    func capabilityLost(
+        _ capability: CapabilityID, project: ProjectID, token: EngineLeaseToken
+    ) -> Result<Void, HostAuthorityRefusal> {
+        book.capabilityLost(capability, project: project, token: token)
+    }
+
+    /// `HostAuthorityBook.resolveRecovery(project:)`.
+    func resolveRecovery(project: ProjectID) -> Result<RecoveryResolution, HostAuthorityRefusal> {
+        book.resolveRecovery(project: project)
+    }
+
+    /// D-auto recovery after the project acquires or reacquires the lease.
+    func resumeRecovery(of project: ProjectID) {
+        book.resumeRecovery(of: project)
+    }
+
+    /// `HostAuthorityBook.restoreCompleted(attempt:revision:target:token:)`.
+    func restoreCompleted(
+        attempt: RestoreAttemptID, revision: ContractRevision, target: RestoreTarget,
+        token: EngineLeaseToken
+    ) -> Result<EngineLifecycle, HostAuthorityRefusal> {
+        book.restoreCompleted(attempt: attempt, revision: revision, target: target, token: token)
     }
 
     /// `HostAuthorityBook.commitReported(_:)`.

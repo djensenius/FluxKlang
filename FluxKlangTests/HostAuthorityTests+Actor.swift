@@ -337,7 +337,7 @@ extension HostAuthorityTests {
         }
 
         @Test func recoveringEngineNeverShowsPreparing() async throws {
-            let authority = try await Bench.makeAuthority(lifecycleA: .recovering)
+            let authority = try await Bench.makeAuthority(lifecycleA: .recovering, recoveryBaseA: .absent)
             try await Bench.begin(authority)
             #expect(try await Bench.state(authority).phase == .preparing)
             #expect(try await Bench.state(authority).lifecycle == .recovering)

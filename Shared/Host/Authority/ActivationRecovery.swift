@@ -112,7 +112,7 @@ enum EngineLifecycle: Hashable, Sendable {
     }
 
     private static func adding(_ capability: CapabilityID, to lost: [CapabilityID]) -> [CapabilityID] {
-        lost.contains(capability) ? lost : lost + [capability]
+        Array(Set(lost).union([capability])).sorted()
     }
 }
 
