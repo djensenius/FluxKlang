@@ -2,32 +2,6 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
-actor RoutingTestInterpreter: AssistantActionInterpreting {
-    var result: AssistantActionInterpretation
-    var available: AssistantActionInterpreterAvailability
-    var fails: Bool
-    var suspend: Bool
-    private(set) var requests: [AssistantActionInterpretationRequest] = []
-    private var gate: CheckedContinuation<Void, Never>?
-    var isWaiting: Bool { gate != nil }
-    init(_ result: AssistantActionInterpretation = .routing(AssistantRoutingFixture.intent),
-         available: AssistantActionInterpreterAvailability = .available, fails: Bool = false, suspend: Bool = false) {
-        self.result = result
-        self.available = available
-        self.fails = fails
-        self.suspend = suspend
-    }
-
-    func availability() -> AssistantActionInterpreterAvailability { available }
-    func interpret(_ request: AssistantActionInterpretationRequest) async throws -> AssistantActionInterpretation {
-        requests.append(request)
-        if suspend { await withCheckedContinuation { gate = $0 } }
-        if fails { throw RoutingTestError.model }
-        return result
-    }
-    func resume() { gate?.resume(); gate = nil }
-}
-
 struct AssistantRoutingEvidenceRegressionTests {
     @Test func effectNameWordsCannotAuthorizeAnUnrequestedDryPath() throws {
         let fixture = AssistantRoutingFixture()
@@ -67,29 +41,6 @@ struct AssistantRoutingEvidenceRegressionTests {
     }
 }
 
-actor RoutingTestDraftStore: PendingStudioPatchPersisting {
-    private(set) var draft: StudioPatchDraft?
-    private(set) var saves = 0
-    private var pauseNext = false
-    private var gates: [CheckedContinuation<Void, Never>] = []
-    var isWaiting: Bool { !gates.isEmpty }
-    var waitingSaves: Int { gates.count }
-    func pauseNextSave() { pauseNext = true }
-    func resume() {
-        guard !gates.isEmpty else { return }
-        gates.removeFirst().resume()
-    }
-    func load() -> StudioPatchDraft? { draft }
-    func save(_ draft: StudioPatchDraft?) async {
-        saves += 1
-        if pauseNext {
-            pauseNext = false
-            await withCheckedContinuation { gates.append($0) }
-        }
-        self.draft = draft
-    }
-}
-
 actor RoutingTestHistory: AssistantHistoryBackend {
     func loadRecords() -> [AssistantConversationRecord] { [] }
     func save(_ record: AssistantConversationRecord) {}
@@ -114,12 +65,6 @@ actor RoutingTestGenerator: AssistantGenerating {
 
 @MainActor
 struct AssistantRoutingChatTests {
-    private func chat(coordinator: AssistantCoordinator, interpreter: any AssistantActionInterpreting,
-                      generator: any AssistantGenerating) -> AssistantChatController {
-        AssistantChatController(coordinator: coordinator,
-            store: AssistantConversationStore(local: RoutingTestHistory(), cloud: nil), generator: generator,
-            actionInterpreter: interpreter)
-    }
     private func wait(_ condition: () async -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !(await condition()) {
@@ -129,20 +74,23 @@ struct AssistantRoutingChatTests {
     }
 
     @Test func routingWorksWithoutMixerPlannerAndBeforePreflightOrProvider() async throws {
-        let fixture = AssistantRoutingFixture()
-        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
-        let interpreter = RoutingTestInterpreter()
-        let generator = RoutingTestGenerator()
-        let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: generator)
-        chat.composer = AssistantRoutingFixture.text
-        chat.send(context: fixture.context)
-        try await wait { !chat.isStreaming }
-        let draft = try #require(coordinator.pendingStudioDraft)
-        #expect(draft.request.additionalRoutes.count == 2)
-        #expect(chat.selectedConversation?.messages.last?.cards.count == 2)
-        #expect(await interpreter.requests.map(\.text) == [AssistantRoutingFixture.text])
-        #expect(await generator.calls == 0)
-        #expect(chat.actionPlanner == nil)
+        try await withRoutingChatFixture { owner in
+            let fixture = AssistantRoutingFixture()
+            let coordinator = owner.coordinator
+            let interpreter = RoutingTestInterpreter()
+            let generator = owner.generator
+            let chat = try owner.makeChat(interpreter: interpreter)
+            chat.composer = AssistantRoutingFixture.text
+            chat.send(context: fixture.context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            let draft = try #require(coordinator.pendingStudioDraft)
+            #expect(draft.request.additionalRoutes.count == 2)
+            #expect(chat.selectedConversation?.messages.last?.cards.count == 2)
+            #expect(await interpreter.requests.map(\.text) == [AssistantRoutingFixture.text])
+            #expect(generator.calls == 0)
+            #expect(chat.actionPlanner == nil)
+        }
     }
 
     @Test func badDisabledErrorPartialAnswerAndMonoMisclassificationNeverMutateOrFallThrough() async throws {
@@ -156,63 +104,71 @@ struct AssistantRoutingChatTests {
             .init(available: .unavailable("disabled")), .init(fails: true)
         ]
         for interpreter in interpreters {
-            let store = RoutingTestDraftStore()
-            let coordinator = AssistantCoordinator(draftStore: store)
-            let prior = try fixture.prepared()
-            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-                preparedContext: fixture.context, currentContext: fixture.context))
-            let generator = RoutingTestGenerator()
-            let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: generator)
-            chat.composer = AssistantRoutingFixture.text
-            chat.send(context: fixture.context)
-            try await wait { !chat.isStreaming }
-            #expect(coordinator.pendingStudioDraft == prior)
-            #expect(await store.saves == 1)
-            #expect(await generator.calls == 0)
-            #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+            try await withRoutingChatFixture { owner in
+                let store = owner.store
+                let coordinator = owner.coordinator
+                let prior = try fixture.prepared()
+                #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                    preparedContext: fixture.context, currentContext: fixture.context))
+                let generator = owner.generator
+                let chat = try owner.makeChat(interpreter: interpreter)
+                chat.composer = AssistantRoutingFixture.text
+                chat.send(context: fixture.context)
+                try await wait { !chat.isStreaming }
+                await chat.awaitOwnedWorkSnapshot()
+                #expect(coordinator.pendingStudioDraft == prior)
+                #expect(await store.saves == 1)
+                #expect(generator.calls == 0)
+                #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+            }
         }
     }
 
     @Test func mixedRoutingAndLiveFaderRequestCannotCommitAPartialRoutingDraft() async throws {
-        let fixture = AssistantRoutingFixture()
-        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
-        let prior = try fixture.prepared()
-        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-            preparedContext: fixture.context, currentContext: fixture.context))
-        let generator = RoutingTestGenerator()
-        let chat = chat(coordinator: coordinator, interpreter: RoutingTestInterpreter(), generator: generator)
-        chat.composer = AssistantRoutingFixture.text + " and set Astrolab volume to 50%"
-        chat.send(context: fixture.context)
-        try await wait { !chat.isStreaming }
-        #expect(coordinator.pendingStudioDraft == prior)
-        #expect(await generator.calls == 0)
-        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+        try await withRoutingChatFixture { owner in
+            let fixture = AssistantRoutingFixture()
+            let coordinator = owner.coordinator
+            let prior = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                preparedContext: fixture.context, currentContext: fixture.context))
+            let generator = owner.generator
+            let chat = try owner.makeChat()
+            chat.composer = AssistantRoutingFixture.text + " and set Astrolab volume to 50%"
+            chat.send(context: fixture.context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(coordinator.pendingStudioDraft == prior)
+            #expect(generator.calls == 0)
+            #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+        }
     }
 
     @Test func cancellationAndChangedConfigurationFenceLateInterpretationBeforeCommit() async throws {
         let fixture = AssistantRoutingFixture()
         for cancelled in [false, true] {
-            let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
-            let prior = try fixture.prepared()
-            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-                preparedContext: fixture.context, currentContext: fixture.context))
-            let interpreter = RoutingTestInterpreter(suspend: true)
-            let generator = RoutingTestGenerator()
-            let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: generator)
-            var current = fixture.context
-            chat.currentRoutingContext = { current }
-            chat.composer = AssistantRoutingFixture.text
-            chat.send(context: fixture.context)
-            try await wait { await interpreter.isWaiting }
-            if cancelled { chat.cancel() } else {
-                current.globalConnections.home.outputs[2].connector = 1
-                current.effectiveConnections = current.globalConnections.effectiveHome
+            try await withRoutingChatFixture { owner in
+                let coordinator = owner.coordinator
+                let prior = try fixture.prepared()
+                #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                    preparedContext: fixture.context, currentContext: fixture.context))
+                let interpreter = RoutingTestInterpreter(suspend: true)
+                let generator = owner.generator
+                let chat = try owner.makeChat(interpreter: interpreter)
+                var current = fixture.context
+                chat.currentRoutingContext = { current }
+                chat.composer = AssistantRoutingFixture.text
+                chat.send(context: fixture.context)
+                try await wait { await interpreter.isWaiting }
+                if cancelled { chat.cancel() } else {
+                    current.globalConnections.home.outputs[2].connector = 1
+                    current.effectiveConnections = current.globalConnections.effectiveHome
+                }
+                await interpreter.resume()
+                try await wait { !chat.isStreaming }
+                await chat.awaitOwnedWorkSnapshot()
+                #expect(coordinator.pendingStudioDraft == prior)
+                #expect(generator.calls == 0)
             }
-            await interpreter.resume()
-            try await wait { !chat.isStreaming }
-            await Task.yield()
-            #expect(coordinator.pendingStudioDraft == prior)
-            #expect(await generator.calls == 0)
         }
     }
 
@@ -234,56 +190,64 @@ struct AssistantRoutingChatTests {
     }
 
     @Test func directLegacyPreflightAndModelDraftToolCannotBypassRoutingPreparation() async throws {
-        let fixture = AssistantRoutingFixture()
-        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
-        let downstream = RoutingTestGenerator()
-        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: downstream)
-        for try await _ in preflight.stream(.init(question: AssistantRoutingFixture.text,
-                                                  recentMessages: [], summary: "", context: fixture.context)) {}
-        #expect(await downstream.calls == 0)
-        #expect(coordinator.pendingStudioDraft == nil)
-        #if canImport(FoundationModels)
-        if #available(iOS 27, macOS 27, *) {
-            let tool = AssistantDraftFoundationTool(question: AssistantRoutingFixture.text, context: fixture.context,
-                                                   coordinator: coordinator, authorizer: .model)
-            _ = try await tool.call(arguments: .init(
-                sourceNames: ["Osmose"], effectNames: ["Evil Pet"], destination: "mains"))
+        try await withRoutingChatFixture { owner in
+            let fixture = AssistantRoutingFixture()
+            let coordinator = owner.coordinator
+            let downstream = owner.generator
+            let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: downstream)
+            for try await _ in preflight.stream(.init(question: AssistantRoutingFixture.text,
+                                                      recentMessages: [], summary: "", context: fixture.context)) {}
+            #expect(downstream.calls == 0)
             #expect(coordinator.pendingStudioDraft == nil)
+            #if canImport(FoundationModels)
+            if #available(iOS 27, macOS 27, *) {
+                let tool = AssistantDraftFoundationTool(
+                    question: AssistantRoutingFixture.text, context: fixture.context,
+                    coordinator: coordinator, authorizer: .model)
+                _ = try await tool.call(arguments: .init(
+                    sourceNames: ["Osmose"], effectNames: ["Evil Pet"], destination: "mains"))
+                #expect(coordinator.pendingStudioDraft == nil)
+            }
+            #endif
         }
-        #endif
     }
 
     @Test func ordinaryQuestionsStillReachReadOnlyProvider() async throws {
-        let generator = RoutingTestGenerator()
-        let chat = chat(coordinator: AssistantCoordinator(draftStore: RoutingTestDraftStore()),
-                        interpreter: RoutingTestInterpreter(.answer), generator: generator)
-        chat.composer = "How do I route instruments to speakers?"
-        chat.send(context: AssistantRoutingFixture().context)
-        try await wait { !chat.isStreaming }
-        #expect(await generator.calls == 1)
-        #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
+        try await withRoutingChatFixture { owner in
+            let generator = owner.generator
+            let chat = try owner.makeChat(interpreter: RoutingTestInterpreter(.answer))
+            chat.composer = "How do I route instruments to speakers?"
+            chat.send(context: AssistantRoutingFixture().context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(generator.calls == 1)
+            #expect(chat.selectedConversation?.messages.last?.text == "read-only reply")
+        }
     }
 
     @Test(arguments: ["inputs and outputs", "ins and outs", "please inputs and outputs?"])
     func standaloneInventoryBypassesRoutingWithoutChangingPendingDraft(question: String) async throws {
-        let fixture = AssistantRoutingFixture()
-        let store = RoutingTestDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let prior = try fixture.prepared()
-        #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
-            preparedContext: fixture.context, currentContext: fixture.context))
-        let downstream = RoutingTestGenerator()
-        let interpreter = RoutingTestInterpreter()
-        let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: downstream)
-        let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: preflight)
-        chat.composer = question
-        chat.send(context: fixture.context)
-        try await wait { !chat.isStreaming }
-        #expect(chat.selectedConversation?.messages.last?.text.contains("WING inputs") == true)
-        #expect(await interpreter.requests.isEmpty)
-        #expect(await downstream.calls == 0)
-        #expect(coordinator.pendingStudioDraft == prior)
-        #expect(await store.saves == 1)
+        try await withRoutingChatFixture { owner in
+            let fixture = AssistantRoutingFixture()
+            let store = owner.store
+            let coordinator = owner.coordinator
+            let prior = try fixture.prepared()
+            #expect(await coordinator.commitPreparedRouting(prior, expectedPending: nil,
+                preparedContext: fixture.context, currentContext: fixture.context))
+            let downstream = owner.generator
+            let interpreter = RoutingTestInterpreter()
+            let preflight = AssistantDraftPreflightGenerator(coordinator: coordinator, downstream: downstream)
+            let chat = try owner.makeChat(interpreter: interpreter, generator: preflight)
+            chat.composer = question
+            chat.send(context: fixture.context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(chat.selectedConversation?.messages.last?.text.contains("WING inputs") == true)
+            #expect(await interpreter.requests.isEmpty)
+            #expect(downstream.calls == 0)
+            #expect(coordinator.pendingStudioDraft == prior)
+            #expect(await store.saves == 1)
+        }
     }
 
     @Test func legacyRetryAndReadOnlyFallbackCannotReplacePriorDraft() async throws {
@@ -374,26 +338,30 @@ struct AssistantRoutingChatTests {
             amount: label == "Desk" ? nil : 3, addToStudio: false,
             evidence: .init(target: label, action: label == "Desk" ? "mute" : "lower",
                             amount: label == "Desk" ? nil : "3 dB", add: nil))
-        let interpreter = RoutingTestInterpreter(.proposal(intent),
-            available: unavailable ? .unavailable("disabled") : .available)
-        let coordinator = AssistantCoordinator(draftStore: RoutingTestDraftStore())
-        let generator = RoutingTestGenerator()
-        let chat = chat(coordinator: coordinator, interpreter: interpreter, generator: generator)
-        let planner = ReviewedChatPlanner()
-        chat.actionPlanner = planner
-        chat.composer = text
-        chat.send(context: context)
-        try await wait { !chat.isStreaming }
-        #expect(planner.intents.count == 1)
-        #expect(planner.pendingReview != nil)
-        #expect(coordinator.pendingStudioDraft == nil)
-        chat.composer = text + " and route Saved Synth to speakers"
-        chat.send(context: context)
-        try await wait { !chat.isStreaming }
-        #expect(planner.intents.count == 1)
-        #expect(planner.confirmations == 0)
-        #expect(coordinator.pendingStudioDraft == nil)
-        #expect(await generator.calls == 0)
+        try await withRoutingChatFixture { owner in
+            let interpreter = RoutingTestInterpreter(.proposal(intent),
+                available: unavailable ? .unavailable("disabled") : .available)
+            let coordinator = owner.coordinator
+            let generator = owner.generator
+            let chat = try owner.makeChat(interpreter: interpreter)
+            let planner = ReviewedChatPlanner()
+            chat.actionPlanner = planner
+            chat.composer = text
+            chat.send(context: context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(planner.intents.count == 1)
+            #expect(planner.pendingReview != nil)
+            #expect(coordinator.pendingStudioDraft == nil)
+            chat.composer = text + " and route Saved Synth to speakers"
+            chat.send(context: context)
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(planner.intents.count == 1)
+            #expect(planner.confirmations == 0)
+            #expect(coordinator.pendingStudioDraft == nil)
+            #expect(generator.calls == 0)
+        }
     }
 
     @Test func exclusionsCannotAbsorbAPositiveRoutingClause() {
@@ -421,30 +389,33 @@ struct AssistantRoutingChatTests {
 
     @Test(arguments: [false, true])
     func supersededRoutingSaveCannotPublishSuccess(replaced: Bool) async throws {
-        let fixture = AssistantRoutingFixture()
-        let store = RoutingTestDraftStore()
-        let coordinator = AssistantCoordinator(draftStore: store)
-        let generator = RoutingTestGenerator()
-        let chat = chat(coordinator: coordinator, interpreter: RoutingTestInterpreter(), generator: generator)
-        await store.pauseNextSave()
-        chat.composer = AssistantRoutingFixture.text
-        chat.send(context: fixture.context)
-        try await wait { await store.isWaiting }
-        var replacement: StudioPatchDraft?
-        if replaced {
-            let draft = try fixture.prepared()
-            #expect(await coordinator.commitPreparedRouting(draft, expectedPending: coordinator.pendingStudioDraft,
-                preparedContext: fixture.context, currentContext: fixture.context))
-            replacement = draft
-        } else {
-            await coordinator.discardPendingStudioDraft()
+        try await withRoutingChatFixture { owner in
+            let fixture = AssistantRoutingFixture()
+            let store = owner.store
+            let coordinator = owner.coordinator
+            let generator = owner.generator
+            let chat = try owner.makeChat()
+            await store.pauseNextSave()
+            chat.composer = AssistantRoutingFixture.text
+            chat.send(context: fixture.context)
+            try await wait { await store.isWaiting }
+            var replacement: StudioPatchDraft?
+            if replaced {
+                let draft = try fixture.prepared()
+                #expect(await coordinator.commitPreparedRouting(draft, expectedPending: coordinator.pendingStudioDraft,
+                    preparedContext: fixture.context, currentContext: fixture.context))
+                replacement = draft
+            } else {
+                await coordinator.discardPendingStudioDraft()
+            }
+            await store.resume()
+            try await wait { !chat.isStreaming }
+            await chat.awaitOwnedWorkSnapshot()
+            #expect(coordinator.pendingStudioDraft == replacement)
+            #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
+            #expect(chat.selectedConversation?.messages.last?.text.contains("Created a review-only") == false)
+            #expect(generator.calls == 0)
         }
-        await store.resume()
-        try await wait { !chat.isStreaming }
-        #expect(coordinator.pendingStudioDraft == replacement)
-        #expect(chat.selectedConversation?.messages.last?.cards.isEmpty == true)
-        #expect(chat.selectedConversation?.messages.last?.text.contains("Created a review-only") == false)
-        #expect(await generator.calls == 0)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] == "1"))
