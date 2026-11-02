@@ -31,12 +31,8 @@ struct AppRootView: View {
                 await AcceptanceLaunchConfiguration.configure(appModel)
             }
             #if DEBUG
-            #if os(macOS)
             let observeRootWork = constructionObservation != nil
                 || ProcessInfo.processInfo.environment["FLUXKLANG_ISOLATED_TESTING"] == "1"
-            #else
-            let observeRootWork = constructionObservation != nil
-            #endif
             if observeRootWork {
                 rootWorkObservation = AppModel.captureUIRootWorkObservation()
             }
