@@ -59,24 +59,38 @@ struct AssistantActionCoordinationTests {
         let startedAt = Date()
         // This is the same paced verified transaction used by Studio Listen.
         let listen = Task { await wing.applyAndVerify([patch]) }
-        try await AssistantBackendFixture.waitAsync {
-            await fixture.transport.writes.contains(patch)
-                && (wing.confirmedReceivedAt[source] ?? .distantPast) >= startedAt
-                && wing.confirmedValues[source] == patch.value
+        var preparationTask: Task<AssistantActionPreparation, Never>?
+        do {
+            try await AssistantBackendFixture.waitAsync {
+                await fixture.transport.writes.contains(patch)
+                    && (wing.confirmedReceivedAt[source] ?? .distantPast) >= startedAt
+                    && wing.confirmedValues[source] == patch.value
+            }
+            let firstDiscovery = try #require(AssistantActionController.discoveryAddresses.sorted().first)
+            await fixture.transport.pauseQueries(at: firstDiscovery)
+            let preparation = Task { await fixture.service.prepare(request(fixture), interpretation: interpretation) }
+            preparationTask = preparation
+            try await AssistantBackendFixture.waitAsync { await fixture.transport.queryWaiting }
+            #expect(wing.confirmedValues[source] == patch.value)
+            #expect(WingApplyVerifier.pendingSettings(expected: [patch], confirmedValues: wing.confirmedValues).isEmpty)
+            let verification = await listen.value
+            #expect(verification.state == .verified)
+            #expect(await fixture.transport.writes.filter { $0.address == source } == [patch])
+            await fixture.transport.releaseQueries()
+            _ = await preparation.value
+            #expect(await fixture.transport.writes == [patch])
+            await wing.disconnect()
+        } catch {
+            listen.cancel()
+            preparationTask?.cancel()
+            fixture.service.cancel()
+            // Disarm future query gates as well as resume any caller already waiting.
+            await fixture.transport.releaseQueries()
+            _ = await listen.value
+            if let preparationTask { _ = await preparationTask.value }
+            await wing.disconnect()
+            throw error
         }
-        let firstDiscovery = try #require(AssistantActionController.discoveryAddresses.sorted().first)
-        await fixture.transport.pauseQueries(at: firstDiscovery)
-        let preparation = Task { await fixture.service.prepare(request(fixture), interpretation: interpretation) }
-        try await AssistantBackendFixture.waitAsync { await fixture.transport.queryWaiting }
-        #expect(wing.confirmedValues[source] == patch.value)
-        #expect(WingApplyVerifier.pendingSettings(expected: [patch], confirmedValues: wing.confirmedValues).isEmpty)
-        let verification = await listen.value
-        #expect(verification.state == .verified)
-        #expect(await fixture.transport.writes.filter { $0.address == source } == [patch])
-        await fixture.transport.releaseQueries()
-        _ = await preparation.value
-        #expect(await fixture.transport.writes == [patch])
-        await wing.disconnect()
     }
 
     @Test func cancelledOrSupersededPreparationNeverRestoresOrOverwritesPendingReview() async throws {
