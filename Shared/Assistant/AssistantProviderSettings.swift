@@ -32,7 +32,18 @@ protocol AssistantCredentialStore: Sendable {
 enum AssistantCredentialStores {
     /// A fresh store per default settings instance; shared fixtures must be injected explicitly.
     static var current: any AssistantCredentialStore {
-        select(isTesting: AppPersistence.isTesting, production: KeychainAssistantCredentialStore())
+        select(isTesting: AppPersistence.isTesting, production: makeProduction())
+    }
+
+    /// Direct production requests still obey process-selected isolation; the mirror is observation only.
+    static func makeProduction(mirroring mirror: ProductionAccessAudit? = nil) -> any AssistantCredentialStore {
+        ProductionAccessAudit.shared.record(.attempted, for: .credentialStore, mirroring: mirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .credentialStore, mirroring: mirror)
+            return MemoryAssistantCredentialStore()
+        }
+        ProductionAccessAudit.shared.record(.factoryEvaluated, for: .credentialStore, mirroring: mirror)
+        return KeychainAssistantCredentialStore(mirroring: mirror)
     }
 
     /// Test selection never constructs or accesses the production credential store.
@@ -63,12 +74,25 @@ final class MemoryAssistantCredentialStore: AssistantCredentialStore, @unchecked
 }
 
 struct KeychainAssistantCredentialStore: AssistantCredentialStore {
+    private let mirror: ProductionAccessAudit?
+
+    init(mirroring mirror: ProductionAccessAudit? = nil) {
+        self.mirror = mirror
+        ProductionAccessAudit.shared.record(.passiveConstruction, for: .credentialStore, mirroring: mirror)
+    }
+
     private var service: String {
         let base = "org.davidjensenius.FluxKlang.assistant"
         return AppPersistence.isTesting ? "\(base).\(AppPersistence.directory.lastPathComponent)" : base
     }
 
     func value(for account: String) -> String? {
+        ProductionAccessAudit.shared.record(.attempted, for: .credentialStore, mirroring: mirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .credentialStore, mirroring: mirror)
+            // Unavailable under isolation, not evidence that no saved credential exists.
+            return nil
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -77,6 +101,7 @@ struct KeychainAssistantCredentialStore: AssistantCredentialStore {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
+        ProductionAccessAudit.shared.record(.apiEntered, for: .credentialStore, mirroring: mirror)
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else {
             return nil
@@ -85,6 +110,11 @@ struct KeychainAssistantCredentialStore: AssistantCredentialStore {
     }
 
     func setValue(_ value: String, for account: String) throws {
+        ProductionAccessAudit.shared.record(.attempted, for: .credentialStore, mirroring: mirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .credentialStore, mirroring: mirror)
+            throw AssistantCredentialError.isolationDenied
+        }
         try removeValue(for: account)
         let attributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -93,6 +123,7 @@ struct KeychainAssistantCredentialStore: AssistantCredentialStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData as String: Data(value.utf8)
         ]
+        ProductionAccessAudit.shared.record(.apiEntered, for: .credentialStore, mirroring: mirror)
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw AssistantCredentialError.keychain(status)
@@ -100,11 +131,17 @@ struct KeychainAssistantCredentialStore: AssistantCredentialStore {
     }
 
     func removeValue(for account: String) throws {
+        ProductionAccessAudit.shared.record(.attempted, for: .credentialStore, mirroring: mirror)
+        guard !AppPersistence.isTesting else {
+            ProductionAccessAudit.shared.record(.denied, for: .credentialStore, mirroring: mirror)
+            throw AssistantCredentialError.isolationDenied
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+        ProductionAccessAudit.shared.record(.apiEntered, for: .credentialStore, mirroring: mirror)
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AssistantCredentialError.keychain(status)
@@ -112,8 +149,9 @@ struct KeychainAssistantCredentialStore: AssistantCredentialStore {
     }
 }
 
-enum AssistantCredentialError: Error {
+enum AssistantCredentialError: Error, Equatable, Sendable {
     case keychain(OSStatus)
+    case isolationDenied
 }
 
 @MainActor
