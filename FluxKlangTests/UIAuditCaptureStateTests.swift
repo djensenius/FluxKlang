@@ -1,6 +1,10 @@
 import Foundation
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 @MainActor
 struct UIAuditCaptureStateTests {
