@@ -12,11 +12,13 @@
 
 actor HostAuthority {
     static let projectLimit = 16
-    /// Abandoned attempts remembered for discarding their late success. When the
-    /// FIFO is full, abandoning evicts the oldest: a success arriving later for an
-    /// evicted attempt is `stalePrepareResponse` and is NOT discarded, so the engine
-    /// may keep that plan (a bounded engine-side leak; H5d may add an engine reset
-    /// that clears it). Abandons alone never make `begin` refuse.
+    /// Abandoned attempts remembered so each one's first late answer is recognised
+    /// exactly once (`.unreclaimed` or `.dropped`). When the FIFO is full, abandoning
+    /// evicts the oldest: a later answer for an evicted attempt is
+    /// `stalePrepareResponse`. Neither path reclaims the engine's plan, and this limit
+    /// does not bound what the engine retains: until engine-qualified reclamation
+    /// exists (#191), every abandoned success stays with the engine. Abandons alone
+    /// never make `begin` refuse.
     static let abandonedPrepareLimit = 64
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access

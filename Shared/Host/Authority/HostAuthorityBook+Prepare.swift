@@ -44,28 +44,27 @@ extension HostAuthorityBook {
     ///   naming any live plan (any project's running, reviewed or held plan) or a
     ///   plan whose `.discard` is still queued is refused as `preparedIDInUse`
     ///   first, with nothing changed: adopting it would let that discard destroy it.
-    /// - An abandoned attempt's success is discarded exactly once, unless it names
-    ///   a live plan or a plan whose `.discard` is already queued; its failure, a
-    ///   live plan or an already queued discard is `.dropped` (never `.queueFull`).
+    /// - An abandoned attempt's first answer is consumed exactly once, and never
+    ///   reaches a transaction or the queue (so it is never `.queueFull`): a success
+    ///   is `.unreclaimed`, unless it names a live plan or a plan whose `.discard` is
+    ///   already queued; that, or a failure, is `.dropped`. No `.discard` is ever
+    ///   queued from its bare ID, which the engine may have reused (#191).
     /// - An unknown, foreign, evicted or already answered attempt is
-    ///   `stalePrepareResponse` and never discards.
-    ///
-    /// Re-delivery: on `.queueFull` nothing changed, the attempt is still
-    /// remembered, and the engine must deliver the same answer again after the
-    /// queue drains; otherwise that plan is never discarded.
+    ///   `stalePrepareResponse` and changes nothing.
     mutating func prepareAnswered(_ result: Result<PreparedActivationID, PrepareFailure>,
                                   attempt: PrepareAttemptID) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
         if let project = outstanding.first(where: { $0.value == attempt })?.key {
             return route(result, attempt: attempt, project: project)
         }
         if let index = abandoned.firstIndex(where: { $0.attempt == attempt }) {
-            return discardLate(result, abandonedAt: index)
+            return .success(consumeLate(result, abandonedAt: index))
         }
         return .failure(.activation(.stalePrepareResponse))
     }
 
-    /// Gives up on `project`'s outstanding prepare. Its late success is discarded,
-    /// unless `abandonedPrepareLimit` later abandons evict it first.
+    /// Gives up on `project`'s outstanding prepare. Its first late answer is
+    /// recognised once, unless `abandonedPrepareLimit` later abandons evict it first;
+    /// its plan is never reclaimed here (#191).
     mutating func abandonPrepare(project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         guard let attempt = outstanding[project], state.transaction.lastPrepareAttempt == attempt else {
@@ -119,27 +118,18 @@ extension HostAuthorityBook {
         return .success(.routed)
     }
 
-    /// The transaction copy only supplies the refusal reported with the discard.
-    private mutating func discardLate(_ result: Result<PreparedActivationID, PrepareFailure>,
-                                      abandonedAt index: Int) -> Result<PrepareAnswerOutcome, HostAuthorityRefusal> {
-        let entry = abandoned[index]
-        guard case .success(let id) = result, !livePlans().contains(id) else {
-            abandoned.remove(at: index)
-            return .success(.dropped)
-        }
-        // Its discard is already queued: never queue a second one (nor refuse `.queueFull` for it).
-        guard !queue.pending.contains(.discard(id)) else {
-            abandoned.remove(at: index)
-            return .success(.dropped)
-        }
-        var copy = projects[entry.project]?.transaction
+    /// Consumes an abandoned attempt's first answer. Nothing is queued and no
+    /// transaction sees it; `refusal` is only read from the issuing project's phase.
+    private mutating func consumeLate(_ result: Result<PreparedActivationID, PrepareFailure>,
+                                      abandonedAt index: Int) -> PrepareAnswerOutcome {
+        let entry = abandoned.remove(at: index)
+        guard case .success(let id) = result, !livePlans().contains(id),
+              !queue.pending.contains(.discard(id)) else { return .dropped }
         let refusal: ActivationRefusal
-        switch copy?.prepared(result, attempt: entry.attempt) {
-        case .failure(let reason): refusal = reason
-        case .success, nil: refusal = .stalePrepareResponse
+        switch projects[entry.project]?.transaction.phase {
+        case .preparing?, nil: refusal = .stalePrepareResponse
+        case let phase?: refusal = .unexpectedPhase(phase)
         }
-        guard case .success = queue.enqueue(effects: [.discard(id)]) else { return .failure(.queueFull) }
-        abandoned.remove(at: index)
-        return .success(.discarded(id, refusal: refusal))
+        return .unreclaimed(id, refusal: refusal)
     }
 }
