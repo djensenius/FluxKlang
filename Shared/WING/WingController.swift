@@ -54,11 +54,11 @@ final class WingController {
     private var keepAliveTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     let mixerBaselineAuthorizations = WingMixerBaselineAuthorizations()
-    /// Creates a live controller that talks to a real WING over OSC/UDP.
-    init(port: UInt16 = WingNetwork.defaultPort) {
+    /// Creates a live-mode controller using the selected hardware services.
+    init(port: UInt16 = WingNetwork.defaultPort, hardware: HardwareServiceFactories = .current) {
         mode = .live
         self.port = port
-        transport = WingTransport(remotePort: port)
+        transport = hardware.makeWingTransport(port, hardware.localNetworkProbe)
     }
 
     /// Injection seam for recording transports; no network is needed by tests.
@@ -90,8 +90,8 @@ final class WingController {
         return controller
     }
 
-    static func acceptanceFailure(reason: String) -> WingController {
-        let controller = WingController()
+    static func acceptanceFailure(reason: String, hardware: HardwareServiceFactories = .current) -> WingController {
+        let controller = WingController(hardware: hardware)
         controller.connection = .failed(reason: reason)
         return controller
     }

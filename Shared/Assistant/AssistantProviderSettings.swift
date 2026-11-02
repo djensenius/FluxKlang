@@ -29,6 +29,39 @@ protocol AssistantCredentialStore: Sendable {
     func removeValue(for account: String) throws
 }
 
+enum AssistantCredentialStores {
+    /// A fresh store per default settings instance; shared fixtures must be injected explicitly.
+    static var current: any AssistantCredentialStore {
+        select(isTesting: AppPersistence.isTesting, production: KeychainAssistantCredentialStore())
+    }
+
+    /// Test selection never constructs or accesses the production credential store.
+    static func select(
+        isTesting: Bool,
+        production: @autoclosure () -> any AssistantCredentialStore
+    ) -> any AssistantCredentialStore {
+        isTesting ? MemoryAssistantCredentialStore() : production()
+    }
+}
+
+final class MemoryAssistantCredentialStore: AssistantCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    // All mutable state is protected by lock, including reads.
+    private var values: [String: String] = [:]
+
+    func value(for account: String) -> String? {
+        lock.withLock { values[account] }
+    }
+
+    func setValue(_ value: String, for account: String) {
+        lock.withLock { values[account] = value }
+    }
+
+    func removeValue(for account: String) {
+        lock.withLock { values[account] = nil }
+    }
+}
+
 struct KeychainAssistantCredentialStore: AssistantCredentialStore {
     private var service: String {
         let base = "org.davidjensenius.FluxKlang.assistant"
@@ -105,7 +138,7 @@ final class AssistantProviderSettings {
 
     init(
         defaults: UserDefaults = AppPersistence.defaults,
-        credentials: any AssistantCredentialStore = KeychainAssistantCredentialStore()
+        credentials: any AssistantCredentialStore = AssistantCredentialStores.current
     ) {
         self.defaults = defaults
         self.credentials = credentials

@@ -6,7 +6,7 @@ import Testing
 struct FoundationModelActionLiveTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] == "1"))
     func ownerRequestsUseAppleAndHostileLiveMetadataCannotAffectInterpretation() async throws {
-        let interpreter = FoundationModelActionInterpreter()
+        let interpreter = FoundationModelActionInterpreter.forLiveTesting(.model)
         try #require(await interpreter.availability() == .available)
         let lowerText = "turn down the volume of my Astrolab"
         let lower = try await interpreter.interpret(.init(text: lowerText))

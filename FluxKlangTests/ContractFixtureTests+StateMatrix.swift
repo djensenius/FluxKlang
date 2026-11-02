@@ -52,11 +52,24 @@ private struct EventRow {
     let endsAs: ContractFixtureState?
 }
 
+/// F7's lease and the lifecycle gate composed with F2's admission context.
+/// Neither command gate grants a lease or substitutes for capability preparation.
+private struct LeaseRow {
+    let lifecycle: EngineLifecycle
+    let windows: Int
+    let contextIsCurrent: Bool
+    /// Attach with the stale token when present, otherwise the current token or a separately issued one.
+    let attachment: EngineLeaseError?
+    /// Safety and proposal commands bypass the lifecycle check, but not command admission.
+    let runningCommand: HostCommandDecision
+}
+
 /// One row per state. The switch is exhaustive, so a new state cannot compile without a row.
 private struct StateExpectation {
     let capability: CapabilityRow
     let readiness: ReadinessRow
     let events: EventRow
+    let lease: LeaseRow
     /// F5's `PressureFixture` models contract limits only, so it has a counterpart in
     /// `pressured` alone; every other state asserts instead that a new action is admitted.
     let atCapacity: Bool
@@ -75,6 +88,8 @@ private struct StateExpectation {
                 events: EventRow(start: .available, script: [.bump(transportKey, .transportRestart)], capacity: 4,
                                  bystander: nil, refusedFault: nil, results: [.success([])], endState: .ready,
                                  endReason: nil, endsAs: nil),
+                lease: LeaseRow(lifecycle: .running, windows: 1, contextIsCurrent: true,
+                                attachment: nil, runningCommand: .admitted),
                 atCapacity: false
             )
         case .missing:
@@ -88,6 +103,8 @@ private struct StateExpectation {
                                         refusesNewAction: false),
                 events: EventRow(start: .missing, script: [lost], capacity: 4, bystander: nil, refusedFault: nil,
                                  results: [.success([])], endState: .unprepared, endReason: nil, endsAs: nil),
+                lease: LeaseRow(lifecycle: .stopped, windows: 0, contextIsCurrent: true,
+                                attachment: .notHeld, runningCommand: .admitted),
                 atCapacity: false
             )
         case .stale:
@@ -101,6 +118,8 @@ private struct StateExpectation {
                 events: EventRow(start: .available, script: [lost], capacity: 4, bystander: nil, refusedFault: nil,
                                  results: [.success([action])], endState: .invalidated, endReason: .sourceChanged,
                                  endsAs: .stale),
+                lease: LeaseRow(lifecycle: .running, windows: 1, contextIsCurrent: false,
+                                attachment: .staleToken, runningCommand: .refused(.stale(.hostEpoch))),
                 atCapacity: false
             )
         case .failed:
@@ -115,6 +134,8 @@ private struct StateExpectation {
                                  bystander: nil, refusedFault: nil,
                                  results: [.failure(.ledger(.reasonDoesNotMatchKind(sourceKey))), .success([])],
                                  endState: .failed, endReason: .preparationFailed, endsAs: nil),
+                lease: LeaseRow(lifecycle: .recovering, windows: 0, contextIsCurrent: true,
+                                attachment: .notHeld, runningCommand: .unavailable(.recovering)),
                 atCapacity: false
             )
         case .pressured:
@@ -129,6 +150,8 @@ private struct StateExpectation {
                 events: EventRow(start: .pressured, script: [lost], capacity: 1, bystander: bystander,
                                  refusedFault: (.duplicate, .capacity), results: [.success([action])],
                                  endState: .invalidated, endReason: .sourceChanged, endsAs: nil),
+                lease: LeaseRow(lifecycle: .running, windows: EngineLeaseRegistry.windowLimit,
+                                contextIsCurrent: true, attachment: .windowLimit, runningCommand: .admitted),
                 atCapacity: true
             )
         }
@@ -277,13 +300,70 @@ extension ContractFixtureTests {
             #expect(PressureFixture.maximumRequirements().count == TriggerStamp.maximumRequirements)
         }
 
+        private func checkLease(_ row: LeaseRow, _ state: ContractFixtureState) throws {
+            let fixture = try LeaseFixture.make(state)
+            let held = fixture.registry.snapshot
+            #expect(fixture.lifecycle == row.lifecycle)
+            #expect((held?.windows.count ?? 0) == row.windows)
+            #expect(fixture.ledger.isCurrent(fixture.contextRequirement) == row.contextIsCurrent)
+            let role = fixture.registry.role(of: fixture.window, project: fixture.project)
+            if let held {
+                #expect(held.project == fixture.project && role == .renders(held.token))
+            } else {
+                #expect(role == .stopped)
+            }
+
+            // Even .admitted for a stopped engine does not grant a lease; recovering blocks only
+            // running-set commands. A stale host epoch still wins over any lifecycle exception.
+            for controlClass in ControlClass.allCases {
+                let context = try AdmissionContextFixture.context(state, controlClass: controlClass)
+                let intent = try AdmissionContextFixture.intent(state, controlClass: controlClass)
+                let expected: HostCommandDecision
+                if controlClass == .safety || controlClass == .proposal {
+                    switch StateExpectation.row(state).capability.admission {
+                    case .admitted: expected = .admitted
+                    case .refused(let result): expected = .refused(result)
+                    }
+                } else {
+                    expected = row.runningCommand
+                }
+                #expect(HostCommandGate.admit(intent, admission: context, lifecycle: fixture.lifecycle) == expected,
+                        "\(state) \(controlClass)")
+            }
+
+            // No fabricated token for the no-holder rows: use one actually issued by another registry.
+            let token: EngineLeaseToken
+            if let issued = fixture.staleToken ?? held?.token {
+                token = issued
+            } else {
+                token = try #require(LeaseFixture.make(.available).registry.snapshot).token
+            }
+            var probe = fixture
+            if let refusal = row.attachment {
+                #expect(throws: refusal) {
+                    try probe.registry.attach(fixture.otherWindow, project: fixture.project, expected: token)
+                }
+                #expect(probe.snapshot == fixture.snapshot)
+                #expect(probe.registry.snapshot == held)
+            } else {
+                try probe.registry.attach(fixture.otherWindow, project: fixture.project, expected: token)
+                #expect(probe.registry.snapshot?.windows == [fixture.window, fixture.otherWindow])
+                #expect(probe.registry.snapshot?.token == token)
+                #expect(probe.registry.role(of: fixture.otherWindow, project: fixture.project) == .renders(token))
+            }
+            // Attachments, successful or refused, are not context changes.
+            #expect(probe.registry.lastIssued == fixture.registry.lastIssued)
+            #expect(probe.ledger.current == fixture.ledger.current)
+        }
+
         @Test(arguments: ContractFixtureState.allCases)
-        func everyStateHasCapabilityReadinessAndEventFixture(state: ContractFixtureState) throws {
+        func everyStateHasCapabilityReadinessEventAndLeaseFixture(state: ContractFixtureState) throws {
             let row = StateExpectation.row(state)
             let fixture = try ReadinessFixture.make(state)
             try checkCapability(row.capability, state)
             try checkReadiness(row.readiness, fixture)
             try checkEvents(row.events)
+            try checkLease(row.lease, state)
             #expect(row.atCapacity == (fixture.readiness.states.count == ReadinessFixture.readinessCapacity))
             if row.atCapacity { try checkPressure(fixture) }
         }
@@ -305,6 +385,17 @@ extension ContractFixtureTests {
                 let second = try deliver(events)
                 #expect(first.source == second.source && first.results == second.results)
                 #expect(first.fixture.snapshot == second.fixture.snapshot)
+                let lease = try LeaseFixture.make(state)
+                let rebuiltLease = try LeaseFixture.make(state)
+                #expect(lease.snapshot == rebuiltLease.snapshot)
+                #expect(Mirror(reflecting: lease.snapshot).children.count == 8)
+                // Snapshot equality intentionally excludes the freshly issued token identities.
+                if let held = lease.registry.snapshot {
+                    #expect(held.token != rebuiltLease.registry.snapshot?.token)
+                }
+                if let stale = lease.staleToken {
+                    #expect(stale != rebuiltLease.staleToken)
+                }
             }
 
             // F5's limit fixtures are compared once. Session tokens are fresh identities, so compare trigger IDs.
