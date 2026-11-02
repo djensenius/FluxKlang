@@ -111,7 +111,7 @@ final class AssistantKeyboardUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         // Keyboard/navigation coverage needs no live mixer or continuously animated demo meters.
         app.launchArguments = ["-ui-testing", "-ui-test-force-fallback"]
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
         let assistantTab = app.tabBars.buttons["Assistant"]
         XCTAssertTrue(assistantTab.waitForExistence(timeout: 10))
         assistantTab.tap()

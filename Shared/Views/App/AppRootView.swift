@@ -10,6 +10,11 @@ import SwiftUI
 
 struct AppRootView: View {
     @Environment(AppModel.self) private var appModel
+    #if DEBUG
+    private let constructionObservation = AcceptanceLaunchConfiguration.isUITesting
+        ? AppModel.captureUIConstructionObservation() : nil
+    @State private var rootWorkObservation: UIStartupObservation.RootWork?
+    #endif
 
     var body: some View {
         @Bindable var assistant = appModel.assistant
@@ -25,7 +30,18 @@ struct AppRootView: View {
             if AcceptanceLaunchConfiguration.isUITesting {
                 await AcceptanceLaunchConfiguration.configure(appModel)
             }
+            #if DEBUG
+            if constructionObservation != nil {
+                rootWorkObservation = AppModel.captureUIRootWorkObservation()
+            }
+            #endif
         }
+        #if DEBUG
+        .modifier(StartupIsolationAccessibility(
+            construction: constructionObservation,
+            rootWork: rootWorkObservation
+        ))
+        #endif
         .sheet(isPresented: helpPresented) {
             if case .help(let topic) = assistant.navigationTarget {
                 AssistantHelpView(entry: FluxKlangHelpCatalog.entry(for: topic))
@@ -76,6 +92,28 @@ struct AppRootView: View {
         )
     }
 }
+
+#if DEBUG
+private struct StartupIsolationAccessibility: ViewModifier {
+    let construction: UIStartupObservation.Construction?
+    let rootWork: UIStartupObservation.RootWork?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let construction {
+            content
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("startup.isolation.observation")
+                .accessibilityValue(UIStartupObservation(
+                    construction: construction,
+                    rootAwaitedWork: rootWork
+                ).encoded)
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 enum AppSection: String, CaseIterable, Identifiable {
     case studio = "Studio"

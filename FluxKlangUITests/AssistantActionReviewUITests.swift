@@ -118,7 +118,7 @@ final class AssistantActionReviewUITests: XCTestCase {
         app.terminate()
         XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-action-review", mode]
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
         let assistant = app.tabBars.buttons["Assistant"]
         XCTAssertTrue(assistant.waitForExistence(timeout: 10))
         assistant.tap()

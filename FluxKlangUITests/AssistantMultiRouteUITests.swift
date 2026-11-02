@@ -123,7 +123,7 @@ final class AssistantMultiRouteUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         // No -ui-test-demo: the new DEBUG seed must force a simulated transport itself.
         app.launchArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-multi-route"] + extraArguments
-        app.launch()
+        launchIsolatedUITestApplication(app, testCase: self)
         XCTAssertTrue(app.navigationBars["Studio"].waitForExistence(timeout: 10))
     }
 
