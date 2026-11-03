@@ -68,12 +68,12 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 208 checks, including regressions
+existing fixture world. The suite has 264 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
 current-module-qualified and inherited aliases, source-defined XCTest names,
-cross-file extension ownership and extension/local rejection routing,
-cycle handling, and bounded input reads/rechecks.
+cross-file extension ownership, local alias/namespace provenance and
+actual-owner member rejection, cycle handling, and bounded input reads/rechecks.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
 
@@ -127,7 +127,12 @@ nested owners, uses rejection-only scoped validation rather than establishing
 ordinary lineage.
 
 Local source-bound ancestry remains unsupported even where a compiler accepts it.
-An indexed dotted spelling can force conservative refusal but does not select a
-local/global binding or prove SDK inheritance; a miss does not establish absence.
-Recorded formal shadows retain precedence, and unconsumed external aliases do
-not themselves require refusal.
+The lexical index retains declaration provenance when ordinary local lookup is
+declined. Nearer formals and physical declarations precede rejection-only lookup
+of actual-owner members, using identity, access and the consumer's source path.
+Ambiguity, cycles and missing required owner modeling remain indeterminate,
+not absence.
+Associated extension lookup uses the actual target, not its enclosing owners.
+Presence does not prove a binding or SDK ancestry; a dotted-index miss does not
+prove absence. Unconsumed declarations and unrelated external helpers do not
+themselves require refusal.
