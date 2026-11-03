@@ -10,7 +10,7 @@ final class SourceLocalProvenance {
         let bindings: SourceExtensionOwnership
         let path: String
     }
-    private enum Kind { case file, nominal, alias, function, closure, block, extended }
+    private enum Kind { case file, nominal, alias, function, closure, block, extended, formal }
     private enum DeclarationKind { case nominal, alias, other }
     private struct Region {
         let path: String
@@ -80,10 +80,12 @@ final class SourceLocalProvenance {
         if node.is(ExtensionDeclSyntax.self) { return .extended }
         if node.asProtocol(DeclGroupSyntax.self) != nil { return .nominal }
         if node.is(TypeAliasDeclSyntax.self) { return .alias }
+        if node.as(SubscriptDeclSyntax.self)?.genericParameterClause != nil { return .formal }
         if node.is(FunctionDeclSyntax.self) || node.is(InitializerDeclSyntax.self) ||
             node.is(DeinitializerDeclSyntax.self) || node.is(AccessorDeclSyntax.self) { return .function }
         if node.is(ClosureExprSyntax.self) { return .closure }
         if node.is(CodeBlockSyntax.self) || node.is(SwitchCaseSyntax.self) { return .block }
+        if node.as(AccessorBlockSyntax.self)?.accessors.is(CodeBlockItemListSyntax.self) == true { return .block }
         return nil
     }
 

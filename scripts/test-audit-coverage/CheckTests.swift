@@ -487,6 +487,7 @@ enum FixtureMain {
         tests.inputLimitCases()
         tests.crossFileOwnershipCases()
         tests.localProvenanceCases()
+        tests.ancestryBoundaryCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }
