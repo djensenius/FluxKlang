@@ -24,6 +24,10 @@ struct ActivationGesture: Hashable, Sendable {
 
 /// Why the actor refused. Every refusal leaves the actor state unchanged.
 enum HostAuthorityRefusal: Error, Equatable, Sendable {
+    /// Closed preparation custody does not execute this legacy operation.
+    case preparationOnly
+    /// An irreversible ownership invariant failure permanently closes admission.
+    case preparationOwnerFaulted
     /// The transaction's own refusal, unchanged.
     case activation(ActivationRefusal)
     case projectDocumentMismatch(expected: ProjectID, found: ProjectID)
