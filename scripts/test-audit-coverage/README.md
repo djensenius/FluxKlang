@@ -148,8 +148,9 @@ never cached as completed absence.
 
 ## Opt-in qualification role (schema v2)
 
-Production registration remains v1 until separately reviewed integration. V1
-retains its two-unit-target schema, canonical obligations, report fields and
+Production registration uses v2 to separate audited targets from the dedicated
+Apple qualification target. V1 retains its two-unit-target schema, canonical
+obligations, report fields and
 exit semantics. Merely downgrading a manifest cannot hide a third actual PBX unit
 target.
 
