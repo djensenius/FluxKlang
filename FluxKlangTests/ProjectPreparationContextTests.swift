@@ -7,6 +7,33 @@ import Testing
 #endif
 
 struct ProjectPreparationContextTests {
+    static let digest = "sha256:" + String(repeating: "0123456789abcdef", count: 4)
+
+    /// Shared by these two preparation suites without depending on iOS-only fixtures.
+    static func sample() -> (ProjectDocument, [GraphDocument]) {
+        let roleID = RoleID(validated: "rol.input")
+        let assetID = AssetID(validated: "ast.audio")
+        let shared = GraphDocument(id: GraphID(validated: "gph.shared"))
+        let output = GraphPort(id: PortID(validated: "out"), direction: .output, signal: .audio, channels: 2)
+        let selected = GraphDocument(id: GraphID(validated: "gph.selected"), nodes: [
+            GraphNode(id: NodeID(validated: "nod.input"), kind: .roleInput, label: "Input",
+                      role: roleID, ports: [output]),
+            GraphNode(id: NodeID(validated: "nod.player"), kind: .mediaPlayer, label: "Player",
+                      asset: assetID, ports: [output]),
+            GraphNode(id: NodeID(validated: "nod.shared"), kind: .sharedGraph, label: "Shared", graph: shared.id)
+        ])
+        let project = ProjectDocument(
+            id: ProjectID(validated: "prj.context"), name: "Preparation context",
+            graphs: [ProjectGraphReference(graph: selected.id, revision: selected.revision),
+                     ProjectGraphReference(graph: shared.id, revision: shared.revision)],
+            roles: [ProjectRole(id: roleID, label: "Input", direction: .input, signal: .audio, channels: 2)],
+            patches: [ProjectPatch(id: PatchID(validated: "pat.main"), label: "Main", graph: selected.id)],
+            assets: [ProjectAsset(id: assetID, label: "Audio", media: .audio, contentDigest: digest,
+                                  timePolicy: .fixedRate, timing: AssetTiming(startTicks: 0))]
+        )
+        return (project, [selected, shared])
+    }
+
     static func minimal() -> (ProjectDocument, GraphDocument) {
         let graph = GraphDocument(id: GraphID(validated: "gph.selected"))
         let project = ProjectDocument(
@@ -112,7 +139,7 @@ struct ProjectPreparationContextTests {
     }
 
     @Test func completeDeclarationsAndSmallUnknownsSurviveWithoutUnrelatedBodies() throws {
-        var (project, graphs) = ProjectContractTests.sample()
+        var (project, graphs) = Self.sample()
         project.revision = try ContractRevision(800)
         let selected = graphs[0]
         #expect(project.revision != selected.revision)
@@ -124,7 +151,7 @@ struct ProjectPreparationContextTests {
         project.patches.append(ProjectPatch(id: PatchID(validated: "pat.unrelated"), label: "Other", graph: unrelated))
         project.assets.append(ProjectAsset(
             id: AssetID(validated: "ast.unused"), label: "Notes", media: .document,
-            contentDigest: ProjectContractTests.digest
+            contentDigest: Self.digest
         ))
         project.actions = [ProjectMediaAction(
             id: ActionID(validated: "act.a"), asset: project.assets[0].id,
@@ -178,7 +205,7 @@ struct ProjectPreparationContextTests {
     }
 
     @Test func selectedRolesAssetsAndSharedGraphsUseCompleteDeclarations() throws {
-        let (original, graphs) = ProjectContractTests.sample()
+        let (original, graphs) = Self.sample()
         let graph = graphs[0]
         let roleNode = try #require(graph.nodes.first { $0.kind == .roleInput })
         let roleID = try #require(roleNode.role)
@@ -221,7 +248,7 @@ struct ProjectPreparationContextTests {
     }
 
     @Test func declarationChecksAndGenericGraphChecksAreStillApplied() throws {
-        var (project, graphs) = ProjectContractTests.sample()
+        var (project, graphs) = Self.sample()
         let original = project
         project.roles.append(project.roles[0])
         #expect(throws: PreparationProjectRefusal.selected(.duplicateRole(project.roles[0].id))) {

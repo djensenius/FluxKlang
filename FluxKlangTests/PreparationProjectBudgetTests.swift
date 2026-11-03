@@ -156,7 +156,7 @@ struct PreparationProjectBudgetTests {
     }
 
     @Test func everyRecordBagAndTypedTextContributes() throws {
-        var (base, _) = ProjectContractTests.sample()
+        var (base, _) = ProjectPreparationContextTests.sample()
         base.actions = Self.withPolicy(try Self.privatePolicy(.null)).actions
         let oversized: [String: JSONValue] = ["x": .string(String(repeating: "x", count: 131_072))]
         let bags: [WritableKeyPath<ProjectDocument, [String: JSONValue]>] = [
