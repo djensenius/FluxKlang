@@ -60,6 +60,19 @@ def snapshot(root):
     return result
 
 
+def binary_object_table(objects):
+    """Encode test objects verbatim: four-byte offsets, two-byte object refs."""
+    data = b"bplist00"
+    offsets = []
+    for obj in objects:
+        offsets.append(len(data))
+        data += obj
+    table_offset = len(data)
+    data += b"".join(offset.to_bytes(4, "big") for offset in offsets)
+    return (data + b"\0" * 6 + bytes((4, 2)) + len(objects).to_bytes(8, "big")
+            + (0).to_bytes(8, "big") + table_offset.to_bytes(8, "big"))
+
+
 class ProducerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -187,6 +200,145 @@ class ProducerTests(unittest.TestCase):
             receipt.validate(self.final, "0" * 64)
         with self.assertRaises(TypeError):
             receipt.validate(self.final)
+
+    def test_binary_info_real_prepare_seal_pinned_consumer_and_separate_identities(self):
+        info = {"CFBundleShortVersionString": "27.2", "CFBundleVersion": "25400.63.5",
+                "DTXcodeBuild": "27B51", "Nested": [{"ValidKey": "retained raw witness"}]}
+        version = {"CFBundleShortVersionString": "27.2", "CFBundleVersion": "25400.63.5",
+                   "ProductBuildVersion": "27B52"}
+        raw_info = plistlib.dumps(info, fmt=plistlib.FMT_BINARY)
+        raw_version = plistlib.dumps(version, fmt=plistlib.FMT_XML)
+        self.assertTrue(raw_info.startswith(b"bplist00"))
+        write(self.developer.parent / "Info.plist", raw_info)
+        write(self.developer.parent / "version.plist", raw_version)
+        result = self.produce()  # Fake compile; REAL prepare, validation and seal.
+        self.assertEqual(self.compiler.call_count, 1)
+        value = json.loads(self.final.read_bytes())
+        toolchain = value["toolchain"]
+        self.assertEqual(toolchain["info"]["fields"]["DTXcodeBuild"], "27B51")
+        self.assertEqual(toolchain["version"]["fields"]["ProductBuildVersion"], "27B52")
+        for key, raw in (("info", raw_info), ("version", raw_version)):
+            self.assertEqual(toolchain[key]["file"]["sha256"], prepare.digest(raw))
+            self.assertEqual(toolchain[key]["file"]["size"], len(raw))
+            self.assertEqual(toolchain[key]["fields"]["CFBundleVersion"], "25400.63.5")
+        before = snapshot(self.root)
+        record = self.consume(result)
+        self.assertEqual(record["profile"], prepare.RETENTION_PROFILE)
+        self.assertEqual(snapshot(self.root), before)
+        # Mutating a binary Info witness is detected independently of version.
+        info["DTXcodeBuild"] = "27B52"
+        write(self.developer.parent / "Info.plist", plistlib.dumps(info, fmt=plistlib.FMT_BINARY))
+        with self.assertRaises(receipt.Refusal):
+            self.consume(result)
+
+    def test_binary_info_actual_encoded_duplicate_and_non_string_keys_refuse(self):
+        path = self.developer.parent / "Info.plist"
+        original = plistlib.loads(path.read_bytes())
+        for nested in (False, True):
+            for kind in ("duplicate", "non-string"):
+                with self.subTest(nested=nested, kind=kind):
+                    extra = {"TwinA": "left", "TwinB": "right"} if kind == "duplicate" else {"K": "value"}
+                    fields = dict(original)
+                    fields.update({"Nested": extra} if nested else extra)
+                    raw = plistlib.dumps(fields, fmt=plistlib.FMT_BINARY)
+                    # Ordinary dict dumping cannot encode duplicate or integer
+                    # keys. Replace equal-size *encoded key objects*, keeping the
+                    # object references/offset table/trailer valid.
+                    old, new = ((b"\x55TwinB", b"\x55TwinA") if kind == "duplicate"
+                                else (b"\x51K", b"\x10\x01"))
+                    self.assertEqual(raw.count(old), 1)
+                    raw = raw.replace(old, new, 1)
+                    ordinary = plistlib.loads(raw, fmt=plistlib.FMT_BINARY)
+                    affected = ordinary["Nested"] if nested else ordinary
+                    if kind == "duplicate":
+                        self.assertEqual(affected["TwinA"], "right")  # Default parser loses a key.
+                        self.assertNotIn("TwinB", affected)
+                    else:
+                        self.assertEqual(affected[1], "value")  # Actual integer dictionary key.
+                    path.write_bytes(raw)
+                    with self.assertRaises(receipt.Refusal):
+                        receipt.toolchain_observation()
+        self.compiler.assert_not_called()
+        self.assertFalse((self.w / "build-evidence").exists())
+
+    def test_binary_info_malformed_recursion_and_root_refusals(self):
+        path = self.developer.parent / "Info.plist"
+        fields = plistlib.loads(path.read_bytes())
+        good = plistlib.dumps(fields, fmt=plistlib.FMT_BINARY)
+        # Real deeply nested encoded objects exercise parser recursion failure,
+        # without requiring the stdlib serializer itself to recurse.
+        depth = sys.getrecursionlimit() + 50
+        objects = [b"\xd1\x00\x01\x00\x02", b"\x51K"]
+        objects += [b"\xa1" + (index + 1).to_bytes(2, "big")
+                    for index in range(2, depth + 2)]
+        objects.append(b"\x00")
+        deep = binary_object_table(objects)
+        with self.assertRaises(RecursionError):
+            plistlib.loads(deep, fmt=plistlib.FMT_BINARY)
+        malformed = (b"bplist00", good[:-10], b"bplist01" + good[8:],
+                     binary_object_table([b"\xff"]), deep)
+        for data in malformed:
+            with self.subTest(data_prefix=data[:12]):
+                path.write_bytes(data)
+                with self.assertRaises(receipt.Refusal):
+                    receipt.toolchain_observation()
+        for root in ([], "not a dictionary", 7, b"data", [list(item) for item in fields.items()]):
+            with self.subTest(root=root):
+                path.write_bytes(plistlib.dumps(root, fmt=plistlib.FMT_BINARY))
+                with self.assertRaisesRegex(receipt.Refusal, "must be dictionary"):
+                    receipt.toolchain_observation()
+        self.compiler.assert_not_called()
+
+    def test_binary_info_critical_types_missing_fields_and_bound_refuse(self):
+        path = self.developer.parent / "Info.plist"
+        original = plistlib.loads(path.read_bytes())
+        for field in ("CFBundleShortVersionString", "CFBundleVersion",
+                      "DTXcodeBuild", "ProductBuildVersion"):
+            for value in (False, 27, b"bytes", ["string"], {"nested": "string"}, ""):
+                with self.subTest(field=field, value=value):
+                    fields = dict(original, **{field: value})
+                    path.write_bytes(plistlib.dumps(fields, fmt=plistlib.FMT_BINARY))
+                    with self.assertRaises(receipt.Refusal):
+                        receipt.toolchain_observation()
+        for field in ("CFBundleShortVersionString", "CFBundleVersion"):
+            fields = dict(original)
+            del fields[field]
+            path.write_bytes(plistlib.dumps(fields, fmt=plistlib.FMT_BINARY))
+            with self.assertRaisesRegex(receipt.Refusal, "missing Xcode version field"):
+                receipt.toolchain_observation()
+        path.write_bytes(b"bplist00" + b"\0" * (receipt.METADATA_BYTES - 7))
+        with self.assertRaisesRegex(receipt.Refusal, "byte limit"):
+            receipt.toolchain_observation()
+        self.compiler.assert_not_called()
+
+    def test_binary_info_interruption_exceptions_propagate(self):
+        path = self.developer.parent / "Info.plist"
+        path.write_bytes(plistlib.dumps(plistlib.loads(path.read_bytes()), fmt=plistlib.FMT_BINARY))
+        for interruption in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interruption=interruption):
+                with mock.patch.object(receipt.plistlib, "loads", side_effect=interruption):
+                    with self.assertRaises(interruption):
+                        receipt.toolchain_observation()
+
+    def test_binary_version_and_xctestrun_stay_refused(self):
+        version = self.developer.parent / "version.plist"
+        xml = version.read_bytes()
+        version.write_bytes(plistlib.dumps(plistlib.loads(xml), fmt=plistlib.FMT_BINARY))
+        with self.assertRaises(receipt.Refusal):
+            receipt.toolchain_observation()
+        self.compiler.assert_not_called()
+        version.write_bytes(xml)
+
+        def compile_binary_metadata(*args):
+            code = self.fake_compile(*args)
+            write(self.w / receipt.PRODUCTS / "Mac.xctestrun",
+                  plistlib.dumps(FIXTURE, fmt=plistlib.FMT_BINARY))
+            return code
+
+        self.compiler.side_effect = compile_binary_metadata
+        with self.assertRaises(receipt.Refusal):
+            self.produce()
+        self.assert_consumed()
 
     def test_product_mutations_and_relocation(self):
         result = self.produce()

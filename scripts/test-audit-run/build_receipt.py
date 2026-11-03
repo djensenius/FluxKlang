@@ -467,6 +467,15 @@ def package_observation(workspace):
     return {"lockfile": lock, "workspace_state": state, "checkouts": checkouts}
 
 
+class _UniqueInfoDictionary(dict):
+    """Enforce string/unique keys in every binary Info.plist dictionary."""
+
+    def __setitem__(self, key, value):
+        require(type(key) is str, "binary Info.plist key must be a string")
+        require(key not in self, "duplicate binary Info.plist key")
+        super().__setitem__(key, value)
+
+
 def toolchain_observation():
     contents = Path(DEVELOPER).parent
     result = {}
@@ -476,7 +485,17 @@ def toolchain_observation():
                                      "ProductBuildVersion")),
     ):
         witness, data = bounded(contents / name)
-        parsed = prepare.parse_plist(data)
+        if key == "info" and data.startswith(b"bplist00"):
+            try:
+                parsed = plistlib.loads(data, fmt=plistlib.FMT_BINARY,
+                                        dict_type=_UniqueInfoDictionary)
+            except (ValueError, TypeError, OverflowError, OSError, LookupError,
+                    RecursionError) as error:
+                raise Refusal("invalid binary Xcode Info.plist") from error
+            require(type(parsed) is _UniqueInfoDictionary, "Xcode plist must be dictionary")
+            parsed = dict(parsed)
+        else:
+            parsed = prepare.parse_plist(data)
         require(type(parsed) is dict, "Xcode plist must be dictionary")
         fields = {}
         for field in ("CFBundleShortVersionString", "CFBundleVersion",

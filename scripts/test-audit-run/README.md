@@ -335,11 +335,22 @@ scripts still require trusted custody and external execution authorization.
 - This is a **limited Swift-input witness**, not complete C/compiler/SDK or
   runtime input closure. It does not invent or parse response-file evidence.
 - Xcode `Contents/Info.plist`, `Contents/version.plist` and the fixed regular
-  `xcodebuild` binary have independent raw byte/mode witnesses. The plists use
-  the accepted strict UTF-8 XML container/scalar parser. Both retain their
+  `xcodebuild` binary have independent raw byte/mode witnesses. Only the fixed
+  installed `Info.plist` additionally accepts bytes beginning `bplist00`, using
+  stdlib `plistlib` with explicit `FMT_BINARY`. Its dictionary factory refuses
+  duplicate/non-string keys, including in nested dictionaries; a dictionary
+  root is required before normalization. XML Info and `version.plist` retain
+  the accepted strict UTF-8 XML parser. All `.xctestrun` constraints remain
+  XML-only and unchanged. Both toolchain plists retain their
   individual `CFBundleShortVersionString`/`CFBundleVersion`; version.plist must
   contain `ProductBuildVersion`. `DTXcodeBuild` and `ProductBuildVersion` are
-  separately retained wherever present, never equated across concepts.
+  separately retained wherever present, never equated across concepts (for
+  example, Info `DTXcodeBuild=27B51` versus version `ProductBuildVersion=27B52`).
+  The existing 2 MiB raw-read bound and raw witnesses/schema are unchanged.
+  Malformed binary parsing, including recursion failures, is refused without
+  swallowing interruption exceptions. This does **not** establish generic
+  binary-parser heap/time bounds or complete toolchain closure: these installed
+  files remain trusted custody surfaces.
 - Exactly one strict original Mac `.xctestrun` must be a Products-root sibling.
   Before real preparation, bounded parsing and the actual `output_paths`,
   `transformed`, `intent_record` helpers precompute exact output sizes with a
