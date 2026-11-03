@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "dbedf90cfb42ef4d845ad7f46ee86d91fc0881321a5f85e16627c30207d64e68",
+    "sha256": "0bf402505e98d8b74aa834467634536e0d836ab2a03d4de14b6a05be41a87cc0",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
