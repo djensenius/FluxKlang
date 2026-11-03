@@ -592,15 +592,24 @@ def swift_paths(data):
         value = data.decode("utf-8")
     except UnicodeError as error:
         raise Refusal("source list must be UTF8") from error
-    require(not any(c in value for c in ('\ufeff', '\0', '\r', '"', "'", "\\")),
+    require(not any(c in value for c in ('\ufeff', '\0', '\r', '"', "'")),
             "unsupported source-list grammar")
     if value.endswith("\n"):
         value = value[:-1]
-    paths = value.split("\n") if value else []
-    require(len(paths) == len(set(paths)), "duplicate Swift input")
-    for path in paths:
+    paths = []
+    for line in value.split("\n") if value else []:
+        decoded = []
+        characters = iter(line)
+        for character in characters:
+            if character == "\\":
+                require(next(characters, None) == " ", "unsupported source-list escape")
+                character = " "
+            decoded.append(character)
+        path = "".join(decoded)
         path_text(path)
         require(Path(path).suffix == ".swift", "non-Swift input")
+        paths.append(path)
+    require(len(paths) == len(set(paths)), "duplicate Swift input")
     return paths
 
 

@@ -351,10 +351,19 @@ scripts still require trusted custody and external execution authorization.
   and the corresponding `FluxKlangMacTests.build/.../FluxKlangMacTests.SwiftFileList`.
   All actual `.SwiftFileList` files below `W/DerivedData/Build/Intermediates.noindex`
   are captured by bounded traversal, not guessed target associations.
-- Lists are UTF-8 raw absolute LF-separated `.swift` paths; one final LF is
-  optional. Literal internal spaces are accepted. BOM/NUL/CR, quotes, escaping,
-  nested `@` lists, interior blank lines, duplicates and ambiguous paths are
-  refused. Every input must be a regular file associated with exactly one
+- Lists are UTF-8 absolute LF-separated `.swift` paths; one final LF is
+  optional. Literal spaces remain accepted. In one pass per line, only a
+  backslash immediately followed by **ASCII space** decodes to one literal
+  space. Every other escape, dangling/doubled backslash and line continuation
+  is refused. No meaningful spaces are stripped or shell-split; there is no
+  shell expansion, `shlex`, or generic response-file parser. BOM/NUL/CR, quotes,
+  nested `@` lists and interior blank lines remain refused. Canonical paths,
+  the 4,096-byte UTF-8 path bound and duplicates are checked **after decoding**:
+  raw-space and escaped-space aliases in one list are duplicates.
+  The 2 MiB raw-list bound and original-byte witness hashes are unchanged;
+  decoding is only for path associations and existing regular/no-follow checks.
+  Even a raw-byte mutation preserving decoded paths invalidates the pinned
+  witness. Every input must be a regular file associated with exactly one
   inventoried tracked source/package file, or a generated Swift file under
   `Intermediates.noindex` or `Build/DerivedSources`. The selected generated
   file set and its parent directory modes are retained; this is **not a whole

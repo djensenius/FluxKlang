@@ -163,6 +163,13 @@ class ProducerTests(unittest.TestCase):
         stderr.write(b"synthetic compile stderr\n")
         return 0
 
+    def fake_compile_space_escaped(self, *args):
+        code = self.fake_compile(*args)
+        for relative in (*receipt.MANDATORY, "Extra/Other.SwiftFileList"):
+            path = self.w / receipt.INTERMEDIATES / relative
+            path.write_bytes(path.read_bytes().replace(b" ", b"\\ "))
+        return code
+
     def produce(self):
         return build_mac.produce(str(self.w), self.commit, self.tree)
 
@@ -205,6 +212,128 @@ class ProducerTests(unittest.TestCase):
         fixture_git(self.nio, "add", ".")
         fixture_git(self.nio, "commit", "-m", "synthetic genuine tracked fixture links")
         self.pin_nio_revision()
+
+    def test_space_escape_real_prepare_seal_pinned_consumer_and_raw_witness(self):
+        self.nio = self.w / "Packages/checkouts/swift-nio"
+        spaced = self.nio / "Sources/More  Spaced Input.swift"
+        write(spaced, b"struct MultipleSpacedInput {}\n")
+        fixture_git(self.nio, "add", ".")
+        fixture_git(self.nio, "commit", "-m", "synthetic tracked multiple spaces")
+        self.pin_nio_revision()
+
+        def compile_spaced(*args):
+            code = self.fake_compile_space_escaped(*args)
+            path = self.w / receipt.INTERMEDIATES / receipt.MANDATORY[0]
+            with path.open("ab") as stream:
+                stream.write((str(spaced).replace(" ", "\\ ") + "\n").encode())
+            return code
+
+        self.compiler.side_effect = compile_spaced
+        result = self.produce()  # Real prepare, metadata validation and Products seal.
+        value = json.loads(self.final.read_bytes())
+        for item in value["inputs"]["lists"]:
+            raw = Path(item["file"]["path"]).read_bytes()
+            self.assertIn(b"\\ ", raw)
+            self.assertEqual(item["file"]["sha256"], prepare.digest(raw))
+            self.assertEqual(item["file"]["size"], len(raw))
+            self.assertEqual(receipt.swift_paths(raw), [i["path"] for i in item["inputs"]])
+        selected = next(item for item in value["inputs"]["lists"]
+                        if item["file"]["path"].endswith(receipt.MANDATORY[0]))
+        self.assertIn({"path": str(spaced), "association": "package:swift-nio"}, selected["inputs"])
+        path = Path(selected["file"]["path"])
+        raw = path.read_bytes()
+        self.assertIn(b"More\\ \\ Spaced\\ Input.swift", raw)
+        before = snapshot(self.root)
+        self.assertEqual(self.consume(result)["profile"], prepare.RETENTION_PROFILE)
+        self.assertEqual(snapshot(self.root), before)
+        self.assertEqual(self.compiler.call_count, 1)
+        # Equivalent decoded paths do NOT permit changing sealed raw evidence.
+        equivalent = raw.replace(b"\\ ", b" ")
+        self.assertEqual(receipt.swift_paths(raw), receipt.swift_paths(equivalent))
+        self.assertNotEqual(prepare.digest(raw), prepare.digest(equivalent))
+        path.write_bytes(equivalent)
+        with self.assertRaises(receipt.Refusal):
+            self.consume(result)
+
+    def test_space_escape_root_association_and_nofollow_boundaries(self):
+        original_w = self.w
+        outside = self.root / "Outside Input.swift"
+        outside.write_bytes(b"struct OutsideInput {}\n")
+        for index, case in enumerate(("outside", "unresolved", "symlink")):
+            with self.subTest(case=case):
+                self.w = self.root / f"W{index}"
+                shutil.copytree(original_w, self.w)
+                self.final = self.w / "build-evidence/receipt.json"
+
+                def compile_bad_input(*args):
+                    code = self.fake_compile_space_escaped(*args)
+                    if case == "outside":
+                        input_path = outside
+                    elif case == "unresolved":
+                        input_path = self.w / "Packages/checkouts/swift-ascii/Unknown Input.swift"
+                    else:
+                        directory = self.w / receipt.DERIVED_SOURCES
+                        (directory / "Alias Directory").symlink_to(directory, target_is_directory=True)
+                        input_path = directory / "Alias Directory/Generated Input.swift"
+                    path = self.w / receipt.INTERMEDIATES / receipt.MANDATORY[0]
+                    with path.open("ab") as stream:
+                        stream.write((str(input_path).replace(" ", "\\ ") + "\n").encode())
+                    return code
+
+                self.compiler.side_effect = compile_bad_input
+                with self.assertRaises((receipt.Refusal, OSError)):
+                    self.produce()
+                self.assert_consumed()
+
+    def test_space_escape_rehashed_receipt_and_list_corruption(self):
+        self.compiler.side_effect = self.fake_compile_space_escaped
+        self.produce()
+        original = json.loads(self.final.read_bytes())
+        for mutation in ("escaped-label", "association", "normalized-hash"):
+            with self.subTest(mutation=mutation):
+                value = copy.deepcopy(original)
+                item = value["inputs"]["lists"][0]
+                package_input = next(i for i in item["inputs"]
+                                     if i["association"] == "package:swift-ascii")
+                if mutation == "escaped-label":
+                    package_input["path"] = package_input["path"].replace(" ", "\\ ")
+                elif mutation == "association":
+                    package_input["association"] = "source"
+                else:
+                    raw = Path(item["file"]["path"]).read_bytes()
+                    item["file"]["sha256"] = prepare.digest(raw.replace(b"\\ ", b" "))
+                data = receipt.encode(value)
+                self.final.write_bytes(data)
+                with self.assertRaises(receipt.Refusal):
+                    receipt.validate(self.final, prepare.digest(data))
+        path = Path(original["inputs"]["lists"][0]["file"]["path"])
+        raw = path.read_bytes()
+        for mutation in ("mixed-alias-duplicate", "invalid-escape"):
+            with self.subTest(mutation=mutation):
+                if mutation == "mixed-alias-duplicate":
+                    corrupted = raw + raw.split(b"\n")[0].replace(b"\\ ", b" ") + b"\n"
+                else:
+                    corrupted = raw.replace(b"\\ ", b"\\q", 1)
+                path.write_bytes(corrupted)
+                value = copy.deepcopy(original)
+                value["inputs"]["lists"][0]["file"] = receipt.file_data(path)[0]
+                data = receipt.encode(value)
+                self.final.write_bytes(data)
+                with self.assertRaises(receipt.Refusal):
+                    receipt.validate(self.final, prepare.digest(data))
+                path.write_bytes(raw)
+
+    def test_space_escape_raw_list_bound_precedes_decoding(self):
+        def compile_oversized_list(*args):
+            code = self.fake_compile_space_escaped(*args)
+            path = self.w / receipt.INTERMEDIATES / receipt.MANDATORY[0]
+            path.write_bytes(b"\\ " * (receipt.METADATA_BYTES // 2) + b"x")
+            return code
+
+        self.compiler.side_effect = compile_oversized_list
+        with self.assertRaisesRegex(receipt.Refusal, "regular byte limit"):
+            self.produce()
+        self.assert_consumed()
 
     def test_nio_links_real_prepare_seal_pinned_consumer_and_read_only(self):
         self.add_nio_links()
@@ -1034,12 +1163,58 @@ class PrimitiveTests(unittest.TestCase):
                          ["/some/literal space.swift"])
         self.assertEqual(receipt.swift_paths(b"/some/literal@name.swift"),
                          ["/some/literal@name.swift"])
-        for value in (b"/x.swift\r\n", b'"/x.swift"\n', b"/x\\ y.swift\n", b"@/x.swift\n",
+        self.assertEqual(receipt.swift_paths(b"/x\\ y.swift\n"), ["/x y.swift"])
+        for value in (b"/x.swift\r\n", b'"/x.swift"\n', b"/x\\q.swift\n", b"@/x.swift\n",
                       b"/x.swift\n\n", b"/x.swift\n/x.swift", b"\xef\xbb\xbf/x.swift",
                       b"/x.swift\0", b"relative.swift", b"/a/../x.swift",
                       b"/x.c", b"/x.swift\n\n/y.swift", b"/x\xff.swift"):
             with self.subTest(value=value), self.assertRaises(receipt.Refusal):
                 receipt.swift_paths(value)
+
+    def test_space_escape_decoding_preserves_spaces_and_detects_alias_duplicates(self):
+        for raw, decoded in (
+            (b"/some\\ directory/a\\ \\ b\\ c.swift", "/some directory/a  b c.swift"),
+            (b"/some directory/a\\ b c.swift\n", "/some directory/a b c.swift"),
+            (b"/ directory\\ / name\\ .swift\n", "/ directory / name .swift"),
+            (b"/plain.swift\n/raw space.swift\n", None),
+        ):
+            expected = [decoded] if decoded is not None else ["/plain.swift", "/raw space.swift"]
+            self.assertEqual(receipt.swift_paths(raw), expected)
+        for raw in (
+            b"/a b.swift\n/a\\ b.swift",
+            b"/a\\ b.swift\n/a b.swift\n",
+            b"/a\\ \\ b.swift\n/a \\ b.swift\n",
+            b"/a\\ b.swift\n/a\\ b.swift\n",
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(receipt.Refusal, "duplicate Swift input"):
+                receipt.swift_paths(raw)
+
+    def test_space_escape_invalid_sequences_controls_blank_and_trailing(self):
+        for raw in (
+            b"/a\\q.swift", b"/a\\t.swift", b"/a\\\tb.swift",
+            "/a\\\u00a0b.swift".encode(), "/a\\\u2003b.swift".encode(),
+            b"/a\\" + b"\\ b.swift", b"/a\\" + b"\\\\ b.swift",
+            b"/a.swift\\", b"/a.swift\\\n", b"/a\\\nb.swift\n",
+            b"/a\\\r\nb.swift", b"/a\\\0b.swift", b"/a\\\xff.swift",
+            b'"/a\\ b.swift"', b"/a\\'b.swift", b"\xef\xbb\xbf/a\\ b.swift",
+            b"/a\\ b.swift\r\n", b"/a\\ b.swift\n\n", b"/a\\ b.swift\n\n/c.swift",
+            b"/a\\ b.swift\n\\ \n/c.swift", b" /a.swift", b"\\ /a.swift",
+            b"/a.swift ", b"/a.swift\\ ", b"/a\\ /../b.swift",
+        ):
+            with self.subTest(raw=raw), self.assertRaises(receipt.Refusal):
+                receipt.swift_paths(raw)
+
+    def test_space_escape_decoded_utf8_path_length_boundary(self):
+        suffix = " é.swift"
+        path = "/" + "x" * (receipt.PATH_BYTES - len(("/" + suffix).encode())) + suffix
+        self.assertEqual(len(path.encode()), receipt.PATH_BYTES)
+        raw = path.replace(" ", "\\ ").encode()
+        self.assertGreater(len(raw), receipt.PATH_BYTES)
+        self.assertEqual(receipt.swift_paths(raw), [path])
+        for oversized in ("/x" + path[1:], path.replace("x", "é", 1)):
+            self.assertEqual(len(oversized.encode()), receipt.PATH_BYTES + 1)
+            with self.assertRaisesRegex(receipt.Refusal, "path byte limit"):
+                receipt.swift_paths(oversized.replace(" ", "\\ ").encode())
 
     def test_fixed_inclusive_entry_depth_byte_and_path_limits(self):
         self.assertEqual((receipt.RECEIPT_BYTES, receipt.METADATA_BYTES, receipt.TREE_ENTRIES,
