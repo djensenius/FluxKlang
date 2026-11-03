@@ -82,8 +82,9 @@ extension HostAuthorityTests {
             var host = try TransactionBench()
             let attempt = try host.committedAttempt()
             let graph = AuthorityBench.candidate()
+            let document = AuthorityBench.projectDocument(project: AuthorityBench.projectA, candidate: graph)
             let commands: [EngineCommand] = [
-                .prepare(graph, plans.reviewed.instance, plans.reviewed.attempt), .discard(plans.reviewed),
+                .prepare(graph, document, plans.reviewed.instance, plans.reviewed.attempt), .discard(plans.reviewed),
                 .commit(plans.previous, attempt, plans.token)
             ]
             var queue = EngineCommandQueue()
@@ -305,9 +306,11 @@ extension HostAuthorityTests {
             graph.extensions = ["vendor": .object(["k": .bool(true)])]
             let decoded = try GraphDocument.decode(from: graph.encoded())
             try await authority.begin(AuthorityBench.request(base: revision), candidate: decoded,
+                                      projectDocument: AuthorityBench.projectDocument(
+                                        project: AuthorityBench.projectA, candidate: decoded),
                                       project: AuthorityBench.projectA).get()
             let first = try #require(await authority.nextEngineCommand())
-            guard case .prepare(let sent, let instance, let attempt) = first else {
+            guard case .prepare(let sent, _, let instance, let attempt) = first else {
                 Issue.record("Expected prepare")
                 return
             }

@@ -79,10 +79,10 @@ actor HostAuthority {
         book.live = state
     }
 
-    /// `HostAuthorityBook.begin(_:candidate:project:)`.
+    /// `HostAuthorityBook.begin(_:candidate:projectDocument:project:)`.
     func begin(_ request: ActivationRequest, candidate: GraphDocument,
-               project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
-        book.begin(request, candidate: candidate, project: project)
+               projectDocument: ProjectDocument, project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
+        book.begin(request, candidate: candidate, projectDocument: projectDocument, project: project)
     }
 
     /// `HostAuthorityBook.prepareAnswered(_:instance:attempt:)`.
