@@ -8,6 +8,7 @@ extension FixtureTests {
         erasedBindingCases()
         erasedOrdinaryCases()
         contextualAncestryCases()
+        lookupAncestryCases()
     }
 
     private func erasedIntermediateCases() {
@@ -389,6 +390,101 @@ extension FixtureTests {
                     }
                 }
             }
+        }
+    }
+}
+
+extension FixtureTests {
+    private func lookupAncestryCases() {
+        let ordinary = "class Plain {}\nclass XCTestCase: Plain {}\n"
+        test("source XCTestCase class binds before SDK terminal spelling") {
+            try ordinaryEnclosing("r11-direct", source: ordinary + "class Helper: XCTestCase {}")
+        }
+        test("nongeneric alias to source XCTestCase retains ordinary lineage") {
+            try ordinaryEnclosing("r11-alias", source: ordinary +
+                                  "typealias Parent = XCTestCase\nclass Helper: Parent {}")
+        }
+        test("source XCTest namespace binds its ordinary XCTestCase member") {
+            try ordinaryEnclosing("r11-namespace", source:
+                "class Plain {}\nenum XCTest { class XCTestCase: Plain {} }\nclass Helper: XCTest.XCTestCase {}")
+        }
+        test("source alias named XCTestCase binds before imported terminal spelling") {
+            try ordinaryEnclosing("r11-alias-name", source:
+                "import XCTest\nclass Plain {}\ntypealias XCTestCase = Plain\nclass Helper: XCTestCase {}")
+        }
+        test("nearer and inherited source terminal shadows remain empty ordinary helpers") {
+            try ordinaryEnclosing("r11-nearer", source:
+                "import XCTest\nenum Outer { class XCTestCase {}; class Helper: XCTestCase {} }")
+            try ordinaryEnclosing("r11-inherited", source:
+                "class Plain {}\nclass Base { class XCTestCase: Plain {} }\n" +
+                "class Outer: Base { class Helper: XCTestCase {} }")
+        }
+        test("source bindings that actually lead to SDK XCTest remain refused") {
+            try rejectLegacy("r11-sdk-source", first: """
+            import XCTest
+            typealias SDKCase = XCTestCase
+            enum XCTest { typealias XCTestCase = SDKCase }
+            class Legacy: XCTest.XCTestCase {}
+            """)
+            try rejectLegacy("r11-sdk-enclosing", first:
+                "import XCTest\nclass Base {}\nclass Outer: Base { class Legacy: XCTestCase {} }")
+        }
+        test("terminal shadow ambiguity access and cycles never establish ordinary lineage") {
+            // Cyclic and duplicate declarations are conservative model controls, not compiler witnesses.
+            try rejectLegacy("r11-cycle", first:
+                "typealias XCTestCase = Parent\ntypealias Parent = XCTestCase\nclass Helper: Parent {}")
+            try rejectLegacy("r11-ambiguous", first:
+                "class XCTestCase {}\nclass XCTestCase {}\nclass Helper: XCTestCase {}")
+            try rejectLegacy("r11-private", first: "private class XCTestCase {}",
+                             second: "class Helper: XCTestCase {}")
+        }
+        test("shared completed unknown ancestry cannot become an ordinary proof") {
+            try rejectLegacy("r11-shared-unknown", first:
+                "class Shared: Missing {}\nclass Left: Shared {}\nclass Right: Shared { func testUtility() {} }")
+            try rejectLegacy("r11-inherited-no-proof", first:
+                "class Base { class XCTestCase {} }\nclass Outer: Base { " +
+                "class Helper: XCTestCase { func testUtility() {} } }")
+        }
+        test("bounded ordinary chains preserve shared ancestry and reversed declaration order") {
+            for count in [16, 32, 64] {
+                let chain = ["class C0 {}"] + (1..<count).map { "class C\($0): C\($0 - 1) {}" }
+                let shared = "typealias Parent = C\(count - 1)\nclass Left: Parent {}\n" +
+                    "class Right: Parent { func testUtility() {} }"
+                for declarations in [chain, Array(chain.reversed())] {
+                    let report = try sourceReport([("A.swift", declarations.joined(separator: "\n")),
+                                                   ("B.swift", shared)])
+                    try require(report.enforcementSatisfied, "bounded ordinary chain changed")
+                }
+            }
+        }
+        test("binding and ancestry caches stay isolated across variants files and inventories") {
+            let definitions = """
+            import XCTest
+            #if canImport(FoundationModels)
+            class XCTestCase {}
+            #endif
+            typealias Parent = XCTestCase
+            """
+            let usage = "class Helper: Parent {}"
+            for models in [true, false, true] {
+                for files in [[("A.swift", definitions), ("B.swift", usage)],
+                              [("B.swift", usage), ("A.swift", definitions)]] {
+                    if models {
+                        let report = try sourceReport(files, modelsImport: models)
+                        try require(report.enforcementSatisfied, "source shadow cache leaked between inventories")
+                    } else {
+                        try rejects({ _ = try sourceReport(files, modelsImport: models) }, containing: "XCTest")
+                    }
+                }
+            }
+        }
+        test("cyclic provisional lineage cannot be memoized as a completed ancestry proof") {
+            // These cycles intentionally exercise the source model, not compilable inheritance.
+            let cycle = "class Plain {}\nclass Early: Plain {}\ntypealias A = B\ntypealias B = A\n"
+            try rejectLegacy("r11-lineage-cycle-extension", first: cycle +
+                "class Helper: A {}\nextension Helper { func testUtility() {} }")
+            try rejectLegacy("r11-lineage-cycle-erased", first: cycle +
+                "typealias Parent<T> = A\nclass Helper: Parent<Int> {}")
         }
     }
 }

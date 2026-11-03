@@ -18,6 +18,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 ulimit -c 0
 root="$PWD"
 work="$(mktemp -d "${TMPDIR:-/tmp}/fluxklang-test-audit.XXXXXX")"
+work="$(cd "$work" && pwd -P)"
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 host="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host"
 sources=(scripts/test-audit-coverage/*.swift)
@@ -67,10 +68,11 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 148 checks, including regressions
+existing fixture world. The suite has 159 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
-current-module-qualified and inherited aliases, and bounded input reads/rechecks.
+current-module-qualified and inherited aliases, source-defined XCTest names,
+cycle handling, and bounded input reads/rechecks.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
 
@@ -115,3 +117,4 @@ from rejection-only traversal. This inventory is not a Swift type checker.
 Unshadowed current-module-qualified bases are refused structurally; a source
 namespace shadowing the module name still uses source lookup. Enclosing inherited
 bindings are checked conservatively for rejection, not to prove ordinary lineage.
+Supported source bindings take precedence over SDK terminal spellings.
