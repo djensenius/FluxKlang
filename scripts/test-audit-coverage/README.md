@@ -69,7 +69,7 @@ Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
 existing fixture world. The suite has 311 checks: all 292 historical checks plus
-19 focused v2 role/qualification mutation groups. Historical regressions include
+19 focused v2 role/qualification mutation groups. Historical regressions include checks
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
 current-module-qualified and inherited aliases, source-defined XCTest names,
