@@ -219,6 +219,27 @@ actor HostAuthority {
         }
     }
 
+    /// Reclaim only privately retained custody with exact canonical abandonment
+    /// evidence. One nonsuspending turn; queued work and other interest are untouched.
+    func reclaimAbandonedPreparation() -> OwnedPreparationStep {
+        guard preparationLimits != nil else { return .refused(.legacyMode) }
+        guard preparationFault == nil else { return .refused(.faulted) }
+        guard let identity = preparation?.identity else { return .empty }
+        guard let entry = book.plans.snapshot().records.first(where: { $0.instance == identity.instance })?
+            .entries.first(where: { $0.attempt == identity.attempt }),
+              case .pending(let reclaim) = entry.state else {
+            return latchConstructionFault(.missingAdmission(identity))
+        }
+        let wanted = book.outstanding.values.contains(identity)
+        if !reclaim && wanted { return .refused(.occupied) }
+        guard reclaim && !wanted else { return .refused(.blocked) }
+        switch disposePreparation(identity) {
+        case .disposed(let outcome): return .terminated(identity, .cancelled, outcome)
+        case .refused(let reason): return .refused(reason)
+        case .faultAfterCleanup(let fault): return .faulted(fault)
+        }
+    }
+
     /// Full fixed-stride geometry is checked before any output allocation.
     /// All borrows are synchronous, local and disjoint; no pointer escapes.
     func evaluatePreparation(
