@@ -384,7 +384,7 @@ enum AuditChecker {
             let paths = Set(memberships.values.flatMap { $0 }).sorted()
             var parsed: [String: ParsedSource] = [:]
             for path in paths {
-                guard let text = String(data: try captured.read(path), encoding: .utf8) else {
+                guard let text = String(data: try captured.read(path, role: .source), encoding: .utf8) else {
                     throw AuditFailure("source is not UTF8: \(path)")
                 }
                 parsed[path] = try ParsedSource(path: path, text: text)

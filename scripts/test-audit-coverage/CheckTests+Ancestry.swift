@@ -7,6 +7,7 @@ extension FixtureTests {
         erasedInitializerCases()
         erasedBindingCases()
         erasedOrdinaryCases()
+        contextualAncestryCases()
     }
 
     private func erasedIntermediateCases() {
@@ -183,6 +184,211 @@ extension FixtureTests {
             @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
             """)])
             try require(report.enforcementSatisfied, "non-ancestry generic helper aliases were rejected")
+        }
+    }
+}
+
+extension FixtureTests {
+    func contextualAncestryCases() {
+        moduleAncestryCases()
+        inheritedAncestryCases()
+        enclosingOrdinaryCases()
+        enclosingUncertainCases()
+    }
+
+    private func moduleAncestry(_ declaration: String) -> String {
+        "#if os(iOS)\n" + declaration.replacingOccurrences(of: "MODULE", with: "FluxKlangTests") +
+            "\n#else\n" + declaration.replacingOccurrences(of: "MODULE", with: "FluxKlangMacTests") + "\n#endif"
+    }
+
+    private func moduleAncestryCases() {
+        test("current module qualifiers cannot hide direct or aliased XCTest ancestry") {
+            for (index, declaration) in ["class Legacy: MODULE.Base {}",
+                                         "typealias Hop = MODULE.Base\nclass Legacy: Hop {}"].enumerated() {
+                try rejectLegacy("r10-module-\(index)", first:
+                    "import XCTest\ntypealias Base = XCTestCase\n" + moduleAncestry(declaration))
+            }
+        }
+        test("module-qualified generic and parenthesized ancestry stays structural") {
+            for (index, declaration) in [
+                "enum Names<T> { typealias Base = XCTestCase }\nclass Legacy: MODULE.Names<Int>.Base {}",
+                "typealias Base = XCTestCase\ntypealias Hop = ((MODULE.Base))\nclass Legacy: Hop {}",
+                "typealias Base = XCTestCase\ntypealias Hop<T> = MODULE.Base\nclass Legacy: Hop<Int> {}"
+            ].enumerated() {
+                try rejectLegacy("r10-module-raw-\(index)", first: "import XCTest\n" + moduleAncestry(declaration))
+            }
+        }
+        test("module alias hops crossing files cannot satisfy enforcement") {
+            try rejectLegacy("r10-module-cross", first: "import XCTest\ntypealias Base = XCTestCase\n" +
+                             moduleAncestry("typealias Hop = MODULE.Base"),
+                             second: "class Legacy: Hop {}")
+        }
+        test("unshadowed current-module ordinary ancestry is refused rather than semantically stripped") {
+            try rejectLegacy("r10-module-ordinary", first: "class Plain {}\ntypealias Base = Plain\n" +
+                             moduleAncestry("class Helper: MODULE.Base {}"))
+        }
+        test("lexical source namespaces shadow module spelling without stripping") {
+            let namespaces = "enum FluxKlangTests { class Base {} }\nenum FluxKlangMacTests { class Base {} }\n"
+            let helper = moduleAncestry("class Helper: MODULE.Base {}")
+            for (index, declaration) in [
+                namespaces + helper,
+                "enum Outer {\n" + namespaces + helper + "\n}",
+                "class Holder {\n" + namespaces + "\n}\nclass Outer: Holder {\n" + helper + "\n}"
+            ].enumerated() {
+                try ordinaryEnclosing("r10-module-shadow-\(index)",
+                                      source: "import XCTest\ntypealias Base = XCTestCase\n" + declaration)
+            }
+        }
+    }
+
+    private func inheritedAncestryCases() {
+        let definitions = "import XCTest\nclass Base { typealias Parent = XCTestCase }\n"
+        test("nested class cannot inherit a hidden enclosing XCTest alias") {
+            try rejectLegacy("r10-inherited-nested", first: definitions +
+                             "class Outer: Base { class Legacy: Parent {} }")
+        }
+        test("extension class cannot inherit a hidden enclosing XCTest alias") {
+            try rejectLegacy("r10-inherited-extension", first: definitions +
+                             "class Outer: Base {}\nextension Outer { class Legacy: Parent {} }")
+        }
+        test("inherited alias hops cross files and declaration order") {
+            let first = definitions + "class Middle: Base {}\nclass Outer: Middle {}"
+            let second = "extension Outer { typealias Hop = Parent; class Legacy: Hop {} }"
+            try rejectLegacy("r10-inherited-cross", first: first, second: second)
+            for files in [[("A.swift", first), ("B.swift", second)],
+                          [("B.swift", second), ("A.swift", first)]] {
+                try rejects({ _ = try sourceReport(files) }, containing: "XCTest")
+            }
+            try rejectLegacy("r10-inherited-dotted", first: """
+            import XCTest
+            class Base { enum Names { typealias Parent = XCTestCase } }
+            class Outer: Base { class Legacy: Names.Parent {} }
+            """)
+        }
+    }
+
+    private func ordinaryEnclosing(_ name: String, source: String, second: String = "") throws {
+        let fixture = try world(name, annotated: true)
+        try fixture.register(fixture.run().derivedRegistrations)
+        try fixture.write("Sources/A.swift",
+                          "@Suite(.productionAccessAudit) struct Example { @Test func body() {} }\n" + source)
+        if !second.isEmpty { try fixture.write("Mac/B.swift", second) }
+        for mode in ["enforce", "inventory"] {
+            try require(fixture.run(mode: mode).enforcementSatisfied, "ordinary enclosing ancestry over-rejected")
+        }
+    }
+
+    private func enclosingOrdinaryCases() {
+        test("ordinary inherited and nearer source aliases remain empty helpers") {
+            for (index, source) in [
+                """
+                class Plain {}
+                class Base { typealias Parent = Plain }
+                class Outer: Base { class Helper: Parent {} }
+                extension Outer { class ExtendedHelper: Parent {} }
+                """,
+                """
+                import XCTest
+                class Plain {}
+                class Base { typealias Parent = XCTestCase }
+                class Outer: Base { typealias Parent = Plain; class Helper: Parent {} }
+                """,
+                """
+                import XCTest
+                class Plain {}
+                class Base { typealias Parent = XCTestCase }
+                class Outer: Base {}
+                extension Outer { typealias Parent = Plain; class Helper: Parent {} }
+                """,
+                """
+                import XCTest
+                class Plain {}
+                typealias Parent = XCTestCase
+                class Base { typealias Parent = Plain }
+                class Outer: Base { class Helper: Parent {} }
+                """
+            ].enumerated() { try ordinaryEnclosing("r10-ordinary-\(index)", source: source) }
+            try ordinaryEnclosing(
+                "r10-ordinary-cross",
+                source: "class Plain {}\nclass Base { typealias Parent = Plain }\nclass Outer: Base {}",
+                second: "extension Outer { typealias Hop = Parent; class Helper: Hop {} }")
+        }
+        test("ordinary generic enclosing helpers and inherited dotted members remain valid") {
+            try ordinaryEnclosing("r10-ordinary-generic", source:
+                "class Plain {}\nstruct Box<T> { class Helper: Plain {} }\nclass Holder<T> { class Helper: Plain {} }")
+            try ordinaryEnclosing("r10-ordinary-dotted", source: """
+            class Base { enum Names { class Parent {} } }
+            class Outer: Base { class Helper: Names.Parent {} }
+            """)
+        }
+        test("enclosing rejection checks never establish ordinary lineage for test-shaped helpers") {
+            try rejectLegacy("r10-no-ordinary-proof", first: """
+            class Plain {}
+            class Base { typealias Parent = Plain }
+            class Outer: Base { class Helper: Parent { func testUtility() {} } }
+            """)
+        }
+    }
+
+    private func enclosingUncertainCases() {
+        test("unknown restricted generic and cyclic enclosing bindings fail closed") {
+            // Unsupported/access/cyclic/formal-parameter examples are model controls, not inheritance proofs.
+            for (index, source) in [
+                "class Outer: Missing { class Legacy: Parent {} }",
+                "class Base<T> { typealias Parent = XCTestCase }\nclass Outer: Base<Int> { class Legacy: Parent {} }",
+                "class Base: Outer {}\nclass Outer: Base { class Legacy: Parent {} }",
+                """
+                class T {}
+                class Base {}
+                class Outer: Base { typealias Parent<T> = T; class Legacy: Parent<Int> {} }
+                """,
+                """
+                class Base { typealias Parent<T> = XCTestCase }
+                class Outer: Base { class Legacy: Parent<Int> {} }
+                """,
+                """
+                class Plain {}
+                typealias Parent = Plain
+                class Outer: Missing { class Legacy: Parent {} }
+                """,
+                """
+                import XCTest
+                class Plain {}
+                typealias Parent = Plain
+                class Base { typealias Parent = XCTestCase }
+                class Outer: Base { class Legacy: Parent {} }
+                """,
+                """
+                class Base {}
+                class Outer: Base { enum Names<T> { class Parent {} }; class Legacy: Names.Parent {} }
+                """
+            ].enumerated() { try rejectLegacy("r10-uncertain-\(index)", first: source) }
+            try rejectLegacy("r10-private", first: "class Plain {}\nclass Base { private typealias Parent = Plain }",
+                             second: "class Outer: Base { class Legacy: Parent {} }")
+        }
+        test("enclosing ancestry binding respects conditional variants and order") {
+            let first = """
+            class Plain {}
+            class Base {
+                #if canImport(FoundationModels)
+                typealias Parent = XCTestCase
+                #else
+                typealias Parent = Plain
+                #endif
+            }
+            """
+            let second = "class Outer: Base { class Legacy: Parent {} }"
+            for models in [false, true] {
+                for sources in [[("A.swift", first), ("B.swift", second)],
+                                [("B.swift", second), ("A.swift", first)]] {
+                    if models {
+                        try rejects({ _ = try sourceReport(sources, modelsImport: models) }, containing: "XCTest")
+                    } else {
+                        let report = try sourceReport(sources, modelsImport: models)
+                        try require(report.exitCode == 0, "ordinary inherited conditional alias changed")
+                    }
+                }
+            }
         }
     }
 }
