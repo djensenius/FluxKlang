@@ -189,7 +189,7 @@ struct ProjectMembership {
             try require(!expected.isEmpty && Set(expected) == Set(actual),
                         "source drift for \(membership.target): missing=\(missing) " +
                         "unexpected=\(Set(actual).subtracting(expected).sorted())")
-            for path in expected.sorted() { _ = try inputs.read(path) }
+            for path in expected.sorted() { _ = try inputs.read(path, role: .source) }
             result[membership.target] = expected.sorted()
         }
         return result

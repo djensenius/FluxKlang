@@ -484,6 +484,7 @@ enum FixtureMain {
         tests.ancestryHopSafeguards()
         tests.specializedConditionalCases()
         tests.erasedAncestryCases()
+        tests.inputLimitCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }
