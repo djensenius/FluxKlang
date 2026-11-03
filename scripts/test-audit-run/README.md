@@ -6,7 +6,7 @@ It imports no app/production modules and performs no subprocess, network,
 test-host, UI-event, service, or hardware execution. There is no in-app fallback
 or conditional audit no-op.
 
-## Two closed profiles
+## Closed profiles and unchanged original behavior
 
 `mac-isolated-unit` supports only the reviewed Debug hosted-Mac XML plist
 FormatVersion **1** layout:
@@ -45,11 +45,13 @@ iOS simulator XML plist FormatVersion **1** layout:
   locations: unit `EnvironmentVariables`, UI `EnvironmentVariables`, and UI
   `UITargetAppEnvironmentVariables`. No other value is added or changed.
 
-The complete reviewed key/value/type allowlists are `OBSERVED` and
-`IOS_OBSERVED` in `prepare.py`. Both intentionally require **all observed values**,
+The complete reviewed input key/value/type allowlists are `OBSERVED` and
+`IOS_OBSERVED` in `prepare.py`. All profiles intentionally require **all observed values**,
 including unrelated diagnostic, logging, environment, timeout, language, and
-attachment fields. Their parsed
-values and supported Xcode path placeholders are preserved exactly; XML
+attachment fields, including `SystemAttachmentLifetime = deleteOnSuccess` and
+`UserAttachmentLifetime = deleteOnSuccess` on every test target. Except for the
+explicit profile transformations described here, parsed values and supported
+Xcode path placeholders are preserved exactly; XML
 formatting/key order need not be byte-identical. No placeholder is expanded and
 no referenced product is opened. No arbitrary configuration switches exist.
 
@@ -59,15 +61,65 @@ metadata, filters (even empty), extra targets, unreviewed host markers, alternat
 audit environments, conflicting schemes, and unresolved audit placeholders are refused,
 not silently dropped. Any preexisting run identity is refused, including a valid
 UUID, an empty value, or a malformed value. Even matching audit keys in
-`TestingEnvironmentVariables` are outside both profiles. Cross-profile inputs
-and intents are refused; a rehashed output still must match the full permitted
-transformation.
+`TestingEnvironmentVariables` are outside all profiles. Cross-platform inputs
+and cross-profile intents are refused, including old/new profiles on the same
+platform; a rehashed output still must match the full permitted transformation.
 
 **Explicit exclusions:** other iOS layouts/destinations, full-regression claims,
 Release, live Apple qualification, and any other target composition. Existing
 app/UI targets are unchanged; this utility never removes tests or presents skipped tests as green.
 The retained layout specimens are read-only metadata examples, **not
 execution-ready artifacts**.
+
+## Explicit opt-in retention requests
+
+Two additional closed profiles reuse the corresponding **original pinned input**,
+with both attachment lifetimes still required to be `deleteOnSuccess`:
+
+| Explicit profile | Test targets | Exact parsed leaf changes |
+| --- | --- | --- |
+| `mac-isolated-unit-retention-request-v1` | `FluxKlangMacTests` | One UUID insertion above, plus both lifetimes: **3** |
+| `ios-simulator-isolated-unit-ui-retention-request-v1` | `FluxKlangTests`, `FluxKlangUITests` | Three UUID insertions above, plus both lifetimes on both targets: **7** |
+
+These outputs replace only `SystemAttachmentLifetime` and
+`UserAttachmentLifetime` with `keepAlways` on the listed targets, in addition to
+the existing UUID insertions. Exactly one fresh UUID4 is copied to those fixed
+locations; the third iOS location remains
+`FluxKlangUITests.UITargetAppEnvironmentVariables`, **not**
+`TestingEnvironmentVariables`. No retention environment keys or other parsed
+changes are allowed. Prepared inputs, preexisting UUIDs, altered input
+lifetimes, filtering, subsets, and layout drift remain refused.
+
+The new intents use integer `schema_version: 2` and add only `attachment_policy`
+to the existing intent fields. Its closed shape is:
+
+```json
+{
+  "identifier": "request-system-and-user-keepAlways-v1",
+  "targets": {
+    "FluxKlangMacTests": {
+      "SystemAttachmentLifetime": "keepAlways",
+      "UserAttachmentLifetime": "keepAlways"
+    }
+  }
+}
+```
+
+For the iOS profile, `targets` instead contains exactly `FluxKlangTests` and
+`FluxKlangUITests`, each with the same two fields/values. Validation reconstructs
+the entire expected output and intent from the pinned original and explicit
+profile, never from the supplied policy. Types and nested key sets must match:
+even `schema_version: 2.0`, a partial lifetime change, or a relabelled/rehashed
+incorrect transformation is refused.
+
+This is **retention requested**, not retained, authorized, or ready. Both
+documented attachment categories are requested conservatively; no classification
+of Swift Testing or XCTest recording APIs, or precedence between them, is
+assumed. Future actual execution might retain unrelated attachments as well,
+increasing storage use and privacy exposure. Opt-in is explicit only: the
+original profiles retain their `deleteOnSuccess` outputs, exact schema-1 intent
+shape, and controlled serialized bytes. No generic retention switch or
+post-preparation chain is provided, and no execution is authorized here.
 
 ## Commands
 
@@ -104,7 +156,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-audit-run/prepare.py validate \
 Validation generates nothing and never repairs UUIDs, flags, intent, or files.
 It rechecks the pinned original and output hashes, canonical UUID4, all parsed
 identities and environment values, exact sibling names/locations, and the entire
-parsed output against the original plus only the authorized run-key additions.
+parsed output against the original plus only the selected profile's fixed
+run-key additions and, for retention-request profiles, lifetime replacements.
 Final-component file symlinks are refused; resolved parent paths are recorded.
 An orphan or partially written pair cannot validate. Exit status is `0` for
 metadata success, `1` for refusal/I/O failure, and `2` for invalid CLI arguments.
@@ -113,6 +166,13 @@ For the combined iOS metadata, use the same `prepare` and `validate` commands
 with `--profile ios-simulator-isolated-unit-ui-v1`, the separately reviewed iOS
 input path/hash, and its printed sibling output/intent paths. The CLI never
 infers a profile or selects a destination.
+
+To opt into a retention **request**, use those same metadata-only commands with
+`--profile mac-isolated-unit-retention-request-v1` or
+`--profile ios-simulator-isolated-unit-ui-retention-request-v1`, respectively,
+for both preparation and validation. Keep the corresponding original input
+path and reviewed pin; do not chain preparation through an existing output.
+The profile is required on both commands and unknown choices are refused.
 
 On caught preparation failures, newly created files are removed (intent first);
 preexisting paths are never removed. Use a stable caller-controlled directory.
@@ -131,16 +191,20 @@ resolution, not the existence or immutability of any referenced native product.
 
 The existing UI helper sets launch flags but does **not** explicitly forward the
 audit UUID. The three iOS metadata insertions express intended custody only;
-Xcode/helper environment delivery remains unqualified. Both profiles preserve
-the observed `deleteOnSuccess` system/user attachment defaults. This change
-adds no retained receipts or full audit-coverage guarantee.
+Xcode/helper environment delivery remains unqualified. The original profiles
+preserve the observed `deleteOnSuccess` system/user attachment defaults; the
+opt-in profiles only request `keepAlways`. No products or results are opened.
+This adds no proof of actual retention, coverage, destination/product closure,
+process freshness, or child-process delivery, and no retained receipts. Scheme
+script bypass, pre-host timing, and `Test.ID` mapping are not established or
+inferred from documentation absence.
 
 Current Makefile launch recipes and raw Cmd+U remain unchanged and unvalidated.
 No command here runs `xcodebuild` or `test-without-building`. Runner integration,
 canonical scope adoption, checker/live extraction, iOS/UI runtime handoff, live
 profiles, and retained runtime results require separate review/authorization.
 
-Both profiles deliberately fix unrelated diagnostic/language/logging
+All profiles deliberately fix unrelated diagnostic/language/logging
 values as well. Broader acceptance requires separate review; this implementation
 conservatively refuses that drift rather than inferring a wider supported shape.
 
@@ -156,4 +220,7 @@ only the current Python interpreter for CLI subprocess tests. They do not read
 or mutate native products, original specimens, Build trees, or repository files.
 They cover successful preparation/preservation, distinct identities, non-clobber,
 failure cleanup, read-only validation, digest/path binding, and adversarial
-layout/environment/parser/identity refusals. No Xcode builds are needed.
+layout/environment/parser/identity refusals. Retention-request fixtures also
+check exact 3/7 leaf paths and values, old-profile byte preservation, closed
+schema/policy validation, rehashed partial changes and relabelled cross-profile
+refusals. No Xcode builds are needed.
