@@ -155,6 +155,68 @@ extension FixtureTests {
         }
     }
 
+    func macroSyntaxCases() {
+        test("parameterized free Test default string some is not an opaque type keyword") {
+            for (number, value) in ["\"some\"", "#\"some\"#"].enumerated() {
+                let fixture = try world("syntax-default-\(number)", annotated: true)
+                try fixture.write("Sources/A.swift", """
+                import Testing
+                @Test(.productionAccessAudit, arguments: ["x"]) func body(_ value: String = \(value)) {}
+                """)
+                let derived = fixture.run()
+                try derived.encoded().write(to: fixture.root.appendingPathComponent("pre-registration.json"))
+                try require(derived.analysisComplete, "default string incorrectly classified as opaque")
+                try fixture.register(derived.derivedRegistrations)
+                try require(fixture.run().enforcementSatisfied, "canonical parameterized free Test failed")
+            }
+        }
+        test("actual opaque and generic Testing functions remain unsupported") {
+            for source in [
+                "@Test(.productionAccessAudit, arguments: [1]) func body(_ value: some Equatable) {}",
+                "@Test(.productionAccessAudit, arguments: [1]) func body<T>(_ value: T) {}"
+            ] { try rejects({ _ = try sourceReport([("A.swift", source)]) }, containing: "generic") }
+        }
+        test("conditional and nested conditional Observable attributes retain their class owner") {
+            let source = """
+            import Observation
+            #if DEBUG
+            #if os(macOS)
+            @Observation.Observable
+            #else
+            @Observable
+            #endif
+            #endif
+            class Helper { var value = 0 }
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            """
+            let fixture = try world("syntax-observable", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", source)
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
+            try require(report.enforcementSatisfied, "conditional class attribute rejected")
+            for configuration in ["Debug", "Release"] {
+                for platform in ["iOS", "macOS"] {
+                    let result = try sourceReport([("A.swift", source)],
+                                                  configuration: configuration, platform: platform)
+                    try require(result.exitCode == 0 && result.ownership.count == 1, "conditional owner drift")
+                }
+            }
+        }
+        test("conditional Observable cannot climb past a non-class declaration or hide unsupported syntax") {
+            for source in [
+                "#if DEBUG\n@Observable\n#endif\nstruct Wrong {}",
+                "class Container {\n#if DEBUG\n@Observable\n#endif\nfunc wrong() {}\n}",
+                "#if DEBUG\n@CustomObservable\n#endif\nclass Wrong {}",
+                "#if compiler(>=6)\n@Observable\n#endif\nclass Wrong {}"
+            ] {
+                for configuration in ["Debug", "Release"] {
+                    try rejects { _ = try sourceReport([("A.swift", source)], configuration: configuration) }
+                }
+            }
+        }
+    }
+
     private func inheritedConditionalCases() throws {
         let sources = [("A.swift", """
         class Base: ExternalBase {

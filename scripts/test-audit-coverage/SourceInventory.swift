@@ -267,7 +267,7 @@ struct SourceInventory {
             aliases.append(TypeAliasRecord(
                 site: site(node, name: name, source: source), qualified: qualified, parent: context,
                 restricted: isPrivate || restricted(context),
-                target: alias.genericParameterClause == nil ? Self.typeName(alias.initializer.value) : nil,
+                target: alias.genericParameterClause == nil ? Self.ancestryName(alias.initializer.value) : nil,
                 value: alias.genericParameterClause == nil ? alias.initializer.value : nil))
         }
         if node.is(DeclSyntax.self), let attributed = node.asProtocol(WithAttributesSyntax.self) {
@@ -294,7 +294,9 @@ struct SourceInventory {
         }
         let attrs = try attributes(function.attributes)
         if attrs.contains(where: { SourceAttributes.macro($0) != nil }) {
-            let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains { $0.text == "some" }
+            let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains {
+                $0.tokenKind == .keyword(.some)
+            }
             let generic = function.genericParameterClause != nil || function.genericWhereClause != nil || opaque
             let name = sourceName(function.name) + " " + sourceTokens(function.signature)
             functions.append(FunctionRecord(site: site(Syntax(function), name: name, source: source), parent: context,
@@ -318,7 +320,7 @@ struct SourceInventory {
             restricted: isPrivate || restricted(context),
             unsupported: !supported || generic || group.genericWhereClause != nil || group.inheritanceClause != nil,
             isClass: node.is(ClassDeclSyntax.self),
-            bases: group.inheritanceClause?.inheritedTypes.map { Self.typeName($0.type) } ?? [],
+            bases: group.inheritanceClause?.inheritedTypes.map { Self.ancestryName($0.type) } ?? [],
             genericParameters: Self.genericNames(node.asProtocol(WithGenericParametersSyntax.self)?
                 .genericParameterClause),
             attributes: try attributes(group.attributes))
@@ -343,6 +345,15 @@ struct SourceInventory {
         extensions.append(record)
         try walk(Syntax(extended.attributes), context: .local, source: source)
         try walk(Syntax(extended.memberBlock.members), context: .extended(index), source: source)
+    }
+
+    private static func ancestryName(_ type: TypeSyntax) -> String? {
+        if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
+           let element = tuple.elements.first, element.firstName == nil,
+           element.secondName == nil, element.ellipsis == nil {
+            return ancestryName(element.type)
+        }
+        return typeName(type)
     }
 
     static func typeName(_ type: TypeSyntax) -> String? {
@@ -381,7 +392,7 @@ enum SourceAttributes {
         if ["Observable", "Observation.Observable"].contains(name) {
             // Standard Observation expansion produces observation helpers, not test declarations.
             // No custom names, arguments, or non-class application are inferred to be equivalent.
-            try require(attribute.parent?.parent?.is(ClassDeclSyntax.self) == true,
+            try require(owningDeclaration(attribute)?.is(ClassDeclSyntax.self) == true,
                         "unsupported Observable declaration context")
             if let arguments = attribute.arguments {
                 guard case .argumentList(let list) = arguments, list.isEmpty else {
@@ -397,6 +408,17 @@ enum SourceAttributes {
         try require(!hasAudit(attribute), "audit expression in non-Testing attribute")
     }
 
+    private static func owningDeclaration(_ attribute: AttributeSyntax) -> Syntax? {
+        var parent = attribute.parent
+        // Only transparent attribute/conditional containers may be crossed.
+        // Stop at the first declaration, never at a surrounding class.
+        while let node = parent,
+              [.attributeList, .ifConfigDecl, .ifConfigClause, .ifConfigClauseList].contains(node.kind) {
+            parent = node.parent
+        }
+        return parent
+    }
+
     static func hasAudit(_ node: some SyntaxProtocol) -> Bool {
         node.tokens(viewMode: .sourceAccurate).contains {
             if case .identifier = $0.tokenKind {
@@ -405,4 +427,50 @@ enum SourceAttributes {
             return false
         }
     }
+
 }
+
+#if AUDIT_CHECK_TESTS
+extension FixtureTests {
+    func parenthesizedAncestryCases() {
+        test("transparent parenthesized ancestry aliases cannot hide empty XCTest subclasses") {
+            for (number, base) in ["(XCTest.XCTestCase)", "(XCTestCase)", "(((XCTestCase)))"].enumerated() {
+                try rejectLegacy("ancestry-parens-\(number)", first: """
+                import class XCTest.XCTestCase
+                typealias Base = \(base)
+                class LegacyTests: Base {}
+                """)
+            }
+        }
+        test("parenthesized cross-file chains and nested ancestry aliases remain XCTest ancestry") {
+            try rejectLegacy("ancestry-chain", first: "import XCTest\ntypealias First = ((XCTestCase))",
+                             second: "typealias Base = (First)\nclass LegacyTests: Base {}")
+            try rejectLegacy("ancestry-nested", first: """
+            import class XCTest.XCTestCase
+            enum Names { typealias Base = ((XCTest.XCTestCase)) }
+            class LegacyTests: Names.Base {}
+            """)
+        }
+        test("known non-XCTest parenthesized aliases pass while uncertain ancestry stays refused") {
+            let fixture = try world("ancestry-known", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            class PlainBase {}
+            typealias Middle = (PlainBase)
+            typealias Base = ((Middle))
+            class Helper: Base { func testUtility() {} }
+            """)
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
+            try require(report.enforcementSatisfied, "known non-XCTest ancestry rejected")
+            try rejectLegacy("ancestry-unknown", first:
+                "typealias Base = (Unknown)\nclass Legacy: Base { func testAccess() {} }")
+            try rejectLegacy("ancestry-restricted", first: "class PlainBase {}\nprivate typealias Base = (PlainBase)",
+                             second: "class Legacy: Base { func testAccess() {} }")
+            try rejectLegacy("ancestry-shadowed", first:
+                "class PlainBase {}\ntypealias Base = (PlainBase)\nclass Legacy<Base>: Base { func testAccess() {} }")
+        }
+    }
+}
+#endif
