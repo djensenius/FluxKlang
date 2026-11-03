@@ -144,6 +144,8 @@ targets:
     sources:
       - path: FluxKlangUITests
         excludes: ["**/.DS_Store"]
+      - path: FluxKlangTests/UIAuditReceiptValidator.swift
+      - path: FluxKlangTests/UIAuditRunPreflight.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.uitests
@@ -167,6 +169,10 @@ targets:
       - path: FluxKlangTests/ProductionAccessScope.swift
       - path: FluxKlangTests/ProductionAccessScopeTests.swift
       - path: FluxKlangTests/UIAuditCaptureStateTests.swift
+      - path: FluxKlangTests/UIAuditReceiptValidator.swift
+      - path: FluxKlangTests/UIAuditReceiptValidatorTests.swift
+      - path: FluxKlangTests/UIAuditRunPreflight.swift
+      - path: FluxKlangTests/UIAuditRunPreflightTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
