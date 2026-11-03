@@ -50,7 +50,9 @@ enum QualifiedRecoveryBook {
 
     static func begin(_ book: inout HostAuthorityBook, project: ProjectID = Bench.projectA) throws {
         let revision = try #require(book.projects[project]).transaction.running.revision
-        try book.begin(Bench.request(base: revision), candidate: Bench.candidate(revision: revision),
+        let graph = Bench.candidate(revision: revision)
+        try book.begin(Bench.request(base: revision), candidate: graph,
+                       projectDocument: Bench.projectDocument(project: project, candidate: graph),
                        project: project).get()
     }
 
@@ -59,7 +61,7 @@ enum QualifiedRecoveryBook {
         try begin(&book, project: project)
         let prepare = try #require(book.outstanding[project])
         let command = book.nextEngineCommand()
-        guard case .prepare(_, prepare.instance, prepare.attempt) = command else {
+        guard case .prepare(_, _, prepare.instance, prepare.attempt) = command else {
             throw QualifiedRecoveryError.command
         }
         #expect(try book.prepareAnswered(.success(name), instance: prepare.instance,
@@ -72,7 +74,7 @@ enum QualifiedRecoveryBook {
         try begin(&book, project: project)
         let preparation = try #require(book.outstanding[project])
         #expect(book.queue.pending.contains {
-            if case .prepare(_, preparation.instance, preparation.attempt) = $0 { true } else { false }
+            if case .prepare(_, _, preparation.instance, preparation.attempt) = $0 { true } else { false }
         })
         #expect(try book.prepareAnswered(.success(name), instance: preparation.instance,
                                          attempt: preparation.attempt).get() == .routed)
@@ -87,7 +89,7 @@ enum QualifiedRecoveryBook {
             guard let command = book.nextEngineCommand() else { return commands }
             commands.append(command)
             if case .discard(let binding) = command { try book.retired(binding).get() }
-            if case .prepare(_, let instance, let attempt) = command,
+            if case .prepare(_, _, let instance, let attempt) = command,
                book.plans.snapshot().records.flatMap(\.entries).contains(where: {
                    $0.attempt == attempt && $0.state == .pending(reclaim: true)
                }) {

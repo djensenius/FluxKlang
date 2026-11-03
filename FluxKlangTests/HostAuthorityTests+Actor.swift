@@ -138,6 +138,7 @@ extension HostAuthorityTests {
             let authority = try await Bench.makeAuthority(&engine)
             let revision = try await Bench.state(authority).running.revision
             let graph = Bench.candidate(revision: revision)
+            let document = Bench.projectDocument(project: Bench.projectA, candidate: graph)
             let next = try revision.next()
             let wrongEpoch = HostEpoch(host: Bench.host, generation: try Generation.initial.next())
             func request(base: ContractRevision? = nil, epoch: HostEpoch = Bench.hostEpoch,
@@ -156,13 +157,20 @@ extension HostAuthorityTests {
             ]
             let before = await authority.snapshot()
             for (request, rejection) in cases {
-                #expect(Bench.refusal(await authority.begin(request, candidate: graph, project: Bench.projectA))
+                #expect(Bench.refusal(await authority.begin(request, candidate: graph,
+                                                            projectDocument: document, project: Bench.projectA))
                         == .activation(.rejected(rejection)))
             }
             let wrongGraph = GraphDocument(id: GraphID(validated: "graph.other"), revision: revision)
-            #expect(Bench.refusal(await authority.begin(request(), candidate: wrongGraph, project: Bench.projectA))
+            let wrongDocument = Bench.projectDocument(project: Bench.projectA, candidate: wrongGraph)
+            #expect(Bench.refusal(await authority.begin(request(), candidate: wrongGraph,
+                                                        projectDocument: wrongDocument, project: Bench.projectA))
                     == .activation(.rejected(.graphMismatch)))
-            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectC))
+            #expect(Bench.refusal(await authority.begin(
+                request(), candidate: graph,
+                projectDocument: Bench.projectDocument(project: Bench.projectC, candidate: graph),
+                project: Bench.projectC
+            ))
                     == .unknownProject(Bench.projectC))
             #expect(await authority.snapshot() == before)
             let live = try Bench.liveState()
@@ -171,17 +179,20 @@ extension HostAuthorityTests {
             ] {
                 await authority.updateLive(HostLiveState(hostEpoch: live.hostEpoch, permission: permission,
                                                          capabilities: live.capabilities))
-                #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+                #expect(Bench.refusal(await authority.begin(request(), candidate: graph,
+                                                            projectDocument: document, project: Bench.projectA))
                         == .activation(.rejected(rejection)))
             }
             await authority.updateLive(try Bench.liveState(epoch: wrongEpoch))
-            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+            #expect(Bench.refusal(await authority.begin(request(), candidate: graph,
+                                                        projectDocument: document, project: Bench.projectA))
                     == .activation(.rejected(.staleHostEpoch)))
             await authority.updateLive(live)
             #expect(await authority.nextEngineCommand() == nil)
             try await Bench.begin(authority)
             let preparing = await authority.snapshot()
-            #expect(Bench.refusal(await authority.begin(request(), candidate: graph, project: Bench.projectA))
+            #expect(Bench.refusal(await authority.begin(request(), candidate: graph,
+                                                        projectDocument: document, project: Bench.projectA))
                     == .activation(.busy))
             #expect(await authority.snapshot() == preparing)
         }
@@ -193,9 +204,12 @@ extension HostAuthorityTests {
             for _ in 0..<3 { lost.append(try await beginAndAbandon(authority, &engine)) }
             let full = await authority.snapshot()
             let revision = try await Bench.state(authority).running.revision
+            let graph = Bench.candidate(revision: revision)
             #expect(pendingCount(full) == 3 && full.plans.capacity == 4)
             #expect(Bench.refusal(await authority.begin(Bench.request(base: revision),
-                                                        candidate: Bench.candidate(revision: revision),
+                                                        candidate: graph,
+                                                        projectDocument: Bench.projectDocument(
+                                                            project: Bench.projectA, candidate: graph),
                                                         project: Bench.projectA)) == .plans(.capacityReached))
             #expect(Bench.refusal(await authority.abandonPrepare(project: Bench.projectA))
                     == .activation(.unexpectedPhase(.idle)))
@@ -293,6 +307,8 @@ extension HostAuthorityTests {
             ).get()
             let before = await authority.snapshot()
             #expect(Bench.refusal(await authority.begin(Bench.request(base: last), candidate: Bench.candidate(),
+                                                        projectDocument: Bench.projectDocument(
+                                                            project: Bench.projectC, candidate: Bench.candidate()),
                                                         project: Bench.projectC)) == .activation(.overflow))
             #expect(await authority.snapshot() == before)
         }
@@ -331,6 +347,8 @@ extension HostAuthorityTests {
             let full = await authority.snapshot()
             #expect(full.queue.count == EngineCommandQueue.capacity)
             #expect(Bench.refusal(await authority.begin(Bench.request(), candidate: Bench.candidate(),
+                                                        projectDocument: Bench.projectDocument(
+                                                            project: Bench.projectB, candidate: Bench.candidate()),
                                                         project: Bench.projectB)) == .queueFull)
             #expect(Bench.refusal(await authority.cancel(project: Bench.projectA)) == .queueFull)
             #expect(await authority.snapshot() == full)

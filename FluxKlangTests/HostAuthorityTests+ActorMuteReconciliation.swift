@@ -226,7 +226,11 @@ extension HostAuthorityTests {
                                      running: RunningGraph(revision: .initial, prepared: nil)).get()
             let limit = abandon ? EngineCommandQueue.capacity - 3 : EngineCommandQueue.capacity
             for _ in 1..<limit {
-                try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectC).get()
+                try await authority.begin(
+                    Bench.request(), candidate: Bench.candidate(),
+                    projectDocument: Bench.projectDocument(project: Bench.projectC, candidate: Bench.candidate()),
+                    project: Bench.projectC
+                ).get()
                 try await authority.abandonPrepare(project: Bench.projectC).get()
             }
             let full = await authority.snapshot()
@@ -315,8 +319,12 @@ extension HostAuthorityTests {
             var book = try HostAuthorityBook(host: ledger, live: Bench.liveState())
             try book.open(project: Bench.projectB, running: RunningGraph(revision: .initial, prepared: nil)).get()
             _ = try book.acquire(project: Bench.projectB, window: Bench.windowB).get()
-            try book.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
-            guard case .prepare(_, let instance, let prepare) = book.nextEngineCommand() else {
+            try book.begin(
+                Bench.request(), candidate: Bench.candidate(),
+                projectDocument: Bench.projectDocument(project: Bench.projectB, candidate: Bench.candidate()),
+                project: Bench.projectB
+            ).get()
+            guard case .prepare(_, _, let instance, let prepare) = book.nextEngineCommand() else {
                 Issue.record("Expected B's prepare")
                 return
             }

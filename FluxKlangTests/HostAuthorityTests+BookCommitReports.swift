@@ -9,10 +9,12 @@ private func deliver(
     _ book: inout HostAuthorityBook, name: PreparedActivationID, outcome: ActivationCommitOutcome
 ) throws -> (PlanBinding, ActivationCommitReport) {
     let revision = try #require(book.snapshot().projects[Bench.projectA]).running.revision
-    try book.begin(Bench.request(base: revision), candidate: Bench.candidate(revision: revision),
+    let graph = Bench.candidate(revision: revision)
+    try book.begin(Bench.request(base: revision), candidate: graph,
+                   projectDocument: Bench.projectDocument(project: Bench.projectA, candidate: graph),
                    project: Bench.projectA).get()
     let preparedCommand = book.nextEngineCommand()
-    guard case .prepare(let graph, let instance, let prepare) = try #require(preparedCommand) else {
+    guard case .prepare(let deliveredGraph, _, let instance, let prepare) = try #require(preparedCommand) else {
         throw BookReportError.command
     }
     #expect(try book.prepareAnswered(.success(name), instance: instance, attempt: prepare).get() == .routed)
@@ -23,7 +25,7 @@ private func deliver(
         throw BookReportError.command
     }
     #expect(binding.instance == instance && binding.attempt == prepare && binding.prepared == name)
-    let nodes = Set(graph.nodes.map(\.id))
+    let nodes = Set(deliveredGraph.nodes.map(\.id))
     let applied = outcome == .succeeded ? nodes : []
     return (binding, ActivationCommitReport(prepared: name, attempt: attempt, outcome: outcome,
                                            applied: applied, unapplied: nodes.subtracting(applied)))
@@ -31,10 +33,12 @@ private func deliver(
 
 private func beginPreparation(_ book: inout HostAuthorityBook) throws -> HostPrepare {
     let revision = try #require(book.snapshot().projects[Bench.projectA]).running.revision
-    try book.begin(Bench.request(base: revision), candidate: Bench.candidate(revision: revision),
+    let graph = Bench.candidate(revision: revision)
+    try book.begin(Bench.request(base: revision), candidate: graph,
+                   projectDocument: Bench.projectDocument(project: Bench.projectA, candidate: graph),
                    project: Bench.projectA).get()
     let command = book.nextEngineCommand()
-    guard case .prepare(_, let instance, let attempt) = try #require(command) else {
+    guard case .prepare(_, _, let instance, let attempt) = try #require(command) else {
         throw BookReportError.command
     }
     return HostPrepare(instance: instance, attempt: attempt)

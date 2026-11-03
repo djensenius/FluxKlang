@@ -95,7 +95,7 @@ struct ScriptedActivationEngine: Sendable {
 
     private mutating func handle(_ command: EngineCommand, by authority: HostAuthority) async {
         switch command {
-        case .prepare(let graph, let instance, let attempt):
+        case .prepare(let graph, _, let instance, let attempt):
             takePreparation(graph, key: HostPrepare(instance: instance, attempt: attempt))
         case .commit(let binding, let attempt, let token):
             takeCommit(ScriptedCommit(binding: binding, attempt: attempt, token: token))
@@ -164,9 +164,9 @@ struct ScriptedActivationEngine: Sendable {
         let snapshot = await authority.snapshot()
         let preparation = try #require(snapshot.outstanding[project])
         let command = try #require(snapshot.queue.pending.first {
-            if case .prepare(_, preparation.instance, preparation.attempt) = $0 { true } else { false }
+            if case .prepare(_, _, preparation.instance, preparation.attempt) = $0 { true } else { false }
         })
-        guard case .prepare(let graph, _, _) = command else {
+        guard case .prepare(let graph, _, _, _) = command else {
             throw ScriptedEngineError.invalidTrackedLimit
         }
         takePreparation(graph, key: preparation)

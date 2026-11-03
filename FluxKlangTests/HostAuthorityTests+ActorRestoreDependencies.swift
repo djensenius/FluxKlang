@@ -62,7 +62,11 @@ extension HostAuthorityTests {
         @Test func deferredRestoreBindingDoesNotAliasSameNamedPreparation() async throws {
             var engine = try ScriptedActivationEngine()
             let (authority, failedBinding) = try await authorityWithDeferredRestoreDiscard(&engine)
-            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+            try await authority.begin(
+                Bench.request(), candidate: Bench.candidate(),
+                projectDocument: Bench.projectDocument(project: Bench.projectB, candidate: Bench.candidate()),
+                project: Bench.projectB
+            ).get()
             let preparation = try #require(await authority.snapshot().outstanding[Bench.projectB])
             #expect(await engine.drain(authority).count == 1)
             let result = await authority.prepareAnswered(.success(failedBinding.prepared),
@@ -81,7 +85,11 @@ extension HostAuthorityTests {
         @Test func abandonedLateSuccessCannotDiscardDeferredRestorePlan() async throws {
             var engine = try ScriptedActivationEngine()
             let (authority, failedBinding) = try await authorityWithDeferredRestoreDiscard(&engine)
-            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+            try await authority.begin(
+                Bench.request(), candidate: Bench.candidate(),
+                projectDocument: Bench.projectDocument(project: Bench.projectB, candidate: Bench.candidate()),
+                project: Bench.projectB
+            ).get()
             let preparation = try #require(await authority.snapshot().outstanding[Bench.projectB])
             #expect(await engine.drain(authority).count == 1)
             let withheldAttempt = engine.withholdNext()
@@ -126,7 +134,11 @@ extension HostAuthorityTests {
             ])
             #expect(await authority.snapshot().restoring?.discardAfterRestore.isEmpty == true)
 
-            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+            try await authority.begin(
+                Bench.request(), candidate: Bench.candidate(),
+                projectDocument: Bench.projectDocument(project: Bench.projectB, candidate: Bench.candidate()),
+                project: Bench.projectB
+            ).get()
             let preparation = try #require(await authority.snapshot().outstanding[Bench.projectB])
             #expect(await engine.drain(authority).count == 1)
             let withheldAttempt = engine.withholdNext()

@@ -146,7 +146,7 @@ extension HostAuthorityTests {
             let prepareAttempt = try #require(await authority.snapshot().outstanding[Bench.projectA])
             let prepareCommands = await engine.drain(authority)
             #expect(prepareCommands.count == 1 && prepareCommands.first.map {
-                if case .prepare(_, let instance, let attempt) = $0 {
+                if case .prepare(_, _, let instance, let attempt) = $0 {
                     HostPrepare(instance: instance, attempt: attempt) == prepareAttempt
                 } else { false }
             } == true)

@@ -47,12 +47,16 @@ extension HostAuthorityTests {
             }
             #expect(Bench.context(await authority.snapshot()) == bumps)
             // B's prepare is queued after the commit; the mute keeps the commit's place.
-            try await authority.begin(Bench.request(), candidate: Bench.candidate(), project: Bench.projectB).get()
+            try await authority.begin(
+                Bench.request(), candidate: Bench.candidate(),
+                projectDocument: Bench.projectDocument(project: Bench.projectB, candidate: Bench.candidate()),
+                project: Bench.projectB
+            ).get()
             let prepareB = try #require(try await Bench.state(authority, Bench.projectB).lastPrepareAttempt)
             let taken = await engine.drain(authority)
             let expectedCount = change == .reacquired ? 4 : change == .transferred ? 3 : 2
             #expect(taken.count == expectedCount && taken.first == .setOutputsMuted(true))
-            guard taken.count == expectedCount, case .prepare(_, _, prepareB) = taken[1] else {
+            guard taken.count == expectedCount, case .prepare(_, _, _, prepareB) = taken[1] else {
                 Issue.record("Expected the mute, then B's prepare; got \(taken)")
                 return
             }

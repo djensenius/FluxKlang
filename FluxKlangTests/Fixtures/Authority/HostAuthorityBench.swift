@@ -53,6 +53,12 @@ enum AuthorityBench {
                           digest: ActivationDigest(rawValue: "sha256:activation"), origin: .human)
     }
 
+    /// Pin the candidate revision, not the future activation ACK revision. Plugin graphs need no roles.
+    static func projectDocument(project: ProjectID, candidate: GraphDocument) -> ProjectDocument {
+        ProjectDocument(id: project, name: "Authority bench",
+                        graphs: [ProjectGraphReference(graph: candidate.id, revision: candidate.revision)])
+    }
+
     static func gesture(_ window: WindowID = windowA, origin: CommandOrigin = .human) -> ActivationGesture {
         ActivationGesture(origin: origin, window: window)
     }
@@ -89,7 +95,9 @@ enum AuthorityBench {
         lifecycle: EngineLifecycle?, recoveryBase: RunningSetState?
     ) async throws {
         _ = try await authority.acquire(project: projectA, window: windowA).get()
-        try await authority.begin(request(), candidate: candidate(), project: projectA).get()
+        try await authority.begin(request(), candidate: candidate(),
+                                  projectDocument: projectDocument(project: projectA, candidate: candidate()),
+                                  project: projectA).get()
         await engine.drain(authority)
         let taken = try engine.requireNext()
         let answer = engine.prepare(taken, as: runningPlan)
@@ -145,7 +153,9 @@ enum AuthorityBench {
     static func begin(_ authority: HostAuthority, project: ProjectID = projectA,
                       withAux: Bool = false) async throws {
         let revision = try await state(authority, project).running.revision
-        try await authority.begin(request(base: revision), candidate: candidate(withAux: withAux, revision: revision),
+        let graph = candidate(withAux: withAux, revision: revision)
+        try await authority.begin(request(base: revision), candidate: graph,
+                                  projectDocument: projectDocument(project: project, candidate: graph),
                                   project: project).get()
     }
 
@@ -243,7 +253,9 @@ enum AuthorityBench {
     /// Fills the command queue with `project`'s prepares, abandoning each.
     static func fillQueue(_ authority: HostAuthority, with project: ProjectID = projectB) async throws {
         while await authority.snapshot().queue.count < EngineCommandQueue.capacity {
-            try await authority.begin(request(), candidate: candidate(), project: project).get()
+            try await authority.begin(request(), candidate: candidate(),
+                                      projectDocument: projectDocument(project: project, candidate: candidate()),
+                                      project: project).get()
             try await authority.abandonPrepare(project: project).get()
         }
 
