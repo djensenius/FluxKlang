@@ -900,6 +900,70 @@ class ProducerTests(unittest.TestCase):
         with self.assertRaisesRegex(receipt.Refusal, "Git link/submodule"):
             receipt.source_observation(source, self.w, commit, tree)
 
+    def assert_non_directory_git_marker_preflight_refusal(self, relative):
+        root = self.w / relative
+        marker = root / ".git"
+        expected_commit = fixture_git(root, "rev-parse", "HEAD")
+        real_file_data = receipt.file_data
+        real_git = receipt.git
+        for variant in ("internal-pointer", "hardlinked-pointer", "symlink-marker"):
+            with self.subTest(root=relative, variant=variant):
+                control = self.w / "test-git-storage" / (relative.replace("/", "-") + "-" + variant)
+                control.parent.mkdir(parents=True, exist_ok=True)
+                marker.rename(control)
+                external_alias = self.root / "external-marker"
+                try:
+                    if variant == "symlink-marker":
+                        marker.symlink_to(control, target_is_directory=True)
+                    else:
+                        marker.write_text("gitdir: " + str(control) + "\n", encoding="utf-8")
+                        if variant == "hardlinked-pointer":
+                            os.link(marker, external_alias)
+                            self.assertFalse(external_alias.is_relative_to(self.w))
+                            self.assertEqual(marker.stat().st_nlink, 2)
+                    self.assertTrue(control.is_relative_to(self.w))
+                    # Fixture setup proves the internal pointer really works in
+                    # Git; refusal must not merely be caused by an invalid repo.
+                    self.assertEqual(fixture_git(root, "rev-parse", "HEAD"), expected_commit)
+                    before = snapshot(self.root)
+
+                    def guarded_read(path, *args, **kwargs):
+                        self.assertNotEqual(Path(path), marker, "rejected .git marker was read")
+                        return real_file_data(path, *args, **kwargs)
+
+                    def guarded_git(selected, *args):
+                        self.assertNotEqual(Path(selected), root, "Git invoked for rejected root")
+                        return real_git(selected, *args)
+
+                    with mock.patch.object(receipt, "file_data", side_effect=guarded_read) as reads, \
+                            mock.patch.object(receipt, "git", side_effect=guarded_git) as calls:
+                        with self.assertRaisesRegex(receipt.Refusal, r"\.git.*directory"):
+                            self.produce()
+                        self.assertFalse(any(Path(c.args[0]) == marker for c in reads.call_args_list))
+                        self.assertFalse(any(Path(c.args[0]) == root for c in calls.call_args_list))
+                        if relative != "source":
+                            # Valid roots earlier in the actual preflight order
+                            # still receive their real read-only observations.
+                            self.assertTrue(any(Path(c.args[0]) == self.w / "source"
+                                                for c in calls.call_args_list))
+                            self.assertTrue(any(Path(c.args[0]) == self.w / "Packages/checkouts/swift-ascii"
+                                                for c in calls.call_args_list))
+                    self.compiler.assert_not_called()
+                    self.assertFalse((self.w / "build-evidence").exists())
+                    self.assertFalse((self.w / "DerivedData").exists())
+                    self.assertEqual(snapshot(self.root), before)
+                finally:
+                    if external_alias.exists():
+                        external_alias.unlink()
+                    marker.unlink()
+                    control.rename(marker)
+
+    def test_git_marker_source_internal_pointers_refuse_before_read_or_git(self):
+        self.assert_non_directory_git_marker_preflight_refusal("source")
+
+    def test_git_marker_package_internal_pointers_refuse_before_read_or_git(self):
+        self.assert_non_directory_git_marker_preflight_refusal("Packages/checkouts/swift-nio")
+
     def test_git_control_escape_alternates_hardlinks_and_external_config(self):
         source = self.w / "source"
         gitdir = source / ".git"

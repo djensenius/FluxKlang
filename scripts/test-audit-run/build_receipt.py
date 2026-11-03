@@ -378,16 +378,8 @@ def git_control(root, workspace):
         mode = os.stat(".git", dir_fd=parent, follow_symlinks=False).st_mode
     finally:
         os.close(parent)
-    if stat.S_ISDIR(mode):
-        directory = marker
-    else:
-        _, data = bounded(marker)
-        line = data.decode("utf-8")
-        require(line.startswith("gitdir: ") and line.endswith("\n") and line.count("\n") == 1,
-                "unsupported Git control pointer")
-        target = line[8:-1]
-        path_text(target, absolute=target.startswith("/"))
-        directory = root / target
+    require(stat.S_ISDIR(mode), ".git marker must be a directory")
+    directory = marker
     inside(directory, workspace)
     check_directory(directory)
     common = directory

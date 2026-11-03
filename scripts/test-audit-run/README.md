@@ -248,11 +248,39 @@ W/Packages/checkouts/<each of the nine pinned identities>
 canonical absolute UTF-8 paths, including `/private/...` rather than a symlinked
 temporary-directory spelling on macOS. `W/DerivedData` and `W/build-evidence`
 must not exist. Source must match independently reviewed full lowercase
-40-hex commit and tree IDs. An implementation-development linked worktree is
-**not** eligible when its common Git storage is outside W. Provisioning is
+40-hex commit and tree IDs. Each source/package root must have a real `.git`
+**directory**. All non-directory `.git` markers are refused before reading
+marker contents or invoking Git for that root. File pointers, including wholly
+internal linked-worktree and separate-gitdir layouts, are unsupported even when
+all referenced storage is inside W. An implementation-development linked
+worktree is therefore **not** an eligible producer workspace. Provisioning is
 external; the producer never clones, fetches, resolves packages, regenerates
 projects, or copies source/products to manufacture provenance. Provisioning
 provenance must be retained separately by the coordinator.
+
+For the reviewed installed SDK, the coordinator must preprovision exactly these
+nine observed directory paths relative to a fresh, private **0700** W, **before
+the baseline observation, preflight and claim**. Every listed directory had
+mode **0777**; the required child shapes are:
+
+| Workspace-relative directory | Children |
+| --- | --- |
+| `source/FluxKlang.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration` | Empty |
+| `Packages/checkouts/swift-atomics/.swiftpm` | Only `xcode` |
+| `Packages/checkouts/swift-atomics/.swiftpm/xcode` | Empty |
+| `Packages/checkouts/swift-collections/.swiftpm` | Only `xcode` |
+| `Packages/checkouts/swift-collections/.swiftpm/xcode` | Empty |
+| `Packages/checkouts/swift-nio/.swiftpm` | Only `xcode` |
+| `Packages/checkouts/swift-nio/.swiftpm/xcode` | Empty |
+| `Packages/checkouts/swift-system/.swiftpm` | Only `xcode` |
+| `Packages/checkouts/swift-system/.swiftpm/xcode` | Empty |
+
+These are SDK-specific provisioning prerequisites, not inventory exemptions,
+producer-created repairs, or a general compatibility guarantee. The directories,
+their modes and their child shapes remain covered by the existing exact
+inventories and before/after comparisons. Do not create or repair them after a
+claim. A consumed workspace, successful or failed, must never be repaired,
+retried or relabeled for a different source candidate.
 
 ```sh
 python3 -B scripts/test-audit-run/build_mac.py produce \
