@@ -309,7 +309,7 @@ struct AuditDiagnostic: Codable, Hashable {
 }
 
 struct AuditReport: Encodable {
-    let schemaVersion = 1
+    var schemaVersion = 1
     let purpose = "source-registration-only"
     let identityNotice = "Source identities/guards only; not public Test.ID, case IDs or runtime receipt expectations."
     let membershipNotice = "Digest-bound REVIEWED transcription; digest verification does not parse YAML."
@@ -322,12 +322,17 @@ struct AuditReport: Encodable {
     var derivedRegistrations: [Registration] = []
     var ownership: [InventoryRow] = []
     var diagnostics: [AuditDiagnostic] = []
+    var targetRoles: [TargetRole]?
+    var qualification: QualificationReport?
 
     mutating func finish() {
         diagnostics = Set(diagnostics).sorted { $0.sortKey < $1.sortKey }
         ownership.sort { $0.registration.sortKey < $1.registration.sortKey }
         derivedRegistrations = ownership.map(\.registration)
-        let invalid = diagnostics.contains { $0.category == "model" || $0.category == "input" }
+        let invalid = diagnostics.contains { ["model", "input", "qualification"].contains($0.category) }
+        qualification?.inventory.sort { $0.sortKey < $1.sortKey }
+        let qualified = !invalid && qualification?.inventory.count == 16
+        qualification?.contractSatisfied = qualified
         analysisComplete = !invalid
         enforcementSatisfied = !invalid && diagnostics.isEmpty
         exitCode = invalid ? 2 : (enforcementSatisfied || mode == "inventory" ? 0 : 1)
@@ -376,7 +381,15 @@ enum AuditChecker {
         do {
             let captured = try SafeInputs(root: options.root)
             inputs = captured
-            let manifest = try AuditManifest.load(captured.read(options.manifest))
+            let data = try captured.read(options.manifest)
+            // An untrusted version discriminator selects only the failure-report
+            // envelope. Strict decoding below still validates every key and value.
+            if (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["schemaVersion"] as? Int == 2 {
+                report.schemaVersion = 2
+                report.targetRoles = TargetRoleContract.roles
+                report.qualification = QualificationReport()
+            }
+            let manifest = try AuditManifest.load(data)
             try require(digest(captured.read(manifest.specification.path)) == manifest.specification.sha256,
                         "reviewed specification digest mismatch; no automatic refresh/trust operation")
             let pbx = try ProjectMembership(data: captured.read(manifest.pbxPath))
@@ -404,35 +417,6 @@ enum AuditChecker {
         }
         report.finish()
         return report
-    }
-
-    private static func inventory(
-        manifest: AuditManifest, memberships: [String: [String]], parsed: [String: ParsedSource],
-        report: inout AuditReport
-    ) throws {
-        for matrix in manifest.matrix.sorted(by: {
-            $0.target + $0.configuration < $1.target + $1.configuration
-        }) {
-            for macImport in [false, true] {
-                for modelsImport in [false, true] {
-                    let variant = SourceVariant(matrix: matrix, macImport: macImport, modelsImport: modelsImport)
-                    do {
-                        var inventory = SourceInventory(variant: variant)
-                        for path in memberships[matrix.target] ?? [] {
-                            guard let source = parsed[path] else { throw AuditFailure("missing parsed member") }
-                            try inventory.add(source)
-                        }
-                        let result = try SourceOwnership(inventory).analyze()
-                        report.ownership += result.rows
-                        report.diagnostics += result.diagnostics
-                    } catch {
-                        let scope = "\(matrix.target)/\(matrix.configuration)/\(variant.guardExpression)"
-                        report.diagnostics.append(AuditDiagnostic(
-                            category: "model", message: "\(scope): \(error)", registration: nil, site: nil))
-                    }
-                }
-            }
-        }
     }
 
     static func compareRegistrations(_ expected: [Registration]?, report: inout AuditReport) {
@@ -467,7 +451,8 @@ enum AuditChecker {
                              "enforcementSatisfied=\(report.enforcementSatisfied) exitCode=\(report.exitCode)"] +
                     report.ownership.map {
                         "\($0.registration.sortKey) annotationSatisfied=\($0.annotationSatisfied)"
-                    } + report.diagnostics.map { "\($0.category): \($0.registration?.sortKey ?? "") \($0.message)" }
+                    } + (report.qualification?.textLines ?? []) +
+                    report.diagnostics.map { "\($0.category): \($0.registration?.sortKey ?? "") \($0.message)" }
                 return (Data((lines.joined(separator: "\n") + "\n").utf8), Int32(report.exitCode))
             }
             return (try report.encoded() + Data([10]), Int32(report.exitCode))

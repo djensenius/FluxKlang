@@ -167,12 +167,15 @@ or permission to access production services or hardware.
 The test and build-for-testing recipes select `FluxKlangIsolatedTests` or
 `FluxKlangMacIsolatedTests`. Their Test actions explicitly set
 `FLUXKLANG_ISOLATED_TESTING=1`, `FLUXKLANG_RUN_APPLE_MODEL_TESTS=0` and
-`FLUXKLANG_QUALIFY_APPLE_ROUTING=0`; they retain all existing test targets.
+`FLUXKLANG_QUALIFY_APPLE_ROUTING=0`; they retain their existing unit/UI targets.
 Once execution is authorized, use these isolated schemes for ordinary Xcode Test
 actions too: startup-boundary fixtures require all three literal values.
-The existing `FluxKlang` and `FluxKlangMac` schemes retain their opt-in behavior
-for separately authorized Apple-model qualification. These isolation settings
-apply to Test actions, not ordinary Run/Profile actions.
+The two live Apple-model tests belong exclusively to the iOS
+`FluxKlangAppleQualificationTests` target. Its `FluxKlangAppleQualification`
+scheme selects only that target and explicitly sets the three flags above to
+`0`, `1`, and `1`. Qualification requires a separate fresh-host invocation and
+execution authorization; ordinary and isolated schemes do not schedule it.
+These environment settings apply to Test actions, not ordinary Run/Profile actions.
 
 Before execution, inspect the generated `.xctestrun` test-host and UI-target-app
 environments and qualify every `XCUIApplication` launch path. Scheme settings
