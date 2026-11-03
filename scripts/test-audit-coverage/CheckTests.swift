@@ -448,6 +448,8 @@ enum FixtureMain {
         tests.returnTypeCases()
         tests.inheritedReturnCases()
         tests.extensionAccessCases()
+        tests.parenthesizedAncestryCases()
+        tests.macroSyntaxCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }
