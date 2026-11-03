@@ -67,15 +67,24 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 119 checks, including regressions
+existing fixture world. The suite has 148 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
-opaque return types, specialized ancestry and erased generic-alias initializers.
+opaque return types, specialized ancestry, erased generic-alias initializers,
+current-module-qualified and inherited aliases, and bounded input reads/rechecks.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
 
 Retain command output, source/input hashes and the reviewed manifest for evidence.
 After the commands finish, remove only the generated scratch directory you
 created, if its outputs are no longer needed; do not remove shared Xcode caches.
+
+## Input limits
+
+Each source read is limited to 8,000,000 bytes; manifest, PBX and reviewed project
+metadata reads are limited to 32,000,000 bytes. These are decimal byte limits.
+Reads remain bounded if a file grows while being read, and oversized content is
+rejected before caching or parsing. Rereads and input rechecks retain the smallest
+limit requested for that path, including after an unsuccessful first read.
 
 ## Reviewed manifest maintenance
 
@@ -103,3 +112,6 @@ changes, not an atomic filesystem transaction or adversarial change-and-restore.
 Generic ancestry is handled conservatively: unsupported initializer chains fail
 closed, without generic argument substitution or inferring ordinary ancestry
 from rejection-only traversal. This inventory is not a Swift type checker.
+Unshadowed current-module-qualified bases are refused structurally; a source
+namespace shadowing the module name still uses source lookup. Enclosing inherited
+bindings are checked conservatively for rejection, not to prove ordinary lineage.
