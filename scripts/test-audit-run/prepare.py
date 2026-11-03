@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External, metadata-only preparation for one observed hosted-Mac profile.
+"""External, metadata-only preparation for closed Mac and iOS profiles.
 
 Never launches anything. Validation is read-only. This is partial regression
 preparation, not product closure, execution permission, or a runtime receipt.
@@ -108,9 +108,186 @@ OBSERVED = {
     },
 }
 
+IOS_PROFILE = "ios-simulator-isolated-unit-ui-v1"
+
+# Complete observed combined simulator XML v1 input. The app-hosted unit
+# bundle and runner-hosted UI bundle intentionally have different fields.
+# Do not merge either target with the Mac profile or infer missing metadata.
+IOS_OBSERVED = {
+    "FluxKlangTests": {
+        "BlueprintName": "FluxKlangTests",
+        "BlueprintProviderName": "FluxKlang",
+        "BlueprintProviderRelativePath": "FluxKlang.xcodeproj",
+        "BundleIdentifiersForCrashReportEmphasis": [
+            "org.davidjensenius.FluxKlang",
+            "org.davidjensenius.FluxKlang.tests",
+            "org.davidjensenius.FluxKlang.uitests",
+        ],
+        "CommandLineArguments": [],
+        "DefaultTestExecutionTimeAllowance": 600,
+        "DependentProductPaths": [
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app/PlugIns/FluxKlangTests.xctest",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app/PlugIns/FluxKlangUITests.xctest",
+        ],
+        "DiagnosticCollectionPolicy": 1,
+        "EnvironmentVariables": {
+            "APP_DISTRIBUTOR_ID_OVERRIDE": "com.apple.AppStore",
+            "DYLD_INSERT_LIBRARIES": "/usr/lib/libRPAC.dylib",
+            "FLUXKLANG_ISOLATED_TESTING": "1",
+            "FLUXKLANG_QUALIFY_APPLE_ROUTING": "0",
+            "FLUXKLANG_RUN_APPLE_MODEL_TESTS": "0",
+            "IDE_CHOSEN_LOGGING_METHOD": "1",
+            "OS_ACTIVITY_DT_MODE": "YES",
+            "PERFC_ENABLE_EXTENDED_DIAGNOSTIC_FORMAT": "1",
+            "PERFC_ENABLE_PROFILE_MODE": "1",
+            "PERFC_RESET_INSERT_LIBRARIES": "1",
+            "PERFC_SUPPRESS_SYSTEM_REPORTS": "1",
+            "SQLITE_ENABLE_THREAD_ASSERTIONS": "1",
+            "TERM": "dumb",
+        },
+        "InProcessParallelizationEnabled": False,
+        "IsAppHostedTestBundle": True,
+        "IsMemoryTaggingAddressSanitizerEnabled": False,
+        "PreferredScreenCaptureFormat": "screenRecording",
+        "ProcessNamesForCrashReportCollection": ["FluxKlang", "FluxKlangUITests-Runner"],
+        "ProductModuleName": "FluxKlangTests",
+        "RunOrder": 0,
+        "SystemAttachmentLifetime": "deleteOnSuccess",
+        "TestBundlePath": "__TESTHOST__/PlugIns/FluxKlangTests.xctest",
+        "TestHostBundleIdentifier": "org.davidjensenius.FluxKlang",
+        "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app",
+        "TestLanguage": "",
+        "TestRegion": "",
+        "TestTimeoutsEnabled": False,
+        "TestingEnvironmentVariables": {
+            "DYLD_FRAMEWORK_PATH": (
+                "__TESTROOT__/Debug-iphonesimulator:"
+                "__TESTROOT__/Debug-iphonesimulator/PackageFrameworks:"
+                "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Frameworks"
+            ),
+            "DYLD_INSERT_LIBRARIES": (
+                "__TESTHOST__/Frameworks/libXCTestBundleInject.dylib:/usr/lib/libRPAC.dylib"
+            ),
+            "DYLD_LIBRARY_PATH": (
+                "__TESTROOT__/Debug-iphonesimulator:"
+                "__PLATFORMS__/iPhoneSimulator.platform/Developer/usr/lib"
+            ),
+            "PERFC_SUPPRESS_SYSTEM_REPORTS": "1",
+            "XCInjectBundleInto": "unused",
+            "XCODE_SCHEME_NAME": "FluxKlangIsolatedTests",
+            "__XCODE_BUILT_PRODUCTS_DIR_PATHS": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_FRAMEWORK_PATH": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_LIBRARY_PATH": "__TESTROOT__/Debug-iphonesimulator",
+        },
+        "ToolchainsSettingValue": [],
+        "UserAttachmentLifetime": "deleteOnSuccess",
+    },
+    "FluxKlangUITests": {
+        "BlueprintName": "FluxKlangUITests",
+        "BlueprintProviderName": "FluxKlang",
+        "BlueprintProviderRelativePath": "FluxKlang.xcodeproj",
+        "BundleIdentifiersForCrashReportEmphasis": [
+            "org.davidjensenius.FluxKlang",
+            "org.davidjensenius.FluxKlang.tests",
+            "org.davidjensenius.FluxKlang.uitests",
+        ],
+        "CommandLineArguments": [],
+        "DefaultTestExecutionTimeAllowance": 600,
+        "DependentProductPaths": [
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app/PlugIns/FluxKlangTests.xctest",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app",
+            "__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app/PlugIns/FluxKlangUITests.xctest",
+        ],
+        "DiagnosticCollectionPolicy": 1,
+        "EnvironmentVariables": {
+            "APP_DISTRIBUTOR_ID_OVERRIDE": "com.apple.AppStore",
+            "DYLD_INSERT_LIBRARIES": "/usr/lib/libRPAC.dylib",
+            "FLUXKLANG_ISOLATED_TESTING": "1",
+            "FLUXKLANG_QUALIFY_APPLE_ROUTING": "0",
+            "FLUXKLANG_RUN_APPLE_MODEL_TESTS": "0",
+            "IDE_CHOSEN_LOGGING_METHOD": "1",
+            "OS_ACTIVITY_DT_MODE": "YES",
+            "PERFC_ENABLE_EXTENDED_DIAGNOSTIC_FORMAT": "1",
+            "PERFC_ENABLE_PROFILE_MODE": "1",
+            "PERFC_RESET_INSERT_LIBRARIES": "1",
+            "PERFC_SUPPRESS_SYSTEM_REPORTS": "1",
+            "SQLITE_ENABLE_THREAD_ASSERTIONS": "1",
+            "TERM": "dumb",
+        },
+        "IsMemoryTaggingAddressSanitizerEnabled": False,
+        "IsUITestBundle": True,
+        "IsXCTRunnerHostedTestBundle": True,
+        "PreferredScreenCaptureFormat": "screenRecording",
+        "ProcessNamesForCrashReportCollection": ["FluxKlang", "FluxKlangUITests-Runner"],
+        "ProductModuleName": "FluxKlangUITests",
+        "RunOrder": 1,
+        "SystemAttachmentLifetime": "deleteOnSuccess",
+        "TestBundlePath": "__TESTHOST__/PlugIns/FluxKlangUITests.xctest",
+        "TestHostBundleIdentifier": "org.davidjensenius.FluxKlang.uitests.xctrunner",
+        "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app",
+        "TestLanguage": "",
+        "TestRegion": "",
+        "TestTimeoutsEnabled": False,
+        "TestingEnvironmentVariables": {
+            "DYLD_FRAMEWORK_PATH": (
+                "__TESTROOT__/Debug-iphonesimulator:"
+                "__TESTROOT__/Debug-iphonesimulator/PackageFrameworks:"
+                "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Frameworks"
+            ),
+            "DYLD_LIBRARY_PATH": (
+                "__TESTROOT__/Debug-iphonesimulator:"
+                "__PLATFORMS__/iPhoneSimulator.platform/Developer/usr/lib"
+            ),
+            "XCODE_SCHEME_NAME": "FluxKlangIsolatedTests",
+            "__XCODE_BUILT_PRODUCTS_DIR_PATHS": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_FRAMEWORK_PATH": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_LIBRARY_PATH": "__TESTROOT__/Debug-iphonesimulator",
+        },
+        "ToolchainsSettingValue": [],
+        "UITargetAppCommandLineArguments": [],
+        "UITargetAppEnvironmentVariables": {
+            "APP_DISTRIBUTOR_ID_OVERRIDE": "com.apple.AppStore",
+            "DYLD_FRAMEWORK_PATH": (
+                "__TESTROOT__/Debug-iphonesimulator:"
+                "__TESTROOT__/Debug-iphonesimulator/PackageFrameworks"
+            ),
+            "DYLD_LIBRARY_PATH": "__TESTROOT__/Debug-iphonesimulator",
+            "XCODE_SCHEME_NAME": "FluxKlangIsolatedTests",
+            "__XCODE_BUILT_PRODUCTS_DIR_PATHS": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_FRAMEWORK_PATH": "__TESTROOT__/Debug-iphonesimulator",
+            "__XPC_DYLD_LIBRARY_PATH": "__TESTROOT__/Debug-iphonesimulator",
+        },
+        "UITargetAppPath": "__TESTROOT__/Debug-iphonesimulator/FluxKlang.app",
+        "UITargetAppPerformanceAntipatternCheckerEnabled": True,
+        "UserAttachmentLifetime": "deleteOnSuccess",
+    },
+    "__xctestrun_metadata__": {
+        "ContainerInfo": {
+            "ContainerName": "FluxKlang",
+            "SchemeName": "FluxKlangIsolatedTests",
+        },
+        "FormatVersion": 1,
+    },
+}
+
 
 class Refusal(ValueError):
     """Unsupported or inconsistent metadata; no repair is authorized."""
+
+
+def _profile_definition(profile):
+    if profile == PROFILE:
+        return OBSERVED, [TARGET], ((TARGET, "EnvironmentVariables", RUN_KEY),)
+    if profile == IOS_PROFILE:
+        return IOS_OBSERVED, ["FluxKlangTests", "FluxKlangUITests"], (
+            ("FluxKlangTests", "EnvironmentVariables", RUN_KEY),
+            ("FluxKlangUITests", "EnvironmentVariables", RUN_KEY),
+            ("FluxKlangUITests", "UITargetAppEnvironmentVariables", RUN_KEY),
+        )
+    raise Refusal("unsupported profile")
 
 
 def require_equal(actual, expected, location):
@@ -227,8 +404,7 @@ def existing_file(selected):
 
 
 def pinned_input(selected, expected_sha256, profile):
-    if profile != PROFILE:
-        raise Refusal("unsupported profile (only mac-isolated-unit)")
+    expected, _, _ = _profile_definition(profile)
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise Refusal("expected SHA256 must be 64 lowercase hexadecimal digits")
     path = existing_file(selected)
@@ -239,7 +415,7 @@ def pinned_input(selected, expected_sha256, profile):
         raise Refusal("input SHA256 mismatch")
     parsed = parse_plist(data)
     # This also refuses every preexisting run key, including empty/malformed IDs.
-    require_equal(parsed, OBSERVED, "input")
+    require_equal(parsed, expected, "input")
     return path, parsed
 
 
@@ -260,19 +436,23 @@ def output_paths(input_path, run_id):
     return output, output.with_suffix(".intent.json")
 
 
-def transformed(original, run_id):
+def transformed(original, run_id, profile=PROFILE):
+    _, _, insertion_paths = _profile_definition(profile)
     prepared = copy.deepcopy(original)
-    prepared[TARGET]["EnvironmentVariables"][RUN_KEY] = run_id
+    for target, environment, key in insertion_paths:
+        prepared[target][environment][key] = run_id
     return prepared
 
 
-def intent_record(input_path, input_digest, output, output_digest, intent, run_id):
+def intent_record(input_path, input_digest, output, output_digest, intent, run_id,
+                  profile=PROFILE):
+    _, targets, _ = _profile_definition(profile)
     return {
         "schema_version": 1,
-        "profile": PROFILE,
+        "profile": profile,
         "qualification": "partial-regression",
         "run_id": run_id,
-        "targets": [TARGET],
+        "targets": targets,
         "input": {"path": str(input_path), "sha256": input_digest},
         "output": {"path": str(output), "sha256": output_digest},
         "intent_path": str(intent),
@@ -298,12 +478,12 @@ def validate(input_path, expected_sha256, profile, output_path, intent_path):
     data = output.read_bytes()
     require_equal(
         record,
-        intent_record(source, expected_sha256, output, digest(data), intent, run_id),
+        intent_record(source, expected_sha256, output, digest(data), intent, run_id, profile),
         "intent",
     )
     # Full type-sensitive comparison proves that the only parsed change is the
-    # new EnvironmentVariables run ID. Flags and Xcode placeholders stay exact.
-    require_equal(parse_plist(data), transformed(original, run_id), "output")
+    # run ID at the fixed profile paths. Flags and Xcode placeholders stay exact.
+    require_equal(parse_plist(data), transformed(original, run_id, profile), "output")
     return record
 
 
@@ -313,10 +493,12 @@ def prepare(input_path, expected_sha256, profile):
     run_id = str(uuid.uuid4())
     check_run_id(run_id)
     output, intent = output_paths(source, run_id)
-    prepared = transformed(original, run_id)
+    prepared = transformed(original, run_id, profile)
     data = plistlib.dumps(prepared, fmt=plistlib.FMT_XML, sort_keys=False)
     require_equal(parse_plist(data), prepared, "serialized output")
-    record = intent_record(source, expected_sha256, output, digest(data), intent, run_id)
+    record = intent_record(
+        source, expected_sha256, output, digest(data), intent, run_id, profile,
+    )
     intent_data = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
     created = []
     try:
@@ -342,7 +524,7 @@ def main(argv=None):
         command = commands.add_parser(name)
         command.add_argument("--input", required=True, type=Path)
         command.add_argument("--expected-sha256", required=True)
-        command.add_argument("--profile", required=True, choices=[PROFILE])
+        command.add_argument("--profile", required=True, choices=[PROFILE, IOS_PROFILE])
         if name == "validate":
             command.add_argument("--output", required=True, type=Path)
             command.add_argument("--intent", required=True, type=Path)

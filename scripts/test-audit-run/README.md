@@ -1,4 +1,4 @@
-# Mac audit-run preparation (partial regression only)
+# Mac and iOS audit-run preparation (partial regression only)
 
 `prepare.py` is an external, Python-standard-library metadata preparer, **never a
 launcher**. It generates a fresh UUID4 before any hypothetical future launch.
@@ -6,7 +6,7 @@ It imports no app/production modules and performs no subprocess, network,
 test-host, UI-event, service, or hardware execution. There is no in-app fallback
 or conditional audit no-op.
 
-## One closed profile
+## Two closed profiles
 
 `mac-isolated-unit` supports only the reviewed Debug hosted-Mac XML plist
 FormatVersion **1** layout:
@@ -23,24 +23,49 @@ FormatVersion **1** layout:
   already present in the actual target `EnvironmentVariables`. Preparation adds
   only `FLUXKLANG_AUDIT_RUN_ID` there; it does not fix missing/wrong flags.
 
-The complete reviewed key/value/type allowlist is `OBSERVED` in `prepare.py`.
-It intentionally requires **all observed values**, including unrelated diagnostic,
-logging, environment, timeout, language, and attachment fields. Their parsed
+`ios-simulator-isolated-unit-ui-v1` supports only the reviewed combined Debug
+iOS simulator XML plist FormatVersion **1** layout:
+
+- Exactly `FluxKlangTests`, `FluxKlangUITests`, and `__xctestrun_metadata__`.
+  Neither a unit-only nor a UI-only subset is supported.
+- Scheme `FluxKlangIsolatedTests` in container metadata, both targets'
+  `TestingEnvironmentVariables`, and `UITargetAppEnvironmentVariables`.
+- Unit app host `__TESTROOT__/Debug-iphonesimulator/FluxKlang.app`, bundle
+  `__TESTHOST__/PlugIns/FluxKlangTests.xctest`, and app-hosted identity.
+- UI runner host
+  `__TESTROOT__/Debug-iphonesimulator/FluxKlangUITests-Runner.app`, bundle
+  `__TESTHOST__/PlugIns/FluxKlangUITests.xctest`, runner-hosted/UI identities,
+  and UI target app `__TESTROOT__/Debug-iphonesimulator/FluxKlang.app`.
+  Both targets require the four observed dependent products in their exact order
+  and all distinct provider/module/bundle/host identities.
+- The same literal `1/0/0` flags described above must already be present in
+  both targets' `EnvironmentVariables`. They must remain **absent** from the
+  observed UI target-app environment metadata.
+- One fresh external UUID4 is added as `FLUXKLANG_AUDIT_RUN_ID` at exactly three
+  locations: unit `EnvironmentVariables`, UI `EnvironmentVariables`, and UI
+  `UITargetAppEnvironmentVariables`. No other value is added or changed.
+
+The complete reviewed key/value/type allowlists are `OBSERVED` and
+`IOS_OBSERVED` in `prepare.py`. Both intentionally require **all observed values**,
+including unrelated diagnostic, logging, environment, timeout, language, and
+attachment fields. Their parsed
 values and supported Xcode path placeholders are preserved exactly; XML
 formatting/key order need not be byte-identical. No placeholder is expanded and
 no referenced product is opened. No arbitrary configuration switches exist.
 
 Unknown/missing fields, changed values, alternate layouts, binary plists,
 FormatVersion2, duplicate plist/JSON keys, unsupported scalar types, ambiguous
-metadata, filters (even empty), extra targets, UI-runner markers, alternate audit
-environments, conflicting schemes, and unresolved audit placeholders are refused,
+metadata, filters (even empty), extra targets, unreviewed host markers, alternate
+audit environments, conflicting schemes, and unresolved audit placeholders are refused,
 not silently dropped. Any preexisting run identity is refused, including a valid
 UUID, an empty value, or a malformed value. Even matching audit keys in
-`TestingEnvironmentVariables` are outside this profile.
+`TestingEnvironmentVariables` are outside both profiles. Cross-profile inputs
+and intents are refused; a rehashed output still must match the full permitted
+transformation.
 
-**Explicit exclusions:** iOS, UI/full-regression, Release, live Apple
-qualification, and any other target composition. Existing app/UI targets are
-unchanged; this utility never removes tests or presents skipped tests as green.
+**Explicit exclusions:** other iOS layouts/destinations, full-regression claims,
+Release, live Apple qualification, and any other target composition. Existing
+app/UI targets are unchanged; this utility never removes tests or presents skipped tests as green.
 The retained layout specimens are read-only metadata examples, **not
 execution-ready artifacts**.
 
@@ -79,10 +104,15 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-audit-run/prepare.py validate \
 Validation generates nothing and never repairs UUIDs, flags, intent, or files.
 It rechecks the pinned original and output hashes, canonical UUID4, all parsed
 identities and environment values, exact sibling names/locations, and the entire
-parsed output against the original plus only the authorized run-key addition.
+parsed output against the original plus only the authorized run-key additions.
 Final-component file symlinks are refused; resolved parent paths are recorded.
 An orphan or partially written pair cannot validate. Exit status is `0` for
 metadata success, `1` for refusal/I/O failure, and `2` for invalid CLI arguments.
+
+For the combined iOS metadata, use the same `prepare` and `validate` commands
+with `--profile ios-simulator-isolated-unit-ui-v1`, the separately reviewed iOS
+input path/hash, and its printed sibling output/intent paths. The CLI never
+infers a profile or selects a destination.
 
 On caught preparation failures, newly created files are removed (intent first);
 preexisting paths are never removed. Use a stable caller-controlled directory.
@@ -93,17 +123,24 @@ They must not be treated as prepared without separate successful validation.
 ## Limits and follow-ups
 
 Hashes and metadata consistency do **not** prove product closure, destination
-binding, immutable Build contents, child-process delivery, execution readiness,
-preflight integration, receipt retention, or runtime coverage. Intent is neither
+binding, immutable Build contents, external PID/process attribution,
+child-process delivery, execution readiness, preflight integration, receipt
+retention, or runtime coverage. Intent is neither
 a signature nor an execution receipt. Sibling placement preserves metadata path
 resolution, not the existence or immutability of any referenced native product.
 
+The existing UI helper sets launch flags but does **not** explicitly forward the
+audit UUID. The three iOS metadata insertions express intended custody only;
+Xcode/helper environment delivery remains unqualified. Both profiles preserve
+the observed `deleteOnSuccess` system/user attachment defaults. This change
+adds no retained receipts or full audit-coverage guarantee.
+
 Current Makefile launch recipes and raw Cmd+U remain unchanged and unvalidated.
 No command here runs `xcodebuild` or `test-without-building`. Runner integration,
-canonical scope adoption, checker/live extraction, iOS/UI/live profiles, and
-retained runtime results require separate review/authorization.
+canonical scope adoption, checker/live extraction, iOS/UI runtime handoff, live
+profiles, and retained runtime results require separate review/authorization.
 
-The initial profile deliberately fixes unrelated diagnostic/language/logging
+Both profiles deliberately fix unrelated diagnostic/language/logging
 values as well. Broader acceptance requires separate review; this implementation
 conservatively refuses that drift rather than inferring a wider supported shape.
 
@@ -111,7 +148,7 @@ conservatively refuses that drift rather than inferring a wider supported shape.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
-  -s scripts/test-audit-run -p 'test_prepare.py' -v
+  -s scripts/test-audit-run -p 'test_prepare*.py' -v
 ```
 
 Tests use independently transcribed specimen metadata, `TemporaryDirectory`, and
