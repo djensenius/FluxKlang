@@ -68,10 +68,11 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 159 checks, including regressions
+existing fixture world. The suite has 208 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
 current-module-qualified and inherited aliases, source-defined XCTest names,
+cross-file extension ownership and extension/local rejection routing,
 cycle handling, and bounded input reads/rechecks.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
@@ -118,3 +119,15 @@ Unshadowed current-module-qualified bases are refused structurally; a source
 namespace shadowing the module name still uses source lookup. Enclosing inherited
 bindings are checked conservatively for rejection, not to prove ordinary lineage.
 Supported source bindings take precedence over SDK terminal spellings.
+
+Extension-declared members are matched to resolved source owners and lexical
+access, not qualified-name text alone. Consumed ambiguous, inaccessible or
+indeterminate source bindings are refused. Extension-owned ancestry, including
+nested owners, uses rejection-only scoped validation rather than establishing
+ordinary lineage.
+
+Local source-bound ancestry remains unsupported even where a compiler accepts it.
+An indexed dotted spelling can force conservative refusal but does not select a
+local/global binding or prove SDK inheritance; a miss does not establish absence.
+Recorded formal shadows retain precedence, and unconsumed external aliases do
+not themselves require refusal.

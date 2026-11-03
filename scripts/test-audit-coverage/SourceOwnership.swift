@@ -3,34 +3,19 @@ import SwiftSyntax
 
 struct SourceOwnership {
     let inventory: SourceInventory
-    private var index: [String: [Int]] = [:]
+    private let bindings: SourceExtensionOwnership
 
     init(_ inventory: SourceInventory) {
         self.inventory = inventory
-        for (number, nominal) in inventory.nominals.enumerated() {
-            if let name = nominal.qualified { index[name, default: []].append(number) }
-        }
-    }
-
-    private func candidates(_ name: String, path: String) -> [Int] {
-        (index[name] ?? []).filter {
-            !inventory.nominals[$0].restricted || inventory.nominals[$0].site.path == path
-        }
+        bindings = SourceExtensionOwnership(inventory)
     }
 
     private func extendedOwner(_ number: Int) throws -> Int {
         let extended = inventory.extensions[number]
         try require(!extended.unsupported, "unsupported constrained/inherited/local test extension: \(extended.site)")
-        guard let name = extended.qualified else { throw AuditFailure("unsupported specialized extended test type") }
-        var prefix: [String] = []
-        for component in name.split(separator: ".").map(String.init) {
-            prefix.append(component)
-            try require(candidates(prefix.joined(separator: "."), path: extended.site.path).count == 1,
-                        "unresolved/ambiguous dotted test extension: \(extended.site.path): \(name)")
+        guard let choice = bindings.extensionTarget(number) else {
+            throw AuditFailure("unresolved/ambiguous/private test extension: \(extended.site)")
         }
-        let choices = candidates(name, path: extended.site.path)
-        try require(choices.count == 1, "unresolved/ambiguous test extension: \(extended.site.path): \(name)")
-        guard let choice = choices.first else { throw AuditFailure("missing extension owner") }
         return choice
     }
 
@@ -40,17 +25,12 @@ struct SourceOwnership {
         switch context {
         case .local: throw AuditFailure("unsupported local test/suite context")
         case .extended(let number):
-            let owner = try root(.nominal(extendedOwner(number)), visiting: visited)
-            let extended = inventory.extensions[number]
-            let outerName = extended.qualified?.split(separator: ".").first.map(String.init) ?? ""
-            try require(candidates(outerName, path: extended.site.path) == [owner],
-                        "ambiguous private dotted-extension root: \(extended.site.path)")
-            return owner
+            return try root(.nominal(extendedOwner(number)), visiting: visited)
         case .nominal(let number):
             let nominal = inventory.nominals[number]
             try require(!nominal.unsupported, "unsupported generic/inherited/protocol test owner: \(nominal.site)")
             guard let name = nominal.qualified else { throw AuditFailure("unresolved nominal test owner") }
-            try require(candidates(name, path: nominal.site.path).count == 1,
+            try require(bindings.declarationChoices(number) == [number],
                         "overlapping/ambiguous nominal owner: \(nominal.site.path): \(name)")
             if let parent = nominal.parent { return try root(parent, visiting: visited) }
             return number
@@ -58,7 +38,7 @@ struct SourceOwnership {
     }
 
     func analyze() throws -> (rows: [InventoryRow], diagnostics: [AuditDiagnostic]) {
-        try XCTestDiscoveryGuard(inventory).validate()
+        try XCTestDiscoveryGuard(inventory, bindings: bindings).validate()
         var rootTests: [Int: [SourceSite]] = [:]
         var freeTests: [FunctionRecord] = []
         var annotations: [Int: [String]] = [:]
