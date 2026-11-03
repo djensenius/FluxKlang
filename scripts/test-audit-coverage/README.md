@@ -67,8 +67,9 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 88 checks, including regressions
-for unsupported XCTest discovery, nested PBX roots and standard macro handling.
+existing fixture world. The suite has 119 checks, including regressions
+for unsupported XCTest discovery, nested PBX roots, standard macro handling,
+opaque return types, specialized ancestry and erased generic-alias initializers.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
 
@@ -98,3 +99,7 @@ consistent symbolic `canImport(FluxKlangMac)`/`canImport(FoundationModels)`
 assignments. They are not public `Test.ID`, parameterized case IDs, SDK
 availability claims or expected runtime receipts. Input rechecks detect observed
 changes, not an atomic filesystem transaction or adversarial change-and-restore.
+
+Generic ancestry is handled conservatively: unsupported initializer chains fail
+closed, without generic argument substitution or inferring ordinary ancestry
+from rejection-only traversal. This inventory is not a Swift type checker.

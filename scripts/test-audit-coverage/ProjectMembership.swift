@@ -453,4 +453,34 @@ final class FixtureWorld {
         return objects
     }
 }
+
+extension FixtureTests {
+    func unqualifiedAncestryCases() {
+        let globals = """
+        import class XCTest.XCTestCase
+        enum Names { class Base {} }
+        enum Holder { typealias Base = XCTestCase }
+        typealias Parent = Names.Base
+        """
+        test("nearest unqualified ancestry alias cannot be obscured by an ordinary global alias") {
+            try rejectLegacy("unqualified-shadow", first: globals + """
+
+            enum Outer { typealias Parent = Holder.Base; class Legacy: Parent {} }
+            """)
+        }
+        test("cross-file unqualified ancestry hops bind in each alias declaration scope") {
+            let nested = """
+            enum Outer {
+                typealias Parent = Holder.Base
+                typealias Middle = Parent
+                class Legacy: Middle {}
+            }
+            """
+            try rejectLegacy("unqualified-chain", first: globals, second: nested)
+            for ordered in [[("A.swift", globals), ("B.swift", nested)], [("B.swift", nested), ("A.swift", globals)]] {
+                try rejects({ _ = try sourceReport(ordered) }, containing: "XCTest")
+            }
+        }
+    }
+}
 #endif

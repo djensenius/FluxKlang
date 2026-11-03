@@ -2,6 +2,33 @@
 import Foundation
 
 extension FixtureTests {
+    func specializedConditionalCases() {
+        test("specialized alias ancestry uses consistent conditional variants") {
+            let source = """
+            enum Names<T> { typealias Base = XCTestCase }
+            class Plain {}
+            #if canImport(FluxKlangMac) && canImport(FoundationModels)
+            typealias Parent = Names<Int>.Base
+            #else
+            typealias Parent = Plain
+            #endif
+            class Legacy: Parent {}
+            """
+            for mac in [false, true] {
+                for models in [false, true] {
+                    if mac && models {
+                        try rejects({
+                            _ = try sourceReport([("A.swift", source)], macImport: mac, modelsImport: models)
+                        }, containing: "XCTest")
+                    } else {
+                        let report = try sourceReport([("A.swift", source)], macImport: mac, modelsImport: models)
+                        try require(report.exitCode == 0, "ordinary alias variant changed")
+                    }
+                }
+            }
+        }
+    }
+
     func sourceReport(
         _ sources: [(String, String)], configuration: String = "Debug",
         platform: String = "iOS", macImport: Bool = false, modelsImport: Bool = false

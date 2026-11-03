@@ -307,3 +307,189 @@ final class SafeInputs {
 
     var hashes: [String: String] { contents.mapValues(digest) }
 }
+
+#if AUDIT_CHECK_TESTS
+extension FixtureTests {
+    func specializedAncestryCases() {
+        let names = "import class XCTest.XCTestCase\nenum Names<T> { typealias Base = XCTestCase }"
+        test("ordinary unqualified generic ancestry and aliases remain non-test helpers") {
+            let fixture = try world("specialized-ordinary", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            class Base<T> {}
+            typealias Parent<T> = Base<T>
+            class Helper: Parent<Int> {}
+            """)
+            try require(fixture.run().enforcementSatisfied, "ordinary generic helper ancestry was over-rejected")
+        }
+        test("specialized source namespace cannot hide an empty XCTest subclass") {
+            try rejectLegacy("specialized-direct", first: names + "\nclass Legacy: Names<Int>.Base {}")
+        }
+        test("specialized ancestry survives parenthesized cross-file alias chains and reversed order") {
+            let first = names + "\ntypealias Parent = ((Names<Int>.Base))"
+            let second = "typealias Middle = Parent\nclass Legacy: Middle {}"
+            try rejectLegacy("specialized-chain", first: first, second: second)
+            for ordered in [[("A.swift", first), ("B.swift", second)], [("B.swift", second), ("A.swift", first)]] {
+                try rejects({ _ = try sourceReport(ordered) }, containing: "XCTest")
+            }
+        }
+        test("specialized generic ancestry aliases cannot lose their source binding") {
+            try rejectLegacy("specialized-generic-alias", first: names + """
+
+            typealias Parent<T> = Names<T>.Base
+            class Legacy: Parent<Int> {}
+            """)
+        }
+        test("nested and shadowed specialized namespaces are refused without generic inference") {
+            try rejectLegacy("specialized-nested", first: """
+            import class XCTest.XCTestCase
+            enum Container { enum Names<T> { typealias Base = XCTestCase } }
+            class Legacy: Container.Names<Int>.Base {}
+            """)
+            try rejectLegacy("specialized-shadowed", first: names + """
+
+            enum Outer { typealias Names<T> = External<T>; class Legacy: Names<Int>.Base {} }
+            """)
+        }
+    }
+
+    func parenthesizedAncestryCases() {
+        test("transparent parenthesized ancestry aliases cannot hide empty XCTest subclasses") {
+            for (number, base) in ["(XCTest.XCTestCase)", "(XCTestCase)", "(((XCTestCase)))"].enumerated() {
+                try rejectLegacy("ancestry-parens-\(number)", first: """
+                import class XCTest.XCTestCase
+                typealias Base = \(base)
+                class LegacyTests: Base {}
+                """)
+            }
+        }
+        test("parenthesized cross-file chains and nested ancestry aliases remain XCTest ancestry") {
+            try rejectLegacy("ancestry-chain", first: "import XCTest\ntypealias First = ((XCTestCase))",
+                             second: "typealias Base = (First)\nclass LegacyTests: Base {}")
+            try rejectLegacy("ancestry-nested", first: """
+            import class XCTest.XCTestCase
+            enum Names { typealias Base = ((XCTest.XCTestCase)) }
+            class LegacyTests: Names.Base {}
+            """)
+        }
+        test("known non-XCTest parenthesized aliases pass while uncertain ancestry stays refused") {
+            let fixture = try world("ancestry-known", annotated: true)
+            try fixture.register(fixture.run().derivedRegistrations)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            class PlainBase {}
+            typealias Middle = (PlainBase)
+            typealias Base = ((Middle))
+            class Helper: Base { func testUtility() {} }
+            """)
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
+            try require(report.enforcementSatisfied, "known non-XCTest ancestry rejected")
+            try rejectLegacy("ancestry-unknown", first:
+                "typealias Base = (Unknown)\nclass Legacy: Base { func testAccess() {} }")
+            try rejectLegacy("ancestry-restricted", first: "class PlainBase {}\nprivate typealias Base = (PlainBase)",
+                             second: "class Legacy: Base { func testAccess() {} }")
+            try rejectLegacy("ancestry-shadowed", first:
+                "class PlainBase {}\ntypealias Base = (PlainBase)\nclass Legacy<Base>: Base { func testAccess() {} }")
+        }
+    }
+
+    func dottedAncestryCases() {
+        let globals = """
+        import class XCTest.XCTestCase
+        enum Names { class Base {} }
+        enum Holder { typealias Base = XCTestCase }
+        """
+        test("nearer dotted namespace alias cannot hide an empty XCTest subclass") {
+            try rejectLegacy("dotted-shadow", first: globals + """
+
+            enum Outer { typealias Names = Holder; class Legacy: Names.Base {} }
+            """)
+        }
+        test("nested alias chains cannot fall back to an unrelated global dotted ancestry") {
+            try rejectLegacy("dotted-chain", first: globals + """
+
+            enum Outer {
+                typealias Middle = Holder
+                typealias Names = Middle
+                typealias Parent = Names.Base
+                class Legacy: Parent {}
+            }
+            """)
+        }
+        test("cross-file dotted namespace shadowing rejects independently of declaration order") {
+            let nested = "enum Outer { typealias Names = Holder; class Legacy: Names.Base {} }"
+            try rejectLegacy("dotted-cross-file", first: globals, second: nested)
+            for ordered in [[("A.swift", globals), ("B.swift", nested)],
+                            [("B.swift", nested), ("A.swift", globals)]] {
+                try rejects({ _ = try sourceReport(ordered) }, containing: "XCTest")
+            }
+        }
+        test("restricted dotted namespace members cannot establish inaccessible ancestry bindings") {
+            for access in ["private", "fileprivate"] {
+                try rejectLegacy("dotted-\(access)", first: globals + """
+
+                enum Outer { \(access) typealias Names = Holder }
+                """, second: "extension Outer { class Legacy: Names.Base {} }")
+            }
+        }
+        test("missing cyclic and ambiguous nearer namespace aliases never select a global member") {
+            for (number, aliases) in [
+                "typealias Names = Missing",
+                "typealias Names = Loop; typealias Loop = Names",
+                "typealias Names = Holder; typealias Names = Missing"
+            ].enumerated() {
+                try rejectLegacy("dotted-indeterminate-\(number)", first: globals +
+                    "\nenum Outer { \(aliases); class Legacy: Names.Base {} }")
+            }
+        }
+        test("known dotted member aliases and nearer nominal namespaces preserve non-XCTest helpers") {
+            for (number, source) in [
+                """
+                enum Names { enum Group { class Base {} }; typealias Base = Group.Base }
+                class Helper: Names.Base { func testUtility() {} }
+                """,
+                """
+                enum Names { class Base {} }
+                enum Outer {
+                    enum Names { class Base {} }
+                    class Helper: Names.Base { func testUtility() {} }
+                }
+                """
+            ].enumerated() {
+                let fixture = try world("dotted-known-\(number)", annotated: true)
+                try fixture.register(fixture.run().derivedRegistrations)
+                try fixture.write("Sources/A.swift",
+                                  "@Suite(.productionAccessAudit) struct Example { @Test func body() {} }\n" + source)
+                try require(fixture.run().enforcementSatisfied, "known dotted non-XCTest ancestry rejected")
+            }
+        }
+        test("dotted namespace binding uses consistent conditional source variants") {
+            let source = globals + """
+
+            enum Outer {
+            #if canImport(FluxKlangMac) && canImport(FoundationModels)
+                typealias Names = Holder
+            #else
+                enum Names { class Base {} }
+            #endif
+                class Legacy: Names.Base {}
+            }
+            """
+            for mac in [false, true] {
+                for models in [false, true] {
+                    if mac && models {
+                        try rejects({
+                            _ = try sourceReport([("A.swift", source)], macImport: mac, modelsImport: models)
+                        }, containing: "XCTest")
+                    } else {
+                        let report = try sourceReport([("A.swift", source)], macImport: mac, modelsImport: models)
+                        try require(report.exitCode == 0, "known conditional nominal namespace rejected")
+                    }
+                }
+            }
+        }
+    }
+}
+#endif

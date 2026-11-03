@@ -112,6 +112,7 @@ struct NominalRecord {
     let unsupported: Bool
     let isClass: Bool
     let bases: [String?]
+    let baseTypes: [TypeSyntax]
     let genericParameters: Set<String>
     let attributes: [AttributeSyntax]
 }
@@ -123,6 +124,8 @@ struct TypeAliasRecord {
     let restricted: Bool
     let target: String?
     let value: TypeSyntax?
+    let ancestryType: TypeSyntax
+    let genericParameters: Set<String>
 }
 
 struct LegacyFunctionRecord {
@@ -268,7 +271,9 @@ struct SourceInventory {
                 site: site(node, name: name, source: source), qualified: qualified, parent: context,
                 restricted: isPrivate || restricted(context),
                 target: alias.genericParameterClause == nil ? Self.ancestryName(alias.initializer.value) : nil,
-                value: alias.genericParameterClause == nil ? alias.initializer.value : nil))
+                value: alias.genericParameterClause == nil ? alias.initializer.value : nil,
+                ancestryType: alias.initializer.value,
+                genericParameters: Self.genericNames(alias.genericParameterClause)))
         }
         if node.is(DeclSyntax.self), let attributed = node.asProtocol(WithAttributesSyntax.self) {
             let attrs = try attributes(attributed.attributes)
@@ -294,9 +299,8 @@ struct SourceInventory {
         }
         let attrs = try attributes(function.attributes)
         if attrs.contains(where: { SourceAttributes.macro($0) != nil }) {
-            let opaque = function.signature.tokens(viewMode: .sourceAccurate).contains {
-                $0.tokenKind == .keyword(.some)
-            }
+            let opaque = function.signature.parameterClause.parameters.contains { Self.opaqueType(Syntax($0.type)) } ||
+                function.signature.returnClause.map { Self.opaqueType(Syntax($0.type)) } == true
             let generic = function.genericParameterClause != nil || function.genericWhereClause != nil || opaque
             let name = sourceName(function.name) + " " + sourceTokens(function.signature)
             functions.append(FunctionRecord(site: site(Syntax(function), name: name, source: source), parent: context,
@@ -321,6 +325,7 @@ struct SourceInventory {
             unsupported: !supported || generic || group.genericWhereClause != nil || group.inheritanceClause != nil,
             isClass: node.is(ClassDeclSyntax.self),
             bases: group.inheritanceClause?.inheritedTypes.map { Self.ancestryName($0.type) } ?? [],
+            baseTypes: group.inheritanceClause?.inheritedTypes.map(\.type) ?? [],
             genericParameters: Self.genericNames(node.asProtocol(WithGenericParametersSyntax.self)?
                 .genericParameterClause),
             attributes: try attributes(group.attributes))
@@ -347,7 +352,13 @@ struct SourceInventory {
         try walk(Syntax(extended.memberBlock.members), context: .extended(index), source: source)
     }
 
-    private static func ancestryName(_ type: TypeSyntax) -> String? {
+    private static func opaqueType(_ node: Syntax) -> Bool {
+        if let type = node.as(SomeOrAnyTypeSyntax.self),
+           type.someOrAnySpecifier.tokenKind == .keyword(.some) { return true }
+        return node.children(viewMode: .sourceAccurate).contains { opaqueType($0) }
+    }
+
+    static func ancestryName(_ type: TypeSyntax) -> String? {
         if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
            let element = tuple.elements.first, element.firstName == nil,
            element.secondName == nil, element.ellipsis == nil {
@@ -430,47 +441,58 @@ enum SourceAttributes {
 
 }
 
-#if AUDIT_CHECK_TESTS
-extension FixtureTests {
-    func parenthesizedAncestryCases() {
-        test("transparent parenthesized ancestry aliases cannot hide empty XCTest subclasses") {
-            for (number, base) in ["(XCTest.XCTestCase)", "(XCTestCase)", "(((XCTestCase)))"].enumerated() {
-                try rejectLegacy("ancestry-parens-\(number)", first: """
-                import class XCTest.XCTestCase
-                typealias Base = \(base)
-                class LegacyTests: Base {}
-                """)
+struct AnnotationReview {
+    var canonicalCount = 0
+    var problems: [String] = []
+    var unsupported: [String] = []
+
+    mutating func inspect(_ attribute: AttributeSyntax) {
+        guard let macro = SourceAttributes.macro(attribute) else { return }
+        guard let arguments = attribute.arguments else { return }
+        guard case .argumentList(let list) = arguments else {
+            unsupported.append("unsupported Testing macro argument syntax")
+            return
+        }
+        var parameters = false
+        for argument in list {
+            if argument.label?.text == "arguments" && macro == "Test" { parameters = true }
+            let expression = argument.expression
+            let canonical = Self.isCanonical(expression) && argument.label == nil && !parameters
+            if canonical {
+                canonicalCount += 1
+            } else if SourceAttributes.hasAudit(expression) {
+                problems.append("noncanonical/injected/nested audit expression")
+            } else if parameters && (argument.label == nil || argument.label?.text == "arguments") {
+                continue // Parameter values are not traits, and disabled tests are still indexed.
+            } else if argument.label != nil || !Self.isAuxiliary(expression, macro: macro) {
+                unsupported.append("unsupported opaque trait expression: \(sourceTokens(argument))")
             }
         }
-        test("parenthesized cross-file chains and nested ancestry aliases remain XCTest ancestry") {
-            try rejectLegacy("ancestry-chain", first: "import XCTest\ntypealias First = ((XCTestCase))",
-                             second: "typealias Base = (First)\nclass LegacyTests: Base {}")
-            try rejectLegacy("ancestry-nested", first: """
-            import class XCTest.XCTestCase
-            enum Names { typealias Base = ((XCTest.XCTestCase)) }
-            class LegacyTests: Names.Base {}
-            """)
+    }
+
+    private static func isCanonical(_ expression: ExprSyntax) -> Bool {
+        guard let member = expression.as(MemberAccessExprSyntax.self) else { return false }
+        return member.base == nil && member.declName.baseName.text == "productionAccessAudit" &&
+            member.declName.argumentNames == nil
+    }
+
+    private static func isAuxiliary(_ expression: ExprSyntax, macro: String) -> Bool {
+        if let literal = expression.as(StringLiteralExprSyntax.self) {
+            return literal.segments.allSatisfy { $0.is(StringSegmentSyntax.self) }
         }
-        test("known non-XCTest parenthesized aliases pass while uncertain ancestry stays refused") {
-            let fixture = try world("ancestry-known", annotated: true)
-            try fixture.register(fixture.run().derivedRegistrations)
-            try fixture.write("Sources/A.swift", """
-            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
-            class PlainBase {}
-            typealias Middle = (PlainBase)
-            typealias Base = ((Middle))
-            class Helper: Base { func testUtility() {} }
-            """)
-            let report = fixture.run()
-            try report.encoded().write(to: fixture.root.appendingPathComponent("enforce-result.json"))
-            try require(report.enforcementSatisfied, "known non-XCTest ancestry rejected")
-            try rejectLegacy("ancestry-unknown", first:
-                "typealias Base = (Unknown)\nclass Legacy: Base { func testAccess() {} }")
-            try rejectLegacy("ancestry-restricted", first: "class PlainBase {}\nprivate typealias Base = (PlainBase)",
-                             second: "class Legacy: Base { func testAccess() {} }")
-            try rejectLegacy("ancestry-shadowed", first:
-                "class PlainBase {}\ntypealias Base = (PlainBase)\nclass Legacy<Base>: Base { func testAccess() {} }")
+        if let member = expression.as(MemberAccessExprSyntax.self) {
+            return member.base == nil && member.declName.baseName.text == "serialized" &&
+                member.declName.argumentNames == nil
         }
+        guard let call = expression.as(FunctionCallExprSyntax.self), call.trailingClosure == nil,
+              call.additionalTrailingClosures.isEmpty else { return false }
+        // Explicit, independently reviewed auxiliary grammar; not registration evidence
+        // and not an exemption for this constructor's file, tests, or owning root.
+        if macro == "Suite", let name = call.calledExpression.as(DeclReferenceExprSyntax.self) {
+            return name.baseName.text == "SuiteExitProbe" && name.argumentNames == nil && call.arguments.isEmpty
+        }
+        guard let member = call.calledExpression.as(MemberAccessExprSyntax.self), member.base == nil,
+              member.declName.argumentNames == nil else { return false }
+        return ["timeLimit", "enabled", "disabled", "tags", "bug"].contains(member.declName.baseName.text)
     }
 }
-#endif
