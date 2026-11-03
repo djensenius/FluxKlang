@@ -6,6 +6,158 @@ private typealias Routing = AudioRoutingTestFixtures
 
 extension HostAuthorityTests {
     struct PreparationOwnershipBoundaries {
+        @Test func maintenanceReclaimsIgnoredConstructionAndReusesCapacity() async throws {
+            let documents = Routing.documents()
+            let authority = try await Bench.authority(documents)
+            let identity = try await Bench.begin(authority, documents)
+            _ = await authority.constructNextPreparation()
+            try await authority.abandonPrepare(project: documents.project.id).get()
+            let before = await authority.snapshot()
+            #expect(AuthorityBench.refusal(await authority.begin(
+                Bench.request(documents.graph), candidate: documents.graph,
+                projectDocument: documents.project, project: documents.project.id
+            )) == .plans(.capacityReached))
+            #expect(await authority.snapshot() == before)
+            #expect(await authority.reclaimAbandonedPreparation() == .terminated(identity, .cancelled, .dropped))
+            #expect(await authority.snapshot().plans.records[0].entries.isEmpty)
+            #expect(await authority.disposePreparation(identity) == .refused(.missing))
+            #expect(await authority.reclaimAbandonedPreparation() == .empty)
+            let next = try await Bench.begin(authority, documents)
+            #expect(next != identity)
+            _ = try await Bench.retain(authority, next)
+            #expect(await authority.disposePreparation(next) == .disposed(.routed))
+            // Capacity reuse is bookkeeping evidence, not measured deallocation.
+        }
+
+        @Test func maintenanceEmptyPreservesQueuedAbandonedAdmission() async throws {
+            let documents = Routing.documents()
+            let authority = try await Bench.authority(documents)
+            let identity = try await Bench.begin(authority, documents)
+            try await authority.abandonPrepare(project: documents.project.id).get()
+            let before = await authority.snapshot()
+            #expect(before.queue.count == 1)
+            #expect(before.plans.records[0].entries == [
+                .init(attempt: identity.attempt, state: .pending(reclaim: true))
+            ])
+            #expect(await authority.reclaimAbandonedPreparation() == .empty)
+            #expect(await authority.snapshot() == before)
+            #expect(await authority.constructNextPreparation() == .terminated(identity, .cancelled, .dropped))
+        }
+
+        @Test func maintenanceWantedRefusalPreservesRealCustody() async throws {
+            let documents = Routing.documents()
+            let authority = try await Bench.authority(documents)
+            let identity = try await Bench.begin(authority, documents)
+            _ = try await Bench.retain(authority, identity)
+            let before = await authority.snapshot()
+            for _ in 0..<3 {
+                #expect(await authority.reclaimAbandonedPreparation() == .refused(.occupied))
+                #expect(await authority.snapshot() == before)
+            }
+            // Explicit cleanup must still find the real private resource.
+            #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+            #expect(await authority.reclaimAbandonedPreparation() == .empty)
+        }
+
+        @Test func maintenanceConcurrentCallsTerminateExactlyOnce() async throws {
+            let documents = Routing.documents()
+            let authority = try await Bench.authority(documents)
+            let identity = try await Bench.begin(authority, documents)
+            _ = try await Bench.retain(authority, identity)
+            try await authority.abandonPrepare(project: documents.project.id).get()
+            let results = await withTaskGroup(of: OwnedPreparationStep.self) { group in
+                for _ in 0..<12 { group.addTask { await authority.reclaimAbandonedPreparation() } }
+                var results: [OwnedPreparationStep] = []
+                for await result in group { results.append(result) }
+                return results
+            }
+            #expect(results.filter { $0 == .terminated(identity, .cancelled, .dropped) }.count == 1)
+            #expect(results.filter { $0 == .empty }.count == 11)
+            #expect(await authority.snapshot().plans.records[0].entries.isEmpty)
+            #expect(await authority.disposePreparation(identity) == .refused(.missing))
+        }
+
+        @Test func maintenancePreservesNewerAndCrossProjectInterestAndLaterCustody() async throws {
+            let first = Routing.documents()
+            var second = Routing.documents()
+            second.project.id = AuthorityBench.projectB
+            let authority = try await Bench.authority(first, capacity: 3)
+            try await authority.open(project: second.project.id,
+                                     running: RunningGraph(revision: .initial, prepared: nil)).get()
+            let old = try await Bench.begin(authority, first)
+            _ = try await Bench.retain(authority, old)
+            try await authority.abandonPrepare(project: first.project.id).get()
+            let newer = try await Bench.begin(authority, first)
+            let other = try await Bench.begin(authority, second)
+            let before = await authority.snapshot()
+            #expect(before.outstanding.count == 2 && before.queue.count == 2)
+            #expect(newer != old && other != old)
+            #expect(await authority.reclaimAbandonedPreparation() == .terminated(old, .cancelled, .dropped))
+            let after = await authority.snapshot()
+            #expect(after.queue == before.queue && after.outstanding == before.outstanding)
+            #expect(after.projects == before.projects)
+            #expect(after.plans.records[0].entries == before.plans.records[0].entries.filter {
+                $0.attempt != old.attempt
+            })
+            for identity in [newer, other] {
+                _ = try await Bench.retain(authority, identity)
+                let retained = await authority.snapshot()
+                #expect(await authority.reclaimAbandonedPreparation() == .refused(.occupied))
+                #expect(await authority.snapshot() == retained)
+                #expect(await authority.disposePreparation(old) == .refused(.identityMismatch))
+                #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+            }
+            #expect(await authority.reclaimAbandonedPreparation() == .empty)
+        }
+
+        @Test func maintenancePreservesMuteRestoreQueueAndRecoveryObligations() async throws {
+            let documents = Routing.documents()
+            for restoring in [false, true] {
+                let authority = try await Bench.authority(documents)
+                let identity = try await Bench.begin(authority, documents)
+                _ = try await Bench.retain(authority, identity)
+                if restoring {
+                    try await authority.open(
+                        project: AuthorityBench.projectB, running: RunningGraph(revision: .initial, prepared: nil),
+                        lifecycle: .recovering
+                    ).get()
+                    _ = try await authority.acquire(project: AuthorityBench.projectB, window: AuthorityBench.windowB)
+                        .get()
+                } else {
+                    let lease = try await authority.acquire(
+                        project: documents.project.id, window: AuthorityBench.windowA
+                    ).get()
+                    _ = try await authority.leaseLost(lease.token).get()
+                }
+                try await authority.abandonPrepare(project: documents.project.id).get()
+                let before = await authority.snapshot()
+                if restoring {
+                    #expect(before.restoring != nil && !before.queue.isEmpty)
+                } else {
+                    #expect(before.pendingOutput == true && before.outputsMuted)
+                }
+                #expect(await authority.reclaimAbandonedPreparation() == .terminated(identity, .cancelled, .dropped))
+                let after = await authority.snapshot()
+                #expect(after.plans.records[0].entries.isEmpty)
+                #expect(after.pendingOutput == before.pendingOutput && after.outputsMuted == before.outputsMuted)
+                #expect(after.queue == before.queue && after.restoring == before.restoring)
+                #expect(after.projects == before.projects && after.outstanding == before.outstanding)
+                #expect(after.retirementOutbox == before.retirementOutbox)
+                #expect(after.deferredRestoreDiscards == before.deferredRestoreDiscards)
+                #expect(after.lease == before.lease && after.ledger == before.ledger)
+                #expect(await authority.disposePreparation(identity) == .refused(.missing))
+            }
+        }
+
+        @Test func maintenanceRefusesLegacyModeUnchanged() async throws {
+            let documents = Routing.documents()
+            let authority = try await Bench.authority(documents, limits: nil)
+            _ = try await Bench.begin(authority, documents)
+            let before = await authority.snapshot()
+            #expect(await authority.reclaimAbandonedPreparation() == .refused(.legacyMode))
+            #expect(await authority.snapshot() == before)
+        }
+
         @Test func rawPullAndExternalAnswersCannotReleasePendingCapacity() async throws {
             let documents = Routing.documents()
             let authority = try await Bench.authority(documents)
