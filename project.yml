@@ -144,6 +144,7 @@ targets:
     sources:
       - path: FluxKlangUITests
         excludes: ["**/.DS_Store"]
+      - path: FluxKlangTests/UIAuditReceiptValidator.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.uitests
