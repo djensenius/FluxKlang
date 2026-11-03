@@ -4,7 +4,7 @@ import SwiftSyntax
 // resolution. Unknown/ambiguous ancestry is never evidence that a test-shaped
 // inherited class is a helper. Plain helpers without discovery-shaped members
 // remain valid unless their supported ancestry actually reaches XCTestCase.
-struct XCTestDiscoveryGuard {
+final class XCTestDiscoveryGuard {
     enum Lineage { case ordinary, xctest, unknown }
     struct Node {
         let site: SourceSite
@@ -17,6 +17,13 @@ struct XCTestDiscoveryGuard {
 
     let inventory: SourceInventory
     let nodes: [Node]
+    private var nodeIndex: [String: [Int]] = [:]
+    private var baseBindings: [Int: [String: [Int]]] = [:]
+    private var validatedAncestry: Set<Int> = []
+    private var activeAncestry: Set<Int> = []
+    private var lineages: [Int: Lineage] = [:]
+    private var activeLineage: Set<Int> = []
+    private var cyclicLineage: Set<Int> = []
 
     init(_ inventory: SourceInventory) {
         self.inventory = inventory
@@ -27,6 +34,9 @@ struct XCTestDiscoveryGuard {
         } + inventory.aliases.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
                  parent: $0.parent, bases: [$0.target], baseTypes: [$0.ancestryType])
+        }
+        for (number, node) in nodes.enumerated() {
+            if let name = node.qualified { nodeIndex[name, default: []].append(number) }
         }
     }
 
@@ -44,13 +54,13 @@ struct XCTestDiscoveryGuard {
             let choices = lookup(extended.qualified, path: extended.site.path, scope: "")
             try require(choices.count == 1, "unsupported XCTest-shaped extension ownership: \(extended.site)")
             guard let owner = choices.first else { throw AuditFailure("unresolved XCTest-shaped extension") }
-            try require(lineage(owner, visiting: []) == .ordinary,
+            try require(lineage(owner) == .ordinary,
                         "unsupported XCTest-shaped extension ancestry: \(extended.site)")
             if owner < inventory.nominals.count { shaped.insert(.nominal(owner)) }
         }
         for (number, nominal) in inventory.nominals.enumerated() where nominal.isClass {
-            try validateAncestryBindings(number, visiting: [])
-            let ancestry = lineage(number, visiting: [])
+            try validateAncestryBindings(number)
+            let ancestry = lineage(number)
             try require(ancestry != .xctest, "unsupported XCTest discovery-bearing class: \(nominal.site)")
             if !nominal.bases.isEmpty && shaped.contains(.nominal(number)) {
                 try require(ancestry == .ordinary,
@@ -58,7 +68,9 @@ struct XCTestDiscoveryGuard {
             }
         }
     }
+}
 
+extension XCTestDiscoveryGuard {
     private func lookup(_ name: String?, path: String, scope: String) -> [Int] {
         guard let name else { return [] }
         var prefixes = scope.split(separator: ".").map(String.init)
@@ -67,9 +79,8 @@ struct XCTestDiscoveryGuard {
             spellings.insert(prefixes.joined(separator: ".") + "." + name)
             prefixes.removeLast()
         }
-        return nodes.indices.filter {
-            guard let qualified = nodes[$0].qualified else { return false }
-            return spellings.contains(qualified) && (!nodes[$0].restricted || nodes[$0].site.path == path)
+        return spellings.flatMap { nodeIndex[$0] ?? [] }.sorted().filter {
+            !nodes[$0].restricted || nodes[$0].site.path == path
         }
     }
 
@@ -162,7 +173,7 @@ struct XCTestDiscoveryGuard {
     }
 
     private func exactChoices(_ name: String, path: String) -> [Int]? {
-        let matches = nodes.indices.filter { nodes[$0].qualified == name }
+        let matches = nodeIndex[name] ?? []
         for match in matches {
             if nodes[match].restricted && nodes[match].site.path != path { return nil }
             if case .extended(let number) = nodes[match].parent,
@@ -220,7 +231,15 @@ struct XCTestDiscoveryGuard {
     }
 
     private func baseChoices(_ base: String?, owner: Int) -> [Int] {
-        guard let first = base?.split(separator: ".").first.map(String.init) else { return [] }
+        guard let base else { return [] }
+        if let cached = baseBindings[owner]?[base] { return cached }
+        let choices = findBaseChoices(base, owner: owner)
+        baseBindings[owner, default: [:]][base] = choices
+        return choices
+    }
+
+    private func findBaseChoices(_ base: String, owner: Int) -> [Int] {
+        guard let first = base.split(separator: ".").first.map(String.init) else { return [] }
         if owner >= inventory.nominals.count,
            inventory.aliases[owner - inventory.nominals.count].genericParameters.contains(first) { return [] }
         var context: OwnerContext? = owner < inventory.nominals.count ? .nominal(owner) : nodes[owner].parent
@@ -235,7 +254,7 @@ struct XCTestDiscoveryGuard {
         }
         let node = nodes[owner]
         let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
-        if let base, let root = lexicalBaseRoot(base, owner: owner) {
+        if let root = lexicalBaseRoot(base, owner: owner) {
             var choices = exactChoices(root, path: node.site.path) ?? []
             for component in base.split(separator: ".").dropFirst() {
                 guard choices.count == 1, let choice = choices.first, choice < inventory.nominals.count,
@@ -253,7 +272,7 @@ struct XCTestDiscoveryGuard {
         var prefixes = nodes[owner].qualified?.split(separator: ".").dropLast().map(String.init) ?? []
         while true {
             let name = (prefixes + [String(first)]).joined(separator: ".")
-            if nodes.contains(where: { $0.qualified == name }) { return name }
+            if nodeIndex[name] != nil { return name }
             if prefixes.isEmpty { return nil }
             prefixes.removeLast()
         }
@@ -288,11 +307,11 @@ struct XCTestDiscoveryGuard {
         }
     }
 
-    private func validateContextualAncestry(_ number: Int, visiting: Set<Int>) throws -> Bool {
+    private func validateContextualAncestry(_ number: Int) throws -> Bool {
         let enclosing = needsEnclosingBinding(nodes[number].parent)
         for type in nodes[number].baseTypes {
             if enclosing {
-                try validateEnclosingBinding(type, owner: number, visiting: visiting)
+                try validateEnclosingBinding(type, owner: number)
             } else if let path = ancestryPath(type) {
                 // Current-module qualification is not an external SDK spelling. Refuse
                 // rather than strip it; a lexical source namespace still binds normally.
@@ -303,7 +322,7 @@ struct XCTestDiscoveryGuard {
         return enclosing
     }
 
-    private func validateEnclosingBinding(_ type: TypeSyntax, owner: Int, visiting: Set<Int>) throws {
+    private func validateEnclosingBinding(_ type: TypeSyntax, owner: Int) throws {
         let node = nodes[owner]
         let alias = owner >= inventory.nominals.count ? inventory.aliases[owner - inventory.nominals.count] : nil
         let parameters = alias?.genericParameters ?? inventory.nominals[owner].genericParameters
@@ -327,14 +346,22 @@ struct XCTestDiscoveryGuard {
                     "ambiguous/unresolved enclosing XCTest ancestry")
         // Rejection only: do not feed these bindings into lineage's ordinary proof.
         for choice in choices {
-            try require(lineage(choice, visiting: []) != .xctest, "unsupported inherited enclosing XCTest ancestry")
-            try validateAncestryBindings(choice, visiting: visiting.union([owner]))
+            try require(lineage(choice) != .xctest, "unsupported inherited enclosing XCTest ancestry")
+            try validateAncestryBindings(choice)
         }
     }
 
-    private func validateAncestryBindings(_ number: Int, visiting: Set<Int>) throws {
-        try require(!visiting.contains(number), "cyclic XCTest ancestry binding: \(nodes[number].site)")
-        if try validateContextualAncestry(number, visiting: visiting) { return }
+    private func validateAncestryBindings(_ number: Int) throws {
+        try require(!activeAncestry.contains(number), "cyclic XCTest ancestry binding: \(nodes[number].site)")
+        if validatedAncestry.contains(number) { return }
+        activeAncestry.insert(number)
+        defer { activeAncestry.remove(number) }
+        try checkAncestryBindings(number)
+        validatedAncestry.insert(number)
+    }
+
+    private func checkAncestryBindings(_ number: Int) throws {
+        if try validateContextualAncestry(number) { return }
         let erased = number >= inventory.nominals.count &&
             inventory.aliases[number - inventory.nominals.count].value == nil
         for type in nodes[number].baseTypes where erased || SourceInventory.ancestryName(type) == nil {
@@ -349,8 +376,8 @@ struct XCTestDiscoveryGuard {
             // Every erased initializer participates, including supported names. This
             // traversal rejects ancestry; it never supplies an ordinary lineage proof.
             for choice in choices {
-                try require(lineage(choice, visiting: []) != .xctest, "unsupported erased XCTest ancestry")
-                try validateAncestryBindings(choice, visiting: visiting.union([number]))
+                try require(lineage(choice) != .xctest, "unsupported erased XCTest ancestry")
+                try validateAncestryBindings(choice)
             }
         }
         // A nearer alias/ambiguous/restricted namespace must not silently become
@@ -362,19 +389,43 @@ struct XCTestDiscoveryGuard {
                 try require(choices.count == 1,
                             "unsupported shadowed/indeterminate XCTest ancestry: \(nodes[number].site)")
             }
-            for choice in choices { try validateAncestryBindings(choice, visiting: visiting.union([number])) }
+            for choice in choices { try validateAncestryBindings(choice) }
         }
     }
 
-    private func lineage(_ number: Int, visiting: Set<Int>) -> Lineage {
-        guard !visiting.contains(number) else { return .unknown }
+    private func lineage(_ number: Int) -> Lineage {
+        if let cached = lineages[number] { return cached }
+        guard activeLineage.insert(number).inserted else {
+            // A back edge makes these partial results path-dependent. Never
+            // memoize them as completed unknown (or ordinary) ancestry.
+            cyclicLineage.formUnion(activeLineage)
+            return .unknown
+        }
+        defer { activeLineage.remove(number) }
+        let result = computeLineage(number)
+        if cyclicLineage.remove(number) == nil { lineages[number] = result }
+        return result
+    }
+
+    private func unshadowedXCTest(_ base: String?, owner: Int) -> Bool {
+        guard let base, base == "XCTestCase" || base == "XCTest.XCTestCase",
+              lexicalBaseRoot(base, owner: owner) == nil else { return false }
+        let node = nodes[owner]
+        if needsEnclosingBinding(node.parent) {
+            let first = base.split(separator: ".").first.map(String.init) ?? ""
+            // An inherited source binding blocks SDK fallback, but cannot prove
+            // ordinary lineage through this rejection-only contextual lookup.
+            return scopedChoices(first, path: node.site.path, context: node.parent)?.isEmpty == true
+        }
+        return true
+    }
+
+    private func computeLineage(_ number: Int) -> Lineage {
         let node = nodes[number]
-        let visited = visiting.union([number])
         let parents = node.bases.map { base -> Lineage in
-            if base == "XCTestCase" || base == "XCTest.XCTestCase" { return .xctest }
             let choices = baseChoices(base, owner: number)
-            guard choices.count == 1, let choice = choices.first else { return .unknown }
-            return lineage(choice, visiting: visited)
+            if choices.count == 1, let choice = choices.first { return lineage(choice) }
+            return unshadowedXCTest(base, owner: number) ? .xctest : .unknown
         }
         if parents.contains(.xctest) { return .xctest }
         if parents.contains(.unknown) { return .unknown }
