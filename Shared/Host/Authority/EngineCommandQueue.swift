@@ -11,8 +11,8 @@
 /// the addressed instance at delivery (H5d/M6/G2); these values perform no engine
 /// operation and do not certify quiescence, freshness or safe destruction.
 enum EngineCommand: Hashable, Sendable {
-    /// Prepare exactly the validated graph, unknown fields and extensions included.
-    case prepare(GraphDocument, EngineInstanceID, PrepareAttemptID)
+    /// Prepare the exact validated graph and complete project snapshot, including retained metadata.
+    case prepare(GraphDocument, ProjectDocument, EngineInstanceID, PrepareAttemptID)
     /// Commit the prepared plan; the owner delivers it only under this lease token.
     case commit(PlanBinding, CommitAttemptID, EngineLeaseToken)
     /// Release a prepared plan the engine holds.

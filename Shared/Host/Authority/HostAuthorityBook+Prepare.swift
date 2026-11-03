@@ -7,7 +7,7 @@
 
 extension HostAuthorityBook {
     mutating func begin(_ request: ActivationRequest, candidate: GraphDocument,
-                        project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
+                        projectDocument: ProjectDocument, project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
         guard var state = projects[project] else { return .failure(.unknownProject(project)) }
         guard queue.canAccept(1) else { return .failure(.queueFull) }
         guard let target = try? state.transaction.running.revision.next() else {
@@ -24,9 +24,13 @@ extension HostAuthorityBook {
         guard effects.count == 1, case .prepare(let validated, let attempt) = effects[0] else {
             return .failure(.unboundPlan)
         }
+        do {
+            try Self.validateProject(projectDocument, selectedGraph: validated.graph, project: project)
+        } catch { return .failure(error) }
         let instance = plans.currentInstance
         var stagedQueue = queue
-        guard case .success = stagedQueue.enqueue([.prepare(validated.graph, instance, attempt)]) else {
+        let command = EngineCommand.prepare(validated.graph, projectDocument, instance, attempt)
+        guard case .success = stagedQueue.enqueue([command]) else {
             return .failure(.queueFull)
         }
         do { try plans.dispatch(instance: instance, attempt: attempt) } catch { return .failure(.plans(error)) }
@@ -35,6 +39,17 @@ extension HostAuthorityBook {
         outstanding[project] = HostPrepare(instance: instance, attempt: attempt)
         projects[project] = state
         return .success(())
+    }
+
+    private static func validateProject(
+        _ document: ProjectDocument, selectedGraph: GraphDocument, project: ProjectID
+    ) throws(HostAuthorityRefusal) {
+        guard document.id == project else {
+            throw .projectDocumentMismatch(expected: project, found: document.id)
+        }
+        do {
+            try document.validatePreparationContext(selectedGraph: selectedGraph)
+        } catch { throw .preparationProject(error) }
     }
 
     /// Answers carry the actual engine instance even when the attempt is known.

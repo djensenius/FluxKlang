@@ -26,6 +26,8 @@ struct ActivationGesture: Hashable, Sendable {
 enum HostAuthorityRefusal: Error, Equatable, Sendable {
     /// The transaction's own refusal, unchanged.
     case activation(ActivationRefusal)
+    case projectDocumentMismatch(expected: ProjectID, found: ProjectID)
+    case preparationProject(PreparationProjectRefusal)
     case unknownProject(ProjectID)
     case projectAlreadyOpen(ProjectID)
     case projectLimit
