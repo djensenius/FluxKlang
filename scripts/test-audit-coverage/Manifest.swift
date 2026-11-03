@@ -124,18 +124,27 @@ struct AuditManifest: Decodable {
     let matrix: [MatrixRow]
     let sources: [SourceMembership]
     let registrations: [Registration]?
+    let targetRoles: [TargetRole]?
+    let qualification: QualificationContract?
 
     static func load(_ data: Data) throws -> AuditManifest {
         try require(data.count <= 32_000_000, "manifest size limit")
         var keyCheck = JSONKeyCheck(bytes: Array(data))
         try keyCheck.validate()
         let object = try JSONSerialization.jsonObject(with: data)
-        let root = try fields(object, required: [
+        let version = (object as? [String: Any])?["schemaVersion"] as? Int
+        let roleKeys: Set<String> = version == 2 ? ["targetRoles", "qualification"] : []
+        let root = try fields(object, required: Set([
             "schemaVersion", "purpose", "specification", "pbxPath", "matrix", "sources"
-        ], optional: ["registrations"])
+        ]).union(roleKeys), optional: ["registrations"])
         _ = try fields(root["specification"], required: ["path", "sha256", "review"])
         try rows(root["matrix"], keys: ["target", "module", "platform", "configuration"])
         try rows(root["sources"], keys: ["target", "directories", "files"])
+        if version == 2 {
+            try rows(root["targetRoles"], keys: ["target", "role"])
+            let qualification = try fields(root["qualification"], required: ["target", "tests"])
+            try rows(qualification["tests"], keys: ["path", "owner", "signature"])
+        }
         if let registrations = root["registrations"] {
             try rows(registrations, keys: [
                 "target", "module", "path", "kind", "name", "configuration", "guardExpression", "requirement"
@@ -162,7 +171,7 @@ struct AuditManifest: Decodable {
     }
 
     private func validate() throws {
-        try require(schemaVersion == 1 && purpose == "source-registration-only", "manifest version/purpose")
+        try require([1, 2].contains(schemaVersion) && purpose == "source-registration-only", "manifest version/purpose")
         try require(specification.path == "project.yml" && specification.review == "REVIEWED",
                     "specification must be an explicitly REVIEWED project.yml transcription")
         try require(specification.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
@@ -171,22 +180,25 @@ struct AuditManifest: Decodable {
         try require(pbxPath.split(separator: "/").count == 2 &&
                     pbxPath.hasSuffix(".xcodeproj/project.pbxproj"),
                     "PBX path must name one repository-root .xcodeproj/project.pbxproj")
-        try require(matrix.count == 4 && Set(matrix).count == 4, "matrix requires four unique rows")
+        if schemaVersion == 2 { try TargetRoleContract.validate(self) }
+        let auditedMatrix = matrix.filter { schemaVersion == 1 || $0.target != TargetRoleContract.target }
+        try require(auditedMatrix.count == 4 && Set(auditedMatrix).count == 4, "matrix requires four unique rows")
         for platform in ["iOS", "macOS"] {
-            let rows = matrix.filter { $0.platform == platform }
+            let rows = auditedMatrix.filter { $0.platform == platform }
             try require(rows.count == 2 && Set(rows.map(\.configuration)) == ["Debug", "Release"],
                         "matrix requires Debug/Release for \(platform)")
             try require(Set(rows.map(\.target)).count == 1 && Set(rows.map(\.module)).count == 1,
                         "matrix target/module drift")
         }
-        try require(Set(matrix.map(\.target)).count == 2, "matrix requires two distinct unit targets")
+        try require(Set(auditedMatrix.map(\.target)).count == 2, "matrix requires two distinct unit targets")
         for row in matrix {
             for name in [row.target, row.module] {
                 try require(name.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil,
                             "unsupported target/module identifier")
             }
         }
-        try require(sources.count == 2 && Set(sources.map(\.target)) == Set(matrix.map(\.target)),
+        try require(sources.count == (schemaVersion == 2 ? 3 : 2) &&
+                    Set(sources.map(\.target)) == Set(matrix.map(\.target)),
                     "source memberships must bind both targets exactly once")
         for source in sources {
             let paths = source.directories + source.files
@@ -198,7 +210,7 @@ struct AuditManifest: Decodable {
             try SafeInputs.validatePath(row.path)
             try require(["root", "freeTest"].contains(row.kind) && !row.name.isEmpty, "registration kind/name")
             try require(row.requirement == "canonicalProductionAccessAudit", "unsupported registration requirement")
-            try require(matrix.contains {
+            try require(auditedMatrix.contains {
                 $0.target == row.target && $0.module == row.module && $0.configuration == row.configuration
             }, "registration outside matrix")
             try require(SourceVariant.guards.contains(row.guardExpression), "unsupported registration guard")

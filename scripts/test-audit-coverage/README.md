@@ -68,7 +68,8 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 292 checks, including regressions
+existing fixture world. The suite has 311 checks: all 292 historical checks plus
+19 focused v2 role/qualification mutation groups. Historical regressions include
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
 current-module-qualified and inherited aliases, source-defined XCTest names,
@@ -144,3 +145,50 @@ supported initializer path, without interpreting unsupported composition element
 Completed transitive member results are cached by owner, exact name, consumer
 path and root/inherited lookup context. Cycles and indeterminate lookups are
 never cached as completed absence.
+
+## Opt-in qualification role (schema v2)
+
+Production registration remains v1 until separately reviewed integration. V1
+retains its two-unit-target schema, canonical obligations, report fields and
+exit semantics. Merely downgrading a manifest cannot hide a third actual PBX unit
+target.
+
+V2 is a single fixed contract, not a configurable exemption facility:
+
+- `FluxKlangTests` and `FluxKlangMacTests` remain audited, with all canonical
+  registration/annotation requirements.
+- `FluxKlangAppleQualificationTests` is the additional iOS unit target. All six
+  Debug/Release matrix rows retain exact target/module/platform identities.
+- Required `targetRoles` entries contain only `target` and `role`. Required
+  `qualification` contains only `target` and `tests`; each test contains only
+  `path`, `owner` and normalized `signature`. These must transcribe
+  `TargetRoleContract` exactly. All v1 nested schemas remain strict.
+- Its explicit three-file closure is the two owner files under
+  `FluxKlangAppleQualificationTests/` and
+  `FluxKlangTests/AssistantRoutingFixture.swift`. No directories are allowed.
+  Owner files belong to neither audited target; the shared fixture remains in
+  the iOS audited target, not the Mac subset.
+
+Every source is parsed and every target/configuration/symbolic variant completes
+role-neutral discovery before role obligations are selected. Qualification
+requires the two directly declared, top-level struct/method identities, exact
+actor annotations and existing single `@Test(.enabled(if: ... == "1"))`
+expressions. Nested, extension, alias, free, static, generic, overload and helper
+test substitutions fail closed. Real conditional compilation anywhere in the
+three files is rejected (comments and string contents are not directives).
+
+V2 adds deterministic `targetRoles` and a separate `qualification` report:
+`contractSatisfied` plus sixteen inventory rows for the two methods across
+Debug/Release and all four symbolic assignments. Audited `ownership` and
+`derivedRegistrations` never include qualification rows. Qualification diagnostics
+have no canonical registration and include a declaration site when available.
+Structural/input failures force exit 2 in both modes and a false contract status;
+otherwise audited failures still mean inventory 0 / enforcement 1.
+Text output also reports qualification status and inventory separately.
+
+This checker does **not** bind or parse schemes, validate effective host settings,
+prove environment provenance, execute tests, or prove fresh-host isolation.
+Host/scheme review is a coordinator-only static integration gate. Live method
+bodies and helpers must be preserved through reviewed source moves; there is no
+body-hash or canonical-adoption mechanism here. Native/runtime/source integration
+and independent review remain separate gates.

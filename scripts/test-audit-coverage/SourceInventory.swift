@@ -105,6 +105,7 @@ struct SourceSite: Codable, Hashable {
 }
 
 struct NominalRecord {
+    let declaration: Syntax
     let site: SourceSite
     let qualified: String?
     let parent: OwnerContext?
@@ -143,6 +144,7 @@ struct ExtensionRecord {
 }
 
 struct FunctionRecord {
+    let declaration: FunctionDeclSyntax
     let site: SourceSite
     let parent: OwnerContext?
     let unsupported: Bool
@@ -312,7 +314,8 @@ struct SourceInventory {
                 function.signature.returnClause.map { Self.opaqueType(Syntax($0.type)) } == true
             let generic = function.genericParameterClause != nil || function.genericWhereClause != nil || opaque
             let name = sourceName(function.name) + " " + sourceTokens(function.signature)
-            functions.append(FunctionRecord(site: site(Syntax(function), name: name, source: source), parent: context,
+            functions.append(FunctionRecord(declaration: function,
+                                            site: site(Syntax(function), name: name, source: source), parent: context,
                                             unsupported: generic, attributes: attrs))
         }
         for child in function.children(viewMode: .sourceAccurate) {
@@ -329,6 +332,7 @@ struct SourceInventory {
         let qualified = prefix(context).map { $0.isEmpty ? name : $0 + "." + name }
         let isPrivate = group.modifiers.contains { ["private", "fileprivate"].contains($0.name.text) }
         let record = NominalRecord(
+            declaration: node,
             site: site(node, name: name, source: source), qualified: qualified, parent: context,
             restricted: isPrivate || restricted(context),
             unsupported: !supported || generic || group.genericWhereClause != nil || group.inheritanceClause != nil,
