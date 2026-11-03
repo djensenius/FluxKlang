@@ -217,6 +217,51 @@ extension FixtureTests {
         }
     }
 
+    func outerTypeCases() {
+        test("default closure local opaque helper is not an outer generic Testing signature") {
+            let fixture = try world("outer-default-closure", annotated: true)
+            try fixture.write("Sources/A.swift", """
+            @Suite(.productionAccessAudit) struct Example { @Test func body() {} }
+            @Test(.productionAccessAudit, arguments: ["x"])
+            func closureDefault(_ value: String = {
+                func helper(_ input: some Equatable) -> String { "x" }
+                return helper(1)
+            }()) {}
+            """)
+            let report = fixture.run()
+            try report.encoded().write(to: fixture.root.appendingPathComponent("pre-registration.json"))
+            try require(report.analysisComplete, "default closure was scanned as an outer type")
+            try fixture.register(report.derivedRegistrations)
+            try require(fixture.run().enforcementSatisfied, "canonical closure-default Test failed")
+        }
+        test("outer opaque return parameter and explicit generic types remain unsupported") {
+            for source in [
+                "@Test(.productionAccessAudit) func body() -> some Equatable { 1 }",
+                "@Test(.productionAccessAudit, arguments: [1]) func body(_ value: some Equatable) {}",
+                "@Test(.productionAccessAudit, arguments: [1]) func body<T: Equatable>(_ value: T) {}"
+            ] { try rejects({ _ = try sourceReport([("A.swift", source)]) }, containing: "generic") }
+        }
+    }
+
+    func ancestryHopSafeguards() {
+        test("nearest ancestry hops preserve generic ambiguous cyclic unknown and restricted refusal") {
+            for (number, body) in [
+                "typealias Parent = Missing; class Legacy: Parent { func testAccess() {} }",
+                "typealias Parent = Loop; typealias Loop = Parent; class Legacy: Parent { func testAccess() {} }",
+                "typealias Parent = Plain; class Legacy<Parent>: Parent { func testAccess() {} }",
+                "typealias Parent = Plain; typealias Parent = Missing; class Legacy: Parent { func testAccess() {} }"
+            ].enumerated() {
+                try rejectLegacy("unqualified-uncertain-\(number)", first:
+                    "class Plain {}\ntypealias Parent = Plain\nenum Outer { \(body) }")
+            }
+            try rejectLegacy("unqualified-restricted", first: """
+            class Plain {}
+            typealias Parent = Plain
+            enum Outer { private typealias Parent = Plain }
+            """, second: "extension Outer { class Legacy: Parent {} }")
+        }
+    }
+
     private func inheritedConditionalCases() throws {
         let sources = [("A.swift", """
         class Base: ExternalBase {

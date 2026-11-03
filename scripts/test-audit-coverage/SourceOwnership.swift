@@ -1,62 +1,6 @@
 import Foundation
 import SwiftSyntax
 
-struct AnnotationReview {
-    var canonicalCount = 0
-    var problems: [String] = []
-    var unsupported: [String] = []
-
-    mutating func inspect(_ attribute: AttributeSyntax) {
-        guard let macro = SourceAttributes.macro(attribute) else { return }
-        guard let arguments = attribute.arguments else { return }
-        guard case .argumentList(let list) = arguments else {
-            unsupported.append("unsupported Testing macro argument syntax")
-            return
-        }
-        var parameters = false
-        for argument in list {
-            if argument.label?.text == "arguments" && macro == "Test" { parameters = true }
-            let expression = argument.expression
-            let canonical = Self.isCanonical(expression) && argument.label == nil && !parameters
-            if canonical {
-                canonicalCount += 1
-            } else if SourceAttributes.hasAudit(expression) {
-                problems.append("noncanonical/injected/nested audit expression")
-            } else if parameters && (argument.label == nil || argument.label?.text == "arguments") {
-                continue // Parameter values are not traits, and disabled tests are still indexed.
-            } else if argument.label != nil || !Self.isAuxiliary(expression, macro: macro) {
-                unsupported.append("unsupported opaque trait expression: \(sourceTokens(argument))")
-            }
-        }
-    }
-
-    private static func isCanonical(_ expression: ExprSyntax) -> Bool {
-        guard let member = expression.as(MemberAccessExprSyntax.self) else { return false }
-        return member.base == nil && member.declName.baseName.text == "productionAccessAudit" &&
-            member.declName.argumentNames == nil
-    }
-
-    private static func isAuxiliary(_ expression: ExprSyntax, macro: String) -> Bool {
-        if let literal = expression.as(StringLiteralExprSyntax.self) {
-            return literal.segments.allSatisfy { $0.is(StringSegmentSyntax.self) }
-        }
-        if let member = expression.as(MemberAccessExprSyntax.self) {
-            return member.base == nil && member.declName.baseName.text == "serialized" &&
-                member.declName.argumentNames == nil
-        }
-        guard let call = expression.as(FunctionCallExprSyntax.self), call.trailingClosure == nil,
-              call.additionalTrailingClosures.isEmpty else { return false }
-        // Explicit, independently reviewed auxiliary grammar; not registration evidence
-        // and not an exemption for this constructor's file, tests, or owning root.
-        if macro == "Suite", let name = call.calledExpression.as(DeclReferenceExprSyntax.self) {
-            return name.baseName.text == "SuiteExitProbe" && name.argumentNames == nil && call.arguments.isEmpty
-        }
-        guard let member = call.calledExpression.as(MemberAccessExprSyntax.self), member.base == nil,
-              member.declName.argumentNames == nil else { return false }
-        return ["timeLimit", "enabled", "disabled", "tags", "bug"].contains(member.declName.baseName.text)
-    }
-}
-
 struct SourceOwnership {
     let inventory: SourceInventory
     private var index: [String: [Int]] = [:]
@@ -233,6 +177,7 @@ struct XCTestDiscoveryGuard {
         let restricted: Bool
         let parent: OwnerContext?
         let bases: [String?]
+        let baseTypes: [TypeSyntax]
     }
 
     let inventory: SourceInventory
@@ -242,10 +187,11 @@ struct XCTestDiscoveryGuard {
         self.inventory = inventory
         nodes = inventory.nominals.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
-                 parent: $0.parent, bases: $0.isClass ? $0.bases : [])
+                 parent: $0.parent, bases: $0.isClass ? $0.bases : [],
+                 baseTypes: $0.isClass ? $0.baseTypes : [])
         } + inventory.aliases.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
-                 parent: $0.parent, bases: [$0.target])
+                 parent: $0.parent, bases: [$0.target], baseTypes: [$0.ancestryType])
         }
     }
 
@@ -268,6 +214,7 @@ struct XCTestDiscoveryGuard {
             if owner < inventory.nominals.count { shaped.insert(.nominal(owner)) }
         }
         for (number, nominal) in inventory.nominals.enumerated() where nominal.isClass {
+            try validateAncestryBindings(number, visiting: [])
             let ancestry = lineage(number, visiting: [])
             try require(ancestry != .xctest, "unsupported XCTest discovery-bearing class: \(nominal.site)")
             if !nominal.bases.isEmpty && shaped.contains(.nominal(number)) {
@@ -439,6 +386,8 @@ struct XCTestDiscoveryGuard {
 
     private func baseChoices(_ base: String?, owner: Int) -> [Int] {
         guard let first = base?.split(separator: ".").first.map(String.init) else { return [] }
+        if owner >= inventory.nominals.count,
+           inventory.aliases[owner - inventory.nominals.count].genericParameters.contains(first) { return [] }
         var context: OwnerContext? = owner < inventory.nominals.count ? .nominal(owner) : nodes[owner].parent
         while let current = context {
             guard case .nominal(let number) = current else { return [] }
@@ -451,7 +400,73 @@ struct XCTestDiscoveryGuard {
         }
         let node = nodes[owner]
         let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
+        if let base, let root = lexicalBaseRoot(base, owner: owner) {
+            var choices = exactChoices(root, path: node.site.path) ?? []
+            for component in base.split(separator: ".").dropFirst() {
+                guard choices.count == 1, let choice = choices.first, choice < inventory.nominals.count,
+                      inventory.nominals[choice].genericParameters.isEmpty,
+                      let name = nodes[choice].qualified else { return [] }
+                choices = exactChoices(name + "." + component, path: node.site.path) ?? []
+            }
+            return choices
+        }
         return lookup(base, path: node.site.path, scope: scope)
+    }
+
+    private func lexicalBaseRoot(_ base: String, owner: Int) -> String? {
+        guard let first = base.split(separator: ".").first else { return nil }
+        var prefixes = nodes[owner].qualified?.split(separator: ".").dropLast().map(String.init) ?? []
+        while true {
+            let name = (prefixes + [String(first)]).joined(separator: ".")
+            if nodes.contains(where: { $0.qualified == name }) { return name }
+            if prefixes.isEmpty { return nil }
+            prefixes.removeLast()
+        }
+    }
+
+    private func ancestryPath(_ type: TypeSyntax) -> String? {
+        // Rejection-only spelling: never substitute generic arguments or prove ordinary ancestry.
+        if let identifier = type.as(IdentifierTypeSyntax.self) { return sourceName(identifier.name) }
+        if let member = type.as(MemberTypeSyntax.self), let base = ancestryPath(member.baseType) {
+            return base + "." + sourceName(member.name)
+        }
+        if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
+           let element = tuple.elements.first, element.firstName == nil,
+           element.secondName == nil, element.ellipsis == nil { return ancestryPath(element.type) }
+        return nil
+    }
+
+    private func validateAncestryBindings(_ number: Int, visiting: Set<Int>) throws {
+        try require(!visiting.contains(number), "cyclic XCTest ancestry binding: \(nodes[number].site)")
+        let erased = number >= inventory.nominals.count &&
+            inventory.aliases[number - inventory.nominals.count].value == nil
+        for type in nodes[number].baseTypes where erased || SourceInventory.ancestryName(type) == nil {
+            guard let path = ancestryPath(type), lexicalBaseRoot(path, owner: number) != nil else {
+                try require(!erased, "unsupported erased generic XCTest ancestry: \(nodes[number].site)")
+                continue
+            }
+            try require(SourceInventory.ancestryName(type) != nil || !path.contains("."),
+                        "unsupported specialized source-bound XCTest ancestry: \(nodes[number].site)")
+            let choices = baseChoices(path, owner: number)
+            try require(choices.count == 1, "unsupported specialized XCTest ancestry binding: \(nodes[number].site)")
+            // Every erased initializer participates, including supported names. This
+            // traversal rejects ancestry; it never supplies an ordinary lineage proof.
+            for choice in choices {
+                try require(lineage(choice, visiting: []) != .xctest, "unsupported erased XCTest ancestry")
+                try validateAncestryBindings(choice, visiting: visiting.union([number]))
+            }
+        }
+        // A nearer alias/ambiguous/restricted namespace must not silently become
+        // an ordinary global member, even for EMPTY classes. Namespace alias
+        // expansion and inherited namespace members remain unsupported here.
+        for base in nodes[number].bases {
+            let choices = baseChoices(base, owner: number)
+            if let base, lexicalBaseRoot(base, owner: number) != nil {
+                try require(choices.count == 1,
+                            "unsupported shadowed/indeterminate XCTest ancestry: \(nodes[number].site)")
+            }
+            for choice in choices { try validateAncestryBindings(choice, visiting: visiting.union([number])) }
+        }
     }
 
     private func lineage(_ number: Int, visiting: Set<Int>) -> Lineage {

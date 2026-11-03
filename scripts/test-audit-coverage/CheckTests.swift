@@ -318,6 +318,32 @@ final class FixtureTests {
 }
 
 extension FixtureTests {
+    func nearerOrdinaryAliasCases() {
+        test("nearer ordinary ancestry aliases are not polluted by global XCTest aliases") {
+            let globals = """
+            import class XCTest.XCTestCase
+            enum Names { class Base {} }
+            enum Holder { typealias Base = XCTestCase }
+            typealias Parent = Holder.Base
+            """
+            let nested = """
+            enum Outer {
+                typealias Parent = Names.Base
+                class Helper: Parent { func testUtility() {} }
+            }
+            """
+            for crossFile in [false, true] {
+                let fixture = try world("unqualified-known-\(crossFile)", annotated: true)
+                try fixture.register(fixture.run().derivedRegistrations)
+                try fixture.write("Sources/A.swift",
+                                  "@Suite(.productionAccessAudit) struct Example { @Test func body() {} }\n" +
+                                  globals + "\n" + (crossFile ? "" : nested))
+                if crossFile { try fixture.write("Mac/B.swift", nested) }
+                try require(fixture.run().enforcementSatisfied, "nearer ordinary alias polluted by global XCTest")
+            }
+        }
+    }
+
     func returnTypeCases() {
         test("Void return alias cannot bypass unknown XCTest ancestry beside registered suites") {
             try rejectLegacy("return-void-alias", first: """
@@ -450,6 +476,14 @@ enum FixtureMain {
         tests.extensionAccessCases()
         tests.parenthesizedAncestryCases()
         tests.macroSyntaxCases()
+        tests.dottedAncestryCases()
+        tests.outerTypeCases()
+        tests.specializedAncestryCases()
+        tests.unqualifiedAncestryCases()
+        tests.nearerOrdinaryAliasCases()
+        tests.ancestryHopSafeguards()
+        tests.specializedConditionalCases()
+        tests.erasedAncestryCases()
         print("RESULT \(tests.passed) passed; \(tests.failed) failed")
         exit(tests.failed == 0 ? 0 : 1)
     }
