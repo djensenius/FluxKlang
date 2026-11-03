@@ -46,6 +46,10 @@ MANDATORY = tuple(
     for target in ("FluxKlangMac", "FluxKlangMacTests")
 )
 EXEMPLAR = "00000000-0000-4000-8000-000000000000"
+NIO_FIXTURE_LINKS = {
+    "Tests/NIOFSIntegrationTests/Test Data/Foo.symlink": ("Foo", "directory"),
+    "Tests/NIOFSIntegrationTests/Test Data/README.md.symlink": ("README.md", "file"),
+}
 
 
 def require(condition, message):
@@ -209,7 +213,70 @@ class Budget:
         self.bytes += size
 
 
-def inventory(root, exclude_control=False, independent=False):
+def nio_link_spec(root, workspace, relative):
+    """Fixed layout exception only; revision authority remains the actual pin."""
+    require(workspace is not None and root is not None and
+            Path(root) == Path(workspace) / "Packages/checkouts/swift-nio" and
+            relative in NIO_FIXTURE_LINKS, "unsupported package fixture link")
+    return NIO_FIXTURE_LINKS[relative]
+
+
+def nio_link_data(root, workspace, relative):
+    target, kind = nio_link_spec(root, workspace, relative)
+    path = Path(root) / relative
+    path_text(path)
+    parent = open_fd(path.parent, directory=True)
+    try:
+        before = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        require(stat.S_ISLNK(before.st_mode), "expected tracked package link")
+        require(before.st_size <= PATH_BYTES, "link target byte limit")
+        raw = os.readlink(os.fsencode(path.name), dir_fd=parent)
+        require(len(raw) <= PATH_BYTES, "link target byte limit")
+        equal(raw, target.encode("utf-8"), "literal package link target")
+        referent = os.stat(target, dir_fd=parent, follow_symlinks=False)
+        require(stat.S_ISDIR(referent.st_mode) if kind == "directory" else
+                stat.S_ISREG(referent.st_mode), "package link referent type")
+        if kind == "file":
+            require(referent.st_nlink == 1, "shared source/Git storage hardlink")
+        after = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        require((before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns,
+                 before.st_mode) ==
+                (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+                 after.st_mode), "link changed while reading")
+    finally:
+        os.close(parent)
+    blob = hashlib.sha1(f"blob {len(raw)}\0".encode("ascii") + raw).hexdigest()
+    return {"path": relative, "type": "symlink", "mode": stat.S_IMODE(after.st_mode),
+            "target": target}, blob
+
+
+def nio_link_bindings(root, workspace, entries, tracked):
+    """Shared live/schema check: link labels alone cannot authorize an alias."""
+    by_path = {entry["path"]: entry for entry in entries}
+    modes = {entry["path"]: entry["git_mode"] for entry in tracked}
+    require(len(modes) == len(tracked), "duplicate tracked path")
+    for name, mode in modes.items():
+        if mode == "120000":
+            nio_link_spec(root, workspace, name)
+            require(by_path.get(name, {}).get("type") == "symlink",
+                    "expected tracked package link")
+    for entry in entries:
+        if entry["type"] != "symlink":
+            continue
+        name = entry["path"]
+        target, kind = nio_link_spec(root, workspace, name)
+        equal(entry["target"], target, "literal package link target")
+        equal(modes.get(name), "120000", "package link Git mode")
+        referent = str(Path(name).with_name(target))
+        require(by_path.get(referent, {}).get("type") == kind, "package link referent type")
+        if kind == "file":
+            require(modes.get(referent) in ("100644", "100755"), "untracked link referent")
+        else:
+            require(any(path.startswith(referent + "/") and mode in ("100644", "100755")
+                        for path, mode in modes.items()), "link directory lacks tracked descendant")
+
+
+def inventory(root, exclude_control=False, independent=False, workspace=None):
     """Exact root-inclusive inventory. scandir is streamed, never listdir/rglob."""
     root = Path(path_text(root))
     result = []
@@ -245,6 +312,10 @@ def inventory(root, exclude_control=False, independent=False):
             entry.update(type="file", size=witness["size"], sha256=witness["sha256"])
             equal(entry["mode"], witness["mode"], "inventory mode")
             result.append(entry)
+        elif stat.S_ISLNK(info.st_mode):
+            witness, _ = nio_link_data(root, workspace, relative)
+            equal(entry["mode"], witness["mode"], "inventory link mode")
+            result.append(witness)  # Never recurse through or flatten the alias.
         else:
             raise Refusal("links and special entries are unsupported")
 
@@ -367,8 +438,8 @@ def source_observation(root, workspace, commit=None, tree=None):
     actual_common = Path(os.path.abspath(root / git(
         root, "rev-parse", "--git-common-dir").decode().strip()))
     require(str(actual_common) in {item["root"] for item in controls}, "Git common-dir drift")
-    entries = inventory(root, exclude_control=True, independent=True)
-    files = {entry["path"]: entry for entry in entries if entry["type"] == "file"}
+    entries = inventory(root, exclude_control=True, independent=True, workspace=workspace)
+    files = {entry["path"]: entry for entry in entries if entry["type"] != "directory"}
     tracked = []
     raw = git(root, "ls-tree", "-rz", "--full-tree", "HEAD")
     require(not raw or raw.endswith(b"\0"), "truncated Git tree")
@@ -376,16 +447,23 @@ def source_observation(root, workspace, commit=None, tree=None):
         header, name = record.split(b"\t", 1)
         mode, kind, oid = header.decode("ascii").split(" ")
         name = path_text(name.decode("utf-8"), absolute=False)
-        require(mode in ("100644", "100755") and kind == "blob",
+        require(mode in ("100644", "100755", "120000") and kind == "blob",
                 "unsupported Git link/submodule/mode")
         require(name in files and name != ".git" and not name.startswith(".git/"),
                 "missing tracked file")
-        witness, _, blob = file_data(root / name)
+        if mode == "120000":
+            require(files[name]["type"] == "symlink", "expected tracked package link")
+            witness, blob = nio_link_data(root, workspace, name)
+            equal(witness, files[name], "tracked link inventory")
+        else:
+            require(files[name]["type"] == "file", "expected tracked regular file")
+            witness, _, blob = file_data(root / name)
+            equal(bool(witness["mode"] & 0o111), mode == "100755", "dirty executable mode")
         equal(blob, oid, "dirty tracked bytes")
-        equal(bool(witness["mode"] & 0o111), mode == "100755", "dirty executable mode")
         tracked.append({"path": name, "git_mode": mode})
     require(len(tracked) == len(files) and len({v["path"] for v in tracked}) == len(files),
             "dirty untracked or ignored source")
+    nio_link_bindings(root, workspace, entries, tracked)
     # Also refuse staged changes even when the worktree happens to match HEAD.
     require(git(root, "diff-index", "--cached", "--raw", "--no-renames",
                 "--no-ext-diff", "HEAD", "--") == b"", "dirty index")
@@ -541,6 +619,8 @@ def input_observation(workspace, source, packages):
         for checkout in packages["checkouts"]
     ]:
         for tracked in record["tracked"]:
+            if tracked["git_mode"] == "120000":
+                continue  # Fixture links never become compiler-input aliases.
             path = str(Path(record["root"]) / tracked["path"])
             require(path not in known, "ambiguous source association")
             known[path] = category
@@ -668,15 +748,16 @@ def file_schema(value):
     hex_value(value["sha256"], 64)
 
 
-def entries_schema(values, absolute=False):
+def entries_schema(values, absolute=False, root=None, workspace=None):
     require(type(values) is list and 0 < len(values) <= TREE_ENTRIES, "invalid inventory")
     seen = set()
     budget = Budget()
     for value in values:
         require(type(value) is dict, "invalid entry")
         kind = value.get("type")
-        keys(value, "path mode type size sha256" if kind == "file" else "path mode type")
-        require(kind in ("file", "directory"), "invalid entry kind")
+        keys(value, "path mode type size sha256" if kind == "file" else
+             "path mode type target" if kind == "symlink" else "path mode type")
+        require(kind in ("file", "directory", "symlink"), "invalid entry kind")
         path = path_text(value["path"], absolute=absolute)
         require(path not in seen, "duplicate entry")
         seen.add(path)
@@ -686,13 +767,18 @@ def entries_schema(values, absolute=False):
             integer(value["size"], TREE_BYTES)
             hex_value(value["sha256"], 64)
             budget.regular(value["size"])
+        elif kind == "symlink":
+            require(not absolute, "absolute link entries unsupported")
+            target, _ = nio_link_spec(root, workspace, path)
+            path_text(value["target"], absolute=False)
+            equal(value["target"], target, "literal package link target")
     equal([v["path"] for v in values], sorted(seen), "inventory order")
     if not absolute:
         require(any(v["path"] == "." and v["type"] == "directory" for v in values),
                 "missing inventory root")
 
 
-def source_schema(value):
+def source_schema(value, workspace=None):
     keys(value, "root commit tree control entries tracked")
     path_text(value["root"])
     hex_value(value["commit"], 40)
@@ -703,13 +789,14 @@ def source_schema(value):
         keys(control, "root entries")
         path_text(control["root"])
         entries_schema(control["entries"])
-    entries_schema(value["entries"])
+    entries_schema(value["entries"], root=value["root"], workspace=workspace)
     require(type(value["tracked"]) is list and len(value["tracked"]) <= TREE_ENTRIES,
             "invalid tracked inventory")
     for tracked in value["tracked"]:
         keys(tracked, "path git_mode")
         path_text(tracked["path"], absolute=False)
-        require(tracked["git_mode"] in ("100644", "100755"), "invalid Git mode")
+        require(tracked["git_mode"] in ("100644", "100755", "120000"), "invalid Git mode")
+    nio_link_bindings(value["root"], workspace, value["entries"], value["tracked"])
 
 
 def schema(value):
@@ -720,7 +807,7 @@ def schema(value):
     w = Path(path_text(value["workspace"]))
     hex_value(value["expected_commit"], 40)
     hex_value(value["expected_tree"], 40)
-    source_schema(value["source"])
+    source_schema(value["source"], w)
     equal(value["source"]["root"], str(w / "source"), "source layout")
     equal(value["source"]["commit"], value["expected_commit"], "expected commit")
     equal(value["source"]["tree"], value["expected_tree"], "expected tree")
@@ -737,7 +824,7 @@ def schema(value):
     require(type(packages["checkouts"]) is list and len(packages["checkouts"]) == 9,
             "nine checkouts required")
     for checkout, identity in zip(packages["checkouts"], IDENTITIES):
-        source_schema(checkout)
+        source_schema(checkout, w)
         equal(checkout["root"], str(w / "Packages/checkouts" / identity), "checkout layout")
     for source in [value["source"], *packages["checkouts"]]:
         for control in source["control"]:

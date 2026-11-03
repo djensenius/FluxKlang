@@ -5,6 +5,7 @@ import sys
 sys.dont_write_bytecode = True
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -54,6 +55,8 @@ def snapshot(root):
     for path in [root, *root.rglob("*")]:
         info = path.lstat()
         data = path.read_bytes() if stat.S_ISREG(info.st_mode) else None
+        if stat.S_ISLNK(info.st_mode):
+            data = os.readlink(os.fsencode(path))
         result[str(path.relative_to(root))] = (
             data, info.st_mode, info.st_ino, info.st_mtime_ns, info.st_ctime_ns,
         )
@@ -173,6 +176,263 @@ class ProducerTests(unittest.TestCase):
         with self.assertRaises((receipt.Refusal, OSError)):
             self.produce()
         self.assertEqual(self.compiler.call_count, count)
+
+    def pin_nio_revision(self):
+        """Only disposable test repos: update the sole lock/state pin together."""
+        revision = fixture_git(self.nio, "rev-parse", "HEAD")
+        lockfile = self.w / "source" / receipt.LOCKFILE
+        lock = json.loads(lockfile.read_bytes())
+        next(pin for pin in lock["pins"] if pin["identity"] == "swift-nio")["state"]["revision"] = revision
+        lockfile.write_bytes(receipt.encode(lock))
+        statefile = self.w / "Packages/workspace-state.json"
+        state = json.loads(statefile.read_bytes())
+        dependency = next(d for d in state["object"]["dependencies"]
+                          if d["packageRef"]["identity"] == "swift-nio")
+        dependency["state"]["checkoutState"]["revision"] = revision
+        statefile.write_bytes(receipt.encode(state))
+        fixture_git(self.w / "source", "add", receipt.LOCKFILE)
+        fixture_git(self.w / "source", "commit", "-m", "synthetic reviewed NIO pin")
+        self.commit = fixture_git(self.w / "source", "rev-parse", "HEAD")
+        self.tree = fixture_git(self.w / "source", "rev-parse", "HEAD^{tree}")
+
+    def add_nio_links(self):
+        self.nio = self.w / "Packages/checkouts/swift-nio"
+        self.nio_data = self.nio / "Tests/NIOFSIntegrationTests/Test Data"
+        write(self.nio_data / "Foo/Fixture.swift", b"struct RealTrackedFixture {}\n")
+        write(self.nio_data / "README.md", b"real tracked fixture readme\n")
+        (self.nio_data / "Foo.symlink").symlink_to("Foo", target_is_directory=True)
+        (self.nio_data / "README.md.symlink").symlink_to("README.md")
+        fixture_git(self.nio, "add", ".")
+        fixture_git(self.nio, "commit", "-m", "synthetic genuine tracked fixture links")
+        self.pin_nio_revision()
+
+    def test_nio_links_real_prepare_seal_pinned_consumer_and_read_only(self):
+        self.add_nio_links()
+
+        def compile_real_referent(*args):
+            code = self.fake_compile(*args)
+            path = self.w / receipt.INTERMEDIATES / receipt.MANDATORY[0]
+            with path.open("ab") as stream:
+                stream.write((str(self.nio_data / "Foo/Fixture.swift") + "\n").encode())
+            return code
+
+        self.compiler.side_effect = compile_real_referent
+        result = self.produce()
+        value = json.loads(self.final.read_bytes())
+        nio = next(c for c in value["packages"]["checkouts"] if c["root"] == str(self.nio))
+        entries = {entry["path"]: entry for entry in nio["entries"]}
+        tracked = {entry["path"]: entry["git_mode"] for entry in nio["tracked"]}
+        for name, target in (("Foo.symlink", "Foo"), ("README.md.symlink", "README.md")):
+            relative = "Tests/NIOFSIntegrationTests/Test Data/" + name
+            self.assertEqual(entries[relative], {
+                "path": relative, "type": "symlink", "target": target,
+                "mode": stat.S_IMODE((self.nio_data / name).lstat().st_mode),
+            })
+            self.assertEqual(tracked[relative], "120000")
+            raw = target.encode()
+            blob = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+            header = fixture_git(self.nio, "ls-tree", "HEAD", "--", relative).split("\t")[0]
+            self.assertEqual(header, "120000 blob " + blob)
+        self.assertIn("Tests/NIOFSIntegrationTests/Test Data/Foo/Fixture.swift", tracked)
+        self.assertIn("Tests/NIOFSIntegrationTests/Test Data/README.md", tracked)
+        self.assertFalse(any("/Foo.symlink/" in entry["path"] for entry in nio["entries"]))
+        before = snapshot(self.root)
+        self.assertEqual(self.consume(result)["profile"], prepare.RETENTION_PROFILE)
+        self.assertEqual(snapshot(self.root), before)
+        self.assertEqual(self.compiler.call_count, 1)
+
+    def test_nio_links_wrong_extra_missing_chained_external_and_referent_swaps(self):
+        self.add_nio_links()
+        for name, target in (("Foo.symlink", "Foo"), ("README.md.symlink", "README.md")):
+            link = self.nio_data / name
+            for wrong in ("missing", "../outside", str(self.root / "external"), "./" + target):
+                with self.subTest(name=name, wrong=wrong):
+                    link.unlink()
+                    link.symlink_to(wrong)
+                    with self.assertRaises((receipt.Refusal, OSError)):
+                        receipt.package_observation(self.w)
+            link.unlink()
+            with self.assertRaises(receipt.Refusal):
+                receipt.package_observation(self.w)
+            # Same literal bytes are NOT an acceptable replacement for Git 120000.
+            link.write_bytes(target.encode())
+            with self.assertRaisesRegex(receipt.Refusal, "expected tracked package link"):
+                receipt.package_observation(self.w)
+            link.unlink()
+            link.symlink_to(target)
+            referent = self.nio_data / target
+            saved = self.root / ("saved-" + target)
+            referent.rename(saved)
+            with self.assertRaises((receipt.Refusal, OSError)):
+                receipt.package_observation(self.w)
+            # Correct literal target but another link at that name must fail.
+            referent.symlink_to(saved, target_is_directory=target == "Foo")
+            with self.assertRaises((receipt.Refusal, OSError)):
+                receipt.package_observation(self.w)
+            referent.unlink()
+            if target == "Foo":
+                referent.write_bytes(b"directory replaced by file")
+            else:
+                referent.mkdir()
+            with self.assertRaises(receipt.Refusal):
+                receipt.package_observation(self.w)
+            if referent.is_dir():
+                referent.rmdir()
+            else:
+                referent.unlink()
+            saved.rename(referent)
+        extra = self.nio_data / "Extra.symlink"
+        extra.symlink_to("Foo")
+        with self.assertRaisesRegex(receipt.Refusal, "unsupported package fixture link"):
+            receipt.package_observation(self.w)
+        extra.unlink()
+        # A file referent is still independently protected against hardlinks/dirt.
+        external = self.root / "hardlink"
+        os.link(self.nio_data / "README.md", external)
+        with self.assertRaisesRegex(receipt.Refusal, "hardlink"):
+            receipt.package_observation(self.w)
+        external.unlink()
+        (self.nio_data / "untracked").write_bytes(b"dirty")
+        with self.assertRaisesRegex(receipt.Refusal, "dirty untracked"):
+            receipt.package_observation(self.w)
+        self.compiler.assert_not_called()
+        self.assertFalse((self.w / "build-evidence").exists())
+
+    def test_nio_links_wrong_git_mode_and_literal_blob_refuse(self):
+        self.add_nio_links()
+        relative = "Tests/NIOFSIntegrationTests/Test Data/Foo.symlink"
+        original_blob = fixture_git(self.nio, "rev-parse", "HEAD:" + relative)
+        fixture_git(self.nio, "update-index", "--cacheinfo", "100644," + original_blob + "," + relative)
+        fixture_git(self.nio, "commit", "-m", "synthetic wrong link Git mode")
+        self.pin_nio_revision()
+        with self.assertRaisesRegex(receipt.Refusal, "expected tracked regular file"):
+            receipt.package_observation(self.w)
+        wrong = self.root / "wrong-literal-target"
+        wrong.write_bytes(b"NotFoo")
+        blob = fixture_git(self.nio, "hash-object", "-w", str(wrong))
+        fixture_git(self.nio, "update-index", "--cacheinfo", "120000," + blob + "," + relative)
+        fixture_git(self.nio, "commit", "-m", "synthetic wrong literal target blob")
+        self.pin_nio_revision()
+        with self.assertRaisesRegex(receipt.Refusal, "dirty tracked bytes"):
+            receipt.package_observation(self.w)
+        self.compiler.assert_not_called()
+
+    def test_nio_links_directory_requires_component_delimited_tracked_descendant(self):
+        self.add_nio_links()
+        (self.nio_data / "Foo/Fixture.swift").unlink()
+        write(self.nio_data / "FooSibling/Fixture.swift", b"struct NotADescendant {}\n")
+        fixture_git(self.nio, "add", "-A")
+        fixture_git(self.nio, "commit", "-m", "synthetic untracked directory referent")
+        self.pin_nio_revision()
+        self.assertTrue((self.nio_data / "Foo").is_dir())  # Existence alone is not proof.
+        with self.assertRaisesRegex(receipt.Refusal, "lacks tracked descendant"):
+            receipt.package_observation(self.w)
+        self.compiler.assert_not_called()
+
+    def test_nio_links_wrong_root_package_and_default_inventories_refuse(self):
+        self.add_nio_links()
+        with self.assertRaisesRegex(receipt.Refusal, "unsupported package fixture link"):
+            receipt.inventory(self.nio)  # Ordinary inventories stay link-free.
+        with self.assertRaisesRegex(receipt.Refusal, "unsupported package fixture link"):
+            receipt.inventory(self.nio, workspace=self.w / "wrong")
+        for root in (self.w / "source", self.w / "Packages/checkouts/swift-ascii",
+                     self.nio / ".git", self.w / receipt.PRODUCTS,
+                     self.w / receipt.DERIVED_SOURCES):
+            with self.subTest(root=root):
+                data = root / "Tests/NIOFSIntegrationTests/Test Data"
+                write(data / "Foo/Fixture.swift", b"struct WrongRoot {}\n")
+                (data / "Foo.symlink").symlink_to("Foo", target_is_directory=True)
+                with self.assertRaisesRegex(receipt.Refusal, "unsupported package fixture link"):
+                    receipt.inventory(root, workspace=self.w)
+                shutil.rmtree(root / "Tests")
+
+    def test_nio_links_swift_descendant_alias_refused_without_traversal(self):
+        self.add_nio_links()
+        alias = self.nio_data / "Foo.symlink/Fixture.swift"
+        with self.assertRaises(OSError):
+            receipt.file_data(alias)
+
+        def compile_alias(*args):
+            code = self.fake_compile(*args)
+            path = self.w / receipt.INTERMEDIATES / receipt.MANDATORY[0]
+            with path.open("ab") as stream:
+                stream.write((str(alias) + "\n").encode())
+            return code
+
+        self.compiler.side_effect = compile_alias
+        with self.assertRaisesRegex(receipt.Refusal, "unresolved Swift input"):
+            self.produce()
+        self.assert_consumed()
+
+    def test_nio_links_permission_and_literal_target_drift(self):
+        self.add_nio_links()
+        result = self.produce()
+        link = self.nio_data / "README.md.symlink"
+        original_mode = stat.S_IMODE(link.lstat().st_mode)
+        referent_mode = (self.nio_data / "README.md").stat().st_mode
+        os.chmod(link, original_mode ^ 0o100, follow_symlinks=False)
+        self.assertEqual(stat.S_IMODE(link.lstat().st_mode), original_mode ^ 0o100)
+        self.assertEqual((self.nio_data / "README.md").stat().st_mode, referent_mode)
+        with self.assertRaises(receipt.Refusal):
+            self.consume(result)
+        os.chmod(link, original_mode, follow_symlinks=False)
+        link.unlink()
+        link.symlink_to("Foo")
+        with self.assertRaises(receipt.Refusal):
+            self.consume(result)
+
+    def test_nio_links_rehashed_receipt_cannot_grant_exceptions(self):
+        self.add_nio_links()
+        self.produce()
+        original = json.loads(self.final.read_bytes())
+        relative = "Tests/NIOFSIntegrationTests/Test Data/"
+
+        def nio(value):
+            return next(c for c in value["packages"]["checkouts"] if c["root"] == str(self.nio))
+
+        def entry(value, name):
+            return next(e for e in nio(value)["entries"] if e["path"] == relative + name)
+
+        def flatten(value):
+            link = entry(value, "Foo.symlink")
+            link.pop("target")
+            link.update(type="file", size=3, sha256=prepare.digest(b"Foo"))
+
+        def wrong_git_mode(value):
+            next(e for e in nio(value)["tracked"]
+                 if e["path"] == relative + "Foo.symlink")["git_mode"] = "100644"
+
+        def no_descendant(value):
+            nio(value)["tracked"] = [t for t in nio(value)["tracked"]
+                                     if not t["path"].startswith(relative + "Foo/")]
+
+        def wrong_root(value):
+            nio(value)["root"] = str(self.w / "Packages/checkouts/swift-ascii")
+
+        for mutate in (
+            lambda v: entry(v, "Foo.symlink").update(target="../Foo"),
+            lambda v: entry(v, "Foo.symlink").update(mode=True),
+            lambda v: entry(v, "Foo.symlink").update(resolved_tracked_entry=None),
+            lambda v: entry(v, "Foo.symlink").update(type="directory"),
+            flatten, wrong_git_mode, no_descendant, wrong_root,
+        ):
+            with self.subTest(mutate=mutate):
+                value = copy.deepcopy(original)
+                mutate(value)
+                data = receipt.encode(value)
+                self.final.write_bytes(data)
+                with self.assertRaises(receipt.Refusal):
+                    receipt.schema(value)
+                with self.assertRaises(receipt.Refusal):
+                    receipt.validate(self.final, prepare.digest(data))
+        # A well-typed but invented permission witness passes shape, not evidence.
+        value = copy.deepcopy(original)
+        entry(value, "Foo.symlink")["mode"] ^= 0o100
+        receipt.schema(value)
+        data = receipt.encode(value)
+        self.final.write_bytes(data)
+        with self.assertRaises(receipt.Refusal):
+            receipt.validate(self.final, prepare.digest(data))
 
     def test_end_to_end_real_prepare_seal_consumer_and_read_only(self):
         result = self.produce()

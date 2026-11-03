@@ -297,13 +297,13 @@ scripts still require trusted custody and external execution authorization.
 
 ### Defined evidence and refusal boundaries
 
-- Every tracked source file has its Git mode, current permission bits and
+- Every tracked regular source file has its Git mode, current permission bits and
   streamed SHA256 retained. Working bytes are checked against the Git blob ID;
   staged changes and untracked/ignored files are refused. Root and directories
   are inventoried too. `project.yml`, generated PBX, isolated Mac scheme and
   `Package.resolved` must be tracked. No project regeneration occurs.
 - Git control locations and root-inclusive inventories are separate from
-  compiled source. All must be inside W. Links, alternates, Gitlinks/submodules,
+  compiled source. All must be inside W. Git-control links, alternates, Gitlinks/submodules,
   shared source/Git regular-file hardlinks (even internal ones), partial/promisor
   repositories, config includes and escaped/multiline local config are refused.
   Git reads use a clean environment, disable global/system configuration,
@@ -318,6 +318,34 @@ scripts still require trusted custody and external execution authorization.
   `basedOn:null`, matching remote source identity/location, retained nonempty
   name, source-control checkout revision/version, and `subpath == identity`.
   Every checkout receives the same clean Git/source inventory checks.
+- The only package fixture-link exception is under the exact root
+  `W/Packages/checkouts/swift-nio`, at these two relative paths:
+
+  | Link | Literal target | Required same-parent referent |
+  | --- | --- | --- |
+  | `Tests/NIOFSIntegrationTests/Test Data/Foo.symlink` | `Foo` | Real directory with a component-delimited tracked regular-file descendant |
+  | `Tests/NIOFSIntegrationTests/Test Data/README.md.symlink` | `README.md` | Real independently inventoried, Git-verified regular file |
+
+  The actual reviewed lockfile, workspace state and checkout Git revision remain
+  the sole pin authority; there is no second revision table or caller policy.
+  Each link is inventoried as exactly `{path, type:"symlink", mode, target}`,
+  using its **own** permission bits and literal target, never referent metadata.
+  Parent opens and `readlink` are descriptor-relative/no-follow; target bytes
+  obey the existing path bound, and the link consumes an entry/depth/path budget.
+  Git must record mode `120000` and the blob hash of the literal `readlink` bytes.
+  A regular file containing the same bytes is not a link substitute. Referents
+  must be real same-parent entries, not links, and retain all normal content,
+  hardlink and cleanliness checks. Directory existence or a null tracked-entry
+  lookup alone is not proof: a tracked descendant under `Foo/` is required;
+  `FooSibling/...` does not count. All referent contents remain at their actual
+  paths in the inventory; links are never traversed, flattened or excluded.
+  Receipt schema and live evidence reconstruction recompute this same fixed
+  root/path/target/type exception; receipt labels cannot grant it.
+  Other paths/packages, source, Git control, Products, metadata and generated
+  inputs remain link-free. Swift input witnesses still require regular,
+  no-follow paths: these test-data aliases, including traversal to a `.swift`
+  descendant through `Foo.symlink`, are not compiler-input aliases. This is not
+  general link support or a new C/compiler/runtime closure claim.
 - Both exact arm64 lists are mandatory and nonempty:
   `Intermediates.noindex/FluxKlang.build/Debug/FluxKlangMac.build/Objects-normal/arm64/FluxKlangMac.SwiftFileList`
   and the corresponding `FluxKlangMacTests.build/.../FluxKlangMacTests.SwiftFileList`.
@@ -379,8 +407,9 @@ Fixed inclusive limits, with no caller overrides:
 
 Traversal streams directory entries and remaining byte budgets, rejects excess
 rather than truncating, and uses ancestor-aware descriptor-relative no-follow
-opens. Links (including dangling links and absolute ancestors) and special
-entries are refused. The existing preparer's internal reads are unbounded;
+opens. Except for the two fixed package fixture links above, links (including
+dangling links and absolute ancestors) and special entries are refused.
+The existing preparer's internal reads are unbounded;
 bounded pre/post checks **require exclusive custody**, not protection against
 a hostile concurrent writer. There is no monkeypatch of production reads or
 change to preparer APIs.
@@ -445,5 +474,8 @@ Producer fixtures use disposable synthetic ordinary Git repos, all nine actual
 checkout/state associations, both mandatory lists, extra lists and a generated
 Swift input. Only compile/toolchain and explicit failure-injection I/O/process
 boundaries are substituted; preparation, validation, sealing and consumption
-are real. Native profile compatibility and qualification require separate
+are real. Package-link fixtures include both genuinely tracked NIO links and
+referents, mode/blob/type/root/target/permission drift, rehashed receipt
+malformations and Swift descendant-alias refusal. Binary Info and XML
+regressions remain covered. Native profile compatibility and qualification require separate
 review and authorization.
