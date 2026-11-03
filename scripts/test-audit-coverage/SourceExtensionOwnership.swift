@@ -14,6 +14,11 @@ final class SourceExtensionOwnership {
         let path: String
     }
 
+    private struct TransitiveKey: Hashable {
+        let member: MemberKey
+        let inherited: Bool
+    }
+
     private let inventory: SourceInventory
     private let entries: [Entry]
     private var index: [String: [Int]] = [:]
@@ -22,6 +27,7 @@ final class SourceExtensionOwnership {
     private var restrictions: [Int: Bool] = [:]
     private var activeRestrictions: Set<Int> = []
     private var members: [MemberKey: [Int]] = [:]
+    private var transitive: [TransitiveKey: [Int]] = [:]
 
     init(_ inventory: SourceInventory) {
         self.inventory = inventory
@@ -138,6 +144,18 @@ final class SourceExtensionOwnership {
         if entry.parent == nil { return exact(name, path: entry.path) }
         guard let owner = declaringOwner(number), let component = name.split(separator: ".").last else { return nil }
         return ownMembers(String(component), owner: owner, path: entry.path)
+    }
+
+    // Distinct from direct membership. The caller checks its visited owners
+    // before entry; only fully returned arrays (including empty) are published.
+    func transitiveMembers(
+        _ name: String, owner: Int, path: String, inherited: Bool, compute: () -> [Int]?
+    ) -> [Int]? {
+        let key = TransitiveKey(member: MemberKey(owner: owner, name: name, path: path), inherited: inherited)
+        if let cached = transitive[key] { return cached }
+        guard let result = compute() else { return nil }
+        transitive[key] = result
+        return result
     }
 
     private func declaringOwner(_ number: Int) -> Int? {

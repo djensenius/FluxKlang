@@ -291,6 +291,7 @@ struct SourceInventory {
         }
         let nestedContext: OwnerContext? = node.is(ExprSyntax.self) || node.is(StmtSyntax.self) ||
             node.is(AccessorDeclSyntax.self) || node.is(InitializerDeclSyntax.self) ||
+            node.as(AccessorBlockSyntax.self)?.accessors.is(CodeBlockItemListSyntax.self) == true ||
             node.is(DeinitializerDeclSyntax.self) ? .local : context
         for child in node.children(viewMode: .sourceAccurate) {
             try walk(child, context: nestedContext, source: source)

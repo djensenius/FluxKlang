@@ -185,6 +185,12 @@ extension XCTestDiscoveryGuard {
 
     private func memberChoices(_ name: String, owner: Int, path: String, visiting: Set<Int>) -> [Int]? {
         guard !visiting.contains(owner) else { return nil }
+        return bindings.transitiveMembers(name, owner: owner, path: path, inherited: !visiting.isEmpty) {
+            self.computeMemberChoices(name, owner: owner, path: path, visiting: visiting)
+        }
+    }
+
+    private func computeMemberChoices(_ name: String, owner: Int, path: String, visiting: Set<Int>) -> [Int]? {
         let visited = visiting.union([owner])
         let node = nodes[owner]
         if owner >= inventory.nominals.count {
@@ -411,7 +417,8 @@ extension XCTestDiscoveryGuard {
             let path = ancestryPath(type)
             if let path { _ = try checkedBaseChoices(path, owner: number) }
             guard let path, lexicalBaseRoot(path, owner: number) != nil else {
-                try require(!erased, "unsupported erased generic XCTest ancestry: \(nodes[number].site)")
+                try require(!erased && (number < inventory.nominals.count || path != nil),
+                            "unsupported erased or non-path XCTest ancestry: \(nodes[number].site)")
                 continue
             }
             try require(SourceInventory.ancestryName(type) != nil || !path.contains("."),

@@ -68,12 +68,13 @@ cp FluxKlangTests/ProductionAccessScope.swift \
 Despite its historical name, `--u1-root` must contain all four files directly.
 Use a fresh scratch directory for each fixture run: fixtures deliberately create
 malformed projects, alternate sources and symlinks, and will not overwrite an
-existing fixture world. The suite has 264 checks, including regressions
+existing fixture world. The suite has 292 checks, including regressions
 for unsupported XCTest discovery, nested PBX roots, standard macro handling,
 opaque return types, specialized ancestry, erased generic-alias initializers,
 current-module-qualified and inherited aliases, source-defined XCTest names,
 cross-file extension ownership, local alias/namespace provenance and
-actual-owner member rejection, cycle handling, and bounded input reads/rechecks.
+actual-owner member rejection, implicit getter boundaries, unsupported consumed
+alias initializers, cycle handling, and bounded input reads/rechecks.
 The actual-source expectations currently reflect unadopted audit traits; review
 those expectations when adopting or otherwise changing the reference sources.
 
@@ -136,3 +137,10 @@ Associated extension lookup uses the actual target, not its enclosing owners.
 Presence does not prove a binding or SDK ancestry; a dotted-index miss does not
 prove absence. Unconsumed declarations and unrelated external helpers do not
 themselves require refusal.
+
+Implicit property and subscript getter bodies are local executable scopes; their
+declarations do not become enclosing-type members. Consumed aliases require a
+supported initializer path, without interpreting unsupported composition elements.
+Completed transitive member results are cached by owner, exact name, consumer
+path and root/inherited lookup context. Cycles and indeterminate lookups are
+never cached as completed absence.
