@@ -7,8 +7,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
     private let solar = "Elta SOLAR 42F"
     private let evilPet = "Endorphin.es EviL Pet"
 
-    func testReviewKeepsThreeSourceSpecificBranchesAndConfiguredDesktopCables() {
-        launchFixture()
+    func testReviewKeepsThreeSourceSpecificBranchesAndConfiguredDesktopCables() throws {
+        try launchFixture()
         openReview()
         XCTAssertEqual(element("assistant.pendingDraft.applicationMode").label, "Append to current Studio graph")
         assertOwnerPaths()
@@ -28,8 +28,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
         assertFixtureHasNotWritten()
     }
 
-    func testAcceptPreservesAllBranchesLocallyAndDoesNotAutomaticallyListen() {
-        launchFixture()
+    func testAcceptPreservesAllBranchesLocallyAndDoesNotAutomaticallyListen() throws {
+        try launchFixture()
         openReview()
         assertOwnerPaths()
         assertFixtureHasNotWritten()
@@ -48,8 +48,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
         capture("Accepted graph retains source-specific routing without Listen")
     }
 
-    func testDiscardLeavesPriorLocalGraphUnchanged() {
-        launchFixture(extraArguments: ["-ui-test-multi-route-prior"])
+    func testDiscardLeavesPriorLocalGraphUnchanged() throws {
+        try launchFixture(extraArguments: ["-ui-test-multi-route-prior"])
         openReview()
         assertOwnerPaths()
         assertFixtureHasNotWritten()
@@ -67,8 +67,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
         capture("Discard keeps the unrelated prior graph")
     }
 
-    func testExplicitDryParallelShowsFourPathsAndAcceptsTheDryWire() {
-        launchFixture(extraArguments: ["-ui-test-multi-route-dry-parallel"])
+    func testExplicitDryParallelShowsFourPathsAndAcceptsTheDryWire() throws {
+        try launchFixture(extraArguments: ["-ui-test-multi-route-dry-parallel"])
         openReview()
         let count = element("assistant.pendingDraft.routingCount")
         reveal(count)
@@ -94,8 +94,8 @@ final class AssistantMultiRouteUITests: XCTestCase {
         assertWireCount(5)
     }
 
-    func testReplacementReviewAtAccessibilitySizeNamesEveryBranchAndSeparateListen() {
-        launchFixture(extraArguments: [
+    func testReplacementReviewAtAccessibilitySizeNamesEveryBranchAndSeparateListen() throws {
+        try launchFixture(extraArguments: [
             "-ui-test-multi-route-replace",
             "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"
         ])
@@ -117,13 +117,13 @@ final class AssistantMultiRouteUITests: XCTestCase {
         capture("Accessibility size replacement review with three complete paths")
     }
 
-    private func launchFixture(extraArguments: [String] = []) {
+    private func launchFixture(extraArguments: [String] = []) throws {
         continueAfterFailure = false
         app.terminate()
         XCUIDevice.shared.orientation = .portrait
         // No -ui-test-demo: the new DEBUG seed must force a simulated transport itself.
-        app.launchArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-multi-route"] + extraArguments
-        launchIsolatedUITestApplication(app, testCase: self)
+        let appArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-multi-route"] + extraArguments
+        try launchIsolatedUITestApplication(app, appArguments: appArguments, testCase: self)
         XCTAssertTrue(app.navigationBars["Studio"].waitForExistence(timeout: 10))
     }
 

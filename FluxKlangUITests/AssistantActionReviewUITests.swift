@@ -4,8 +4,8 @@ import XCTest
 final class AssistantActionReviewUITests: XCTestCase {
     private lazy var app = makeIsolatedUITestApplication()
 
-    func testCandidateSelectionRefreshesReviewAndDisclosesSuggestedAmount() {
-        launchReview("candidate")
+    func testCandidateSelectionRefreshesReviewAndDisclosesSuggestedAmount() throws {
+        try launchReview("candidate")
         let candidate = app.buttons["assistant.action.candidate.astrolab-7"]
         XCTAssertTrue(candidate.waitForExistence(timeout: 5))
         XCTAssertTrue(candidate.label.contains("Channel 7"))
@@ -27,8 +27,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         capture("Candidate refreshed to suggested 3 dB review")
     }
 
-    func testReadyReviewShowsExactStereoBeforeAfterAndHardwareConfirmation() {
-        launchReview("ready")
+    func testReadyReviewShowsExactStereoBeforeAfterAndHardwareConfirmation() throws {
+        try launchReview("ready")
         let confirm = app.buttons["assistant.action.confirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         XCTAssertTrue(confirm.label.contains("Write to WING Hardware"))
@@ -51,8 +51,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         capture("Explicit left right fader review")
     }
 
-    func testExpiredReviewCannotConfirm() {
-        launchReview("expired")
+    func testExpiredReviewCannotConfirm() throws {
+        try launchReview("expired")
         let confirm = app.buttons["assistant.action.confirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         XCTAssertFalse(confirm.isEnabled)
@@ -62,8 +62,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         assertConfirmCalls(0)
     }
 
-    func testRestoredCardHasNoReviewOrConfirmationCapability() {
-        launchReview("restored")
+    func testRestoredCardHasNoReviewOrConfirmationCapability() throws {
+        try launchReview("restored")
         let inert = element("assistant.action.inertCard")
         XCTAssertTrue(inert.waitForExistence(timeout: 5))
         XCTAssertTrue(inert.label.contains("cannot confirm"))
@@ -73,8 +73,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         capture("Restored inert action card")
     }
 
-    func testPartialResultReportsLocalAndPerMemberOutcome() {
-        launchReview("partial")
+    func testPartialResultReportsLocalAndPerMemberOutcome() throws {
+        try launchReview("partial")
         XCTAssertTrue(app.staticTexts["Partial outcome"].waitForExistence(timeout: 5))
         XCTAssertEqual(element("assistant.action.localResult").label, "Shortcut: added locally")
         XCTAssertTrue(element("assistant.action.memberResult.ch-7").label.contains("Confirmed by readback"))
@@ -86,8 +86,8 @@ final class AssistantActionReviewUITests: XCTestCase {
         capture("Truthful local and partial stereo result")
     }
 
-    func testConsumedReviewRemainsVisibleAndCancelRevokesQueuedFixtureChanges() {
-        launchReview("confirming")
+    func testConsumedReviewRemainsVisibleAndCancelRevokesQueuedFixtureChanges() throws {
+        try launchReview("confirming")
         assertConfirmCalls(0)
         let showReview = app.buttons["assistant.action.showReview"]
         XCTAssertTrue(showReview.waitForExistence(timeout: 5))
@@ -113,12 +113,12 @@ final class AssistantActionReviewUITests: XCTestCase {
         assertConfirmCalls(1)
     }
 
-    private func launchReview(_ mode: String) {
+    private func launchReview(_ mode: String) throws {
         continueAfterFailure = false
         app.terminate()
         XCUIDevice.shared.orientation = .portrait
-        app.launchArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-action-review", mode]
-        launchIsolatedUITestApplication(app, testCase: self)
+        let appArguments = ["-ui-testing", "-ui-test-force-fallback", "-ui-test-action-review", mode]
+        try launchIsolatedUITestApplication(app, appArguments: appArguments, testCase: self)
         let assistant = app.tabBars.buttons["Assistant"]
         XCTAssertTrue(assistant.waitForExistence(timeout: 10))
         assistant.tap()

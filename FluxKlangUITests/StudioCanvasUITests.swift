@@ -4,10 +4,10 @@ import XCTest
 final class StudioCanvasUITests: XCTestCase {
     private lazy var app = makeIsolatedUITestApplication()
 
-    func testBlankCanvasPansToControlsAndLastAddedNodeCanBeRemoved() {
+    func testBlankCanvasPansToControlsAndLastAddedNodeCanBeRemoved() throws {
         // Seed the same persisted node layout without 24 menu interactions;
         // the acceptance here is panning to and deleting the farthest full card.
-        launchPatch(longCanvas: true)
+        try launchPatch(longCanvas: true)
         showCanvas()
         let canvas = element("studio.canvas")
         panToControls(canvas)
@@ -23,8 +23,8 @@ final class StudioCanvasUITests: XCTestCase {
         XCTAssertFalse(lastNode.exists)
     }
 
-    func testDeleteWhileRoutingDeletesConnectedNodeInsteadOfDrawingAnotherEdge() {
-        launchPatch()
+    func testDeleteWhileRoutingDeletesConnectedNodeInsteadOfDrawingAnotherEdge() throws {
+        try launchPatch()
         showCanvas()
         let draw = app.buttons["Draw connection from OP-1 Field"]
         XCTAssertTrue(draw.isHittable)
@@ -45,8 +45,8 @@ final class StudioCanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["OP-1 Field"].exists, "Removing from the patch must not delete library gear")
     }
 
-    func testRerouteCanFinishWithHereAfterHorizontalCanvasScroll() {
-        launchPatch()
+    func testRerouteCanFinishWithHereAfterHorizontalCanvasScroll() throws {
+        try launchPatch()
         showActions()
         let reroute = app.buttons["Reroute"].firstMatch
         XCTAssertTrue(reroute.isHittable)
@@ -63,8 +63,8 @@ final class StudioCanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Reroute"].firstMatch.exists)
     }
 
-    func testMoveHandlePersistsAndBlankTapCancelsRouting() {
-        launchPatch()
+    func testMoveHandlePersistsAndBlankTapCancelsRouting() throws {
+        try launchPatch()
         showCanvas()
         let canvas = element("studio.canvas")
         let move = elementWithLabel("Move OP-1 Field")
@@ -86,16 +86,16 @@ final class StudioCanvasUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Draw connection from OP-1 Field"].exists)
     }
 
-    func testActionsKeepFullLabelsAtDefaultSize() {
-        assertActionLayout(accessibilitySize: false)
+    func testActionsKeepFullLabelsAtDefaultSize() throws {
+        try assertActionLayout(accessibilitySize: false)
     }
 
-    func testActionsKeepFullLabelsAtAccessibilitySize() {
-        assertActionLayout(accessibilitySize: true)
+    func testActionsKeepFullLabelsAtAccessibilitySize() throws {
+        try assertActionLayout(accessibilitySize: true)
     }
 
-    private func assertActionLayout(accessibilitySize: Bool) {
-        launchPatch(accessibilitySize: accessibilitySize)
+    private func assertActionLayout(accessibilitySize: Bool) throws {
+        try launchPatch(accessibilitySize: accessibilitySize)
         showActions()
         for (identifier, title) in [
             ("studio.addGear", "Add Gear"),
@@ -118,17 +118,17 @@ final class StudioCanvasUITests: XCTestCase {
         add(attachment)
     }
 
-    private func launchPatch(accessibilitySize: Bool = false, longCanvas: Bool = false) {
+    private func launchPatch(accessibilitySize: Bool = false, longCanvas: Bool = false) throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
-        app.launchArguments = [
+        var appArguments = [
             "-ui-testing", "-ui-test-force-fallback", "-ui-test-seed-acceptance", "-ui-test-demo"
         ]
         if accessibilitySize {
-            app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+            appArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
-        if longCanvas { app.launchArguments.append("-ui-test-long-canvas") }
-        launchIsolatedUITestApplication(app, testCase: self)
+        if longCanvas { appArguments.append("-ui-test-long-canvas") }
+        try launchIsolatedUITestApplication(app, appArguments: appArguments, testCase: self)
         if longCanvas {
             XCTAssertTrue(element("studio.canvas").waitForExistence(timeout: 10))
             return

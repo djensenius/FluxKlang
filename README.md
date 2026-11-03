@@ -153,7 +153,7 @@ make build                  # iOS simulator build
 make build-mac              # native macOS build
 make build-for-testing      # compile iOS app + unit/UI targets (no launch)
 make build-for-testing-mac  # compile Mac app + FluxKlangMacTests (no launch)
-make test                   # hosted iOS unit/UI tests; execution-gated by #60
+make test                   # hosted iOS unit/UI tests; execution-gated by #60; unprepared UI launches fail closed
 make test-mac               # hosted Mac tests; execution-gated by #60
 ```
 
@@ -168,8 +168,23 @@ The test and build-for-testing recipes select `FluxKlangIsolatedTests` or
 `FluxKlangMacIsolatedTests`. Their Test actions explicitly set
 `FLUXKLANG_ISOLATED_TESTING=1`, `FLUXKLANG_RUN_APPLE_MODEL_TESTS=0` and
 `FLUXKLANG_QUALIFY_APPLE_ROUTING=0`; they retain their existing unit/UI targets.
-Once execution is authorized, use these isolated schemes for ordinary Xcode Test
-actions too: startup-boundary fixtures require all three literal values.
+Startup-boundary fixtures require all three literal values, but these settings
+alone are not sufficient for UI launches.
+
+The canonical UI launch helper now intentionally fails closed: unprepared
+`make test` and ordinary isolated-scheme Cmd+U invocations reaching it fail for
+missing `FLUXKLANG_AUDIT_RUN_ID`. Execution authorization alone does not supply
+that identity. The helper validates the runner's canonical lowercase UUID4 and
+literal flags against the intended app configuration, then explicitly forwards
+that UUID with only the intended app environment and unchanged arguments.
+Refusal throws before app configuration setters, launch, or startup queries;
+earlier termination/orientation effects remain outside this boundary. This is
+not pre-host isolation or proof of actual delivery, runtime custody, factory
+exclusion, audit coverage, results/retention, or full #60 isolation acceptance.
+This slice delivers **no replacement supported execution workflow**. Compilation
+remains available via the build-for-testing recipes; Mac/unit adoption is separate.
+A generated or manually supplied UUID is neither provenance nor permission.
+
 The two live Apple-model tests belong exclusively to the iOS
 `FluxKlangAppleQualificationTests` target. Its `FluxKlangAppleQualification`
 scheme selects only that target and explicitly sets the three flags above to
