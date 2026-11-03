@@ -1,5 +1,5 @@
 /// Caller-supplied offline preparation budgets; these are not production defaults.
-struct AudioRoutingLimits {
+struct AudioRoutingLimits: Sendable {
     let maxFrames: Int
     let maxInputChannels: Int
     let maxOutputChannels: Int
@@ -9,7 +9,7 @@ struct AudioRoutingLimits {
     let maxSampleWork: Int
 }
 
-struct AudioRoutingEndpoint: Equatable {
+struct AudioRoutingEndpoint: Equatable, Sendable {
     let node: NodeID
     let port: PortID
     let role: RoleID
@@ -20,7 +20,7 @@ struct AudioRoutingEndpoint: Equatable {
 /// Internal planar Float32 ABI. Each channel has a fixed `maxFrames` stride,
 /// including for short and zero-frame calls. Peaks are per output channel.
 /// Only external role endpoints appear here; mute slabs remain private scratch.
-struct AudioRoutingLayout: Equatable {
+struct AudioRoutingLayout: Equatable, Sendable {
     let graph: GraphID
     let revision: ContractRevision
     let maxFrames: Int
@@ -40,7 +40,7 @@ enum AudioRoutingPreparationError: Error, Equatable {
     case contractFailure(ProjectValidationError)
 }
 
-enum AudioRoutingProcessRefusal: Equatable {
+enum AudioRoutingProcessRefusal: Equatable, Sendable {
     case invalidFrames
     case invalidBufferGeometry
     case overlappingStorage
@@ -49,7 +49,7 @@ enum AudioRoutingProcessRefusal: Equatable {
     case scratchUnavailable
 }
 
-enum AudioRoutingProcessResult: Equatable {
+enum AudioRoutingProcessResult: Equatable, Sendable {
     case processed
     case refused(AudioRoutingProcessRefusal)
 }
