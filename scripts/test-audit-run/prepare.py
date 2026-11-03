@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 
 
 PROFILE = "mac-isolated-unit"
+RETENTION_PROFILE = "mac-isolated-unit-retention-request-v1"
 TARGET = "FluxKlangMacTests"
 SCHEME = "FluxKlangMacIsolatedTests"
 RUN_KEY = "FLUXKLANG_AUDIT_RUN_ID"
@@ -109,6 +110,7 @@ OBSERVED = {
 }
 
 IOS_PROFILE = "ios-simulator-isolated-unit-ui-v1"
+IOS_RETENTION_PROFILE = "ios-simulator-isolated-unit-ui-retention-request-v1"
 
 # Complete observed combined simulator XML v1 input. The app-hosted unit
 # bundle and runner-hosted UI bundle intentionally have different fields.
@@ -279,14 +281,19 @@ class Refusal(ValueError):
 
 
 def _profile_definition(profile):
-    if profile == PROFILE:
-        return OBSERVED, [TARGET], ((TARGET, "EnvironmentVariables", RUN_KEY),)
-    if profile == IOS_PROFILE:
+    # Retention requests reuse the exact original input layouts, not prepared
+    # inputs or a broader attachment/environment allowlist.
+    if profile in (PROFILE, RETENTION_PROFILE):
+        return (
+            OBSERVED, [TARGET], ((TARGET, "EnvironmentVariables", RUN_KEY),),
+            profile == RETENTION_PROFILE,
+        )
+    if profile in (IOS_PROFILE, IOS_RETENTION_PROFILE):
         return IOS_OBSERVED, ["FluxKlangTests", "FluxKlangUITests"], (
             ("FluxKlangTests", "EnvironmentVariables", RUN_KEY),
             ("FluxKlangUITests", "EnvironmentVariables", RUN_KEY),
             ("FluxKlangUITests", "UITargetAppEnvironmentVariables", RUN_KEY),
-        )
+        ), profile == IOS_RETENTION_PROFILE
     raise Refusal("unsupported profile")
 
 
@@ -404,7 +411,7 @@ def existing_file(selected):
 
 
 def pinned_input(selected, expected_sha256, profile):
-    expected, _, _ = _profile_definition(profile)
+    expected, _, _, _ = _profile_definition(profile)
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise Refusal("expected SHA256 must be 64 lowercase hexadecimal digits")
     path = existing_file(selected)
@@ -437,18 +444,22 @@ def output_paths(input_path, run_id):
 
 
 def transformed(original, run_id, profile=PROFILE):
-    _, _, insertion_paths = _profile_definition(profile)
+    _, targets, insertion_paths, retention_requested = _profile_definition(profile)
     prepared = copy.deepcopy(original)
     for target, environment, key in insertion_paths:
         prepared[target][environment][key] = run_id
+    if retention_requested:
+        for target in targets:
+            prepared[target]["SystemAttachmentLifetime"] = "keepAlways"
+            prepared[target]["UserAttachmentLifetime"] = "keepAlways"
     return prepared
 
 
 def intent_record(input_path, input_digest, output, output_digest, intent, run_id,
                   profile=PROFILE):
-    _, targets, _ = _profile_definition(profile)
-    return {
-        "schema_version": 1,
+    _, targets, _, retention_requested = _profile_definition(profile)
+    record = {
+        "schema_version": 2 if retention_requested else 1,
         "profile": profile,
         "qualification": "partial-regression",
         "run_id": run_id,
@@ -457,6 +468,17 @@ def intent_record(input_path, input_digest, output, output_digest, intent, run_i
         "output": {"path": str(output), "sha256": output_digest},
         "intent_path": str(intent),
     }
+    if retention_requested:
+        record["attachment_policy"] = {
+            "identifier": "request-system-and-user-keepAlways-v1",
+            "targets": {
+                target: {
+                    "SystemAttachmentLifetime": "keepAlways",
+                    "UserAttachmentLifetime": "keepAlways",
+                } for target in targets
+            },
+        }
+    return record
 
 
 def validate(input_path, expected_sha256, profile, output_path, intent_path):
@@ -481,8 +503,9 @@ def validate(input_path, expected_sha256, profile, output_path, intent_path):
         intent_record(source, expected_sha256, output, digest(data), intent, run_id, profile),
         "intent",
     )
-    # Full type-sensitive comparison proves that the only parsed change is the
-    # run ID at the fixed profile paths. Flags and Xcode placeholders stay exact.
+    # Full type-sensitive comparison permits only the profile's run-key additions
+    # and, when explicitly selected, its fixed attachment lifetime requests.
+    # Expectations never come from the supplied intent's attachment policy.
     require_equal(parse_plist(data), transformed(original, run_id, profile), "output")
     return record
 
@@ -524,7 +547,9 @@ def main(argv=None):
         command = commands.add_parser(name)
         command.add_argument("--input", required=True, type=Path)
         command.add_argument("--expected-sha256", required=True)
-        command.add_argument("--profile", required=True, choices=[PROFILE, IOS_PROFILE])
+        command.add_argument("--profile", required=True, choices=[
+            PROFILE, IOS_PROFILE, RETENTION_PROFILE, IOS_RETENTION_PROFILE,
+        ])
         if name == "validate":
             command.add_argument("--output", required=True, type=Path)
             command.add_argument("--intent", required=True, type=Path)
