@@ -6,6 +6,15 @@ import SwiftSyntax
 // remain valid unless their supported ancestry actually reaches XCTestCase.
 final class XCTestDiscoveryGuard {
     enum Lineage { case ordinary, xctest, unknown }
+    private enum BaseBinding {
+        case resolved([Int])
+        case indeterminate
+
+        var choices: [Int]? {
+            if case .resolved(let value) = self { return value }
+            return nil
+        }
+    }
     struct Node {
         let site: SourceSite
         let qualified: String?
@@ -17,16 +26,17 @@ final class XCTestDiscoveryGuard {
 
     let inventory: SourceInventory
     let nodes: [Node]
-    private var nodeIndex: [String: [Int]] = [:]
-    private var baseBindings: [Int: [String: [Int]]] = [:]
+    private let bindings: SourceExtensionOwnership
+    private var baseBindings: [Int: [String: BaseBinding]] = [:]
     private var validatedAncestry: Set<Int> = []
     private var activeAncestry: Set<Int> = []
     private var lineages: [Int: Lineage] = [:]
     private var activeLineage: Set<Int> = []
     private var cyclicLineage: Set<Int> = []
 
-    init(_ inventory: SourceInventory) {
+    init(_ inventory: SourceInventory, bindings: SourceExtensionOwnership) {
         self.inventory = inventory
+        self.bindings = bindings
         nodes = inventory.nominals.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
                  parent: $0.parent, bases: $0.isClass ? $0.bases : [],
@@ -34,9 +44,6 @@ final class XCTestDiscoveryGuard {
         } + inventory.aliases.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
                  parent: $0.parent, bases: [$0.target], baseTypes: [$0.ancestryType])
-        }
-        for (number, node) in nodes.enumerated() {
-            if let name = node.qualified { nodeIndex[name, default: []].append(number) }
         }
     }
 
@@ -51,9 +58,9 @@ final class XCTestDiscoveryGuard {
             }
         }
         for (number, extended) in inventory.extensions.enumerated() where shaped.contains(.extended(number)) {
-            let choices = lookup(extended.qualified, path: extended.site.path, scope: "")
-            try require(choices.count == 1, "unsupported XCTest-shaped extension ownership: \(extended.site)")
-            guard let owner = choices.first else { throw AuditFailure("unresolved XCTest-shaped extension") }
+            guard let owner = bindings.extensionTarget(number) else {
+                throw AuditFailure("unresolved XCTest-shaped extension ownership: \(extended.site)")
+            }
             try require(lineage(owner) == .ordinary,
                         "unsupported XCTest-shaped extension ancestry: \(extended.site)")
             if owner < inventory.nominals.count { shaped.insert(.nominal(owner)) }
@@ -71,17 +78,8 @@ final class XCTestDiscoveryGuard {
 }
 
 extension XCTestDiscoveryGuard {
-    private func lookup(_ name: String?, path: String, scope: String) -> [Int] {
-        guard let name else { return [] }
-        var prefixes = scope.split(separator: ".").map(String.init)
-        var spellings: Set<String> = [name]
-        while !prefixes.isEmpty {
-            spellings.insert(prefixes.joined(separator: ".") + "." + name)
-            prefixes.removeLast()
-        }
-        return spellings.flatMap { nodeIndex[$0] ?? [] }.sorted().filter {
-            !nodes[$0].restricted || nodes[$0].site.path == path
-        }
+    private func lookup(_ name: String?, path: String, scope: String) -> [Int]? {
+        bindings.lexical(name, path: path, scope: scope)
     }
 
     private struct ReturnScope {
@@ -101,11 +99,9 @@ extension XCTestDiscoveryGuard {
                                parameters: parameters.union(nominal.genericParameters).union(outer.parameters),
                                context: context)
         case .extended(let index):
-            let name = inventory.extensions[index].qualified ?? ""
-            let owners = lookup(name, path: site.path, scope: "").filter { $0 < inventory.nominals.count }
-            let inherited = owners.reduce(parameters) {
-                $0.union(returnScope(site: site, context: .nominal($1)).parameters)
-            }
+            let owner = bindings.extensionTarget(index)
+            let inherited = owner.map { parameters.union(returnScope(site: site, context: .nominal($0)).parameters) }
+                ?? parameters
             return ReturnScope(path: site.path, parameters: inherited, context: context)
         case .none, .local:
             return ReturnScope(path: site.path, parameters: parameters, context: context)
@@ -160,10 +156,7 @@ extension XCTestDiscoveryGuard {
             if !members.isEmpty { return members }
             return scopedChoices(name, path: path, context: inventory.nominals[number].parent)
         case .extended(let number):
-            let extended = inventory.extensions[number]
-            guard !extended.unsupported else { return nil }
-            let owners = lookup(extended.qualified, path: path, scope: "")
-            guard owners.count == 1, let owner = owners.first,
+            guard let owner = bindings.extensionTarget(number),
                   let members = memberChoices(name, owner: owner, path: path, visiting: []) else { return nil }
             if !members.isEmpty { return members }
             return exactChoices(name, path: path)
@@ -173,13 +166,7 @@ extension XCTestDiscoveryGuard {
     }
 
     private func exactChoices(_ name: String, path: String) -> [Int]? {
-        let matches = nodeIndex[name] ?? []
-        for match in matches {
-            if nodes[match].restricted && nodes[match].site.path != path { return nil }
-            if case .extended(let number) = nodes[match].parent,
-               inventory.extensions[number].unsupported { return nil }
-        }
-        return matches
+        bindings.exact(name, path: path)
     }
 
     private func qualifiedChoices(_ name: String, first: [Int], path: String) -> [Int]? {
@@ -203,17 +190,17 @@ extension XCTestDiscoveryGuard {
             // Only transparent top-level ancestry aliases are expanded here.
             // Nested/generic ancestry binding requires unsupported semantics.
             guard node.parent == nil, let target = node.bases.first else { return nil }
-            let choices = lookup(target, path: node.site.path, scope: "")
-            guard choices.count == 1, let choice = choices.first else { return nil }
+            guard let choices = lookup(target, path: node.site.path, scope: ""),
+                  choices.count == 1, let choice = choices.first else { return nil }
             return memberChoices(name, owner: choice, path: path, visiting: visited)
         }
         let nominal = inventory.nominals[owner]
-        guard !nominal.genericParameters.contains(name), let qualified = nominal.qualified,
-              let own = exactChoices(qualified + "." + name, path: path) else { return nil }
+        guard !nominal.genericParameters.contains(name),
+              let own = bindings.ownMembers(name, owner: owner, path: path) else { return nil }
         if !visiting.isEmpty && !nominal.genericParameters.isEmpty { return nil }
         // Records conservatively combine private/fileprivate. A restricted
         // inherited member cannot establish a binding even in the same file.
-        if !visiting.isEmpty && own.contains(where: { nodes[$0].restricted }) { return nil }
+        if !visiting.isEmpty && own.contains(where: { bindings.restriction($0) != false }) { return nil }
         if !own.isEmpty { return own }
         if !nominal.isClass && nominal.unsupported { return nil }
         return inheritedChoices(name, owner: owner, path: path, visiting: visited)
@@ -222,23 +209,22 @@ extension XCTestDiscoveryGuard {
     private func inheritedChoices(_ name: String, owner: Int, path: String, visiting: Set<Int>) -> [Int]? {
         var result: [Int] = []
         for base in inventory.nominals[owner].bases {
-            let choices = baseChoices(base, owner: owner)
-            guard choices.count == 1, let choice = choices.first,
+            guard let choices = baseChoices(base, owner: owner), choices.count == 1, let choice = choices.first,
                   let members = memberChoices(name, owner: choice, path: path, visiting: visiting) else { return nil }
             result += members
         }
         return result
     }
 
-    private func baseChoices(_ base: String?, owner: Int) -> [Int] {
+    private func baseChoices(_ base: String?, owner: Int) -> [Int]? {
         guard let base else { return [] }
-        if let cached = baseBindings[owner]?[base] { return cached }
+        if let cached = baseBindings[owner]?[base] { return cached.choices }
         let choices = findBaseChoices(base, owner: owner)
-        baseBindings[owner, default: [:]][base] = choices
+        baseBindings[owner, default: [:]][base] = choices.map(BaseBinding.resolved) ?? .indeterminate
         return choices
     }
 
-    private func findBaseChoices(_ base: String, owner: Int) -> [Int] {
+    private func findBaseChoices(_ base: String, owner: Int) -> [Int]? {
         guard let first = base.split(separator: ".").first.map(String.init) else { return [] }
         if owner >= inventory.nominals.count,
            inventory.aliases[owner - inventory.nominals.count].genericParameters.contains(first) { return [] }
@@ -255,16 +241,20 @@ extension XCTestDiscoveryGuard {
         let node = nodes[owner]
         let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
         if let root = lexicalBaseRoot(base, owner: owner) {
-            var choices = exactChoices(root, path: node.site.path) ?? []
-            for component in base.split(separator: ".").dropFirst() {
-                guard choices.count == 1, let choice = choices.first, choice < inventory.nominals.count,
-                      inventory.nominals[choice].genericParameters.isEmpty,
-                      let name = nodes[choice].qualified else { return [] }
-                choices = exactChoices(name + "." + component, path: node.site.path) ?? []
-            }
-            return choices
+            return dottedBaseChoices(base, root: root, path: node.site.path)
         }
         return lookup(base, path: node.site.path, scope: scope)
+    }
+
+    private func dottedBaseChoices(_ base: String, root: String, path: String) -> [Int]? {
+        guard var choices = exactChoices(root, path: path) else { return nil }
+        for component in base.split(separator: ".").dropFirst() {
+            guard choices.count == 1, let choice = choices.first, choice < inventory.nominals.count,
+                  inventory.nominals[choice].genericParameters.isEmpty else { return [] }
+            guard let members = bindings.ownMembers(String(component), owner: choice, path: path) else { return nil }
+            choices = members
+        }
+        return choices
     }
 
     private func lexicalBaseRoot(_ base: String, owner: Int) -> String? {
@@ -272,7 +262,10 @@ extension XCTestDiscoveryGuard {
         var prefixes = nodes[owner].qualified?.split(separator: ".").dropLast().map(String.init) ?? []
         while true {
             let name = (prefixes + [String(first)]).joined(separator: ".")
-            if nodeIndex[name] != nil { return name }
+            // A raw bucket can contain only foreign members. Continue outward
+            // for proved absence, but stop on nil (indeterminate) or candidates.
+            if !bindings.indexed(name).isEmpty,
+               bindings.exact(name, path: nodes[owner].site.path) != [] { return name }
             if prefixes.isEmpty { return nil }
             prefixes.removeLast()
         }
@@ -299,17 +292,16 @@ extension XCTestDiscoveryGuard {
             let nominal = inventory.nominals[number]
             return !nominal.bases.isEmpty || needsEnclosingBinding(nominal.parent, visiting: visited)
         case .extended(let number):
-            let extended = inventory.extensions[number]
-            let owners = lookup(extended.qualified, path: extended.site.path, scope: "")
-            guard owners.count == 1, let owner = owners.first, owner < inventory.nominals.count else { return true }
+            guard let owner = bindings.extensionTarget(number) else { return true }
             return needsEnclosingBinding(.nominal(owner), visiting: visited)
         case .local: return false
         }
     }
 
     private func validateContextualAncestry(_ number: Int) throws -> Bool {
-        let enclosing = needsEnclosingBinding(nodes[number].parent)
+        let enclosing = hasExtensionContext(nodes[number].parent) || needsEnclosingBinding(nodes[number].parent)
         for type in nodes[number].baseTypes {
+            if let path = ancestryPath(type) { try validateLocalConsumption(path, owner: number) }
             if enclosing {
                 try validateEnclosingBinding(type, owner: number)
             } else if let path = ancestryPath(type) {
@@ -320,6 +312,36 @@ extension XCTestDiscoveryGuard {
             }
         }
         return enclosing
+    }
+
+    private func hasExtensionContext(_ context: OwnerContext?) -> Bool {
+        switch context {
+        case .nominal(let number): return hasExtensionContext(inventory.nominals[number].parent)
+        case .extended: return true
+        case .none, .local: return false
+        }
+    }
+
+    private func validateLocalConsumption(_ base: String, owner: Int) throws {
+        guard base.contains("."), let first = base.split(separator: ".").first.map(String.init) else { return }
+        if owner >= inventory.nominals.count,
+           inventory.aliases[owner - inventory.nominals.count].genericParameters.contains(first) { return }
+        var context: OwnerContext? = owner < inventory.nominals.count ? .nominal(owner) : nodes[owner].parent
+        while let current = context {
+            switch current {
+            case .nominal(let number):
+                let nominal = inventory.nominals[number]
+                if nominal.genericParameters.contains(first) { return }
+                context = nominal.parent
+            case .local:
+                // Presence is only grounds for unsupported local consumption, not
+                // a winning binding over local shadows. No hit is not proof of absence.
+                try require(bindings.indexed(base).isEmpty,
+                            "unsupported source-associated local XCTest ancestry: \(nodes[owner].site)")
+                return
+            case .extended: return
+            }
+        }
     }
 
     private func validateEnclosingBinding(_ type: TypeSyntax, owner: Int) throws {
@@ -333,6 +355,13 @@ extension XCTestDiscoveryGuard {
         }
         try require(first != inventory.variant.matrix.module || !roots.isEmpty,
                     "unsupported current-module XCTest ancestry")
+        if roots.isEmpty && base.contains(".") {
+            // Rejection only: contextual base lookup deliberately declines ordinary
+            // binding, but an absent first component cannot erase indexed provenance.
+            let scope = node.qualified?.split(separator: ".").dropLast().joined(separator: ".") ?? ""
+            try require(lookup(base, path: node.site.path, scope: scope) != nil,
+                        "indeterminate contextual source-bound XCTest ancestry: \(node.site)")
+        }
         try require(SourceInventory.ancestryName(type) != nil || !base.contains("."),
                     "unsupported specialized enclosing XCTest ancestry")
         try require(!base.contains(".") || roots.allSatisfy {
@@ -365,13 +394,15 @@ extension XCTestDiscoveryGuard {
         let erased = number >= inventory.nominals.count &&
             inventory.aliases[number - inventory.nominals.count].value == nil
         for type in nodes[number].baseTypes where erased || SourceInventory.ancestryName(type) == nil {
-            guard let path = ancestryPath(type), lexicalBaseRoot(path, owner: number) != nil else {
+            let path = ancestryPath(type)
+            if let path { _ = try checkedBaseChoices(path, owner: number) }
+            guard let path, lexicalBaseRoot(path, owner: number) != nil else {
                 try require(!erased, "unsupported erased generic XCTest ancestry: \(nodes[number].site)")
                 continue
             }
             try require(SourceInventory.ancestryName(type) != nil || !path.contains("."),
                         "unsupported specialized source-bound XCTest ancestry: \(nodes[number].site)")
-            let choices = baseChoices(path, owner: number)
+            let choices = try checkedBaseChoices(path, owner: number)
             try require(choices.count == 1, "unsupported specialized XCTest ancestry binding: \(nodes[number].site)")
             // Every erased initializer participates, including supported names. This
             // traversal rejects ancestry; it never supplies an ordinary lineage proof.
@@ -384,7 +415,7 @@ extension XCTestDiscoveryGuard {
         // an ordinary global member, even for EMPTY classes. Namespace alias
         // expansion and inherited namespace members remain unsupported here.
         for base in nodes[number].bases {
-            let choices = baseChoices(base, owner: number)
+            let choices = try checkedBaseChoices(base, owner: number)
             if let base, lexicalBaseRoot(base, owner: number) != nil {
                 try require(choices.count == 1,
                             "unsupported shadowed/indeterminate XCTest ancestry: \(nodes[number].site)")
@@ -407,6 +438,15 @@ extension XCTestDiscoveryGuard {
         return result
     }
 
+    private func checkedBaseChoices(_ base: String?, owner: Int) throws -> [Int] {
+        // An indexed member can have unresolved extension provenance even when
+        // its first component has no source nominal. Never cache that as absence.
+        guard let choices = baseChoices(base, owner: owner) else {
+            throw AuditFailure("indeterminate source-bound XCTest ancestry: \(nodes[owner].site)")
+        }
+        return choices
+    }
+
     private func unshadowedXCTest(_ base: String?, owner: Int) -> Bool {
         guard let base, base == "XCTestCase" || base == "XCTest.XCTestCase",
               lexicalBaseRoot(base, owner: owner) == nil else { return false }
@@ -423,12 +463,13 @@ extension XCTestDiscoveryGuard {
     private func computeLineage(_ number: Int) -> Lineage {
         let node = nodes[number]
         let parents = node.bases.map { base -> Lineage in
-            let choices = baseChoices(base, owner: number)
+            guard let choices = baseChoices(base, owner: number) else { return .unknown }
             if choices.count == 1, let choice = choices.first { return lineage(choice) }
             return unshadowedXCTest(base, owner: number) ? .xctest : .unknown
         }
         if parents.contains(.xctest) { return .xctest }
         if parents.contains(.unknown) { return .unknown }
+        if bindings.restriction(number) == nil { return .unknown }
         // Aliases/types declared in local or extension scopes are not semantically
         // resolved by this guard; they cannot establish safe ancestry for tests.
         if case .extended = node.parent { return .unknown }
