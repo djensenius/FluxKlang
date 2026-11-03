@@ -173,7 +173,8 @@ struct ProjectMembership {
         let targets = try references.map { try object($0, isa: "PBXNativeTarget") }
         let units = targets.filter { $0["productType"] as? String == "com.apple.product-type.bundle.unit-test" }
         let names = try units.map { try string($0, "name") }
-        try require(names.count == 2 && Set(names) == Set(manifest.matrix.map(\.target)),
+        try require(names.count == (manifest.schemaVersion == 2 ? 3 : 2) &&
+                    Set(names) == Set(manifest.matrix.map(\.target)),
                     "PBX unit-target set does not match matrix")
         var result: [String: [String]] = [:]
         for membership in manifest.sources {
@@ -192,6 +193,7 @@ struct ProjectMembership {
             for path in expected.sorted() { _ = try inputs.read(path, role: .source) }
             result[membership.target] = expected.sorted()
         }
+        if manifest.schemaVersion == 2 { try TargetRoleContract.validateMemberships(result) }
         return result
     }
 

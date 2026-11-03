@@ -100,6 +100,37 @@ struct SourceOwnership {
         return (rows.sorted { $0.registration.sortKey < $1.registration.sortKey }, diagnostics)
     }
 
+    // V2 performs this role-neutral structural pass for every target/variant
+    // before either canonical or qualification obligations are selected.
+    func validateDiscovery() throws {
+        try XCTestDiscoveryGuard(inventory, bindings: bindings).validate()
+        for (number, nominal) in inventory.nominals.enumerated()
+        where nominal.attributes.contains(where: { SourceAttributes.macro($0) != nil }) {
+            _ = try root(.nominal(number))
+        }
+        for (number, extended) in inventory.extensions.enumerated()
+        where extended.attributes.contains(where: { SourceAttributes.macro($0) != nil }) {
+            _ = try root(.extended(number))
+        }
+        var freeIdentities = Set<String>()
+        for function in inventory.functions {
+            try require(!function.unsupported, "unsupported generic test function: \(function.site)")
+            if let parent = function.parent {
+                _ = try root(parent)
+            } else {
+                let identity = function.site.path + "\u{1F}" + function.site.name
+                try require(freeIdentities.insert(identity).inserted, "duplicate source declaration identity")
+            }
+        }
+        let attributes = inventory.nominals.flatMap(\.attributes) + inventory.extensions.flatMap(\.attributes) +
+            inventory.functions.flatMap(\.attributes)
+        for attribute in attributes {
+            var review = AnnotationReview()
+            review.inspect(attribute)
+            try require(review.unsupported.isEmpty, review.unsupported.joined(separator: "; "))
+        }
+    }
+
     private func reviewAttributes(
         _ attributes: [AttributeSyntax], expected: String, canonical: Bool
     ) -> AnnotationReview {
