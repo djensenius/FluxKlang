@@ -128,6 +128,42 @@ enum ProjectValidationError: Error, Hashable, Sendable {
 }
 
 extension ProjectDocument {
+    /// Preparation-only project admission. Preserve the complete original value;
+    /// unrelated graph bodies are not required and no compiler subset is imposed.
+    func validatePreparationContext(selectedGraph: GraphDocument) throws(PreparationProjectRefusal) {
+        try PreparationProjectBudget.check(self)
+        let byteCount: Int
+        do {
+            // Exactly one top-level full-project encoding, after preflight.
+            // Existing nested encoder operations/validation remain unchanged.
+            byteCount = try ContractCoding.makeEncoder().encode(self).count
+        } catch { throw .encoding }
+        guard byteCount <= PreparationProjectBudget.encodedBytes else { throw .encodedLimit }
+        do { try validateSelectedContext(selectedGraph) } catch { throw .selected(error) }
+    }
+
+    private func validateSelectedContext(_ candidate: GraphDocument) throws(ProjectValidationError) {
+        let rolesByID = Dictionary(roles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let assetsByID = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        if let first = recordErrors(assetsByID: assetsByID, strict: false).first { throw first }
+        // recordErrors rejects duplicate graph declarations, so this match is
+        // unique and pinned to the candidate, not the project's revision.
+        guard graphs.contains(where: { $0.graph == candidate.id && $0.revision == candidate.revision }) else {
+            throw .graphNotSupplied(candidate.id, revision: candidate.revision)
+        }
+        // Existing generic graph checks are deliberately outside the NEW project
+        // resource guarantee; this API does not bound arbitrary caller graph data.
+        do { try candidate.checkCollectionBounds() } catch { throw .graph(candidate.id, .bounds(error)) }
+        if let first = candidate.validationErrors().first { throw .graph(candidate.id, first) }
+        let referenced = Set(graphs.map(\.graph))
+        for node in candidate.nodes {
+            if let first = referenceErrors(
+                node, in: candidate.id, graphs: referenced, rolesByID: rolesByID, assetsByID: assetsByID
+            ).first { throw first }
+        }
+        // No unrelated bodies were supplied: do not claim cross-graph cycle validation.
+    }
+
     /// Every reason this project is rejected, given the graphs it references.
     func validationErrors(graphs supplied: [GraphDocument], strict: Bool = false) -> [ProjectValidationError] {
         do {

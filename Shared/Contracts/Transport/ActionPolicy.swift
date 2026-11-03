@@ -97,4 +97,30 @@ struct ActionPolicy: Hashable, Sendable, Codable {
         try fields.encodeIfPresent(extensions, forKey: .extensions)
         try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: CodingKeys.self)
     }
+
+    /// Direct retained-field accounting, including metadata omitted by coding.
+    /// The caller charges the policy member/name; this hook charges its subtree.
+    func checkPreparationBudget(_ budget: inout PreparationProjectBudget, depth: Int)
+        throws(PreparationProjectRefusal) {
+        try budget.container(depth: depth, members: 9)
+        try budget.scalar("media", depth: depth + 1, text: media.rawValue)
+        try budget.scalar("timePolicy", depth: depth + 1, text: timePolicy?.rawValue)
+        try budget.text("latePolicy")
+        try budget.container(depth: depth + 1, members: 2)
+        let tag: String
+        switch latePolicy {
+        case .drop: tag = "drop"
+        case .fireLate: tag = "fireLate"
+        case .joinInProgress: tag = "joinInProgress"
+        case .nextBoundary: tag = "nextBoundary"
+        }
+        try budget.scalar("tag", depth: depth + 2, text: tag)
+        try budget.scalar("payload", depth: depth + 2)
+        try budget.scalar("gridTicks", depth: depth + 1)
+        try budget.scalar("retroactiveMs", depth: depth + 1)
+        try budget.scalar("stoppedPolicy", depth: depth + 1, text: stoppedPolicy.rawValue)
+        try budget.bag("unknownFields", unknownFields, depth: depth + 1)
+        try budget.bag("extensions", extensions, depth: depth + 1)
+        try budget.bag("latePolicyUnknownFields", latePolicyUnknownFields, depth: depth + 1)
+    }
 }
