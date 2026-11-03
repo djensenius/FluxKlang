@@ -37,6 +37,7 @@ final class XCTestDiscoveryGuard {
     init(_ inventory: SourceInventory, bindings: SourceExtensionOwnership) {
         self.inventory = inventory
         self.bindings = bindings
+        inventory.localProvenance.finalize()
         nodes = inventory.nominals.map {
             Node(site: $0.site, qualified: $0.qualified, restricted: $0.restricted,
                  parent: $0.parent, bases: $0.isClass ? $0.bases : [],
@@ -323,6 +324,19 @@ extension XCTestDiscoveryGuard {
     }
 
     private func validateLocalConsumption(_ base: String, owner: Int) throws {
+        let record: SourceLocalProvenance.Record = owner < inventory.nominals.count ?
+            .nominal(owner) : .alias(owner - inventory.nominals.count)
+        let lookupContext = SourceLocalProvenance.LookupContext(inventory: inventory, bindings: bindings,
+                                                              path: nodes[owner].site.path)
+        let presence = inventory.localProvenance.presence(base, record: record, context: lookupContext) {
+            self.memberChoices($0, owner: $1, path: lookupContext.path, visiting: [])
+        }
+        switch presence {
+        case .declaration, .indeterminate:
+            throw AuditFailure("unsupported local source ancestry provenance: \(nodes[owner].site)")
+        case .formal: return
+        case .nonlocal, .absent: break
+        }
         guard base.contains("."), let first = base.split(separator: ".").first.map(String.init) else { return }
         if owner >= inventory.nominals.count,
            inventory.aliases[owner - inventory.nominals.count].genericParameters.contains(first) { return }
