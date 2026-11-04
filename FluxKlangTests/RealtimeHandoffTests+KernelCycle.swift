@@ -29,7 +29,7 @@ struct CycleRig {
     let cycle: KernelCycle
 
     init(lanes: Int = 2, laneCapacity: Int = 20, blockCapacity: Int = 64, pulsesPerBlock: Int = 4,
-         staleTolerance: Int64 = 48) throws {
+         staleTolerance: Int64 = 48, perLaneQuota: Int = 64) throws {
         faults = try FaultLatch(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
         events = try FanInHandoff(policy: Self.policy(lanes: lanes, laneCapacity: laneCapacity),
                                   laneCapacity: laneCapacity, reserved: 16, faults: faults,
@@ -41,7 +41,7 @@ struct CycleRig {
                                      ramps: ramps)
         cycle = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: pulsesPerBlock,
                                                               staleTolerance: staleTolerance),
-                                blockCapacity: blockCapacity, perLaneQuota: 64)
+                                blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
     }
 
     /// A MIDI-receive fan-in to render with a 480-frame tolerance and a 96,000-frame lookahead.
@@ -474,14 +474,15 @@ extension RealtimeHandoffTests {
         }
 
         /// Review finding 6, pinned: the E2 key orders a same-frame `noteOff` (release lane) before its `noteOn`
-        /// (content lane), so a zero-length note is left sounding. Producers must not send zero-length notes.
+        /// (content lane); round 4b's tie rule treats the `noteOn` as a retrigger, so a zero-length note sounds and
+        /// stays owned. Producers must not send zero-length notes.
         @Test func zeroLengthNoteFromOneProducerIsReleaseFirst() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
             #expect(rig.push(cycleEvent(100, noteOn(60), sequence: 0), token) == .ok)
             #expect(rig.push(cycleEvent(100, noteOff(60), sequence: 1), token) == .ok)
-            let (_, emitted) = rig.run(64, 64)
-            #expect(emitted.map(\.event.sequence) == [1, 0])
+            let (result, emitted) = rig.run(64, 64)
+            #expect(emitted.map(\.event.sequence) == [1, 0] && result.discardedSuperseded == 0)
             #expect(rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
         }
     }

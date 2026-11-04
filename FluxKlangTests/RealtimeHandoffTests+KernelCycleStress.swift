@@ -115,7 +115,7 @@ private struct CycleModel: Sendable {
         cycles += 1
         drained += result.drained
         decided += result.dispatched + result.droppedLate + result.refused + result.skippedPulses
-            + result.discardedWhileSilenced
+            + result.discardedWhileSilenced + result.discardedSuperseded
         if result.status != .ok { silencedCycles += 1 }
         if result.flushing { flushingCycles += 1 }
         if result.flushing, emitted.contains(where: { if case .noteOn = $0.event.payload { true } else { false } }) {

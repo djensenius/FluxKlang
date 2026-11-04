@@ -1,18 +1,13 @@
-// #64 E5a kernel cycle core: one bounded, render-owned block of event work composed from the accepted parts. It takes
-// safety requests, keys critical loss on the fan-in's latched `criticalScope`, drains the M5 fan-in into a
-// preallocated block buffer ordered by original frame, decides each event with the E2 `DeadlinePolicy` (counting
-// `droppedLate`), applies `NoteOwnership`, the E2 `ClockPulseGate` and E3 `RampSlots`, and returns an explicit
-// `KernelCycleResult`. It is not wired into any render path, AU callback or audio buffer. Plan adoption (`noPlan`),
-// the output buffer, gate-counter telemetry and the `.staleClock` decision are E5b's.
-// Reference model; not RT-certified.
+// #64 E5a kernel cycle core: one bounded, render-owned block of event work composed from the accepted E2/E3 parts.
+// Not wired into any render path, AU callback or audio buffer; plan adoption (`noPlan`), the output buffer, gate
+// telemetry and the `.staleClock` decision are E5b's. Reference model; not RT-certified.
 
 /// What one `KernelCycle.run` did. Every drained event that leaves the block buffer is counted in exactly one of
-/// `dispatched`, `droppedLate`, `refused`, `skippedPulses` or `discardedWhileSilenced`; synthesized releases are
-/// counted only in `releasedNotes`.
+/// `dispatched`, `droppedLate`, `refused`, `skippedPulses`, `discardedWhileSilenced` or `discardedSuperseded`;
+/// synthesized releases are counted only in `releasedNotes`.
 /// Reference model; not RT-certified.
 struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
-    /// `.ok`; `.silenced(.scopeFaulted)` while the fan-in's critical scope is latched; otherwise
-    /// `.silenced(.safetyMute)` for a cycle that took a panic request.
+    /// `.ok`; `.silenced(.scopeFaulted)` while the critical scope is latched; else `.silenced(.safetyMute)` on panic.
     fileprivate(set) var status: KernelStatus = .ok
     /// Events moved from the fan-in into the block buffer.
     fileprivate(set) var drained = 0
@@ -28,6 +23,8 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     /// Note events consumed without emitting: a silenced cycle's buffered `noteOn`s and unowned `noteOff`s, and
     /// `noteOn`s decided while flushing (see the type's Flush watermark).
     fileprivate(set) var discardedWhileSilenced = 0
+    /// Decided `noteOn`s a same-key `noteOff` strictly after their frame already released (`ReleaseTombstones`).
+    fileprivate(set) var discardedSuperseded = 0
     /// A lane was still flushing after this cycle's drain (see the type's Flush watermark).
     fileprivate(set) var flushing = false
     /// Owned notes released by safety requests or by critical-fault recovery, each emitted as a synthesized
@@ -71,9 +68,11 @@ struct KernelCycleParts {
 ///    `noteOn`s keep their own FIFO `noteOff`s. A panic is global: it cuts notes short in other scopes too.
 /// 6. Ramps, when `frames > 0`, advance to the end of the block.
 ///
-/// Per due event: `noteOn` is emitted only if `NoteOwnership` accepts it; `noteOff` clears ownership and is
-/// always emitted; `control`/`program` are never merged; `clockPulse` goes through the gate with its original
-/// frame; `rampTo` replaces the ramp from its value at the dispatch frame. `emit` gets the event and its frame.
+/// Per due event: `noteOn` is emitted only if no same-key release after its frame was applied (release
+/// tombstones; cross-lane order is otherwise not guaranteed) and `NoteOwnership` accepts it; `noteOff` records its
+/// tombstone, clears ownership and is always emitted; `control`/`program` are never merged; `clockPulse` goes
+/// through the gate with its original frame; `rampTo` replaces the ramp from its value at the dispatch frame.
+/// `emit` gets the event and its frame.
 ///
 /// Flush watermark. A latched loss means some lane may hold a `noteOn` ahead of its refused `noteOff`, possibly
 /// behind a full buffer. Each latched cycle sets every lane's flush bit; a drain clears a lane's bit when it proves
@@ -89,18 +88,17 @@ struct KernelCycleParts {
 /// Stale clocks: the gate's one marker per stall is `KernelCycleResult.resync`; E5a intentionally raises no
 /// `.staleClock` (E5b's decision) and adds no `FaultLatch.raise` site. Frame order: E5a tolerates a producer's
 /// frames going backwards (ordered by original frame, decided late or dropped); producers reset discontinuities
-/// via `DeadlinePolicy.admit` before pushing. Zero-length notes: a same-frame `noteOff` is ordered before its
-/// `noteOn` (release lane first), leaving it sounding; producers must put the `noteOff` at least a frame later.
+/// via `DeadlinePolicy.admit` before pushing. Zero-length notes: a same-frame `noteOff` is ordered first and the
+/// `noteOn` (a tie, so a retrigger) then sounds and sticks; producers must put the `noteOff` at least a frame later.
 ///
-/// Bounds. All storage (block and scratch buffers, render state, flush bits, gate, ramp words) is allocated in
-/// `init`. A cycle drains at most the free room, sorts in O(n log n) moves, passes the buffer once more, visits
-/// each owned-note word at most twice and each ramp parameter and lane once. A buffer full of future (or, while
-/// silenced, non-note) events stops draining: producers meet M4/M5 backpressure and the lanes are decided later.
+/// Bounds. All storage (block and scratch buffers, render state, flush bits, tombstones, gate, ramp words) is
+/// allocated in `init`. A cycle drains at most the free room, sorts in O(n log n) moves, passes the buffer once
+/// more, visits each owned-note word at most twice and each ramp parameter and lane once; a buffer full of future
+/// (or, while silenced, non-note) events stops draining (M4/M5 backpressure; the lanes are decided later).
 ///
 /// Contracts. `run`, `parameterValue`, `pulses` and `bufferedCount` are the render consumer's only (the fan-in's
 /// single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call back. The
 /// parts are kept for life. ARC, metadata and target progress are unqualified (X1 probe), as in M5–M7.
-///
 /// `@unchecked Sendable`: all mutable state is render-only, in storage preallocated in `init`.
 final class KernelCycle: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
@@ -151,6 +149,8 @@ final class KernelCycle: @unchecked Sendable {
     private let state: UnsafeMutablePointer<RenderState>
     /// One flush bit per fan-in lane.
     private let flushLanes: UnsafeMutablePointer<Bool>
+    /// Latest release frame per note key; see `ReleaseTombstones`.
+    private let tombstones: ReleaseTombstones
     /// The gate's cumulative counters and resync state.
     private let gate: UnsafeMutablePointer<ClockPulseGate>
     /// Each parameter's last known value: where a replacing ramp starts when none is active.
@@ -191,6 +191,7 @@ final class KernelCycle: @unchecked Sendable {
         state.initialize(to: RenderState())
         flushLanes = .allocate(capacity: parts.events.laneCount)
         flushLanes.initialize(repeating: false, count: parts.events.laneCount)
+        tombstones = ReleaseTombstones(scopes: parts.ownership.scopeCount)
         gate = .allocate(capacity: 1)
         gate.initialize(to: pulses)
         values = .allocate(capacity: parts.ramps.parameterCount)
@@ -315,6 +316,7 @@ final class KernelCycle: @unchecked Sendable {
             case .noteOn:
                 result.discardedWhileSilenced &+= 1
             case .noteOff(let channel, let note):
+                tombstones.release(item.event)
                 guard ownership.noteOff(scope: item.event.scope, channel: channel, note: note) else {
                     result.discardedWhileSilenced &+= 1
                     continue
@@ -361,11 +363,16 @@ final class KernelCycle: @unchecked Sendable {
                        _ emit: (KernelEvent, Int64) -> Void) {
         switch event.payload {
         case .noteOn(let channel, let note, _):
+            guard !tombstones.supersedes(event, blockStart: blockStart, lateTolerance: deadline.lateTolerance) else {
+                result.discardedSuperseded &+= 1
+                return
+            }
             guard ownership.noteOn(scope: event.scope, channel: channel, note: note) == .ok else {
                 result.refused &+= 1
                 return
             }
         case .noteOff(let channel, let note):
+            tombstones.release(event)
             _ = ownership.noteOff(scope: event.scope, channel: channel, note: note)
         case .clockPulse:
             guard gate.pointee.admit(pulseFrame: event.frame, blockStart: blockStart) == .emit else {
