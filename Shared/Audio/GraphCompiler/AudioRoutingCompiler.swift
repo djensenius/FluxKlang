@@ -7,6 +7,9 @@ struct PreparedAudioRoutingPlan {
     }
 
     struct Mute {
+        let node: NodeID
+        let inputPort: PortID
+        let outputPort: PortID
         let muted: Bool
         let inputOffset: Int
         let resultOffset: Int
@@ -73,6 +76,7 @@ enum AudioRoutingCompiler {
                 channels: geometry.muteChannels, sources: sources, stride: limits.maxFrames, terms: &terms
             )
             mute = PreparedAudioRoutingPlan.Mute(
+                node: node.id, inputPort: input.id, outputPort: output.id,
                 muted: muted, inputOffset: geometry.inputSamples,
                 resultOffset: geometry.muteResultOffset, rows: muteRows
             )
@@ -89,6 +93,12 @@ enum AudioRoutingCompiler {
             inputs: inputs, outputs: outputs, inputSampleCount: geometry.inputSamples,
             outputSampleCount: geometry.outputSamples, peakCount: geometry.outputChannels
         )
+        let componentCount = try AudioRoutingAdmission.add(
+            AudioRoutingAdmission.add(inputs.count, outputs.count), mute == nil ? 0 : 1
+        )
+        guard componentCount == selectedGraph.nodes.count else {
+            throw AudioRoutingPreparationError.unsupported
+        }
         return PreparedAudioRoutingPlan(
             layout: layout, bounds: limits, geometry: geometry,
             mute: mute, rows: rows, terms: terms
