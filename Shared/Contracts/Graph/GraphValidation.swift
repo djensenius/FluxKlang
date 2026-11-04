@@ -13,13 +13,19 @@ import Foundation
 enum GraphValidationError: Error, Hashable, Sendable {
     case bounds(ProjectGraphLimitError)
     case reviewRequired
-    /// The exact declaration must be empty without mute nodes, or the one mute token with them.
+    /// The exact declaration must equal the sorted profile tokens of the gain/mute kinds present.
     case invalidRequiredFeatures([String])
     case requiredFeaturesCollision
     /// Missing mute state, inappropriate typed legacy state, or an unknown-field collision.
     case invalidMuteState(NodeID)
     /// A mute needs one audio input/output pair of equal width and no references.
     case invalidMuteShape(NodeID)
+    /// Missing gain value, inappropriate typed state on another kind, or an unknown-field collision.
+    case invalidGainState(NodeID)
+    /// A gain must be normal, positive, at most 16 and exactly representable as Float32.
+    case invalidGainValue(NodeID)
+    /// A gain needs one audio input/output pair of equal width and no references.
+    case invalidGainShape(NodeID)
     case invalidPosition(NodeID)
     case duplicateNode(NodeID)
     case duplicatePort(NodeID, PortID)
@@ -119,8 +125,7 @@ extension GraphDocument {
             }
             if !node.kind.isRoutable, !node.ports.isEmpty { errors.append(.nonRoutableNodeHasPorts(node.id)) }
             if let field = node.missingReferenceField { errors.append(.missingReference(node: node.id, field: field)) }
-            if let error = node.muteStateError { errors.append(error) }
-            if node.kind == .audioMute, !node.hasValidMuteShape { errors.append(.invalidMuteShape(node.id)) }
+            errors += node.profileErrors
             errors += portErrors(node)
             for capability in node.requiredCapabilities + node.advisoryCapabilities
             where !defined.contains(capability) {
@@ -234,7 +239,24 @@ extension GraphDocument {
 }
 
 extension GraphNode {
-    var hasValidMuteShape: Bool {
+    /// Mute and gain profile state, value and shape errors, in that order.
+    var profileErrors: [GraphValidationError] {
+        var errors: [GraphValidationError] = []
+        if let error = muteStateError { errors.append(error) }
+        if kind == .audioMute, !hasValidMuteShape { errors.append(.invalidMuteShape(id)) }
+        if let error = gainStateError { errors.append(error) }
+        if kind == .audioGain {
+            if let linearGain, !Self.isValidLinearGain(linearGain) { errors.append(.invalidGainValue(id)) }
+            if !hasValidGainShape { errors.append(.invalidGainShape(id)) }
+        }
+        return errors
+    }
+
+    var hasValidMuteShape: Bool { hasValidUnaryAudioShape }
+
+    var hasValidGainShape: Bool { hasValidUnaryAudioShape }
+
+    private var hasValidUnaryAudioShape: Bool {
         guard role == nil, asset == nil, graph == nil, ports.count == 2,
               let input = ports.first(where: { $0.direction == .input }),
               let output = ports.first(where: { $0.direction == .output }) else { return false }
