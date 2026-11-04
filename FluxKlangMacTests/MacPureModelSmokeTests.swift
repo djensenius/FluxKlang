@@ -12,6 +12,7 @@ import Foundation
 import Testing
 @testable import FluxKlangMac
 
+@Suite(.productionAccessAudit)
 struct MacPureModelSmokeTests {
     @Test func testHostSelectsMemoryCredentials() throws {
         try #require(AppPersistence.isTesting)
