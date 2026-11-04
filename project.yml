@@ -192,6 +192,7 @@ targets:
       - path: FluxKlangTests/UIAuditRunPreflightTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
+      - path: FluxKlangTests/AudioGainContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
