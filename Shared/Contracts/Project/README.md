@@ -88,7 +88,10 @@ unsupported kinds. Regular files with more than one hard link
 (`crossedMountPoint`) are refused before they are opened, and the same check
 is repeated on the opened descriptor's status, so a link added between
 admission and open cannot become the change-detection baseline. A link added
-while reading changes the status-change time and refuses at EOF.
+while reading usually changes the status-change time and refuses as
+`memberChanged`; on filesystems with coarse timestamps it may go unnoticed, but
+the member had a single link when opened, so a later link cannot alias outside
+content into the package.
 
 Each read request is bounded before IO, each delivered chunk is charged once
 before it is retained, a zero allowance probes for one more byte rather than
@@ -125,6 +128,9 @@ Non-goals:
   because creating a mount or a device node requires root.
 - The writer is not an atomic replace, staged export, file-coordination or
   iCloud step, and it does not clean up partial output.
+- The writer reopens subdirectories by name inside the new destination, so a
+  concurrent rename there could redirect a write elsewhere within (never
+  outside) that destination.
 
 Project and graph documents are not decoded here. Migration, bookmark
 resolution, document lifecycle and activation remain separate obligations.
