@@ -71,9 +71,11 @@ enum AudioRoutingCompiler {
                   let muted = node.muted else {
                 throw AudioRoutingPreparationError.unsupported
             }
-            let muteRows = try lowerRows(
+            var muteRows: [PreparedAudioRoutingPlan.Row] = []
+            try appendRows(
                 edge: incoming[AudioRoutingPortKey(node: node.id, port: input.id)],
-                channels: geometry.muteChannels, sources: sources, stride: limits.maxFrames, terms: &terms
+                channels: geometry.muteChannels, sources: sources, stride: limits.maxFrames,
+                terms: &terms, rows: &muteRows
             )
             mute = PreparedAudioRoutingPlan.Mute(
                 node: node.id, inputPort: input.id, outputPort: output.id,
@@ -84,9 +86,10 @@ enum AudioRoutingCompiler {
         }
         for output in outputs {
             let edge = incoming[AudioRoutingPortKey(node: output.node, port: output.port)]
-            rows.append(contentsOf: try lowerRows(
-                edge: edge, channels: output.channels, sources: sources, stride: limits.maxFrames, terms: &terms
-            ))
+            try appendRows(
+                edge: edge, channels: output.channels, sources: sources, stride: limits.maxFrames,
+                terms: &terms, rows: &rows
+            )
         }
         let layout = AudioRoutingLayout(
             graph: selectedGraph.id, revision: selectedGraph.revision, maxFrames: limits.maxFrames,
@@ -105,11 +108,11 @@ enum AudioRoutingCompiler {
         )
     }
 
-    private static func lowerRows(
+    // swiftlint:disable:next function_parameter_count
+    private static func appendRows(
         edge: GraphEdge?, channels: Int, sources: [AudioRoutingPortKey: Int],
-        stride: Int, terms: inout [Int]
-    ) throws -> [PreparedAudioRoutingPlan.Row] {
-        var rows: [PreparedAudioRoutingPlan.Row] = []
+        stride: Int, terms: inout [Int], rows: inout [PreparedAudioRoutingPlan.Row]
+    ) throws {
         for channel in 0..<channels {
             let start = terms.count
             if let edge {
@@ -129,7 +132,6 @@ enum AudioRoutingCompiler {
                 isIdentity: edge != nil && edge?.conversion == nil
             ))
         }
-        return rows
     }
 
     private static func endpoints(_ graph: GraphDocument, kind: NodeKind) throws -> [AudioRoutingEndpoint] {
