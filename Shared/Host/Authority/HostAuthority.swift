@@ -28,7 +28,7 @@ actor HostAuthority {
     private var book: HostAuthorityBook
     private let preparationLimits: AudioRoutingLimits?
     private var preparation: PendingPreparation?
-    private var preparationFault: OwnedPreparationFault?
+    private var preparationLifetime: OwnedPreparationLifetime = .vacant
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState,
@@ -93,8 +93,36 @@ actor HostAuthority {
     /// `HostAuthorityBook.begin(_:candidate:projectDocument:project:)`.
     func begin(_ request: ActivationRequest, candidate: GraphDocument,
                projectDocument: ProjectDocument, project: ProjectID) -> Result<Void, HostAuthorityRefusal> {
-        guard preparationFault == nil else { return .failure(.preparationOwnerFaulted) }
-        return book.begin(request, candidate: candidate, projectDocument: projectDocument, project: project)
+        guard preparationLimits != nil else {
+            return book.begin(request, candidate: candidate, projectDocument: projectDocument, project: project)
+        }
+        if let refusal = preparationLifetime.admissionRefusal { return .failure(refusal) }
+        // Reserve before canonical admission can touch a transaction, attempt,
+        // ledger or queue. A canonical refusal releases only this provisional charge.
+        preparationLifetime = .provisional
+        switch book.begin(request, candidate: candidate, projectDocument: projectDocument, project: project) {
+        case .failure(let refusal):
+            preparationLifetime = .vacant
+            return .failure(refusal)
+        case .success:
+            guard let identity = book.outstanding[project],
+                  book.plans.snapshot().records.first(where: { $0.instance == identity.instance })?
+                    .entries.contains(where: {
+                        $0.attempt == identity.attempt && $0.state == .pending(reclaim: false)
+                    }) == true,
+                  book.queue.pending.contains(where: {
+                      if case .prepare(_, let document, let instance, let attempt) = $0 {
+                          return document.id == project && instance == identity.instance &&
+                              attempt == identity.attempt
+                      }
+                      return false
+                  }) else {
+                preparationLifetime = .faulted(.unassociatedAdmission)
+                return .failure(.preparationAdmissionFault)
+            }
+            preparationLifetime = .queued(identity)
+            return .success(())
+        }
     }
 
     /// `HostAuthorityBook.prepareAnswered(_:instance:attempt:)`.
@@ -185,23 +213,32 @@ actor HostAuthority {
         return book.nextEngineCommand()
     }
 
-    /// One nonsuspending turn reserves the empty slot before pulling exactly
-    /// the admitted FIFO head. No command accepted from a caller can execute.
+    /// One nonsuspending turn consumes its own reserved FIFO head. A queued
+    /// reservation is not physical occupancy; callers cannot supply commands.
     func constructNextPreparation() -> OwnedPreparationStep {
         guard let limits = preparationLimits else { return .refused(.legacyMode) }
-        guard preparationFault == nil else { return .refused(.faulted) }
+        guard preparationLifetime.fault == nil else { return .refused(.faulted) }
         guard book.pendingOutput == nil else { return .refused(.blocked) }
         guard preparation?.identity == nil else { return .refused(.occupied) }
         guard let head = book.queue.pending.first else { return .empty }
+        return constructAdmittedPreparation(head, limits: limits)
+    }
+
+    private func constructAdmittedPreparation(_ head: EngineCommand, limits: AudioRoutingLimits)
+    -> OwnedPreparationStep {
         guard case .prepare(_, _, let instance, let attempt) = head else { return .refused(.blocked) }
-        let identity = HostPrepare(instance: instance, attempt: attempt)
+        guard case .queued(let identity) = preparationLifetime else {
+            return latchConstructionFault(.unassociatedAdmission)
+        }
+        guard identity.instance == instance, identity.attempt == attempt else {
+            return latchConstructionFault(.unexpectedDelivery(identity))
+        }
         guard let entry = book.plans.snapshot().records.first(where: { $0.instance == instance })?
             .entries.first(where: { $0.attempt == attempt }),
               case .pending(let reclaim) = entry.state else {
             return latchConstructionFault(.missingAdmission(identity))
         }
-        // Empty slot + actor isolation reserve real capacity for this entire
-        // turn. No suspension/reentrancy exists between this check and storage.
+        // The admitted lifetime remains charged throughout this nonsuspending turn.
         // No success report can create bound entries: retirement refill is inert.
         guard let delivered = book.nextEngineCommand(), delivered == head,
               case .prepare(let graph, let project, _, _) = delivered else {
@@ -212,6 +249,7 @@ actor HostAuthority {
             let resource = try PendingPreparation(identity: identity, project: project, graph: graph, limits: limits)
             let layout = resource.layout
             preparation = consume resource
+            preparationLifetime = .held(identity)
             return .retained(identity, layout)
         } catch {
             // The throwing initializer has fully unwound before the failure ACK.
@@ -223,7 +261,7 @@ actor HostAuthority {
     /// evidence. One nonsuspending turn; queued work and other interest are untouched.
     func reclaimAbandonedPreparation() -> OwnedPreparationStep {
         guard preparationLimits != nil else { return .refused(.legacyMode) }
-        guard preparationFault == nil else { return .refused(.faulted) }
+        guard preparationLifetime.fault == nil else { return .refused(.faulted) }
         guard let identity = preparation?.identity else { return .empty }
         guard let entry = book.plans.snapshot().records.first(where: { $0.instance == identity.instance })?
             .entries.first(where: { $0.attempt == identity.attempt }),
@@ -246,7 +284,7 @@ actor HostAuthority {
         _ expected: HostPrepare, frames: Int, input: [Float]
     ) -> Result<OwnedPreparationBlock, OwnedPreparationRefusal> {
         guard preparationLimits != nil else { return .failure(.legacyMode) }
-        guard preparationFault == nil else { return .failure(.faulted) }
+        guard preparationLifetime.fault == nil else { return .failure(.faulted) }
         guard let identity = preparation?.identity else { return .failure(.missing) }
         guard identity == expected else { return .failure(.identityMismatch) }
         guard book.outstanding.values.contains(identity) else { return .failure(.unwanted) }
@@ -266,17 +304,13 @@ actor HostAuthority {
     /// teardown and sends no answer, callback or quiescence acknowledgement.
     func disposePreparation(_ expected: HostPrepare) -> OwnedPreparationDisposal {
         guard preparationLimits != nil else { return .refused(.legacyMode) }
+        guard preparationLifetime.fault == nil else { return .refused(.faulted) }
         guard let identity = preparation?.identity else { return .refused(.missing) }
         guard identity == expected else { return .refused(.identityMismatch) }
         Self.destroyPreparation(preparation.take())
         // Only inert identity survives the consuming cleanup scope above.
-        switch book.prepareAnswered(.failure(.cancelled), instance: identity.instance, attempt: identity.attempt) {
-        case .success(let outcome): return .disposed(outcome)
-        case .failure(let refusal):
-            let fault = OwnedPreparationFault.terminalAfterCleanup(identity, refusal)
-            preparationFault = fault
-            return .faultAfterCleanup(fault)
-        }
+        preparationLifetime = .cleaned(identity)
+        return accountPreparationFailure(.cancelled)
     }
 
     private static func destroyPreparation(_ resource: consuming PendingPreparation?) {
@@ -284,16 +318,23 @@ actor HostAuthority {
     }
 
     private func latchConstructionFault(_ fault: OwnedPreparationFault) -> OwnedPreparationStep {
-        preparationFault = fault
+        preparationLifetime = .faulted(fault)
         return .faulted(fault)
     }
 
     private func terminatePreparation(_ identity: HostPrepare, reason: PrepareFailure) -> OwnedPreparationStep {
-        switch book.prepareAnswered(.failure(reason), instance: identity.instance, attempt: identity.attempt) {
-        case .success(let outcome): return .terminated(identity, reason, outcome)
-        case .failure(let refusal):
-            return latchConstructionFault(.terminalAfterCleanup(identity, refusal))
+        preparationLifetime = .cleaned(identity)
+        switch accountPreparationFailure(reason) {
+        case .disposed(let outcome): return .terminated(identity, reason, outcome)
+        case .refused(let refusal): return .refused(refusal)
+        case .faultAfterCleanup(let fault): return .faulted(fault)
         }
+    }
+
+    private func accountPreparationFailure(_ reason: PrepareFailure) -> OwnedPreparationDisposal {
+        guard let identity = preparationLifetime.terminalIdentity else { return .refused(.faulted) }
+        let result = book.prepareAnswered(.failure(reason), instance: identity.instance, attempt: identity.attempt)
+        return preparationLifetime.finishTerminal(result)
     }
 }
 

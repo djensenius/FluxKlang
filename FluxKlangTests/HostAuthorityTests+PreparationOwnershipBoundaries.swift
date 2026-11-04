@@ -8,7 +8,7 @@ extension HostAuthorityTests {
     struct PreparationOwnershipBoundaries {
         @Test func maintenanceReclaimsIgnoredConstructionAndReusesCapacity() async throws {
             let documents = Routing.documents()
-            let authority = try await Bench.authority(documents)
+            let authority = try await Bench.authority(documents, capacity: 3)
             let identity = try await Bench.begin(authority, documents)
             _ = await authority.constructNextPreparation()
             try await authority.abandonPrepare(project: documents.project.id).get()
@@ -16,7 +16,7 @@ extension HostAuthorityTests {
             #expect(AuthorityBench.refusal(await authority.begin(
                 Bench.request(documents.graph), candidate: documents.graph,
                 projectDocument: documents.project, project: documents.project.id
-            )) == .plans(.capacityReached))
+            )) == .preparationOccupied)
             #expect(await authority.snapshot() == before)
             #expect(await authority.reclaimAbandonedPreparation() == .terminated(identity, .cancelled, .dropped))
             #expect(await authority.snapshot().plans.records[0].entries.isEmpty)
@@ -77,7 +77,7 @@ extension HostAuthorityTests {
             #expect(await authority.disposePreparation(identity) == .refused(.missing))
         }
 
-        @Test func maintenancePreservesNewerAndCrossProjectInterestAndLaterCustody() async throws {
+        @Test func maintenanceReleasesReservationBeforeNewerOrCrossProjectAdmission() async throws {
             let first = Routing.documents()
             var second = Routing.documents()
             second.project.id = AuthorityBench.projectB
@@ -87,11 +87,14 @@ extension HostAuthorityTests {
             let old = try await Bench.begin(authority, first)
             _ = try await Bench.retain(authority, old)
             try await authority.abandonPrepare(project: first.project.id).get()
-            let newer = try await Bench.begin(authority, first)
-            let other = try await Bench.begin(authority, second)
             let before = await authority.snapshot()
-            #expect(before.outstanding.count == 2 && before.queue.count == 2)
-            #expect(newer != old && other != old)
+            for documents in [first, second] {
+                #expect(AuthorityBench.refusal(await authority.begin(
+                    Bench.request(documents.graph), candidate: documents.graph,
+                    projectDocument: documents.project, project: documents.project.id
+                )) == .preparationOccupied)
+                #expect(await authority.snapshot() == before)
+            }
             #expect(await authority.reclaimAbandonedPreparation() == .terminated(old, .cancelled, .dropped))
             let after = await authority.snapshot()
             #expect(after.queue == before.queue && after.outstanding == before.outstanding)
@@ -99,7 +102,9 @@ extension HostAuthorityTests {
             #expect(after.plans.records[0].entries == before.plans.records[0].entries.filter {
                 $0.attempt != old.attempt
             })
-            for identity in [newer, other] {
+            for documents in [first, second] {
+                let identity = try await Bench.begin(authority, documents)
+                #expect(identity != old)
                 _ = try await Bench.retain(authority, identity)
                 let retained = await authority.snapshot()
                 #expect(await authority.reclaimAbandonedPreparation() == .refused(.occupied))
@@ -188,12 +193,12 @@ extension HostAuthorityTests {
             #expect(AuthorityBench.refusal(await authority.begin(
                 Bench.request(documents.graph), candidate: documents.graph,
                 projectDocument: documents.project, project: documents.project.id
-            )) == .plans(.capacityReached))
+            )) == .preparationOccupied)
             #expect(await authority.snapshot() == before)
             #expect(await authority.disposePreparation(identity) == .disposed(.dropped))
         }
 
-        @Test func queuedWorkCannotBypassOccupiedResourceOrEvaluation() async throws {
+        @Test func occupiedAdmissionRefusesWithoutBlockingExistingEvaluation() async throws {
             let first = Routing.documents()
             var second = Routing.documents()
             second.project.id = AuthorityBench.projectB
@@ -202,15 +207,22 @@ extension HostAuthorityTests {
                                      running: RunningGraph(revision: .initial, prepared: nil)).get()
             let owned = try await Bench.begin(authority, first)
             _ = try await Bench.retain(authority, owned)
-            let queued = try await Bench.begin(authority, second)
             let before = await authority.snapshot()
+            #expect(AuthorityBench.refusal(await authority.begin(
+                Bench.request(second.graph), candidate: second.graph,
+                projectDocument: second.project, project: second.project.id
+            )) == .preparationOccupied)
+            #expect(await authority.snapshot() == before)
             #expect(await authority.constructNextPreparation() == .refused(.occupied))
-            #expect(await authority.evaluatePreparation(owned, frames: 0, input: Array(repeating: 0, count: 8)) ==
-                .failure(.blocked))
+            #expect(try await authority.evaluatePreparation(
+                owned, frames: 0, input: Array(repeating: 0, count: 8)
+            ).get().result == .processed)
             #expect(await authority.nextEngineCommand() == nil)
             #expect(await authority.snapshot() == before)
             #expect(await authority.disposePreparation(owned) == .disposed(.routed))
             #expect(await authority.snapshot().queue == before.queue)
+            let queued = try await Bench.begin(authority, second)
+            #expect(queued.attempt.generation == .initial)
             _ = try await Bench.retain(authority, queued)
             #expect(await authority.disposePreparation(queued) == .disposed(.routed))
         }
@@ -224,6 +236,10 @@ extension HostAuthorityTests {
             #expect(await authority.snapshot().plans.records[0].entries.isEmpty)
             #expect(await authority.constructNextPreparation() == .empty)
             #expect(await authority.disposePreparation(identity) == .refused(.missing))
+            let next = try await Bench.begin(authority, documents)
+            #expect(next.attempt.generation == (try identity.attempt.generation.next()))
+            try await authority.abandonPrepare(project: documents.project.id).get()
+            #expect(await authority.constructNextPreparation() == .terminated(next, .cancelled, .dropped))
         }
 
         @Test func actualConstructorRejectionIsTerminalAndAllowsNewAdmission() async throws {

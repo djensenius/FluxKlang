@@ -22,10 +22,15 @@ struct ActivationGesture: Hashable, Sendable {
     let window: WindowID
 }
 
-/// Why the actor refused. Every refusal leaves the actor state unchanged.
+/// Ordinary refusals leave canonical state unchanged. The explicitly identified
+/// post-acceptance admission fault is not a rollback or unchanged-refusal claim.
 enum HostAuthorityRefusal: Error, Equatable, Sendable {
     /// Closed preparation custody does not execute this legacy operation.
     case preparationOnly
+    /// The one prepare-only lifetime is reserved, even if no resource exists yet.
+    case preparationOccupied
+    /// Canonical admission succeeded but association failed; the owner is now faulted.
+    case preparationAdmissionFault
     /// An irreversible ownership invariant failure permanently closes admission.
     case preparationOwnerFaulted
     /// The transaction's own refusal, unchanged.

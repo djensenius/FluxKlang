@@ -51,6 +51,44 @@ private typealias Routing = AudioRoutingTestFixtures
 
 extension HostAuthorityTests {
     struct PreparationOwnership {
+        @Test func admissionReservationRejectsOverlapBeforeCanonicalMutation() async throws {
+            let first = Routing.documents()
+            var second = Routing.documents()
+            second.project.id = AuthorityBench.projectB
+            for constructed in [false, true] {
+                for abandoned in [false, true] {
+                    for replacement in [first, second] {
+                        let authority = try await Bench.authority(first, capacity: 3)
+                        try await authority.open(project: second.project.id,
+                                                 running: RunningGraph(revision: .initial, prepared: nil)).get()
+                        let identity = try await Bench.begin(authority, first)
+                        if constructed { _ = await authority.constructNextPreparation() }
+                        if abandoned { try await authority.abandonPrepare(project: first.project.id).get() }
+                        let before = await authority.snapshot()
+                        #expect(AuthorityBench.refusal(await authority.begin(
+                            Bench.request(replacement.graph), candidate: replacement.graph,
+                            projectDocument: replacement.project, project: replacement.project.id
+                        )) == .preparationOccupied)
+                        #expect(await authority.snapshot() == before)
+                        if constructed {
+                            #expect(await authority.disposePreparation(identity) ==
+                                .disposed(abandoned ? .dropped : .routed))
+                        } else {
+                            if !abandoned { try await authority.abandonPrepare(project: first.project.id).get() }
+                            #expect(await authority.constructNextPreparation() ==
+                                .terminated(identity, .cancelled, .dropped))
+                        }
+                        let next = try await Bench.begin(authority, replacement)
+                        #expect(next != identity)
+                        #expect(next.attempt.generation == (replacement.project.id == first.project.id ?
+                            try identity.attempt.generation.next() : .initial))
+                        _ = try await Bench.retain(authority, next)
+                        #expect(await authority.disposePreparation(next) == .disposed(.routed))
+                    }
+                }
+            }
+        }
+
         @Test func realSamplesRemainPendingAndPreserveCallerSnapshot() async throws {
             var documents = Routing.documents(map: [[0, 1, 0], [1, 1]])
             let original = documents
@@ -183,7 +221,7 @@ extension HostAuthorityTests {
             #expect(AuthorityBench.refusal(await authority.begin(
                 Bench.request(documents.graph), candidate: documents.graph,
                 projectDocument: documents.project, project: documents.project.id
-            )) == .plans(.capacityReached))
+            )) == .preparationOccupied)
             #expect(await authority.snapshot() == abandoned)
             #expect(await authority.disposePreparation(identity) == .disposed(.dropped))
             #expect(await authority.disposePreparation(identity) == .refused(.missing))
@@ -199,6 +237,53 @@ extension HostAuthorityTests {
             // Capacity reuse is bookkeeping evidence, NOT measured arena deallocation.
             try await other.abandonPrepare(project: documents.project.id).get()
             #expect(await other.constructNextPreparation() == .terminated(wrong, .cancelled, .dropped))
+        }
+
+        @Test func terminalDispositionRetainsRefusedAccountingWithoutAnotherAnswer() async throws {
+            let documents = Routing.documents()
+            for abandoned in [false, true] {
+                // Genuine canonical identities and outcomes, with no processor or
+                // book injection. This tests disposition, not physical deallocation.
+                let legacy = try await Bench.authority(documents, limits: nil)
+                let identity = try await Bench.begin(legacy, documents)
+                #expect(await legacy.nextEngineCommand() == .prepare(
+                    documents.graph, documents.project, identity.instance, identity.attempt
+                ))
+                if abandoned { try await legacy.abandonPrepare(project: documents.project.id).get() }
+                let accepted = await legacy.prepareAnswered(
+                    .failure(.cancelled), instance: identity.instance, attempt: identity.attempt
+                )
+                #expect(accepted == .success(abandoned ? .dropped : .routed))
+                let refused = await legacy.prepareAnswered(
+                    .failure(.cancelled), instance: identity.instance, attempt: identity.attempt
+                )
+                #expect(refused == .failure(.activation(.stalePrepareResponse)))
+                let before = await legacy.snapshot()
+                var lifetime = OwnedPreparationLifetime.cleaned(identity)
+                #expect(lifetime.admissionRefusal == .preparationOccupied)
+                var answers = 0
+                for _ in 0..<3 {
+                    // The same eligibility gate used before production's book call.
+                    if let terminal = lifetime.terminalIdentity {
+                        #expect(terminal == identity)
+                        answers += 1
+                        #expect(lifetime.finishTerminal(refused) ==
+                            .faultAfterCleanup(.terminalAfterCleanup(identity)))
+                    }
+                    #expect(lifetime == .faulted(.terminalAfterCleanup(identity)))
+                    #expect(lifetime.admissionRefusal == .preparationOwnerFaulted)
+                    #expect(lifetime.terminalIdentity == nil)
+                    #expect(lifetime.finishTerminal(accepted) == .refused(.faulted))
+                }
+                #expect(answers == 1)
+                #expect(await legacy.snapshot() == before)
+                var completed = OwnedPreparationLifetime.cleaned(identity)
+                #expect(completed.finishTerminal(accepted) == .disposed(abandoned ? .dropped : .routed))
+                #expect(completed == .vacant && completed.admissionRefusal == nil)
+                #expect(completed.terminalIdentity == nil)
+                #expect(completed.finishTerminal(refused) == .refused(.faulted))
+                #expect(completed == .vacant)
+            }
         }
     }
 }
