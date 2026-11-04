@@ -34,6 +34,22 @@ enum UIAuditRunPreflight {
         (.runAppleModelTests, "0")
     ]
 
+    /// Refusal precedes the callback; a callback error propagates without retry.
+    @MainActor
+    static func performValidatedLaunch(
+        runnerEnvironment: [String: String],
+        appEnvironment: [String: String],
+        appArguments: [String],
+        perform: @MainActor (ValidatedLaunchConfiguration) throws -> Void
+    ) throws {
+        let configuration = try validate(
+            runnerEnvironment: runnerEnvironment,
+            appEnvironment: appEnvironment,
+            appArguments: appArguments
+        ).get()
+        try perform(configuration)
+    }
+
     /// `appEnvironment` is the intended explicit launch dictionary, not raw target metadata.
     static func validate(
         runnerEnvironment: [String: String],

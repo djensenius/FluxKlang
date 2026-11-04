@@ -4,8 +4,8 @@ import XCTest
 final class FluxKlangAcceptanceUITests: XCTestCase {
     private lazy var app = makeIsolatedUITestApplication()
 
-    func testPrimaryNavigationDraftAndTemporaryMoveSafety() {
-        launchSeededDemo()
+    func testPrimaryNavigationDraftAndTemporaryMoveSafety() throws {
+        try launchSeededDemo()
 
         XCTAssertTrue(app.navigationBars["Studio"].waitForExistence(timeout: 10))
         XCTAssertTrue(element("studio.status").waitForExistence(timeout: 10))
@@ -43,8 +43,8 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         XCTAssertFalse(apply.isEnabled)
     }
 
-    func testAssistantTextEntryUsesGroundedFallback() {
-        launchSeededDemo()
+    func testAssistantTextEntryUsesGroundedFallback() throws {
+        try launchSeededDemo()
         app.tabBars.buttons["Assistant"].tap()
 
         let composer = app.textFields["assistant.composer"]
@@ -60,14 +60,14 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         XCTAssertTrue(response.waitForExistence(timeout: 10))
     }
 
-    func testConnectionFailureRecoversThroughDemoMode() {
+    func testConnectionFailureRecoversThroughDemoMode() throws {
         continueAfterFailure = false
-        app.launchArguments = [
+        let appArguments = [
             "-ui-testing",
             "-ui-test-force-fallback",
             "-ui-test-connection-failure"
         ]
-        launchIsolatedUITestApplication(app, testCase: self)
+        try launchIsolatedUITestApplication(app, appArguments: appArguments, testCase: self)
 
         let status = app.buttons["connection.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
@@ -84,15 +84,15 @@ final class FluxKlangAcceptanceUITests: XCTestCase {
         XCTAssertTrue(demoStatus.waitForExistence(timeout: 10))
     }
 
-    private func launchSeededDemo() {
+    private func launchSeededDemo() throws {
         continueAfterFailure = false
-        app.launchArguments = [
+        let appArguments = [
             "-ui-testing",
             "-ui-test-force-fallback",
             "-ui-test-seed-acceptance",
             "-ui-test-demo"
         ]
-        launchIsolatedUITestApplication(app, testCase: self)
+        try launchIsolatedUITestApplication(app, appArguments: appArguments, testCase: self)
     }
 
     private func element(_ identifier: String) -> XCUIElement {

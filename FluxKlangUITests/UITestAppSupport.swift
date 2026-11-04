@@ -2,22 +2,32 @@ import XCTest
 
 @MainActor
 func makeIsolatedUITestApplication() -> XCUIApplication {
-    let app = XCUIApplication()
-    app.launchEnvironment["FLUXKLANG_ISOLATED_TESTING"] = "1"
-    app.launchEnvironment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] = "0"
-    app.launchEnvironment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] = "0"
-    return app
+    XCUIApplication()
 }
 
 @MainActor
 func launchIsolatedUITestApplication(
     _ app: XCUIApplication,
+    appArguments: [String],
     testCase: XCTestCase,
     file: StaticString = #filePath,
     line: UInt = #line
-) {
+) throws {
     testCase.continueAfterFailure = false
-    app.launch()
+    let runnerEnvironment = ProcessInfo.processInfo.environment
+    var appEnvironment = app.launchEnvironment
+    appEnvironment["FLUXKLANG_ISOLATED_TESTING"] = appEnvironment["FLUXKLANG_ISOLATED_TESTING"] ?? "1"
+    appEnvironment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] = appEnvironment["FLUXKLANG_RUN_APPLE_MODEL_TESTS"] ?? "0"
+    appEnvironment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] = appEnvironment["FLUXKLANG_QUALIFY_APPLE_ROUTING"] ?? "0"
+    try UIAuditRunPreflight.performValidatedLaunch(
+        runnerEnvironment: runnerEnvironment,
+        appEnvironment: appEnvironment,
+        appArguments: appArguments
+    ) { configuration in
+        app.launchEnvironment = configuration.appEnvironment
+        app.launchArguments = configuration.appArguments
+        app.launch()
+    }
     let element = app.descendants(matching: .any)
         .matching(identifier: "startup.isolation.observation").firstMatch
     guard element.waitForExistence(timeout: 10) else {
