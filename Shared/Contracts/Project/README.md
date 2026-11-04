@@ -73,8 +73,68 @@ that byte-inclusive total. External asset lengths are not bookmark byte counts
 or package consumption. Identity checks preserve inert `requiresReview` intent
 without claiming graph readiness, resource availability or activation authority.
 
-This is not a package reader or writer. A later reader must retain original
-member bytes, including unsupported, failed and unlisted content, within refusal
-limits; independently verify membership, lengths, digests and confinement; and
-charge delivered bytes through P1. No filesystem access or bookmark resolution
-is performed by the manifest.
+The manifest itself performs no filesystem access or bookmark resolution.
+
+## Package reader and writer
+
+`ProjectPackageReader` reads a directory package with one P1 admission attempt.
+The root's final path component is opened with `O_NOFOLLOW`; its ancestors
+resolve normally. Below the root, each entry is inspected with
+`fstatat(AT_SYMLINK_NOFOLLOW)` and admitted by P1 before it is opened relative to
+its already-open parent with `O_NOFOLLOW`, then matched by device, inode and type.
+Symbolic links at any level, FIFOs, sockets and devices are refused through P1 as
+unsupported kinds. Regular files with more than one hard link
+(`hardLinkedMember`) and entries on a different device from the root
+(`crossedMountPoint`) are refused before they are opened, and the same check
+is repeated on the opened descriptor's status, so a link added between
+admission and open cannot become the change-detection baseline. A link added
+while reading usually changes the status-change time and refuses as
+`memberChanged`; on filesystems with coarse timestamps it may go unnoticed, but
+the member had a single link when opened, so a later link cannot alias outside
+content into the package.
+
+Each read request is bounded before IO, each delivered chunk is charged once
+before it is retained, a zero allowance probes for one more byte rather than
+assuming EOF, and a member finishes only after an actual zero-byte read.
+Declared lengths are never preallocated. At EOF the open member is re-checked:
+a changed size, modification time or status-change time, or a size different
+from the bytes read, refuses with `memberChanged`.
+
+The resulting `ProjectPackageContents` retains the original manifest bytes and
+the original bytes of every member, including undecoded/unsupported listed
+members and unlisted files and directories. Listed members must exist as regular
+files and embedded media must match its `sha256:` content digest. Values come
+only from the reader or from in-memory construction, which runs the same P1 pass
+and checks.
+
+`ProjectPackageWriter` accepts only a `ProjectPackageContents` value, so every
+write has passed manifest, membership and digest verification. It also
+re-admits every path through P1 before any IO, so escaping, absolute, duplicate
+or parentless paths write nothing. It opens the destination's parent with
+`O_DIRECTORY|O_NOFOLLOW`; a parent that is a link or not a directory is refused
+with `destinationParentRefused`. It then creates the destination with
+`mkdirat` (an existing name is refused) and opens it relative to that parent
+without re-resolving the path. Members are created exclusively with no-follow,
+descriptor-relative calls, the original bytes are written unchanged, and each
+file is `fsync`ed. If a later IO step fails, partial output stays in the new
+destination for the caller to discard.
+
+Non-goals:
+- The reader does not hash or snapshot content during reads, so a change that
+  keeps size and both timestamps is not detected.
+- Nothing prevents another process from swapping the destination between
+  `mkdirat` and `openat` for a different directory.
+- `crossedMountPoint` and device-node refusal are not exercised by tests,
+  because creating a mount or a device node requires root.
+- The writer is not an atomic replace, staged export, file-coordination or
+  iCloud step, and it does not clean up partial output.
+- The writer does not defend against concurrent mutation of the new
+  destination. It reopens subdirectories by name, and it keeps writing through
+  directory descriptors it already holds, so a subdirectory renamed while the
+  write runs, including one moved outside the destination on the same volume,
+  receives the remaining members wherever it now lives. Discarding the
+  destination does not remove that output. Callers must give the writer a
+  destination no other process mutates until the write returns.
+
+Project and graph documents are not decoded here. Migration, bookmark
+resolution, document lifecycle and activation remain separate obligations.
