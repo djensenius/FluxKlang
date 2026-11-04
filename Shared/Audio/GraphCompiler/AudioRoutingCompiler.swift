@@ -108,6 +108,7 @@ enum AudioRoutingCompiler {
         )
     }
 
+    // swiftlint:disable:next function_parameter_count
     private static func appendRows(
         edge: GraphEdge?, channels: Int, sources: [AudioRoutingPortKey: Int],
         stride: Int, terms: inout [Int], rows: inout [PreparedAudioRoutingPlan.Row]
