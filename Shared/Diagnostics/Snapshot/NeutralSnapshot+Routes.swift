@@ -42,7 +42,8 @@ extension NeutralSnapshotAssembly {
     ///   more hex digits including a digit);
     /// - it is not equal, ignoring case, to any withheld UID, host or evidence string.
     ///
-    /// Anything else, including UUIDs and CoreAudio UIDs, is withheld.
+    /// Anything else, including UUIDs and CoreAudio UIDs, is withheld, and a device ID
+    /// refused by the form is also redacted from every label (`withheldFields(of:)`).
     static func isNeutralDeviceAlias(_ raw: String, refused: Set<String>) -> Bool {
         guard raw.hasPrefix("dev."), raw.utf8.count <= 64, !refused.contains(raw.lowercased()) else { return false }
         let segments = raw.dropFirst(4).split(separator: ".", omittingEmptySubsequences: false)

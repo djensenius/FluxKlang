@@ -12,14 +12,14 @@ struct NeutralSnapshotAssembly {
     typealias Selection<Element> = (kept: [Element], count: NeutralSnapshot.CategoryCount)
 
     let limits: NeutralSnapshot.Limits
-    /// At most this many distinct withheld strings are collected: three per route
-    /// at the default route cap of 256, plus as many hardware identifiers.
+    /// At most this many distinct withheld strings are collected, enough for four
+    /// per route at the default route cap of 256. Past it, `withheldOverflow` is reported.
     static let maximumWithheldCount = 1_024
     /// Device IDs are `ContractID`s of at most 128 bytes, so longer strings can never equal one.
     static let maximumRefusedBytes = 128
 
-    /// Hardware UIDs, host IDs and evidence strings known from the inputs, never
-    /// exposed as a device ID.
+    /// Hardware UIDs, host IDs, evidence strings and device IDs refused by the alias
+    /// form, known from the inputs and never exposed as a device ID.
     let withheld: [String]
     /// The withheld strings in label match form, prepared once for every label.
     let redacted: [UntrustedTextSanitizer.WithheldTerm]
@@ -38,8 +38,9 @@ struct NeutralSnapshotAssembly {
     }
 
     /// Hardware identifiers first, sorted by their prepared form and then their
-    /// raw form in UTF-8 byte order, then each route's UID, host and evidence in
-    /// route-ID order, until `maximumWithheldCount` distinct strings are held.
+    /// raw form in UTF-8 byte order, then each route's `withheldFields` in route-ID
+    /// order, with routes sharing an ID ordered by those fields in UTF-8 byte order,
+    /// until `maximumWithheldCount` distinct strings are held.
     /// Strings past the cap are neither refused nor redacted; their count is
     /// returned as `overflow` and reported in `Truncation.withheldOverflow`.
     static func collectWithheld(_ inputs: NeutralSnapshot.Inputs) -> (strings: [String], overflow: Int) {
@@ -50,7 +51,12 @@ struct NeutralSnapshotAssembly {
                     ? lhs.raw.utf8.lexicographicallyPrecedes(rhs.raw.utf8)
                     : lhs.key.utf8.lexicographicallyPrecedes(rhs.key.utf8)
             }
-        let routes = inputs.routes.map(\.route).sorted { $0.id < $1.id }
+        let routes = inputs.routes.map { (id: $0.route.id, fields: withheldFields(of: $0.route)) }
+            .sorted { lhs, rhs in
+                lhs.id != rhs.id
+                    ? lhs.id < rhs.id
+                    : lhs.fields.lexicographicallyPrecedes(rhs.fields) { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+            }
         var seen = Set<String>()
         var collected: [String] = []
         var overflow = 0
@@ -59,10 +65,16 @@ struct NeutralSnapshotAssembly {
             if collected.count < maximumWithheldCount { collected.append(candidate) } else { overflow += 1 }
         }
         hardware.forEach { add($0.raw) }
-        for route in routes {
-            [route.confirmedDeviceUID, route.confirmedHost?.rawValue, route.evidence].compactMap(\.self).forEach(add)
-        }
+        routes.forEach { $0.fields.forEach(add) }
         return (collected, overflow)
+    }
+
+    /// The route's strings that labels must not show: its device ID when the alias
+    /// form refuses it (a withheld route field must not reappear in a label), then
+    /// its confirmed UID, host and evidence.
+    static func withheldFields(of route: AudioRoute) -> [String] {
+        let device = isNeutralDeviceAlias(route.device.rawValue, refused: []) ? nil : route.device.rawValue
+        return [device, route.confirmedDeviceUID, route.confirmedHost?.rawValue, route.evidence].compactMap(\.self)
     }
 
     func label(_ raw: String) -> UntrustedLabel {

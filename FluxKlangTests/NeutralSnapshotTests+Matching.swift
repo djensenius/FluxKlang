@@ -35,6 +35,8 @@ extension NeutralSnapshotTests {
         let scan = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: 4)
         #expect(scan.isComplete && scan.text == raw)
         #expect(!UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: 3).isComplete)
+        let selected = "😀\u{FE0F}😀"
+        #expect(UntrustedTextSanitizer.filterScalars(selected.unicodeScalars, keeping: 2).isComplete)
     }
 
     @Test func aJoinedUIDCutByTheScanLimitLeavesNoPrefix() {
@@ -42,7 +44,7 @@ extension NeutralSnapshotTests {
         let joined = "SE\u{200D}RI\u{200C}AL" + serial.dropFirst(6)
         let raw = "Rig " + String(repeating: serial, count: 4) + joined
         let label = UntrustedLabel(raw, maximumBytes: 200, withholding: [serial])
-        #expect(label.text == "Rig " + String(repeating: UntrustedLabel.withheldMarker, count: 4))
+        #expect(label.text == "Rig " + UntrustedLabel.withheldMarker)
         #expect(label.isTruncated && label.wasSanitized)
     }
 
@@ -130,6 +132,110 @@ extension NeutralSnapshotTests {
         inputs.hardwareIdentifiers = ["Rig-Alpha\u{200B}", "\tRig-Bravo", "Rig-Alpha"]
         let prepared = NeutralSnapshotAssembly.collectWithheld(inputs).strings
         #expect(prepared == ["Rig-Alpha", "Rig-Alpha\u{200B}", "\tRig-Bravo"])
+    }
+
+    // MARK: - Round 5
+
+    @Test func deviceIDsRefusedByTheAliasFormAreRedactedFromLabels() throws {
+        let uuid = "6F1D2C8A-3B4E-4F50-9A61-7C8D9E0F1A2B"
+        var route = try Self.routeInput("rte.uuid", binding: .proposed, presence: nil)
+        route.route.device = try DeviceID(uuid)
+        let alias = try Self.routeInput("rte.alias", binding: .proposed, presence: nil)
+        let node = try Self.node("node.a", label: "Rig \(uuid.lowercased()) on dev.interface-b")
+        var inputs = Snapshot.Inputs(graph: GraphDocument(id: GraphID(validated: "graph.d"), nodes: [node]))
+        inputs.routes = [route, alias]
+        inputs.diagnostics = try [Self.diagnostic("dgn.a", .warning, summary: "Lost \(uuid)")]
+        let snapshot = Snapshot.build(from: inputs)
+        let marker = UntrustedLabel.withheldMarker
+        #expect(snapshot.node(Self.nodeA)?.label.text == "Rig \(marker) on dev.interface-b")
+        #expect(snapshot.diagnostics.map(\.summary.text) == ["Lost \(marker)"])
+        #expect(snapshot.route(RouteID(validated: "rte.uuid"))?.isDeviceWithheld == true)
+        let json = try #require(String(data: Self.encode(snapshot), encoding: .utf8))
+        #expect(!json.localizedCaseInsensitiveContains(uuid) && json.contains("dev.interface-b"))
+    }
+
+    @Test(arguments: [
+        ("SN-12\u{FE0F}3456", "SN-123456"),
+        ("SN-12\u{FE0E}3456", "SN-123456"),
+        ("SN-123456", "SN-12\u{FE0F}3456"),
+        ("SN-123456", "SN-12\u{E0100}34\u{FE00}56\u{180B}")
+    ])
+    func variationSelectorsDoNotHideAWithheldString(raw: String, withheld: String) {
+        let label = UntrustedLabel(raw, withholding: [withheld])
+        #expect(label.text == UntrustedLabel.withheldMarker && label.wasSanitized)
+        let kept = UntrustedLabel("SN-12\u{FE0F}34", withholding: [withheld])
+        #expect(kept.text.unicodeScalars.elementsEqual("SN-12\u{FE0F}34".unicodeScalars) && !kept.wasSanitized)
+    }
+
+    @Test func theMatchFormIsNFCAfterJoinersAreRemoved() throws {
+        let label = UntrustedLabel("\u{1100}\u{200D}\u{1161}나다", withholding: ["가나다"])
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        let raw = "\u{1100}\u{200D}\u{1161}\u{FE0F}나다"
+        let form = UntrustedTextSanitizer.matchForm(raw)
+        #expect(form.unicodeScalars.elementsEqual("가나다".unicodeScalars))
+        #expect(UntrustedTextSanitizer.matchForm(form).unicodeScalars.elementsEqual(form.unicodeScalars))
+        let term = try #require(UntrustedTextSanitizer.withheldTerm(raw))
+        #expect(term.text.unicodeScalars.elementsEqual("가나다".unicodeScalars))
+        #expect(UntrustedTextSanitizer.withheldTerm(term.text) == term)
+        let unmatched = UntrustedLabel("Cafe\u{0301} \u{1100}\u{1161}", withholding: ["가나다"]).text
+        #expect(unmatched.unicodeScalars.elementsEqual("Café 가".unicodeScalars))
+    }
+
+    @Test func overlappingWithheldStringsLeaveNoTail() {
+        let run = String(repeating: "A", count: 1_024)
+        for withheld in [[run, run + "SECRET-TAIL"], [run + "SECRET-TAIL", run]] {
+            let label = UntrustedLabel("Rig " + run + "SECRET-TAIL", withholding: withheld)
+            #expect(label.text == "Rig \(UntrustedLabel.withheldMarker)")
+        }
+    }
+
+    @Test func overlappingCopiesOfOneTermAreAllRedacted() {
+        let label = UntrustedLabel("abcabcabcab", withholding: ["abcabcab"])
+        #expect(label.text == UntrustedLabel.withheldMarker && label.wasSanitized)
+    }
+
+    @Test func noWholeWithheldTermSurvivesInAnyOrder() {
+        let terms = ["AAAAAA-1", "a-1-secret", "SECRET-TAIL", "TAIL-END-9"]
+        let raw = "x AAAAAA-1-SECRET-TAIL-END-9 y SECRET-TAIL-END-9AAAAAA-1 z"
+        let marker = UntrustedLabel.withheldMarker
+        for order in Self.permutations(terms) {
+            let text = UntrustedLabel(raw, withholding: order).text
+            #expect(text == "x \(marker) y \(marker) z")
+            #expect(!order.contains { text.localizedCaseInsensitiveContains($0) })
+            let prefix = UntrustedTextSanitizer.WithheldTerm(text: "SECRET-T", isPrefix: true)
+            let terms = UntrustedTextSanitizer.withheldTerms(order) + [prefix]
+            let redacted = UntrustedTextSanitizer.redact(raw, withheld: terms.reversed(), marker: marker)
+            #expect(redacted.text == "x \(marker)" && redacted.changed)
+        }
+    }
+
+    @Test func routesSharingAnIDContributeWithheldStringsInAFixedOrder() throws {
+        let cap = NeutralSnapshotAssembly.maximumWithheldCount
+        var serial = try Self.routeInput("rte.a", binding: .proposed, presence: nil)
+        serial.route.device = try DeviceID("SN-0001-A")
+        var evidence = try Self.routeInput("rte.a", binding: .confirmed, presence: .present)
+        evidence.route.evidence = "evidence-two"
+        var inputs = try Snapshot.Inputs(graph: GraphDocument(
+            id: GraphID(validated: "graph.t"), nodes: [Self.node("node.a", label: "SN-0001-A evidence-two")]
+        ))
+        inputs.hardwareIdentifiers = Self.serials(0..<(cap - 1))
+        inputs.routes = [evidence, serial]
+        let forward = NeutralSnapshotAssembly.collectWithheld(inputs)
+        let snapshot = Snapshot.build(from: inputs)
+        inputs.routes.reverse()
+        #expect(NeutralSnapshotAssembly.collectWithheld(inputs) == forward)
+        #expect(Snapshot.build(from: inputs) == snapshot)
+        #expect(forward.strings.last == "SN-0001-A" && forward.overflow == 1)
+        #expect(snapshot.node(Self.nodeA)?.label.text == "\(UntrustedLabel.withheldMarker) evidence-two")
+    }
+
+    static func permutations(_ items: [String]) -> [[String]] {
+        guard items.count > 1 else { return [items] }
+        return items.indices.flatMap { index in
+            var rest = items
+            let first = rest.remove(at: index)
+            return permutations(rest).map { [first] + $0 }
+        }
     }
 
     static func serials(_ range: some Sequence<Int>) -> [String] {

@@ -37,9 +37,11 @@ enum UntrustedTextSanitizer {
     }
 
     /// Filters scalars until `limit` of them have been kept. Removed scalars and
-    /// kept joiners do not count, so the limit applies to the joiner-free match
-    /// form and invisible padding cannot push later text past it. A kept joiner
-    /// always follows a kept non-joiner, so the kept text is at most `2 * limit` scalars.
+    /// kept match-ignorable scalars (joiners, presentation selectors) do not count,
+    /// so the limit applies to the match form and invisible padding cannot push
+    /// later text past it. A kept selector follows an emoji and a kept joiner
+    /// follows a counted scalar or such a selector, so the kept text is at most
+    /// `3 * limit` scalars.
     static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int) -> Scan {
         var kept = String.UnicodeScalarView()
         var keptCount = 0
@@ -53,7 +55,7 @@ enum UntrustedTextSanitizer {
             switch disposition(of: scalar, after: kept, before: next) {
             case .keep:
                 kept.append(scalar)
-                keptCount += isJoiner(scalar) ? 0 : 1
+                keptCount += isMatchIgnorable(scalar) ? 0 : 1
             case .remove:
                 changed = true
             case .replaceWithSpace:
@@ -150,29 +152,54 @@ enum UntrustedTextSanitizer {
         return (String(result), changed)
     }
 
-    /// Replaces every withheld term, longest first, ignoring case. A prefix term
-    /// stands for a longer secret, so everything from its first match to the end
-    /// is replaced: the rest of the secret can never be shown.
+    /// Replaces every withheld term, ignoring case. All matches are found in the
+    /// original text first: every occurrence of a term, including occurrences that
+    /// overlap each other (the search restarts one Character after each match
+    /// start, `abcabcab` in `abcabcabcab` matches twice), and for a
+    /// prefix term (which stands for a longer secret) the range from its first
+    /// match to the end, so the rest of the secret can never be shown. Overlapping
+    /// and adjacent ranges are merged and each merged range becomes one marker, so
+    /// overlapping terms cannot leave part of a longer secret behind and the
+    /// result does not depend on term order.
+    ///
+    /// Cost: each search stops at its first match and the next starts one Character
+    /// later, so a term costs O(n·m) for a match form of n Characters and a term of
+    /// m. Both are bounded: n by the scan limit and m by `maximumWithheldBytes`.
     ///
     /// Accepted limit: only whole terms are found. A partial quote of a secret,
     /// short or long (for example the first 300 bytes of a 2,000-byte secret,
     /// shorter than its 1,024-byte prefix term), is not redacted. Only a partial
     /// at the end of a scan-cut label is dropped (`dropPartialWithheld`).
     static func redact(_ text: String, withheld: [WithheldTerm], marker: String) -> Result {
-        var result = text
-        let ordered = withheld.sorted { lhs, rhs in
-            lhs.text.count != rhs.text.count ? lhs.text.count > rhs.text.count : lhs.text < rhs.text
-        }
         let options: String.CompareOptions = [.caseInsensitive, .literal]
-        for term in ordered where !term.text.isEmpty {
-            if term.isPrefix {
-                guard let range = result.range(of: term.text, options: options) else { continue }
-                result = result[..<range.lowerBound] + marker
-            } else {
-                result = result.replacingOccurrences(of: term.text, with: marker, options: options)
+        var ranges: [Range<String.Index>] = []
+        for term in withheld where !term.text.isEmpty {
+            var start = text.startIndex
+            while let range = text.range(of: term.text, options: options, range: start..<text.endIndex) {
+                guard !term.isPrefix else {
+                    ranges.append(range.lowerBound..<text.endIndex)
+                    break
+                }
+                ranges.append(range)
+                start = text.index(after: range.lowerBound)
             }
         }
-        return (result, result != text)
+        guard !ranges.isEmpty else { return (text, false) }
+        var merged: [Range<String.Index>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = merged.last, range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
+        }
+        var result = ""
+        var cursor = text.startIndex
+        for range in merged {
+            result += text[cursor..<range.lowerBound] + marker
+            cursor = range.upperBound
+        }
+        return (result + text[cursor...], true)
     }
 
     /// After a scan stopped early, drops a trailing piece of at least

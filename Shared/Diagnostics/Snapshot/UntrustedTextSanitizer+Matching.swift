@@ -2,18 +2,36 @@
 //  UntrustedTextSanitizer+Matching.swift
 //  FluxKlang
 //
-//  Withheld strings are found in a joiner-free, NFC "match form" of a label, so
-//  ZWJ/ZWNJ (kept for display between letters or emoji) cannot split a secret.
+//  Withheld strings are found in a "match form" of a label without ZWJ/ZWNJ or
+//  variation selectors, normalized to NFC, so the only invisible scalars that
+//  survive filtering cannot split a secret.
 //
 
 import Foundation
 
 extension UntrustedTextSanitizer {
-    /// The display text without ZWJ/ZWNJ. Labels and withheld strings are compared in this form.
+    /// The display text without match-ignorable scalars, normalized to NFC
+    /// afterwards because a removed joiner may have blocked a composition
+    /// (`\u{1100}\u{200D}\u{1161}` becomes `가`). Idempotent. Labels and withheld
+    /// strings are compared in this form.
     static func matchForm(_ display: String) -> String {
         var scalars = display.unicodeScalars
-        scalars.removeAll(where: isJoiner)
-        return String(scalars)
+        scalars.removeAll(where: isMatchIgnorable)
+        return String(scalars).precomposedStringWithCanonicalMapping
+    }
+
+    /// ZWJ/ZWNJ and variation selectors. After `filterScalars` these are the only
+    /// default-ignorable scalars left (it keeps joiners between letters or emoji and
+    /// FE0E/FE0F after an emoji, and removes every other default-ignorable or format
+    /// scalar), so this class covers every invisible scalar a display text can hold.
+    /// The test covers all variation selectors (FE00–FE0F, E0100–E01EF and the
+    /// Mongolian free variation selectors) so a raw withheld string is handled alike.
+    ///
+    /// Non-goal: visible space separators (Zs, such as a hair space U+200A inside a
+    /// UID) are content and stay in the match form. A redacted label is shown in its
+    /// match form, so removing them would corrupt the spacing of ordinary labels.
+    static func isMatchIgnorable(_ scalar: Unicode.Scalar) -> Bool {
+        isJoiner(scalar) || scalar.properties.isVariationSelector
     }
 
     /// Redacting shorter strings would mangle ordinary words (evidence "ok").
@@ -30,7 +48,7 @@ extension UntrustedTextSanitizer {
     }
 
     /// Prepares a withheld string exactly like a label (filtering, grapheme cap,
-    /// NFC, joiner removal), then trims surrounding whitespace. An overlong string
+    /// match form), then trims surrounding whitespace. An overlong string
     /// is cut to `maximumWithheldBytes` and loses its last grapheme, which the cut
     /// may have split, so the prefix matches wherever the full string occurs.
     /// Returns nil when fewer than `minimumRedactedBytes` remain.
@@ -43,7 +61,7 @@ extension UntrustedTextSanitizer {
             isPrefix = true
         }
         if isPrefix, !display.isEmpty { display.removeLast() }
-        let text = matchForm(display.precomposedStringWithCanonicalMapping)
+        let text = matchForm(display)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return text.utf8.count >= minimumRedactedBytes ? WithheldTerm(text: text, isPrefix: isPrefix) : nil
     }
@@ -58,8 +76,8 @@ extension UntrustedTextSanitizer {
     /// Redacts withheld terms found in the match form of `display`. When one
     /// matches, or when a scan cut leaves a partial withheld string at the end,
     /// the result is the redacted match form; otherwise `display` is unchanged
-    /// and keeps its joiners (so an emoji family loses its joiners only when the
-    /// label also contains a withheld string).
+    /// and keeps its joiners and presentation selectors (so an emoji family loses
+    /// them only when the label also contains a withheld string).
     static func redactMatchForm(
         of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool
     ) -> Result {

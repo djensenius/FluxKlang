@@ -16,10 +16,12 @@ import Foundation
 ///    so they cannot split a withheld string and hide it from step 3.
 /// 2. Each grapheme is limited to `UntrustedTextSanitizer.maximumScalarsPerGrapheme`
 ///    scalars, and the text is normalized to NFC.
-/// 3. Withheld strings are searched in the match form (the text without ZWJ/ZWNJ)
-///    and replaced, ignoring case, by `withheldMarker`. If the scan stopped early, a
-///    trailing piece that begins a withheld string is dropped. When either happens
-///    the label is the redacted match form; otherwise it keeps its allowed joiners.
+/// 3. Withheld strings are searched in the match form (the text without ZWJ/ZWNJ or
+///    variation selectors, renormalized to NFC) and replaced, ignoring case, by
+///    `withheldMarker`; overlapping matches become one marker. If the scan stopped
+///    early, a trailing piece that begins a withheld string is dropped. When either
+///    happens the label is the redacted match form; otherwise it keeps its allowed
+///    joiners and presentation selectors.
 /// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are

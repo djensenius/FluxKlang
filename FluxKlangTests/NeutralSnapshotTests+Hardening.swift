@@ -139,8 +139,8 @@ extension NeutralSnapshotTests {
         #expect(label.wasSanitized && !label.isTruncated)
     }
 
-    /// Four redacted 1,000-byte copies shrink to 40 bytes, so whatever the scan
-    /// keeps of the fifth copy would fit in a 200-byte label.
+    /// Four adjacent 1,000-byte copies shrink to one 10-byte marker, so whatever the
+    /// scan keeps of the fifth copy would fit in a 200-byte label.
     @Test(arguments: [
         (0, ""), (88, String(repeating: "x", count: 88)), (89, String(repeating: "x", count: 89) + "ser")
     ])
@@ -150,7 +150,8 @@ extension NeutralSnapshotTests {
             + serial.lowercased()
         let label = UntrustedLabel(raw, maximumBytes: 200, withholding: [serial])
         let marker = UntrustedLabel.withheldMarker
-        #expect(label.text == "Rig " + String(repeating: marker, count: 4) + tail)
+        // Adjacent copies merge into one marker.
+        #expect(label.text == "Rig " + marker + tail)
         #expect(label.isTruncated)
     }
 
