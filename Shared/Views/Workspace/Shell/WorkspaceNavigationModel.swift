@@ -68,11 +68,24 @@ enum WorkspaceWidthClass: Hashable, Sendable {
     case compact
 }
 
-/// A selectable graph item, keyed by its kind and stable contract ID.
+/// A selectable graph item, keyed by its kind and stable contract IDs. A `GraphPort` ID is
+/// unique only within its node, so a port is keyed by its owning node and its port ID
+/// together: two nodes' `out` ports are different items. Not Codable; W1 never persists it.
 enum WorkspaceItemRef: Hashable, Sendable {
     case node(NodeID)
-    case port(PortID)
+    case port(node: NodeID, port: PortID)
     case edge(EdgeID)
+
+    /// Whether a revision whose items are `present` still has this item. A port also
+    /// needs its owning node, because `GraphDocument` removes a node together with its
+    /// ports. `removeNode` also drops the edges touching the node; an edge is keyed by
+    /// its graph-unique ID alone, so `present` must omit those edges itself.
+    func isPresent(in present: Set<WorkspaceItemRef>) -> Bool {
+        switch self {
+        case .node, .edge: present.contains(self)
+        case let .port(node, _): present.contains(self) && present.contains(.node(node))
+        }
+    }
 }
 
 /// A selected item. An item missing from an applied revision stays selected as
@@ -217,7 +230,7 @@ private struct WorkspaceNavigationTransition {
         windows = windows.mapValues { window in
             var window = window
             window.selection = window.selection.map { entry in
-                guard case let .live(item) = entry, !present.contains(item) else { return entry }
+                guard case let .live(item) = entry, !item.isPresent(in: present) else { return entry }
                 return .removed(item, in: revision)
             }
             return window

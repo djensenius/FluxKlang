@@ -23,8 +23,12 @@ enum WorkspaceNavigationAction: Hashable, Sendable {
     case setInspectorRequested(Bool, window: WindowID)
     case setAdvancedExpanded(Bool)
     /// A newer revision: every window's selected live items absent from `present` become removed in it.
-    /// W1 models a single open document, so this revision sequence is global across windows; a
-    /// multi-project host must key revision state by `ProjectID` before shell wiring (a W2 follow-up).
+    /// `present` is authoritative. The reducer does not cascade edges, so `present` must already omit
+    /// the edges that `GraphDocument.removeNode` dropped with their node. Every listed port also
+    /// requires its owning `.node(owner)` in `present`; otherwise the port is marked removed
+    /// (`WorkspaceItemRef.isPresent(in:)`). W1 models a single open document, so this revision
+    /// sequence is global across windows; a multi-project host must key revision state by `ProjectID`
+    /// before shell wiring (a W2 follow-up).
     case revisionApplied(ContractRevision, present: Set<WorkspaceItemRef>)
 }
 

@@ -3,7 +3,7 @@
 //  FluxKlangTests
 //
 //  The pure workspace navigation reducer (#99): defaults, windows, limits,
-//  selection, revisions, refusals and determinism.
+//  selection, node-scoped ports, revisions, refusals and determinism.
 //
 
 import Testing
@@ -20,6 +20,13 @@ struct WorkspaceNavigationTests {
 
     static func node(_ index: Int) throws -> WorkspaceItemRef { .node(try NodeID("nod.\(index)")) }
 
+    /// The node that owns the fixture ports unless a test names another.
+    static let owner = NodeID(validated: "nod.owner")
+
+    static func port(_ raw: StaticString, on node: NodeID = owner) -> WorkspaceItemRef {
+        .port(node: node, port: PortID(validated: raw))
+    }
+
     static func revision(_ value: Int) throws -> ContractRevision { try ContractRevision(value) }
 
     static func applying(
@@ -33,7 +40,7 @@ struct WorkspaceNavigationTests {
     /// Window A on Compatibility in Perform at compact width, with a removed and a
     /// live selection and the inspector requested; window B in the default state.
     static func customizedState() throws -> WorkspaceNavigationState {
-        let port = WorkspaceItemRef.port(PortID(validated: "prt.a"))
+        let port = Self.port("prt.a")
         return try applying([
             .openWindow(windowA),
             .selectSurface(.compatibility, window: windowA),
@@ -41,7 +48,7 @@ struct WorkspaceNavigationTests {
             .setWidthClass(.compact, window: windowA),
             .select([try node(1), port, .edge(EdgeID(validated: "edg.a"))], window: windowA),
             .setInspectorRequested(true, window: windowA),
-            .revisionApplied(try revision(5), present: [port]),
+            .revisionApplied(try revision(5), present: [port, .node(owner)]),
             .openWindow(windowB)
         ])
     }
@@ -93,13 +100,13 @@ struct WorkspaceNavigationTests {
     /// Window A customized on a non-advanced surface with a removed and a live item;
     /// window B on Wiring with one live item; Advanced collapsed; revision 3 applied.
     static func isolationState() throws -> WorkspaceNavigationState {
-        let port = WorkspaceItemRef.port(PortID(validated: "prt.a"))
+        let port = Self.port("prt.a")
         return try applying([
             .openWindow(windowA), .openWindow(windowB),
             .selectSurface(.library, window: windowA), .setMode(.perform, window: windowA),
             .setWidthClass(.compact, window: windowA), .setInspectorRequested(true, window: windowA),
             .select([try node(1), port], window: windowA), .select([try node(9)], window: windowB),
-            .revisionApplied(try revision(3), present: [port, try node(9)])
+            .revisionApplied(try revision(3), present: [port, .node(owner), try node(9)])
         ])
     }
 
@@ -184,7 +191,8 @@ struct WorkspaceNavigationTests {
     @Test func selectionKeepsOrderIsKeyedByKindAndRefusesDuplicates() throws {
         let sharedRaw = "shared.id"
         let ordered: [WorkspaceItemRef] = [
-            .edge(try EdgeID(sharedRaw)), .node(try NodeID(sharedRaw)), .port(try PortID(sharedRaw)), try Self.node(2)
+            .edge(try EdgeID(sharedRaw)), .node(try NodeID(sharedRaw)),
+            .port(node: try NodeID(sharedRaw), port: try PortID(sharedRaw)), try Self.node(2)
         ]
         let opened = try Self.applying([.openWindow(Self.windowA)])
         let state = try Self.applying([.select(ordered, window: Self.windowA)], to: opened)
@@ -210,7 +218,7 @@ struct WorkspaceNavigationTests {
     }
 
     @Test func revisionAppliedMarksAbsentLiveItemsRemovedInOrder() throws {
-        let port = WorkspaceItemRef.port(PortID(validated: "prt.p"))
+        let port = Self.port("prt.p", on: NodeID(validated: "nod.2"))
         let edge = WorkspaceItemRef.edge(EdgeID(validated: "edg.e"))
         let (first, second) = (try Self.node(1), try Self.node(2))
         var state = try Self.applying([
@@ -365,5 +373,79 @@ struct WorkspaceNavigationTests {
         ])
         #expect(try first.presentation(for: Self.windowA) == second.presentation(for: Self.windowA))
         #expect(!first.isAdvancedExpanded)
+    }
+}
+
+private typealias Root = WorkspaceNavigationTests
+
+extension WorkspaceNavigationTests {
+    /// A `GraphPort` ID is unique only within its node, so a port item is keyed by both IDs.
+    struct PortScope {
+        static let keys = NodeID(validated: "nod.keys")
+        static let synth = NodeID(validated: "nod.synth")
+        static let keysOut = Root.port("out", on: keys)
+        static let synthOut = Root.port("out", on: synth)
+
+        /// Window A selects both `out` ports and the keys node; revision 1 has every item.
+        static func bothSelected() throws -> WorkspaceNavigationState {
+            try Root.applying([
+                .openWindow(Root.windowA), .select([keysOut, synthOut, .node(keys)], window: Root.windowA),
+                .revisionApplied(try Root.revision(1), present: [.node(keys), .node(synth), keysOut, synthOut])
+            ])
+        }
+
+        static func selection(_ state: WorkspaceNavigationState) -> [WorkspaceSelectionEntry]? {
+            state.windows[Root.windowA]?.selection
+        }
+
+        @Test func portItemsAreKeyedByTheirNodeAndPort() {
+            #expect(Self.keysOut != Self.synthOut)
+            #expect(Self.keysOut == .port(node: Self.keys, port: PortID(validated: "out")))
+            #expect(Set([Self.keysOut, Self.synthOut, Root.port("out", on: Self.keys)]).count == 2)
+            #expect(Self.keysOut != .node(Self.keys))
+        }
+
+        @Test func twoNodesSharingAPortIDCanBothBeSelected() throws {
+            let state = try Self.bothSelected()
+            #expect(Self.selection(state) == [.live(Self.keysOut), .live(Self.synthOut), .live(.node(Self.keys))])
+            Root.expectRefusal(
+                .duplicateSelectionItem(Self.synthOut),
+                applying: .select([Self.keysOut, Self.synthOut, Self.synthOut], window: Root.windowA), to: state
+            )
+        }
+
+        @Test func removingOneNodesPortMarksOnlyThatSelectionRemoved() throws {
+            var state = try Self.bothSelected()
+            let two = try Root.revision(2)
+            try state.apply(.revisionApplied(two, present: [.node(Self.keys), .node(Self.synth), Self.synthOut]))
+            #expect(Self.selection(state) == [
+                .removed(Self.keysOut, in: two), .live(Self.synthOut), .live(.node(Self.keys))
+            ])
+        }
+
+        @Test func removingANodeRemovesItsPortsButNotTheOtherNodesPort() throws {
+            var state = try Self.bothSelected()
+            let two = try Root.revision(2)
+            // GraphDocument removes a node with its ports, so a listed port of an absent node is removed too.
+            try state.apply(.revisionApplied(two, present: [.node(Self.synth), Self.keysOut, Self.synthOut]))
+            #expect(Self.selection(state) == [
+                .removed(Self.keysOut, in: two), .live(Self.synthOut), .removed(.node(Self.keys), in: two)
+            ])
+        }
+
+        @Test func aStaleRevisionCannotRemoveEitherPort() throws {
+            var state = try Self.bothSelected()
+            let three = try Root.revision(3)
+            try state.apply(.revisionApplied(three, present: [.node(Self.keys), .node(Self.synth), Self.keysOut]))
+            #expect(Self.selection(state) == [
+                .live(Self.keysOut), .removed(Self.synthOut, in: three), .live(.node(Self.keys))
+            ])
+            for value in [1, 2, 3] {
+                let stale = try Root.revision(value)
+                Root.expectRefusal(
+                    .staleRevision(stale), applying: .revisionApplied(stale, present: [.node(Self.synth)]), to: state
+                )
+            }
+        }
     }
 }
