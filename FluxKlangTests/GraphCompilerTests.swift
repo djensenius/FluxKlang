@@ -129,25 +129,58 @@ extension GraphCompilerTests {
         #expect(throws: AudioRoutingPreparationError.unsupported) { try Fixtures.compile(documents) }
     }
 
-    @Test func muteExactBudgetsAndAllEdgeTermsAreCharged() throws {
-        for muted in [false, true] {
-            let documents = Fixtures.muteDocuments(muted)
-            let plan = try Fixtures.compile(
-                documents, limits: Fixtures.limits(inputs: 2, outputs: 2, terms: 4, scratch: 520, work: 388)
-            )
-            #expect(plan.scratchFloats == 130 && plan.scratchBytes == 520 && plan.sampleWork == 388)
-            #expect(plan.terms.count == 4)
-            for limits in [Fixtures.limits(terms: 3), Fixtures.limits(scratch: 519), Fixtures.limits(work: 387)] {
-                #expect(throws: AudioRoutingPreparationError.resourceLimit) {
-                    try Fixtures.compile(documents, limits: limits)
-                }
-            }
-            var disconnected = documents
-            disconnected.graph.edges = []
-            let isolated = try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: 0, work: 324))
-            #expect(isolated.scratchBytes == 520 && isolated.sampleWork == 324 && isolated.terms.isEmpty)
+    @Test(arguments: [false, true], [false, true])
+    func muteExactBudgetsAndAllEdgeTermsAreCharged(muted: Bool, reversed: Bool) throws {
+        var documents = Fixtures.muteDocuments(muted)
+        let nodeID = NodeID(validated: reversed ? "node.reverseMute" : "node.forwardMute")
+        documents.graph.nodes[2].id = nodeID
+        documents.graph.nodes[2].ports[0].id = PortID(validated: "receive")
+        documents.graph.nodes[2].ports[1].id = PortID(validated: "send")
+        documents.graph.edges[0].to = PortAddress(node: nodeID, port: PortID(validated: "receive"))
+        documents.graph.edges[1].from = PortAddress(node: nodeID, port: PortID(validated: "send"))
+        if reversed { documents.graph.nodes[2].ports.reverse() }
+        let plan = try Fixtures.compile(
+            documents, limits: Fixtures.limits(inputs: 2, outputs: 2, terms: 4, scratch: 520, work: 388)
+        )
+        #expect(plan.scratchFloats == 130 && plan.scratchBytes == 520 && plan.sampleWork == 388)
+        let mute = try #require(plan.mute)
+        #expect(mute.node == nodeID && mute.muted == muted)
+        #expect(mute.inputPort == documents.graph.edges[0].to.port)
+        #expect(mute.outputPort == documents.graph.edges[1].from.port)
+        #expect(mute.inputOffset == 32 && mute.resultOffset == 64 && plan.terms == [0, 16, 64, 80])
+        #expect(mute.rows.map(\.firstTerm) == [0, 1] && mute.rows.map(\.termCount) == [1, 1])
+        #expect(mute.rows.allSatisfy(\.isIdentity) && plan.rows.allSatisfy(\.isIdentity))
+        #expect(plan.rows.map(\.firstTerm) == [2, 3] && plan.rows.map(\.termCount) == [1, 1])
+        for limits in [Fixtures.limits(terms: 3), Fixtures.limits(scratch: 519), Fixtures.limits(work: 387)] {
             #expect(throws: AudioRoutingPreparationError.resourceLimit) {
-                try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: 0, work: 323))
+                try Fixtures.compile(documents, limits: limits)
+            }
+        }
+        for topology in 0..<3 {
+            var disconnected = documents
+            disconnected.graph.edges = topology == 1 ? [documents.graph.edges[0]] : []
+            if topology == 2 { disconnected.graph.nodes = [documents.graph.nodes[2]] }
+            let work = [324, 356, 128][topology], terms = topology == 1 ? 2 : 0
+            let isolated = try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: terms, work: work))
+            let operation = try #require(isolated.mute)
+            #expect(operation.node == mute.node && operation.muted == muted)
+            #expect(operation.inputPort == mute.inputPort && operation.outputPort == mute.outputPort)
+            #expect(operation.rows.count == 2 && isolated.rows.count == (topology == 2 ? 0 : 2))
+            #expect(operation.rows.map(\.firstTerm) == (topology == 1 ? [0, 1] : [0, 0]))
+            #expect(operation.rows.map(\.termCount) == (topology == 1 ? [1, 1] : [0, 0]))
+            #expect(operation.rows.allSatisfy { $0.isIdentity == (topology == 1) })
+            #expect(isolated.rows.allSatisfy { $0.firstTerm == terms && $0.termCount == 0 && !$0.isIdentity })
+            let start = topology == 2 ? 0 : 32, width = operation.rows.count * isolated.layout.maxFrames
+            #expect(operation.inputOffset..<operation.inputOffset + width == start..<start + 32)
+            #expect(operation.resultOffset..<operation.resultOffset + width == start + 32..<start + 64)
+            #expect(isolated.layout.inputs == (topology == 2 ? [] : plan.layout.inputs))
+            #expect(isolated.layout.outputs == (topology == 2 ? [] : plan.layout.outputs))
+            #expect(isolated.layout.inputSampleCount == start && isolated.layout.outputSampleCount == start)
+            #expect(isolated.layout.peakCount == (topology == 2 ? 0 : 2))
+            #expect(isolated.scratchBytes == (topology == 2 ? 256 : 520) && isolated.sampleWork == work)
+            #expect(isolated.terms == (topology == 1 ? [0, 16] : []))
+            #expect(throws: AudioRoutingPreparationError.resourceLimit) {
+                try Fixtures.compile(disconnected, limits: Fixtures.limits(terms: terms, work: work - 1))
             }
         }
         var fanout = Fixtures.muteDocuments(false, inputMap: [[1, 0, 1], []], outputMap: [[0], [0, 0]])
@@ -156,8 +189,8 @@ extension GraphCompilerTests {
         edge.id = EdgeID(validated: "edge.fanout")
         edge.to.node = fanout.graph.nodes[3].id
         fanout.graph.edges.append(edge)
-        let plan = try Fixtures.compile(fanout, limits: Fixtures.limits(terms: 9))
-        #expect(plan.terms.count == 9)
+        let fanoutPlan = try Fixtures.compile(fanout, limits: Fixtures.limits(terms: 9))
+        #expect(fanoutPlan.terms.count == 9)
         #expect(throws: AudioRoutingPreparationError.resourceLimit) {
             try Fixtures.compile(fanout, limits: Fixtures.limits(terms: 8))
         }
@@ -308,8 +341,9 @@ extension GraphCompilerTests {
     }
 
     @Test func presentationDocumentOrderAndEmptyBagsAreInert() throws {
-        var documents = Fixtures.documents(map: [[1, 0, 1], []])
+        var documents = Fixtures.muteDocuments(false, inputMap: [[1, 0, 1], []], outputMap: [[1, 0, 1], []])
         try Fixtures.appendEndpoint(to: &documents, input: false, suffix: "unconnected")
+        let nodes = documents.graph.nodes
         let original = try Fixtures.compile(documents)
         documents.project.name = "Mute everything (not an opcode)"
         documents.graph.label = "Gain -100 dB (not an opcode)"
@@ -325,20 +359,35 @@ extension GraphCompilerTests {
         documents.project.roles.reverse()
         let reordered = try Fixtures.compile(documents)
         #expect(reordered.layout == original.layout)
-        #expect(reordered.terms == [16, 0, 16])
-        #expect(reordered.terms == original.terms)
-        #expect(reordered.rows.map(\.termCount) == [3, 0, 0, 0])
+        documents.graph.nodes[1].id = NodeID(validated: "node.changed")
+        documents.graph.nodes[1].ports[0].id = PortID(validated: "changed")
+        documents.graph.nodes[1].ports[1].id = PortID(validated: "alsoChanged")
+        documents.graph.nodes[1].muted = true
+        documents.graph.edges = []
+        documents.project.roles = []
+        for plan in [original, reordered] {
+            for endpoint in plan.layout.inputs + plan.layout.outputs {
+                let node = try #require(nodes.first { $0.id == endpoint.node })
+                #expect(endpoint.port == node.ports[0].id && endpoint.role == node.role && endpoint.channels == 2)
+                #expect(endpoint.firstChannel == (node.id == nodes[3].id ? 2 : 0))
+            }
+            let mute = try #require(plan.mute)
+            #expect(mute.node == nodes[2].id && mute.inputPort == nodes[2].ports[0].id)
+            #expect(mute.outputPort == nodes[2].ports[1].id && !mute.muted)
+            #expect(mute.inputOffset == 32 && mute.resultOffset == 64 && mute.rows.count == 2)
+            #expect(mute.rows.map(\.firstTerm) == [0, 3] && mute.rows.map(\.termCount) == [3, 0])
+            #expect(plan.terms == [16, 0, 16, 80, 64, 80] && plan.rows.map(\.firstTerm) == [3, 6, 6, 6])
+            #expect(plan.rows.map(\.termCount) == [3, 0, 0, 0])
+            #expect((mute.rows + plan.rows).allSatisfy { !$0.isIdentity })
+        }
     }
 
     @Test func exactResourceBudgetsAndOneBelow() throws {
         let documents = Fixtures.documents()
         let exact = Fixtures.limits(inputs: 2, outputs: 2, terms: 2, scratch: 264, work: 228)
         let plan = try Fixtures.compile(documents, limits: exact)
-        #expect(plan.scratchFloats == 66)
-        #expect(plan.scratchBytes == 264)
-        #expect(plan.sampleWork == 228)
-        #expect(plan.layout.inputSampleCount == 32)
-        #expect(plan.layout.outputSampleCount == 32)
+        #expect(plan.scratchFloats == 66 && plan.scratchBytes == 264 && plan.sampleWork == 228)
+        #expect(plan.layout.inputSampleCount == 32 && plan.layout.outputSampleCount == 32 && plan.mute == nil)
         let insufficient = [
             Fixtures.limits(inputs: 1), Fixtures.limits(outputs: 1), Fixtures.limits(terms: 1),
             Fixtures.limits(scratch: 263), Fixtures.limits(work: 227)
@@ -439,9 +488,11 @@ extension GraphCompilerTests {
         documents.graph.edges = []
         let limits = Fixtures.limits(inputs: 0, outputs: 0, terms: 0, scratch: 4, work: 0)
         let plan = try Fixtures.compile(documents, limits: limits)
-        #expect(plan.scratchFloats == 1)
-        #expect(plan.layout.peakCount == 0)
-        #expect(plan.sampleWork == 0)
+        #expect(plan.scratchFloats == 1 && plan.scratchBytes == 4)
+        #expect(plan.mute == nil && plan.layout.inputs.isEmpty && plan.layout.outputs.isEmpty)
+        #expect(plan.rows.isEmpty && plan.terms.isEmpty)
+        #expect(plan.layout.inputSampleCount == 0 && plan.layout.outputSampleCount == 0)
+        #expect(plan.layout.peakCount == 0 && plan.sampleWork == 0)
         #expect(throws: AudioRoutingPreparationError.resourceLimit) {
             try Fixtures.compile(documents, limits: Fixtures.limits(scratch: 3))
         }
