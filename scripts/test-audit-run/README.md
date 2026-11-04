@@ -189,9 +189,16 @@ retention, or runtime coverage. Intent is neither
 a signature nor an execution receipt. Sibling placement preserves metadata path
 resolution, not the existence or immutability of any referenced native product.
 
-The existing UI helper sets launch flags but does **not** explicitly forward the
-audit UUID. The three iOS metadata insertions express intended custody only;
-Xcode/helper environment delivery remains unqualified. The original profiles
+The canonical UI helper now validates the runner environment and intended app
+configuration before setting launch environment/arguments and launching. Its
+source explicitly forwards the validated audit UUID with only the intended app
+dictionary and unchanged arguments, not the entire runner environment. Explicit
+app identity conflicts are refused, not overwritten. The three iOS metadata
+insertions and helper source express intended forwarding only; actual
+Xcode/helper environment delivery and runtime custody remain unqualified.
+Earlier termination/orientation effects remain outside this boundary; this is
+not pre-host isolation, factory exclusion, audit coverage, or full #60 acceptance.
+The original profiles
 preserve the observed `deleteOnSuccess` system/user attachment defaults; the
 opt-in profiles only request `keepAlways`. No products or results are opened.
 This adds no proof of actual retention, coverage, destination/product closure,
@@ -199,7 +206,13 @@ process freshness, or child-process delivery, and no retained receipts. Scheme
 script bypass, pre-host timing, and `Test.ID` mapping are not established or
 inferred from documentation absence.
 
-Current Makefile launch recipes and raw Cmd+U remain unchanged and unvalidated.
+This is an intentional fail-closed change: unprepared `make test` and ordinary
+isolated-scheme Cmd+U invocations reaching the helper fail for missing
+`FLUXKLANG_AUDIT_RUN_ID`. Refusal propagates as an error, not a skip. Execution
+authorization alone does not supply identity, and a generated or manually supplied
+UUID is neither provenance nor permission. This slice delivers **no replacement
+supported execution workflow**. Compilation remains available; Mac/unit adoption
+is separate. `UIAuditCaptureSession` remains unused and out of scope.
 No command here runs `xcodebuild` or `test-without-building`. Runner integration,
 canonical scope adoption, checker/live extraction, iOS/UI runtime handoff, live
 profiles, and retained runtime results require separate review/authorization.

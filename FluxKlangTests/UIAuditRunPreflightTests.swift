@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+@MainActor
 struct UIAuditRunPreflightTests {
     private let runIDKey = "FLUXKLANG_AUDIT_RUN_ID"
     private let runID = "f767034a-c02c-47d7-a076-0110c8824c4e"
@@ -39,6 +40,20 @@ struct UIAuditRunPreflightTests {
         case .success:
             Issue.record("Expected preflight refusal")
         }
+        var callbacks = 0
+        do {
+            try UIAuditRunPreflight.performValidatedLaunch(
+                runnerEnvironment: runnerEnvironment,
+                appEnvironment: appEnvironment,
+                appArguments: appArguments
+            ) { _ in
+                callbacks += 1
+            }
+            Issue.record("Expected launch preflight refusal")
+        } catch {
+            #expect(error as? UIAuditRunPreflight.Refusal == expected)
+        }
+        #expect(callbacks == 0)
         #expect(runnerEnvironment == originalRunner)
         #expect(appEnvironment == originalApp)
         #expect(appArguments == originalArguments)
@@ -124,10 +139,14 @@ struct UIAuditRunPreflightTests {
             ["--other", "value", "-ui-testing"],
             ["-ui-testing", "", "--other", "-ui-testing", "-ui-testing=1", "value"]
         ] {
-            let configuration = try UIAuditRunPreflight.validate(
+            var callbacks = 0
+            try UIAuditRunPreflight.performValidatedLaunch(
                 runnerEnvironment: runner(), appEnvironment: flags, appArguments: arguments
-            ).get()
-            #expect(configuration.appArguments == arguments)
+            ) { configuration in
+                callbacks += 1
+                #expect(configuration.appArguments == arguments)
+            }
+            #expect(callbacks == 1)
         }
     }
 
@@ -139,15 +158,25 @@ struct UIAuditRunPreflightTests {
             appEnvironment[runIDKey] = existingIdentity
             appEnvironment["APP_ONLY"] = " preserve whitespace \n"
             appEnvironment["EMPTY"] = ""
-            var arguments = ["--unrelated", "-ui-testing", "value"]
+            var arguments = ["--unrelated", "-ui-testing", "", "-ui-testing", "value"]
             let originalRunner = runnerEnvironment
             let originalApp = appEnvironment
             let originalArguments = arguments
-            let configuration = try UIAuditRunPreflight.validate(
-                runnerEnvironment: runnerEnvironment, appEnvironment: appEnvironment, appArguments: arguments
-            ).get()
             var expectedApp = originalApp
             expectedApp[runIDKey] = runID
+            var callbacks = 0
+            var received: UIAuditRunPreflight.ValidatedLaunchConfiguration?
+            try UIAuditRunPreflight.performValidatedLaunch(
+                runnerEnvironment: runnerEnvironment, appEnvironment: appEnvironment, appArguments: arguments
+            ) { configuration in
+                callbacks += 1
+                received = configuration
+                #expect(configuration.runID == UUID(uuidString: runID))
+                #expect(configuration.appEnvironment == expectedApp)
+                #expect(configuration.appArguments == originalArguments)
+            }
+            #expect(callbacks == 1)
+            let configuration = try #require(received)
             #expect(configuration.runID == UUID(uuidString: runID))
             #expect(configuration.appEnvironment == expectedApp)
             #expect(configuration.appArguments == originalArguments)
@@ -160,6 +189,24 @@ struct UIAuditRunPreflightTests {
             #expect(configuration.appEnvironment == expectedApp)
             #expect(configuration.appArguments == originalArguments)
         }
+    }
+
+    @Test func propagatesCallbackErrorWithoutRetry() {
+        final class CallbackError: Error {}
+        let sentinel = CallbackError()
+        var callbacks = 0
+        do {
+            try UIAuditRunPreflight.performValidatedLaunch(
+                runnerEnvironment: runner(), appEnvironment: flags, appArguments: ["-ui-testing"]
+            ) { _ in
+                callbacks += 1
+                throw sentinel
+            }
+            Issue.record("Expected callback error")
+        } catch {
+            #expect((error as? CallbackError) === sentinel)
+        }
+        #expect(callbacks == 1)
     }
 
     @Test func refusesEveryConflictingAppIdentityWithoutRepair() {
