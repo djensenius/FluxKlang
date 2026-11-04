@@ -370,6 +370,22 @@ def git(root, *arguments):
         raise
 
 
+def git_control_exists(path):
+    """Probe Git's literal lookup using filesystem alias rules, never links."""
+    path = Path(path_text(path))
+    try:
+        parent = open_fd(path.parent, directory=True)
+    except FileNotFoundError:
+        return False
+    try:
+        os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(parent)
+
+
 def git_control(root, workspace):
     """Check control paths BEFORE Git can follow pointers or object alternates."""
     marker = root / ".git"
@@ -395,11 +411,11 @@ def git_control(root, workspace):
     controls = []
     for location in sorted({directory, common}):
         entries = inventory(location, independent=True)
-        require(not any(entry["path"] in ("objects/info/alternates",
-                                         "objects/info/http-alternates")
-                        for entry in entries), "Git alternates are unsupported")
+        require(not any(git_control_exists(location / name) for name in
+                        ("objects/info/alternates", "objects/info/http-alternates")),
+                "Git alternates are unsupported")
         for name in ("config", "config.worktree"):
-            if any(entry["path"] == name for entry in entries):
+            if git_control_exists(location / name):
                 _, data = bounded(location / name)
                 config = data.decode("utf-8")
                 # Refuse external includes and lazy acquisition before invoking
@@ -650,6 +666,8 @@ def input_observation(workspace, source, packages):
                     file_witness = file_data(path, TREE_BYTES - generated_budget.bytes)[0]
                     generated_budget.regular(file_witness["size"])
                     generated[name] = dict(file_witness, type="file")
+                require(generated[name]["type"] == "file",
+                        "generated Swift input must be a regular file")
                 parent = path.parent
                 while True:
                     if str(parent) in generated:

@@ -170,6 +170,16 @@ class ProducerTests(unittest.TestCase):
             path.write_bytes(path.read_bytes().replace(b" ", b"\\ "))
         return code
 
+    def fake_compile_nested_generated(self, *args):
+        code = self.fake_compile(*args)
+        leaf = self.w / receipt.DERIVED_SOURCES / "Container.swift/Leaf.swift"
+        write(leaf, b"struct NestedGeneratedInput {}\n")
+        for relative in (*receipt.MANDATORY, "Extra/Other.SwiftFileList"):
+            path = self.w / receipt.INTERMEDIATES / relative
+            with path.open("ab") as stream:
+                stream.write((str(leaf) + "\n").encode())
+        return code
+
     def produce(self):
         return build_mac.produce(str(self.w), self.commit, self.tree)
 
@@ -964,6 +974,63 @@ class ProducerTests(unittest.TestCase):
     def test_git_marker_package_internal_pointers_refuse_before_read_or_git(self):
         self.assert_non_directory_git_marker_preflight_refusal("Packages/checkouts/swift-nio")
 
+    def assert_git_reserved_case_lookup(self, relative):
+        root = self.w / relative
+        external = self.root / "external-control"
+        write(external, b"[fixture]\nvalue = external\n")
+        real_git = receipt.git
+        real_file_data = receipt.file_data
+        for name in ("objects/info/ALTERNATES", "objects/info/HTTP-ALTERNATES",
+                     "CONFIG", "CONFIG.WORKTREE"):
+            with self.subTest(root=relative, name=name):
+                target = root / ".git" / name
+                lookup = root / ".git" / name.lower()
+                original = lookup.read_bytes() if lookup.is_file() else None
+                if original is not None:
+                    lookup.rename(target)  # Preserve the actual uppercase directory entry.
+                data = ((str(external) + "\n").encode() if "ALTERNATES" in name else
+                        (original or b"") + b"\n[include]\npath = " + os.fsencode(external) + b"\n")
+                write(target, data)
+                try:
+                    aliases = lookup.exists() and lookup.samefile(target)
+                    before = snapshot(self.root)
+
+                    def guarded_git(selected, *args):
+                        self.assertNotEqual(Path(selected), root, "Git invoked before reserved-path refusal")
+                        return real_git(selected, *args)
+
+                    def guarded_read(path, *args, **kwargs):
+                        self.assertNotEqual(Path(path), external, "external control was read")
+                        return real_file_data(path, *args, **kwargs)
+
+                    with mock.patch.object(receipt, "git", side_effect=guarded_git) as calls, \
+                            mock.patch.object(receipt, "file_data", side_effect=guarded_read):
+                        if aliases:
+                            with self.assertRaisesRegex(receipt.Refusal, "alternates|configuration"):
+                                self.produce()
+                            if relative != "source":
+                                self.assertTrue(any(Path(c.args[0]) == self.w / "source"
+                                                    for c in calls.call_args_list))
+                        else:
+                            # On case-sensitive filesystems these are NOT Git's
+                            # reserved paths. A casefolded-name proxy is incorrect.
+                            receipt.git_control(root, self.w)
+                        self.assertFalse(any(Path(c.args[0]) == root for c in calls.call_args_list))
+                    self.compiler.assert_not_called()
+                    self.assertFalse((self.w / "build-evidence").exists())
+                    self.assertFalse((self.w / "DerivedData").exists())
+                    self.assertEqual(snapshot(self.root), before)
+                finally:
+                    target.unlink()
+                    if original is not None:
+                        lookup.write_bytes(original)
+
+    def test_git_reserved_case_source_lookup_refuses_before_git(self):
+        self.assert_git_reserved_case_lookup("source")
+
+    def test_git_reserved_case_package_lookup_refuses_before_git(self):
+        self.assert_git_reserved_case_lookup("Packages/checkouts/swift-nio")
+
     def test_git_control_escape_alternates_hardlinks_and_external_config(self):
         source = self.w / "source"
         gitdir = source / ".git"
@@ -1054,6 +1121,57 @@ class ProducerTests(unittest.TestCase):
                 with self.assertRaises((receipt.Refusal, OSError)):
                     self.produce()
                 self.assert_consumed()
+
+    def test_generated_cache_directory_input_refused_before_prepare(self):
+        original_w = self.w
+        for index, relative in enumerate(("Extra/Other.SwiftFileList", receipt.MANDATORY[0])):
+            with self.subTest(list=relative):
+                self.w = self.root / f"W{index}"
+                shutil.copytree(original_w, self.w)
+                self.final = self.w / "build-evidence/receipt.json"
+
+                def compile_directory_input(*args):
+                    code = self.fake_compile_nested_generated(*args)
+                    container = self.w / receipt.DERIVED_SOURCES / "Container.swift"
+                    path = self.w / receipt.INTERMEDIATES / relative
+                    data = path.read_bytes()
+                    if index:
+                        # The earlier Extra list alone populates this cache entry.
+                        data = data.replace((str(container / "Leaf.swift") + "\n").encode(), b"")
+                    path.write_bytes(data + (str(container) + "\n").encode())
+                    return code
+
+                self.compiler.side_effect = compile_directory_input
+                with mock.patch.object(prepare, "prepare", wraps=prepare.prepare) as preparer:
+                    with self.assertRaisesRegex(receipt.Refusal, "regular file"):
+                        self.produce()
+                    preparer.assert_not_called()
+                self.assert_consumed()
+
+    def test_generated_cache_directory_rehashed_consumer_refusal(self):
+        self.compiler.side_effect = self.fake_compile_nested_generated
+        result = self.produce()  # Repeated real files beneath a .swift directory are valid.
+        before = snapshot(self.root)
+        self.consume(result)
+        self.assertEqual(snapshot(self.root), before)
+        value = json.loads(self.final.read_bytes())
+        container = self.w / receipt.DERIVED_SOURCES / "Container.swift"
+        entry = next(item for item in value["inputs"]["generated"]
+                     if item["path"] == str(container))
+        self.assertEqual(entry["type"], "directory")
+        item = next(item for item in value["inputs"]["lists"]
+                    if item["file"]["path"].endswith("/Extra/Other.SwiftFileList"))
+        path = Path(item["file"]["path"])
+        path.write_bytes(path.read_bytes() + (str(container) + "\n").encode())
+        item["file"] = receipt.bounded(path)[0]
+        item["inputs"].append({"path": str(container), "association": "generated"})
+        receipt.schema(value)  # Structurally valid; live input reconstruction must refuse.
+        data = receipt.encode(value)
+        self.final.write_bytes(data)
+        before = snapshot(self.root)
+        with self.assertRaisesRegex(receipt.Refusal, "regular file"):
+            receipt.validate(self.final, prepare.digest(data))
+        self.assertEqual(snapshot(self.root), before)
 
     def test_claim_collision_and_each_pre_spawn_publication_failure(self):
         original_w = self.w
