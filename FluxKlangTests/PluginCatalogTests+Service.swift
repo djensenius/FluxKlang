@@ -82,19 +82,98 @@ extension PluginCatalogTests {
         }
 
         @Test func rejectedReportsStillCommitTheirQuarantineEvidence() async throws {
-            let (verb, newcomer) = try (PluginCatalogTests.identity("Verb"), PluginCatalogTests.identity("New!"))
+            let (verb, echo) = try (PluginCatalogTests.identity("Verb"), PluginCatalogTests.identity("Echo"))
             let report = try PluginScanReport(entries: [
-                PluginCatalogTests.described(newcomer), PluginScanEntry(identity: verb, outcome: .probeCrashed)
+                PluginScanEntry(identity: verb, outcome: .probeCrashed),
+                PluginCatalogTests.described(echo), PluginCatalogTests.described(echo)
             ])
-            let full = try PluginCatalogTests.fullCatalog()
-            let service = PluginCatalogService(scanner: ScriptedScanner(.success(report)), catalog: full)
-            let refusal = PluginCatalogError.tooManyEntries(maximum: PluginCatalogLimits.entries)
-            await #expect(throws: PluginCatalogServiceError.rejected(refusal)) {
+            let service = PluginCatalogService(scanner: ScriptedScanner(.success(report)))
+            await #expect(throws: PluginCatalogServiceError.rejected(.duplicateIdentity(echo.id))) {
                 try await service.scan(depth: .instantiatingProbe)
             }
             let catalog = await service.catalog
-            #expect(catalog.quarantined == [verb.id] && catalog.entries[newcomer.id] == nil)
-            #expect(catalog.entries.count == PluginCatalogLimits.entries + 1)
+            #expect(catalog.quarantined == [verb.id] && catalog.entries[echo.id] == nil)
+            #expect(await service.probeBlocked == false)
+        }
+
+        @Test func rejectedBatchesWithProbeEvidenceBlockProbesUntilCleared() async throws {
+            let (verb, echo, gone) = try (PluginCatalogTests.identity("Verb"), PluginCatalogTests.identity("Echo"),
+                                          PluginCatalogTests.identity("Gone"))
+            var start = PluginCatalog()
+            _ = try start.apply(PluginScanReport(entries: [PluginCatalogTests.described(gone)]),
+                                for: start.request(depth: .metadataOnly))
+            _ = try start.apply(PluginScanReport(entries: []), for: start.request(depth: .metadataOnly))
+            _ = try start.recordQuarantine([PluginQuarantineEvidence(identity: verb, reason: .probeCrashed)])
+            let mixed = PluginScanReport(entries: [
+                PluginScanEntry(identity: echo, outcome: .probeCrashed),
+                PluginScanEntry(identity: verb, outcome: .probeTimedOut)
+            ])
+            let scanner = ScriptedScanner(.success(mixed))
+            let service = PluginCatalogService(scanner: scanner, catalog: start)
+            await #expect(throws: PluginCatalogServiceError.rejected(.probedQuarantinedPlugin(verb.id))) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
+            #expect(await service.catalog == start)
+            #expect(await service.probeBlock == .evidenceRejected)
+            await #expect(throws: PluginCatalogServiceError.probeBlockedEvidenceUnrecorded) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
+            #expect(await scanner.recorder.requests.count == 1)
+
+            _ = try await service.forget(gone.id)
+            #expect(await service.probeBlock == .evidenceRejected)
+            await service.clearProbeBlock()
+            #expect(await service.probeBlocked == false)
+        }
+
+        @Test(arguments: [false, true])
+        func evidenceRefusedForOtherThanRoomStaysBlockedAfterForget(_ overflow: Bool) async throws {
+            let (verb, gone) = try (PluginCatalogTests.identity("Verb"), PluginCatalogTests.identity("Gone"))
+            let initial = try overflow ? Generation(Generation.maximumValue - 2) : .initial
+            var start = PluginCatalog(generation: initial)
+            _ = try start.apply(PluginScanReport(entries: [PluginCatalogTests.described(gone)]),
+                                for: start.request(depth: .metadataOnly))
+            _ = try start.apply(PluginScanReport(entries: []), for: start.request(depth: .metadataOnly))
+            let crash = PluginQuarantineEvidence(identity: verb, reason: .probeCrashed)
+            let evidence = overflow ? [crash] : [crash, crash]
+            let scanner = ScriptedScanner(.failure(.cancelled(quarantine: evidence)))
+            let service = PluginCatalogService(scanner: scanner, catalog: start)
+            let refusal: PluginCatalogError = overflow ? .generationOverflow : .duplicateIdentity(verb.id)
+            await #expect(throws: PluginCatalogServiceError.evidenceNotRecorded(refusal, original: .cancelled)) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
+            #expect(await service.catalog == start)
+            #expect(await service.probeBlock == .evidenceRejected)
+
+            _ = try? await service.forget(gone.id)
+            #expect(await service.catalog.entries[gone.id] == (overflow ? start.entries[gone.id] : nil))
+            #expect(await service.probeBlock == .evidenceRejected)
+            await #expect(throws: PluginCatalogServiceError.probeBlockedEvidenceUnrecorded) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
+            #expect(await scanner.recorder.requests.count == 1)
+        }
+
+        @Test func oversizedEvidenceBatchesStayBlockedAfterForget() async throws {
+            let gone = try PluginCatalogTests.identity("Gone")
+            var start = PluginCatalog()
+            _ = try start.apply(PluginScanReport(entries: [PluginCatalogTests.described(gone)]),
+                                for: start.request(depth: .metadataOnly))
+            _ = try start.apply(PluginScanReport(entries: []), for: start.request(depth: .metadataOnly))
+            let evidence = try PluginCatalogTests.evidence(count: PluginCatalogLimits.entries + 1)
+            let scanner = ScriptedScanner(.failure(.cancelled(quarantine: evidence)))
+            let service = PluginCatalogService(scanner: scanner, catalog: start)
+            await #expect(throws: PluginCatalogServiceError.evidenceNotRecorded(
+                .evidenceBatchTooLarge(maximum: PluginCatalogLimits.entries), original: .cancelled
+            )) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
+            #expect(await service.probeBlock == .evidenceRejected)
+            _ = try await service.forget(gone.id)
+            #expect(await service.probeBlock == .evidenceRejected)
+            await #expect(throws: PluginCatalogServiceError.probeBlockedEvidenceUnrecorded) {
+                try await service.scan(depth: .instantiatingProbe)
+            }
         }
 
         @Test func exhaustedHeadroomKeepsTheScannerErrorAlongsideTheRefusal() async throws {

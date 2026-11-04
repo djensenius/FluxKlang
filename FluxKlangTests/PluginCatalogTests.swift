@@ -154,8 +154,8 @@ struct PluginCatalogTests {
         case .staleRequest:
             scenario = .init([], PluginScanRequest(depth: .instantiatingProbe, quarantined: []), .staleRequest)
         case .tooManyEntries:
-            scenario = try .init(Self.report(count: PluginCatalogLimits.entries + 1).entries, metadata,
-                                 .tooManyEntries(maximum: PluginCatalogLimits.entries))
+            let maximum = PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom
+            scenario = try .init(Self.report(count: maximum + 1).entries, metadata, .tooManyEntries(maximum: maximum))
         }
         let before = catalog
         #expect(throws: scenario.expected) {
@@ -164,7 +164,7 @@ struct PluginCatalogTests {
         #expect(catalog == before)
     }
 
-    @Test func capRefusesNewcomersUntilAnExplicitForget() throws {
+    @Test func capDefersNewcomersUntilAnExplicitForget() throws {
         var catalog = PluginCatalog()
         let full = try Self.report(count: PluginCatalogLimits.entries)
         _ = try catalog.apply(full, for: catalog.request(depth: .metadataOnly))
@@ -174,9 +174,8 @@ struct PluginCatalogTests {
 
         let before = catalog
         let newcomer = try PluginScanReport(entries: [Self.described(Self.identity("New!"))])
-        #expect(throws: PluginCatalogError.tooManyEntries(maximum: PluginCatalogLimits.entries)) {
-            try catalog.apply(newcomer, for: catalog.request(depth: .metadataOnly))
-        }
+        let deferred = try catalog.apply(newcomer, for: catalog.request(depth: .metadataOnly))
+        #expect(deferred == PluginCatalogChange(generation: before.generation, changed: [], deferred: 1))
         #expect(catalog == before)
 
         let forgotten = full.entries[0].identity.id
@@ -228,16 +227,16 @@ struct PluginCatalogTests {
         #expect(catalog.entries[id] == nil && catalog.entries.count == PluginCatalogLimits.entries - 1)
     }
 
-    @Test func describingABareEntryOverTheCapIsRefusedWhole() throws {
+    @Test func describingABareEntryOverTheCapIsDeferredWhileAbsencesApply() throws {
         var catalog = try Self.fullCatalog()
         let bare = try Self.evidence(count: 1)[0]
         _ = try catalog.recordQuarantine([bare])
         let before = catalog
         let report = try PluginScanReport(entries: [Self.described(bare.identity)])
-        #expect(throws: PluginCatalogError.tooManyEntries(maximum: PluginCatalogLimits.entries)) {
-            try catalog.apply(report, for: catalog.request(depth: .metadataOnly))
-        }
-        #expect(catalog == before)
+        let change = try catalog.apply(report, for: catalog.request(depth: .metadataOnly))
+        #expect(change.deferred == 1 && change.changed.count == PluginCatalogLimits.entries)
+        #expect(catalog.entries[bare.identity.id] == before.entries[bare.identity.id])
+        #expect(catalog.entries.values.filter { $0.presence == .missing }.count == PluginCatalogLimits.entries)
     }
 
     @Test func forgetRefusesAnythingButMissingUnquarantinedEntries() throws {

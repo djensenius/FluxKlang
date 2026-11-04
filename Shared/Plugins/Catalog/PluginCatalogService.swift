@@ -9,18 +9,30 @@
 //  it ran, even if performing has ended again by the time the probe returns.
 //  Probe crashes and hangs are still recorded from a discarded, cancelled,
 //  rejected or failed pass, so crash isolation never depends on completion.
-//  If credible evidence cannot be committed (catalog full), further probes are
-//  blocked until forget/release leaves room or the user clears the block;
-//  metadata-only scans stay allowed.
+//  If credible evidence cannot be committed because the catalog is full, further
+//  probes are blocked until forget/release leaves room or the user clears the
+//  block. Evidence refused for any other reason (not credible, duplicated, or
+//  generation overflow) blocks probes until the user clears the block, since a
+//  credible crash may have been discarded with it; the batch stays atomic. Metadata-only
+//  scans stay allowed in both cases.
 //  Scans run on this actor, never on a render callback. Qualified probe
 //  containment (#71/#72, evidence in #78) is a non-goal here.
 //
 
 import Foundation
 
+/// Why instantiating probes are blocked.
+enum PluginProbeBlock: Hashable, Sendable {
+    /// Evidence did not fit (entry cap or quarantine headroom); cleared once
+    /// forget/release leaves room.
+    case evidenceUnrecorded
+    /// Evidence was refused for any other reason; cleared only by `clearProbeBlock()`.
+    case evidenceRejected
+}
+
 enum PluginCatalogServiceError: Error, Equatable, Sendable {
     case probeRefusedDuringPerformance
-    /// Earlier probe evidence could not be recorded; forget missing entries or clear the block.
+    /// Earlier probe evidence was not recorded; see `probeBlock` for how to recover.
     case probeBlockedEvidenceUnrecorded
     /// Performing started while a probe ran; only its quarantine evidence was kept.
     case probeInterruptedByPerformance
@@ -40,9 +52,11 @@ actor PluginCatalogService {
     private(set) var catalog: PluginCatalog
     private(set) var activity: PluginHostActivity
     private var inFlight: InFlight?
-    /// Latched when credible quarantine evidence was lost, so no further probe
-    /// can crash a component the catalog cannot remember.
-    private(set) var probeBlocked = false
+    /// Latched when probe evidence was lost, so no further probe can crash a
+    /// component the catalog cannot remember.
+    private(set) var probeBlock: PluginProbeBlock?
+
+    var probeBlocked: Bool { probeBlock != nil }
 
     private struct InFlight {
         let depth: PluginScanDepth
@@ -110,7 +124,7 @@ actor PluginCatalogService {
     /// The user's explicit confirmation that probing may resume without room
     /// for new quarantine evidence.
     func clearProbeBlock() {
-        probeBlocked = false
+        probeBlock = nil
     }
 
     func resolve(_ reference: PluginReference) -> PluginResolution {
@@ -155,18 +169,24 @@ actor PluginCatalogService {
         do throws(PluginCatalogError) {
             try PluginCatalog.check(evidence, for: request)
         } catch {
+            probeBlock = .evidenceRejected
             throw original == .rejected(error) ? original : .rejected(error)
         }
         do throws(PluginCatalogError) {
             _ = try catalog.recordQuarantine(evidence)
         } catch {
-            probeBlocked = true
+            switch error {
+            case .tooManyEntries, .quarantineHeadroomExhausted:
+                if probeBlock != .evidenceRejected { probeBlock = .evidenceUnrecorded }
+            default:
+                probeBlock = .evidenceRejected
+            }
             throw original == .rejected(error) ? original : .evidenceNotRecorded(error, original: original)
         }
     }
 
     private func unblockProbesIfRoom() {
-        if catalog.hasQuarantineRoom { probeBlocked = false }
+        if probeBlock == .evidenceUnrecorded, catalog.hasQuarantineRoom { probeBlock = nil }
     }
 
     private func mutate(

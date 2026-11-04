@@ -2,9 +2,11 @@
 //  PluginCatalog.swift
 //  FluxKlang
 //
-//  The cached plugin catalog: a pure value that applies complete scan reports
-//  all or nothing. Components a pass omits become `missing` and keep their last
-//  descriptor; probe crashes and hangs quarantine a component until it is
+//  The cached plugin catalog: a pure value that applies every update and
+//  absence of a complete scan report, deferring admissions over the cap (see
+//  below), and never applies one partially when it throws.
+//  Components a pass omits become `missing` and keep their last descriptor;
+//  probe crashes and hangs quarantine a component until it is
 //  explicitly released, and a probed component needs a fresh description
 //  before it resolves again. The catalog generation steps by one whenever
 //  anything a consumer could observe changes, and stays put otherwise. The
@@ -14,11 +16,19 @@
 //  separate, bounded headroom rather than be dropped, and quarantined entries
 //  can never be forgotten, only explicitly released.
 //
-//  "Catalog full": once missing and installed entries fill the cap, newcomers
-//  are refused (`tooManyEntries`) until the user forgets missing entries. A
-//  missing, quarantined bare entry leaves in three explicit steps: forget a
-//  missing unquarantined entry to make room, release the quarantine (which
-//  turns it into a metadata entry), then forget it once a pass marks it missing.
+//  A complete report may list up to `entries + quarantineHeadroom` components,
+//  the most any catalog can hold, so a full catalog with quarantined
+//  components can always be refreshed.
+//
+//  "Catalog full": once missing and installed entries fill the cap, a pass
+//  still applies every update and confirmed absence (installed entries it
+//  omits become `missing`), but defers admissions that do not fit: newcomers,
+//  and descriptions of bare quarantined entries. `PluginCatalogChange.deferred`
+//  counts them; the user forgets missing entries and a rescan admits them.
+//  Releasing a bare entry is refused at the cap. A missing, quarantined bare
+//  entry leaves in three explicit steps: forget a missing unquarantined entry
+//  to make room, release the quarantine (which turns it into a metadata
+//  entry), then forget it once a pass marks it missing.
 //
 
 import Foundation
@@ -33,6 +43,9 @@ enum PluginCatalogError: Error, Equatable, Sendable {
     case tooManyEntries(maximum: Int)
     /// Recording quarantine would exceed the metadata cap plus quarantine headroom.
     case quarantineHeadroomExhausted(maximum: Int)
+    /// One evidence batch is larger than any catalog could record; no amount of
+    /// freed room helps, so it is not a capacity condition.
+    case evidenceBatchTooLarge(maximum: Int)
     case duplicateIdentity(PluginID)
     case descriptorIdentityMismatch(PluginID)
     /// A metadata-only pass claimed to have instantiated a component.
@@ -61,6 +74,10 @@ struct PluginCatalogEntry: Hashable, Sendable {
     /// The latest successful description, kept while missing, failed or quarantined.
     var lastKnown: PluginDescriptor?
     var quarantine: PluginQuarantineReason?
+
+    /// Quarantined without a descriptor: counts against the quarantine
+    /// headroom rather than the ordinary entry cap.
+    var isBare: Bool { quarantine != nil && lastKnown == nil }
 }
 
 enum PluginCatalogScanState: Hashable, Sendable {
@@ -72,6 +89,15 @@ struct PluginCatalogChange: Hashable, Sendable {
     let generation: Generation
     /// Sorted identities whose entry was added, changed or removed; empty when nothing changed.
     let changed: [PluginID]
+    /// Admissions a full catalog deferred (newcomers, or descriptions of bare
+    /// quarantined entries): "catalog full — forget missing entries".
+    let deferred: Int
+
+    init(generation: Generation, changed: [PluginID], deferred: Int = 0) {
+        self.generation = generation
+        self.changed = changed
+        self.deferred = deferred
+    }
 }
 
 struct PluginCatalog: Hashable, Sendable {
@@ -98,14 +124,15 @@ struct PluginCatalog: Hashable, Sendable {
         PluginScanRequest(depth: depth, quarantined: quarantined)
     }
 
-    /// Applies one complete pass, or throws and changes nothing.
+    /// Applies every update and absence of one complete pass, deferring
+    /// admissions over the cap (counted, never evicted for). Never partially
+    /// applies on throw: a throw changes nothing.
     mutating func apply(
         _ report: PluginScanReport, for request: PluginScanRequest
     ) throws(PluginCatalogError) -> PluginCatalogChange {
         guard request.quarantined == quarantined else { throw .staleRequest }
-        guard report.entries.count <= PluginCatalogLimits.entries else {
-            throw .tooManyEntries(maximum: PluginCatalogLimits.entries)
-        }
+        let maximumReport = PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom
+        guard report.entries.count <= maximumReport else { throw .tooManyEntries(maximum: maximumReport) }
         try Self.check(report.quarantineEvidence, for: request)
         var next = entries
         var seen = Set<PluginID>()
@@ -135,9 +162,37 @@ struct PluginCatalog: Hashable, Sendable {
         for id in entries.keys where !seen.contains(id) {
             next[id]?.presence = .missing
         }
+        let deferred = deferAdmissions(&next, reported: report.entries)
         let change = try commit(next, forceStep: scanState == .notScanned)
         scanState = .scanned
-        return change
+        return PluginCatalogChange(generation: change.generation, changed: change.changed, deferred: deferred)
+    }
+
+    /// Over the ordinary cap, undoes admissions from the highest `PluginID`
+    /// down until the rest fit, so the outcome never depends on scan order: a
+    /// newcomer is left out, and a described bare entry stays bare (present,
+    /// needing a rescan). Updates and absences are kept.
+    private func deferAdmissions(
+        _ next: inout [PluginID: PluginCatalogEntry], reported: [PluginScanEntry]
+    ) -> Int {
+        var ordinary = next.values.count { !$0.isBare }
+        guard ordinary > PluginCatalogLimits.entries else { return 0 }
+        let admissions = reported.map(\.identity.id).filter { id in
+            guard let candidate = next[id], !candidate.isBare else { return false }
+            return entries[id]?.isBare ?? true
+        }.sorted(by: >)
+        var deferred = 0
+        for id in admissions where ordinary > PluginCatalogLimits.entries {
+            if var kept = entries[id] {
+                kept.presence = .needsRescan
+                next[id] = kept
+            } else {
+                next[id] = nil
+            }
+            ordinary -= 1
+            deferred += 1
+        }
+        return deferred
     }
 
     /// Commits probe failures from a pass whose metadata is being discarded.
@@ -146,7 +201,7 @@ struct PluginCatalog: Hashable, Sendable {
         _ evidence: [PluginQuarantineEvidence]
     ) throws(PluginCatalogError) -> PluginCatalogChange {
         guard evidence.count <= PluginCatalogLimits.entries else {
-            throw .tooManyEntries(maximum: PluginCatalogLimits.entries)
+            throw .evidenceBatchTooLarge(maximum: PluginCatalogLimits.entries)
         }
         var next = entries
         var seen = Set<PluginID>()
@@ -183,7 +238,10 @@ struct PluginCatalog: Hashable, Sendable {
         return try commit(next, forceStep: false)
     }
 
-    /// Whether one more bare quarantined entry would fit.
+    /// Whether one more bare quarantined entry would fit. One free slot is
+    /// enough to clear a service's `.evidenceUnrecorded` block even if the
+    /// failed batch needed more: a probe that crashes again re-latches the
+    /// block, so recovery is retried one probe at a time.
     var hasQuarantineRoom: Bool {
         entries.count < PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom
     }
@@ -201,10 +259,10 @@ struct PluginCatalog: Hashable, Sendable {
     }
 
     /// Entries with metadata are capped; bare quarantined entries may use the
-    /// headroom above the cap. Releasing a bare entry, or describing one in a
-    /// scan, turns it into a metadata entry and is refused at the cap.
+    /// headroom above the cap. Releasing a bare entry turns it into a metadata
+    /// entry and is refused at the cap (a scan defers describing one instead).
     private static func checkCapacity(_ next: [PluginID: PluginCatalogEntry]) throws(PluginCatalogError) {
-        let bare = next.values.count { $0.quarantine != nil && $0.lastKnown == nil }
+        let bare = next.values.count(where: \.isBare)
         guard next.count - bare <= PluginCatalogLimits.entries else {
             throw .tooManyEntries(maximum: PluginCatalogLimits.entries)
         }
