@@ -278,7 +278,8 @@ actor HostAuthority {
         }
     }
 
-    /// Full fixed-stride geometry is checked before any output allocation.
+    /// State, identity and full fixed-stride geometry are checked before staging,
+    /// clearing persistent output or allocating independent result copies.
     /// All borrows are synchronous, local and disjoint; no pointer escapes.
     func evaluatePreparation(
         _ expected: HostPrepare, frames: Int, input: [Float]
@@ -341,27 +342,64 @@ actor HostAuthority {
 /// Concrete, noncopyable custody confined to the actor's defining file. There
 /// is no supplied backend, processor, closure, replacement or resource accessor.
 private struct PendingPreparation: ~Copyable {
+    /// Added sample payload only, separate from the original arena's 16 MiB ceiling.
+    private static let maximumSampleStorageBytes = 16 * 1_024 * 1_024
     let identity: HostPrepare
     private var processor: OfflineAudioRoutingProcessor
+    private let storage: UnsafeMutablePointer<Float>?
+    private let sampleCount: Int
+    private let outputRange: Range<Int>
+    private let peakRange: Range<Int>
 
     var layout: AudioRoutingLayout { processor.layout }
 
     init(identity: HostPrepare, project: ProjectDocument, graph: GraphDocument, limits: AudioRoutingLimits) throws {
+        let prepared = try OfflineAudioRoutingProcessor(project: project, selectedGraph: graph, limits: limits)
+        // The compiler checks fixed-stride products. Check all added slab endpoints
+        // and bytes before allocation, without another graph/coverage collection.
+        let layout = prepared.layout
+        let peakStart = try AudioRoutingAdmission.add(layout.inputSampleCount, layout.outputSampleCount)
+        let end = try AudioRoutingAdmission.add(peakStart, layout.peakCount)
+        let bytes = try AudioRoutingAdmission.multiply(end, MemoryLayout<Float>.stride)
+        guard bytes <= Self.maximumSampleStorageBytes else { throw AudioRoutingPreparationError.resourceLimit }
         self.identity = identity
-        processor = try OfflineAudioRoutingProcessor(project: project, selectedGraph: graph, limits: limits)
+        processor = consume prepared
+        outputRange = layout.inputSampleCount..<peakStart
+        peakRange = peakStart..<end
+        sampleCount = end
+        // Control allocator exhaustion remains nonrecoverable, not a thrown error.
+        // No fallible unowned step follows allocation. Empty payload needs no slab,
+        // but keeps the same original arena/processor, including mute-only work.
+        storage = end == 0 ? nil : UnsafeMutablePointer<Float>.allocate(capacity: end)
+        storage?.initialize(repeating: 0, count: end)
+    }
+
+    deinit {
+        // Existing consuming cleanup destroys this slab and the original processor
+        // before terminal accounting. Fatal allocation failure promises neither.
+        storage?.deinitialize(count: sampleCount)
+        storage?.deallocate()
     }
 
     mutating func evaluate(frames: Int, input: [Float]) -> OwnedPreparationBlock {
-        let layout = processor.layout
-        var output = [Float](repeating: 0, count: layout.outputSampleCount)
-        var peaks = [Float](repeating: 0, count: layout.peakCount)
-        let result = input.withUnsafeBufferPointer { source in
-            output.withUnsafeMutableBufferPointer { destination in
-                peaks.withUnsafeMutableBufferPointer { meters in
-                    processor.process(frames: frames, input: source, output: destination, peaks: meters)
-                }
+        input.withUnsafeBufferPointer { source in
+            if let base = source.baseAddress, !source.isEmpty {
+                storage?.update(from: base, count: source.count)
             }
         }
-        return OwnedPreparationBlock(layout: layout, result: result, output: output, peaks: peaks)
+        let source = UnsafeBufferPointer(start: storage.map { UnsafePointer($0) }, count: outputRange.lowerBound)
+        let output = UnsafeMutableBufferPointer(
+            start: storage?.advanced(by: outputRange.lowerBound), count: outputRange.count
+        )
+        let peaks = UnsafeMutableBufferPointer(
+            start: storage?.advanced(by: peakRange.lowerBound), count: peakRange.count
+        )
+        // Clear ALL padding, including zero-frame calls, just as fresh arrays did.
+        // Staging, clearing and snapshot copies are outside maxSampleWork.
+        output.baseAddress?.update(repeating: 0, count: output.count)
+        let result = processor.process(frames: frames, input: source, output: output, peaks: peaks)
+        return OwnedPreparationBlock(
+            layout: processor.layout, result: result, output: Array(output), peaks: Array(peaks)
+        )
     }
 }
