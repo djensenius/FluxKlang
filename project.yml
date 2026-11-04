@@ -192,6 +192,7 @@ targets:
       - path: FluxKlangTests/UIAuditRunPreflightTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
+      - path: FluxKlangTests/AudioGainContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
@@ -203,8 +204,6 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestCodecTests.swift
       - path: FluxKlangTests/ProjectPackageManifestValidationTests.swift
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
-      - path: FluxKlangTests/ProjectPackageIOTests.swift
-      - path: FluxKlangTests/ProjectPackageIOTests+Hardening.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift

@@ -15,7 +15,7 @@ struct AudioMuteContractTests {
         (#"{"nested":"state"}"#, .object(["nested": .string("state")]))
     ]
 
-    @Test(arguments: NodeKind.allCases.filter { $0 != .audioMute })
+    @Test(arguments: NodeKind.allCases.filter { $0 != .audioMute && $0 != .audioGain })
     func legacyMutedIsUnknownForEveryJSONKind(kind: NodeKind) throws {
         let base = GraphDocument(id: GraphID(validated: "graph.mute"), nodes: [Self.legacy(kind)])
         let canonical = try #require(String(data: base.encoded(), encoding: .utf8))
@@ -34,7 +34,7 @@ struct AudioMuteContractTests {
         }
     }
 
-    @Test(arguments: NodeKind.allCases.filter { $0 != .audioMute })
+    @Test(arguments: NodeKind.allCases.filter { $0 != .audioMute && $0 != .audioGain })
     func typedLegacyStateRejectsWithoutLosingUnknownData(kind: NodeKind) throws {
         for muted in [false, true] {
             var node = Self.legacy(kind)

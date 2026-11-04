@@ -73,6 +73,8 @@ enum NodeKind: String, Codable, Hashable, Sendable, CaseIterable {
     case plugin
     /// Constant channelwise mute intent; syntax support is not executor support.
     case audioMute
+    /// Constant channelwise linear gain intent; syntax support is not executor support.
+    case audioGain
     /// Outboard gear through a send and return; compensation is #68's seam.
     case externalInsert
     /// Plays a project asset (needs `asset`).
@@ -96,6 +98,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         case asset
         case graph
         case muted
+        case linearGain
         case ports
         case requiredCapabilities
         case advisoryCapabilities
@@ -113,6 +116,9 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
     /// channelwise, bit for bit; true writes positive zero, never multiplies by
     /// zero or suppresses upstream work, nonfinite-input or overflow refusal.
     var muted: Bool?
+    /// Required only for audioGain; constant for a prepared graph. A finite, normal,
+    /// exact-Float32 linear factor in (0, 16]; never a decibel value or a polarity.
+    var linearGain: Double?
     var ports: [GraphPort]
     /// Capabilities whose absence blocks activation.
     var requiredCapabilities: [CapabilityID]
@@ -135,7 +141,8 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         advisoryCapabilities: [CapabilityID] = [],
         position: GraphPoint? = nil,
         extensions: [String: JSONValue]? = nil,
-        muted: Bool? = nil
+        muted: Bool? = nil,
+        linearGain: Double? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -144,6 +151,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         self.asset = asset
         self.graph = graph
         self.muted = muted
+        self.linearGain = linearGain
         self.ports = ports
         self.requiredCapabilities = requiredCapabilities
         self.advisoryCapabilities = advisoryCapabilities
@@ -156,6 +164,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         id = try container.decode(NodeID.self, forKey: .id)
         kind = try container.decode(NodeKind.self, forKey: .kind)
         muted = kind == .audioMute ? try container.decode(Bool.self, forKey: .muted) : nil
+        linearGain = kind == .audioGain ? try container.decode(Double.self, forKey: .linearGain) : nil
         label = try container.decode(String.self, forKey: .label)
         role = try container.decodeIfPresent(RoleID.self, forKey: .role)
         asset = try container.decodeIfPresent(AssetID.self, forKey: .asset)
@@ -173,7 +182,11 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
     }
 
     func encode(to encoder: any Encoder) throws {
-        if let error = muteStateError { throw error }
+        if let error = muteStateError ?? gainStateError { throw error }
+        // Finite out-of-range values round-trip; validation is their gate.
+        if kind == .audioGain, let linearGain, !linearGain.isFinite {
+            throw GraphValidationError.invalidGainValue(id)
+        }
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(kind, forKey: .kind)
@@ -182,6 +195,7 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         try container.encodeIfPresent(asset, forKey: .asset)
         try container.encodeIfPresent(graph, forKey: .graph)
         if kind == .audioMute { try container.encode(muted, forKey: .muted) }
+        if kind == .audioGain { try container.encode(linearGain, forKey: .linearGain) }
         try container.encode(ports, forKey: .ports)
         if !requiredCapabilities.isEmpty {
             try container.encode(requiredCapabilities, forKey: .requiredCapabilities)
@@ -194,9 +208,11 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
         try ExtensionFields.encode(unknownFields, to: encoder, knownKeys: knownKeyNames)
     }
 
-    /// Legacy kinds retain arbitrary unknown `muted` data on both coding paths.
+    /// Other kinds retain arbitrary unknown `muted`/`linearGain` data on both coding paths.
     private var knownKeyNames: Set<String> {
-        Set(CodingKeys.allCases.filter { $0 != .muted || kind == .audioMute }.map(\.stringValue))
+        Set(CodingKeys.allCases.filter {
+            ($0 != .muted || kind == .audioMute) && ($0 != .linearGain || kind == .audioGain)
+        }.map(\.stringValue))
     }
 
     var muteStateError: GraphValidationError? {
@@ -204,6 +220,19 @@ struct GraphNode: Codable, Hashable, Sendable, Identifiable {
             return muted == nil || unknownFields["muted"] != nil ? .invalidMuteState(id) : nil
         }
         return muted == nil ? nil : .invalidMuteState(id)
+    }
+
+    var gainStateError: GraphValidationError? {
+        if kind == .audioGain {
+            return linearGain == nil || unknownFields["linearGain"] != nil ? .invalidGainState(id) : nil
+        }
+        return linearGain == nil ? nil : .invalidGainState(id)
+    }
+
+    /// Positive, at most 16 and exactly representable as a normal Float32, so
+    /// zero, negative zero, subnormals, NaN, infinities and 0.1 all reject.
+    static func isValidLinearGain(_ gain: Double) -> Bool {
+        gain.isNormal && gain > 0 && gain <= 16 && Float(gain).isNormal && Double(Float(gain)) == gain
     }
 
     func port(_ id: PortID) -> GraphPort? {

@@ -31,10 +31,12 @@ rejects stray unknown fields but permits extension bags. Unknown nonempty
 ## Constant mute syntax profile
 
 `audioMute.constant.v1` is one opt-in, fail-closed graph v1 syntax profile.
-`requiredFeatures` stores the exact supplied candidate array: it must be `[]`
-without mute nodes, or exactly `["audioMute.constant.v1"]` with one or more
-`audioMute` nodes. Construction and mutation never infer, sort, deduplicate,
-insert or remove features; validation, decoding and encoding reject mismatches.
+`requiredFeatures` stores the exact supplied candidate array. In a graph with no
+gain nodes it must be `[]` when there are no mute nodes, and exactly
+`["audioMute.constant.v1"]` when there is at least one `audioMute` node; the
+gain combinations are listed below. Construction and mutation never infer, sort,
+deduplicate, insert or remove features; validation, decoding and encoding reject
+mismatches.
 Missing, null and empty wire lists normalize to `[]` and are invalid with mutes.
 Empty lists are omitted on encoding to retain base-v1 canonical bytes.
 An unknown-field `requiredFeatures` collision rejects rather than being dropped.
@@ -62,6 +64,51 @@ reject the feature marker before interpreting the new kind; they do not support
 the profile. Project and package envelopes still reject all nonempty features,
 including this graph token. Integer-major checks are unchanged; `minorVersion`
 remains unknown optional data, not feature negotiation.
+
+## Constant gain syntax profile (execution unsupported)
+
+`audioGain.constant.v1` is a second opt-in, fail-closed graph v1 syntax profile;
+the graph version stays 1. Graph v1 recognizes a closed, fixed set of exact
+`requiredFeatures` arrays, not a registry:
+
+- `[]`
+- `["audioGain.constant.v1"]`
+- `["audioMute.constant.v1"]`
+- `["audioGain.constant.v1","audioMute.constant.v1"]`
+
+Any other array, including reversed order, duplicates or an unknown token,
+rejects as unsupported before node decoding. After bounded node decoding the
+declaration must equal exactly the sorted tokens for the gain/mute kinds present
+(gain nodes need the gain token, mute nodes the mute token, both need both, and
+neither needs `[]`); otherwise `invalidRequiredFeatures`. Nothing is inferred,
+sorted or repaired.
+
+An `audioGain` requires an explicit JSON number `linearGain`, a linear factor
+(not decibels; unrelated to `gainCeilingDb`). It must be finite, normal, greater
+than zero, at most 16 and exactly representable as a normal Float32
+(`Double(Float(g)) == g`): `0.1` rejects while `0.10000000149011612` is accepted.
+Zero, negative zero, negative values, subnormals, NaN and infinities reject; there
+is no zero gain or polarity inversion (silence is mute's job). Missing, null and
+non-number values reject; there is no default. Shape matches mute: exactly one
+audio input and one audio output with matching 1–64 channel widths and no role,
+asset or graph reference. Errors are `invalidGainState` (missing value, typed
+value on another kind, unknown-field collision), `invalidGainValue` and
+`invalidGainShape`. Finite out-of-range values round-trip through coding and
+reject in validation; encoding refuses only nonfinite values and state errors.
+
+Documented semantics, not implemented: per channel and sample the output is
+`Float32(input) × Float32(g)` as a single round-to-nearest multiply, never fused
+with other operations; `g = 1` is bit-exact. The value is constant per prepared
+graph.
+
+Gain and mute are separate nodes. `linearGain` is known only on `audioGain` and
+`muted` only on `audioMute`; on every other kind (including each other) they are
+preserved unknown data, reported by strict validation. Typed state on the wrong
+kind, or an unknown-field collision, rejects validation and encoding.
+
+This is contract only: the offline routing compiler refuses every gain node as
+`unsupported`, including valid disconnected gains. Project and package envelopes
+still reject all nonempty features, including the gain token.
 
 ### Bounded offline routing execution
 
