@@ -23,10 +23,10 @@ enum ProjectGraphEnvelope {
         guard required.isEmpty else { throw ProjectGraphVersionError.unsupportedRequiredFeatures(required) }
     }
 
-    /// One fixed graph syntax profile, not a registry or an executor capability.
+    /// A closed set of fixed graph syntax profiles, not a registry or an executor capability.
     fileprivate static func requireCurrentGraph(from decoder: any Decoder) throws -> [String] {
         let required = try requiredFeatures(from: decoder, supported: GraphDocument.currentVersion)
-        guard required.isEmpty || required == [GraphDocument.constantMuteFeature] else {
+        guard GraphDocument.supportedFeatureDeclarations.contains(required) else {
             throw ProjectGraphVersionError.unsupportedRequiredFeatures(required)
         }
         return required
@@ -63,7 +63,13 @@ enum ProjectGraphVersionError: Error, Equatable {
 /// A neutral, typed signal graph with no console or engine handles.
 struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
     static let currentVersion = ContractVersion(contract: "fluxklang.graph", version: 1)
+    static let constantGainFeature = "audioGain.constant.v1"
     static let constantMuteFeature = "audioMute.constant.v1"
+    /// The only exact declarations graph v1 accepts: sorted, duplicate-free subsets
+    /// of the fixed profile tokens. Never extended at runtime or repaired.
+    static let supportedFeatureDeclarations: [[String]] = [
+        [], [constantGainFeature], [constantMuteFeature], [constantGainFeature, constantMuteFeature]
+    ]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case contract
@@ -174,8 +180,10 @@ struct GraphDocument: Codable, Hashable, Sendable, Identifiable {
         guard unknownFields["requiredFeatures"] == nil else {
             throw .requiredFeaturesCollision
         }
-        let hasMute = nodes.contains { $0.kind == .audioMute }
-        guard hasMute ? requiredFeatures == [Self.constantMuteFeature] : requiredFeatures.isEmpty else {
+        var expected: [String] = []
+        if nodes.contains(where: { $0.kind == .audioGain }) { expected.append(Self.constantGainFeature) }
+        if nodes.contains(where: { $0.kind == .audioMute }) { expected.append(Self.constantMuteFeature) }
+        guard requiredFeatures == expected else {
             throw .invalidRequiredFeatures(requiredFeatures)
         }
     }
