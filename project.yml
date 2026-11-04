@@ -203,6 +203,8 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestCodecTests.swift
       - path: FluxKlangTests/ProjectPackageManifestValidationTests.swift
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
+      - path: FluxKlangTests/ProjectPackageIOTests.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+Hardening.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
