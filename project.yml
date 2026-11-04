@@ -30,7 +30,7 @@ targets:
       - path: FluxKlang
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md", "Peer/README.md"]
     info:
       path: FluxKlang/Info.plist
       properties:
@@ -82,7 +82,7 @@ targets:
       - path: FluxKlangMac
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md", "Peer/README.md"]
     info:
       path: FluxKlangMac/Info.plist
       properties:
@@ -223,6 +223,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/PeerTransportTests.swift
+      - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
