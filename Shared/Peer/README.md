@@ -29,6 +29,8 @@ Limits:
 - The maximum payload defaults to 16 384 bytes. It is configurable between
   1 024 and 1 048 576, so a frame is at most 24 + that maximum.
 - The decoder never buffers more than one maximum frame.
+- Queued frames drain FIFO through a head index, which is linear; no timing
+  test covers that.
 
 Any of the following latches the decoder failed: a bad magic, unknown version,
 kind or flags, an invalid epoch, a sequence gap or repeat, an oversized length,

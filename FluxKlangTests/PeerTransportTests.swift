@@ -184,6 +184,22 @@ struct PeerTransportTests {
         }
     }
 
+    @Test("A max-size frame leaves no large storage for later tiny frames to retain")
+    func payloadStorageIsNotRetained() throws {
+        let maximum = PeerFrameLimits.standard.maximumPayloadBytes
+        let large = Support.message(.control, epoch: 4, payload: Array(repeating: 0xAB, count: maximum))
+        let tiny = (0..<64).map { Support.message(.control, epoch: 4, payload: [UInt8($0)]) }
+        let bytes = Support.stream([large] + tiny)
+        let split = PeerWire.headerByteCount + maximum
+        var decoder = PeerFrameDecoder()
+        #expect(try decoder.strictFeed(Array(bytes.prefix(split))).map(\.payload.count) == [maximum])
+        #expect(decoder.bufferCapacity < 256)
+        let later = try decoder.strictFeed(Array(bytes.dropFirst(split)))
+        #expect(later.map(\.payload) == tiny.map(\.payload))
+        #expect(later.allSatisfy { $0.payload.capacity < 256 })
+        #expect(decoder.bufferCapacity < 256)
+    }
+
     @Test("A zero-length frame ending at a chunk boundary completes at once")
     func zeroLengthAtChunkBoundary() throws {
         let bytes = Support.stream([

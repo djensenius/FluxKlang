@@ -26,7 +26,9 @@ enum PeerChannelError: Error, Hashable, Sendable {
 }
 
 /// Encodes outbound messages and decodes inbound frames over one transport.
-/// Inbound reads are at most one maximum frame, so pending frames stay bounded.
+/// Inbound reads are at most one maximum frame, so pending frames stay bounded
+/// by the current delivery; they drain FIFO through a head index (linear total
+/// work) and the queue is released once drained.
 /// Frames decoded before a wire defect are returned first; the defect is then
 /// thrown and latched, whatever the transport's chunking.
 struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
@@ -34,6 +36,7 @@ struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
     private var encoder: PeerFrameEncoder
     private var decoder: PeerFrameDecoder
     private var pending: [PeerFrame] = []
+    private var pendingHead = 0
     private var failed: PeerChannelError?
 
     init(transport: Transport, limits: PeerFrameLimits = .standard) {
@@ -63,7 +66,7 @@ struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
 
     /// The next whole frame, or nil at a clean end of stream between frames.
     mutating func receive() async throws(PeerChannelError) -> PeerFrame? {
-        while pending.isEmpty {
+        while pendingHead == pending.count {
             if let failed { throw failed }
             let maximum = decoder.limits.maximumFrameBytes
             let chunk: [UInt8]?
@@ -83,14 +86,26 @@ struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
             guard chunk.count <= maximum else { throw latch(.receiveExceededLimit) }
             let delivery = decoder.feed(chunk)
             pending = delivery.frames
+            pendingHead = 0
             if let failure = delivery.failure { failed = .wire(failure) }
         }
-        return pending.removeFirst()
+        // Returned frames stay referenced by `pending` until the whole current
+        // delivery drains. That is bounded by one delivery (at most one maximum
+        // frame of bytes, ~1 MiB at the ceiling). The queue is released when it
+        // empties or when a failure latches.
+        let frame = pending[pendingHead]
+        pendingHead += 1
+        if pendingHead == pending.count {
+            pending = []
+            pendingHead = 0
+        }
+        return frame
     }
 
     private mutating func latch(_ error: PeerChannelError) -> PeerChannelError {
         failed = error
         pending = []
+        pendingHead = 0
         return error
     }
 }

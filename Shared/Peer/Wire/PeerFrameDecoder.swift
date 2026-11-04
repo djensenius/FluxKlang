@@ -41,6 +41,12 @@ struct PeerFrameDecoder: Sendable {
         buffer.reserveCapacity(PeerWire.headerByteCount)
     }
 
+    /// Allocated capacity of the working buffer. Between frames it is at most
+    /// `PeerWire.headerByteCount` (rounded up by the allocator); while a payload
+    /// is pending it is at least the payload's length, as reserved (the
+    /// allocator may round up).
+    var bufferCapacity: Int { buffer.capacity }
+
     /// Bytes held for an incomplete frame; never above `limits.maximumFrameBytes`.
     var bufferedByteCount: Int { buffer.count + (header == nil ? 0 : PeerWire.headerByteCount) }
 
@@ -81,15 +87,25 @@ struct PeerFrameDecoder: Sendable {
             throw .badMagic
         }
         if header == nil, buffer.count == PeerWire.headerByteCount {
-            header = try parseHeader(buffer)
-            buffer.removeAll(keepingCapacity: true)
+            let parsed = try parseHeader(buffer)
+            header = parsed
+            buffer = Self.freshBuffer(capacity: parsed.length)
         }
         guard let pending = header, buffer.count == pending.length else { return }
+        // The payload takes the buffer's storage, sized for this frame alone.
+        // A fresh header-sized buffer follows, so no earlier frame's large
+        // allocation is kept or shared by later frames.
         frames.append(PeerFrame(
             kind: pending.kind, sequence: pending.sequence, connectionEpoch: pending.epoch, payload: buffer
         ))
         header = nil
-        buffer.removeAll(keepingCapacity: true)
+        buffer = Self.freshBuffer(capacity: PeerWire.headerByteCount)
+    }
+
+    private static func freshBuffer(capacity: Int) -> [UInt8] {
+        var fresh: [UInt8] = []
+        fresh.reserveCapacity(capacity)
+        return fresh
     }
 
     private mutating func parseHeader(_ bytes: [UInt8]) throws(PeerWireError) -> Header {

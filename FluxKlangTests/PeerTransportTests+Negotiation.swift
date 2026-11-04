@@ -407,6 +407,21 @@ struct PeerTransportNegotiationTests {
         #expect(await transport.receiveCount == 2)
     }
 
+    @Test("One maximal delivery of empty control frames drains in FIFO order")
+    func maximalDeliveryDrainsInOrder() async throws {
+        let limits = try #require(PeerFrameLimits(maximumPayloadBytes: PeerFrameLimits.payloadCeiling))
+        let count = limits.maximumFrameBytes / PeerWire.headerByteCount
+        #expect(count == 43_691)
+        let chunk = Support.stream(Array(repeating: Support.message(.control, epoch: 4), count: count), limits: limits)
+        let transport = ScriptedPeerTransport(inbound: [chunk])
+        var channel = PeerFramedChannel(transport: transport, limits: limits)
+        var sequences: [UInt32] = []
+        sequences.reserveCapacity(count)
+        while let frame = try await channel.receive() { sequences.append(frame.sequence) }
+        #expect(sequences == Array(1...UInt32(count)))
+        #expect(await transport.receiveCount == 2)
+    }
+
     @Test("Negotiating a refused or closed session returns without reading")
     func terminalNegotiate() async throws {
         let live = Support.stream([validHello, Support.message(.control, epoch: 4, payload: [1])])
