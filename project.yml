@@ -226,6 +226,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/ControlBindingTests.swift
+      - path: FluxKlangTests/ControlBindingTests+Coverage.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
