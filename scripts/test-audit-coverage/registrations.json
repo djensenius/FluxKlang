@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "9165cf881c6ab28e4e25b68eb98f8b8621d75af8f5cca3e5810cc77d80d319a3",
+    "sha256": "ef563c0d9b09641963d2c88eff4fd099c828fc2a6e8cc0ea8093d13efdd5a3e9",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -123,7 +123,9 @@
         "FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift",
         "FluxKlangTests/RealtimeHandoffTests+Deadline.swift",
         "FluxKlangTests/RealtimeHandoffTests+SysEx.swift",
-        "FluxKlangTests/RealtimeHandoffTests+SysExStress.swift"
+        "FluxKlangTests/RealtimeHandoffTests+SysExStress.swift",
+        "FluxKlangTests/WorkspaceNavigationTests.swift",
+        "FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift"
       ]
     },
     {
@@ -337,6 +339,14 @@
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "UIAuditRunPreflightTests", "path": "FluxKlangTests/UIAuditRunPreflightTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangMacTests", "name": "UIAuditRunPreflightTests", "path": "FluxKlangTests/UIAuditRunPreflightTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "UIAuditRunPreflightTests", "path": "FluxKlangTests/UIAuditRunPreflightTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangMacTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangMacTests"},
     {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "AcceptanceAssistantSafetyTests", "path": "FluxKlangTests/AcceptanceAssistantSafetyTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
     {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "AcceptanceAssistantSafetyTests", "path": "FluxKlangTests/AcceptanceAssistantSafetyTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
     {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "AcceptanceAssistantSafetyTests", "path": "FluxKlangTests/AcceptanceAssistantSafetyTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
@@ -1200,6 +1210,14 @@
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WingValueTests", "path": "FluxKlangTests/WingValueTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WingValueTests", "path": "FluxKlangTests/WingValueTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
     {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WingValueTests", "path": "FluxKlangTests/WingValueTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
-    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WingValueTests", "path": "FluxKlangTests/WingValueTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"}
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WingValueTests", "path": "FluxKlangTests/WingValueTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Debug", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=false&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=false", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"},
+    {"configuration": "Release", "guardExpression": "canImport(FluxKlangMac)=true&&canImport(FoundationModels)=true", "kind": "root", "module": "FluxKlangTests", "name": "WorkspaceNavigationTests", "path": "FluxKlangTests/WorkspaceNavigationTests.swift", "requirement": "canonicalProductionAccessAudit", "target": "FluxKlangTests"}
   ]
 }
