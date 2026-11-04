@@ -11,15 +11,21 @@ private typealias Support = PeerWireTestSupport
 private actor ScriptedPeerTransport: PeerByteTransport {
     private var inbound: [[UInt8]]
     private let failReceive: Bool
+    private var sendFailuresLeft: Int
     private(set) var sent: [UInt8] = []
     private(set) var receiveCount = 0
 
-    init(inbound: [[UInt8]], failReceive: Bool = false) {
+    init(inbound: [[UInt8]], failReceive: Bool = false, failSends: Int = 0) {
         self.inbound = inbound
         self.failReceive = failReceive
+        sendFailuresLeft = failSends
     }
 
     func send(_ bytes: [UInt8]) async throws(PeerTransportError) {
+        if sendFailuresLeft > 0 {
+            sendFailuresLeft -= 1
+            throw .disconnected
+        }
         sent += bytes
     }
 
@@ -369,6 +375,35 @@ struct PeerTransportNegotiationTests {
         for _ in 0..<3 {
             await #expect(throws: PeerChannelError.wire(.badMagic)) { try await channel.receive() }
         }
+        #expect(await transport.receiveCount == 2)
+    }
+
+    @Test("A failed send latches: later sends and receives throw it and nothing more is written")
+    func sendFailureLatches() async throws {
+        let transport = ScriptedPeerTransport(inbound: [Support.stream([validHello])], failSends: 1)
+        var channel = PeerFramedChannel(transport: transport)
+        let control = Support.message(.control, epoch: 4, payload: [1])
+        let latched = PeerChannelError.transport(.disconnected)
+        await #expect(throws: latched) { try await channel.send(control) }
+        await #expect(throws: latched) { try await channel.send(control) }
+        await #expect(throws: latched) { try await channel.receive() }
+        var acceptor = makeAcceptor()
+        #expect(await channel.negotiate(&acceptor) == .refused(.transportFailed))
+        #expect(await transport.sent.isEmpty)
+        #expect(await transport.receiveCount == 0)
+    }
+
+    @Test("A negotiated session is failed by a later latched defect")
+    func renegotiateAfterLatchedDefect() async throws {
+        let transport = ScriptedPeerTransport(inbound: [Support.stream([validHello]), [0x46, 0x4B, 0x50, 0x00]])
+        var channel = PeerFramedChannel(transport: transport)
+        var acceptor = makeAcceptor()
+        guard case .negotiated = await channel.negotiate(&acceptor) else { throw PeerSessionError.notNegotiated }
+        await #expect(throws: PeerChannelError.wire(.badMagic)) { try await channel.receive() }
+        #expect(await channel.negotiate(&acceptor) == .refused(.wire(.badMagic)))
+        #expect(acceptor.negotiated == nil)
+        #expect(throws: PeerSessionError.notNegotiated) { try acceptor.control([1]) }
+        #expect(await channel.negotiate(&acceptor) == .refused(.wire(.badMagic)))
         #expect(await transport.receiveCount == 2)
     }
 

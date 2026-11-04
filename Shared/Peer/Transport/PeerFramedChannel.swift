@@ -42,7 +42,10 @@ struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
         decoder = PeerFrameDecoder(limits: limits)
     }
 
-    /// Refuses with the latched error once inbound decoding or the transport has failed.
+    /// Refuses with the latched error once inbound decoding or the transport has
+    /// failed. A transport send failure latches too: the frame's sequence is
+    /// spent and the stream may hold a partial frame, so the channel is dead.
+    /// An encode refusal (oversized payload) spends no sequence and does not latch.
     mutating func send(_ message: PeerOutboundMessage) async throws(PeerChannelError) {
         if let failed { throw failed }
         let bytes: [UInt8]
@@ -54,7 +57,7 @@ struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
         do {
             try await transport.send(bytes)
         } catch {
-            throw .transport(error)
+            throw latch(.transport(error))
         }
     }
 
@@ -97,14 +100,17 @@ extension PeerFramedChannel {
     /// channel failure becomes a terminal refusal; nothing is retried. A
     /// negotiated, closed or refused session returns its state without reading.
     /// A wire defect latched in the same delivery as the hello or accept refuses
-    /// the session rather than reporting it negotiated.
+    /// the session rather than reporting it negotiated. Once the channel has
+    /// latched any failure, a session that is not refused or closed is failed
+    /// with it, including an already negotiated one.
     mutating func negotiate(_ session: inout PeerSessionNegotiator) async -> PeerSessionEvent {
         switch session.state {
-        case .negotiated(let existing): return .negotiated(existing)
         case .refused(let refusal): return .refused(refusal)
         case .closed: return .closed
-        case .idle, .awaitingHello, .awaitingAccept: break
+        case .negotiated, .idle, .awaitingHello, .awaitingAccept: break
         }
+        if let failed { return session.fail(Self.refusal(for: failed)).event }
+        if let existing = session.negotiated { return .negotiated(existing) }
         if let hello = session.start(), let refusal = await deliver(hello) { return session.fail(refusal).event }
         let frame: PeerFrame?
         do {
