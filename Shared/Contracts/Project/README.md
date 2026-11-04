@@ -85,7 +85,10 @@ its already-open parent with `O_NOFOLLOW`, then matched by device, inode and typ
 Symbolic links at any level, FIFOs, sockets and devices are refused through P1 as
 unsupported kinds. Regular files with more than one hard link
 (`hardLinkedMember`) and entries on a different device from the root
-(`crossedMountPoint`) are refused before they are opened.
+(`crossedMountPoint`) are refused before they are opened, and the same check
+is repeated on the opened descriptor's status, so a link added between
+admission and open cannot become the change-detection baseline. A link added
+while reading changes the status-change time and refuses at EOF.
 
 Each read request is bounded before IO, each delivered chunk is charged once
 before it is retained, a zero allowance probes for one more byte rather than

@@ -13,6 +13,9 @@ struct ProjectPackageReader: Sendable {
     let chunkByteCount: Int
     /// Test observation point after each retained chunk (path, bytes retained so far); nil in production.
     var chunkHookForTesting: (@Sendable (String, Int) -> Void)?
+    /// Test interleaving point after a member's pre-open placement check and before `openat` (path);
+    /// nil in production. Lets tests mutate the filesystem between admission and open deterministically.
+    var openHookForTesting: (@Sendable (String) -> Void)?
 
     init(policy: ProjectPackageManifestPolicy, chunkByteCount: Int = 65_536) throws(ProjectPackageError) {
         guard chunkByteCount > 0 else { throw .invalidLimits }
@@ -93,8 +96,7 @@ private struct ProjectPackageReadSession {
         let kind = FileSystem.kind(info)
         try admission.admit(path: name, kind: kind)
         guard kind == .regularFile else { throw ProjectPackageIOError.missingMember }
-        try checkPlacement(info)
-        let opened = try FileSystem.openMember(at: root, name, matching: info)
+        let opened = try open(at: root, name, path: name, admitted: info)
         defer { close(opened.descriptor) }
         return try readFile(opened, path: name, cap: policy.maxManifestBytes)
     }
@@ -110,8 +112,7 @@ private struct ProjectPackageReadSession {
             let kind = FileSystem.kind(info)
             // Lexical, limit, kind, link-count and device refusal happen before the member is opened.
             try admission.admit(path: path, kind: kind, declaredByteCount: kind == .directory ? nil : declared[path])
-            try checkPlacement(info)
-            let opened = try FileSystem.openMember(at: directory, name, matching: info)
+            let opened = try open(at: directory, name, path: path, admitted: info)
             defer { close(opened.descriptor) }
             if kind == .directory {
                 directories.append(path)
@@ -120,6 +121,23 @@ private struct ProjectPackageReadSession {
                 files[path] = try readFile(opened, path: path, cap: nil)
             }
         }
+    }
+
+    /// Placement is checked on the admitted status and again on the opened descriptor's status, so a
+    /// link or mount change between admission and open cannot become the change-detection baseline.
+    private func open(
+        at directory: Int32, _ name: String, path: String, admitted info: stat
+    ) throws -> (descriptor: Int32, status: stat) {
+        try checkPlacement(info)
+        reader.openHookForTesting?(path)
+        let opened = try FileSystem.openMember(at: directory, name, matching: info)
+        do {
+            try checkPlacement(opened.status)
+        } catch {
+            close(opened.descriptor)
+            throw error
+        }
+        return opened
     }
 
     private func checkPlacement(_ info: stat) throws {

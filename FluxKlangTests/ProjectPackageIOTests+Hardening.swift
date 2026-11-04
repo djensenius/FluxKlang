@@ -86,6 +86,22 @@ extension ProjectPackageIOTests {
         }
     }
 
+    @Test func hardLinkAddedBetweenAdmissionAndOpenIsRefused() throws {
+        let scratch = try Support.scratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        for member in ["manifest.json", "unknown.bin"] {
+            let root = try Support.makePackage(in: Support.scratchChild(scratch, member))
+            let target = root.appendingPathComponent(member).path
+            let alias = scratch.appendingPathComponent("\(member).alias").path
+            var reader = try ProjectPackageReader(policy: Support.policy())
+            reader.openHookForTesting = { path in
+                guard path == member else { return }
+                #expect(link(target, alias) == 0)
+            }
+            #expect(throws: ProjectPackageIOError.hardLinkedMember) { try reader.read(from: root) }
+        }
+    }
+
     @Test func memberChangedWhileOpenIsRefusedAtEOF() throws {
         let scratch = try Support.scratch()
         defer { try? FileManager.default.removeItem(at: scratch) }
