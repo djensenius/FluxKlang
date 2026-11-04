@@ -513,6 +513,54 @@ before its own one-use execution claim, keep its artifacts outside Products,
 and use the exact returned prepared path. No runner or runtime permission is
 provided here, and Xcode is not promised to leave Products unchanged at runtime.
 
+### Library-only one-use Mac launch reservation
+
+`mac_launch_claim.claim(receipt_path, expected_sha256)` is a library API only:
+no CLI, callback, launcher, override or execution workflow. It first calls the
+real externally pinned receipt consumer. From the complete validated intent's
+original `W/DerivedData/Build/Products/<original>` path it derives W, cross-checks
+the prepared/intent siblings and the exact supplied
+`W/build-evidence/receipt.json` path, and reserves only
+`W.parent / (W.name + ".mac-launch-evidence")`. It does not derive authority by
+stripping a caller pathname, resolve aliases, prepare again, generate a UUID,
+compile or launch. Restricted read-only Git observations by the consumer remain
+part of validation.
+
+Before creating anything, it checks absolute unambiguous UTF-8 paths, the
+4,096-byte ceiling, real no-follow directory ancestors and local component/path
+limits (including the suffixed basename, record pathname and syscall NUL).
+Unsupported limits refuse. A closed version-1 record, encoded at most 2 MiB,
+contains `status: reservation-recorded`, validated W, the fixed reservation
+location, exact receipt path/external SHA and the **complete returned intent**.
+There is no timestamp or new identity. The intent file's own digest is
+transitively receipt-bound; it is not a field invented inside that intent.
+
+Exclusive private directory creation **consumes the attempt**. Any existing
+file, directory, partial claim or symlink (including dangling) refuses reuse;
+filesystem lookup, not textual alias normalization, arbitrates collisions.
+The parent is synced promptly, then fixed `prelaunch.json` is exclusively
+written with short-write handling, flushed, fsynced and closed. The claim
+directory and parent are synced; bounded no-follow reread must match both bytes
+and record, with exactly that one directory entry. Real receipt validation must
+again return the unchanged intent before the record is returned. W is not
+modified (reads can change access times).
+
+Every post-mkdir failure/interruption preserves the claim, including an empty
+directory, zero-length/partial record, failed sync/check and mkdir success
+interrupted before reporting. There is no cleanup, repair, resume, overwrite or
+retry. Failed/interrupted parent fsync cannot promise power-loss survival.
+Ambiguous mkdir/reporting requires **coordinator quarantine even if a later
+inspection finds no marker**; absence after uncertainty is not retry permission.
+
+External coordinator custody must cover W, its parent and stable ancestor/name
+mappings throughout validation/publication, then preserve the reserved slot:
+no deletion, replacement, rename or recreation. This is a local reservation,
+not crash-proof persistence, global deduplication, malicious-concurrency
+protection or sandboxing. `reservation-recorded` is not authorization, launch,
+fresh-host custody, auditing or actual retention. Separate reviewed launcher
+integration, execution authorization, reconciliation and retention qualification
+remain required; this increment does not complete #60.
+
 Run all pure audit-run fixtures (no native tools or installed product reads):
 
 ```sh

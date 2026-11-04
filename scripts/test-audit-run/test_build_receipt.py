@@ -5,6 +5,7 @@ import sys
 sys.dont_write_bytecode = True
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -185,6 +187,275 @@ class ProducerTests(unittest.TestCase):
 
     def consume(self, result):
         return receipt.validate(result["receipt"], result["sha256"])
+
+    def launch_fixture(self, name=None):
+        if name is not None:
+            self.w = self.root / name
+            shutil.copytree(self.template, self.w)
+            self.final = self.w / "build-evidence/receipt.json"
+        count = self.compiler.call_count
+        with mock.patch.object(prepare, "prepare", wraps=prepare.prepare) as preparation:
+            result = self.produce()
+        preparation.assert_called_once()
+        self.assertEqual(self.compiler.call_count, count + 1)
+        return result, self.w.with_name(self.w.name + ".mac-launch-evidence")
+
+    def reserve(self, result):
+        import mac_launch_claim
+
+        # Real validation may run restricted read-only Git observations. Only
+        # production/preparation/new identity are forbidden, not all processes.
+        with mock.patch.object(build_mac, "produce", side_effect=AssertionError("producer")), \
+                mock.patch.object(build_mac, "compile_once", side_effect=AssertionError("compile")), \
+                mock.patch.object(prepare, "prepare", side_effect=AssertionError("prepare")), \
+                mock.patch.object(prepare.uuid, "uuid4", side_effect=AssertionError("new identity")):
+            return mac_launch_claim.claim(result["receipt"], result["sha256"])
+
+    def test_launch_claim_preserves_complete_intent_and_workspace(self):
+        result, slot = self.launch_fixture()
+        intent = self.consume(result)
+        before = snapshot(self.w)
+        with mock.patch.object(receipt, "validate", wraps=receipt.validate) as validation:
+            record = self.reserve(result)
+        self.assertEqual(validation.call_count, 2)
+        self.assertEqual(record, {
+            "schema_version": 1, "status": "reservation-recorded",
+            "workspace": str(self.w), "reservation": str(slot),
+            "receipt": {"path": result["receipt"], "sha256": result["sha256"]},
+            "intent": intent,
+        })
+        self.assertEqual(json.loads((slot / "prelaunch.json").read_bytes()), record)
+        self.assertEqual(list(slot.iterdir()), [slot / "prelaunch.json"])
+        self.assertEqual(stat.S_IMODE(slot.stat().st_mode), 0o700)
+        self.assertEqual(intent["qualification"], "partial-regression")
+        self.assertEqual(intent["profile"], prepare.RETENTION_PROFILE)
+        self.assertIn("attachment_policy", intent)
+        self.assertEqual(snapshot(self.w), before)
+        self.assertEqual(self.compiler.call_count, 1)
+        consumed = snapshot(slot)
+        with self.assertRaises(FileExistsError):
+            self.reserve(result)
+        self.assertEqual(snapshot(slot), consumed)
+
+    def test_launch_claim_pin_drift_and_receipt_aliases_refuse_before_mkdir(self):
+        result, slot = self.launch_fixture()
+        copied = self.root / "receipt-copy.json"
+        copied.write_bytes(self.final.read_bytes())
+        linked = self.root / "receipt-link.json"
+        linked.symlink_to(self.final)
+        ancestor = self.root / "alias"
+        ancestor.symlink_to(self.w, target_is_directory=True)
+        invalid = [
+            dict(result, sha256="0" * 64),
+            dict(result, receipt=str(copied)),
+            dict(result, receipt=str(linked)),
+            dict(result, receipt=str(ancestor / "build-evidence/receipt.json")),
+        ]
+        for path in (str(self.final).replace("/build-evidence/", "//build-evidence/"),
+                     str(self.w) + "/./build-evidence/receipt.json",
+                     str(self.final) + "\0", "/invalid\udcff", "/" + "x" * 4096):
+            invalid.append(dict(result, receipt=path))
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("premature mkdir")):
+            for value in invalid:
+                with self.subTest(receipt=value["receipt"], pin=value["sha256"]):
+                    with self.assertRaises((receipt.Refusal, OSError)):
+                        self.reserve(value)
+            log = self.w / "build-evidence/stdout.log"
+            log.write_bytes(log.read_bytes() + b"drift")
+            with self.assertRaises(receipt.Refusal):
+                self.reserve(result)
+        self.assertFalse(os.path.lexists(slot))
+
+    def test_launch_claim_local_limits_and_record_bound_precede_mkdir(self):
+        result, slot = self.launch_fixture()
+        original_conf = os.fpathconf
+        parent_info = self.root.stat()
+        for kind in ("suffix", "record-path-nul", "unknown", "metadata"):
+            with self.subTest(kind=kind):
+                def limits(fd, key):
+                    info = os.fstat(fd)
+                    if (info.st_dev, info.st_ino) == (parent_info.st_dev, parent_info.st_ino):
+                        if kind == "suffix" and key == "PC_NAME_MAX":
+                            return len(slot.name.encode()) - 1
+                        if kind == "record-path-nul" and key == "PC_PATH_MAX":
+                            return len(str(slot / "prelaunch.json").encode())
+                        if kind == "unknown":
+                            return -1
+                    return original_conf(fd, key)
+
+                with mock.patch.object(os, "fpathconf", side_effect=limits), \
+                        mock.patch.object(Path, "mkdir", side_effect=AssertionError("premature mkdir")):
+                    if kind == "metadata":
+                        with mock.patch.object(receipt, "encode",
+                                               return_value=b"x" * (receipt.METADATA_BYTES + 1)):
+                            with self.assertRaises(receipt.Refusal):
+                                self.reserve(result)
+                    else:
+                        with self.assertRaises(receipt.Refusal):
+                            self.reserve(result)
+                self.assertFalse(os.path.lexists(slot))
+        # A genuinely supported W basename can become unsupported after the
+        # fixed suffix. Real compile/preparation/validation still succeed.
+        name_max = os.pathconf(self.root, "PC_NAME_MAX")
+        result, slot = self.launch_fixture("w" * (name_max - 1))
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("premature mkdir")):
+            with self.assertRaises(receipt.Refusal):
+                self.reserve(result)
+        self.assertFalse(os.path.lexists(slot))
+
+    def test_launch_claim_existing_slots_are_untouched(self):
+        for kind in ("file", "directory", "partial", "dangling"):
+            with self.subTest(kind=kind):
+                result, slot = self.launch_fixture(kind)
+                if kind == "file":
+                    slot.write_bytes(b"existing")
+                elif kind == "dangling":
+                    slot.symlink_to("missing")
+                else:
+                    slot.mkdir()
+                    if kind == "partial":
+                        (slot / "prelaunch.json").write_bytes(b'{"partial":')
+                before = snapshot(self.root)
+                with self.assertRaises(FileExistsError):
+                    self.reserve(result)
+                self.assertEqual(snapshot(self.root), before)
+
+    def test_launch_claim_competing_claimants_have_one_success(self):
+        import mac_launch_claim
+
+        result, slot = self.launch_fixture()
+        before = snapshot(self.w)
+        barrier = threading.Barrier(2)
+        original_mkdir = Path.mkdir
+
+        def mkdir(path, *args, **kwargs):
+            if path == slot:
+                barrier.wait(timeout=30)
+            return original_mkdir(path, *args, **kwargs)
+
+        def compete():
+            try:
+                return mac_launch_claim.claim(result["receipt"], result["sha256"])
+            except FileExistsError:
+                return None
+
+        with mock.patch.object(Path, "mkdir", mkdir), \
+                mock.patch.object(prepare, "prepare", side_effect=AssertionError("prepare")), \
+                mock.patch.object(prepare.uuid, "uuid4", side_effect=AssertionError("identity")), \
+                mock.patch.object(build_mac, "compile_once", side_effect=AssertionError("compile")):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda _: compete(), range(2)))
+        self.assertEqual(sum(value is not None for value in results), 1)
+        self.assertEqual(snapshot(self.w), before)
+        self.assertEqual(self.compiler.call_count, 1)
+
+    def test_launch_claim_publication_failures_consume_without_repair(self):
+        original_open = Path.open
+        original_mkdir = Path.mkdir
+        original_fsync = os.fsync
+        original_bounded = receipt.bounded
+        for phase in ("partial", "zero", "flush", "close", "parent-sync", "dir-sync",
+                      "final-parent-sync", "file-sync", "reread", "reread-bytes",
+                      "extra-entry", "revalidation", "postmkdir-interrupt",
+                      "mkdir-return-interrupt"):
+            with self.subTest(phase=phase):
+                result, slot = self.launch_fixture(phase)
+                before = snapshot(self.w)
+                record_path = slot / "prelaunch.json"
+                parent_syncs = 0
+
+                class Writer:
+                    def __init__(self, stream):
+                        self.stream = stream
+                        self.writes = 0
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        self.stream.close()
+
+                    def write(self, data):
+                        self.writes += 1
+                        if phase == "zero":
+                            return 0
+                        if phase == "partial":
+                            if self.writes > 1:
+                                raise OSError("partial write")
+                            return self.stream.write(data[:11])
+                        return self.stream.write(data)
+
+                    def flush(self):
+                        if phase == "flush":
+                            raise OSError("flush")
+                        self.stream.flush()
+
+                    def fileno(self):
+                        return self.stream.fileno()
+
+                    def close(self):
+                        self.stream.close()
+                        if phase == "close":
+                            raise OSError("close")
+
+                def opening(path, *args, **kwargs):
+                    stream = original_open(path, *args, **kwargs)
+                    return Writer(stream) if path == record_path and args == ("xb",) else stream
+
+                def mkdir(path, *args, **kwargs):
+                    answer = original_mkdir(path, *args, **kwargs)
+                    if path == slot and phase == "mkdir-return-interrupt":
+                        raise KeyboardInterrupt("mkdir succeeded before returning")
+                    return answer
+
+                def fsync(fd):
+                    nonlocal parent_syncs
+                    info = os.fstat(fd)
+                    parent = self.root.stat()
+                    if (info.st_dev, info.st_ino) == (parent.st_dev, parent.st_ino):
+                        parent_syncs += 1
+                        if phase == "postmkdir-interrupt":
+                            raise KeyboardInterrupt("first parent sync")
+                        if phase == "parent-sync" or (phase == "final-parent-sync"
+                                                      and parent_syncs == 2):
+                            raise OSError("parent fsync")
+                        if phase == "extra-entry":
+                            (slot / "unexpected").write_bytes(b"retained")
+                        if phase == "revalidation":
+                            log = self.w / "build-evidence/stdout.log"
+                            log.write_bytes(b"postclaim drift")
+                    elif stat.S_ISDIR(info.st_mode) and phase == "dir-sync":
+                        raise OSError("claim directory fsync")
+                    elif stat.S_ISREG(info.st_mode) and phase == "file-sync":
+                        raise OSError("record fsync")
+                    return original_fsync(fd)
+
+                def bounded(path, *args, **kwargs):
+                    if Path(path) == record_path:
+                        if phase == "reread":
+                            raise OSError("reread")
+                        if phase == "reread-bytes":
+                            witness, data = original_bounded(path, *args, **kwargs)
+                            return witness, data + b"\n"
+                    return original_bounded(path, *args, **kwargs)
+
+                with mock.patch.object(Path, "open", opening), \
+                        mock.patch.object(Path, "mkdir", mkdir), \
+                        mock.patch.object(os, "fsync", side_effect=fsync), \
+                        mock.patch.object(receipt, "bounded", side_effect=bounded):
+                    with self.assertRaises((OSError, receipt.Refusal, KeyboardInterrupt)):
+                        self.reserve(result)
+                self.assertTrue(slot.is_dir())
+                consumed = snapshot(slot)
+                if phase != "revalidation":
+                    self.assertEqual(snapshot(self.w), before)
+                if phase == "partial":
+                    self.assertEqual(record_path.stat().st_size, 11)
+                if phase == "zero":
+                    self.assertEqual(record_path.stat().st_size, 0)
+                with self.assertRaises((FileExistsError, receipt.Refusal)):
+                    self.reserve(result)
+                self.assertEqual(snapshot(slot), consumed)
 
     def assert_consumed(self):
         self.assertTrue((self.w / "build-evidence").is_dir())
