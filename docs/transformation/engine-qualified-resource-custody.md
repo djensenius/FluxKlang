@@ -7,7 +7,7 @@
 | Source baseline | `6e4db20dab5bb8896e73004e5f86f76a180b4745` (tree `4d665c6d590de3d40c81e75bae44637baf1b30f5`) |
 | First future slice | Actor-private, noncopyable, **never-published** adoption and exact-binding retirement |
 | Initial bound | One outstanding preparation lifetime, including queued admission and one custody/evidence slot, covered by canonical ledger capacity |
-| Unresolved prerequisite | A separately specified and reviewed truthful activation-eligible artifact/predicate, before successful-binding source implementation |
+| Unresolved prerequisite | [#291 specifies the proposed target and eligibility](engine-software-routing-activation.md); concrete implementation and independent qualification remain prerequisites to canonical successful binding |
 
 ## 1. Decision and activation meaning
 
@@ -25,14 +25,13 @@ it is not merely successful offline compilation or evaluation. The current
 `PreparedActivationID` cannot fix that, and no “offline-prepared” success may
 enter `ActivationTransaction.prepared`.
 
-The activation-eligible artifact and the predicate establishing its eligibility
-remain genuinely unresolved. A separate specification and review must identify
-what operation the artifact supports, the validated context it represents, its
-resource ownership and limits, and why success truthfully permits the existing
-review/authorization path without bypassing commit-time checks. Until then,
-successful-binding source work is blocked; existing construction-only behavior
-remains construction-only. This prerequisite does **not** block this decision
-record, nor require all of G2 to be implemented first.
+[#291](engine-software-routing-activation.md) specifies the proposed software-role
+target and eligibility predicate. Concrete implementation and independent
+qualification remain prerequisites to canonical successful binding; existing
+construction-only behavior remains construction-only. The existing
+review/authorization path and commit-time checks remain required. This
+prerequisite does **not** block this decision record, nor require all of G2 to
+be implemented first.
 
 ## 2. Grounding in accepted source
 
@@ -79,8 +78,9 @@ state. All three components participate in equality. The ledger alone constructs
 bindings; no global identity minter or reconstruction from snapshots is added.
 Inert snapshots are observations, not ownership authority.
 
-For this first slice, the **proposed admission policy**, not existing behavior,
-allows at most **one outstanding preparation lifetime** across pre-admission
+For this first slice, the admission foundation accepted in **#288/#290** now
+reserves at most **one outstanding preparation lifetime** for construction-only
+custody; successful-binding phases below remain proposed. The bound spans pre-admission
 reservation, queued admission, construction, live pending/held/retiring custody
 and retained completion/destruction evidence. These are successive states of
 one reservation, not separate allowances. The authority reserves the lifetime's
@@ -96,8 +96,8 @@ accepted lifetime; the ledger must have capacity at least one, shared across
 all phases and both current and retained prior instances. Ledger/queue headroom
 does not authorize a second queued preparation in this slice.
 
-This prevents ordinary work from creating a FIFO dependency cycle: current
-`begin` can queue preparation B while A occupies the cell; construction of B
+This prevents ordinary work from creating a FIFO dependency cycle: without the
+gate, book-level `begin` can queue preparation B while A occupies the cell; construction of B
 then waits for A, but `discard(A)` behind B prevents A's canonical retirement.
 [`nextEngineCommand`](../../Shared/Host/Authority/HostAuthorityBook+Commit.swift)
 does not automatically bypass that preparation. The proposed policy neither
@@ -114,8 +114,8 @@ answer. Uncertainty consumes the slot indefinitely and applies backpressure.
 ## 4. Proposed never-published sequence
 
 The labels below describe **future sequencing requirements**, not implemented
-methods. Successful branches are conditional on section 1's unresolved
-prerequisite. All cell transitions are private nonsuspending actor operations.
+methods. Successful branches are conditional on section 1's implementation and
+qualification prerequisite. All cell transitions are private nonsuspending actor operations.
 
 | Label | Named owner, action and retained custody on refusal |
 |---|---|
