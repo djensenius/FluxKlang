@@ -42,8 +42,9 @@ human-readable report; JSON is the default. Modes and exit codes are:
 | 2 | Invalid inputs or unsupported/incomplete structural analysis |
 
 Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
-manifest is complete. `MacPureModelSmokeTests` now uses
-`@Suite(.productionAccessAudit)`; this is partial adoption only. Other owners'
+manifest is complete. `MacPureModelSmokeTests` and, under `#if os(macOS)`,
+`RoutingDSPTests` use `@Suite(.productionAccessAudit)`; this is partial source
+adoption only. The iOS `RoutingDSPTests` owner remains unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
 success is not coverage or isolation.
@@ -54,12 +55,73 @@ per-test evidence or exclusive attribution. Missing/invalid
 bootstrap. This adoption provides no new safe ordinary/unprepared Mac execution
 workflow and does not authorize hosted execution.
 
+The macOS guard also applies to the isolated pure SwiftPM consumer; it does not
+exclude that consumer from the canonical audit. Its successor fixture retains
+the original 149 repository source paths and adds the unchanged
+`Shared/Store/ProductionAccessAudit.swift` to `FluxKlang` and
+`FluxKlangTests/ProductionAccessScope.swift` to `FluxKlangTests` (151 repository
+sources). The successor fixture also adds one private instrumentation source, for
+152 staged Swift inputs: 151 exact repository sources plus one private witness.
+Generated SwiftPM runner sources are separate. The manifest and original
+`(GraphCompilerTests|RoutingDSPTests|RoutingBoundaryTests)` filter are unchanged.
+
+Separately authorized, bounded Debug and Release runs of this fixture each
+passed all original 39 declarations and 50 case invocations plus the witness
+(40 declarations, 51 cases, three suites) using SwiftPM's `--build-system native`.
+Each run retained genuine canonical suite-exit attachments through
+`--attachments-path` (an existing writable directory) under its own fresh
+authorized `FLUXKLANG_AUDIT_RUN_ID`. The observed `Test.ID` was
+`FluxKlangTests/RoutingDSPTests`, all 14 operation IDs reported zero
+`apiEntered` and `factoryEvaluated` counters, and no audit issue was recorded.
+The Release run is optimized with `-enable-testing`, which `@testable` imports
+require; it does not establish shipping-build equivalence. Best-effort
+`Attachment.record` alone does not establish persistence. MIDI adoption and
+the broader storage selection are deferred.
+
+The private witness records ordered `CommandLine.arguments`, self executable
+paths and POSIX process IDs in a separately named genuine attachment. The
+witness uses a bounded request/acknowledgment protocol: the supervisor publishes
+complete control only after launching the command and obtaining its actual
+PID/group. The witness waits for validated control, then for matching
+independent observations. Other tests may already be running; this is not
+pre-test or bootstrap control. A 50 ms condition wait is only waiting, never
+proof. Missing/mismatched acknowledgment, ancestry, image or owned-group
+membership fails closed without adopting or signalling an unowned group.
+
+One separately compiled private Security-framework metadata observer is tooling,
+not another fixture source, test or suite: fixture counts remain 151+1 inputs
+and 40 declarations/51 cases/three suites. Its public APIs report OS code-origin
+metadata, not signature validity, authenticity or secure loaded-byte identity.
+Required executable URL/status/type checks do not detect all invalid metadata;
+optional unsigned-code fields are not mandatory. The observer was separately
+compiled and narrowly qualified as a tool (one directly owned live subject)
+before fixture execution was authorized; that qualification does not cover the
+fixture, SwiftPM groups or bootstrap.
+
+The recorded `CommandLine.arguments` remain Swift process arguments **during the
+witness**, not initial kernel argv or an unmodified launch snapshot.
+Self/external PID, group, current ancestry, paths and run UUID must correlate
+with the genuine canonical suite-exit payload.
+A hosting `swiftpm-testing-helper` or `xctest` is not the test-bundle executable;
+actual host/bundle headers and loading relationships remain separate gates, and
+an Apple host's deployment target need not equal the fixture's macOS 27 target.
+The witness reads only its authorized run UUID and allowlisted control-path
+environment entry, never serializes the environment, and does not invent a
+canonical `Test.ID`.
+
+Earlier attempts were not accepted. Debug02's collector rejected
+valid parameterized summaries and lacked independent live host/group correlation.
+A later Release attempt without `-enable-testing` failed to build. The
+observation protocol is not proof of birth identity, historical ancestry or
+descendant closure. Source-checker qualification covers registrations, not this
+README or the private witness/tool.
+
 Remaining gates include other source-owner adoption and independent review,
 coordinator-only native compile-only qualification, and separately authorized
-runtime qualification: exact runner argv, earliest bootstrap, fresh-host
-isolation, actual UUID delivery and runtime `Test.ID`/result identity, attachment
-persistence, descendant closure and artifact sealing. Source registration rows
-are not runtime receipt expectations; #60 remains open.
+native/hosted runtime qualification: exact runner argv, earliest bootstrap,
+fresh-host isolation, actual UUID delivery and runtime `Test.ID`/result
+identity, attachment persistence, descendant closure and artifact sealing.
+Source registration rows are not runtime receipt expectations; #60 remains open.
 
 ## Headless fixtures
 
