@@ -41,10 +41,25 @@ human-readable report; JSON is the default. Modes and exit codes are:
 | 1 | Structurally complete but registration/annotation obligations are unsatisfied |
 | 2 | Invalid inputs or unsupported/incomplete structural analysis |
 
-Always inspect `analysisComplete` and `enforcementSatisfied`. The initial
-registration manifest is complete, but the roots are not yet annotated:
-inventory intentionally exits 0 with `enforcementSatisfied: false`, while
-default enforcement exits 1. Inventory success is not coverage or isolation.
+Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
+manifest is complete. `MacPureModelSmokeTests` now uses
+`@Suite(.productionAccessAudit)`; this is partial adoption only. Other owners'
+annotation obligations remain unsatisfied: inventory intentionally exits 0 with
+`enforcementSatisfied: false`, while default enforcement exits 1. Inventory
+success is not coverage or isolation.
+
+The trait observes cumulative suite-exit state with nonrecursive scope, not
+per-test evidence or exclusive attribution. Missing/invalid
+`FLUXKLANG_AUDIT_RUN_ID` records an issue after the body, not at earliest
+bootstrap. This adoption provides no new safe ordinary/unprepared Mac execution
+workflow and does not authorize hosted execution.
+
+Remaining gates include other source-owner adoption and independent review,
+coordinator-only native compile-only qualification, and separately authorized
+runtime qualification: exact runner argv, earliest bootstrap, fresh-host
+isolation, actual UUID delivery and runtime `Test.ID`/result identity, attachment
+persistence, descendant closure and artifact sealing. Source registration rows
+are not runtime receipt expectations; #60 remains open.
 
 ## Headless fixtures
 
