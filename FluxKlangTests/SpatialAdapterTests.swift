@@ -224,3 +224,44 @@ struct SpatialAdapterTests {
         }
     }
 }
+
+extension SpatialAdapterTests {
+    @Test func extremeFiniteLegacyCoordinatesClampBeforeTransform() throws {
+        let big = Double.greatestFiniteMagnitude
+        #expect(try LegacySpatialImport.point(x: big, y: 0) == NeutralPoint(x: 1, y: 1))
+        #expect(try LegacySpatialImport.point(x: -big, y: 0) == NeutralPoint(x: -1, y: 1))
+        #expect(try LegacySpatialImport.point(x: 0, y: big) == NeutralPoint(x: -1, y: -1))
+        #expect(try LegacySpatialImport.point(x: 0, y: -big) == NeutralPoint(x: -1, y: 1))
+        #expect(try LegacySpatialImport.point(x: big, y: -big) == NeutralPoint(x: 1, y: 1))
+        let wide = LegacySourceInput(id: try Self.uuid(0), x: -big, y: big, width: big, isStereo: true)
+        let source = try LegacySpatialImport.source(wide)
+        #expect(source.position == (try NeutralPoint(x: -1, y: -1)) && source.width == 1)
+        #expect(source.channelPositions().allSatisfy { $0.x.isFinite && $0.y.isFinite })
+    }
+
+    @Test func tinyAndNegativeZeroLegacyCoordinates() throws {
+        let tiny = Double.leastNonzeroMagnitude
+        for value in [tiny, -tiny, -0.0, 0.0] {
+            let point = try LegacySpatialImport.point(x: value, y: value)
+            #expect(point.x == -1 && point.y == 1)
+        }
+        let nearOne = try LegacySpatialImport.point(x: 1 - tiny, y: 1 + tiny)
+        #expect(nearOne.x == 1 && nearOne.y == -1)
+        let decoded = try JSONDecoder().decode(
+            NeutralPoint.self, from: JSONEncoder().encode(LegacySpatialImport.point(x: -0.0, y: -0.0)))
+        #expect(decoded == (try NeutralPoint(x: -1, y: 1)))
+    }
+
+    @Test func extremeItemDoesNotAbortMixedImport() throws {
+        var speakers = try Self.quadInputs()
+        speakers.append(LegacySpeakerInput(id: try Self.uuid(9), x: .greatestFiniteMagnitude, y: -0.0))
+        let sources = [
+            LegacySourceInput(id: try Self.uuid(20), x: 0.5, y: 0.5),
+            LegacySourceInput(id: try Self.uuid(21), x: -.greatestFiniteMagnitude, y: .leastNonzeroMagnitude)
+        ]
+        let result = try LegacySpatialImport.importLegacy(speakers: speakers, sources: sources)
+        #expect(result.layout.speakers.count == 5)
+        #expect(result.layout.speakers[4].position == (try NeutralPoint(x: 1, y: 1)))
+        #expect(result.sources.map(\.position) == [try NeutralPoint(x: 0, y: 0), try NeutralPoint(x: -1, y: 1)])
+    }
+}

@@ -141,10 +141,20 @@ enum LegacySpatialImport {
     /// Neutral units per legacy unit.
     static let scale = 2.0
 
-    /// Maps a legacy position: x′ = 2x − 1, y′ = 1 − 2y, clamped to `−1…1`.
+    /// The documented legacy coordinate domain.
+    static let legacyRange: ClosedRange<Double> = 0...1
+
+    /// Maps a legacy position: x′ = 2x − 1, y′ = 1 − 2y. Finite inputs are
+    /// clamped to `legacyRange` *before* the transform, so a huge finite value
+    /// (e.g. `greatestFiniteMagnitude`) cannot overflow to infinity. The result is
+    /// then exactly inside `−1…1`, so the strict initialiser is used: a missing
+    /// clamp would surface as an error rather than be hidden by a second clamp.
+    /// Non-finite inputs are refused.
     static func point(x legacyX: Double, y legacyY: Double) throws(SpatialLayoutError) -> NeutralPoint {
         guard legacyX.isFinite, legacyY.isFinite else { throw .nonFiniteCoordinate }
-        return try NeutralPoint(x: scale * legacyX - 1, y: 1 - scale * legacyY)
+        let clampedX = min(max(legacyX, legacyRange.lowerBound), legacyRange.upperBound)
+        let clampedY = min(max(legacyY, legacyRange.lowerBound), legacyRange.upperBound)
+        return try NeutralPoint(validatingX: scale * clampedX - 1, y: 1 - scale * clampedY)
     }
 
     /// Scales a legacy distance (e.g. a blur) into neutral units.
@@ -164,7 +174,8 @@ enum LegacySpatialImport {
     }
 
     /// One neutral source per legacy source; a stereo source has two channels.
-    /// A finite legacy width is clamped to `0…1`.
+    /// A finite legacy width is clamped to `0…1` before any arithmetic, so the
+    /// channel offset (`width × 0.5`) and offset positions stay bounded.
     /// Legacy blur is the fixed constant 0.15, imported as 0.30 (inside
     /// `SpatialSourcePlacement.blurRange`), so import never clamps or refuses blur.
     static func source(_ input: LegacySourceInput) throws(SpatialLayoutError) -> SpatialSourcePlacement {
