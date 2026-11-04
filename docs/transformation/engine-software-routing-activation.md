@@ -7,7 +7,12 @@
 | Source baseline | `de1cbcd84e77905f17d7a6be0e876ec0a8f7f5f4` (tree `41d7a57b570d64199e79a1966239a7af33f1f664`) |
 | Target | Software-owned planar Float32 role ports, qualified by the existing canonical engine instance |
 | Application | Persistent selection of a whole executable image within the same private custody boundary |
-| Remaining prerequisite | Concrete installation/use implementation and independent qualification before canonical successful binding |
+| Remaining prerequisite | Justified all-category charged-region cost basis, concrete installation/use implementation and independent qualification before canonical successful binding |
+
+**No supplied representation/cost basis satisfies all-category accounting in
+custody section 5, even in the narrower charged covered backing-region domain.
+Allocator-dependent eligibility implementation remains stopped.** This #304
+amendment supplies neither that basis nor implementation or eligibility.
 
 **Current construction-only progress (#299):** The existing private cell now owns
 one initialized fixed-stride input/output/peak slab alongside its original
@@ -22,11 +27,13 @@ are additional. Staging/clearing/copying is outside `maxSampleWork`. Configurati
 throws do not make allocator exhaustion recoverable; recoverable errors unwind
 before a failure answer, while fatal allocation establishes neither cleanup nor
 a terminal answer. This is not activation eligibility: predicate 3.6 and custody
-section 5's full accounting remain unmet and must preflight **before relevant
+section 5's charged-region accounting remain unmet and must preflight **before relevant
 future allocations/retentions**, not retroactively before binding. No successful
 binding, installation, commit/ACK, publication/readers, overlapping replacement,
 reset/quiescence or runtime/RT qualification is added. The historical grounding
 below records the decision baseline, not a claim that those gates are now met.
+The narrower domain defined below does not upgrade #299/#302's historical
+requested-raw-only acceptance.
 
 ## 1. Decision and boundary
 
@@ -68,7 +75,10 @@ These are existing boundaries, not implementations of the proposed target.
 
 ## 3. Genuine preparation predicate
 
-Before any canonical successful binding, all of the following must hold:
+Before any canonical successful binding, all of the following must hold.
+Predicate 3.6's charged covered backing-region accounting must be enforced
+before the corresponding allocation or authority retention, including paths
+later refused; binding is not a deferred accounting checkpoint.
 
 1. Consume the actual admitted FIFO command once, retaining its exact
    `HostPrepare(instance:attempt:)`, full canonical instance/attempt and validated
@@ -94,13 +104,20 @@ Before any canonical successful binding, all of the following must hold:
    It must cover every candidate node with the actual ranges, rows and
    operations below, with no missing or extra node. Appending a node-ID set
    after compilation proves nothing.
-6. Preflight added endpoint/peak storage, coverage/layout descriptors and
-   construction peaks using checked arithmetic and finite limits **before**
-   allocating or retaining beyond those limits. Count lowered collections,
-   allocator overhead and temporary copies. Separately account for retained
-   documents, control/evidence bookkeeping and observer copies at their owners,
-   as required by the custody record. One reservation and a scratch ceiling
-   do not establish whole-resource or whole-system byte bounds.
+6. Preflight finite charges for the covered backing regions of added endpoint/peak
+   storage, lowered collections, coverage/layout descriptors and construction
+   storage using checked arithmetic **before** allocation or authority retention.
+   Include unused reserve, internal representation/object headers and metadata,
+   padding and simultaneous construction copies. For every custody section 5
+   category, identify its accountable owner, justified region/cost basis,
+   retained multiplicity, construction overlap and early enforcement point;
+   retained documents (including inherited backing), control/evidence data and
+   observer creation and retention are not free. Swift/Foundation management
+   does not exempt backing or temporaries; unknown capacity blocks qualification.
+   Only custody section 5's independently justified underlying allocator and
+   OS costs outside covered representation regions are excluded. This narrower
+   domain is not total allocator capacity, heap, physical residency or memory
+   availability. One reservation and a scratch ceiling do not discharge it.
 7. An independently implemented and exercised concrete installation operation
    must be able to consume this image without inventing endpoint resources
    afterward. Eligibility is not inferred from validation, offline evaluation,
@@ -171,6 +188,15 @@ not establish reader quiescence, and lost evidence retains the charge.
 
 ## 6. Future qualification and remaining gates
 
+Future #191/G2/#62/O2 acceptance must establish the narrower charged covered
+backing-region accounting of predicate 3.6 and custody section 5, with a justified
+basis for every category and enforcement before allocation or authority retention,
+including subsequently refused paths and observer creation and retention.
+**No supplied basis meets that obligation; allocator-dependent eligibility
+implementation remains stopped.** Policy wording alone qualifies no representation.
+Recoverable constructor unwind before a failure answer does not promise cleanup
+or a terminal answer after fatal allocator exhaustion.
+
 This issue requires documentation and independent source-to-contract review,
 not new tests or implementation. Future isolated fixtures must observe actual
 selection and subsequent use of the installed image with meaningful nonzero-frame
@@ -192,7 +218,9 @@ during prepare or publishing from the never-published lifecycle.
 Preserve accepted G1 authority, review/authorization and commit-time checks,
 canonical identity/custody decisions and legacy behavior. Full #191/G2/#62/O2,
 #190 caller proof and nonblocking/allocation/panic-free qualification, and full
-#60 remain open. No production commit dispatch, render publication/readers,
+#60 remain open. Binding, installation, reclamation, reader departure,
+quiescence, stopped-residency and runtime qualification remain separate gates.
+No production commit dispatch, render publication/readers,
 overlapping lifetimes, recovery/reset execution or quiescence acknowledgement
 is implemented or authorized here. No apps, hosted tests, services, production
 audio, MIDI, OSC, WING, cloud, plugins or hardware execution is authorized.
