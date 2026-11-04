@@ -132,6 +132,19 @@ extension HostAuthorityTests {
             let identity = try await Bench.begin(authority, documents)
             _ = try await Bench.retain(authority, identity)
             let before = await authority.snapshot()
+            let original: [Float] = [-0.0, .leastNonzeroMagnitude, Float(1).nextUp, -4, 5, -6, 7, -8]
+            var input = original
+            let full = try await authority.evaluatePreparation(identity, frames: 4, input: input).get()
+            #expect(full.result == .processed && full.output.map(\.bitPattern) == original.map(\.bitPattern))
+            #expect(full.peaks == [4, 8])
+            input[0] = 123
+            var callerOutput = full.output
+            var callerPeaks = full.peaks
+            callerOutput[0] = 456
+            callerPeaks[0] = 789
+            #expect(callerOutput[0] == 456 && callerPeaks[0] == 789)
+            #expect(full.output.map(\.bitPattern) == original.map(\.bitPattern))
+            #expect(full.peaks == [4, 8])
             for frames in [-1, 5, Int.max] {
                 #expect(await authority.evaluatePreparation(identity, frames: frames, input: []) ==
                     .failure(.invalidFrames))
@@ -147,14 +160,33 @@ extension HostAuthorityTests {
             let short = try await authority.evaluatePreparation(identity, frames: 2, input: padded).get()
             #expect(short.result == .processed && short.output == [1, -2, 0, 0, -3, 4, 0, 0])
             #expect(short.peaks == [2, 4])
+            #expect([2, 3, 6, 7].allSatisfy { short.output[$0].bitPattern == 0 })
             let zero = try await authority.evaluatePreparation(identity, frames: 0, input: padded).get()
             #expect(zero.result == .processed && zero.output == Array(repeating: 0, count: 8))
             #expect(zero.peaks == [0, 0])
+            #expect((zero.output + zero.peaks).allSatisfy { $0.bitPattern == 0 })
+            input = Array(original.reversed())
+            let changed = try await authority.evaluatePreparation(identity, frames: 4, input: input).get()
+            #expect(changed.result == .processed && changed.output.map(\.bitPattern) == input.map(\.bitPattern))
+            #expect(changed.peaks == [8, 4])
             let refused = try await authority.evaluatePreparation(identity, frames: 4, input: padded).get()
             #expect(refused.result == .refused(.nonFiniteInput))
             #expect(refused.output == Array(repeating: 0, count: 8) && refused.peaks == [0, 0])
+            #expect((refused.output + refused.peaks).allSatisfy { $0.bitPattern == 0 })
+            #expect(try await authority.evaluatePreparation(identity, frames: 4, input: input).get() == changed)
             #expect(await authority.snapshot() == before)
             #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+            let next = try await Bench.begin(authority, documents)
+            _ = try await Bench.retain(authority, next)
+            input = Array(repeating: 11, count: 8)
+            let later = try await authority.evaluatePreparation(next, frames: 4, input: input).get()
+            #expect(later.result == .processed && later.output == input && later.peaks == [11, 11])
+            #expect(await authority.disposePreparation(next) == .disposed(.routed))
+            #expect(full.output.map(\.bitPattern) == original.map(\.bitPattern) && full.peaks == [4, 8])
+            #expect(short.output == [1, -2, 0, 0, -3, 4, 0, 0] && short.peaks == [2, 4])
+            #expect((zero.output + zero.peaks).allSatisfy { $0.bitPattern == 0 })
+            #expect(changed.output.map(\.bitPattern) == original.reversed().map(\.bitPattern))
+            #expect(changed.peaks == [8, 4])
         }
 
         @Test func realMuteAndOverflowAreNotSubstitutedByTheOwner() async throws {
@@ -283,6 +315,149 @@ extension HostAuthorityTests {
                 #expect(completed.terminalIdentity == nil)
                 #expect(completed.finishTerminal(refused) == .refused(.faulted))
                 #expect(completed == .vacant)
+            }
+        }
+    }
+}
+
+extension HostAuthorityTests {
+    struct PreparationStorage {
+        @Test func unusedMutedOverflowAndDisconnectedInputStillExecuteWithoutOutputs() async throws {
+            for muted in [false, true] {
+                var documents = Routing.muteDocuments(
+                    muted, inputChannels: 3, inputMap: [[2], [0, 1, 2]]
+                )
+                documents.graph.nodes.removeAll { $0.kind == .roleOutput }
+                documents.graph.edges.removeLast()
+                try Routing.appendEndpoint(to: &documents, input: true, suffix: "zzz", channels: 1)
+                let authority = try await Bench.authority(documents)
+                let identity = try await Bench.begin(authority, documents)
+                let layout = try await Bench.retain(authority, identity)
+                #expect(layout.inputSampleCount == 16 && layout.outputSampleCount == 0 && layout.peakCount == 0)
+                for bad in [Float.nan, .infinity, -.infinity, .greatestFiniteMagnitude] {
+                    var input = [Float](repeating: .nan, count: 16)
+                    for channel in 0..<4 { input[channel * 4] = 1 }
+                    if bad.isFinite {
+                        input[0] = bad
+                        input[4] = bad
+                        input[8] = -bad // A finite final mathematical sum must not hide intermediate overflow.
+                    } else {
+                        input[12] = bad // Disconnected input still participates in validation.
+                    }
+                    let block = try await authority.evaluatePreparation(identity, frames: 1, input: input).get()
+                    #expect(block.result == .refused(bad.isFinite ? .nonFiniteSum : .nonFiniteInput))
+                    #expect(block.output.isEmpty && block.peaks.isEmpty)
+                    for channel in 0..<4 { input[channel * 4] = -2 }
+                    let recovered = try await authority.evaluatePreparation(identity, frames: 1, input: input).get()
+                    #expect(recovered.result == .processed && recovered.output.isEmpty && recovered.peaks.isEmpty)
+                }
+                #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+            }
+        }
+
+        @Test func unequalAndOneSidedEmptyAndMuteOnlyGeometry() async throws {
+            let unequal = Routing.documents(inputChannels: 3, outputChannels: 1, map: [[2, 0]])
+            var inputOnly = Routing.documents()
+            inputOnly.graph.nodes.removeAll { $0.kind == .roleOutput }
+            inputOnly.graph.edges = []
+            var outputOnly = Routing.documents()
+            outputOnly.graph.nodes.removeAll { $0.kind == .roleInput }
+            outputOnly.graph.edges = []
+            var empty = Routing.documents()
+            empty.graph.nodes = []
+            empty.graph.edges = []
+            var muteOnly = empty
+            muteOnly.graph.nodes = [Routing.muteNode(true)]
+            muteOnly.graph.requiredFeatures = [GraphDocument.constantMuteFeature]
+            let limits = Routing.limits(frames: 16)
+            #expect(try Routing.compile(empty, limits: limits).scratchBytes == 4)
+            #expect(try Routing.compile(muteOnly, limits: limits).scratchBytes == 256)
+            for documents in [unequal, inputOnly, outputOnly, empty, muteOnly] {
+                let authority = try await Bench.authority(documents, limits: limits)
+                let identity = try await Bench.begin(authority, documents)
+                let layout = try await Bench.retain(authority, identity)
+                let pending = await authority.snapshot()
+                #expect(AuthorityBench.refusal(await authority.begin(
+                    Bench.request(documents.graph), candidate: documents.graph,
+                    projectDocument: documents.project, project: documents.project.id
+                )) == .preparationOccupied)
+                #expect(await authority.snapshot() == pending)
+                for frames in [16, 1, 0, 16] {
+                    var input = [Float](repeating: .nan, count: layout.inputSampleCount)
+                    for channel in 0..<(layout.inputSampleCount / 16) {
+                        for frame in 0..<frames { input[channel * 16 + frame] = Float(channel + 1) }
+                    }
+                    let block = try await authority.evaluatePreparation(identity, frames: frames, input: input).get()
+                    #expect(block.result == .processed && block.layout == layout)
+                    var expected = [Float](repeating: 0, count: layout.outputSampleCount)
+                    if layout.inputs.count == 1 && layout.outputs.count == 1 {
+                        for frame in 0..<frames { expected[frame] = 4 }
+                    }
+                    #expect(block.output.map(\.bitPattern) == expected.map(\.bitPattern))
+                    #expect(block.peaks == (layout.inputSampleCount == 48 ?
+                        [frames == 0 ? 0 : 4] : Array(repeating: 0, count: layout.peakCount)))
+                }
+                if layout.inputSampleCount > 0 {
+                    #expect(try await authority.evaluatePreparation(
+                        identity, frames: 1, input: Array(repeating: .nan, count: layout.inputSampleCount)
+                    ).get().result == .refused(.nonFiniteInput))
+                }
+                #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+                #expect(await authority.disposePreparation(identity) == .refused(.missing))
+            }
+        }
+
+        @Test func realConstructionExactBudgetsOneBelowAndArithmeticOverflow() async throws {
+            let documents = Routing.documents()
+            let exact = Routing.limits(frames: 4, inputs: 2, outputs: 2, terms: 2, scratch: 72, work: 60)
+            let cases = [
+                exact, Routing.limits(frames: 4, inputs: 1), Routing.limits(frames: 4, outputs: 1),
+                Routing.limits(frames: 4, terms: 1), Routing.limits(frames: 4, scratch: 71),
+                Routing.limits(frames: 4, work: 59), Routing.limits(frames: Int.max)
+            ]
+            for (index, limits) in cases.enumerated() {
+                let authority = try await Bench.authority(documents, limits: limits)
+                let identity = try await Bench.begin(authority, documents)
+                if index == 0 {
+                    _ = try await Bench.retain(authority, identity)
+                    #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+                } else {
+                    #expect(await authority.constructNextPreparation() ==
+                        .terminated(identity, .engineRefused, .routed))
+                    #expect(await authority.snapshot().plans.records[0].entries.isEmpty)
+                }
+            }
+        }
+
+        @Test func realInputOnlyReachesBothSixteenMiBRequests() async throws {
+            var documents = Routing.documents(inputChannels: 64)
+            documents.graph.nodes.removeAll { $0.kind == .roleOutput }
+            documents.graph.edges = []
+            for frames in [65_536, 65_537, Int.max] {
+                for scratch in [(1 << 24) - 1, 1 << 24, Int.max] {
+                    let limits = Routing.limits(
+                        frames: frames, inputs: 64, outputs: 0, terms: 0, scratch: scratch, work: Int.max
+                    )
+                    let authority = try await Bench.authority(documents, limits: limits)
+                    let identity = try await Bench.begin(authority, documents)
+                    if frames != 65_536 || scratch < 1 << 24 {
+                        #expect(await authority.constructNextPreparation() ==
+                            .terminated(identity, .engineRefused, .routed))
+                        continue
+                    }
+                    let layout = try await Bench.retain(authority, identity)
+                    #expect(layout.inputSampleCount * MemoryLayout<Float>.stride == 1 << 24)
+                    var input = [Float](repeating: 1, count: layout.inputSampleCount)
+                    for value in [Float.nan, -0.0] {
+                        input[input.count - 1] = value
+                        let block = try await authority.evaluatePreparation(
+                            identity, frames: frames, input: input
+                        ).get()
+                        #expect(block.result == (value.isFinite ? .processed : .refused(.nonFiniteInput)))
+                        #expect(block.output.isEmpty && block.peaks.isEmpty)
+                    }
+                    #expect(await authority.disposePreparation(identity) == .disposed(.routed))
+                }
             }
         }
     }

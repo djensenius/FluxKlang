@@ -9,6 +9,25 @@
 | Application | Persistent selection of a whole executable image within the same private custody boundary |
 | Remaining prerequisite | Concrete installation/use implementation and independent qualification before canonical successful binding |
 
+**Current construction-only progress (#299):** The existing private cell now owns
+one initialized fixed-stride input/output/peak slab alongside its original
+processor/arena, stages input and returns independent value snapshots. For frame
+stride F and input/output channel counts I/O, added requested bytes
+`P = 4*(F*I + F*O + O) <= S <= 16 MiB`, where S is the original scratch request;
+`S+P <= 32 MiB` bounds **only those two requested raw allocations**. Zero payload
+adds no slab, not an empty processor or a free lifetime; mute-only still executes.
+Caller input and new/historical snapshots, collection backing capacity, allocator
+overhead, temporaries, construction/evaluation peaks and other custody accounting
+are additional. Staging/clearing/copying is outside `maxSampleWork`. Configuration
+throws do not make allocator exhaustion recoverable; recoverable errors unwind
+before a failure answer, while fatal allocation establishes neither cleanup nor
+a terminal answer. This is not activation eligibility: predicate 3.6 and custody
+section 5's full accounting remain unmet and must preflight **before relevant
+future allocations/retentions**, not retroactively before binding. No successful
+binding, installation, commit/ACK, publication/readers, overlapping replacement,
+reset/quiescence or runtime/RT qualification is added. The historical grounding
+below records the decision baseline, not a claim that those gates are now met.
+
 ## 1. Decision and boundary
 
 Specify a **new in-process software-role routing target**, not a physical
