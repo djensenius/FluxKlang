@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -21,6 +22,8 @@ from unittest import mock
 
 import build_mac
 import build_receipt as receipt
+import mac_launch
+import mac_launch_claim
 import prepare
 from test_prepare import FIXTURE
 
@@ -140,6 +143,18 @@ class ProducerTests(unittest.TestCase):
         self.compiler = self.compile.start()
         self.addCleanup(self.compile.stop)
         self.final = self.w / "build-evidence/receipt.json"
+        # Every launch call, including expected refusals, has private fail-fast
+        # Xcode and signal boundaries. Never patch Popen: consumer Git is real.
+        for target in ("_spawn", "_signal_group"):
+            patcher = mock.patch.object(mac_launch, target,
+                                        side_effect=AssertionError("unexpected " + target))
+            setattr(self, target, patcher.start())
+            self.addCleanup(patcher.stop)
+        for target in ("kill", "killpg"):
+            patcher = mock.patch.object(os, target,
+                                        side_effect=AssertionError("real signaling forbidden"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def fake_compile(self, argv, environment, cwd, stdout, stderr):
         self.assertEqual(argv, receipt.recipe(self.w))
@@ -210,6 +225,452 @@ class ProducerTests(unittest.TestCase):
                 mock.patch.object(prepare, "prepare", side_effect=AssertionError("prepare")), \
                 mock.patch.object(prepare.uuid, "uuid4", side_effect=AssertionError("new identity")):
             return mac_launch_claim.claim(result["receipt"], result["sha256"])
+
+    def fake_child(self, code=0, pid=314159):
+        child = mock.Mock(pid=pid)
+        child.wait.return_value = code
+        child.poll.return_value = code
+        self._spawn.reset_mock(side_effect=True)
+        self._spawn.return_value = child
+        self._signal_group.reset_mock(side_effect=True)
+        self._signal_group.side_effect = AssertionError("unexpected signal")
+        return child
+
+    def launch(self, result):
+        # Guard against accidental extra production/preparation/new identity.
+        with mock.patch.object(build_mac, "produce", side_effect=AssertionError("producer")), \
+                mock.patch.object(build_mac, "compile_once", side_effect=AssertionError("compile")), \
+                mock.patch.object(prepare, "prepare", side_effect=AssertionError("prepare")), \
+                mock.patch.object(prepare.uuid, "uuid4", side_effect=AssertionError("new identity")):
+            return mac_launch.launch(result["receipt"], result["sha256"])
+
+    def assert_launch_consumed(self, result, slot):
+        before = snapshot(slot)
+        count = self._spawn.call_count
+        with self.assertRaises((receipt.Refusal, OSError)):
+            self.launch(result)
+        self.assertEqual(self._spawn.call_count, count)
+        self.assertEqual(snapshot(slot), before)
+
+    def test_mac_launch_exit_contract_environment_and_preservation(self):
+        for code in (0, 7, -15):
+            with self.subTest(returncode=code):
+                result, slot = self.launch_fixture("exit-" + str(code))
+                intent = self.consume(result)
+                prepared = Path(intent["output"]["path"])
+                prepared_bytes = prepared.read_bytes()
+                before = snapshot(self.w)
+                child = self.fake_child(code)
+                prelaunch = None
+
+                def spawn(argv, **kwargs):
+                    nonlocal prelaunch
+                    prelaunch = (slot / "prelaunch.json").read_bytes()
+                    self.assertEqual(argv, [
+                        self.binary, "test-without-building", "-xctestrun", str(prepared),
+                        "-destination", "platform=macOS,arch=arm64",
+                        "-parallel-testing-enabled", "NO", "-test-iterations", "1",
+                        "-derivedDataPath", str(slot / "DerivedData"),
+                        "-resultBundlePath", str(slot / "result.xcresult"),
+                    ])
+                    self.assertEqual(set(kwargs), {
+                        "env", "cwd", "stdout", "stderr", "stdin", "close_fds", "shell",
+                        "start_new_session",
+                    })
+                    self.assertEqual(kwargs["env"], {
+                        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                        "DEVELOPER_DIR": str(self.developer), "HOME": str(slot / "home"),
+                        "TMPDIR": str(slot / "tmp"), "LC_ALL": "C",
+                    })
+                    self.assertEqual(kwargs["cwd"], str(slot))
+                    self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+                    for name, value in (("close_fds", True), ("shell", False),
+                                        ("start_new_session", True)):
+                        self.assertIs(kwargs[name], value)
+                    for name in ("stdout", "stderr"):
+                        stream = kwargs[name]
+                        self.assertFalse(stream.closed)
+                        self.assertTrue(stat.S_ISREG(os.fstat(stream.fileno()).st_mode))
+                        self.assertEqual(stream.name, str(slot / (name + ".log")))
+                        os.write(stream.fileno(), (name + " fake child bytes\n").encode())
+                    for name in ("home", "tmp"):
+                        self.assertEqual(stat.S_IMODE((slot / name).stat().st_mode), 0o700)
+                    for name in ("DerivedData", "result.xcresult", "process-outcome.json"):
+                        self.assertFalse(os.path.lexists(slot / name))
+                    self.assertEqual(prepared.read_bytes(), prepared_bytes)
+                    self.assertEqual(plistlib.loads(prepared_bytes)["FluxKlangMacTests"]
+                                     ["EnvironmentVariables"]["FLUXKLANG_AUDIT_RUN_ID"],
+                                     intent["run_id"])
+                    return child
+
+                self._spawn.side_effect = spawn
+                with mock.patch.dict(os.environ, {
+                    "DYLD_INSERT_LIBRARIES": "/not/loaded", "FLUXKLANG_AUDIT_RUN_ID": "ambient",
+                    "GIT_INDEX_FILE": "/not/used", "HOME": "/not/copied", "LC_ALL": "ambient",
+                }):
+                    environment = dict(os.environ)
+                    with mock.patch.object(mac_launch_claim, "claim",
+                                           wraps=mac_launch_claim.claim) as claim, \
+                            mock.patch.object(receipt, "validate",
+                                              wraps=receipt.validate) as validation:
+                        outcome = self.launch(result)
+                    self.assertEqual(dict(os.environ), environment)
+                claim.assert_called_once_with(result["receipt"], result["sha256"])
+                self.assertEqual(validation.call_count, 3)
+                self._spawn.assert_called_once()
+                child.wait.assert_called_once_with(timeout=1800)
+                self._signal_group.assert_not_called()
+                expected = {
+                    "schema_version": 1, "state": "process-exited", "reservation": str(slot),
+                    "receipt_sha256": result["sha256"], "prepared_xctestrun": str(prepared),
+                    "pid": child.pid, "returncode": code, "descendant_closure": "unproven",
+                    "artifacts_sealed": False,
+                }
+                receipt.equal(outcome, expected, "exact typed outcome")
+                self.assertEqual((slot / "process-outcome.json").read_bytes(),
+                                 receipt.encode(expected))
+                self.assertEqual((slot / "prelaunch.json").read_bytes(), prelaunch)
+                self.assertEqual(snapshot(self.w), before)
+                for name in ("stdout", "stderr"):
+                    self.assertEqual((slot / (name + ".log")).read_bytes(),
+                                     (name + " fake child bytes\n").encode())
+                    self.assertTrue(self._spawn.call_args.kwargs[name].closed)
+                self.assert_launch_consumed(result, slot)
+
+    def test_mac_launch_refusals_and_competition(self):
+        result, slot = self.launch_fixture()
+        for pin in ("0" * 64, "A" * 64, "", None, True):
+            with self.subTest(pin=pin):
+                with self.assertRaises(receipt.Refusal):
+                    self.launch(dict(result, sha256=pin))
+                self.assertFalse(os.path.lexists(slot))
+        for path in (str(self.final) + "\0", "/invalid\udcff", "/" + "x" * 4096):
+            with self.subTest(path=path):
+                with self.assertRaises(receipt.Refusal):
+                    self.launch(dict(result, receipt=path))
+        log = self.w / "build-evidence/stdout.log"
+        log.write_bytes(b"actual drift")
+        with self.assertRaises(receipt.Refusal):
+            self.launch(result)
+        self._spawn.assert_not_called()
+        for kind in ("file", "directory", "partial", "dangling", "prior-record",
+                     "claim-zero", "claim-sync"):
+            with self.subTest(kind=kind):
+                result, slot = self.launch_fixture(kind)
+                if kind == "file":
+                    slot.write_bytes(b"existing")
+                elif kind == "dangling":
+                    slot.symlink_to("missing")
+                elif kind == "prior-record":
+                    self.reserve(result)
+                elif kind in ("directory", "partial"):
+                    slot.mkdir()
+                    if kind == "partial":
+                        (slot / "prelaunch.json").write_bytes(b'{"partial":')
+                before = snapshot(self.w)
+                if kind == "claim-zero":
+                    with mock.patch.object(build_mac, "write_all", return_value=None):
+                        with self.assertRaises(receipt.Refusal):
+                            self.launch(result)
+                    self.assertEqual((slot / "prelaunch.json").stat().st_size, 0)
+                elif kind == "claim-sync":
+                    with mock.patch.object(mac_launch_claim, "sync_directory",
+                                           side_effect=OSError("claim sync")):
+                        with self.assertRaises(OSError):
+                            self.launch(result)
+                else:
+                    old = snapshot(self.root)
+                    with self.assertRaises(FileExistsError):
+                        self.launch(result)
+                    self.assertEqual(snapshot(self.root), old)
+                self.assertEqual(snapshot(self.w), before)
+                self._spawn.assert_not_called()
+                self.assert_launch_consumed(result, slot)
+
+        result, slot = self.launch_fixture("competition")
+        before = snapshot(self.w)
+        self.fake_child()
+        barrier = threading.Barrier(2)
+        original_mkdir = Path.mkdir
+
+        def mkdir(path, *args, **kwargs):
+            if path == slot:
+                barrier.wait(timeout=30)
+            return original_mkdir(path, *args, **kwargs)
+
+        def compete():
+            try:
+                return mac_launch.launch(result["receipt"], result["sha256"])
+            except FileExistsError:
+                return None
+
+        with mock.patch.object(Path, "mkdir", mkdir):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(lambda _: compete(), range(2)))
+        self.assertEqual(sum(value is not None for value in outcomes), 1)
+        self._spawn.assert_called_once()
+        self.assertEqual(snapshot(self.w), before)
+        self.assert_launch_consumed(result, slot)
+
+    def test_mac_launch_setup_paths_and_final_real_validation(self):
+        original_conf = os.fpathconf
+        original_mkdir = Path.mkdir
+        original_sync = build_mac.sync_directory
+        original_open = Path.open
+        cases = ["outcome-path-nul", "name-limit", "unknown-limit", "final-drift"]
+        cases += ["mkdir-" + name for name in ("home", "tmp")]
+        cases += ["sync-" + name for name in ("home", "tmp", "slot", "parent")]
+        cases += ["open-" + name for name in ("stdout.log", "stderr.log")]
+        cases += ["collision-" + name for name in (
+            "home", "tmp", "stdout.log", "stderr.log", "DerivedData", "result.xcresult",
+            "process-outcome.json")]
+        for phase in cases:
+            with self.subTest(phase=phase):
+                result, slot = self.launch_fixture(phase)
+                before = snapshot(self.w)
+                prelaunch = None
+
+                def limits(fd, key):
+                    if slot.is_dir() and os.fstat(fd).st_ino == slot.stat().st_ino:
+                        if phase == "outcome-path-nul" and key == "PC_PATH_MAX":
+                            # Claim's prelaunch fits, but longer outcome + NUL does not.
+                            return len(str(slot / "process-outcome.json").encode())
+                        if phase == "name-limit" and key == "PC_NAME_MAX":
+                            return len("process-outcome.json") - 1
+                        if phase == "unknown-limit":
+                            return -1
+                    return original_conf(fd, key)
+
+                def mkdir(path, *args, **kwargs):
+                    if phase == "mkdir-" + path.name and path.parent == slot:
+                        raise OSError("private mkdir")
+                    return original_mkdir(path, *args, **kwargs)
+
+                def opening(path, *args, **kwargs):
+                    if path.parent == slot and phase == "open-" + path.name:
+                        raise OSError("exclusive log open")
+                    return original_open(path, *args, **kwargs)
+
+                def sync(path):
+                    nonlocal prelaunch
+                    answer = original_sync(path)
+                    # The claim imports its own sync function. This boundary is
+                    # reached only after real claim completion and log setup.
+                    if path == slot:
+                        prelaunch = (slot / "prelaunch.json").read_bytes()
+                    if phase == "final-drift" and path == slot:
+                        (self.w / "build-evidence/stdout.log").write_bytes(b"real drift")
+                    name = "slot" if path == slot else "parent" if path == slot.parent else path.name
+                    if phase == "sync-" + name:
+                        raise OSError("runner directory sync")
+                    return answer
+
+                # Inject an actual dangling entry after the real claim, at the
+                # runner's first path-limit syscall; never mock claim success.
+                inserted = False
+
+                def conf(fd, key):
+                    nonlocal inserted
+                    if (phase.startswith("collision-") and not inserted and slot.is_dir()
+                            and os.fstat(fd).st_ino == slot.stat().st_ino):
+                        (slot / phase.removeprefix("collision-")).symlink_to("missing")
+                        inserted = True
+                    return limits(fd, key)
+
+                with mock.patch.object(os, "fpathconf", side_effect=conf), \
+                        mock.patch.object(Path, "mkdir", mkdir), \
+                        mock.patch.object(Path, "open", opening), \
+                        mock.patch.object(build_mac, "sync_directory", side_effect=sync):
+                    with self.assertRaises((receipt.Refusal, OSError)):
+                        self.launch(result)
+                self._spawn.assert_not_called()
+                self.assertTrue((slot / "prelaunch.json").is_file())
+                if prelaunch is not None:
+                    self.assertEqual((slot / "prelaunch.json").read_bytes(), prelaunch)
+                if phase != "final-drift":
+                    self.assertEqual(snapshot(self.w), before)
+                self.assert_launch_consumed(result, slot)
+
+    def test_mac_launch_wait_uncertainty_and_bounded_cleanup(self):
+        timeout = lambda: subprocess.TimeoutExpired("fake Xcode", 1800)
+        cases = [
+            ("spawn", OSError("ambiguous spawn"), [], [], []),
+            ("spawn-interrupt", KeyboardInterrupt("ambiguous spawn"), [], [], []),
+            ("timeout", timeout(), [timeout(), -9], [None, None], [signal.SIGTERM, signal.SIGKILL]),
+            ("wait-error", OSError("wait"), [-15], [None], [signal.SIGTERM]),
+            ("interrupt", KeyboardInterrupt("wait"), [-15], [None], [signal.SIGTERM]),
+            ("already-exited", timeout(), [], [0], []),
+            ("term-leader-exit", timeout(), [0], [None], [signal.SIGTERM]),
+            ("exit-before-kill", timeout(), [timeout()], [None, 0], [signal.SIGTERM]),
+            ("term-failure", timeout(), [timeout(), -9], [None, None],
+             [signal.SIGTERM, signal.SIGKILL]),
+            ("kill-failure", timeout(), [timeout(), timeout()], [None, None],
+             [signal.SIGTERM, signal.SIGKILL]),
+            ("reap-failure", timeout(), [timeout(), OSError("reap")], [None, None],
+             [signal.SIGTERM, signal.SIGKILL]),
+            ("term-wait-failure", timeout(), [OSError("term wait")], [None], [signal.SIGTERM]),
+            ("repeat-interrupt", KeyboardInterrupt("first"), [KeyboardInterrupt("second")],
+             [None], [signal.SIGTERM]),
+            ("poll-failure", OSError("wait"), [], [OSError("poll")], []),
+        ]
+        for phase, error, grace, polls, signals in cases:
+            with self.subTest(phase=phase):
+                result, slot = self.launch_fixture(phase)
+                before = snapshot(self.w)
+                child = self.fake_child()
+                if phase.startswith("spawn"):
+                    self._spawn.side_effect = error
+                else:
+                    child.wait.side_effect = [error, *grace]
+                    child.poll.side_effect = polls
+
+                def signaling(pid, signum):
+                    self.assertIs(type(pid), int)
+                    self.assertEqual(pid, child.pid)
+                    self.assertGreater(pid, 0)
+                    if (phase == "term-failure" and signum == signal.SIGTERM or
+                            phase == "kill-failure" and signum == signal.SIGKILL):
+                        raise OSError("signal syscall")
+
+                self._signal_group.side_effect = signaling
+                with self.assertRaises(type(error)) as raised:
+                    self.launch(result)
+                self.assertIs(raised.exception, error)
+                self._spawn.assert_called_once()
+                self.assertEqual(self._signal_group.call_args_list,
+                                 [mock.call(child.pid, signum) for signum in signals])
+                waits = [] if phase.startswith("spawn") else [
+                    mock.call(timeout=1800), *[mock.call(timeout=5) for _ in grace]]
+                self.assertEqual(child.wait.call_args_list, waits)
+                self.assertFalse((slot / "process-outcome.json").exists())
+                self.assertEqual(snapshot(self.w), before)
+                self.assert_launch_consumed(result, slot)
+
+        for field, values in (("pid", (True, 0, -1, 1.5, None)),
+                              ("returncode", (True, 0.0, None))):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    result, slot = self.launch_fixture(field + "-" + str(value))
+                    child = self.fake_child()
+                    if field == "pid":
+                        child.pid = value
+                    else:
+                        child.wait.return_value = value
+                    with self.assertRaises(receipt.Refusal):
+                        self.launch(result)
+                    self._signal_group.assert_not_called()
+                    self._spawn.assert_called_once()
+                    if field == "pid":
+                        child.wait.assert_not_called()
+                    self.assert_launch_consumed(result, slot)
+
+    def test_mac_launch_log_and_outcome_io_faults(self):
+        original_open = Path.open
+        original_fsync = os.fsync
+        original_bounded = receipt.bounded
+        original_encode = receipt.encode
+        cases = [(name, phase) for name in ("stdout.log", "stderr.log")
+                 for phase in ("pre-flush", "pre-fsync", "post-flush", "post-fsync", "close")]
+        cases += [("process-outcome.json", phase) for phase in (
+            "open", "short", "partial", "zero", "flush", "fsync", "close", "dirsync",
+            "reread", "bytes", "bound", "version-bool", "interrupt")]
+        for name, phase in cases:
+            with self.subTest(name=name, phase=phase):
+                result, slot = self.launch_fixture(name + "-" + phase)
+                target = slot / name
+                self.fake_child()
+                before = snapshot(self.w)
+                short_writes = 0
+
+                class Writer:
+                    def __init__(self, stream):
+                        self.stream = stream
+                        self.writes = 0
+
+                    def write(self, data):
+                        nonlocal short_writes
+                        self.writes += 1
+                        if phase == "zero":
+                            return 0
+                        if phase == "partial" and self.writes > 1:
+                            raise OSError("partial outcome")
+                        if phase in ("short", "partial"):
+                            short_writes += 1
+                            return self.stream.write(data[:11])
+                        return self.stream.write(data)
+
+                    def flush(self):
+                        stage = "post" if self_test._spawn.called else "pre"
+                        if phase in ("flush", stage + "-flush"):
+                            raise OSError("flush")
+                        if phase == "interrupt":
+                            raise KeyboardInterrupt("outcome flush")
+                        self.stream.flush()
+
+                    def fileno(self):
+                        return self.stream.fileno()
+
+                    def close(self):
+                        self.stream.close()
+                        if phase in ("close", "interrupt"):
+                            raise OSError("close")
+
+                self_test = self
+
+                def opening(path, *args, **kwargs):
+                    if path == target and args == ("xb",) and phase == "open":
+                        raise OSError("outcome open")
+                    stream = original_open(path, *args, **kwargs)
+                    return Writer(stream) if path == target and args == ("xb",) else stream
+
+                def fsync(fd):
+                    info = os.fstat(fd)
+                    stage = "post" if self._spawn.called else "pre"
+                    if target.exists() and info.st_ino == target.stat().st_ino:
+                        if phase in ("fsync", stage + "-fsync"):
+                            raise OSError("file fsync")
+                    if (phase == "dirsync" and self._spawn.called and slot.exists()
+                            and info.st_ino == slot.stat().st_ino):
+                        raise OSError("outcome directory fsync")
+                    return original_fsync(fd)
+
+                def bounded(path, *args, **kwargs):
+                    if Path(path) == target and name == "process-outcome.json":
+                        self.assertEqual(args, (receipt.METADATA_BYTES,))
+                        if phase == "reread":
+                            raise OSError("outcome reread")
+                        if phase == "bytes":
+                            witness, data = original_bounded(path, *args, **kwargs)
+                            return witness, data + b"\n"
+                    return original_bounded(path, *args, **kwargs)
+
+                def encode(value):
+                    if value.get("state") == "process-exited":
+                        if phase == "bound":
+                            return b"x" * (receipt.METADATA_BYTES + 1)
+                        if phase == "version-bool":
+                            return original_encode(dict(value, schema_version=True))
+                    return original_encode(value)
+
+                with mock.patch.object(Path, "open", opening), \
+                        mock.patch.object(os, "fsync", side_effect=fsync), \
+                        mock.patch.object(receipt, "bounded", side_effect=bounded), \
+                        mock.patch.object(receipt, "encode", side_effect=encode):
+                    if phase == "short":
+                        self.assertEqual(self.launch(result)["returncode"], 0)
+                        self.assertGreater(short_writes, 1)
+                    else:
+                        error = KeyboardInterrupt if phase == "interrupt" else (OSError, receipt.Refusal)
+                        with self.assertRaises(error):
+                            self.launch(result)
+                self.assertEqual(self._spawn.call_count, 0 if phase.startswith("pre-") else 1)
+                self._signal_group.assert_not_called()
+                self.assertEqual(snapshot(self.w), before)
+                if phase == "zero":
+                    self.assertEqual(target.stat().st_size, 0)
+                if phase == "partial":
+                    self.assertEqual(target.stat().st_size, 11)
+                self.assert_launch_consumed(result, slot)
 
     def test_launch_claim_preserves_complete_intent_and_workspace(self):
         result, slot = self.launch_fixture()

@@ -577,3 +577,107 @@ referents, mode/blob/type/root/target/permission drift, rehashed receipt
 malformations and Swift descendant-alias refusal. Binary Info and XML
 regressions remain covered. Native profile compatibility and qualification require separate
 review and authorization.
+
+### Single-attempt Mac process library (#294; source-only, unqualified argv)
+
+`mac_launch.launch(receipt_path, expected_sha256)` accepts exactly those two
+inputs. It calls the real `mac_launch_claim.claim` once **in this invocation**,
+uses the returned record's `reservation` and unchanged `intent.output.path`,
+and never continues a prior record/marker. There is no CLI, Makefile integration,
+caller configuration, callback/backend, retry or resume.
+
+The fixed candidate argv is:
+
+```text
+/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
+test-without-building -xctestrun <record.intent.output.path>
+-destination platform=macOS,arch=arm64
+-parallel-testing-enabled NO -test-iterations 1
+-derivedDataPath <slot>/DerivedData -resultBundlePath <slot>/result.xcresult
+```
+
+**This combined invocation remains unqualified**, particularly
+`-derivedDataPath` with scheme-less `-xctestrun`. Installed option help and fake
+process tests prove neither compatibility nor incompatibility. Resolve that
+separately before any real call; do not investigate by executing/retrying a
+consumed attempt, adapting flags, adding a scheme or moving Products. This is
+not a supported execution workflow or permission to run tests/apps.
+
+After claim, every runner path (including the longer `process-outcome.json`)
+is checked for literal UTF-8/NUL grammar, the 4,096-byte ceiling and local
+component/path limits. A successful claim followed by refusal is consumed.
+`prelaunch.json` is preserved. Private exclusive `home`/`tmp` directories and
+exclusive regular `stdout.log`/`stderr.log` are created in the slot; both Xcode
+destinations must be absent under no-follow checks, including dangling links.
+Pre-spawn log flush/fsync and directory syncs leave log descriptors open and
+usable. The real externally pinned receipt consumer runs again **after artifact
+setup** and must return the complete unchanged claimed intent.
+
+Exactly one no-shell, new-session spawn uses the slot as cwd, `stdin=DEVNULL`,
+`close_fds=True`, and direct stdout/stderr file descriptors. Its environment is
+closed: `PATH=/usr/bin:/bin:/usr/sbin:/sbin`,
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`, private slot
+`HOME`/`TMPDIR`, and `LC_ALL=C`. The caller environment is not mutated or copied,
+and the prepared target's isolation/UUID environment is not reconstructed.
+The prepared xctestrun bytes and location remain unchanged by the library.
+
+Only an observed zero, nonzero or signal exit followed by successful log
+finalization and outcome publication returns. The exact nine-field record is:
+
+```text
+schema_version: 1
+state: process-exited
+reservation: <record.reservation>
+receipt_sha256: <external expected SHA256>
+prepared_xctestrun: <record.intent.output.path>
+pid: <obtained positive integer>
+returncode: <observed integer, negative signal codes preserved>
+descendant_closure: unproven
+artifacts_sealed: false
+```
+
+Integers exclude booleans. Fixed `process-outcome.json` is exclusively written,
+bounded to 2 MiB, with short/zero-write handling, flush/fsync/close, directory
+sync and bounded exact byte/type-sensitive reread. No arbitrary exception or
+log payload is included. Spawn/wait/timeout/interruption, log finalization and
+report failures raise, never return a failure-as-success variant. Partial and
+complete-but-unreported outcomes remain in place; nothing is repaired or
+removed. Every consumed second invocation refuses.
+
+The process wait is 1800 seconds. Failure triggers bounded best-effort
+TERM/5-second grace, then KILL/5-second reap grace only for a successfully
+obtained valid positive child/session. There is no PID discovery or kill after
+ambiguous spawn without a returned handle, no process-global signal handlers,
+and no signaling of zero/negative/unvalidated IDs. Observing/reaping leader
+exit stops further signaling: it does **not** reconcile the group. Catchable
+interrupts propagate after best-effort cleanup; cleanup errors do not turn
+failure into success. Detached descendants, fatal termination, repeated
+interrupts, failed cleanup or incomplete reporting require external quarantine,
+even if a marker later disappears. Wait limits do not bound filesystem calls,
+the whole operation or descendant lifetime.
+
+One Xcode spawn is not one host-process proof. This record asserts no PASS,
+qualification, host freshness, UUID delivery, result identity, audit coverage,
+retention, descendant closure or sealed output. Direct child writes are not
+library-observable: log finalization does not establish complete log capture.
+Child logs/results/path growth are **not** bounded by the outcome's 2 MiB limit.
+Private HOME/TMP is not a sandbox and intended DerivedData placement is not
+confinement. External storage limits, privacy handling, continuous custody and
+compiler/runner descendant reconciliation remain mandatory.
+
+Pure tests in `ProducerTests` use real preparation, receipt validation and
+claiming in disposable synthetic workspaces. Every launch call, including
+refusals, installs a private fake Xcode spawn boundary and a private signal
+boundary with fail-fast guards against actual signaling. Production waiting,
+cleanup and reporting run with fake handles; shared `subprocess.Popen` and
+consumer Git are not mocked. I/O faults cover paths/setup/sync, actual evidence
+drift after setup, claims/competition, exits, wait/cleanup uncertainty, log
+finalization and bounded publication. Fake whole-W preservation checks
+bytes/modes/inode/mtime/ctime (not atime); it is **not proof real Xcode preserves
+Products**.
+
+Stop at source acceptance. Actual execution separately needs explicit
+authorization, selected source/receipt pins, an eligible unreserved workspace,
+compatible invocation, continuous custody, isolation/process attribution and
+evidence/storage procedures. W1–W4 and other reserved lanes are not fixtures.
+Full #60, both iOS targets, G2, #190 and #191 remain open.
