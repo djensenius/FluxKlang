@@ -101,9 +101,12 @@ files and embedded media must match its `sha256:` content digest. Values come
 only from the reader or from in-memory construction, which runs the same P1 pass
 and checks.
 
-`ProjectPackageWriter` re-admits every path through P1 before any IO, so
-escaping, absolute, duplicate or parentless paths write nothing. It opens the
-destination's parent with `O_DIRECTORY|O_NOFOLLOW`, creates the destination with
+`ProjectPackageWriter` accepts only a `ProjectPackageContents` value, so every
+write has passed manifest, membership and digest verification. It also
+re-admits every path through P1 before any IO, so escaping, absolute, duplicate
+or parentless paths write nothing. It opens the destination's parent with
+`O_DIRECTORY|O_NOFOLLOW`; a parent that is a link or not a directory is refused
+with `destinationParentRefused`. It then creates the destination with
 `mkdirat` (an existing name is refused) and opens it relative to that parent
 without re-resolving the path. Members are created exclusively with no-follow,
 descriptor-relative calls, the original bytes are written unchanged, and each
@@ -115,6 +118,8 @@ Non-goals:
   keeps size and both timestamps is not detected.
 - Nothing prevents another process from swapping the destination between
   `mkdirat` and `openat` for a different directory.
+- `crossedMountPoint` and device-node refusal are not exercised by tests,
+  because creating a mount or a device node requires root.
 - The writer is not an atomic replace, staged export, file-coordination or
   iCloud step, and it does not clean up partial output.
 

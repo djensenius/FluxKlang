@@ -12,8 +12,9 @@ enum ProjectPackageWriter {
         )
     }
 
-    /// Lexical backstop: refuses `..`, absolute, duplicate, parentless or oversized entries before any IO.
-    static func write(
+    /// Lexical backstop over already-verified contents: refuses `..`, absolute, duplicate, parentless
+    /// or oversized entries before any IO. Private so no caller can bypass manifest/membership/digest checks.
+    private static func write(
         manifestBytes: Data, entries: [ProjectPackageEntry], limits: ProjectPackageLimits, to destination: URL
     ) throws {
         let ordered = try ProjectPackageContents.admit(

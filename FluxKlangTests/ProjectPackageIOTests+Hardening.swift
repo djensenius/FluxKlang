@@ -10,29 +10,45 @@ import Testing
 extension ProjectPackageIOTests {
     private typealias Support = PackageIOTestSupport
 
-    @Test func writerRefusesEscapingAndAbsolutePathsBeforeAnyIO() throws {
+    @Test func escapingAndAbsolutePathsAreRefusedBeforeAnyWrite() throws {
         let scratch = try Support.scratch()
         defer { try? FileManager.default.removeItem(at: scratch) }
-        let limits = try Support.policy().packageLimits
-        let manifest = try Support.manifestBytes()
-        let destination = scratch.appendingPathComponent("dest.fluxklang")
-        let escapes: [[ProjectPackageEntry]] = [
-            [ProjectPackageEntry(path: "../escape.bin", bytes: Data([1]))],
-            [ProjectPackageEntry(path: scratch.appendingPathComponent("absolute.bin").path, bytes: Data([1]))],
-            [
-                ProjectPackageEntry(path: "dir", bytes: nil),
-                ProjectPackageEntry(path: "dir/../../escape.bin", bytes: Data([1]))
-            ],
-            [ProjectPackageEntry(path: "..", bytes: nil)]
+        let escapes: [(directories: [String], file: String?)] = [
+            ([], "../escape.bin"),
+            ([], scratch.appendingPathComponent("absolute.bin").path),
+            (["dir"], "dir/../../escape.bin"),
+            ([".."], nil)
         ]
-        for entries in escapes {
+        for escape in escapes {
+            var files = Support.files
+            if let file = escape.file { files[file] = Data([1]) }
             #expect(throws: ProjectPackageError.invalidPath) {
-                try ProjectPackageWriter.write(
-                    manifestBytes: manifest, entries: entries, limits: limits, to: destination
+                let contents = try ProjectPackageContents(
+                    manifestBytes: Support.manifestBytes(), directories: Support.directories + escape.directories,
+                    files: files, policy: Support.policy()
                 )
+                try ProjectPackageWriter.write(contents, to: scratch.appendingPathComponent("dest.fluxklang"))
             }
             #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.path).isEmpty)
         }
+    }
+
+    @Test func linkedOrNonDirectoryDestinationParentIsRefused() throws {
+        let scratch = try Support.scratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let source = try Support.makePackage(in: Support.scratchChild(scratch, "source"))
+        let contents = try Support.read(source)
+        let target = try Support.scratchChild(scratch, "target")
+        let linkedParent = scratch.appendingPathComponent("linked")
+        try FileManager.default.createSymbolicLink(at: linkedParent, withDestinationURL: target)
+        let fileParent = scratch.appendingPathComponent("plain.bin")
+        try Data([1]).write(to: fileParent)
+        for parent in [linkedParent, fileParent] {
+            #expect(throws: ProjectPackageIOError.destinationParentRefused) {
+                try ProjectPackageWriter.write(contents, to: parent.appendingPathComponent("dest.fluxklang"))
+            }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
     }
 
     @Test func writerIOFailureLeavesPartialOutputOnlyInsideTheNewDestination() throws {

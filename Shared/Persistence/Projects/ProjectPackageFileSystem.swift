@@ -8,6 +8,8 @@ enum ProjectPackageIOError: Error, Sendable, Equatable {
     case hardLinkedMember
     case crossedMountPoint
     case destinationExists
+    /// The destination's parent is a link or not a directory; it is never followed.
+    case destinationParentRefused
     case system(code: Int32)
 }
 
@@ -30,7 +32,12 @@ enum ProjectPackageFileSystem {
     static func createRoot(_ url: URL) throws -> Int32 {
         let name = url.lastPathComponent
         guard !name.isEmpty, name != ".", name != "..", name != "/" else { throw ProjectPackageError.invalidPath }
-        let parent = try openRoot(url.deletingLastPathComponent())
+        let parent: Int32
+        do {
+            parent = try openRoot(url.deletingLastPathComponent())
+        } catch ProjectPackageIOError.system(let code) where code == ELOOP || code == ENOTDIR {
+            throw ProjectPackageIOError.destinationParentRefused
+        }
         defer { close(parent) }
         guard mkdirat(parent, name, 0o755) == 0 else {
             guard errno != EEXIST else { throw ProjectPackageIOError.destinationExists }
