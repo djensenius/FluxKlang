@@ -30,7 +30,7 @@ targets:
       - path: FluxKlang
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md", "Peer/README.md"]
     info:
       path: FluxKlang/Info.plist
       properties:
@@ -82,7 +82,7 @@ targets:
       - path: FluxKlangMac
         excludes: ["**/.DS_Store"]
       - path: Shared
-        excludes: ["**/.DS_Store", "Contracts/Project/README.md"]
+        excludes: ["**/.DS_Store", "Contracts/Project/README.md", "Peer/README.md"]
     info:
       path: FluxKlangMac/Info.plist
       properties:
@@ -192,6 +192,7 @@ targets:
       - path: FluxKlangTests/UIAuditRunPreflightTests.swift
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
+      - path: FluxKlangTests/AudioGainContractTests.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
@@ -203,6 +204,8 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestCodecTests.swift
       - path: FluxKlangTests/ProjectPackageManifestValidationTests.swift
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
+      - path: FluxKlangTests/ProjectPackageIOTests.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+Hardening.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
@@ -223,6 +226,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/PeerTransportTests.swift
+      - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
+      - path: FluxKlangTests/ControlBindingTests.swift
+      - path: FluxKlangTests/ControlBindingTests+Coverage.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.davidjensenius.FluxKlang.mactests
