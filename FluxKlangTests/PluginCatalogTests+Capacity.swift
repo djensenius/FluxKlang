@@ -81,4 +81,46 @@ extension PluginCatalogTests {
         #expect(catalog.entries.count == PluginCatalogLimits.entries + 1)
         #expect(catalog.entries.count <= PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom)
     }
+
+    @Test func replacingAComponentAtTheTotalBoundDefersTheNewcomer() throws {
+        var catalog = PluginCatalog()
+        let bare = try Self.evidence(count: PluginCatalogLimits.quarantineHeadroom + 1)
+        _ = try catalog.recordQuarantine(bare)
+        let installed = try Self.report(count: PluginCatalogLimits.entries - 1).entries
+        _ = try catalog.apply(PluginScanReport(entries: installed), for: catalog.request(depth: .metadataOnly))
+        let maximumTotal = PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom
+        #expect(catalog.entries.count == maximumTotal)
+        let removed = installed[0].identity.id
+        let newcomer = try Self.identity("New!")
+        let replacement = try PluginScanReport(entries: Array(installed.dropFirst()) + [Self.described(newcomer)])
+
+        let first = try catalog.apply(replacement, for: catalog.request(depth: .metadataOnly))
+        #expect(first.changed == [removed] && first.deferred == 1)
+        #expect(catalog.entries[removed]?.presence == .missing && catalog.entries[newcomer.id] == nil)
+        #expect(catalog.entries.count == maximumTotal && catalog.quarantined.count == bare.count)
+
+        _ = try catalog.forget(removed)
+        let second = try catalog.apply(replacement, for: catalog.request(depth: .metadataOnly))
+        #expect(second.changed == [newcomer.id] && second.deferred == 0)
+        #expect(catalog.entries.count == maximumTotal)
+    }
+
+    @Test func onlyNewcomersAreDeferredWhenOnlyTheTotalBoundBinds() throws {
+        var catalog = PluginCatalog()
+        let bare = try Self.evidence(count: PluginCatalogLimits.quarantineHeadroom + 96)
+        _ = try catalog.recordQuarantine(bare)
+        let installed = try Self.report(count: PluginCatalogLimits.entries - 96).entries
+        _ = try catalog.apply(PluginScanReport(entries: installed), for: catalog.request(depth: .metadataOnly))
+        let newcomers = try ["!Nw1", "!Nw2"].map { try Self.described(Self.identity($0)) }
+        let described = try Self.described(bare[0].identity)
+
+        let change = try catalog.apply(
+            PluginScanReport(entries: installed + newcomers + [described]), for: catalog.request(depth: .metadataOnly)
+        )
+        #expect(change.deferred == 2 && catalog.entries[bare[0].identity.id]?.lastKnown != nil)
+        #expect(newcomers.allSatisfy { catalog.entries[$0.identity.id] == nil })
+        #expect(catalog.quarantined.count == bare.count)
+        #expect(catalog.entries.values.count { !$0.isBare } < PluginCatalogLimits.entries)
+        #expect(catalog.entries.count == PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom)
+    }
 }

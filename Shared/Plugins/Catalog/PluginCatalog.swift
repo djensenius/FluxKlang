@@ -12,9 +12,12 @@
 //  anything a consumer could observe changes, and stays put otherwise. The
 //  entry cap is never relieved by eviction: only an explicit `forget` of a
 //  missing, unquarantined entry frees a slot. Quarantine is safety evidence,
-//  so bare quarantined entries (no descriptor) may exceed the cap by a
-//  separate, bounded headroom rather than be dropped, and quarantined entries
-//  can never be forgotten, only explicitly released.
+//  so bare quarantined entries (no descriptor) never count against the
+//  ordinary cap; all entries together are bounded by the cap plus a separate
+//  headroom. Bare entries may therefore exceed the headroom while ordinary
+//  slots are free (for example, 257 crashes recorded before 4,095 components
+//  were described). Quarantined entries can never be forgotten, only
+//  explicitly released.
 //
 //  A complete report may list up to `entries + quarantineHeadroom` components,
 //  the most any catalog can hold, so a full catalog with quarantined
@@ -168,26 +171,39 @@ struct PluginCatalog: Hashable, Sendable {
         return PluginCatalogChange(generation: change.generation, changed: change.changed, deferred: deferred)
     }
 
-    /// Over the ordinary cap, undoes admissions from the highest `PluginID`
-    /// down until the rest fit, so the outcome never depends on scan order: a
-    /// newcomer is left out, and a described bare entry stays bare (present,
-    /// needing a rescan). Updates and absences are kept.
+    /// Over the ordinary cap or the total bound (cap plus headroom), undoes
+    /// admissions from the highest `PluginID` down until both hold, so the
+    /// outcome never depends on scan order: a newcomer is left out, and a
+    /// described bare entry stays bare (present, needing a rescan). Only
+    /// newcomers relieve the total bound. Updates, absences and quarantine are
+    /// kept. If new crash entries alone exceed the total, the commit refuses
+    /// (`quarantineHeadroomExhausted`): the service still tries to record the
+    /// evidence and, where it cannot fit, latches `.evidenceUnrecorded` and
+    /// reports `evidenceNotRecorded`. That pass's confirmed absences are not
+    /// applied; the next scan retries them.
     private func deferAdmissions(
         _ next: inout [PluginID: PluginCatalogEntry], reported: [PluginScanEntry]
     ) -> Int {
+        let maximumTotal = PluginCatalogLimits.entries + PluginCatalogLimits.quarantineHeadroom
         var ordinary = next.values.count { !$0.isBare }
-        guard ordinary > PluginCatalogLimits.entries else { return 0 }
+        var total = next.count
+        guard ordinary > PluginCatalogLimits.entries || total > maximumTotal else { return 0 }
         let admissions = reported.map(\.identity.id).filter { id in
             guard let candidate = next[id], !candidate.isBare else { return false }
             return entries[id]?.isBare ?? true
         }.sorted(by: >)
         var deferred = 0
-        for id in admissions where ordinary > PluginCatalogLimits.entries {
+        for id in admissions {
+            let overOrdinary = ordinary > PluginCatalogLimits.entries
+            let overTotal = total > maximumTotal
+            guard overOrdinary || overTotal else { break }
+            guard overOrdinary || entries[id] == nil else { continue }
             if var kept = entries[id] {
                 kept.presence = .needsRescan
                 next[id] = kept
             } else {
                 next[id] = nil
+                total -= 1
             }
             ordinary -= 1
             deferred += 1
