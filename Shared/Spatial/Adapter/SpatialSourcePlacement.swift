@@ -14,12 +14,20 @@ struct SpatialSourcePlacement: Hashable, Sendable, Codable {
     static let defaultBlur = 0.30
     /// Horizontal channel offset per unit of width (legacy `0.25` doubled).
     static let widthOffsetFactor = 0.5
+    /// Accepted blur, in neutral units. The upper bound is the plane diagonal
+    /// `2√2`: every speaker-source distance is at most that, so a larger blur only
+    /// repeats the uniform result legacy gives at `2√2`. The lower bound `1e-3`
+    /// (0.05 % of the plane width, far below the legacy default 0.30) is policy:
+    /// it refuses degenerate near-zero blur and the legacy divide-by-zero at
+    /// blur 0 with a source on a speaker. It is not needed for numerical
+    /// stability, since `NeutralDBAP` weights are relative to the nearest speaker.
+    static let blurRange: ClosedRange<Double> = 1e-3...(2 * 2.0.squareRoot())
     static let channelCounts: ClosedRange<Int> = 1...2
 
     let sourceID: SpatialSourceID
     let name: String?
     let position: NeutralPoint
-    /// Positive, finite distance floor.
+    /// Distance floor within `blurRange`.
     let blur: Double
     /// Stereo spread in `0…1`.
     let width: Double
@@ -36,7 +44,7 @@ struct SpatialSourcePlacement: Hashable, Sendable, Codable {
         channelCount: Int = 1,
         evidence: [String] = []
     ) throws(SpatialLayoutError) {
-        guard blur.isFinite, blur > 0 else { throw .invalidBlur }
+        try Self.validate(blur: blur)
         guard width.isFinite, (0...1).contains(width) else { throw .invalidWidth }
         guard Self.channelCounts.contains(channelCount) else { throw .invalidChannelCount(channelCount) }
         guard evidence.count <= channelCount else { throw .tooMuchEvidence(evidence.count) }
@@ -48,6 +56,11 @@ struct SpatialSourcePlacement: Hashable, Sendable, Codable {
         self.width = width
         self.channelCount = channelCount
         self.evidence = evidence
+    }
+
+    /// Refuses a non-finite blur or one outside `blurRange`.
+    static func validate(blur: Double) throws(SpatialLayoutError) {
+        guard blur.isFinite, blurRange.contains(blur) else { throw .invalidBlur }
     }
 
     /// One point per channel: the position for mono; for stereo, left and right

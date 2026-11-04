@@ -73,4 +73,81 @@ extension SpatialAdapterTests {
         let silentLayout = try LegacySpatialImport.importLegacy(speakers: silent).layout
         #expect(try NeutralDBAP.gains(source: origin, layout: silentLayout) == [0, 0, 0, 0])
     }
+
+    @Test func blurOutsideDomainIsRefusedIncludingOverflowExtremes() throws {
+        let speaker = try SpatialSpeaker(id: SpeakerID("spk"), position: NeutralPoint(x: 0.25, y: -0.5))
+        let layout = try SpatialLayout(speakers: [speaker])
+        let range = SpatialSourcePlacement.blurRange
+        for blur in [1e-200, 1e200, 0, -0.3, range.lowerBound.nextDown, range.upperBound.nextUp, .nan, .infinity] {
+            #expect(throws: SpatialLayoutError.invalidBlur) {
+                try NeutralDBAP.gains(source: speaker.position, layout: layout, blur: blur)
+            }
+            #expect(throws: SpatialLayoutError.invalidBlur) {
+                try SpatialSourcePlacement(sourceID: SpatialSourceID("src"), position: speaker.position, blur: blur)
+            }
+        }
+        let json = #"{"sourceID":"s","position":{"x":0,"y":0},"blur":1e-200,"width":0.5,"channelCount":1}"#
+        #expect(Self.decodeError(SpatialSourcePlacement.self, json) == .invalidBlur)
+        #expect(range.contains(SpatialSourcePlacement.defaultBlur))
+        for (blur, accepted) in [(0.000_999, false), (0.001, true), (2.828_4, true), (2.828_5, false)] {
+            let result = try? NeutralDBAP.gains(source: speaker.position, layout: layout, blur: blur)
+            #expect((result == [1]) == accepted, "blur \(blur)")
+        }
+    }
+
+    @Test func relativeWeightsStayBoundedForExtremeDistances() {
+        for exponent in [0.5, 1, 4] {
+            let weights = NeutralDBAP.relativeWeights(distances: [1e200, nil, 1e-200, 1e-199], exponent: exponent)
+            #expect(weights[2] == 1 && weights[1] == 0)
+            #expect(weights.allSatisfy { $0.isFinite && (0...1).contains($0) })
+            #expect(weights[3] > 0 && weights[3] < 1)
+        }
+        #expect(NeutralDBAP.relativeWeights(distances: [nil, nil], exponent: 1) == [0, 0])
+    }
+
+    @Test(arguments: [0.0, 6.0, 24.0])
+    func singleSpeakerAtSourceIsUnityAcrossBlurDomain(rolloff: Double) throws {
+        let speaker = try SpatialSpeaker(id: SpeakerID("spk"), position: NeutralPoint(x: -1, y: 1))
+        let layout = try SpatialLayout(speakers: [speaker])
+        let range = SpatialSourcePlacement.blurRange
+        for blur in [range.lowerBound, SpatialSourcePlacement.defaultBlur, range.upperBound] {
+            let atSource = try NeutralDBAP.gains(source: speaker.position, layout: layout, rolloff: rolloff, blur: blur)
+            #expect(atSource == [1])
+            let far = try NeutralDBAP.gains(source: NeutralPoint(x: 1, y: -1), layout: layout, rolloff: rolloff,
+                                            blur: blur)
+            #expect(far == [1])
+        }
+    }
+
+    @Test(arguments: [0.0, 6.0, 24.0])
+    func gainsStayFiniteAndAudibleAtDomainEdges(rolloff: Double) throws {
+        let corners = try [(-1.0, 1.0), (1, 1), (-1, -1), (1, -1), (0, 0)].enumerated().map { index, point in
+            try SpatialSpeaker(id: SpeakerID("spk.\(index)"), position: NeutralPoint(x: point.0, y: point.1),
+                               participatesInPanning: index != 2)
+        }
+        let layout = try SpatialLayout(speakers: corners)
+        let sources = try [(-1.0, 1.0), (0, 0), (0.0005, 0), (1, 0), (-0.3, 0.7)].map { try NeutralPoint(x: $0, y: $1) }
+        let range = SpatialSourcePlacement.blurRange
+        for blur in [range.lowerBound, range.upperBound] {
+            for source in sources {
+                let gains = try NeutralDBAP.gains(source: source, layout: layout, rolloff: rolloff, blur: blur)
+                #expect(gains.allSatisfy { $0.isFinite && $0 >= 0 })
+                #expect(gains.contains { $0 > 0 } && gains[2] == 0)
+                #expect(abs(gains.reduce(0) { $0 + $1 * $1 } - 1) < 1e-12)
+                if blur == range.upperBound {
+                    #expect(gains.enumerated().allSatisfy { $0.offset == 2 || abs($0.element - 0.5) < 1e-12 })
+                }
+            }
+        }
+    }
+
+    @Test func rolloffIsCheckedBeforeBlur() throws {
+        let layout = try LegacySpatialImport.importLegacy(speakers: Self.quadInputs()).layout
+        let origin = try NeutralPoint(x: 0, y: 0)
+        for (rolloff, blur) in [(Double.nan, 0.0), (-1, 1e200), (25, .infinity)] {
+            #expect(throws: SpatialLayoutError.invalidRolloff) {
+                try NeutralDBAP.gains(source: origin, layout: layout, rolloff: rolloff, blur: blur)
+            }
+        }
+    }
 }

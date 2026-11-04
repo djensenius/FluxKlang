@@ -165,6 +165,8 @@ enum LegacySpatialImport {
 
     /// One neutral source per legacy source; a stereo source has two channels.
     /// A finite legacy width is clamped to `0…1`.
+    /// Legacy blur is the fixed constant 0.15, imported as 0.30 (inside
+    /// `SpatialSourcePlacement.blurRange`), so import never clamps or refuses blur.
     static func source(_ input: LegacySourceInput) throws(SpatialLayoutError) -> SpatialSourcePlacement {
         guard input.width.isFinite else { throw .invalidWidth }
         return try SpatialSourcePlacement(
