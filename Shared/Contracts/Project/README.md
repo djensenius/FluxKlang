@@ -128,9 +128,13 @@ Non-goals:
   because creating a mount or a device node requires root.
 - The writer is not an atomic replace, staged export, file-coordination or
   iCloud step, and it does not clean up partial output.
-- The writer reopens subdirectories by name inside the new destination, so a
-  concurrent rename there could redirect a write elsewhere within (never
-  outside) that destination.
+- The writer does not defend against concurrent mutation of the new
+  destination. It reopens subdirectories by name, and it keeps writing through
+  directory descriptors it already holds, so a subdirectory renamed while the
+  write runs, including one moved outside the destination on the same volume,
+  receives the remaining members wherever it now lives. Discarding the
+  destination does not remove that output. Callers must give the writer a
+  destination no other process mutates until the write returns.
 
 Project and graph documents are not decoded here. Migration, bookmark
 resolution, document lifecycle and activation remain separate obligations.
