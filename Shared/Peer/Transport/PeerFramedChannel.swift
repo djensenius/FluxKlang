@@ -1,0 +1,140 @@
+//
+//  PeerFramedChannel.swift
+//  FluxKlang
+//
+//  The byte-stream seam between peer framing and a concrete transport. This
+//  lane provides no network, TLS or Bonjour implementation; a production
+//  transport (Network.framework over TLS) conforms later. Tests use in-memory
+//  doubles.
+//
+
+import Foundation
+
+enum PeerTransportError: Error, Hashable, Sendable { case disconnected, failed }
+
+/// An ordered, reliable byte stream (for example TCP+TLS).
+protocol PeerByteTransport: Sendable {
+    func send(_ bytes: [UInt8]) async throws(PeerTransportError)
+    /// Up to `maximumLength` bytes; nil at a clean end of stream.
+    func receive(maximumLength: Int) async throws(PeerTransportError) -> [UInt8]?
+}
+
+enum PeerChannelError: Error, Hashable, Sendable {
+    case wire(PeerWireError)
+    case transport(PeerTransportError)
+    case receiveExceededLimit
+}
+
+/// Encodes outbound messages and decodes inbound frames over one transport.
+/// Inbound reads are at most one maximum frame, so pending frames stay bounded.
+/// Frames decoded before a wire defect are returned first; the defect is then
+/// thrown and latched, whatever the transport's chunking.
+struct PeerFramedChannel<Transport: PeerByteTransport>: Sendable {
+    let transport: Transport
+    private var encoder: PeerFrameEncoder
+    private var decoder: PeerFrameDecoder
+    private var pending: [PeerFrame] = []
+    private var failed: PeerChannelError?
+
+    init(transport: Transport, limits: PeerFrameLimits = .standard) {
+        self.transport = transport
+        encoder = PeerFrameEncoder(limits: limits)
+        decoder = PeerFrameDecoder(limits: limits)
+    }
+
+    /// Refuses with the latched error once inbound decoding or the transport has failed.
+    mutating func send(_ message: PeerOutboundMessage) async throws(PeerChannelError) {
+        if let failed { throw failed }
+        let bytes: [UInt8]
+        do {
+            bytes = try encoder.encode(message)
+        } catch {
+            throw .wire(error)
+        }
+        do {
+            try await transport.send(bytes)
+        } catch {
+            throw .transport(error)
+        }
+    }
+
+    /// The next whole frame, or nil at a clean end of stream between frames.
+    mutating func receive() async throws(PeerChannelError) -> PeerFrame? {
+        while pending.isEmpty {
+            if let failed { throw failed }
+            let maximum = decoder.limits.maximumFrameBytes
+            let chunk: [UInt8]?
+            do {
+                chunk = try await transport.receive(maximumLength: maximum)
+            } catch {
+                throw latch(.transport(error))
+            }
+            guard let chunk else {
+                do {
+                    try decoder.finish()
+                } catch {
+                    throw latch(.wire(error))
+                }
+                return nil
+            }
+            guard chunk.count <= maximum else { throw latch(.receiveExceededLimit) }
+            let delivery = decoder.feed(chunk)
+            pending = delivery.frames
+            if let failure = delivery.failure { failed = .wire(failure) }
+        }
+        return pending.removeFirst()
+    }
+
+    private mutating func latch(_ error: PeerChannelError) -> PeerChannelError {
+        failed = error
+        pending = []
+        return error
+    }
+}
+
+extension PeerFramedChannel {
+    /// Runs one hello exchange: the session negotiates or refuses. Every
+    /// channel failure becomes a terminal refusal; nothing is retried. A
+    /// negotiated, closed or refused session returns its state without reading.
+    /// A wire defect latched in the same delivery as the hello or accept refuses
+    /// the session rather than reporting it negotiated.
+    mutating func negotiate(_ session: inout PeerSessionNegotiator) async -> PeerSessionEvent {
+        switch session.state {
+        case .negotiated(let existing): return .negotiated(existing)
+        case .refused(let refusal): return .refused(refusal)
+        case .closed: return .closed
+        case .idle, .awaitingHello, .awaitingAccept: break
+        }
+        if let hello = session.start(), let refusal = await deliver(hello) { return session.fail(refusal).event }
+        let frame: PeerFrame?
+        do {
+            frame = try await receive()
+        } catch {
+            return session.fail(Self.refusal(for: error)).event
+        }
+        guard let frame else { return session.fail(.endOfStream).event }
+        let step = session.receive(frame)
+        // A defect latched behind the hello or accept refuses before any reply is sent.
+        if let failed, case .negotiated = step.event { return session.fail(Self.refusal(for: failed)).event }
+        if let outbound = step.outbound, let refusal = await deliver(outbound), case .negotiated = step.event {
+            return session.fail(refusal).event
+        }
+        return step.event
+    }
+
+    private mutating func deliver(_ message: PeerOutboundMessage) async -> PeerRefusal? {
+        do {
+            try await send(message)
+            return nil
+        } catch {
+            return Self.refusal(for: error)
+        }
+    }
+
+    private static func refusal(for error: PeerChannelError) -> PeerRefusal {
+        switch error {
+        case .wire(let wire): .wire(wire)
+        case .transport, .receiveExceededLimit: .transportFailed
+        }
+    }
+}
