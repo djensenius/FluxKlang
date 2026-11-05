@@ -16,8 +16,9 @@
 /// `KernelCycle.acknowledgeCritical`, both on that control thread and never concurrently; a UI meter gets samples from
 /// control, never reads the slot itself. Approval never comes from a caller-held value, so a forged
 /// `KernelCycleTelemetry` (all fields are settable: a report, not a capability) cannot approve a ticket. Anything
-/// holding the `TelemetrySlots` could still publish one into the cycle's slot, breaking the single-producer
-/// contract; as with `FaultLatch.acknowledge`, that is trusted control code, not type-restricted.
+/// holding the `TelemetrySlots` could still publish one into the cycle's slot, breaking the single-producer contract
+/// (trusted control code, not type-restricted), but even then it cannot approve: `acknowledgeCritical` also
+/// requires the cycle-private `lastFaultedAckEpoch` atomic (round 2g), so a forgery can only withhold or delay it.
 /// Reference model; not RT-certified.
 struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// `run` calls so far, this one included; empty (`frames <= 0`) cycles count. The first cycle is 1.
@@ -57,10 +58,11 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     var ackCycle: UInt64 = 0
 
     /// Control only: the acknowledgement handshake, as `KernelCycle.acknowledgeCritical` applies it to its own
-    /// slot's latest sample (on any other value it is advisory only). `true` when this sample was published by the
-    /// cycle that issued `ticket` (`ackCycle == ticket.cycle`; any other cycle never approves it, even on the same
-    /// slots) and shows a `.scopeFaulted` cycle that loaded `ticket`'s epoch or a later one before reading the
-    /// latch, so it began after control's `observe` and `request` and armed the flush watermark. A stale sample
+    /// slot's latest sample, together with its private `lastFaultedAckEpoch` (on its own it is advisory only).
+    /// `true` when this sample was published by the cycle that issued `ticket` (`ackCycle == ticket.cycle`; any
+    /// other cycle never approves it, even on the same slots) and shows a `.scopeFaulted` cycle that loaded
+    /// `ticket`'s epoch or a later one before reading the latch, so it began after control's `observe` and
+    /// `request` and armed the flush watermark. A stale sample
     /// (published before render loaded the epoch, or never refreshed) only delays acknowledgement. The
     /// happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190. Epoch 0 (never
     /// handed out) is refused as defence in depth: every sample has `lastFaultedAckEpoch >= 0`.

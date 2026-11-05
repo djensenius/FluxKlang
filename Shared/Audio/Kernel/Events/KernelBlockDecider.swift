@@ -10,6 +10,7 @@ struct KernelCycleTally: Sendable, BitwiseCopyable, Equatable {
     var skippedPulses = 0
     var discardedWhileSilenced = 0
     var discardedSuperseded = 0
+    var discardedDuringTakeover = 0
     var resync = false
 }
 
@@ -20,7 +21,8 @@ final class KernelBlockDecider {
     let deadline: DeadlinePolicy
     private let ownership: NoteOwnership
     private let ramps: RampSlots
-    /// Latest release frame per note key; see `ReleaseTombstones`.
+    /// Latest release frame per note key: `ownership.tombstones`, shared by every cycle over that ownership (see
+    /// `ReleaseTombstones`).
     private let tombstones: ReleaseTombstones
     /// The gate's cumulative counters and resync state.
     private let gate: UnsafeMutablePointer<ClockPulseGate>
@@ -30,8 +32,10 @@ final class KernelBlockDecider {
     private let advanced: UnsafeMutablePointer<Int64>
     /// The next scope a `.replacingCycle` takeover releases; `ownership.scopeCount` once none is pending.
     private let takeoverScope: UnsafeMutablePointer<Int>
-    /// One bit per note key (`NoteOwnership`'s layout) the takeover released: the key's next unowned `noteOff` is
-    /// consumed silently, never emitted a second time. An owned (re-struck) note's `noteOff` releases it as usual.
+    /// One bit per note key (`NoteOwnership`'s layout) this cycle's takeover released: the key's next unowned
+    /// `noteOff` this cycle sees (decided, or consumed while silenced) is consumed and clears the bit, so this cycle
+    /// never emits a second `noteOff` for that release. An owned (re-struck) note's `noteOff` releases it as usual
+    /// and keeps the bit. Per cycle: a later replacement starts with no bits.
     private let takenOver: UnsafeMutablePointer<UInt64>
 
     /// `takeover`: a `.replacingCycle` start, so the notes `ownership` marks sounding are released (see
@@ -41,7 +45,7 @@ final class KernelBlockDecider {
         self.deadline = deadline
         self.ownership = ownership
         self.ramps = ramps
-        tombstones = ReleaseTombstones(scopes: ownership.scopeCount)
+        tombstones = ownership.tombstones
         takeoverScope = .allocate(capacity: 1)
         takeoverScope.initialize(to: takeover ? 0 : ownership.scopeCount)
         takenOver = .allocate(capacity: ownership.scopeCount &* NoteOwnership.wordsPerScope)
@@ -62,9 +66,17 @@ final class KernelBlockDecider {
         takenOver.deallocate()
     }
 
-    /// A `.replacingCycle` takeover still has notes to release; every decided `noteOn` is discarded meanwhile, so
-    /// the takeover only ever cuts notes the retired cycle left sounding.
+    /// A `.replacingCycle` takeover still has notes to release.
     var takeoverPending: Bool { takeoverScope.pointee < ownership.scopeCount }
+
+    /// `true` while the takeover has not yet finished `scope` (`scope` at or after its cursor): a decided `noteOn`
+    /// there is discarded (`discardedDuringTakeover`), so the takeover only ever cuts notes the retired cycle left
+    /// sounding. Scopes before the cursor are fully released and sound again; out-of-range scopes are refused as
+    /// usual. `false` once the takeover ended.
+    private func heldByTakeover(_ scope: UInt32) -> Bool {
+        let index = Int(scope)
+        return index >= takeoverScope.pointee && index < ownership.scopeCount
+    }
 
     /// Step 1, `.replacingCycle` only: releases at most `limit` notes `ownership` still marks sounding (left by the
     /// retired cycle, whose buffered `noteOff`s this cycle never sees), in (scope, channel, note) order, each as a
@@ -115,11 +127,11 @@ final class KernelBlockDecider {
     }
 
     /// Step 4: decides and applies `block`'s entries in order; keeps the first `notYet` and everything after it.
-    /// `flushing`: a lane's flush bit is set, so every decided `noteOn` is discarded (as while `takeoverPending`).
+    /// `flushing`: a lane's flush bit is set, so every decided `noteOn` is discarded (`discardedWhileSilenced`);
+    /// otherwise a `noteOn` in a scope the takeover still holds is discarded (`discardedDuringTakeover`).
     func decide(_ block: KernelBlockBuffer, flushing: Bool, _ window: (start: Int64, frames: Int64),
                 _ tally: inout KernelCycleTally, _ emit: (KernelEvent, Int64) -> Void) {
         let (blockStart, frames) = window
-        let discarding = flushing || takeoverPending
         var index = 0
         while index < block.count {
             let entry = block[index]
@@ -132,8 +144,10 @@ final class KernelBlockDecider {
             case .dropLate:
                 tally.droppedLate &+= 1
             case .dispatch(let frame), .dispatchLate(let frame):
-                if case .noteOn = event.payload, entry.flushed || discarding {
+                if case .noteOn = event.payload, entry.flushed || flushing {
                     tally.discardedWhileSilenced &+= 1
+                } else if case .noteOn = event.payload, heldByTakeover(event.scope) {
+                    tally.discardedDuringTakeover &+= 1
                 } else {
                     apply(event, at: frame, blockStart, &tally, emit)
                 }
@@ -145,7 +159,8 @@ final class KernelBlockDecider {
     }
 
     /// Step 5: a silenced cycle discards buffered `noteOn`s, applies buffered `noteOff`s to ownership (emitting
-    /// only real releases) and keeps every other event in order.
+    /// only real releases; an unowned one also clears its takeover bit, being the key's next unowned `noteOff`) and
+    /// keeps every other event in order.
     func consumeNotesWhileSilenced(_ block: KernelBlockBuffer, _ blockStart: Int64, _ tally: inout KernelCycleTally,
                                    _ emit: (KernelEvent, Int64) -> Void) {
         block.retain { entry in
@@ -155,6 +170,7 @@ final class KernelBlockDecider {
             case .noteOff(let channel, let note):
                 tombstones.release(entry.event)
                 guard ownership.noteOff(scope: entry.event.scope, channel: channel, note: note) else {
+                    _ = clearTakenOver(entry.event.scope, channel, note)
                     tally.discardedWhileSilenced &+= 1
                     return false
                 }
@@ -184,7 +200,7 @@ final class KernelBlockDecider {
             tombstones.release(event)
             if !ownership.noteOff(scope: event.scope, channel: channel, note: note),
                clearTakenOver(event.scope, channel, note) {
-                // The takeover already released this note: its late `noteOff` is consumed, never emitted twice.
+                // This cycle's takeover already released this note: its late `noteOff` is consumed, not emitted again.
                 tally.discardedWhileSilenced &+= 1
                 return
             }

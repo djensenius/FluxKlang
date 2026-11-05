@@ -56,8 +56,10 @@ private let ackRequestIdentities = Atomic<UInt64>(0)
 ///    `FaultLatch.isLatched`; reading `e` or later makes the raise (and every push before it) visible to that
 ///    load and to the cycle's drain;
 /// 3. render: a cycle that then reads the scope latched arms the flush watermark, drains, and publishes
-///    `KernelCycleTelemetry.lastFaultedAckEpoch` = the epoch it loaded through `TelemetrySlots.publish` (release);
-/// 4. control: a `TelemetrySlots.latest` read (acquire) showing `lastFaultedAckEpoch >= e` lets it acknowledge.
+///    `KernelCycleTelemetry.lastFaultedAckEpoch` = the epoch it loaded through `TelemetrySlots.publish` (release),
+///    after storing it in the cycle-private `KernelCycle.lastFaultedAckEpoch` atomic (release);
+/// 4. control: a `TelemetrySlots.latest` read (acquire) showing `lastFaultedAckEpoch >= e`, and an acquiring load
+///    of the private atomic showing the same, lets it acknowledge.
 /// A sample published before step 2 carries an older epoch, so a stale cached sample cannot approve a newer
 /// request. Every update is a compare-exchange (a read-modify-write), so a later epoch continues `e`'s release
 /// sequence for several requesters. Reference model; not RT-certified.

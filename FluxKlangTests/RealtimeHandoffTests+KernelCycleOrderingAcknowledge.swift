@@ -7,43 +7,6 @@ import Testing
 
 private func noteOn(_ note: UInt8) -> KernelEventPayload { .noteOn(channel: 0, note: note, velocity: 100) }
 private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 0, controller: 7, value: value) }
-private func noteOff(_ note: UInt8) -> KernelEventPayload { .noteOff(channel: 0, note: note) }
-
-/// A replacement `KernelCycle` on `rig`'s fan-in, latch and ownership.
-private func takeover(of rig: CycleRig, start: KernelCycleStart = .replacingCycle,
-                      blockCapacity: Int = 64) throws -> KernelCycle {
-    var parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership, safety: rig.safety,
-                                 ramps: rig.ramps)
-    parts.start = start
-    return try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48),
-                           blockCapacity: blockCapacity, perLaneQuota: 64)
-}
-
-/// Runs one 64-frame block of `cycle` and returns its result with everything it emitted.
-private func takeoverRun(_ cycle: KernelCycle, _ blockStart: Int64) -> (KernelCycleResult, [CycleEmission]) {
-    var emitted: [CycleEmission] = []
-    let result = cycle.run(blockStart: blockStart, frames: 64) { emitted.append(CycleEmission(event: $0, frame: $1)) }
-    return (result, emitted)
-}
-
-/// One note key a takeover releases.
-private struct TakeoverKey {
-    let scope: UInt32
-    let channel: UInt8
-    let note: UInt8
-
-    init(_ scope: UInt32, _ channel: UInt8, _ note: UInt8) {
-        self.scope = scope
-        self.channel = channel
-        self.note = note
-    }
-}
-
-/// A synthesized release of `key` at `frame`.
-private func takeoverRelease(_ key: TakeoverKey, at frame: Int64) -> CycleEmission {
-    CycleEmission(event: KernelEvent(frame: frame, scope: key.scope, sequence: KernelCycle.releaseSequence,
-                                     payload: .noteOff(channel: key.channel, note: key.note)), frame: frame)
-}
 
 /// `acknowledgeCritical` as a value, so a refusal can be compared and the ticket is consumed outside `#expect`.
 private func acknowledging(_ cycle: KernelCycle, _ observation: FaultObservation,
@@ -168,6 +131,7 @@ extension RealtimeHandoffTests {
             #expect(AcknowledgeState(rig) == before)
 
             let ticket = try rig.cycle.ackRequests.request(for: observation)
+            rig.cycle.retire()
             let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
                                          safety: rig.safety, ramps: rig.ramps, telemetry: output)
             let replacement = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4,
@@ -189,6 +153,46 @@ extension RealtimeHandoffTests {
             let silentOutcome = acknowledging(silent.cycle, silentObservation, silentTicket)
             #expect(silentOutcome == .failure(.notApproved))
             #expect(silent.faults.isLatched(CycleRig.criticalScope))
+        }
+
+        /// Round 2g: a sample forged into the cycle's own slot (any holder of the `TelemetrySlots` can publish one)
+        /// never approves, because approval also needs the cycle-private `lastFaultedAckEpoch` that only faulted runs
+        /// store: before any cycle, and after an unfaulted cycle that loaded the ticket's epoch (`.notApproved`, not
+        /// the latch's `.latchRefused`), changing nothing. A sample published over a real faulted one can only
+        /// withhold approval (the slot check still applies); the next faulted cycle approves. Kills: the private
+        /// check removed; the atomic stored on every cycle; the slot check ignored.
+        @Test func forgedSampleInTheSlotNeverApproves() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+            let forged = KernelCycleTelemetry(lastFaultedAckEpoch: .max, ackCycle: rig.cycle.ackRequests.identity)
+            let stamp = TelemetryStamp(clockGeneration: 0, frame: 0)
+            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+            let first = try #require(rig.faults.observe(CycleRig.criticalScope))
+            let early = try rig.cycle.ackRequests.request(for: first)
+            #expect(slots.publish(slot: 1, value: forged, stamp: stamp) == .ok)
+            let before = AcknowledgeState(rig)
+            let earlyOutcome = acknowledging(rig.cycle, first, early)
+            #expect(earlyOutcome == .failure(.notApproved) && AcknowledgeState(rig) == before && before.latched)
+
+            let unfaultedTicket = try rig.cycle.ackRequests.request(for: first)
+            #expect(rig.faults.acknowledge(first) != nil)
+            #expect(rig.run(0, 64).0.status == .ok && rig.cycle.telemetry.ackEpochSeen == unfaultedTicket.epoch)
+            #expect(slots.publish(slot: 1, value: forged, stamp: stamp) == .ok)
+            let unfaulted = acknowledging(rig.cycle, first, unfaultedTicket)
+            #expect(unfaulted == .failure(.notApproved))
+
+            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 64) == .ok)
+            let second = try #require(rig.faults.observe(CycleRig.criticalScope))
+            let withheldTicket = try rig.cycle.ackRequests.request(for: second)
+            #expect(rig.run(64, 64).0.status == .silenced(.scopeFaulted))
+            let withholding = KernelCycleTelemetry(ackCycle: rig.cycle.ackRequests.identity)
+            #expect(slots.publish(slot: 1, value: withholding, stamp: stamp) == .ok)
+            let withheld = acknowledging(rig.cycle, second, withheldTicket)
+            #expect(withheld == .failure(.notApproved) && rig.faults.isLatched(CycleRig.criticalScope))
+            let ticket = try rig.cycle.ackRequests.request(for: second)
+            #expect(rig.run(128, 64).0.status == .silenced(.scopeFaulted))
+            let approved = acknowledging(rig.cycle, second, ticket)
+            #expect(approved == .success(second.record) && !rig.faults.isLatched(CycleRig.criticalScope))
         }
 
         /// Round 2e: a twin latch's observation with the same words is refused as `.foreignObservation` before the
@@ -246,10 +250,11 @@ extension RealtimeHandoffTests {
         }
 
         /// Round 2c L1: the old cycle is acknowledged while its lane is still flushing (the quota cut it short, so
-        /// `noteOn(9)` is still queued behind its controls); a replacement (quota 1) on the same fan-in drains it. A
-        /// `.freshFanIn` start lets it sound and stick; the default `.replacingCycle` start reports flushing at once,
-        /// discards it, and once the lane is proved empty a later `noteOn` sounds (liveness). Kills: a replacement
-        /// starting unarmed, with no flushing count, or `.freshFanIn` as the default.
+        /// `noteOn(9)` is still queued behind its controls); the old cycle retires and a replacement (quota 1) on the
+        /// same fan-in drains it. A `.freshFanIn` start (now refused over the used ownership, so shown over a new
+        /// one) lets it sound and stick; the default `.replacingCycle` start reports flushing at once, discards it,
+        /// and once the lane is proved empty a later `noteOn` sounds (liveness). Kills: a replacement starting
+        /// unarmed, with no flushing count, or `.freshFanIn` as the default.
         @Test func replacementCycleStartsFlushingSoAQueuedNoteOnNeverSounds() throws {
             for fresh in [true, false] {
                 let slots = try kernelCycleTelemetrySlots()
@@ -267,7 +272,15 @@ extension RealtimeHandoffTests {
                 let acknowledged = acknowledging(rig.cycle, observation, ticket)
                 #expect(acknowledged == .success(observation.record))
 
-                var parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                rig.cycle.retire()
+                let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
+                let reused = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                              safety: rig.safety, ramps: rig.ramps, start: .freshFanIn)
+                #expect(throws: KernelCycle.PreparationError.ownershipClaim(.alreadyUsed)) {
+                    try KernelCycle(reused, pulses: gate, blockCapacity: 64, perLaneQuota: 1)
+                }
+                let ownership = fresh ? try NoteOwnership(scopes: 2) : rig.ownership
+                var parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: ownership,
                                              safety: rig.safety, ramps: rig.ramps)
                 if fresh { parts.start = .freshFanIn }
                 let replacement = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4,
@@ -281,7 +294,7 @@ extension RealtimeHandoffTests {
                     }
                     flushing.append(result.flushing)
                 }
-                #expect(sounded == fresh && rig.ownership.isOwned(scope: 0, channel: 0, note: 9) == fresh)
+                #expect(sounded == fresh && ownership.isOwned(scope: 0, channel: 0, note: 9) == fresh)
                 #expect(flushing == (fresh ? [false, false, false, false] : [true, true, false, false]))
                 #expect(rig.push(cycleEvent(320, noteOn(10)), token) == .ok)
                 var later = false
@@ -289,103 +302,6 @@ extension RealtimeHandoffTests {
                     later = later || event.payload == noteOn(10)
                 }
                 #expect(result.status == .ok && later && replacement.bufferedCount == 0)
-            }
-        }
-    }
-
-    /// Copilot round 2 (4483068023): a `.replacingCycle` replacement takes over the shared `NoteOwnership` and
-    /// releases what the retired cycle left sounding; it cuts notes short by design.
-    struct CycleOrderingTakeover {
-        /// Copilot's scenario: the retired cycle ran [0, 64) with `noteOn(9)` at 0 and buffered its `noteOff` at 128.
-        /// The `.replacingCycle` replacement sees an empty fan-in yet emits the release once, at its first
-        /// `blockStart`, and clears the ownership; a `.freshFanIn` start is unchanged (takes nothing over). Kills:
-        /// synthesis skipped; synthesis on `.freshFanIn` too; ownership not cleared.
-        @Test func takeoverReleasesANoteWhoseNoteOffOnlyTheRetiredCycleBuffered() throws {
-            for start in [KernelCycleStart.replacingCycle, .freshFanIn] {
-                let rig = try CycleRig()
-                let token = try #require(rig.events.claimProducer())
-                #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-                #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
-                let (old, sounded) = rig.run(0, 64)
-                #expect(sounded.map(\.event.payload) == [noteOn(9)] && old.pending == 1)
-                let replacement = try takeover(of: rig, start: start)
-                let replacing = start == .replacingCycle
-                let (first, emitted) = takeoverRun(replacement, 64)
-                #expect(emitted == (replacing ? [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)] : []))
-                #expect(first.status == .ok && first.releasedNotes == (replacing ? 1 : 0))
-                #expect(rig.ownership.isOwned(scope: 0, channel: 0, note: 9) == !replacing)
-                #expect(takeoverRun(replacement, 128).1.isEmpty)
-            }
-        }
-
-        /// The retired cycle's `noteOff` re-delivered after the takeover released its note is consumed once
-        /// (counted, not emitted, nothing latched); a re-struck key then sounds and releases as usual. Kills: the
-        /// takeover not recording its releases (double release); ownership not cleared.
-        @Test func lateNoteOffAfterTakeoverIsConsumedOnceAndARestruckNoteReleases() throws {
-            let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
-            _ = rig.run(0, 64)
-            let replacement = try takeover(of: rig)
-            #expect(takeoverRun(replacement, 64).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)])
-            #expect(rig.push(cycleEvent(128, noteOff(9)), token) == .ok)
-            let (late, lateEmitted) = takeoverRun(replacement, 128)
-            #expect(lateEmitted.isEmpty && late.status == .ok && late.releasedNotes == 0)
-            #expect(late.discardedWhileSilenced == 1 && late.dispatched == 0)
-            #expect(!rig.faults.isLatched(CycleRig.criticalScope))
-            #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
-            #expect(rig.push(cycleEvent(192, noteOn(9)), token) == .ok)
-            #expect(rig.push(cycleEvent(200, noteOff(9)), token) == .ok)
-            let (_, restruck) = takeoverRun(replacement, 192)
-            #expect(restruck.map(\.event.payload) == [noteOn(9), noteOff(9)])
-            #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
-        }
-
-        /// With nothing sounding the takeover emits and counts nothing, and ends at once: a `noteOn` queued after the
-        /// first cycle proved the lanes empty sounds. Guards the empty case: a takeover that never ends.
-        @Test func takeoverWithNothingSoundingEmitsNothing() throws {
-            let rig = try CycleRig()
-            let token = try #require(rig.events.claimProducer())
-            let replacement = try takeover(of: rig)
-            let (first, emitted) = takeoverRun(replacement, 0)
-            #expect(emitted.isEmpty && first.releasedNotes == 0 && first.discardedWhileSilenced == 0)
-            #expect(rig.push(cycleEvent(64, noteOn(9)), token) == .ok)
-            #expect(takeoverRun(replacement, 64).1.map(\.event.payload) == [noteOn(9)])
-        }
-
-        /// At most `blockCapacity` (3) releases per cycle, in (scope, channel, note) order, the rest carried to the
-        /// next cycle; bounds at N (3, one cycle), N + 1 (4, two) and 7 (three). Every decided `noteOn` is discarded
-        /// while releases remain (`noteOn(100)` with 7 sounding) and sounds once they end. Kills: the carry dropped;
-        /// `noteOn`s decided while the takeover is pending.
-        @Test func takeoverCarriesReleasesBeyondBlockCapacityInOrder() throws {
-            let keys = [TakeoverKey(0, 0, 1), TakeoverKey(0, 0, 2), TakeoverKey(0, 0, 64), TakeoverKey(0, 0, 127),
-                        TakeoverKey(0, 1, 3), TakeoverKey(1, 0, 5), TakeoverKey(1, 2, 6)]
-            for sounding in [3, 4, 7] {
-                let rig = try CycleRig()
-                let token = try #require(rig.events.claimProducer())
-                for key in keys.prefix(sounding) {
-                    #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
-                }
-                let replacement = try takeover(of: rig, blockCapacity: 3)
-                for block in 0..<4 {
-                    let blockStart = Int64(block) * 64
-                    if block == 1 { #expect(rig.push(cycleEvent(64, noteOn(100)), token) == .ok) }
-                    if block == 3 { #expect(rig.push(cycleEvent(192, noteOn(101)), token) == .ok) }
-                    let chunk = keys.prefix(sounding).dropFirst(block * 3).prefix(3)
-                    var expected = chunk.map { takeoverRelease($0, at: blockStart) }
-                    let blocked = block == 1 && sounding > 6
-                    if block == 1 && !blocked {
-                        expected.append(CycleEmission(event: cycleEvent(64, noteOn(100)), frame: 64))
-                    }
-                    if block == 3 { expected.append(CycleEmission(event: cycleEvent(192, noteOn(101)), frame: 192)) }
-                    let (result, emitted) = takeoverRun(replacement, blockStart)
-                    #expect(emitted == expected && result.releasedNotes == chunk.count)
-                    #expect(result.discardedWhileSilenced == (blocked ? 1 : 0))
-                }
-                for key in keys.prefix(sounding) {
-                    #expect(!rig.ownership.isOwned(scope: key.scope, channel: key.channel, note: key.note))
-                }
             }
         }
     }

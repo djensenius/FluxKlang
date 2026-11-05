@@ -10,6 +10,11 @@ import Synchronization
 /// Storage is one allocation of `scopes × 32` `UInt64` words made in `init` (word `channel * 2 + note / 64` of
 /// the scope's 32, bit `note % 64`). A single thread (render) owns the instance, so the words are plain memory,
 /// not atomics. Every hot-path method range-checks `scope`, `channel` and `note` and never traps.
+///
+/// It also owns the scopes' `ReleaseTombstones` (allocated in `init`, same scopes and key space), so every
+/// `KernelCycle` sharing this ownership shares its release history too, exactly when it shares the notes, and the
+/// two can never be passed apart (round 2g). Its cycle claim is the only cross-thread state: `KernelCycle.init`
+/// (control) claims it and `KernelCycle.retire()` (render) hands it back; see `claimForCycle(_:fresh:)`.
 final class NoteOwnership: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
         /// `scopes` is outside `1...maximumScopes`.
@@ -24,15 +29,56 @@ final class NoteOwnership: @unchecked Sendable {
     static let maximumNotesPerScope = channels * notesPerChannel
     static let wordsPerScope = maximumNotesPerScope / UInt64.bitWidth
 
+    /// Why `claimForCycle(_:fresh:)` refused; nothing changed.
+    enum CycleClaimRefusal: Error, Equatable, Sendable {
+        /// A `.freshFanIn` cycle, but a cycle was already built over this ownership.
+        case alreadyUsed
+        /// The cycle last built over this ownership has not `retire()`d.
+        case predecessorNotRetired
+    }
+
     let scopeCount: Int
+    /// The latest release frame per note key, shared by every cycle over this ownership; render only after init.
+    let tombstones: ReleaseTombstones
     private let words: UnsafeMutablePointer<UInt64>
+    /// The `KernelAckRequests.identity` of the cycle that holds the claim; 0 when none does.
+    private let liveCycle = Atomic<UInt64>(0)
+    /// A cycle was ever built over this ownership.
+    private let everClaimed = Atomic<Bool>(false)
 
     init(scopes: Int) throws(PreparationError) {
         guard scopes >= 1, scopes <= Self.maximumScopes else { throw .scopeCountOutOfRange(scopes) }
         scopeCount = scopes
+        tombstones = ReleaseTombstones(scopes: scopes)
         let count = scopes * Self.wordsPerScope
         words = UnsafeMutablePointer<UInt64>.allocate(capacity: count)
         words.initialize(repeating: 0, count: count)
+    }
+
+    /// Control only, from `KernelCycle.init`, before it makes anything: why a cycle could not claim this ownership
+    /// now (`fresh`: a `.freshFanIn` start), or `nil`. Acquire pairs with `releaseCycleClaim`'s release, so a claim
+    /// seen handed back follows the retiring cycle's tombstone writes.
+    func cycleClaimRefusal(fresh: Bool) -> CycleClaimRefusal? {
+        if fresh, everClaimed.load(ordering: .relaxed) { return .alreadyUsed }
+        return liveCycle.load(ordering: .acquiring) == 0 ? nil : .predecessorNotRetired
+    }
+
+    /// Control only, last in `KernelCycle.init`: claims this ownership for `identity` (never 0), or refuses as
+    /// `cycleClaimRefusal` would (another preparation raced this one), changing nothing. One compare-exchange.
+    func claimForCycle(_ identity: UInt64, fresh: Bool) -> CycleClaimRefusal? {
+        if let refusal = cycleClaimRefusal(fresh: fresh) { return refusal }
+        let (claimed, _) = liveCycle.compareExchange(expected: 0, desired: identity, successOrdering: .acquiring,
+                                                     failureOrdering: .relaxed)
+        guard claimed else { return .predecessorNotRetired }
+        everClaimed.store(true, ordering: .relaxed)
+        return nil
+    }
+
+    /// Render only, from `KernelCycle.retire()`, after its tombstone writes: hands the claim back when `identity`
+    /// holds it (a stale or repeated retire is a no-op). Release publishes those writes to the next claim.
+    func releaseCycleClaim(_ identity: UInt64) {
+        _ = liveCycle.compareExchange(expected: identity, desired: 0, successOrdering: .releasing,
+                                      failureOrdering: .relaxed)
     }
 
     /// Control-side teardown only.

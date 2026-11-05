@@ -1,3 +1,5 @@
+import Synchronization
+
 // #64 E5 kernel cycle core: one bounded, render-owned block of event work composed from the accepted E2/E3 parts.
 // E5a: silence and recovery. E5b: split by composition into `KernelBlockBuffer` (order), `KernelFlushWatermark`
 // (drain) and `KernelBlockDecider` (decide, apply, ramps), each with private storage; cycle telemetry and the
@@ -5,8 +7,8 @@
 // adoption (`noPlan`) and the output buffer are not modelled here. Reference model; not RT-certified.
 
 /// What one `KernelCycle.run` did. Every drained event that leaves the block buffer is counted in exactly one of
-/// `dispatched`, `droppedLate`, `refused`, `skippedPulses`, `discardedWhileSilenced` or `discardedSuperseded`;
-/// synthesized releases are counted only in `releasedNotes`.
+/// `dispatched`, `droppedLate`, `refused`, `skippedPulses`, `discardedWhileSilenced`, `discardedSuperseded` or
+/// `discardedDuringTakeover`; synthesized releases are counted only in `releasedNotes`.
 /// Reference model; not RT-certified.
 struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     /// `.ok`; `.silenced(.scopeFaulted)` while the critical scope is latched; else `.silenced(.safetyMute)` on panic.
@@ -23,11 +25,14 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     /// Due clock pulses the gate skipped (stale or rate-limited); the gate keeps the cumulative counters.
     private(set) var skippedPulses: Int
     /// Note events consumed without emitting: a silenced cycle's buffered `noteOn`s and unowned `noteOff`s,
-    /// `noteOn`s decided while flushing (see the type's Flush watermark) or while a takeover is pending, and the
-    /// first `noteOff` for a note a takeover released (see the type's Takeover).
+    /// `noteOn`s decided while flushing (see the type's Flush watermark), and the first `noteOff` this cycle sees for
+    /// a note its takeover released (see the type's Takeover).
     private(set) var discardedWhileSilenced: Int
     /// Decided `noteOn`s a same-key `noteOff` strictly after their frame already released (`ReleaseTombstones`).
     private(set) var discardedSuperseded: Int
+    /// Decided `noteOn`s (not flushing) in a scope a pending takeover has not finished releasing (see the type's
+    /// Takeover); scopes it finished sound again.
+    private(set) var discardedDuringTakeover: Int
     /// A lane was still flushing after this cycle's drain (see the type's Flush watermark).
     private(set) var flushing: Bool
     /// Owned notes released by a `.replacingCycle` takeover, safety requests or critical-fault recovery, each
@@ -50,6 +55,7 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
         skippedPulses = tally.skippedPulses
         discardedWhileSilenced = tally.discardedWhileSilenced
         discardedSuperseded = tally.discardedSuperseded
+        discardedDuringTakeover = tally.discardedDuringTakeover
         self.flushing = flushing
         self.releasedNotes = releasedNotes
         resync = tally.resync
@@ -57,9 +63,11 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     }
 }
 
-/// How a `KernelCycle` takes over its fan-in. Reference model; not RT-certified.
+/// How a `KernelCycle` takes over its fan-in and its `NoteOwnership`. Reference model; not RT-certified.
 enum KernelCycleStart: Sendable, Equatable {
-    /// No earlier cycle consumed `events`: the flush watermark starts clear.
+    /// No earlier cycle consumed `events` or was built over `ownership`: the flush watermark starts clear and
+    /// nothing is taken over. `KernelCycle.init` refuses it (`.ownershipClaim(.alreadyUsed)`) once any cycle was
+    /// built over the ownership, so a cycle sharing ownership (and so tombstones) always takes over.
     case freshFanIn
     /// The fail-safe default: an earlier cycle may have consumed `events` and may have been acknowledged while a
     /// lane was still flushing, so a pre-fault `noteOn` may still be queued. The cycle starts with every lane's
@@ -67,6 +75,8 @@ enum KernelCycleStart: Sendable, Equatable {
     /// and their `noteOn`s discarded. Liveness is as after any latch: each bit clears once its lane's drain
     /// delivers fewer than its limit, so a queued `noteOn` is lost but never sounds and sticks. It also takes over
     /// the shared `NoteOwnership`: every note still marked sounding is released (see `KernelCycle`'s Takeover).
+    /// Contract: the cycle last built over the ownership must have `retire()`d (render, after its last `run`)
+    /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
     case replacingCycle
 }
 
@@ -76,6 +86,8 @@ struct KernelCycleParts {
     let events: FanInHandoff<KernelEvent>
     /// The latch `events` raises on; its `criticalScope` must be prepared in it.
     let faults: FaultLatch
+    /// Notes sounding and, in `ownership.tombstones`, the release history: shared by every cycle over it, one at a
+    /// time (`KernelCycle.init` claims it, `retire()` hands it back).
     let ownership: NoteOwnership
     /// Must have as many scopes as `ownership`.
     let safety: SafetyFlags
@@ -86,7 +98,8 @@ struct KernelCycleParts {
     /// acknowledges: read it only through `KernelCycle.latestTelemetry()` and `acknowledgeCritical` on that thread
     /// (a UI meter gets samples from control, never reads the slot itself from another thread).
     var telemetry: KernelCycleTelemetryOutput?
-    /// `.freshFanIn` only when no earlier cycle consumed `events`; anything else starts flushing (fail-safe).
+    /// `.freshFanIn` only when no earlier cycle consumed `events` or used `ownership` (refused otherwise); anything
+    /// else starts flushing and takes over (fail-safe).
     var start = KernelCycleStart.replacingCycle
 }
 
@@ -94,7 +107,8 @@ struct KernelCycleParts {
 ///
 /// `run` does, in order:
 /// 0. Acknowledgement epoch: `ackRequests.loadForRender()` (acquire), before any latch read; published in step 7
-///    as `ackEpochSeen`, and as `lastFaultedAckEpoch` by a `.scopeFaulted` cycle.
+///    as `ackEpochSeen`, and as `lastFaultedAckEpoch` (in the sample and the cycle-private atomic) by a
+///    `.scopeFaulted` cycle.
 /// 1. Takeover, `.replacingCycle` only, while pending: at most `blockCapacity` synthesized releases (see Takeover).
 ///    Safety: takes every scope's `SafetyFlags`; any request releases that scope's owned notes (bits, never
 ///    queue-capacity dependent); `panic` also silences this cycle (`.safetyMute`) for every scope.
@@ -112,11 +126,14 @@ struct KernelCycleParts {
 ///    an owned note. Other events stay buffered in order. A panic flushes the buffer, not the lanes; leftover
 ///    `noteOn`s keep their own FIFO `noteOff`s. A panic is global: it cuts notes short in other scopes too.
 /// 6. Ramps, when `frames > 0`, advance to the end of the block.
-/// 7. Telemetry (any `frames`): the cumulative `KernelCycleTelemetry` is updated and, with an output, published.
+/// 7. Telemetry (any `frames`): the cumulative `KernelCycleTelemetry` is updated and, with an output, published;
+///    a `.scopeFaulted` cycle first stores its epoch in the cycle-private `lastFaultedAckEpoch` (release).
 ///
 /// Per due event: `noteOn` is emitted only if no same-key release after its frame was applied (release
-/// tombstones; cross-lane order is otherwise not guaranteed) and `NoteOwnership` accepts it; `noteOff` records its
-/// tombstone, clears ownership and is always emitted; `control`/`program` are never merged; `clockPulse` goes
+/// tombstones; cross-lane order is otherwise not guaranteed), its scope is not held by a pending takeover and
+/// `NoteOwnership` accepts it; `noteOff` records its tombstone, clears ownership and is emitted, except the first
+/// unowned `noteOff` this cycle sees for a key its own takeover released, which is consumed (see Takeover);
+/// `control`/`program` are never merged; `clockPulse` goes
 /// through the gate with its original frame; `rampTo` replaces the ramp from its value at the dispatch frame.
 /// `emit` gets the event and its frame.
 ///
@@ -128,24 +145,43 @@ struct KernelCycleParts {
 /// `discardedWhileSilenced`; `noteOff`s apply as usual. Lanes are FIFO, so once every bit clears every pre-fault
 /// event has been drained, and a marked one never sounds. `KernelCycleResult.flushing` reports set bits.
 ///
-/// Takeover. A replacement shares the retired cycle's `NoteOwnership` but not its block buffer, so a `noteOff`
-/// buffered only there would never reach it and its note would stick. A `.replacingCycle` start therefore releases
-/// every note the ownership still marks sounding, through the same synthesized `noteOff` path as safety releases,
-/// and clears that ownership, independent of the retired cycle's buffers. It cuts those notes short by design: no
-/// stuck note beats exact durations. Each cycle releases at most `blockCapacity` of them, in (scope, channel, note)
-/// order, and carries the rest to the next cycle, so with `n` notes sounding the takeover ends after
-/// `ceil(n / blockCapacity)` cycles (`n <= scopes × 2,048`); nothing is dropped. Until it ends every decided
-/// `noteOn` is discarded, so it only cuts the retired cycle's notes. The first unowned `noteOff` for a released key
-/// (the retired cycle's event re-delivered, say) is consumed and counted in `discardedWhileSilenced`, never emitted
-/// twice and never latched; a re-struck (owned) key's `noteOff` is emitted as usual. `.freshFanIn` takes nothing over.
+/// Takeover. A replacement shares the retired cycle's `NoteOwnership` (and so its `ReleaseTombstones`: release
+/// history survives replacement) but not its block buffer, so a `noteOff` buffered only there would never reach it
+/// and its note would stick. A `.replacingCycle` start therefore releases every note the ownership still marks
+/// sounding, through the same synthesized `noteOff` path as safety releases, and clears that ownership, independent
+/// of the retired cycle's buffers. It cuts those notes short by design: no stuck note beats exact durations. Each
+/// cycle releases at most `blockCapacity` of them, in (scope, channel, note) order, and carries the rest to the next
+/// cycle, so with `n` notes sounding the takeover ends after `ceil(n / blockCapacity)` cycles
+/// (`n <= scopes × 2,048`); nothing is dropped. Until it ends, a decided `noteOn` in a scope at or after its scope
+/// cursor (not yet fully released) is discarded and counted in `discardedDuringTakeover`, so it only cuts the
+/// retired cycle's notes; scopes before the cursor sound again. The first unowned `noteOff` this cycle sees for a
+/// key its takeover released (the retired cycle's event re-delivered, say; decided or consumed while silenced) is
+/// consumed, not emitted, and never latched; decided, it is counted in `discardedWhileSilenced`. A re-struck (owned)
+/// key's `noteOff` is emitted as usual and keeps the record. So within one cycle a takeover release is never
+/// followed by a second `noteOff` for it; across replacements the record is not shared (a second replacement may
+/// emit one redundant, harmless `noteOff` for a key its predecessor's takeover released). `.freshFanIn` takes nothing
+/// over.
+///
+/// Retirement. Render calls `retire()` on the old cycle after its last `run` and before the replacement's first:
+/// every `noteOff` still pending in the old block buffer records its tombstone (its own frame, unclamped, as a
+/// silenced cycle does), so a same-key `noteOn` stamped before it, arriving later at the replacement, is superseded
+/// instead of sounding with its release lost; then it hands the ownership's cycle claim back. Its pending
+/// `noteOn`s are dropped with it: never emitted or owned, so they cannot stick (lost notes, never stuck ones). A
+/// `.replacingCycle` cycle cannot be prepared over an ownership whose last cycle has not retired
+/// (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one any cycle has used
+/// (`.ownershipClaim(.alreadyUsed)`). So a replacement is prepared after the retire, and render runs no cycle in
+/// between (at least one block without event work).
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
 /// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls
 /// `ackRequests.request(for: observation)` after `observe` (only this cycle's latch and critical scope), then
 /// `acknowledgeCritical(observation, ticket)`, which reads this cycle's own telemetry slot and acknowledges only
-/// when that sample's `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` (the happens-before chain is on
-/// `KernelAckRequests`; its formal model-check is tracked in #190). No caller-supplied sample is ever trusted.
+/// when that sample's `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` and the cycle-private
+/// `lastFaultedAckEpoch` atomic (stored only by this cycle's render, on `.scopeFaulted` cycles) is at least the
+/// ticket's epoch (the happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190).
+/// No caller-supplied sample is accepted, and a sample forged into the slot (all its fields are settable) cannot
+/// approve alone: the atomic is reachable only from this file.
 /// Step 0 of `run` acquire-loads the epoch before step 2's latch read. Tickets are bound to this cycle's
 /// `ackRequests.identity` (published as `ackCycle`), so a replacement cycle on the same slots never approves them,
 /// and to the observation they were requested for, so a re-raise after the request needs a new observation, a new
@@ -153,7 +189,8 @@ struct KernelCycleParts {
 /// on the same fan-in starts the replacement flushing (`KernelCycleStart.replacingCycle`). Fail-closed: with no
 /// telemetry output nothing is ever approved. Residual (#190): control must acknowledge critical scopes only via
 /// `acknowledgeCritical`; `FaultLatch.acknowledge` is a shared API and is not type-restricted for critical scopes.
-/// The ticket is type-enforced only for callers of `acknowledgeCritical`.
+/// The ticket is type-enforced only for callers of `acknowledgeCritical`. Anything holding the `TelemetrySlots` can
+/// still publish into the slot (breaking its single producer); that can only withhold or delay approval.
 ///
 /// Stale clocks (E5b decision): the gate's one marker per stall is `KernelCycleResult.resync`, counted with the
 /// gate's counters in telemetry; no `FaultKind.staleClock` is raised and the cycle adds no `FaultLatch.raise` site.
@@ -162,21 +199,23 @@ struct KernelCycleParts {
 /// Zero-length notes: a same-frame `noteOff` is ordered first and the `noteOn` (a tie, so a retrigger) then sounds
 /// and sticks; producers must put the `noteOff` at least a frame later.
 ///
-/// Bounds. All storage (block and scratch buffers, telemetry, flush bits, admission refusal counters, tombstones,
-/// takeover bits, gate, ramp words) is allocated in `init`, inside the private components. A cycle drains at most the
+/// Bounds. All storage (block and scratch buffers, telemetry, flush bits, admission refusal counters, takeover bits,
+/// gate, ramp words) is allocated in `init`, inside the private components; tombstones live in the shared
+/// `NoteOwnership` (its `init`). `retire()` passes the block buffer once. A cycle drains at most the
 /// free room, sorts in O(n log n) moves, passes the buffer once more, visits each owned-note word at most twice (a
 /// pending takeover adds at most two passes over each scope it reaches), each ramp parameter once and each lane at most
 /// three times (drain, then the two refusal totals); a buffer full of future (or, while silenced, non-note) events
 /// stops draining (M4/M5 backpressure; the lanes are decided later).
 ///
-/// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only (the
-/// fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call back.
+/// Contracts. `run`, `retire`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's
+/// only (the fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not
+/// call back. `retire()` is the cycle's last render call: no `run` after it.
 /// `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests`,
 /// `latestTelemetry()` and `acknowledgeCritical` are control's, the last two being the only reads of the telemetry slot
 /// (its single consumer, on the acknowledging control thread). The parts are kept for life. ARC, metadata and target
 /// progress are unqualified (X1 probe), as in M5–M7.
 /// `@unchecked Sendable`: all other mutable state is render-only, in storage preallocated in `init`; the refusal
-/// counters and the acknowledgement epoch are atomic.
+/// counters, the acknowledgement epoch, `lastFaultedAckEpoch` and the ownership's cycle claim are atomic.
 final class KernelCycle: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
         /// The fan-in is not `.events` consumed on `.render`.
@@ -193,6 +232,9 @@ final class KernelCycle: @unchecked Sendable {
         case telemetrySlotOutOfRange(Int)
         /// Every `KernelAckRequests` identity was issued.
         case ackIdentitiesExhausted
+        /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked last. A refusal from the
+        /// final claim (only when another preparation raced this one) has used one `KernelAckRequests` identity.
+        case ownershipClaim(NoteOwnership.CycleClaimRefusal)
     }
 
     /// Why `acknowledgeCritical` refused, checked in this order. Every refusal leaves the latch, the epoch and the
@@ -208,8 +250,9 @@ final class KernelCycle: @unchecked Sendable {
         case notCriticalScope
         /// The ticket was requested for another observation (an earlier latched state of the scope).
         case ticketObservationMismatch
-        /// This cycle publishes no telemetry, its slot holds no sample yet, or the latest one does not yet
-        /// `permitsAcknowledgement` the ticket.
+        /// This cycle publishes no telemetry, its slot holds no sample yet, the latest one does not yet
+        /// `permitsAcknowledgement` the ticket, or no `.scopeFaulted` run of this cycle loaded the ticket's epoch
+        /// (the private `lastFaultedAckEpoch`; a sample forged into the slot fails here).
         case notApproved
         /// `FaultLatch.acknowledge` refused this cycle's own observation: the scope was raised on or acknowledged
         /// since `observe` (another latch's observation is `.foreignObservation`).
@@ -245,6 +288,9 @@ final class KernelCycle: @unchecked Sendable {
     private let decider: KernelBlockDecider
     /// The cumulative telemetry counters.
     private let counters: UnsafeMutablePointer<KernelCycleTelemetry>
+    /// The epoch loaded by this cycle's latest `.scopeFaulted` run; 0 before any. Render stores it (release) once per
+    /// faulted cycle; `acknowledgeCritical` acquire-loads it. Private, so no sample forged into the slot approves.
+    private let lastFaultedAckEpoch = Atomic<UInt64>(0)
 
     /// Control-side preparation; allocates the block buffer and the ramp bookkeeping.
     init(_ parts: KernelCycleParts, pulses: ClockPulseGate, blockCapacity: Int,
@@ -269,8 +315,13 @@ final class KernelCycle: @unchecked Sendable {
         if let output = parts.telemetry, output.slot < 0 || output.slot >= output.slots.slotCount {
             throw .telemetrySlotOutOfRange(output.slot)
         }
+        let fresh = parts.start == .freshFanIn
+        if let refusal = parts.ownership.cycleClaimRefusal(fresh: fresh) { throw .ownershipClaim(refusal) }
         guard let ackRequests = KernelAckRequests(faults: parts.faults, criticalScope: parts.events.criticalScope)
         else { throw .ackIdentitiesExhausted }
+        if let refusal = parts.ownership.claimForCycle(ackRequests.identity, fresh: fresh) {
+            throw .ownershipClaim(refusal)
+        }
         self.ackRequests = ackRequests
         self.blockCapacity = blockCapacity
         self.perLaneQuota = perLaneQuota
@@ -335,7 +386,8 @@ final class KernelCycle: @unchecked Sendable {
     /// Control only; takes the latch's control lock, so never call from render. The Acknowledgement contract's
     /// entry point: re-arms the critical scope and returns `observation.record` only when `ticket` was issued by
     /// this cycle for exactly `observation` (made by this cycle's latch, of its critical scope) and the latest
-    /// sample in this cycle's own telemetry slot permits it; otherwise a typed refusal that changes nothing, in
+    /// sample in this cycle's own telemetry slot permits it, as does the private `lastFaultedAckEpoch` (acquire)
+    /// that only this cycle's faulted runs store; otherwise a typed refusal that changes nothing, in
     /// `AcknowledgeRefusal`'s order (identity checks before the slot is read). Consumes `ticket` either way. It
     /// reads the slot through `latestTelemetry()`, as its single consumer, so call it only from the acknowledging
     /// control thread, never concurrently with another read of the slot.
@@ -345,9 +397,22 @@ final class KernelCycle: @unchecked Sendable {
         guard observation.isObservation(of: faults) else { throw .foreignObservation }
         guard observation.record.scope == criticalScope else { throw .notCriticalScope }
         guard ticket.isBound(to: observation) else { throw .ticketObservationMismatch }
-        guard let sample = latestTelemetry(), sample.value.permitsAcknowledgement(ticket) else { throw .notApproved }
+        guard let sample = latestTelemetry(), sample.value.permitsAcknowledgement(ticket),
+              lastFaultedAckEpoch.load(ordering: .acquiring) >= ticket.epoch else { throw .notApproved }
         guard let record = faults.acknowledge(observation) else { throw .latchRefused }
         return record
+    }
+
+    /// Render only, once, after this cycle's last `run` and before its replacement is prepared (see the type's
+    /// Retirement): records the tombstone of every `noteOff` still pending in the block buffer at its own frame,
+    /// unclamped, in the shared `ownership.tombstones`, then hands the ownership's cycle claim back (release).
+    /// O(`blockCapacity`); no allocation, lock or emission. Pending `noteOn`s are dropped with the cycle. A repeated
+    /// call only records the same frames again.
+    func retire() {
+        for index in 0..<block.count {
+            ownership.tombstones.release(block[index].event)
+        }
+        ownership.releaseCycleClaim(ackRequests.identity)
     }
 
     /// Control only: this cycle's latest published sample, or `nil` with no telemetry output or before the first
@@ -381,6 +446,7 @@ final class KernelCycle: @unchecked Sendable {
         if result.status == .silenced(.scopeFaulted) {
             totals.lastFaultedCycle = totals.cycle
             totals.lastFaultedAckEpoch = ackEpoch
+            lastFaultedAckEpoch.store(ackEpoch, ordering: .releasing)
         }
         totals.droppedLate = KernelCycleTelemetry.saturatingAdd(totals.droppedLate, result.droppedLate)
         if result.resync { totals.resyncs = KernelCycleTelemetry.saturatingAdd(totals.resyncs, 1) }
