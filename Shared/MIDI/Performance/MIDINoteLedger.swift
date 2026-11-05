@@ -7,7 +7,9 @@
 ///
 /// Cost: one routed note, pedal or channel message is O(k · n) for k rules or layers over n held instances. Bulk
 /// key-ups (CC 120, CC 123...127, `inputLost`) are O(n²): each key-up rescans the ledger for another key-down copy
-/// and removes in place. They are control-side work, never for a realtime thread; an indexed ledger is a follow-up.
+/// and removes in place. The CC 121/124...127 preflight rescans the notes and holds once per current rule
+/// (O(rules · (notes + holds))). All of this is control-side work, never for a realtime thread; an indexed ledger is a
+/// follow-up.
 struct MIDINoteLedger: Equatable, Sendable {
     /// Release velocity of synthesized note-offs (panic, loss, All Notes Off); MIDI 1.0's default.
     static let releaseVelocity: UInt8 = 64
@@ -183,7 +185,9 @@ extension MIDINoteLedger {
     /// 123 are not forwarded at all (the ledger releases this input's keys, and for CC 120 its pedals, instead), and
     /// CC 121 and 124...127, which must be forwarded, are refused whole before any change when a current route on this
     /// channel carries another input's notes or holds (`.sharedDestinationOwned`, after `.systemMessage` and
-    /// `.malformedEvent`; these controllers have no other refusal).
+    /// `.malformedEvent`; these controllers have no other refusal). The preflight assumes the destination applies
+    /// these messages to that one channel; an omni-mode receiver may apply them more widely, which a per-channel check
+    /// cannot see (follow-up: receiver mode in #81/#66 routing metadata).
     private mutating func applyController(
         _ controller: UInt8, value: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {

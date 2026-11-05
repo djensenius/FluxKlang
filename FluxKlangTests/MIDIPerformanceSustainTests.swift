@@ -162,6 +162,33 @@ struct MIDIPerformanceSustainTests {
     }
 
     @Test
+    func handedOverNoteFollowsSustainHoldersOnItsDestination() throws {
+        var ledger = MIDINoteLedger()
+        let shared = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, from: Fixture.pads))
+        _ = try Fixture.play([
+            Fixture.on(60), Fixture.control(66, 127), Fixture.off(60), Fixture.control(64, 127, from: Fixture.pads),
+            Fixture.control(64, 127)
+        ], on: &ledger, routing: shared)
+        // Pads' and keys' sustain on piano channel 1 take the note over; it ends only with the last holder.
+        #expect(try ledger.route(Fixture.control(66, 0), routing: shared)
+            == [Fixture.sentControl(Fixture.piano, 66, 0)])
+        #expect(try ledger.route(Fixture.control(64, 0), routing: shared).isEmpty)
+        #expect(ledger.notes.map { [$0.keyDown, $0.sustained, $0.sostenuto] } == [[false, true, false]])
+        #expect(try ledger.route(Fixture.control(64, 0, from: Fixture.pads), routing: shared)
+            == [Fixture.sentControl(Fixture.piano, 64, 0)])
+        #expect(ledger.notes.isEmpty)
+
+        // A sustain held only on strings channel 1 (another route, same channel) does not keep it.
+        let apart = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.strings, from: Fixture.pads))
+        _ = try Fixture.play([
+            Fixture.control(64, 127, from: Fixture.pads), Fixture.on(60), Fixture.control(66, 127), Fixture.off(60)
+        ], on: &ledger, routing: apart)
+        #expect(try ledger.route(Fixture.control(66, 0), routing: apart) == [Fixture.sentControl(Fixture.piano, 66, 0)])
+        #expect(ledger.notes.isEmpty)
+        #expect(ledger.pedalHolds.map(\.route) == [Fixture.strings])
+    }
+
+    @Test
     func retriggerUnderSustain() throws {
         var ledger = MIDINoteLedger()
         let piano = try Fixture.routing(Fixture.rule(Fixture.piano))
