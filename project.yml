@@ -226,6 +226,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/OSCSchedulingTests.swift
+      - path: FluxKlangTests/OSCSchedulingTests+Era.swift
+      - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
+      - path: FluxKlangTests/OSCSchedulingTests+Batches.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/UMPCodecTests.swift
