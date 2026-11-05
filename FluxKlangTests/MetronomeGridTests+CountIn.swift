@@ -70,4 +70,69 @@ extension MetronomeGridTests {
         #expect(bar.first.map { $0.frame - (placed.last ?? 0) } == 5512)
         #expect(countIn.count == 24 && countIn.first?.accent == .bar)
     }
+
+    @Test
+    func countInKeepsTheClocksFractionalPhase() throws {
+        // Tick 1 on frame 10,000 at 44.1 kHz and 120 BPM: tick 0 is at 9,998.56 (frame 9,999) and the last
+        // sixteenth, tick −3,840, at 4,486.06. Rounding the 5,512.5-frame duration alone gave 4,487.
+        let clock = try Self.clock(frame: 10_000, ticks: 1, rate: 44_100)
+        let clicks = try Self.countIn(1, Self.configuration(1, 4, subdivisions: 4), clock)
+        #expect(try clock.frame(atTicks: 0) == 9999)
+        #expect(clicks.map { 9999 - Int64($0.framesBeforeAnchor) } == [-12_051, -6539, -1026, 4486])
+    }
+
+    /// The exact frame of a negative tick, rounded half-up: written independently of the map's segment walk.
+    static func reference(ticks: Int64, frame: Int64, anchorTicks: Int64, rate: Int,
+                          segments: [(Int64, Int64)]) -> Int64? {
+        let unitsPerFrame = Int128(Self.quarter) * 1_000_000
+        func cost(_ index: Int) -> Int128 { Int128(segments[index].1) * Int128(rate) }
+        var anchorUnits = Int128(min(anchorTicks, 0)) * cost(0)
+        for index in segments.indices where anchorTicks > 0 {
+            let end = index + 1 < segments.count ? segments[index + 1].0 : Int64.max
+            anchorUnits += Int128(max(0, min(anchorTicks, end) - segments[index].0)) * cost(index)
+        }
+        let numerator = 2 * (Int128(frame) * unitsPerFrame + Int128(ticks) * cost(0) - anchorUnits) + unitsPerFrame
+        let denominator = 2 * unitsPerFrame
+        var quotient = numerator / denominator
+        if numerator % denominator != 0, numerator < 0 { quotient -= 1 }
+        return Int64(exactly: quotient)
+    }
+
+    @Test
+    func everyCountInClickIsTheExactRoundedExtrapolation() throws {
+        let grid = try Self.configuration(4, 4, subdivisions: 7)
+        var checked = 0
+        var mismatches = 0
+        for rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
+            for tempo: Int64 in [60_000, 333_333, 500_000, 2_999_999] {
+                for (frame, ticks) in [(Int64(10_000), Int64(1)), (-7, 7777), (123_457, -5), (3, 46_081)] {
+                    let maps: [[(Int64, Int64)]] = [[(0, tempo)], [(0, tempo), (Self.quarter, 250_000)]]
+                    for segments in maps {
+                        let clock = try Self.clock(frame: frame, ticks: ticks, rate: rate, segments: segments)
+                        let anchor = try clock.frame(atTicks: 0)
+                        let clicks = try Self.countIn(1, grid, clock)
+                        for (number, click) in clicks.enumerated() {
+                            let tick = (Int64(number / 7) - 4) * Self.quarter + grid.offset(ofSubdivision: number % 7)
+                            let exact = Self.reference(ticks: tick, frame: frame, anchorTicks: ticks, rate: rate,
+                                                       segments: segments)
+                            let placed = anchor - Int64(click.framesBeforeAnchor)
+                            let mapped = try clock.frame(atTicks: tick)
+                            if placed != exact || placed != mapped { mismatches += 1 }
+                            checked += 1
+                        }
+                    }
+                }
+            }
+        }
+        #expect(checked == 6 * 4 * 4 * 2 * 28 && mismatches == 0)
+    }
+
+    @Test
+    func countInBelowInt64MinIsRefused() throws {
+        // One 4/4 bar at 120 BPM and 48 kHz starts 96,000 frames before the anchor.
+        let lowest = try Self.countIn(1, Self.configuration(), Self.clock(frame: Int64.min + 96_000))
+        #expect(lowest.first?.framesBeforeAnchor == 96_000)
+        #expect(Self.refusal { try Self.countIn(1, Self.configuration(), Self.clock(frame: Int64.min + 95_999)) }
+            == .clock(.overflow))
+    }
 }
