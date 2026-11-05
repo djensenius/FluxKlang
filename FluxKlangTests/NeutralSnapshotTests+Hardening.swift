@@ -218,4 +218,97 @@ extension NeutralSnapshotTests {
         let missing: Set = ["dgn.4", "dgn.6", "dgn.8", "dgn.a", "dgn.c"]
         #expect(snapshot.diagnostics.map(\.subjectInSnapshot) == subjects.map { !missing.contains($0.0) })
     }
+
+    // MARK: - Round 9: caseless identity refusal
+
+    @Test(arguments: [
+        ("dev.interfase-b", "dev.interfa\u{017F}e-b"), ("dev.kelvin-a", "dev.\u{212A}elvin-a"),
+        ("dev.strasse-a", "dev.stra\u{00DF}e-a"), ("dev.strasse-a", "DEV.STRA\u{1E9E}E-A")
+    ])
+    func aliasesEqualToACaseVariantOfAnIdentityAreWithheld(device: String, identity: String) throws {
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = try DeviceID(device)
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.hardwareIdentifiers = [identity]
+        let snapshot = Snapshot.build(from: inputs)
+        let route = try #require(snapshot.route(RouteID(validated: "rte.x")))
+        #expect(route.device == nil && route.isDeviceWithheld)
+        let json = try #require(String(data: Self.encode(snapshot), encoding: .utf8))
+        #expect(!json.contains(device))
+        #expect(RefusedIdentities([identity], terms: []).refuses(device))
+        #expect(RefusedIdentities([device], terms: []).refuses(identity))
+    }
+
+    /// Contract IDs are ASCII, so non-ASCII spellings are compared on the identity
+    /// form directly (both directions, equality path only).
+    @Test(arguments: [
+        ("dev.interfase-b", "dev.interfa\u{017F}e-b"), ("dev.\u{212A}elvin", "dev.kelvin"),
+        ("dev.stra\u{00DF}e", "dev.strasse"), ("\u{212B}ngstrom", "\u{00C5}ngstrom"),
+        ("\u{00C5}ngstrom", "a\u{030A}ngstrom"), ("A\u{030A}ngstrom", "\u{212B}ngstrom"),
+        ("dev.\u{D55C}\u{AD6D}", "dev.\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}"),
+        ("dev.\u{03BF}\u{03B4}\u{03BF}\u{03C2}", "dev.\u{03BF}\u{03B4}\u{03BF}\u{03C3}"),
+        ("dev.\u{03BF}\u{03B4}\u{03BF}\u{03C2}", "DEV.\u{039F}\u{0394}\u{039F}\u{03A3}")
+    ])
+    func identityFormsCompareCaselessly(lhs: String, rhs: String) {
+        #expect(RefusedIdentities([lhs], terms: []).refuses(rhs))
+        #expect(RefusedIdentities([rhs], terms: []).refuses(lhs))
+        #expect(!RefusedIdentities([lhs], terms: []).refuses("dev.iface-b"))
+    }
+
+    @Test func labelRedactionAndAliasRefusalAgree() {
+        let pairs = Self.caseFoldingPairs + Self.canonicalCasePairs + [("dev.iface-b", "dev.iface-c")]
+        for (label, identity) in pairs {
+            let redacted = UntrustedLabel(label, withholding: [identity]).text != label
+            let terms = UntrustedTextSanitizer.withheldTerms([identity])
+            #expect(RefusedIdentities([identity], terms: []).refuses(label) == redacted, "\(label)")
+            #expect(RefusedIdentities([], terms: terms).refuses(label) == redacted, "\(label)")
+        }
+    }
+
+    @Test func identitiesPastTheByteBoundRefuseThroughLabelRedaction() throws {
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.kick-b")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.hardwareIdentifiers = ["DEV.\u{212A}ICK-B" + String(repeating: "\u{0001}", count: 200)]
+        let route = try #require(Snapshot.build(from: inputs).route(RouteID(validated: "rte.x")))
+        #expect(route.device == nil && route.isDeviceWithheld)
+    }
+
+    @Test func anOverCapIdentityDoesNotWithholdOtherRoutes() throws {
+        var first = try Self.routeInput("rte.a", binding: .confirmed, presence: .present)
+        first.route.device = DeviceID(validated: "dev.iface-b")
+        first.route.evidence = String(repeating: "\u{AC01}", count: 30)
+        var second = try Self.routeInput("rte.b", binding: .confirmed, presence: .present)
+        second.route.device = DeviceID(validated: "dev.phone-audio")
+        let snapshot = Snapshot.build(from: Snapshot.Inputs(graph: Self.emptyGraph, routes: [first, second]))
+        #expect(snapshot.route(RouteID(validated: "rte.a"))?.device?.rawValue == "dev.iface-b")
+        #expect(snapshot.route(RouteID(validated: "rte.b"))?.device?.rawValue == "dev.phone-audio")
+    }
+
+    @Test func anIdentityLongerThanAnyDeviceIDIsSkippedButStillRedacted() throws {
+        let identity = "SN-" + String(repeating: "\u{AC01}", count: 20)
+        #expect(identity.utf8.count == 63 && RefusedIdentities.form(identity) == nil)
+        let decomposed = "sn-" + String(repeating: "\u{1100}\u{1161}\u{11A8}", count: 20)
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.iface-b")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.graph.nodes = [try Self.node("node.a", label: "Rig " + decomposed)]
+        inputs.hardwareIdentifiers = [identity]
+        let snapshot = Snapshot.build(from: inputs)
+        #expect(snapshot.route(RouteID(validated: "rte.x"))?.device?.rawValue == "dev.iface-b")
+        #expect(snapshot.node(Self.nodeA)?.label.text == "Rig \(UntrustedLabel.withheldMarker)")
+    }
+
+    /// Identities of five bytes are too short to be withheld terms, so only the
+    /// equality path can refuse `dev.a`; each needs the scalar filter and the trim.
+    @Test(arguments: ["\u{0001}dev.a", "\u{E000} DEV.A\u{0007}", "dev.\u{2060}a", "\u{FEFF}DEV.A\u{00AD}"])
+    func theEqualityPathFiltersAndTrimsIdentities(identity: String) throws {
+        #expect(UntrustedTextSanitizer.withheldTerm(identity) == nil)
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.a")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.hardwareIdentifiers = [identity]
+        let route = try #require(Snapshot.build(from: inputs).route(RouteID(validated: "rte.x")))
+        #expect(route.device == nil && route.isDeviceWithheld)
+    }
 }

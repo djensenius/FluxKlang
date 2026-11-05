@@ -73,7 +73,7 @@ struct NeutralSnapshotAssembly {
     /// form refuses it (a withheld route field must not reappear in a label), then
     /// its confirmed UID, host and evidence.
     static func withheldFields(of route: AudioRoute) -> [String] {
-        let device = isNeutralDeviceAlias(route.device.rawValue, refused: []) ? nil : route.device.rawValue
+        let device = isNeutralDeviceAlias(route.device.rawValue, refused: .none) ? nil : route.device.rawValue
         return [device, route.confirmedDeviceUID, route.confirmedHost?.rawValue, route.evidence].compactMap(\.self)
     }
 

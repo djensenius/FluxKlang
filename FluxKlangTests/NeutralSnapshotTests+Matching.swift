@@ -292,13 +292,7 @@ extension NeutralSnapshotTests {
         #expect(UntrustedLabel("", withholding: [giant]).text.isEmpty)
     }
 
-    @Test(arguments: [
-        ("STRA\u{1E9E}E-X", "Straße-X"), ("Straße-X", "STRA\u{1E9E}E-X"), ("STRASSE-X", "Stra\u{1E9E}e-X"),
-        ("Stra\u{1E9E}e-X", "STRASSE-X"), ("strasse-x", "STRA\u{1E9E}E-X"), ("Straße-X", "strasse-x"),
-        ("\u{017F}erial-1234", "SERIAL-1234"), ("\u{212A}ELVIN-12", "kelvin-12"), ("\u{2126}MEGA-12", "ωmega-12"),
-        ("ΟΔΟΣ-1234", "οδος-1234"), ("οδοσ-1234", "ΟΔΟΣ-1234"), ("\u{FB05}udio-123", "STUDIO-123"),
-        ("STUDIO-123", "\u{FB05}udio-123")
-    ])
+    @Test(arguments: caseFoldingPairs)
     func fullCaseFoldingMatchesInEveryDirection(label: String, withheld: String) {
         let marker = UntrustedLabel.withheldMarker
         #expect(UntrustedLabel("Rig " + label + " ok", withholding: [withheld]).text == "Rig \(marker) ok")
@@ -306,18 +300,7 @@ extension NeutralSnapshotTests {
 
     // MARK: - Round 8
 
-    @Test(arguments: [
-        ("\u{03AA}\u{0301}-123456", "\u{0390}-123456"), ("\u{0390}-123456", "\u{03AA}\u{0301}-123456"),
-        ("\u{212B}12345", "\u{00C5}12345"), ("\u{00C5}12345", "A\u{030A}12345"),
-        ("a\u{030A}12345", "\u{212B}12345"),
-        ("\u{01C5}-123456", "\u{01C4}-123456"), ("\u{01C6}-123456", "\u{01C5}-123456"),
-        ("\u{01C4}-1234", "\u{01C6}-1234"),
-        ("q\u{0307}\u{0323}-123456", "q\u{0323}\u{0307}-123456"),
-        ("q\u{0323}\u{0307}-123456", "Q\u{0307}\u{0323}-123456"),
-        ("\u{1FB4}\u{0301}-12", "\u{0386}\u{0301}\u{0345}-12"), ("\u{0386}\u{0301}\u{0345}-12", "\u{1FB4}\u{0301}-12"),
-        ("\u{D55C}\u{AD6D}-12", "\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12"),
-        ("\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12", "\u{D55C}\u{AD6D}-12")
-    ])
+    @Test(arguments: canonicalCasePairs)
     func canonicallyEquivalentCaseVariantsMatch(label: String, withheld: String) {
         let marker = UntrustedLabel.withheldMarker
         #expect(UntrustedLabel("Rig " + label + " ok", withholding: [withheld]).text == "Rig \(marker) ok")
@@ -357,6 +340,29 @@ extension NeutralSnapshotTests {
             #expect(map.sourceCount == text.unicodeScalars.count)
         }
     }
+
+    /// Label and withheld spellings that are equal under full case folding (round 7).
+    static let caseFoldingPairs: [(String, String)] = [
+        ("STRA\u{1E9E}E-X", "Straße-X"), ("Straße-X", "STRA\u{1E9E}E-X"), ("STRASSE-X", "Stra\u{1E9E}e-X"),
+        ("Stra\u{1E9E}e-X", "STRASSE-X"), ("strasse-x", "STRA\u{1E9E}E-X"), ("Straße-X", "strasse-x"),
+        ("\u{017F}erial-1234", "SERIAL-1234"), ("\u{212A}ELVIN-12", "kelvin-12"), ("\u{2126}MEGA-12", "ωmega-12"),
+        ("ΟΔΟΣ-1234", "οδος-1234"), ("οδοσ-1234", "ΟΔΟΣ-1234"), ("\u{FB05}udio-123", "STUDIO-123"),
+        ("STUDIO-123", "\u{FB05}udio-123")
+    ]
+
+    /// Label and withheld spellings that are canonically equivalent case variants (round 8).
+    static let canonicalCasePairs: [(String, String)] = [
+        ("\u{03AA}\u{0301}-123456", "\u{0390}-123456"), ("\u{0390}-123456", "\u{03AA}\u{0301}-123456"),
+        ("\u{212B}12345", "\u{00C5}12345"), ("\u{00C5}12345", "A\u{030A}12345"),
+        ("a\u{030A}12345", "\u{212B}12345"),
+        ("\u{01C5}-123456", "\u{01C4}-123456"), ("\u{01C6}-123456", "\u{01C5}-123456"),
+        ("\u{01C4}-1234", "\u{01C6}-1234"),
+        ("q\u{0307}\u{0323}-123456", "q\u{0323}\u{0307}-123456"),
+        ("q\u{0323}\u{0307}-123456", "Q\u{0307}\u{0323}-123456"),
+        ("\u{1FB4}\u{0301}-12", "\u{0386}\u{0301}\u{0345}-12"), ("\u{0386}\u{0301}\u{0345}-12", "\u{1FB4}\u{0301}-12"),
+        ("\u{D55C}\u{AD6D}-12", "\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12"),
+        ("\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12", "\u{D55C}\u{AD6D}-12")
+    ]
 
     static func permutations(_ items: [String]) -> [[String]] {
         guard items.count > 1 else { return [items] }
