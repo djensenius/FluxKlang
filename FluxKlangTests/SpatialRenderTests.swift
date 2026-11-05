@@ -141,6 +141,7 @@ struct SpatialRenderTests {
         #expect(silent.rowSources == [placements[0].sourceID, placements[0].sourceID, placements[1].sourceID])
         #expect(silent.gains == Array(repeating: 0, count: 12) && silent.delayFrames == [0, 0, 0, 0])
         #expect(silent.calibrationGeneration == 2)
+        #expect(silent.speakerIDs == layout.speakers.map(\.id))
         let many = try (0..<65).map { try Self.source("src.\($0)", 0, 0) }
         let (none, tooMany) = SpatialRenderer.planOrSilence(SpatialRenderRequest(layout: layout, placements: many))
         #expect(tooMany == .tooManySources(65) && none.rowCount == 0 && none.gains.isEmpty)

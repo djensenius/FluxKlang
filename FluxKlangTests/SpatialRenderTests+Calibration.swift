@@ -172,4 +172,54 @@ extension SpatialRenderTests {
         let midPower = (0..<4).map { ramp.gain(row: 0, speaker: $0, frame: 50) }.reduce(0) { $0 + $1 * $1 }
         #expect(midPower < 1 && midPower > 0.5)
     }
+
+    @Test func rampRefusesReorderedOrDifferentColumns() throws {
+        let stereoPoints: [(Double, Double)] = [(-1, 0), (1, 0)]
+        let pair = try Self.layout(stereoPoints, names: ["spk.l", "spk.r"])
+        let reversed = try Self.layout(stereoPoints.reversed(), names: ["spk.r", "spk.l"])
+        let other = try Self.layout(stereoPoints, names: ["spk.l", "spk.c"])
+        let from = try Self.plan(pair, [Self.source(-0.5, 0)])
+        #expect(from.speakerIDs == [try Self.id("spk.l"), try Self.id("spk.r")])
+        let flipped = try Self.plan(reversed, [Self.source(-0.5, 0)])
+        #expect(flipped.speakerCount == from.speakerCount && flipped.rowSources == from.rowSources)
+        #expect(throws: SpatialRenderError.columnMismatch) { try SpatialGainRamp(from: from, to: flipped, frames: 4) }
+        let swapped = try Self.plan(other, [Self.source(-0.5, 0)])
+        #expect(throws: SpatialRenderError.columnMismatch) { try SpatialGainRamp(from: from, to: swapped, frames: 4) }
+        let to = try Self.plan(pair, [Self.source(0.5, 0)])
+        let ramp = try SpatialGainRamp(from: from, to: to, frames: 4)
+        let start = from.gain(row: 0, speaker: 0)
+        #expect(ramp.gain(row: 0, speaker: 0, frame: 2) == start + (to.gain(row: 0, speaker: 0) - start) / 2)
+    }
+
+    @Test func rampFramesBeforeAndAfterNeverDivideByZero() throws {
+        let layout = try Self.quad()
+        // Centre source with the front-left muted: speaker 0 is 0, the rest 0.5.
+        let flat = try Self.plan(layout, [Self.source(0, 0)], masks: [Self.mask("spk.fl")])
+        #expect(flat.row(0) == [0, 0.5, 0.5, 0.5])
+        let from = try Self.plan(layout, [Self.source(-1, 1)])
+        let to = try Self.plan(layout, [Self.source(1, 1)])
+        let equal = try SpatialGainRamp(from: flat, to: flat, frames: 0)
+        let jump = try SpatialGainRamp(from: from, to: to, frames: 0)
+        for speaker in 0..<4 {
+            for frame in [-1, 0, 1] {
+                #expect(equal.gain(row: 0, speaker: speaker, frame: frame) == flat.gain(row: 0, speaker: speaker))
+            }
+            #expect(jump.gain(row: 0, speaker: speaker, frame: -1) == from.gain(row: 0, speaker: speaker))
+            #expect(jump.gain(row: 0, speaker: speaker, frame: 0) == to.gain(row: 0, speaker: speaker))
+            #expect(jump.gain(row: 0, speaker: speaker, frame: 1) == to.gain(row: 0, speaker: speaker))
+        }
+        let ramp = try SpatialGainRamp(from: from, to: to, frames: 10)
+        for speaker in 0..<4 {
+            let start = from.gain(row: 0, speaker: speaker)
+            let end = to.gain(row: 0, speaker: speaker)
+            #expect([-1, 0].map { ramp.gain(row: 0, speaker: speaker, frame: $0) } == [start, start])
+            #expect([10, 11].map { ramp.gain(row: 0, speaker: speaker, frame: $0) } == [end, end])
+        }
+        let ramps = [equal, jump, ramp, try SpatialGainRamp(from: flat, to: flat, frames: 10)]
+        #expect(ramps.allSatisfy { sweep in
+            (-3...13).allSatisfy { frame in
+                (0..<4).allSatisfy { sweep.gain(row: 0, speaker: $0, frame: frame).isFinite }
+            }
+        })
+    }
 }

@@ -16,10 +16,16 @@ import Foundation
 /// speakers); it never rises above the larger endpoint. A 0-frame ramp jumps to
 /// `to` immediately.
 ///
+/// Both plans must have identical row identities and identical ordered output
+/// columns (`speakerIDs`). A layout reorder or membership change, even at the
+/// same speaker count, is refused with `.columnMismatch` rather than ramping one
+/// speaker's gain toward another's (an unintended pan); it needs a fresh plan
+/// (a jump). An ID-aligned ramp across layout changes is an M2 follow-up.
+///
 /// Pure value math at control rate: not for the audio thread (building plans
 /// allocates). Both plans come only from `SpatialRenderer`, whose plans always
-/// have `rowSources.count × speakerCount` gains, so equal row sources and
-/// speaker counts imply equal gain counts.
+/// have `rowSources.count × speakerIDs.count` gains, so equal rows and columns
+/// imply equal gain counts.
 struct SpatialGainRamp: Hashable, Sendable {
     static let frameRange: ClosedRange<Int> = 0...48_000
 
@@ -32,16 +38,20 @@ struct SpatialGainRamp: Hashable, Sendable {
         guard from.speakerCount == to.speakerCount, from.rowSources == to.rowSources else {
             throw .shapeMismatch
         }
+        guard from.speakerIDs == to.speakerIDs else { throw .columnMismatch }
         self.from = from
         self.to = to
         self.frames = frames
     }
 
-    /// The gain at `frame`: `to` from `frames` on; before frame 0 the endpoint
-    /// clamp holds it at `from`.
+    /// The gain at `frame`: `from` before frame 0, `to` from `frames` on (so a
+    /// 0-frame ramp at any frame ≥ 0 is `to`), linear in between. The guards run
+    /// before the division, whose divisor is then always ≥ 1, so no frame yields
+    /// a NaN or infinity.
     func gain(row: Int, speaker: Int, frame: Int) -> Double {
         let start = from.gain(row: row, speaker: speaker)
         let end = to.gain(row: row, speaker: speaker)
+        guard frame >= 0 else { return start }
         guard frame < frames else { return end }
         let fraction = Double(frame) / Double(frames)
         let value = start + (end - start) * fraction

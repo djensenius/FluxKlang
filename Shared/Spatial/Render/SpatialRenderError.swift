@@ -30,8 +30,11 @@ enum SpatialRenderError: Error, Equatable, Sendable {
     case noPendingCalibration
     /// `promote` was asked to apply a set other than the one pending.
     case pendingMismatch
-    /// Two plans with different rows or speakers cannot be ramped.
+    /// Two plans with different rows or speaker counts cannot be ramped.
     case shapeMismatch
+    /// Two plans with the same speaker count but different ordered speaker IDs
+    /// (a layout reorder or membership change) cannot be ramped; use a fresh plan.
+    case columnMismatch
 }
 
 /// Wraps a render validation failure as `DecodingError.dataCorrupted`, keeping

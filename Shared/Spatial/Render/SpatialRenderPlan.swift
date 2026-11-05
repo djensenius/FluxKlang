@@ -50,7 +50,8 @@ struct SpatialRenderRequest: Hashable, Sendable {
 /// `SpatialRenderer` (this file) can construct a plan, so its shape and gain
 /// bounds always hold.
 struct SpatialRenderPlan: Hashable, Sendable {
-    let speakerCount: Int
+    /// The output columns: `layout.speakers` IDs in layout order.
+    let speakerIDs: [SpeakerID]
     /// The source of each row (a stereo source contributes two consecutive rows).
     let rowSources: [SpatialSourceID]
     /// Row-major, `rowSources.count × speakerCount`.
@@ -60,15 +61,16 @@ struct SpatialRenderPlan: Hashable, Sendable {
     /// The generation of the calibration snapshot this plan used.
     let calibrationGeneration: Int
 
-    fileprivate init(speakerCount: Int, rowSources: [SpatialSourceID], gains: [Double], delayFrames: [Int],
+    fileprivate init(speakerIDs: [SpeakerID], rowSources: [SpatialSourceID], gains: [Double], delayFrames: [Int],
                      calibrationGeneration: Int) {
-        self.speakerCount = speakerCount
+        self.speakerIDs = speakerIDs
         self.rowSources = rowSources
         self.gains = gains
         self.delayFrames = delayFrames
         self.calibrationGeneration = calibrationGeneration
     }
 
+    var speakerCount: Int { speakerIDs.count }
     var rowCount: Int { rowSources.count }
 
     func gain(row: Int, speaker: Int) -> Double {
@@ -114,7 +116,7 @@ enum SpatialRenderer {
             delays.append(try request.calibration.entry(for: speaker.id)?
                 .delayFrames(sampleRate: request.sampleRate) ?? 0)
         }
-        return SpatialRenderPlan(speakerCount: layout.speakers.count, rowSources: rowSources, gains: gains,
+        return SpatialRenderPlan(speakerIDs: layout.speakers.map(\.id), rowSources: rowSources, gains: gains,
                                  delayFrames: delays, calibrationGeneration: request.calibration.generation)
     }
 
@@ -124,12 +126,13 @@ enum SpatialRenderer {
         do {
             return (try plan(request), nil)
         } catch {
-            let speakers = request.layout.speakers.count
+            let speakerIDs = request.layout.speakers.map(\.id)
+            let speakers = speakerIDs.count
             let rows: [SpatialSourceID] = request.placements.count <= maximumSources
                 ? request.placements.flatMap { Array(repeating: $0.sourceID, count: $0.channelCount) }
                 : []
             let silent = SpatialRenderPlan(
-                speakerCount: speakers, rowSources: rows, gains: Array(repeating: 0, count: rows.count * speakers),
+                speakerIDs: speakerIDs, rowSources: rows, gains: Array(repeating: 0, count: rows.count * speakers),
                 delayFrames: Array(repeating: 0, count: speakers),
                 calibrationGeneration: request.calibration.generation
             )
