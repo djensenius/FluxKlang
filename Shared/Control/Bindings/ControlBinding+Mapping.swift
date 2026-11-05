@@ -3,7 +3,8 @@ import Foundation
 extension ControlRecord where Fields == ControlBindingFields {
     /// Checks this binding against the host's descriptor and returns the range it may write:
     /// the descriptor range capped by its ceiling, narrowed by the binding range and, for
-    /// stepped parameters, shrunk to integral steps.
+    /// stepped parameters, shrunk to integral steps. Absolute bindings, which map positions over the
+    /// range, refuse a range whose width overflows (`0 * inf` would be NaN); relative ones need no width.
     func validate(against descriptor: ParameterDescriptor) throws(ControlBindingRefusal) -> ClosedRange<Double> {
         guard descriptor.id == fields.target else {
             throw .descriptorMismatch(expected: fields.target, found: descriptor.id)
@@ -13,7 +14,9 @@ extension ControlRecord where Fields == ControlBindingFields {
         if !fields.profile.isRelative, descriptor.curve == .faderTaper { throw .undefinedCurve(.faderTaper) }
         let stepped = descriptor.curve == .stepped
         if stepped, let step = fields.step, step.rounded() != step { throw .invalidStep(step) }
-        return try writableRange(descriptor, stepped: stepped)
+        let range = try writableRange(descriptor, stepped: stepped)
+        if !fields.profile.isRelative { try Self.requireRepresentable(range) }
+        return range
     }
 
     /// Resolves one decoded input against host truth (`current`) into an absolute setter.
@@ -44,6 +47,12 @@ extension ControlRecord where Fields == ControlBindingFields {
         return lower...upper
     }
 
+    static func requireRepresentable(_ range: ClosedRange<Double>) throws(ControlBindingRefusal) {
+        guard (range.upperBound - range.lowerBound).isFinite else {
+            throw .unrepresentableRange(lower: range.lowerBound, upper: range.upperBound)
+        }
+    }
+
     /// Stepped parameters step from the whole step behind the turn, so a non-integral host value
     /// moves at most `|delta|` steps.
     private func candidate(for input: ControlInput, current: Double, range: ClosedRange<Double>,
@@ -68,6 +77,7 @@ extension ControlRecord where Fields == ControlBindingFields {
     static func value(at normalized: Double, over range: ClosedRange<Double>,
                       curve: ParameterCurve) throws(ControlBindingRefusal) -> Double {
         guard curve != .faderTaper else { throw .undefinedCurve(curve) }
+        try requireRepresentable(range)
         guard normalized < 1 else { return range.upperBound }
         return range.lowerBound + normalized * (range.upperBound - range.lowerBound)
     }
