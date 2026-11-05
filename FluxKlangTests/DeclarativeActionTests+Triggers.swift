@@ -319,4 +319,32 @@ struct DeclarativeActionTriggerTests {
         }
         #expect(fired == [3, 0, 3])
     }
+
+    /// `ResolvedActionSet` has only the library resolver as an initializer, so `decide` sees members only.
+    @Test
+    func foreignOrUnpreparedActionNeverReachesDecide() throws {
+        var fixture = try ActionSetFixture()
+        let ids = try ActionSetFixture.ids(5)
+        let project = try ActionSetFixture.actions(Array(ids.prefix(4)))
+        try fixture.ready(Array(ids.prefix(3)))
+        let scene = ActionSetFixture.scene
+        let library = try PerformanceActionSetLibrary(sets: [
+            PerformanceActionSet(id: ActionSetID("set.members"), members: [ids[1], ids[0]], cancelScope: scene),
+            PerformanceActionSet(id: ActionSetID("set.unprepared"), members: [ids[0], ids[3]], cancelScope: scene),
+            PerformanceActionSet(id: ActionSetID("set.foreign"), members: [ids[0], ids[4]], cancelScope: scene)
+        ])
+        let members = try library.resolve(ActionSetID("set.members"), in: project)
+        #expect(members.actions.map(\.id) == [ids[1], ids[0]])
+        let fired = try Self.stamps(fixture.decide(members, ActionSetFixture.request()))
+        #expect(fired.map(\.action) == [ids[1], ids[0]])
+        let unprepared = try library.resolve(ActionSetID("set.unprepared"), in: project)
+        guard case .dropped(let report) = try fixture.decide(unprepared, ActionSetFixture.request()) else {
+            Issue.record("An unprepared member must drop the set")
+            return
+        }
+        #expect(report.readiness.notReady == [ActionSetMemberStatus(action: ids[3], state: .unprepared, reason: nil)])
+        #expect(throws: ActionSetRefusal.unknownMember(ids[4])) {
+            try library.resolve(ActionSetID("set.foreign"), in: project)
+        }
+    }
 }

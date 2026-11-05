@@ -8,12 +8,31 @@
 
 import Foundation
 
-/// A set whose members all resolved, in member order.
+/// A set whose members all resolved, in member order. `decide` trusts that `actions[i].id ==
+/// set.members[i]`, so the only initializer is `fileprivate` and derives `actions` from
+/// `set.members`; there is no memberwise init, and only `PerformanceActionSetLibrary.resolve` can
+/// build one. A foreign action therefore never reaches `decide`, and readiness is checked per member.
+/// The storage is `private`, so an initializer declared in an extension in another file can neither
+/// assign it nor delegate to an accessible init.
 struct ResolvedActionSet: Hashable, Sendable {
-    let set: PerformanceActionSet
-    let actions: [ProjectMediaAction]
+    private let storedSet: PerformanceActionSet
+    private let storedActions: [ProjectMediaAction]
+
+    var set: PerformanceActionSet { storedSet }
+    var actions: [ProjectMediaAction] { storedActions }
 
     var mediaKinds: Set<ActionMedia> { Set(actions.map(\.policy.media)) }
+
+    fileprivate init(_ set: PerformanceActionSet,
+                     index: [ActionID: ProjectMediaAction]) throws(ActionSetRefusal) {
+        var actions: [ProjectMediaAction] = []
+        for member in set.members {
+            guard let action = index[member] else { throw .unknownMember(member) }
+            actions.append(action)
+        }
+        storedSet = set
+        storedActions = actions
+    }
 }
 
 struct PerformanceActionSetLibrary: Codable, Hashable, Sendable {
@@ -65,12 +84,7 @@ struct PerformanceActionSetLibrary: Codable, Hashable, Sendable {
 
     private static func resolve(_ set: PerformanceActionSet,
                                 index: [ActionID: ProjectMediaAction]) throws(ActionSetRefusal) -> ResolvedActionSet {
-        var actions: [ProjectMediaAction] = []
-        for member in set.members {
-            guard let action = index[member] else { throw .unknownMember(member) }
-            actions.append(action)
-        }
-        return ResolvedActionSet(set: set, actions: actions)
+        try ResolvedActionSet(set, index: index)
     }
 
     init(from decoder: any Decoder) throws {
