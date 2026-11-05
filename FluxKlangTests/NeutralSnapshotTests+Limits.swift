@@ -128,11 +128,12 @@ extension NeutralSnapshotTests {
             // The scalars nearest the base are kept: 7 of the 9 leading Prepend scalars fit.
             ("Rig " + prepends(4) + String(repeating: "\u{11A84}", count: 5) + "a",
              "Rig " + prepends(2) + String(repeating: "\u{11A84}", count: 5) + "a"),
-            // Dropping the Prepend run lets the marks join "a"; the merged grapheme is capped again.
-            ("a" + prepends(9) + acutes(9) + "z", "a" + acutes(7) + "z")
+            // Dropping the Prepend run lets the marks join "a"; the merged grapheme is capped
+            // again, and the fixed point composes a + U+0301 to U+00E1.
+            ("a" + prepends(9) + acutes(9) + "z", "\u{00E1}" + acutes(6) + "z")
         ]
         for (raw, expected) in cases {
-            #expect(UntrustedLabel(raw).text == expected)
+            #expect(UntrustedLabel(raw).text.unicodeScalars.elementsEqual(expected.unicodeScalars))
             #expect(Self.meetsLabelPostcondition(raw))
         }
     }
@@ -147,6 +148,11 @@ extension NeutralSnapshotTests {
         let label = UntrustedLabel(raw, withholding: [term])
         let merged = String(repeating: "\u{1100}", count: 4) + "\u{AC00}" + String(repeating: "\u{1161}", count: 3)
         #expect(label.text == "R " + merged + " " + UntrustedLabel.withheldMarker)
+        // `settle` itself rematches and re-caps, not only the fixed-point loop around it.
+        let settled = UntrustedLabel.settle(
+            raw.precomposedStringWithCanonicalMapping, terms: UntrustedTextSanitizer.withheldTerms([term])
+        )
+        #expect(settled.text == label.text && settled.changed)
         #expect(Self.meetsLabelPostcondition(raw, withholding: [term]))
         // Withholding the whole label minus U+030A withholds all of it once capping completes the match.
         #expect(UntrustedLabel(raw, withholding: ["R " + jamo + " " + term]).text == UntrustedLabel.withheldMarker)
@@ -191,6 +197,92 @@ extension NeutralSnapshotTests {
             let count = Int.random(in: 0...80, using: &generator)
             let raw = (0..<count).map { _ in alphabet.randomElement(using: &generator) ?? "" }.joined()
             #expect(Self.meetsLabelPostcondition(raw, withholding: ["SN-1234"]), "\(Array(raw.unicodeScalars))")
+        }
+    }
+}
+
+extension NeutralSnapshotTests {
+    /// Capping a regional indicator re-pairs the ones after it and once enlarged the
+    /// EARLIER grapheme to nine scalars; the whole-string sweep caps it again.
+    @Test func reCappingRegionalIndicatorsChecksEveryGrapheme() {
+        let raw = String(repeating: "\u{0D4E}", count: 8) + "\u{1F1E8}\u{200D}\u{1F1E8}\u{1F1E8}"
+        let label = UntrustedLabel(raw)
+        let expected = String(repeating: "\u{0D4E}", count: 6) + "\u{1F1E8}\u{1F1E8}\u{1F1E8}"
+        #expect(label.text.unicodeScalars.elementsEqual(expected.unicodeScalars))
+        #expect(label.text.map(\.unicodeScalars.count) == [8, 1])
+        #expect(label.wasSanitized && !label.isTruncated)
+        // `capGraphemes` meets the cap on its own; the label's fixed-point loop is not needed for it.
+        let capped = UntrustedTextSanitizer.capGraphemes(raw)
+        #expect(capped.text.unicodeScalars.elementsEqual(expected.unicodeScalars) && capped.changed)
+    }
+
+    /// Capping is whole-string sweeps, so its work is linear. The counted work is the
+    /// deterministic pin: a regional-indicator run needs one scan and no rebuild, and a
+    /// 20,000-scalar Prepend + regional-indicator label stays within a constant number
+    /// of visits per scalar. Release builds also check how the time SCALES (see
+    /// `cappingTimeScalesLinearly`), which catches work the counter does not see.
+    @Test func cappingWorkIsLinear() {
+        let run = String(repeating: "\u{1F1E8}", count: 16_384)
+        var runWork = UntrustedTextSanitizer.CapWork()
+        let cappedRun = UntrustedTextSanitizer.capGraphemes(run, work: &runWork)
+        #expect(cappedRun.text == run && !cappedRun.changed)
+        #expect(runWork.sweeps == 0 && runWork.graphemesVisited == 8_192)
+        let block = String(repeating: "\u{0D4E}", count: 9) + "\u{1F1E8}\u{200D}\u{1F1E8}\u{1F1E8}"
+        let mixed = String(repeating: block, count: 1_538)
+        var mixedWork = UntrustedTextSanitizer.CapWork()
+        let cappedMixed = UntrustedTextSanitizer.capGraphemes(mixed, work: &mixedWork)
+        #expect(UntrustedTextSanitizer.meetsGraphemeCap(cappedMixed.text))
+        #expect(mixedWork.sweeps <= 2)
+        #expect(mixedWork.graphemesVisited <= 2 * (mixedWork.sweeps + 1) * mixed.unicodeScalars.count)
+    }
+
+    #if !DEBUG
+    /// A hidden per-append `String.last` scan rescans the whole regional-indicator run,
+    /// so quadrupling the run multiplies the time by about 16 instead of about 4. The
+    /// check is a ratio, so it does not depend on the machine's speed, and it takes the
+    /// minimum of interleaved repeats, so a load spike only slows the samples it hits.
+    @Test func cappingTimeScalesLinearly() {
+        let clock = ContinuousClock()
+        let small = String(repeating: "\u{1F1E8}", count: 4_096)
+        let large = String(repeating: "\u{1F1E8}", count: 16_384)
+        var fastest = (small: Duration.seconds(3_600), large: Duration.seconds(3_600))
+        for _ in 0..<9 {
+            fastest.small = min(fastest.small, clock.measure { _ = UntrustedTextSanitizer.capGraphemes(small) })
+            fastest.large = min(fastest.large, clock.measure { _ = UntrustedTextSanitizer.capGraphemes(large) })
+        }
+        let ratio = fastest.large / fastest.small
+        #expect(ratio < 8, "\(fastest.small) -> \(fastest.large), ratio \(ratio)")
+    }
+    #endif
+
+    /// A withheld string inside the marker never reaches a fixed point (every pass wraps
+    /// the marker again), so the label fails closed to the marker.
+    @Test func aLabelWithoutAFixedPointIsWithheld() {
+        let label = UntrustedLabel("x withheld", withholding: ["withheld"])
+        #expect(label.text == UntrustedLabel.withheldMarker && label.isTruncated && label.wasSanitized)
+    }
+
+    @Test func seededAdversarialLabelsAreCappedIdempotentAndRedacted() {
+        let alphabet = [
+            "\u{0D4E}", "\u{11A84}", "\u{1F1E8}", "\u{1F1E6}", "\u{200D}", "\u{200C}", "\u{0301}", "\u{1F3FB}",
+            "\u{FE0F}", "👩", "\u{1100}", "\u{1161}", "\u{11A8}", "\r", "\n", "\r\n", "\u{E0041}", "\u{E007F}",
+            "a", "Z", " ", "-", "SN-", "1234", "SN-1234", "sn-1234", "\u{0D4E}\u{0D4E}\u{0D4E}\u{0D4E}"
+        ]
+        let terms = UntrustedTextSanitizer.withheldTerms(["SN-1234"])
+        var generator = NeutralSnapshotSplitMix64(seed: 0x118_010E)
+        for index in 0..<2_000 {
+            let count = Int.random(in: 0...40, using: &generator)
+            let raw = (0..<count).map { _ in alphabet.randomElement(using: &generator) ?? "" }.joined()
+            let limit = index.isMultiple(of: 3) ? 24 : 128
+            let label = UntrustedLabel(raw, maximumBytes: limit, terms: terms)
+            let again = UntrustedLabel(label.text, maximumBytes: limit, terms: terms)
+            let context = "\(Array(raw.unicodeScalars))"
+            let capped = UntrustedTextSanitizer.capGraphemes(raw).text
+            #expect(capped.allSatisfy { $0.unicodeScalars.count <= 8 }, "\(context)")
+            #expect(label.text.allSatisfy { $0.unicodeScalars.count <= 8 }, "\(context)")
+            #expect(label.text.utf8.count <= limit, "\(context)")
+            #expect(again.text.unicodeScalars.elementsEqual(label.text.unicodeScalars), "\(context)")
+            #expect(!label.text.uppercased().contains("SN-1234"), "\(context)")
         }
     }
 }

@@ -131,42 +131,65 @@ enum UntrustedTextSanitizer {
         }
     }
 
-    /// Caps every grapheme of the result, as Swift segments the result, to
+    /// Caps every grapheme of the text, as Swift segments the WHOLE text, to
     /// `maximumScalarsPerGrapheme` scalars, never ending a capped one on a joiner.
     ///
-    /// Capping the input's own graphemes is not enough: a capped grapheme can end in
-    /// a `Prepend` scalar (U+0D4E) and merge with the next one. So the result is built
-    /// one input grapheme at a time, and after each append its trailing grapheme is
-    /// re-checked. A grapheme boundary depends only on the scalars before it and the
-    /// one scalar after it, so an append can only change the trailing grapheme. A
-    /// replacement can merge into the grapheme before it (dropping a Prepend run lets
-    /// marks attach to the previous base: `"a" + 9×U+0D4E + 9×U+0301` caps to
-    /// `"a" + 7×U+0301`), so the check loops until the trailing grapheme fits; every
-    /// pass shrinks the text, and graphemes before the merged one are untouched. A
-    /// rematch can still create an oversized grapheme (dropping a joiner merges its
-    /// neighbours), so `UntrustedLabel` caps again after every rematch.
+    /// Segmentation is not local: a capped grapheme can end in a `Prepend` scalar
+    /// (U+0D4E) and merge with the next one, dropping a Prepend run lets marks attach to
+    /// the previous base (`"a" + 9×U+0D4E + 9×U+0301` caps to `"a" + 7×U+0301`), and
+    /// regional indicators pair by parity from the left, so capping one re-pairs those
+    /// after it and can enlarge an EARLIER grapheme (`8×U+0D4E + 🇨 ZWJ 🇨🇨` once gave
+    /// `[9, 1]`). So the text is capped by whole-string sweeps: each sweep scans the
+    /// whole text once and, if any grapheme is oversized, rebuilds it with every
+    /// oversized grapheme replaced by `cappedScalars`; a changing sweep removes at least
+    /// one scalar. At most `maximumCapSweeps` rebuilds run, so the work is linear in the
+    /// text. (An earlier per-append check of the trailing grapheme was quadratic on a
+    /// regional-indicator run, because `String.last` scans back to the start of the run.)
+    /// A rematch can still create an oversized grapheme (dropping a joiner merges its
+    /// neighbours), so `UntrustedLabel` caps again after every rematch, and finally
+    /// checks `meetsGraphemeCap` on the whole text and fails closed if the sweeps ran out.
     static func capGraphemes(_ text: String) -> Result {
-        var result = ""
-        var changed = false
-        for character in text {
-            result.unicodeScalars.append(contentsOf: character.unicodeScalars)
-            changed = capTrailingGrapheme(&result) || changed
-        }
-        return (result, changed)
+        var work = CapWork()
+        return capGraphemes(text, work: &work)
     }
 
-    /// Replaces an oversized trailing grapheme by at most `maximumScalarsPerGrapheme`
-    /// of its scalars (`cappedScalars`). Each pass removes at least one scalar, so the
-    /// loop ends.
-    private static func capTrailingGrapheme(_ text: inout String) -> Bool {
+    /// Work done by `capGraphemes`, counted so tests can pin it as linear.
+    struct CapWork {
+        /// Whole-text rebuilds, at most `maximumCapSweeps`.
+        var sweeps = 0
+        /// Graphemes visited by the cap checks and the rebuilds.
+        var graphemesVisited = 0
+    }
+
+    /// At most this many whole-string rebuilds run; `UntrustedLabel` fails closed if the
+    /// text still has an oversized grapheme after them.
+    static let maximumCapSweeps = 4
+
+    static func capGraphemes(_ text: String, work: inout CapWork) -> Result {
+        var text = text
         var changed = false
-        while let last = text.last, last.unicodeScalars.count > maximumScalarsPerGrapheme {
-            let kept = cappedScalars(Array(last.unicodeScalars))
-            text.removeSubrange(text.index(before: text.endIndex)...)
-            text.unicodeScalars.append(contentsOf: kept)
+        for _ in 0..<maximumCapSweeps {
+            guard text.contains(where: { character in
+                work.graphemesVisited += 1
+                return character.unicodeScalars.count > maximumScalarsPerGrapheme
+            }) else { break }
+            var rebuilt = String.UnicodeScalarView()
+            for character in text {
+                work.graphemesVisited += 1
+                let scalars = Array(character.unicodeScalars)
+                let oversized = scalars.count > maximumScalarsPerGrapheme
+                rebuilt.append(contentsOf: oversized ? cappedScalars(scalars) : scalars)
+            }
+            text = String(rebuilt)
+            work.sweeps += 1
             changed = true
         }
-        return changed
+        return (text, changed)
+    }
+
+    /// Whether every grapheme of `text`, as Swift segments the whole string, fits the cap.
+    static func meetsGraphemeCap(_ text: String) -> Bool {
+        text.allSatisfy { $0.unicodeScalars.count <= maximumScalarsPerGrapheme }
     }
 
     /// Keeps the base and its first marks, never ending on a joiner. An oversized run of
@@ -193,16 +216,15 @@ enum UntrustedTextSanitizer {
     }
 
     /// Keeps whole graphemes of `text` while they fit in `maximumBytes` UTF-8 bytes.
-    /// The cut is at a grapheme boundary of `text`, so the kept prefix segments the
-    /// same way; its trailing grapheme is re-checked against the scalar cap anyway.
+    /// The cut is at a grapheme boundary of `text`. The kept prefix is capped again
+    /// (defensive: a prefix cut at a boundary never enlarges a grapheme), which only
+    /// ever removes scalars, so it still fits.
     static func truncate(_ text: String, maximumBytes: Int) -> Result {
         var used = 0
         for index in text.indices {
             let width = text[index].utf8.count
             guard used + width <= maximumBytes else {
-                var kept = String(text[..<index])
-                _ = capTrailingGrapheme(&kept)
-                return (kept, true)
+                return (capGraphemes(String(text[..<index])).text, true)
             }
             used += width
         }

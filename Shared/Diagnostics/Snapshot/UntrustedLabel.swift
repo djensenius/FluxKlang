@@ -31,8 +31,13 @@ import Foundation
 ///    `withheldMarker` (or empty, flagged truncated, when the marker does not fit
 ///    either), never a silently empty string.
 ///
-/// Postcondition: every grapheme of `text` has at most `maximumScalarsPerGrapheme`
-/// scalars, and `text` is at most `maximumBytes` UTF-8 bytes.
+/// 5. Steps 1–4 repeat until the text is a fixed point (bounded by
+///    `maximumStablePasses`), and a final whole-string scan checks the postcondition;
+///    either failing withholds the label.
+///
+/// Postcondition: every grapheme of `text`, as Swift segments the whole string, has at
+/// most `maximumScalarsPerGrapheme` scalars; `text` is at most `maximumBytes` UTF-8
+/// bytes; and labelling `text` again with the same terms returns `text`.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
 /// matched by a match-form prefix, and a match redacts the rest of the label. One
@@ -66,21 +71,68 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
     /// Used by the snapshot builder, which prepares the terms once for all labels.
     init(_ raw: String, maximumBytes: Int, terms: [UntrustedTextSanitizer.WithheldTerm]) {
         let limit = max(0, maximumBytes)
+        let first = Self.sanitizeOnce(raw, limit: limit, terms: terms)
+        var text = first.text
+        var isTruncated = first.isTruncated
+        var wasSanitized = first.wasSanitized
+        var isStable = false
+        for _ in 0..<Self.maximumStablePasses {
+            let again = Self.sanitizeOnce(text, limit: limit, terms: terms)
+            // Scalar-exact: `String ==` is canonical equivalence and would accept a text
+            // that a second labelling still renormalizes.
+            if again.text.unicodeScalars.elementsEqual(text.unicodeScalars) {
+                isStable = true
+                break
+            }
+            text = again.text
+            isTruncated = isTruncated || again.isTruncated
+            wasSanitized = true
+        }
+        // The final guard scans the whole text. A label that is not a fixed point, or
+        // still breaks the postcondition, is withheld rather than shown.
+        if !isStable || !UntrustedTextSanitizer.meetsGraphemeCap(text) || text.utf8.count > limit {
+            text = Self.withheldMarker.utf8.count <= limit ? Self.withheldMarker : ""
+            isTruncated = true
+            wasSanitized = true
+        }
+        self.text = text
+        self.isTruncated = isTruncated
+        self.wasSanitized = wasSanitized
+    }
+
+    /// At most this many extra passes of the whole pipeline run before a label that is
+    /// not yet a fixed point is withheld. Capping can leave text that normalizes or
+    /// segments differently (dropped marks let a base compose with the next mark), so
+    /// the label is the pipeline's fixed point, which also makes it idempotent.
+    static let maximumStablePasses = 4
+
+    private struct Pass {
+        let text: String
+        let isTruncated: Bool
+        let wasSanitized: Bool
+    }
+
+    /// One pass of steps 1–4.
+    private static func sanitizeOnce(
+        _ raw: String, limit: Int, terms: [UntrustedTextSanitizer.WithheldTerm]
+    ) -> Pass {
         let scan = UntrustedTextSanitizer.scanLimit(maximumBytes: limit, withheld: terms.map(\.text))
         let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: scan)
         let display = filtered.text.precomposedStringWithCanonicalMapping
         let redacted = UntrustedTextSanitizer.redactMatchForm(
-            of: display, withheld: terms, marker: Self.withheldMarker, scanIsComplete: filtered.isComplete
+            of: display, withheld: terms, marker: withheldMarker, scanIsComplete: filtered.isComplete
         )
-        let settled = Self.settle(redacted.text, terms: terms)
+        let settled = settle(redacted.text, terms: terms)
         var cut = UntrustedTextSanitizer.truncate(settled.text, maximumBytes: limit)
         if cut.text.isEmpty, !settled.text.isEmpty {
             // The first grapheme alone does not fit: the label is withheld, not silently emptied.
-            cut = (Self.withheldMarker.utf8.count <= limit ? Self.withheldMarker : "", true)
+            cut = (withheldMarker.utf8.count <= limit ? withheldMarker : "", true)
         }
-        text = cut.text
-        isTruncated = cut.changed || !filtered.isComplete
-        wasSanitized = filtered.changed || redacted.changed || settled.changed
+        return Pass(
+            text: cut.text,
+            isTruncated: cut.changed || !filtered.isComplete,
+            wasSanitized: filtered.changed || redacted.changed || settled.changed
+        )
     }
 
     /// At most this many cap-and-rematch passes run before a label is withheld.
@@ -93,7 +145,7 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
     /// A pass that caps nothing, or rematches nothing, ends with every grapheme within
     /// the cap. If `maximumSettlePasses` pass without that, the label fails closed to
     /// `withheldMarker`.
-    private static func settle(
+    static func settle(
         _ text: String, terms: [UntrustedTextSanitizer.WithheldTerm]
     ) -> UntrustedTextSanitizer.Result {
         var capped = UntrustedTextSanitizer.capGraphemes(text)
