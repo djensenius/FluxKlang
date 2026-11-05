@@ -239,6 +239,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
+      - path: FluxKlangTests/WorkspaceNavigationTests+Projects.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
