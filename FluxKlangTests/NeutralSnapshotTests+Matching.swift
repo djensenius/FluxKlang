@@ -171,9 +171,9 @@ extension NeutralSnapshotTests {
         let label = UntrustedLabel("\u{1100}\u{200D}\u{1161}나다", withholding: ["가나다"])
         #expect(label.text == UntrustedLabel.withheldMarker)
         let raw = "\u{1100}\u{200D}\u{1161}\u{FE0F}나다"
-        let form = UntrustedTextSanitizer.matchForm(raw)
+        let form = UntrustedTextSanitizer.sourceForm(raw)
         #expect(form.unicodeScalars.elementsEqual("가나다".unicodeScalars))
-        #expect(UntrustedTextSanitizer.matchForm(form).unicodeScalars.elementsEqual(form.unicodeScalars))
+        #expect(UntrustedTextSanitizer.sourceForm(form).unicodeScalars.elementsEqual(form.unicodeScalars))
         let term = try #require(UntrustedTextSanitizer.withheldTerm(raw))
         #expect(term.text.unicodeScalars.elementsEqual("가나다".unicodeScalars))
         #expect(UntrustedTextSanitizer.withheldTerm(term.text) == term)
@@ -240,10 +240,12 @@ extension NeutralSnapshotTests {
         let flooded = "SN-x" + String(repeating: "\u{0301}", count: 8) + "-99"
         let completed = "SN-x" + String(repeating: "\u{0301}", count: 7) + "-99"
         #expect(UntrustedLabel(flooded, withholding: [completed]).text == UntrustedLabel.withheldMarker)
-        // A term is never capped: a leading mark flood is withheld whole, not cut to eight scalars.
-        let marks = String(repeating: "\u{0301}", count: 9) + "-123456"
+        // A term is never capped: a leading flood of nine distinct marks is matched whole
+        // (and widened to the grapheme it sits in), not cut to eight scalars.
+        let marks = String(String.UnicodeScalarView((0x0300...0x0309).compactMap(Unicode.Scalar.init)))
+            .replacingOccurrences(of: "\u{0305}", with: "") + "-123456"
         let whole = UntrustedLabel("q" + marks, withholding: [marks])
-        #expect(Array(whole.text.unicodeScalars) == Array(("q" + UntrustedLabel.withheldMarker).unicodeScalars))
+        #expect(Array(whole.text.unicodeScalars) == Array(UntrustedLabel.withheldMarker.unicodeScalars))
     }
 
     @Test func aScanCutTailIsWithheldInTheSamePassAsCompleteMatches() {
@@ -300,6 +302,60 @@ extension NeutralSnapshotTests {
     func fullCaseFoldingMatchesInEveryDirection(label: String, withheld: String) {
         let marker = UntrustedLabel.withheldMarker
         #expect(UntrustedLabel("Rig " + label + " ok", withholding: [withheld]).text == "Rig \(marker) ok")
+    }
+
+    // MARK: - Round 8
+
+    @Test(arguments: [
+        ("\u{03AA}\u{0301}-123456", "\u{0390}-123456"), ("\u{0390}-123456", "\u{03AA}\u{0301}-123456"),
+        ("\u{212B}12345", "\u{00C5}12345"), ("\u{00C5}12345", "A\u{030A}12345"),
+        ("a\u{030A}12345", "\u{212B}12345"),
+        ("\u{01C5}-123456", "\u{01C4}-123456"), ("\u{01C6}-123456", "\u{01C5}-123456"),
+        ("\u{01C4}-1234", "\u{01C6}-1234"),
+        ("q\u{0307}\u{0323}-123456", "q\u{0323}\u{0307}-123456"),
+        ("q\u{0323}\u{0307}-123456", "Q\u{0307}\u{0323}-123456"),
+        ("\u{1FB4}\u{0301}-12", "\u{0386}\u{0301}\u{0345}-12"), ("\u{0386}\u{0301}\u{0345}-12", "\u{1FB4}\u{0301}-12"),
+        ("\u{D55C}\u{AD6D}-12", "\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12"),
+        ("\u{1112}\u{1161}\u{11AB}\u{1100}\u{116E}\u{11A8}-12", "\u{D55C}\u{AD6D}-12")
+    ])
+    func canonicallyEquivalentCaseVariantsMatch(label: String, withheld: String) {
+        let marker = UntrustedLabel.withheldMarker
+        #expect(UntrustedLabel("Rig " + label + " ok", withholding: [withheld]).text == "Rig \(marker) ok")
+    }
+
+    @Test func aMatchCoversTheWholeSourceGraphemes() {
+        let marker = UntrustedLabel.withheldMarker
+        #expect(UntrustedLabel("Rig ID-1234q\u{0323}\u{0307} ok", withholding: ["ID-1234q\u{0307}\u{0323}"]).text
+            == "Rig \(marker) ok")
+        // A term ending on a base letter withholds the marks on it too (over-redaction).
+        #expect(UntrustedLabel("Rig SN-12345\u{00C5} ok", withholding: ["SN-12345A"]).text == "Rig \(marker) ok")
+        #expect(UntrustedLabel("Rig ID-1234q\u{0323}\u{0307} ok", withholding: ["ID-1234q"]).text == "Rig \(marker) ok")
+    }
+
+    @Test func aScanCutTailNeverEndsInsideANormalizationSegment() {
+        let marker = UntrustedLabel.withheldMarker
+        let jamo = "\u{1100}\u{1161}\u{1102}\u{1161}"
+        let decomposed = UntrustedLabel("Rig -" + String(repeating: jamo, count: 1100), withholding: ["가나"])
+        #expect(decomposed.text == "Rig -\(marker)" && decomposed.isTruncated)
+        let precomposed = UntrustedLabel("Rig -" + String(repeating: "가나", count: 2100), withholding: [jamo])
+        #expect(precomposed.text == "Rig -\(marker)" && precomposed.isTruncated)
+        let midSyllable = UntrustedLabel(
+            "Rig -" + String(repeating: "\u{1100}\u{1161}\u{11A8}", count: 1400), withholding: ["각각"]
+        )
+        #expect(midSyllable.text == "Rig -\(marker)" && midSyllable.isTruncated)
+    }
+
+    @Test func caselessMapMatchesTheWholeText() {
+        let corpus = [
+            "Rig \u{03AA}\u{0301}-123456 ok", "\u{1FB4}\u{0301}\u{0345}x", "q\u{0307}\u{0323}\u{0345}\u{0301}",
+            "STRA\u{1E9E}E \u{01C5} \u{FB05} \u{0130}\u{0323}", "\u{1100}\u{1161}\u{11A8}\u{1102}", "👩👩👧 ΣΊΓΜΑ"
+        ]
+        for raw in corpus {
+            let text = UntrustedTextSanitizer.sourceForm(raw)
+            let map = UntrustedTextSanitizer.CaselessMap(text)
+            #expect(map.scalars == UntrustedTextSanitizer.caselessForm(text.unicodeScalars))
+            #expect(map.sourceCount == text.unicodeScalars.count)
+        }
     }
 
     static func permutations(_ items: [String]) -> [[String]] {

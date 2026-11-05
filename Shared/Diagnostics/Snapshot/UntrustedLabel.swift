@@ -15,11 +15,13 @@ import Foundation
 /// 1. Invisible characters are removed or replaced (see `UntrustedTextSanitizer`),
 ///    so they cannot split a withheld string and hide it from step 2. The text is
 ///    normalized to NFC.
-/// 2. Withheld strings are found in the full, uncapped match form (the text without
-///    ZWJ/ZWNJ or variation selectors, renormalized to NFC), case-folded, together
-///    with the tail of a scan-cut text. All ranges are merged and replaced once by
-///    `withheldMarker`. When anything is withheld the label is the redacted match
-///    form; otherwise it keeps its allowed joiners and presentation selectors.
+/// 2. Withheld strings are found by canonical caseless matching (NFD, full case
+///    folding, NFD) on the full, uncapped source form (the text without ZWJ/ZWNJ or
+///    variation selectors, renormalized to NFC), together with the tail of a
+///    scan-cut text. Every range covers whole source graphemes; all ranges are
+///    merged and replaced once by `withheldMarker`. When anything is withheld the
+///    label is the redacted source form; otherwise it keeps its allowed joiners and
+///    presentation selectors.
 /// 3. Each grapheme of the redacted text is limited to
 ///    `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
 ///    anything, step 2 runs again, since dropping scalars can complete a withheld string.
