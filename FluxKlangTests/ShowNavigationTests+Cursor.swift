@@ -404,3 +404,30 @@ struct ShowNavigationCursorTests {
         #expect(rig.here == "e3/a1")
     }
 }
+
+extension ShowNavigationCursorTests {
+    /// A cursor made on an empty setlist has no stop while that setlist lives; once it is removed, `currentStop`
+    /// and every command refuse with `cursorTargetRemoved` instead of reading as an unpositioned cursor.
+    @Test
+    func anUnpositionedCursorRefusesOnceItsSetlistIsRemoved() throws {
+        let rig = try Rig()
+        let empty = try rig.library.replacingSetlist(ShowSetlist.make(id: Fix.main, title: "Main"))
+        var cursor = try Fix.cursor(empty)
+        let created = cursor
+        #expect(cursor.status(in: empty) == .current)
+        #expect(try cursor.currentStop(in: empty, catalog: rig.catalog) == nil)
+        let gone = try empty.removingSetlist(Fix.main)
+        let removed = ShowRefusal.cursorTargetRemoved(.setlistRemoved(Fix.main))
+        #expect(cursor.status(in: gone) == .setlistRemoved(Fix.main))
+        #expect(throws: removed) { try cursor.currentStop(in: gone, catalog: rig.catalog) }
+        let commands: [ShowNavigationCommand] = [.nextPart, .previousPart, .nextSong, .previousSong,
+                                                 .jump(Fix.entries[0], nil)]
+        for command in commands {
+            let input = ShowNavigationInput(command, source: Fix.foot, sequence: 1, tick: 1)
+            #expect(throws: removed) { try cursor.navigate(input, in: gone, catalog: rig.catalog) }
+        }
+        #expect(cursor == created)
+        #expect(cursor.position == nil)
+        #expect(try cursor.currentStop(in: empty, catalog: rig.catalog) == nil)
+    }
+}

@@ -157,10 +157,12 @@ struct ShowCursor: Hashable, Sendable {
         return .current
     }
 
+    /// The status is checked first, so a removed setlist throws `cursorTargetRemoved` even for a cursor that was
+    /// never positioned. `nil` only while the setlist is live and the cursor is still unpositioned.
     func currentStop(in library: ShowLibrary, catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowStop? {
-        guard let position = storedPosition else { return nil }
         let status = status(in: library)
         guard status == .current else { throw .cursorTargetRemoved(status) }
+        guard let position = storedPosition else { return nil }
         return try Self.stop(at: position, in: library, catalog: catalog)
     }
 
@@ -171,8 +173,9 @@ struct ShowCursor: Hashable, Sendable {
     /// 4. Relative commands only: `cursorTargetRemoved` unless `status` is `.current` (removed or stale target).
     /// 5. Relative commands only: `.ignored(.bounce)` inside that command's window (per command, across sources).
     /// 6. `positionMismatch` when `expected` no longer holds.
-    /// 7. The target: `emptySetlist`, `atStart`, `atEnd`; for a jump `cursorTargetRemoved(.setlistRemoved)`,
-    ///    `unknownEntry` or `unknownPart`.
+    /// 7. The target: `emptySetlist`, `atStart`, `atEnd`; for a jump `cursorTargetRemoved(.setlistRemoved)` or
+    ///    `unknownEntry`; then `unknownSong` and link-resolution refusals from `stop(at:)`, such as `unknownPart`
+    ///    for a jump to a part that is not in the entry's song (unknown, or a part from another song).
     /// A refusal changes nothing, not even the remembered sequence or tick. A duplicate records nothing and a bounce
     /// only the sequence and tick. Only a move writes a bounce slot, its own command's.
     mutating func navigate(_ input: ShowNavigationInput, in library: ShowLibrary,
