@@ -2,14 +2,18 @@
 /// received the note-on whatever the current routing is. Nothing expires: only a release, the loss of the input or
 /// the route, or a panic removes an entry. Storage is reserved up front and never grows past the policy.
 ///
+/// A key-down press that loses every layer to `routeLost` or a route-scoped panic leaves a release marker in its
+/// place, so its own Note Off sends nothing instead of releasing a newer press of the same key (`releaseMarkers`).
+///
 /// Every change goes through `route`, `panic`, `routeLost` and `inputLost`. The primitives they share are private to
 /// this file: they keep the ledger's invariants only after their caller's capacity check.
 ///
 /// Cost: one routed note, pedal or channel message is O(k · n) for k rules or layers over n held instances. Bulk
 /// key-ups (CC 120, CC 123...127, `inputLost`) are O(n²): each key-up rescans the ledger for another key-down copy
-/// and removes in place. The CC 121/124...127 preflight rescans the notes and holds once per current rule
-/// (O(rules · (notes + holds))). All of this is control-side work, never for a realtime thread; an indexed ledger is a
-/// follow-up.
+/// and removes in place. `routeLost` and a route-scoped panic are O(n²) too: each lost key-down instance rescans the
+/// notes for a layer that stays and the markers for its place. The CC 121/124...127 preflight rescans the notes and
+/// holds once per current rule (O(rules · (notes + holds))). All of this is control-side work, never for a realtime
+/// thread; an indexed ledger is a follow-up.
 struct MIDINoteLedger: Equatable, Sendable {
     /// Release velocity of synthesized note-offs (panic, loss, All Notes Off); MIDI 1.0's default.
     static let releaseVelocity: UInt8 = 64
@@ -21,6 +25,10 @@ struct MIDINoteLedger: Equatable, Sendable {
     let policy: MIDINoteLedgerPolicy
     /// Arrival order, so the first key-down instance of an input note belongs to its oldest press.
     private(set) var notes: [MIDINoteInstance] = []
+    /// Ascending by press and unique: lost key-down presses whose Note Off is still to come. They share
+    /// `policy.noteCapacity` with `notes`; only that Note Off, CC 120/123...127 of the input and channel, the loss of
+    /// the input, or a full panic removes one.
+    private(set) var releaseMarkers: [MIDIReleaseMarker] = []
     /// Ascending and unique.
     private(set) var pedalHolds: [MIDIPedalHold] = []
     /// Private with no default value, so an initializer outside this file must delegate to `init(policy:)`, which
@@ -31,6 +39,7 @@ struct MIDINoteLedger: Equatable, Sendable {
         self.policy = policy
         nextPress = 0
         notes.reserveCapacity(policy.noteCapacity)
+        releaseMarkers.reserveCapacity(policy.noteCapacity)
         pedalHolds.reserveCapacity(policy.pedalCapacity)
     }
 
@@ -65,6 +74,10 @@ private struct MIDIRoutingContext {
 
     func owns(_ hold: MIDIPedalHold) -> Bool {
         hold.input == input && hold.channel == channel
+    }
+
+    func owns(_ marker: MIDIReleaseMarker) -> Bool {
+        marker.input == input && marker.channel == channel
     }
 
     func hold(_ pedal: MIDIPedal, on route: MIDIRouteID) -> MIDIPedalHold {
@@ -113,7 +126,8 @@ extension MIDINoteLedger {
 
     /// Carries held pedals to the note's new routes, then sends one note-on per distinct (route, transformed note) of
     /// the matching rules, recorded as one press. Refused whole, before anything is sent, when the notes or the
-    /// carried holds do not fit.
+    /// carried holds do not fit; release markers count toward the note capacity. A press of a key that still has
+    /// release markers queues behind them: their Note Offs come first.
     private mutating func pressNote(
         _ note: UInt8, velocity: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {
@@ -125,7 +139,7 @@ extension MIDINoteLedger {
             let message = MIDI1Semantic.noteOn(channel: context.channel, note: sent, velocity: velocity)
             Self.appendOnce(MIDIRoutedOutput(route: rule.route, message: message), since: noteStart, to: &outputs)
         }
-        guard notes.count + outputs.count - noteStart <= policy.noteCapacity else {
+        guard notes.count + releaseMarkers.count + outputs.count - noteStart <= policy.noteCapacity else {
             outputs.removeSubrange(start...)
             throw .noteLedgerFull(input: context.input, channel: context.channel, note: note)
         }
@@ -155,17 +169,26 @@ extension MIDINoteLedger {
         }
     }
 
-    /// Releases the oldest key-down press of the input note on every route it reached (FIFO for duplicates).
+    /// Ends the oldest pending press of the input note (FIFO for duplicates). A release marker older than every
+    /// key-down press of the note is consumed and sends nothing, so newer presses keep sounding; otherwise the oldest
+    /// key-down press is released on every route it reached.
     private mutating func releaseOldestPress(
         of note: UInt8, velocity: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {
-        guard let oldest = notes.first(where: { $0.keyDown && context.owns($0, inputNote: note) }) else {
+        let oldest = notes.first(where: { $0.keyDown && context.owns($0, inputNote: note) })
+        if let marker = releaseMarkers.firstIndex(where: { context.owns($0) && $0.inputNote == note }),
+           oldest.map({ releaseMarkers[marker].press < $0.press }) ?? true {
+            releaseMarkers.remove(at: marker)
+            return
+        }
+        guard let oldest else {
             throw .unownedNote(input: context.input, channel: context.channel, note: note)
         }
         releaseKeys(velocity: velocity, into: &outputs) { $0.press == oldest.press }
     }
 
-    /// Poly pressure belongs to the key, so it follows the newest key-down press of the input note.
+    /// Poly pressure belongs to the key, so it follows the newest key-down press of the input note. Release markers
+    /// sound nothing and are skipped.
     private func sendPolyPressure(
         of note: UInt8, pressure: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {
@@ -208,8 +231,9 @@ extension MIDINoteLedger {
         }
         switch controller {
         case 120:
-            // All Sound Off: release this input's keys, then its pedals.
+            // All Sound Off: release this input's keys and drop its release markers, then release its pedals.
             releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { context.owns($0) }
+            releaseMarkers.removeAll { context.owns($0) }
             releaseHolds(value: 0, into: &outputs) { context.owns($0) }
         case 121:
             // Reset All Controllers releases this input's pedals; its other resets go to the current routes.
@@ -219,11 +243,14 @@ extension MIDINoteLedger {
         case 123:
             // All Notes Off respects the pedals like Note Off.
             releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { context.owns($0) }
+            releaseMarkers.removeAll { context.owns($0) }
         case 124...127:
             // Omni and mono/poly mode imply All Notes Off through the ledger; the mode goes to the current routes.
+            // Release markers are dropped only once the message is accepted.
             try refuseSharedDestination(controller, context: context)
             releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { context.owns($0) }
             forward(message, context: context, into: &outputs)
+            releaseMarkers.removeAll { context.owns($0) }
         default:
             forward(message, context: context, into: &outputs)
         }
@@ -296,28 +323,39 @@ extension MIDINoteLedger {
 
 extension MIDINoteLedger {
     /// Returns `panicPlan(scope, allNotesAndSoundOff:)` and forgets everything in `scope`, so a second panic emits
-    /// nothing until a new note-on or pedal-down; a key or pedal released after it is refused as unowned.
+    /// nothing until a new note-on or pedal-down. A full panic also drops every release marker, so a key or pedal
+    /// released after it is refused as unowned. A route-scoped panic leaves a release marker for each key-down press
+    /// it takes every layer of, as `routeLost` does, and keeps the markers it finds.
     mutating func panic(_ scope: MIDIPanicScope = .all, allNotesAndSoundOff: Bool = true) -> [MIDIRoutedOutput] {
         let outputs = panicPlan(scope, allNotesAndSoundOff: allNotesAndSoundOff)
+        if scope == .all {
+            releaseMarkers.removeAll(keepingCapacity: true)
+        } else {
+            markPressesLosingEveryLayer { scope.contains($0.route) }
+        }
         forget(notesWhere: { scope.contains($0.route) }, holdsWhere: { scope.contains($0.route) })
         return outputs
     }
 
     /// Removes the route's instances and holds and reports them; nothing is sent. Later releases and panics no
-    /// longer target the route.
+    /// longer target the route. A key-down press with no layer left keeps its place in its key's release FIFO as a
+    /// release marker, so its Note Off sends nothing instead of releasing a newer press; other markers stay.
     mutating func routeLost(_ route: MIDIRouteID) -> MIDIOrphanedRoute {
         let orphaned = MIDIOrphanedRoute(
             route: route, notes: notes.filter { $0.route == route }, pedalHolds: pedalHolds.filter { $0.route == route }
         )
+        markPressesLosingEveryLayer { $0.route == route }
         forget(notesWhere: { $0.route == route }, holdsWhere: { $0.route == route })
         return orphaned
     }
 
     /// The input is gone: key-up for each of its key-down instances on its recorded routes (arrival order), then its
-    /// pedal holds (ascending; a pedal goes up with its last holder). Notes another input's pedal sustains stay.
+    /// pedal holds (ascending; a pedal goes up with its last holder). Its release markers go too. Notes another
+    /// input's pedal sustains stay.
     mutating func inputLost(_ input: MIDIInputID) -> [MIDIRoutedOutput] {
         var outputs: [MIDIRoutedOutput] = []
         releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { $0.input == input }
+        releaseMarkers.removeAll { $0.input == input }
         releaseHolds(value: 0, into: &outputs) { $0.input == input }
         return outputs
     }
@@ -405,6 +443,17 @@ extension MIDINoteLedger {
         pedalHolds.removeAll(where: holdPredicate)
     }
 
+    /// Before `forget`: a release marker, in press order, for each key-down press whose every layer is `lost`.
+    /// Each marker replaces at least one forgotten instance, so markers and notes stay within the note capacity.
+    private mutating func markPressesLosingEveryLayer(_ lost: (MIDINoteInstance) -> Bool) {
+        for instance in notes where instance.keyDown && lost(instance)
+            && !notes.contains(where: { $0.press == instance.press && !lost($0) }) {
+            let index = releaseMarkers.firstIndex { $0.press >= instance.press } ?? releaseMarkers.endIndex
+            guard index == releaseMarkers.endIndex || releaseMarkers[index].press != instance.press else { continue }
+            releaseMarkers.insert(MIDIReleaseMarker(of: instance), at: index)
+        }
+    }
+
     /// Key-up of one instance. Returns true when it was removed because no pedal holds it. The note-off is sent
     /// only when no other key-down instance still sounds the same note on the same route and channel.
     private mutating func releaseKey(at index: Int, velocity: UInt8, into outputs: inout [MIDIRoutedOutput]) -> Bool {
@@ -442,34 +491,5 @@ extension MIDINoteLedger {
             }
         }
         notes.removeAll { !$0.keyDown && !$0.sustained && !$0.sostenuto }
-    }
-}
-
-private extension MIDI1Semantic {
-    /// Channel 1...16 claimed by a channel voice message, or nil for system messages.
-    var routedChannel: UInt8? {
-        switch self {
-        case let .noteOff(channel, _, _), let .noteOn(channel, _, _), let .polyphonicPressure(channel, _, _),
-             let .controlChange(channel, _, _), let .programChange(channel, _), let .channelPressure(channel, _),
-             let .pitchBend(channel, _):
-            channel
-        case .systemCommon, .realTime, .sysEx:
-            nil
-        }
-    }
-
-    /// The semantic cases are constructible directly, so data ranges are checked here as `MIDI1PerformanceState` does.
-    var hasRoutableData: Bool {
-        switch self {
-        case let .noteOn(_, first, second), let .noteOff(_, first, second),
-             let .polyphonicPressure(_, first, second), let .controlChange(_, first, second):
-            first < 0x80 && second < 0x80
-        case let .programChange(_, value), let .channelPressure(_, value):
-            value < 0x80
-        case let .pitchBend(_, value):
-            value <= MIDI1ChannelState.maximum14BitValue
-        case .systemCommon, .realTime, .sysEx:
-            false
-        }
     }
 }

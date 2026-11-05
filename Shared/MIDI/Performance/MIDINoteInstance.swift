@@ -33,3 +33,22 @@ struct MIDINoteInstance: Equatable, Sendable {
     /// Key-down when the route's sostenuto pedal (CC 66) went down on this channel.
     var sostenuto = false
 }
+
+/// A key-down press whose every layer went with a lost route or a route-scoped panic. It sounds nothing and owns no
+/// destination; it keeps the press's place in its key's release FIFO, so the press's own Note Off is consumed here
+/// and sends nothing instead of releasing a newer press of the same key.
+struct MIDIReleaseMarker: Equatable, Sendable {
+    let press: UInt64
+    let input: MIDIInputID
+    let channel: UInt8
+    let inputNote: UInt8
+}
+
+extension MIDIReleaseMarker {
+    /// The marker of `instance`'s press.
+    init(of instance: MIDINoteInstance) {
+        self.init(
+            press: instance.press, input: instance.input, channel: instance.channel, inputNote: instance.inputNote
+        )
+    }
+}

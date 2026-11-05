@@ -118,9 +118,11 @@ struct MIDIPerformanceRecoveryTests {
         Fixture.expectRefused(Fixture.control(64, 0),
                               .unownedPedal(input: Fixture.keys, channel: 1, pedal: .sustain), in: ledger,
                               routing: merged)
-        // A route or input lost since the note-on leaves its release unowned.
+        // A route lost since the note-on leaves a release marker: that press's Note Off sends nothing, and the next
+        // is unowned. An input lost since its pedal-down leaves the pedal-up unowned.
         var lost = ledger
         _ = lost.routeLost(Fixture.piano)
+        #expect(try lost.route(Fixture.off(60), routing: merged).isEmpty)
         Fixture.expectRefused(Fixture.off(60), .unownedNote(input: Fixture.keys, channel: 1, note: 60), in: lost,
                               routing: merged)
         _ = lost.inputLost(Fixture.pads)
