@@ -226,6 +226,20 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/ParameterAutomationTests.swift
+      - path: FluxKlangTests/ParameterAutomationTests+Arbitration.swift
+      - path: FluxKlangTests/ParameterAutomationTests+Resume.swift
+      - path: FluxKlangTests/ParameterAutomationTests+Transport.swift
+      - path: FluxKlangTests/PrefetchTests.swift
+      - path: FluxKlangTests/PrefetchTests+Playhead.swift
+      - path: FluxKlangTests/SpatialMappingTests.swift
+      - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
+      - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
+      - path: FluxKlangTests/SpatialMaskTests.swift
+      - path: FluxKlangTests/OpenSoundControlCodecTests.swift
+      - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
+      - path: FluxKlangTests/MIDITimecodeTests.swift
+      - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/MetronomeGridTests.swift
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
@@ -246,6 +260,8 @@ targets:
       - path: FluxKlangTests/MIDI1PerformanceSnapshotTests.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
+      - path: FluxKlangTests/PatchVariationTests+Editing.swift
+      - path: FluxKlangTests/PatchVariationTests+Repair.swift
       - path: FluxKlangTests/PeerSyncTests.swift
       - path: FluxKlangTests/PeerSyncTests+Commands.swift
       - path: FluxKlangTests/PeerTrustTests.swift
