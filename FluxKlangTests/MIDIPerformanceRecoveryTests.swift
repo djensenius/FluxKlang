@@ -145,6 +145,49 @@ struct MIDIPerformanceRecoveryTests {
     }
 
     @Test
+    func resetAllControllersRefusedWhereAnotherInputOwns() throws {
+        var ledger = MIDINoteLedger()
+        let shared = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, from: Fixture.pads))
+        // Pads sustain a released note where keys also play; keys hold their own sustain there too.
+        _ = try Fixture.play([
+            Fixture.control(64, 127, from: Fixture.pads), Fixture.on(62, from: Fixture.pads),
+            Fixture.off(62, from: Fixture.pads), Fixture.control(64, 127)
+        ], on: &ledger, routing: shared)
+        Fixture.expectRefused(Fixture.control(121, 0), .sharedDestinationOwned(
+            input: Fixture.keys, channel: 1, controller: 121, route: Fixture.piano, owner: Fixture.pads
+        ), in: ledger, routing: shared)
+        // Keys alone on strings channel 1 (pads own only channel 2 there): forwarded; the piano hold is pads' too.
+        let exclusive = try Fixture.routing(
+            Fixture.rule(Fixture.strings), Fixture.rule(Fixture.strings, from: Fixture.pads, channels: 2...2)
+        )
+        _ = try ledger.route(Fixture.on(64, channel: 2, from: Fixture.pads), routing: exclusive)
+        #expect(try ledger.route(Fixture.control(121, 0), routing: exclusive)
+            == [Fixture.sentControl(Fixture.strings, 121, 0)])
+        #expect(ledger.pedalHolds.map(\.input) == [Fixture.pads])
+        #expect(ledger.notes.map(\.note) == [62, 64])
+    }
+
+    @Test
+    func resetForwardsOnceOtherOwnershipEnds() throws {
+        var ledger = MIDINoteLedger()
+        let shared = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, from: Fixture.pads))
+        let refused = MIDIPerformanceRefusal.sharedDestinationOwned(
+            input: Fixture.keys, channel: 1, controller: 121, route: Fixture.piano, owner: Fixture.pads
+        )
+        // A pedal hold alone is ownership; so is a key down. Each ends with its release, and the reset then forwards.
+        _ = try ledger.route(Fixture.control(64, 127, from: Fixture.pads), routing: shared)
+        Fixture.expectRefused(Fixture.control(121, 0), refused, in: ledger, routing: shared)
+        _ = try ledger.route(Fixture.control(64, 0, from: Fixture.pads), routing: shared)
+        #expect(try ledger.route(Fixture.control(121, 0), routing: shared)
+            == [Fixture.sentControl(Fixture.piano, 121, 0)])
+        _ = try ledger.route(Fixture.on(62, from: Fixture.pads), routing: shared)
+        Fixture.expectRefused(Fixture.control(121, 0), refused, in: ledger, routing: shared)
+        _ = try ledger.route(Fixture.off(62, from: Fixture.pads), routing: shared)
+        #expect(try ledger.route(Fixture.control(121, 0), routing: shared)
+            == [Fixture.sentControl(Fixture.piano, 121, 0)])
+    }
+
+    @Test
     func panicWithoutModeMessagesSendsOneOffPerOutputNote() throws {
         var ledger = MIDINoteLedger()
         let octaves = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, transpose: 12))

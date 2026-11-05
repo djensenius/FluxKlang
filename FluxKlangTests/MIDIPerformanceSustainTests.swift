@@ -128,6 +128,40 @@ struct MIDIPerformanceSustainTests {
     }
 
     @Test
+    func sostenutoReleaseHandsKeyUpNoteToSustain() throws {
+        let single = try #require(MIDINoteLedgerPolicy(noteCapacity: 1))
+        var ledger = MIDINoteLedger(policy: single)
+        let piano = try Fixture.routing(Fixture.rule(Fixture.piano))
+        _ = try Fixture.play([Fixture.on(60), Fixture.control(66, 127), Fixture.off(60), Fixture.control(64, 127)],
+                             on: &ledger, routing: piano)
+        #expect(ledger.notes.map { [$0.keyDown, $0.sustained, $0.sostenuto] } == [[false, false, true]])
+        // The sustain pedal is down when the sostenuto goes up, so the note keeps sounding and stays recorded.
+        #expect(try ledger.route(Fixture.control(66, 0), routing: piano) == [Fixture.sentControl(Fixture.piano, 66, 0)])
+        #expect(ledger.notes.map { [$0.keyDown, $0.sustained, $0.sostenuto] } == [[false, true, false]])
+        Fixture.expectRefused(Fixture.on(62), .noteLedgerFull(input: Fixture.keys, channel: 1, note: 62), in: ledger,
+                              routing: piano)
+        #expect(try ledger.route(Fixture.control(64, 0), routing: piano) == [Fixture.sentControl(Fixture.piano, 64, 0)])
+        #expect(ledger.notes.isEmpty)
+        #expect(try ledger.route(Fixture.on(62), routing: piano) == [Fixture.sentOn(Fixture.piano, 62)])
+    }
+
+    @Test
+    func sustainReleaseLeavesSostenutoHeldNote() throws {
+        var ledger = MIDINoteLedger()
+        let piano = try Fixture.routing(Fixture.rule(Fixture.piano))
+        _ = try Fixture.play([
+            Fixture.control(64, 127, channel: 2), Fixture.on(60), Fixture.control(66, 127), Fixture.off(60),
+            Fixture.control(64, 127)
+        ], on: &ledger, routing: piano)
+        #expect(try ledger.route(Fixture.control(64, 0), routing: piano) == [Fixture.sentControl(Fixture.piano, 64, 0)])
+        #expect(ledger.notes.map { [$0.keyDown, $0.sustained, $0.sostenuto] } == [[false, false, true]])
+        // With this destination's sustain already up (channel 2's is not this destination), the sostenuto ends it.
+        #expect(try ledger.route(Fixture.control(66, 0), routing: piano) == [Fixture.sentControl(Fixture.piano, 66, 0)])
+        #expect(ledger.notes.isEmpty)
+        #expect(ledger.pedalHolds.map(\.channel) == [2])
+    }
+
+    @Test
     func retriggerUnderSustain() throws {
         var ledger = MIDINoteLedger()
         let piano = try Fixture.routing(Fixture.rule(Fixture.piano))

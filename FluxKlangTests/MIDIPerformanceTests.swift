@@ -362,6 +362,27 @@ struct MIDIPerformanceTests {
             == [Fixture.sentControl(Fixture.strings, 126, 1), Fixture.sentControl(Fixture.bass, 126, 1)])
     }
 
+    @Test(arguments: [UInt8(124), 125, 126, 127])
+    func modeMessagesRefusedWhereAnotherInputOwns(controller: UInt8) throws {
+        var ledger = MIDINoteLedger()
+        let shared = try Fixture.routing(Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, from: Fixture.pads))
+        // Keys' sustain holds pads' released note (pads hold no pedal); keys also keep a key of their own down.
+        _ = try Fixture.play([
+            Fixture.control(64, 127), Fixture.on(62, from: Fixture.pads), Fixture.off(62, from: Fixture.pads),
+            Fixture.on(60)
+        ], on: &ledger, routing: shared)
+        Fixture.expectRefused(Fixture.control(controller, 0), .sharedDestinationOwned(
+            input: Fixture.keys, channel: 1, controller: controller, route: Fixture.piano, owner: Fixture.pads
+        ), in: ledger, routing: shared)
+        // Routed only where keys own everything, the releases and the mode message go out as before.
+        let exclusive = try Fixture.routing(
+            Fixture.rule(Fixture.strings), Fixture.rule(Fixture.piano, from: Fixture.pads)
+        )
+        #expect(try ledger.route(Fixture.control(controller, 0), routing: exclusive)
+            == [Fixture.sentOff(Fixture.piano, 60), Fixture.sentControl(Fixture.strings, controller, 0)])
+        #expect(ledger.notes.map(\.sustained) == [true, true])
+    }
+
     @Test
     func noteOnVelocityZeroReleases() throws {
         var ledger = MIDINoteLedger()

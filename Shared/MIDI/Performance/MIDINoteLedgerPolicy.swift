@@ -47,4 +47,13 @@ enum MIDIPerformanceRefusal: Error, Equatable, Hashable, Sendable {
     /// as above: a continuous pedal sends many values below 64, and only the first releases. Count or log it.
     /// A pedal-up held back because another input still holds the pedal is not refused.
     case unownedPedal(input: MIDIInputID, channel: UInt8, pedal: MIDIPedal)
+    /// CC 121 (Reset All Controllers) or CC 124...127 (omni and mono/poly mode, which imply All Notes Off) would reach
+    /// `route` on this channel, where `owner` (another input) still has a key down, a sustained or sostenuto-held
+    /// note, or a pedal hold. The receiver would reset that input's pedals or end its notes while the ledger still
+    /// records them, so the whole message is refused before anything changes. `route` is the first such current
+    /// route in rule order; `owner` the lowest other input owning something there. Not benign: the reset did not
+    /// happen; the caller may retry once that ownership has ended.
+    case sharedDestinationOwned(
+        input: MIDIInputID, channel: UInt8, controller: UInt8, route: MIDIRouteID, owner: MIDIInputID
+    )
 }

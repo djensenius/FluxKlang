@@ -179,7 +179,11 @@ extension MIDINoteLedger {
     }
 
     /// Pedals and the note-releasing channel mode messages resolve through the ledger, scoped to this input and
-    /// channel; raw CC 120 and 123 are not forwarded, because they would also release other inputs' notes.
+    /// channel. Receiver-wide messages never reach a destination where another input owns something: raw CC 120 and
+    /// 123 are not forwarded at all (the ledger releases this input's keys, and for CC 120 its pedals, instead), and
+    /// CC 121 and 124...127, which must be forwarded, are refused whole before any change when a current route on this
+    /// channel carries another input's notes or holds (`.sharedDestinationOwned`, after `.systemMessage` and
+    /// `.malformedEvent`; these controllers have no other refusal).
     private mutating func applyController(
         _ controller: UInt8, value: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {
@@ -205,6 +209,7 @@ extension MIDINoteLedger {
             releaseHolds(value: 0, into: &outputs) { context.owns($0) }
         case 121:
             // Reset All Controllers releases this input's pedals; its other resets go to the current routes.
+            try refuseSharedDestination(controller, context: context)
             releaseHolds(value: 0, into: &outputs) { context.owns($0) }
             forward(message, context: context, into: &outputs)
         case 123:
@@ -212,6 +217,7 @@ extension MIDINoteLedger {
             releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { context.owns($0) }
         case 124...127:
             // Omni and mono/poly mode imply All Notes Off through the ledger; the mode goes to the current routes.
+            try refuseSharedDestination(controller, context: context)
             releaseKeys(velocity: Self.releaseVelocity, into: &outputs) { context.owns($0) }
             forward(message, context: context, into: &outputs)
         default:
@@ -240,6 +246,30 @@ extension MIDINoteLedger {
             throw .pedalLedgerFull(input: context.input, channel: context.channel, pedal: pedal)
         }
         addHolds(outputs[start...], context: context)
+    }
+
+    /// Preflight for the forwarded receiver-wide messages (CC 121, 124...127): throws for the first current route in
+    /// rule order where another input has a note (key-down, sustained or sostenuto-held) or a pedal hold on this
+    /// channel, naming the lowest such input. Changes nothing; ownership-safe translation is a follow-up.
+    private func refuseSharedDestination(
+        _ controller: UInt8, context: MIDIRoutingContext
+    ) throws(MIDIPerformanceRefusal) {
+        for rule in context.routing.rules where rule.matches(context.input, channel: context.channel) {
+            guard let owner = otherOwner(on: rule.route, context: context) else { continue }
+            throw .sharedDestinationOwned(
+                input: context.input, channel: context.channel, controller: controller, route: rule.route, owner: owner
+            )
+        }
+    }
+
+    private func otherOwner(on route: MIDIRouteID, context: MIDIRoutingContext) -> MIDIInputID? {
+        let owns = { (owner: MIDIInputID, owned: MIDIRouteID, channel: UInt8) in
+            owner != context.input && owned == route && channel == context.channel
+        }
+        let noteOwner = notes.lazy.filter { owns($0.input, $0.route, $0.channel) }.map(\.input).min()
+        let holdOwner = pedalHolds.lazy.filter { owns($0.input, $0.route, $0.channel) }.map(\.input).min()
+        guard let noteOwner else { return holdOwner }
+        return min(noteOwner, holdOwner ?? noteOwner)
     }
 
     /// Channel messages go to each current route once.
@@ -394,12 +424,17 @@ extension MIDINoteLedger {
     }
 
     /// The last hold of a destination pedal is gone: notes it alone was holding on that route and channel end.
-    /// Other routes and channels keep their pedals.
+    /// Other routes and channels keep their pedals. A key-up note the sostenuto releases while the sustain pedal is
+    /// down there passes to the sustain (as the destination keeps it sounding) and ends with the sustain's last holder;
+    /// a sustain release likewise leaves a sostenuto-held note until the sostenuto goes up.
     private mutating func destinationPedalUp(_ pedal: MIDIPedal, route: MIDIRouteID, channel: UInt8) {
+        let sustainDown = isPedalDown(.sustain, route: route, channel: channel)
         for index in notes.indices where notes[index].route == route && notes[index].channel == channel {
             switch pedal {
             case .sustain: notes[index].sustained = false
-            case .sostenuto: notes[index].sostenuto = false
+            case .sostenuto:
+                if sustainDown, !notes[index].keyDown { notes[index].sustained = true }
+                notes[index].sostenuto = false
             }
         }
         notes.removeAll { !$0.keyDown && !$0.sustained && !$0.sostenuto }
