@@ -353,6 +353,68 @@ struct PeerSyncTests {
     }
 }
 
+extension PeerSyncTests {
+    @Test(arguments: [Double.nan, .infinity, -.infinity])
+    func nonFiniteValuesAreRefusedInSnapshotsAndDeltas(bad: Double) throws {
+        let values = [Fixture.gain: Fixture.value(0.5), Fixture.mix: Fixture.value(bad)]
+        let candidate = PeerSyncSnapshot(session: Fixture.session(), sequence: .origin,
+                                         revisions: Fixture.revisions(), values: values)
+        #expect(throws: PeerSyncError.nonFiniteValue(Fixture.mix)) { try candidate.validate(.standard) }
+        #expect(throws: PeerSyncError.nonFiniteValue(Fixture.mix)) {
+            try PeerSyncPublisher(session: Fixture.session(), revisions: Fixture.revisions(), values: values)
+        }
+        var controller = PeerSyncReceiver(session: Fixture.session())
+        #expect(controller.receive(candidate) == .refused(.nonFiniteValue(Fixture.mix)))
+        #expect(controller.phase == .awaitingSnapshot)
+        #expect(throws: PeerSyncError.nonFiniteValue(Fixture.mix)) {
+            try delta(1, parameter: 1, updates: values).validate(.standard)
+        }
+        var host = try publisher()
+        let before = host.state
+        #expect(throws: PeerSyncError.nonFiniteValue(Fixture.mix)) {
+            try host.publish(revisions: Fixture.revisions(parameter: 1), updates: values)
+        }
+        #expect(host.state == before)
+        #expect(host.snapshot() == PeerSyncSnapshot(session: Fixture.session(), sequence: .origin,
+                                                    revisions: Fixture.revisions(),
+                                                    values: [Fixture.gain: Fixture.value(0.5)]))
+    }
+
+    @Test func multipleNonFiniteIDsReportTheSmallest() throws {
+        let names = ["parameter.zeta", "parameter.alpha", "parameter.mu", "parameter.beta", "parameter.omega",
+                     "parameter.delta", "parameter.kappa", "parameter.gamma", "parameter.theta", "parameter.epsilon"]
+        let ids = try names.map { try ParameterID($0) }
+        for count in 2...ids.count {
+            let chosen = Array(ids.prefix(count))
+            let smallest = try #require(chosen.min())
+            let bad = Dictionary(uniqueKeysWithValues: chosen.map { ($0, Fixture.value(.nan)) })
+            let candidate = PeerSyncSnapshot(session: Fixture.session(), sequence: .origin,
+                                             revisions: Fixture.revisions(), values: bad)
+            #expect(throws: PeerSyncError.nonFiniteValue(smallest)) { try candidate.validate(.standard) }
+            #expect(throws: PeerSyncError.nonFiniteValue(smallest)) {
+                try delta(1, parameter: 1, updates: bad).validate(.standard)
+            }
+        }
+    }
+
+    @Test func nonFiniteDeltaLatchesResyncUntilACoveringSnapshot() throws {
+        var host = try publisher()
+        var controller = PeerSyncReceiver(session: host.session)
+        _ = controller.receive(host.snapshot())
+        let before = controller.revisionFloor
+        let request = PeerResyncRequest(session: host.session, lastApplied: .origin,
+                                        reason: .unappliable(.nonFiniteValue(Fixture.gain)))
+        let poisoned = delta(1, parameter: 1, updates: [Fixture.gain: Fixture.value(.infinity)])
+        #expect(controller.receive(poisoned) == .resyncRequested(request))
+        #expect(controller.phase == .resyncRequired(request))
+        #expect(controller.revisionFloor == before)
+        #expect(controller.highWaterMark == Fixture.sequence(1))
+        _ = try host.step(1, gain: 0.25)
+        #expect(controller.receive(host.snapshot()) == .applied(Fixture.sequence(1)))
+        #expect(controller.state == host.state)
+    }
+}
+
 private func values(_ count: Int) -> [ParameterID: ParameterValue] {
     Dictionary(uniqueKeysWithValues: (0..<count).map { index in
         (ParameterID(rawValue: "parameter.bulk\(index)") ?? Fixture.gain, Fixture.value(0))

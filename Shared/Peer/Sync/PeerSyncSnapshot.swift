@@ -100,6 +100,8 @@ enum PeerSyncError: Error, Hashable, Sendable {
     case emptyDelta
     case overlappingChanges(ParameterID)
     case removedUnknownValue(ParameterID)
+    /// A NaN or infinite value, like `ParameterValueError.nonFinite`, naming the smallest such ID.
+    case nonFiniteValue(ParameterID)
     case revisionRegressed
     case sequenceExhausted
     case snapshotBehind(current: PeerSequence, found: PeerSequence)
@@ -116,6 +118,7 @@ struct PeerSyncSnapshot: Hashable, Sendable {
         guard values.count <= limits.maximumSnapshotValues else {
             throw .snapshotTooLarge(count: values.count, limit: limits.maximumSnapshotValues)
         }
+        if let bad = values.smallestNonFiniteID { throw .nonFiniteValue(bad) }
     }
 }
 
@@ -135,6 +138,7 @@ struct PeerSyncDelta: Hashable, Sendable {
             throw .deltaTooLarge(count: changeCount, limit: limits.maximumDeltaChanges)
         }
         if let shared = removals.filter({ updates[$0] != nil }).min() { throw .overlappingChanges(shared) }
+        if let bad = updates.smallestNonFiniteID { throw .nonFiniteValue(bad) }
     }
 }
 
@@ -180,4 +184,8 @@ extension CommandRevisions {
         patch < base.patch || capability < base.capability || permission < base.permission
             || parameter < base.parameter || graph < base.graph
     }
+}
+
+private extension Dictionary where Key == ParameterID, Value == ParameterValue {
+    var smallestNonFiniteID: ParameterID? { filter { !$0.value.value.isFinite }.keys.min() }
 }
