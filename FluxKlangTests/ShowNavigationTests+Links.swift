@@ -231,6 +231,62 @@ struct ShowNavigationLinkTests {
     }
 
     @Test
+    func addedOrChangedVariationsUnderAMissingPatchAreRefusedInBothEditPaths() throws {
+        let catalog = try Self.catalog()
+        let missing = PatchID(validated: "pat.none")
+        let old = PatchVariationID(validated: "var.old")
+        let bare = try SongPartLinks.make(patch: missing)
+        let pinned = try SongPartLinks.make(patch: missing, variation: old)
+        let stale = try Self.chart(Self.staleAsset)
+        let song = try ShowSong.make(id: Fix.songA, title: "A", parts: [
+            Fix.part("a1", links: bare), Fix.part("a2", links: pinned)
+        ], chart: stale)
+        let library = try Fix.library(songs: [song, Fix.song(Fix.songB, parts: []), Fix.song(Fix.songC, parts: [])])
+        let added = try SongPartLinks.make(patch: missing, variation: Self.variation)
+        let relinked = try SongPartLinks.make(patch: missing, variation: old, chart: Self.chart(Self.chartAsset))
+        let refusal = ShowRefusal.unknownVariation(missing, Self.variation)
+        // (part, links): adding a variation under a missing patch, changing one, and an unrelated chart relink.
+        for (part, links) in [(Fix.partID("a1"), added), (Fix.partID("a2"), added), (Fix.partID("a2"), relinked)] {
+            let index = try #require(song.parts.firstIndex { $0.id == part })
+            var parts = song.parts
+            parts[index] = try SongPart.make(id: part, title: "Edited", links: links)
+            let edited = try ShowSong.make(id: Fix.songA, title: "A", parts: parts, chart: stale)
+            if links == added {
+                #expect(throws: refusal) { try song.replacingLinks(links, for: part, in: catalog) }
+                #expect(throws: refusal) { try library.upsertingSong(edited, in: catalog) }
+            } else {
+                #expect(try song.replacingLinks(links, for: part, in: catalog).part(part)?.links == links)
+                #expect(try library.upsertingSong(edited, in: catalog).song(Fix.songA)?.part(part)?.links == links)
+            }
+        }
+        #expect(throws: ShowRefusal.unknownPatch(missing)) {
+            try song.insertingPart(Fix.part("a3", links: added), in: catalog)
+        }
+        #expect(library.linkReport(in: catalog).map(\.problem)
+            == [.chart(stale, .contentUnavailable), .unknownPatch(missing), .unknownPatch(missing)])
+    }
+
+    @Test
+    func upsertChecksEveryReferenceOfANewPartOrSong() throws {
+        let catalog = try Self.catalog()
+        let library = try Fix.library()
+        let unknownSet = ActionSetID(validated: "as.none")
+        let songA = try #require(library.song(Fix.songA))
+        let withNewPart = try ShowSong.make(id: Fix.songA, title: songA.title,
+                                            parts: songA.parts + [Fix.part("a9", links: .make(actionSet: unknownSet))])
+        #expect(throws: ShowRefusal.unknownActionSet(unknownSet)) {
+            try library.upsertingSong(withNewPart, in: catalog)
+        }
+        let stale = try Self.chart(Self.staleAsset)
+        let newSong = try ShowSong.make(id: SongID(validated: "song.d"), title: "D",
+                                        parts: [Fix.part("d1", links: .make(chart: stale))])
+        #expect(throws: ShowRefusal.chartUnavailable(stale, .contentUnavailable)) {
+            try library.upsertingSong(newSong, in: catalog)
+        }
+        #expect(library == (try Fix.library()))
+    }
+
+    @Test
     func replacingLinksChecksOnlyWhatChanged() throws {
         let catalog = try Self.catalog()
         let unknown = PatchID(validated: "pat.none")
@@ -246,6 +302,11 @@ struct ShowNavigationLinkTests {
             try song.replacingLinks(.make(patch: unknown, actionSet: unknownSet, chart: stale), for: part,
                                     in: catalog)
         }
+        let keptSet = try ShowSong.make(id: Fix.songA, title: "A", parts: [
+            Fix.part("a1", links: .make(actionSet: unknownSet, chart: stale))
+        ])
+        let fixedPatch = try SongPartLinks.make(patch: Self.patch, actionSet: unknownSet, chart: stale)
+        #expect(try keptSet.replacingLinks(fixedPatch, for: part, in: catalog).parts[0].links == fixedPatch)
         let otherPatch = PatchID(validated: "pat.other")
         #expect(throws: ShowRefusal.unknownPatch(otherPatch)) {
             try song.replacingLinks(.make(patch: otherPatch), for: part, in: catalog)

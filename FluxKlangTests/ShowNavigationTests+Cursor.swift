@@ -177,6 +177,42 @@ struct ShowNavigationCursorTests {
     }
 
     @Test
+    func eachCommandKeepsItsOwnBounceSlotThroughInterleaving() throws {
+        var rig = try Rig()
+        _ = try rig.press(.nextSong, tick: 1_000)
+        _ = try rig.press(.nextPart, tick: 1_010)
+        #expect(rig.here == "e2/b2")
+        #expect(try rig.press(.nextSong, tick: 1_020) == .ignored(.bounce(ticksSinceAccepted: 20)))
+        #expect(rig.here == "e2/b2")
+        guard case .moved = try rig.press(.previousPart, tick: 1_030) else {
+            Issue.record("a different command bounced")
+            return
+        }
+        #expect(rig.here == "e2/b1")
+        #expect(try rig.press(.nextPart, tick: 1_040, from: Fix.screen) == .ignored(.bounce(ticksSinceAccepted: 30)))
+        #expect(try rig.press(.nextSong, tick: 1_050, from: Fix.screen) == .ignored(.bounce(ticksSinceAccepted: 50)))
+        _ = try rig.press(.jump(Fix.entries[0], nil), tick: 1_060)
+        #expect(try rig.press(.nextSong, tick: 1_070) == .ignored(.bounce(ticksSinceAccepted: 70)))
+        guard case .moved = try rig.press(.nextSong, tick: 1_100, from: Fix.screen) else {
+            Issue.record("the window did not close")
+            return
+        }
+        #expect(rig.here == "e2/b1")
+    }
+
+    @Test
+    func refusedAndIgnoredPressesLeaveTheBounceSlotsAlone() throws {
+        var rig = try Rig()
+        #expect(throws: ShowRefusal.atStart) { try rig.press(.previousPart, tick: 1_000) }
+        _ = try rig.press(.nextPart, tick: 1_010)
+        guard case .moved = try rig.press(.previousPart, tick: 1_020) else {
+            Issue.record("a refused press opened a bounce window")
+            return
+        }
+        #expect(rig.here == "e1/a1")
+    }
+
+    @Test
     func aRefusedPressConsumesNothing() throws {
         var rig = try Rig()
         #expect(throws: ShowRefusal.atStart) { try rig.press(.previousSong, tick: 5_000, sequence: 5) }

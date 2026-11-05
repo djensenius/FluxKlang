@@ -38,14 +38,14 @@ struct ShowLibrary: Hashable, Sendable {
     func song(_ id: SongID) -> ShowSong? { songs.first { $0.id == id } }
     func setlist(_ id: SetlistID) -> ShowSetlist? { setlists.first { $0.id == id } }
 
-    /// Edit path: replaces the song with the same ID in place, or appends a new one. Refuses the first link
-    /// problem the stored song did not already have, so loaded broken links stay until relinked; a song with
+    /// Edit path: replaces the song with the same ID in place, or appends a new one. Every reference added or
+    /// changed against the stored song (its chart, and each part's links matched by part ID) must resolve; see
+    /// `ShowLinkCatalog.check(_:replacing:)`. Unchanged loaded broken links stay until relinked; a song with
     /// broken links enters only through `make` (load), which `linkReport(in:)` then reports.
     func upsertingSong(_ song: ShowSong, in catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowLibrary {
-        let kept = self.song(song.id)?.linkIssues(in: catalog) ?? []
-        if let fresh = song.linkIssues(in: catalog).first(where: { !kept.contains($0) }) {
-            throw fresh.problem.refusal
-        }
+        let stored = self.song(song.id)
+        if let chart = song.chart, chart != stored?.chart { try catalog.checkChart(chart) }
+        for part in song.parts { try catalog.check(part.links, replacing: stored?.part(part.id)?.links) }
         var updated = songs
         if let index = songs.firstIndex(where: { $0.id == song.id }) {
             updated[index] = song

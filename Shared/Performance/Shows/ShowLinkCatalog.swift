@@ -70,11 +70,29 @@ struct ShowLinkCatalog: Sendable {
         return problems
     }
 
-    /// Edit-time check: refuses the first problem that `previous` (the links being replaced) did not already
-    /// have, so an unchanged loaded broken link never blocks fixing another one.
+    /// Edit-time check, field by field against `previous` (the stored links; `nil` for a new part): every
+    /// reference the edit adds or changes must resolve, in the order patch, variation, action set, chart. An
+    /// unchanged loaded broken reference is kept. A variation is changed when it or its patch changes, and one
+    /// under a missing patch cannot resolve. Unlike `problems`, nothing is collapsed here.
     func check(_ links: SongPartLinks, replacing previous: SongPartLinks? = nil) throws(ShowRefusal) {
-        let kept = previous.map(problems) ?? []
-        if let fresh = problems(links).first(where: { !kept.contains($0) }) { throw fresh.refusal }
+        if let patch = links.patch {
+            let patchChanged = patch != previous?.patch
+            let variations = variationsByPatch[patch]
+            if patchChanged, variations == nil { throw .unknownPatch(patch) }
+            if let variation = links.variation, patchChanged || variation != previous?.variation,
+               variations?.contains(variation) != true {
+                throw .unknownVariation(patch, variation)
+            }
+        }
+        if let actionSet = links.actionSet, actionSet != previous?.actionSet, !actionSets.contains(actionSet) {
+            throw .unknownActionSet(actionSet)
+        }
+        if let chart = links.chart, chart != previous?.chart { try checkChart(chart) }
+    }
+
+    /// Refuses a chart reference that is not available.
+    func checkChart(_ chart: ChartReference) throws(ShowRefusal) {
+        if case let .missing(_, reason) = availability(of: chart) { throw .chartUnavailable(chart, reason) }
     }
 }
 
@@ -83,15 +101,6 @@ enum ShowLinkProblem: Hashable, Sendable {
     case unknownVariation(PatchID, PatchVariationID)
     case unknownActionSet(ActionSetID)
     case chart(ChartReference, ChartMissingReason)
-
-    var refusal: ShowRefusal {
-        switch self {
-        case let .unknownPatch(patch): .unknownPatch(patch)
-        case let .unknownVariation(patch, variation): .unknownVariation(patch, variation)
-        case let .unknownActionSet(actionSet): .unknownActionSet(actionSet)
-        case let .chart(chart, reason): .chartUnavailable(chart, reason)
-        }
-    }
 }
 
 /// One reported problem; `part == nil` means the song's own chart.

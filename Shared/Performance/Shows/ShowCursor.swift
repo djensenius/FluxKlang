@@ -6,9 +6,9 @@
 //  It stores IDs only, so reordering never retargets it. Foot input arrives as
 //  a `ShowNavigationCommand` value (binding wiring is B4/SH2) from a declared
 //  input source, with a per-source sequence and caller ticks on one shared
-//  clock: a re-delivered sequence is ignored, a press of
-//  the same command within the bounce window of the last accepted press is
-//  ignored, and nothing wraps. Navigation recalls and fires nothing; it returns
+//  clock: a re-delivered sequence is ignored, a press within the bounce window
+//  of that same command's last accepted press (from any source, whatever was
+//  pressed in between) is ignored, and nothing wraps. Navigation recalls and fires nothing; it returns
 //  the new position and its resolved links.
 //
 
@@ -26,8 +26,22 @@ enum ShowNavigationCommand: Hashable, Sendable {
     case previousPart
     case nextSong
     case previousSong
-    /// `part == nil` means the entry's first part. Never bounced: repeating a jump is idempotent by target.
+    /// `part == nil` means the entry's first part. Never bounced and never recorded for bounce: repeating a
+    /// jump is idempotent by target, and a jump neither opens nor resets a relative command's window.
     case jump(SetlistEntryID, SongPartID?)
+
+    static let bounceSlotCount = 4
+
+    /// Each relative command's own bounce slot; jumps have none.
+    var bounceSlot: Int? {
+        switch self {
+        case .nextPart: 0
+        case .previousPart: 1
+        case .nextSong: 2
+        case .previousSong: 3
+        case .jump: nil
+        }
+    }
 }
 
 struct ShowNavigationInput: Hashable, Sendable {
@@ -95,8 +109,8 @@ struct ShowCursor: Hashable, Sendable {
     /// Lookup only; never iterated.
     private var lastSequences: [ShowInputSourceID: UInt64] = [:]
     private var lastTick: UInt64?
-    private var lastAcceptedTick: UInt64?
-    private var lastAcceptedCommand: ShowNavigationCommand?
+    /// The last accepted tick of each relative command, shared across sources, indexed by `bounceSlot`.
+    private var lastAcceptedTicks = [UInt64?](repeating: nil, count: ShowNavigationCommand.bounceSlotCount)
 
     var setlist: SetlistID { storedSetlist }
     var bounceTicks: UInt64 { storedBounceTicks }
@@ -144,7 +158,8 @@ struct ShowCursor: Hashable, Sendable {
         return try Self.stop(at: position, in: library, catalog: catalog)
     }
 
-    /// A refusal changes nothing, not even the remembered sequence. Bounce is per command across sources.
+    /// A refusal or an ignored press changes no bounce slot, and a refusal changes nothing at all, not even the
+    /// remembered sequence. Bounce is per command across sources.
     mutating func navigate(_ input: ShowNavigationInput, in library: ShowLibrary,
                            catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowNavigationResult {
         guard storedSources.contains(input.source) else { throw .unknownInputSource(input.source) }
@@ -155,8 +170,9 @@ struct ShowCursor: Hashable, Sendable {
             }
         }
         if let lastTick, input.tick < lastTick { throw .ticksWentBackwards(last: lastTick, received: input.tick) }
-        if let lastAcceptedTick, lastAcceptedCommand == input.command, !input.command.isJump {
-            let elapsed = input.tick - lastAcceptedTick
+        let slot = input.command.bounceSlot
+        if let slot, let accepted = lastAcceptedTicks[slot] {
+            let elapsed = input.tick - accepted
             if elapsed < storedBounceTicks {
                 lastSequences[input.source] = input.sequence
                 lastTick = input.tick
@@ -171,8 +187,7 @@ struct ShowCursor: Hashable, Sendable {
         storedPosition = target
         lastSequences[input.source] = input.sequence
         lastTick = input.tick
-        lastAcceptedTick = input.tick
-        lastAcceptedCommand = input.command
+        if let slot { lastAcceptedTicks[slot] = input.tick }
         return .moved(stop)
     }
 
@@ -250,12 +265,5 @@ struct ShowCursor: Hashable, Sendable {
         guard let song = library.song(entry.song) else { throw .unknownSong(entry.song) }
         return try ShowStop(position: position, song: song.id,
                             links: ShowLibrary.resolvedLinks(song: song, part: position.part, in: catalog))
-    }
-}
-
-extension ShowNavigationCommand {
-    var isJump: Bool {
-        if case .jump = self { return true }
-        return false
     }
 }
