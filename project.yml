@@ -245,6 +245,8 @@ targets:
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
       - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ControlHostTruthTests.swift
+      - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
       - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift
