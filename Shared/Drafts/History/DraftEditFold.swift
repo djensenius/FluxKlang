@@ -25,6 +25,9 @@
 ///   an added node's NaN or infinite `linearGain` (`nonFiniteNodeValue`) or a connected
 ///   edge's NaN or infinite `gainCeilingDb` (`nonFiniteEdgeValue`): a NaN never equals
 ///   itself, so such a draft would record an undo entry for every later gesture.
+/// - Node and edge counts, and an added node's ports and combined required and advisory
+///   capabilities, are checked against `ProjectGraphLimits` (`bounds`) as each edit folds,
+///   so a later edit that normalizes the add or connect away cannot admit it.
 ///
 /// The IDs of draft-added nodes and edges are not reserved: once an add or a
 /// connect folds away, the same ID may be added or connected again with other
@@ -123,6 +126,10 @@ private struct FoldState {
         guard !nodes.contains(node.id) else { throw .edit(index: index, .nodeExists(node.id)) }
         guard baseNodes[node.id] == nil else { throw .nodeIDReuse(node.id) }
         try Self.check(nodes.count + 1, maximum: ProjectGraphLimits.nodes, path: "$.nodes")
+        // The per-node limits of `checkCollectionBounds`, checked now so a later remove cannot erase them.
+        try Self.check(node.ports.count, maximum: ProjectGraphLimits.portsPerNode, path: "$.nodes[\(node.id)].ports")
+        try Self.check(node.requiredCapabilities.count + node.advisoryCapabilities.count,
+                       maximum: ProjectGraphLimits.capabilities, path: "$.nodes[\(node.id)].capabilities")
         nodes.insert(node.id)
         added.insert(node.id)
         edits.append(.addNode(node))

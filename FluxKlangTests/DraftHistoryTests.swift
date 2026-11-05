@@ -361,6 +361,42 @@ struct DraftHistoryTests {
         }
     }
 
+    /// `applying` an added node over a per-node limit fails, so the fold refuses it when it is added, before a
+    /// later remove in the gesture can normalize it away. A node exactly at the limit is accepted.
+    @Test(arguments: ["ports", "capabilities"])
+    func addedNodesAreBoundedByThePerNodeLimitsEvenWhenRemovedInTheGesture(kind: String) throws {
+        let base = try Fixture.base()
+        let limit = kind == "ports" ? ProjectGraphLimits.portsPerNode : ProjectGraphLimits.capabilities
+        func node(_ count: Int) throws -> GraphNode {
+            var node = try Fixture.node("d0")
+            if kind == "ports" {
+                node.ports = Array(repeating: node.ports[0], count: count)
+                return node
+            }
+            // Required and advisory capabilities count together; neither half alone is over the limit.
+            node.requiredCapabilities = Array(repeating: try CapabilityID("cap.one"), count: count - count / 2)
+            node.advisoryCapabilities = Array(repeating: try CapabilityID("cap.two"), count: count / 2)
+            return node
+        }
+        let (over, atLimit) = try (node(limit + 1), node(limit))
+        let exceeded = ProjectGraphLimitError.exceeded(path: "$.nodes[d0].\(kind)", maximum: limit)
+        #expect(throws: GraphEditError.bounds(exceeded)) { try base.applying([.addNode(over)]) }
+        var history = try DraftHistory.make(draft: DraftID("draft"), base: base, depth: 10)
+        try history.apply([.moveNode(Fixture.nodeID("b0"), to: nil)], on: base)
+        let before = history
+        let (removeD0, moveB1) = try (GraphEdit.removeNode(over.id), GraphEdit.moveNode(Fixture.nodeID("b1"), to: nil))
+        for gesture: [GraphEdit] in [[.addNode(over)], [.addNode(over), removeD0], [moveB1, .addNode(over), removeD0]] {
+            #expect(throws: DraftHistoryRefusal.bounds(exceeded)) { try history.apply(gesture, on: base) }
+            #expect(throws: DraftHistoryRefusal.bounds(exceeded)) {
+                try DraftEditFold.fold(gesture, onto: before.draft.edits, base: base)
+            }
+        }
+        #expect(history == before)
+        #expect(try history.apply([.addNode(atLimit), removeD0], on: base) == .unchanged)
+        #expect(try history.apply([.addNode(atLimit)], on: base) == .recorded)
+        #expect(history.draft.edits == before.draft.edits + [.addNode(atLimit)])
+    }
+
     @Test(arguments: DraftHistoryFixture.nonFinite)
     func nonFinitePositionsAreRefusedOnAddAndMove(position: GraphPoint) throws {
         let base = try Fixture.base()
