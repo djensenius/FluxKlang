@@ -161,4 +161,82 @@ struct RecordingTakeBackwardJumpTests {
             #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 1000, host: 2_500_000_000)).isEmpty)
         }
     }
+
+    /// Round 8c: only takes on the restarting clock bound it. A take on clock 1 records [0, 2000)
+    /// and is device-stopped at 2000, finished or discarded; a clock-0 restart with `previousFrame:
+    /// 1000` is accepted and leaves it untouched, while a clock-1 one is still refused.
+    @Test
+    func takeOnAnotherClockNeverBoundsARestart() throws {
+        enum Closing { case deviceStop, finish, discard }
+        for closing in [Closing.deviceStop, .finish, .discard] {
+            var ledger = try TakeLedger(timebase: Fixture.timebase)
+            let start = Fixture.stamp(1, 0, clock: 1)
+            try ledger.observe(RuntimeClockAnchor(sample: start, host: HostStamp(ticks: 0), musical: nil),
+                               nominalRate: 48_000)
+            try ledger.open(TakeOpening(take: Fixture.take1, stream: Fixture.stream, streamSlot: Fixture.streamSlot,
+                                        clock: Fixture.clock, start: start,
+                                        inputLatency: try Fixture.latency()))
+            try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000, clock: 1))
+            var finished: RecordingTake?
+            var discarded: DiscardedTake?
+            var refusal = TakeLedgerError.segmentAfterRestart(Fixture.take1, segmentEnd: 2000, previousFrame: 1000)
+            switch closing {
+            case .deviceStop:
+                let stop = RuntimeDiscontinuity(kind: .captureStopped(reason: .deviceLost),
+                                                sample: Fixture.stamp(1, 2000, clock: 1), frames: nil,
+                                                stream: Fixture.streamSlot, host: nil)
+                #expect(try ledger.ingest(stop) == [.recorded(Fixture.take1)])
+                refusal = .stopAfterRestart(Fixture.take1, stopFrame: 2000, previousFrame: 1000)
+            case .finish: finished = try ledger.finish(Fixture.take1, reason: .user)
+            case .discard: discarded = try ledger.discard(Fixture.take1, reason: .abandoned)
+            }
+            #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 1000, host: 2_500_000_000)).isEmpty)
+            #expect(ledger.take(Fixture.take1) == finished && ledger.discarded(Fixture.take1) == discarded)
+            let sameClock = Fixture.restart(2, 0, previousFrame: 1000, host: 2_500_000_000, clock: 1)
+            Fixture.refusal(refusal) { () throws(TakeLedgerError) in _ = try ledger.ingest(sameClock) }
+            if closing == .deviceStop {
+                let take = try ledger.finish(Fixture.take1, reason: .deviceLost)
+                #expect(take.segments.map(\.frames) == [2000] && take.stopMark?.frame == 2000)
+            }
+        }
+    }
+
+    /// Round 8c (Copilot 4486448555): take 1 records [1000, 2000) and a jump to 500 ends it. An
+    /// overflow [s, e) is pre-roll only when e <= 500. An unowned one crossing 500 is routed exactly
+    /// like its part [500, e), never dropped: with no take after the jump, it is refused
+    /// `.recordNotOwned` at 500, like one starting at 500 (lengthless included). Take 2, capturing
+    /// from 500 on the stream, owns a crossing overflow and refuses it by its own start rule; it
+    /// records one starting at 500 and refuses a lengthless one's length.
+    @Test
+    func overflowCrossingTheJumpTargetIsNeverDropped() throws {
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        let notOwned = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: 500)
+        for opensTake2 in [false, true] {
+            for (frame, frames) in [(Int64(490), UInt32(20)), (500, 20), (500, 0)] {
+                var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+                try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+                #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+                var expected: TakeLedgerError? = notOwned
+                if opensTake2 {
+                    try ledger.open(Fixture.opening(Fixture.take2, 1, 500))
+                    try ledger.advance(Fixture.take2, to: Fixture.stamp(1, 600))
+                    expected = frame < 500 ? .overflowOutsideSegment(startFrame: 490, endFrame: 510) : nil
+                    if frames == 0 { expected = .missingOverflowFrames }
+                }
+                // Pre-roll ends at or before the target; a lengthless overflow spans one frame.
+                for (start, length) in [(Int64(490), UInt32?(10)), (499, 1), (499, 0), (499, nil), (490, 0)] {
+                    #expect(try ledger.ingest(Fixture.overflow(1, start, frames: length)).isEmpty)
+                }
+                let record = Fixture.overflow(1, frame, frames: frames)
+                if let expected {
+                    Fixture.refusal(expected) { () throws(TakeLedgerError) in _ = try ledger.ingest(record) }
+                } else {
+                    #expect(try ledger.ingest(record) == [.recorded(Fixture.take2)])
+                }
+                if opensTake2 {
+                    #expect(try ledger.finish(Fixture.take2, reason: .user).droppedFrames == (expected == nil ? 20 : 0))
+                }
+            }
+        }
+    }
 }
