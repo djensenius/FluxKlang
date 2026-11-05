@@ -40,7 +40,8 @@ enum MeterUnavailableReason: Equatable, Sendable {
     case staleGeneration
     /// The sample is older than the kernel's frame-age rule (`TelemetryUnavailable.tooOld`).
     case tooOld
-    /// The same sample has stayed latest for longer than the injected staleness window.
+    /// The earliest classification of the sample that this channel has consumed is more than the injected staleness
+    /// window before the update: the producer stalled, or a read was consumed late.
     case stale(ageNanoseconds: UInt64)
     /// The latest sample is NaN or +∞.
     case invalidReading(MeterInvalidReading)

@@ -22,7 +22,8 @@ struct MeterInstant: Comparable, Hashable, Sendable {
     }
 }
 
-/// How long the latest published sample may go unreplaced before its channel shows `.stale(ageNanoseconds:)`.
+/// How long a sample may be shown after the earliest classification of it that its channel has consumed, before the
+/// channel shows `.stale(ageNanoseconds:)`: its producer stopped replacing it, or its read was consumed late.
 ///
 /// The window answers #55 open question 5 per caller; there is deliberately no default. An age equal to the
 /// window is still fresh; one nanosecond more is stale.

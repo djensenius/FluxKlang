@@ -171,17 +171,17 @@ extension MeterDisplayTests {
         var model = try Self.tap()
         var feed = try Feed()
         #expect(Self.clips(try model.update([feed.publish(0.5)], at: Self.ms(0))) == [true])
-        #expect(Self.clips(try model.update([feed.publish(-40)], at: Self.ms(100))) == [true])
+        #expect(Self.clips(try model.update([feed.publish(-40, at: Self.ms(100))], at: Self.ms(100))) == [true])
         let stale = try model.update([feed.latest], at: Self.ms(700))
         #expect(Self.signals(stale) == [.unavailable(.stale(ageNanoseconds: 600 * Self.millisecond))])
         #expect(Self.clips(stale) == [true])
         #expect(Self.clips(try model.update([Self.missing(.tooOld)], at: Self.ms(800))) == [true])
-        let beforeReset = try model.update([feed.publish(-30)], at: Self.ms(900))
+        let beforeReset = try model.update([feed.publish(-30, at: Self.ms(900))], at: Self.ms(900))
         model.resetClip()
         let afterReset = try model.update([feed.latest], at: Self.ms(900))
         #expect(Self.clips(afterReset) == [false])
         #expect(Self.signals(afterReset) == Self.signals(beforeReset))
-        #expect(Self.clips(try model.update([feed.publish(0)], at: Self.ms(1_000))) == [true])
+        #expect(Self.clips(try model.update([feed.publish(0, at: Self.ms(1_000))], at: Self.ms(1_000))) == [true])
     }
 
     @Test
@@ -270,7 +270,7 @@ extension MeterDisplayTests {
                 let choice = random.below(20)
                 let special: [Double] = [-.infinity, .nan, .infinity, 1e300]
                 let reading = choice < 4 ? special[Int(choice)] : Double(random.below(97)) - 90
-                try feed.publish(reading)
+                try feed.publish(reading, at: MeterInstant(nanoseconds: now))
                 clipped = clipped || reading >= 0
             }
             let display = try model.update([feed.latest], at: MeterInstant(nanoseconds: now))

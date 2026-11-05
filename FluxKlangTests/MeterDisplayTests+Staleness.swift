@@ -25,8 +25,8 @@ extension MeterDisplayTests {
     @Test(arguments: [Int64(1_000_000), 60_000_000_000])
     func shortestAndLongestWindowsHoldExactlyToTheirEdges(window: Int64) throws {
         var model = try Self.tap(window: window)
-        let sample = try Self.read(-6, sequence: 1)
         let start = MeterInstant(nanoseconds: 7)
+        let sample = try Self.read(-6, sequence: 1, at: start)
         _ = try model.update([sample], at: start)
         let edge = MeterInstant(nanoseconds: 7 + UInt64(window))
         guard case .measured = try Self.signal(&model, sample, at: edge) else {
@@ -42,7 +42,7 @@ extension MeterDisplayTests {
         var model = try Self.tap()
         var feed = try Feed()
         _ = try Self.signal(&model, feed.latest, at: Self.ms(0))
-        try feed.publish(-20)
+        try feed.publish(-20, at: Self.ms(100))
         _ = try Self.signal(&model, feed.latest, at: Self.ms(100))
         for time: UInt64 in [300, 450, 600] {
             guard case .measured = try Self.signal(&model, feed.latest, at: Self.ms(time)) else {
@@ -61,7 +61,7 @@ extension MeterDisplayTests {
         _ = try Self.signal(&model, feed.publish(-6), at: Self.ms(0))
         #expect(try Self.signal(&model, feed.latest, at: Self.ms(600))
                 == .unavailable(.stale(ageNanoseconds: 600 * Self.millisecond)))
-        #expect(try Self.signal(&model, feed.publish(-50), at: Self.ms(1_000))
+        #expect(try Self.signal(&model, feed.publish(-50, at: Self.ms(1_000)), at: Self.ms(1_000))
                 == .measured(levelDBFS: -26, peakHoldDBFS: -6))
     }
 
@@ -69,13 +69,13 @@ extension MeterDisplayTests {
     func aNewSequenceOrANewStampIsANewSample() throws {
         var model = try Self.tap()
         _ = try Self.signal(&model, Self.read(-6, sequence: 1, frame: 0), at: Self.ms(0))
-        let restamped = try Self.read(-6, sequence: 1, frame: 480)
+        let restamped = try Self.read(-6, sequence: 1, frame: 480, at: Self.ms(400))
         _ = try Self.signal(&model, restamped, at: Self.ms(400))
         #expect(try Self.signal(&model, restamped, at: Self.ms(900)) == .measured(levelDBFS: -16, peakHoldDBFS: -6))
-        let regenerated = try Self.read(-6, sequence: 1, generation: 2, frame: 480)
+        let regenerated = try Self.read(-6, sequence: 1, generation: 2, frame: 480, at: Self.ms(1_300))
         _ = try Self.signal(&model, regenerated, at: Self.ms(1_300))
         #expect(try Self.signal(&model, regenerated, at: Self.ms(1_800)) == .measured(levelDBFS: -16, peakHoldDBFS: -6))
-        let resequenced = try Self.read(-6, sequence: 2, generation: 2, frame: 480)
+        let resequenced = try Self.read(-6, sequence: 2, generation: 2, frame: 480, at: Self.ms(2_200))
         _ = try Self.signal(&model, resequenced, at: Self.ms(2_200))
         #expect(try Self.signal(&model, resequenced, at: Self.ms(2_700)) == .measured(levelDBFS: -16, peakHoldDBFS: -6))
         #expect(try Self.signal(&model, resequenced, at: Self.ms(2_700, plus: 1))
@@ -198,8 +198,8 @@ extension MeterDisplayTests {
         var model = try Self.tap(3)
         var feeds = try [Feed(), Feed(), Feed()]
         _ = try model.update([feeds[0].publish(-6), feeds[1].publish(-12), feeds[2].publish(1)], at: Self.ms(0))
-        let display = try model.update([feeds[0].publish(-6), feeds[1].latest, Self.missing(.tooOld)],
-                                       at: Self.ms(600))
+        let display = try model.update([feeds[0].publish(-6, at: Self.ms(600)), feeds[1].latest,
+                                        Self.missing(.tooOld)], at: Self.ms(600))
         #expect(Self.signals(display) == [.measured(levelDBFS: -6, peakHoldDBFS: -6),
                                           .unavailable(.stale(ageNanoseconds: 600 * Self.millisecond)),
                                           .unavailable(.tooOld)])
@@ -217,9 +217,10 @@ extension MeterDisplayTests {
             var feeds = try [Feed(), Feed()]
             var displays: [MeterDisplay] = []
             for step in UInt64(0)..<60 {
-                if step % 3 == 0 { try feeds[0].publish(-Double(step % 50)) }
-                if step % 7 == 0 { try feeds[1].publish(step % 14 == 0 ? .nan : -Double(step)) }
-                displays.append(try model.update(feeds.map(\.latest), at: Self.ms(step * 45)))
+                let now = Self.ms(step * 45)
+                if step % 3 == 0 { try feeds[0].publish(-Double(step % 50), at: now) }
+                if step % 7 == 0 { try feeds[1].publish(step % 14 == 0 ? .nan : -Double(step), at: now) }
+                displays.append(try model.update(feeds.map(\.latest), at: now))
             }
             return (displays, model)
         }

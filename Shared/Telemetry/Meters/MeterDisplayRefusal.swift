@@ -36,4 +36,7 @@ enum MeterDisplayRefusal: Error, Equatable, Sendable {
     case readsForUnmeasuredSource(MeterUnavailableReason, count: Int)
     /// The injected host time is earlier than the previous update's.
     case clockRegressed(last: MeterInstant, now: MeterInstant)
+    /// The read for `channel` (the first such channel) was classified after the update's host time; host time
+    /// runs forward, so the two times cannot come from one clock.
+    case classifiedAfterUpdate(channel: Int, classifiedAt: MeterInstant, now: MeterInstant)
 }

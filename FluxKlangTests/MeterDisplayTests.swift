@@ -15,8 +15,8 @@ struct MeterDisplayTests {
     static let frameAge: Int64 = 24_000
 
     /// Publishes successive samples for one channel the way `TelemetrySlots.latest` returns them, classified at
-    /// their own frame: never published until the first publish, then the same sample until the next one;
-    /// sequences start at 1.
+    /// their own frame and at host time `at` (0 unless a test says otherwise): never published until the first
+    /// publish, then the same classified read until the next one; sequences start at 1.
     struct Feed {
         private(set) var latest: MeterClassifiedRead
         private var sequence: UInt64 = 0
@@ -26,9 +26,11 @@ struct MeterDisplayTests {
         }
 
         @discardableResult
-        mutating func publish(_ dbfs: Double, frame: Int64 = 0) throws(MeterDisplayRefusal) -> MeterClassifiedRead {
+        mutating func publish(_ dbfs: Double, frame: Int64 = 0,
+                              at classifiedAt: MeterInstant = MeterInstant(nanoseconds: 0))
+            throws(MeterDisplayRefusal) -> MeterClassifiedRead {
             sequence += 1
-            latest = try MeterDisplayTests.read(dbfs, sequence: sequence, frame: frame)
+            latest = try MeterDisplayTests.read(dbfs, sequence: sequence, frame: frame, at: classifiedAt)
             return latest
         }
     }
@@ -66,11 +68,14 @@ struct MeterDisplayTests {
                                   stamp: TelemetryStamp(clockGeneration: generation, frame: frame), sequence: sequence))
     }
 
-    /// A sample classified in its own clock generation at its own frame, so the kernel rule passes it.
-    static func read(_ dbfs: Double, sequence: UInt64, generation: UInt64 = 1,
-                     frame: Int64 = 0) throws(MeterDisplayRefusal) -> MeterClassifiedRead {
+    /// A sample classified in its own clock generation at its own frame, so the kernel rule passes it, at host time
+    /// `at` (0 unless a test says otherwise).
+    static func read(_ dbfs: Double, sequence: UInt64, generation: UInt64 = 1, frame: Int64 = 0,
+                     at classifiedAt: MeterInstant = MeterInstant(nanoseconds: 0)) throws(MeterDisplayRefusal)
+        -> MeterClassifiedRead {
         try MeterClassifiedRead.classify(raw(dbfs, sequence: sequence, generation: generation, frame: frame),
-                                         generation: generation, frame: frame, maximumAgeFrames: frameAge)
+                                         generation: generation, frame: frame, maximumAgeFrames: frameAge,
+                                         at: classifiedAt)
     }
 
     /// One hour of render frames at 48 kHz.
@@ -84,15 +89,22 @@ struct MeterDisplayTests {
         return try TelemetrySlots<MeterTapValue>(policy: policy, slotCount: count)
     }
 
-    /// Classifies a raw read at render `frame` of clock `generation` with the fixtures' frame-age rule.
-    static func classified(_ read: TelemetryRead<MeterTapValue>, generation: UInt64 = 3,
-                           frame: Int64) throws(MeterDisplayRefusal) -> MeterClassifiedRead {
-        try MeterClassifiedRead.classify(read, generation: generation, frame: frame, maximumAgeFrames: frameAge)
+    /// Classifies a raw read at render `frame` of clock `generation` and host time `at` (0 unless a test says
+    /// otherwise), with the fixtures' frame-age rule.
+    static func classified(_ read: TelemetryRead<MeterTapValue>, generation: UInt64 = 3, frame: Int64,
+                           at classifiedAt: MeterInstant = MeterInstant(nanoseconds: 0)) throws(MeterDisplayRefusal)
+        -> MeterClassifiedRead {
+        try MeterClassifiedRead.classify(read, generation: generation, frame: frame, maximumAgeFrames: frameAge,
+                                         at: classifiedAt)
     }
 
-    /// A telemetry-unavailable read, classified (it passes through unchanged).
-    static func missing(_ reason: TelemetryUnavailable) throws(MeterDisplayRefusal) -> MeterClassifiedRead {
-        try MeterClassifiedRead.classify(.unavailable(reason), generation: 1, frame: 0, maximumAgeFrames: frameAge)
+    /// A telemetry-unavailable read, classified at host time `at` (0 unless a test says otherwise); it passes
+    /// through unchanged.
+    static func missing(_ reason: TelemetryUnavailable,
+                        at classifiedAt: MeterInstant = MeterInstant(nanoseconds: 0)) throws(MeterDisplayRefusal)
+        -> MeterClassifiedRead {
+        try MeterClassifiedRead.classify(.unavailable(reason), generation: 1, frame: 0, maximumAgeFrames: frameAge,
+                                         at: classifiedAt)
     }
 
     /// Returns the refusal `body` throws, or nil when it succeeds. Any other error is recorded as an issue.
@@ -251,12 +263,16 @@ struct MeterDisplayTests {
                               stamp: TelemetryStamp(clockGeneration: 3, frame: 4_800)) == .ok)
         #expect(slots.publish(slot: 1, value: MeterTapValue(peakDBFS: -24),
                               stamp: TelemetryStamp(clockGeneration: 3, frame: 4_800)) == .ok)
-        let fresh = try model.update([Self.classified(slots.latest(slot: 0), frame: 28_800),
-                                      Self.classified(slots.latest(slot: 1), frame: 28_800)], at: Self.ms(10))
+        let later = Self.ms(10)
+        let fresh = try model.update([Self.classified(slots.latest(slot: 0), frame: 28_800, at: later),
+                                      Self.classified(slots.latest(slot: 1), frame: 28_800, at: later)], at: later)
         #expect(Self.signals(fresh) == [.measured(levelDBFS: -12, peakHoldDBFS: -12),
                                         .measured(levelDBFS: -24, peakHoldDBFS: -24)])
-        let classified = try model.update([Self.classified(slots.latest(slot: 0), generation: 4, frame: 28_800),
-                                           Self.classified(slots.latest(slot: 1), frame: 28_801)], at: Self.ms(20))
+        let last = Self.ms(20)
+        let classified = try model.update([
+            Self.classified(slots.latest(slot: 0), generation: 4, frame: 28_800, at: last),
+            Self.classified(slots.latest(slot: 1), frame: 28_801, at: last)
+        ], at: last)
         #expect(Self.signals(classified) == [.unavailable(.staleGeneration), .unavailable(.tooOld)])
     }
 
@@ -266,13 +282,14 @@ struct MeterDisplayTests {
     func frameAgeRuleIsBoundedToOneFrameThroughTwoToTheTwentyFour() throws {
         let sample = Self.raw(-6, sequence: 1)
         for accepted: Int64 in [1, 1 << 24] {
-            let read = try MeterClassifiedRead.classify(sample, generation: 1, frame: 0, maximumAgeFrames: accepted)
+            let read = try MeterClassifiedRead.classify(sample, generation: 1, frame: 0, maximumAgeFrames: accepted,
+                                                        at: Self.ms(0))
             #expect(read.read == sample)
         }
         for refused: Int64 in [0, -1, (1 << 24) + 1, .min, .max] {
             #expect(Self.refusal {
                 try MeterClassifiedRead.classify(.unavailable(.neverPublished), generation: 1, frame: 0,
-                                                 maximumAgeFrames: refused)
+                                                 maximumAgeFrames: refused, at: Self.ms(0))
             } == .maximumAgeFramesOutOfRange(refused))
         }
     }
@@ -293,11 +310,12 @@ struct MeterDisplayTests {
     func longDeadSampleIsNeverShownAsLiveOnFirstSight() throws {
         // The review's repro: a fresh model first sees sequence 999 an hour after it was published.
         let dead = Self.raw(-6, sequence: 999, generation: 3, frame: 0)
+        let hour = Self.ms(3_600_000)
         var model = try Self.tap()
-        #expect(try Self.signal(&model, Self.classified(dead, frame: Self.hourOfFrames), at: Self.ms(3_600_000))
+        #expect(try Self.signal(&model, Self.classified(dead, frame: Self.hourOfFrames, at: hour), at: hour)
                 == .unavailable(.tooOld))
         var restarted = try Self.tap()
-        #expect(try Self.signal(&restarted, Self.classified(dead, generation: 4, frame: 0), at: Self.ms(3_600_000))
+        #expect(try Self.signal(&restarted, Self.classified(dead, generation: 4, frame: 0, at: hour), at: hour)
                 == .unavailable(.staleGeneration))
     }
 
@@ -309,16 +327,19 @@ struct MeterDisplayTests {
         var model = try Self.tap()
         #expect(try Self.signal(&model, Self.classified(slots.latest(slot: 0), frame: 0), at: Self.ms(0))
                 == .measured(levelDBFS: -6, peakHoldDBFS: -6))
+        let hour = Self.ms(3_600_000)
         for source in [model.source, .faderTravelOnly] {
             model.rebind(to: source)
             model.rebind(to: try MeterSource.tap(channels: 1))
-            #expect(try Self.signal(&model, Self.classified(slots.latest(slot: 0), frame: Self.hourOfFrames),
-                                    at: Self.ms(3_600_000)) == .unavailable(.tooOld))
+            #expect(try Self.signal(&model, Self.classified(slots.latest(slot: 0), frame: Self.hourOfFrames, at: hour),
+                                    at: hour) == .unavailable(.tooOld))
         }
         #expect(slots.publish(slot: 0, value: MeterTapValue(peakDBFS: -9),
                               stamp: TelemetryStamp(clockGeneration: 3, frame: Self.hourOfFrames)) == .ok)
-        #expect(try Self.signal(&model, Self.classified(slots.latest(slot: 0), frame: Self.hourOfFrames + 480),
-                                at: Self.ms(3_600_010)) == .measured(levelDBFS: -9, peakHoldDBFS: -9))
+        let later = Self.ms(3_600_010)
+        #expect(try Self.signal(&model, Self.classified(slots.latest(slot: 0), frame: Self.hourOfFrames + 480,
+                                                        at: later), at: later)
+                == .measured(levelDBFS: -9, peakHoldDBFS: -9))
     }
 
     // MARK: - Fader travel is never signal
