@@ -45,16 +45,26 @@ extension UntrustedTextSanitizer {
     struct WithheldTerm: Hashable, Sendable {
         let text: String
         let isPrefix: Bool
+        /// `text` case-folded scalar by scalar (`fold`), the form that is matched.
+        let folded: [Unicode.Scalar]
+
+        init(text: String, isPrefix: Bool) {
+            self.text = text
+            self.isPrefix = isPrefix
+            folded = text.unicodeScalars.flatMap(UntrustedTextSanitizer.fold)
+        }
     }
 
-    /// Prepares a withheld string exactly like a label (filtering, grapheme cap,
-    /// match form), then trims surrounding whitespace. An overlong string
-    /// is cut to `maximumWithheldBytes` and loses its last grapheme, which the cut
-    /// may have split, so the prefix matches wherever the full string occurs.
+    /// Prepares a withheld string like a label (filtering, match form), then trims
+    /// surrounding whitespace. No display cap applies: graphemes are not capped, so
+    /// a term matches the uncapped label it came from. A string over the matching
+    /// limits fails closed: it is cut to `maximumWithheldBytes`, loses its last
+    /// grapheme (which the cut may have split) and becomes a prefix term, which
+    /// redacts from its first match to the end of the label.
     /// Returns nil when fewer than `minimumRedactedBytes` remain.
     static func withheldTerm(_ raw: String) -> WithheldTerm? {
         let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes)
-        var display = capGraphemes(filtered.text).text
+        var display = filtered.text
         var isPrefix = !filtered.isComplete
         if display.utf8.count > maximumWithheldBytes {
             display = truncate(display, maximumBytes: maximumWithheldBytes).text
@@ -73,17 +83,118 @@ extension UntrustedTextSanitizer {
         }
     }
 
-    /// Redacts withheld terms found in the match form of `display`. When one
-    /// matches, or when a scan cut leaves a partial withheld string at the end,
-    /// the result is the redacted match form; otherwise `display` is unchanged
-    /// and keeps its joiners and presentation selectors (so an emoji family loses
-    /// them only when the label also contains a withheld string).
+    /// Redacts withheld terms found in the match form of `display`. When anything
+    /// is withheld the result is the redacted match form; otherwise `display` is
+    /// unchanged and keeps its joiners and presentation selectors (so an emoji
+    /// family loses them only when the label also contains a withheld string).
     static func redactMatchForm(
         of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool
     ) -> Result {
-        let redacted = redact(matchForm(display), withheld: withheld, marker: marker)
-        guard !scanIsComplete else { return redacted.changed ? redacted : (display, false) }
-        let trimmed = dropPartialWithheld(atEndOf: redacted.text, withheld: withheld.map(\.text))
-        return redacted.changed || trimmed.changed ? (trimmed.text, true) : (display, false)
+        let redacted = redact(matchForm(display), withheld: withheld, marker: marker, scanIsComplete: scanIsComplete)
+        return redacted.changed ? redacted : (display, false)
+    }
+
+    /// Replaces every withheld range of `text` (a match form) in one pass: all
+    /// ranges are found on the original text first (`withheldRanges`), overlapping
+    /// and adjacent ones are merged, and each merged range becomes one marker. The
+    /// result therefore does not depend on term order, and no replacement can hide
+    /// another term or the scan-cut tail.
+    ///
+    /// Accepted limit: only whole terms are found. A partial quote of a secret,
+    /// short or long (for example the first 300 bytes of a 2,000-byte secret,
+    /// shorter than its 1,024-byte prefix term), is not redacted, except in the
+    /// withheld tail of a scan-cut label.
+    static func redact(
+        _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool = true
+    ) -> Result {
+        let scalars = Array(text.unicodeScalars)
+        let ranges = merge(withheldRanges(in: scalars, terms: withheld, scanIsComplete: scanIsComplete))
+        guard !ranges.isEmpty else { return (text, false) }
+        var result = String.UnicodeScalarView()
+        var cursor = 0
+        for range in ranges {
+            result.append(contentsOf: scalars[cursor..<range.lowerBound])
+            result.append(contentsOf: marker.unicodeScalars)
+            cursor = range.upperBound
+        }
+        result.append(contentsOf: scalars[cursor...])
+        return (String(result), true)
+    }
+
+    /// Scalar ranges of `text` to withhold:
+    /// - every occurrence of every term, overlapping ones included, found on the
+    ///   case-folded text and mapped back through the fold's source index (a match
+    ///   that starts or ends inside one scalar's folding covers that whole scalar);
+    /// - for a prefix term, its first match through the end of the text;
+    /// - when the scan was cut and a term exists, the last `L - 1` scalars, where `L`
+    ///   is the longest folded term. Option (ii) of the ruling: a cut-off secret is a
+    ///   proper prefix of an occurrence, so it has at most `L - 1` folded and hence at
+    ///   most `L - 1` text scalars, and this tail always covers it, whatever its case
+    ///   folding or composition at the cut. The cost is over-redaction of up to
+    ///   `L - 1` trailing scalars of a label whose input exceeded the scan limit
+    ///   (at least 4,096 kept scalars, far past the default 128-byte label).
+    ///
+    /// Cost: each term is tried at every folded position, O(n·m) for n folded text
+    /// scalars and m folded term scalars. n is bounded by the scan limit (each
+    /// scalar folds to at most three) and m by `maximumWithheldBytes`.
+    static func withheldRanges(
+        in text: [Unicode.Scalar], terms: [WithheldTerm], scanIsComplete: Bool
+    ) -> [Range<Int>] {
+        var folded: [Unicode.Scalar] = []
+        var source: [Int] = []
+        for (index, scalar) in text.enumerated() {
+            let folding = fold(scalar)
+            folded.append(contentsOf: folding)
+            source.append(contentsOf: repeatElement(index, count: folding.count))
+        }
+        var ranges: [Range<Int>] = []
+        for term in terms where !term.folded.isEmpty {
+            for start in occurrences(of: term.folded, in: folded, firstOnly: term.isPrefix) {
+                let end = term.isPrefix ? text.count : source[start + term.folded.count - 1] + 1
+                ranges.append(source[start]..<end)
+            }
+        }
+        if !scanIsComplete, let longest = terms.map(\.folded.count).max(), longest > 1, !text.isEmpty {
+            ranges.append(max(0, text.count - (longest - 1))..<text.count)
+        }
+        return ranges
+    }
+
+    /// Start offsets of every occurrence of `term` in `text`, overlapping ones included.
+    static func occurrences(of term: [Unicode.Scalar], in text: [Unicode.Scalar], firstOnly: Bool) -> [Int] {
+        guard let first = term.first, term.count <= text.count else { return [] }
+        var found: [Int] = []
+        for start in 0...(text.count - term.count) where text[start] == first {
+            guard text[start..<(start + term.count)].elementsEqual(term) else { continue }
+            found.append(start)
+            if firstOnly { break }
+        }
+        return found
+    }
+
+    /// Sorts ranges and merges overlapping or adjacent ones.
+    static func merge(_ ranges: [Range<Int>]) -> [Range<Int>] {
+        var merged: [Range<Int>] = []
+        for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            if let last = merged.last, range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
+    }
+
+    /// Full case folding, approximated per scalar as the lowercase mapping of the
+    /// uppercase mapping: `ß`, `SS` and `ss` fold to `ss`; `ς`, `σ` and `Σ` to `σ`.
+    /// Lengths may change, which is why matches are mapped back through a source index.
+    static func fold(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
+        if scalar.isASCII {
+            let value = UInt8(scalar.value)
+            return [Unicode.Scalar((65...90).contains(value) ? value + 32 : value)]
+        }
+        return scalar.properties.uppercaseMapping.unicodeScalars.flatMap { upper in
+            upper.properties.lowercaseMapping.unicodeScalars
+        }
     }
 }

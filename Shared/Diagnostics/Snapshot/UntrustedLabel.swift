@@ -13,15 +13,16 @@ import Foundation
 ///
 /// The text goes through these steps in order:
 /// 1. Invisible characters are removed or replaced (see `UntrustedTextSanitizer`),
-///    so they cannot split a withheld string and hide it from step 3.
-/// 2. Each grapheme is limited to `UntrustedTextSanitizer.maximumScalarsPerGrapheme`
-///    scalars, and the text is normalized to NFC.
-/// 3. Withheld strings are searched in the match form (the text without ZWJ/ZWNJ or
-///    variation selectors, renormalized to NFC) and replaced, ignoring case, by
-///    `withheldMarker`; overlapping matches become one marker. If the scan stopped
-///    early, a trailing piece that begins a withheld string is dropped. When either
-///    happens the label is the redacted match form; otherwise it keeps its allowed
-///    joiners and presentation selectors.
+///    so they cannot split a withheld string and hide it from step 2. The text is
+///    normalized to NFC.
+/// 2. Withheld strings are found in the full, uncapped match form (the text without
+///    ZWJ/ZWNJ or variation selectors, renormalized to NFC), case-folded, together
+///    with the tail of a scan-cut text. All ranges are merged and replaced once by
+///    `withheldMarker`. When anything is withheld the label is the redacted match
+///    form; otherwise it keeps its allowed joiners and presentation selectors.
+/// 3. Each grapheme of the redacted text is limited to
+///    `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
+///    anything, step 2 runs again, since dropping scalars can complete a withheld string.
 /// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
@@ -57,14 +58,20 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let limit = max(0, maximumBytes)
         let scan = UntrustedTextSanitizer.scanLimit(maximumBytes: limit, withheld: terms.map(\.text))
         let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: scan)
-        let capped = UntrustedTextSanitizer.capGraphemes(filtered.text)
-        let display = capped.text.precomposedStringWithCanonicalMapping
+        let display = filtered.text.precomposedStringWithCanonicalMapping
         let redacted = UntrustedTextSanitizer.redactMatchForm(
             of: display, withheld: terms, marker: Self.withheldMarker, scanIsComplete: filtered.isComplete
         )
-        let cut = UntrustedTextSanitizer.truncate(redacted.text, maximumBytes: limit)
+        let capped = UntrustedTextSanitizer.capGraphemes(redacted.text)
+        // Dropping scalars can complete a withheld string, so a capped text is matched again.
+        let confirmed = capped.changed
+            ? UntrustedTextSanitizer.redactMatchForm(
+                of: capped.text, withheld: terms, marker: Self.withheldMarker, scanIsComplete: true
+            )
+            : capped
+        let cut = UntrustedTextSanitizer.truncate(confirmed.text, maximumBytes: limit)
         text = cut.text
         isTruncated = cut.changed || !filtered.isComplete
-        wasSanitized = filtered.changed || capped.changed || redacted.changed
+        wasSanitized = filtered.changed || capped.changed || redacted.changed || confirmed.changed
     }
 }

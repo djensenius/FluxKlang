@@ -229,6 +229,49 @@ extension NeutralSnapshotTests {
         #expect(snapshot.node(Self.nodeA)?.label.text == "\(UntrustedLabel.withheldMarker) evidence-two")
     }
 
+    // MARK: - Round 6
+
+    @Test func redactionRunsBeforeTheGraphemeCap() {
+        let family = "👨\u{FE0F}\u{200D}👩\u{FE0F}\u{200D}👧\u{FE0F}\u{200D}👦\u{FE0F}"
+        for withheld in ["👨👩👧👦ID-123456", family + "ID-123456"] {
+            let label = UntrustedLabel(family + "ID-123456", withholding: [withheld])
+            #expect(label.text == UntrustedLabel.withheldMarker && label.wasSanitized)
+        }
+        let flooded = "SN-x" + String(repeating: "\u{0301}", count: 8) + "-99"
+        let completed = "SN-x" + String(repeating: "\u{0301}", count: 7) + "-99"
+        #expect(UntrustedLabel(flooded, withholding: [completed]).text == UntrustedLabel.withheldMarker)
+        // A term is never capped: a leading mark flood is withheld whole, not cut to eight scalars.
+        let marks = String(repeating: "\u{0301}", count: 9) + "-123456"
+        let whole = UntrustedLabel("q" + marks, withholding: [marks])
+        #expect(Array(whole.text.unicodeScalars) == Array(("q" + UntrustedLabel.withheldMarker).unicodeScalars))
+    }
+
+    @Test func aScanCutTailIsWithheldInTheSamePassAsCompleteMatches() {
+        let short = "ABCABC"
+        let long = short + "DEF-" + String(repeating: "7", count: 990)
+        let label = UntrustedLabel("Rig " + String(repeating: short, count: 600) + long, withholding: [short, long])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker)" && label.isTruncated)
+        let exact = UntrustedLabel("Rig -----" + String(repeating: "ABCDEFGH", count: 600), withholding: ["ABCDEFGH"])
+        #expect(exact.text == "Rig -----\(UntrustedLabel.withheldMarker)")
+    }
+
+    @Test func caseFoldingMatchesAcrossLengthChanges() {
+        let label = UntrustedLabel("Rig " + String(repeating: "STRASSE-X", count: 800), withholding: ["Straße-X"])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker)")
+        let marker = UntrustedLabel.withheldMarker
+        #expect(UntrustedLabel("Maß Straße-X ok", withholding: ["STRASSE-X"]).text == "Maß \(marker) ok")
+        #expect(UntrustedLabel("Gro\u{00DF}-123456 ok", withholding: ["s-123456"]).text == "Gro\(marker) ok")
+        #expect(UntrustedLabel("ΣΊΓΜΑ-12 ok", withholding: ["σίγμα-12"]).text == "\(marker) ok")
+        // Accepted over-redaction: ß folds to "ss", so the whole ß is withheld.
+        #expect(UntrustedLabel("Maß-123456", withholding: ["s-123456"]).text == "Ma\(marker)")
+    }
+
+    @Test func aTwoScalarTermWithholdsAOneScalarScanCutTail() {
+        let cut = "Rig -" + String(repeating: "中文", count: 2045) + "中" + "文 tail"
+        let label = UntrustedLabel(cut, withholding: ["中文"])
+        #expect(label.text == "Rig -\(UntrustedLabel.withheldMarker)" && label.isTruncated)
+    }
+
     static func permutations(_ items: [String]) -> [[String]] {
         guard items.count > 1 else { return [items] }
         return items.indices.flatMap { index in

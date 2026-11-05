@@ -85,7 +85,8 @@ extension NeutralSnapshotTests {
     @Test func graphemesAreCappedAtEightScalars() {
         let flood = "e" + String(repeating: "\u{0301}", count: 40) + "x"
         let label = UntrustedLabel(flood)
-        #expect(label.text == "e" + String(repeating: "\u{0301}", count: 7) + "x")
+        let expected = "\u{00E9}" + String(repeating: "\u{0301}", count: 7) + "x"
+        #expect(label.text.unicodeScalars.elementsEqual(expected.unicodeScalars))
         #expect(label.text.allSatisfy { $0.unicodeScalars.count <= 8 })
         #expect(label.wasSanitized && !label.isTruncated)
         let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦"
@@ -140,18 +141,18 @@ extension NeutralSnapshotTests {
     }
 
     /// Four adjacent 1,000-byte copies shrink to one 10-byte marker, so whatever the
-    /// scan keeps of the fifth copy would fit in a 200-byte label.
-    @Test(arguments: [
-        (0, ""), (88, String(repeating: "x", count: 88)), (89, String(repeating: "x", count: 89) + "ser")
-    ])
-    func aUIDCutByTheScanLimitLeavesNoPrefix(padding: Int, tail: String) {
+    /// scan keeps of the fifth copy would fit in a 200-byte label. The scan-cut tail
+    /// window (the last 999 scalars) covers the cut copy and the padding before it,
+    /// even a partial of only three bytes.
+    @Test(arguments: [0, 88, 89])
+    func aUIDCutByTheScanLimitLeavesNoPrefix(padding: Int) {
         let serial = Self.thousandByteSerial
         let raw = "Rig " + String(repeating: serial, count: 4) + String(repeating: "x", count: padding)
             + serial.lowercased()
         let label = UntrustedLabel(raw, maximumBytes: 200, withholding: [serial])
         let marker = UntrustedLabel.withheldMarker
-        // Adjacent copies merge into one marker.
-        #expect(label.text == "Rig " + marker + tail)
+        // Adjacent copies and the tail window merge into one marker.
+        #expect(label.text == "Rig " + marker)
         #expect(label.isTruncated)
     }
 
