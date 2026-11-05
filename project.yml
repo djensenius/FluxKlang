@@ -226,12 +226,14 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
-      - path: FluxKlangTests/NeutralSnapshotTests.swift
-      - path: FluxKlangTests/NeutralSnapshotTests+Fixtures.swift
-      - path: FluxKlangTests/NeutralSnapshotTests+Grounding.swift
-      - path: FluxKlangTests/NeutralSnapshotTests+Hardening.swift
-      - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
-      - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
+      - path: FluxKlangTests/SpatialRenderTests.swift
+      - path: FluxKlangTests/SpatialRenderTests+Masks.swift
+      - path: FluxKlangTests/SpatialRenderTests+Calibration.swift
+      - path: FluxKlangTests/MIDI1ChannelStateTests.swift
+      - path: FluxKlangTests/MIDI1ParameterStateTests.swift
+      - path: FluxKlangTests/MIDI1PerformanceSnapshotTests.swift
+      - path: FluxKlangTests/PatchVariationTests.swift
+      - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PeerSyncTests.swift
       - path: FluxKlangTests/PeerSyncTests+Commands.swift
       - path: FluxKlangTests/PeerTrustTests.swift
