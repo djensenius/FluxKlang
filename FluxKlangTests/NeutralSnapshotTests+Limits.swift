@@ -186,7 +186,7 @@ extension NeutralSnapshotTests {
             "👩", "\u{200D}", "\u{FE0F}", "\u{1100}", "\u{1161}", "\u{11A8}", " ", "SN-1234", "[", "\u{0001}",
             "\u{200B}", "é", "9", "\u{0E33}", "\u{0903}", String(repeating: "\u{0D4E}", count: 8)
         ]
-        var generator = SplitMix64(seed: 0x118_0010)
+        var generator = NeutralSnapshotSplitMix64(seed: 0x118_0010)
         for _ in 0..<2_000 {
             let count = Int.random(in: 0...80, using: &generator)
             let raw = (0..<count).map { _ in alphabet.randomElement(using: &generator) ?? "" }.joined()
@@ -196,7 +196,7 @@ extension NeutralSnapshotTests {
 }
 
 /// A fixed-seed generator, so the fuzz cases are the same on every run.
-struct SplitMix64: RandomNumberGenerator {
+private struct NeutralSnapshotSplitMix64: RandomNumberGenerator {
     private var state: UInt64
 
     init(seed: UInt64) {
