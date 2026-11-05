@@ -226,6 +226,19 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
+      - path: FluxKlangTests/SpatialAdapterTests.swift
+      - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift
+      - path: FluxKlangTests/SpatialAdapterTests+Decoding.swift
+      - path: FluxKlangTests/PluginCatalogTests.swift
+      - path: FluxKlangTests/PluginCatalogTests+Service.swift
+      - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
+      - path: FluxKlangTests/WorkspaceNavigationTests.swift
+      - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
