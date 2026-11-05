@@ -406,6 +406,14 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
     /// nothing. `body` must not call `drain`.
     @discardableResult
     func drain(perLaneQuota: Int, total: Int, _ body: (UInt8, Element) -> Void) -> Int {
+        drain(perLaneQuota: perLaneQuota, total: total, emptied: { _ in }, body)
+    }
+
+    /// `drain(perLaneQuota:total:_:)` that also calls `emptied` with each visited lane it proved empty (it
+    /// delivered fewer than that lane's limit), after that lane's elements went to `body`. Added for #64 E5a's
+    /// flush watermark; same visiting order, bounds and lane freeing. Neither closure may call `drain`.
+    @discardableResult
+    func drain(perLaneQuota: Int, total: Int, emptied: (UInt8) -> Void, _ body: (UInt8, Element) -> Void) -> Int {
         guard perLaneQuota > 0, total > 0 else { return 0 }
         let start = cursor
         var lane = start
@@ -422,8 +430,11 @@ final class FanInHandoff<Element: BitwiseCopyable>: @unchecked Sendable {
                 ring.popAll(limit: limit) { body(tag, $0) }
             }
             // Fewer than `limit` means the lane is now empty; only this consumer leaves `retiring`.
-            if delivered < limit, let freed = FanInLaneWord.free(state) {
-                (states + lane).pointee.store(freed, ordering: .releasing)
+            if delivered < limit {
+                if let freed = FanInLaneWord.free(state) {
+                    (states + lane).pointee.store(freed, ordering: .releasing)
+                }
+                emptied(tag)
             }
             remaining &-= delivered  // Exact: delivered <= limit <= remaining.
             lastLimit = limit
