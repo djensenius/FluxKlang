@@ -90,3 +90,28 @@ from peer bytes:
 
 The Bonjour service type is deferred. `_fluxklang._tcp` is a working name only
 and is not advertised or browsed by anything in this lane.
+
+## Reconnect (`Reliability/`, #97 R1)
+
+Pure values only; no sockets, timers or Bonjour.
+- `PeerConnectionEpochIssuer` (host) issues each peer's connection epoch from one
+  host-wide `Generation.next()` counter, so an epoch is never reused. Currency is
+  equality with the live epoch only. Live peers are bounded (64 by default) and a
+  full issuer refuses instead of evicting.
+- `PeerOutboundQueue` (remote) holds up to 256 intents of the current session,
+  queued and sent-but-unanswered together, in strict order with no coalescing. An
+  intent of any other epoch is refused, and a full queue refuses instead of evicting.
+- `PeerReconnectState` moves connected → synced → resyncing → synced, with
+  disconnected from any phase. It reads the session from the receiver it observes.
+  Input and sending are enabled only when synced and resumed. After an in-session
+  resync, held intents wait for an explicit `resume()` from the sync layer; nothing
+  flushes on its own. A reconnect is allowed only after `connectionLost()` and only
+  to the same host, whose (host generation, connection generation) pair must
+  strictly increase over the current session; another host is adopted only through
+  the explicit `changeHost(to:)`, which restarts that order. Adoption drops the
+  whole queue, never replays it, and returns one `PeerDiscardReport`: never-sent intents are
+  *discarded*, and sent intents without a result are *outcome unknown*. Events of
+  an old session are ignored and reported.
+- `PeerReconnectBackoff` is pure math: 250 ms × 2^attempt, capped at 30 s, with
+  equal jitter from a caller-supplied unit in [0, 1). `PeerReconnectAttempts`
+  counts attempts (saturating at 32) and is reset by a successful sync.
