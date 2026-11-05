@@ -131,32 +131,79 @@ enum UntrustedTextSanitizer {
         }
     }
 
-    /// Keeps the first scalars of an oversized grapheme, never ending it on a joiner.
+    /// Caps every grapheme of the result, as Swift segments the result, to
+    /// `maximumScalarsPerGrapheme` scalars, never ending a capped one on a joiner.
+    ///
+    /// Capping the input's own graphemes is not enough: a capped grapheme can end in
+    /// a `Prepend` scalar (U+0D4E) and merge with the next one. So the result is built
+    /// one input grapheme at a time, and after each append its trailing grapheme is
+    /// re-checked. A grapheme boundary depends only on the scalars before it and the
+    /// one scalar after it, so an append can only change the trailing grapheme. A
+    /// replacement can merge into the grapheme before it (dropping a Prepend run lets
+    /// marks attach to the previous base: `"a" + 9×U+0D4E + 9×U+0301` caps to
+    /// `"a" + 7×U+0301`), so the check loops until the trailing grapheme fits; every
+    /// pass shrinks the text, and graphemes before the merged one are untouched. A
+    /// rematch can still create an oversized grapheme (dropping a joiner merges its
+    /// neighbours), so `UntrustedLabel` caps again after every rematch.
     static func capGraphemes(_ text: String) -> Result {
-        var result = String.UnicodeScalarView()
+        var result = ""
         var changed = false
         for character in text {
-            let scalars = character.unicodeScalars
-            guard scalars.count > maximumScalarsPerGrapheme else {
-                result.append(contentsOf: scalars)
-                continue
-            }
-            var prefix = Array(scalars.prefix(maximumScalarsPerGrapheme))
-            while let last = prefix.last, isJoiner(last) {
-                prefix.removeLast()
-            }
-            result.append(contentsOf: prefix)
-            changed = true
+            result.unicodeScalars.append(contentsOf: character.unicodeScalars)
+            changed = capTrailingGrapheme(&result) || changed
         }
-        return (String(result), changed)
+        return (result, changed)
     }
 
-    /// Keeps whole graphemes while they fit in `maximumBytes` UTF-8 bytes.
+    /// Replaces an oversized trailing grapheme by at most `maximumScalarsPerGrapheme`
+    /// of its scalars (`cappedScalars`). Each pass removes at least one scalar, so the
+    /// loop ends.
+    private static func capTrailingGrapheme(_ text: inout String) -> Bool {
+        var changed = false
+        while let last = text.last, last.unicodeScalars.count > maximumScalarsPerGrapheme {
+            let kept = cappedScalars(Array(last.unicodeScalars))
+            text.removeSubrange(text.index(before: text.endIndex)...)
+            text.unicodeScalars.append(contentsOf: kept)
+            changed = true
+        }
+        return changed
+    }
+
+    /// Keeps the base and its first marks, never ending on a joiner. An oversized run of
+    /// leading `Prepend` scalars loses only its excess (the scalars farthest from the
+    /// base), so the base and the text after it survive. A run with no base keeps its
+    /// first scalars.
+    private static func cappedScalars(_ scalars: [Unicode.Scalar]) -> [Unicode.Scalar] {
+        let limit = maximumScalarsPerGrapheme
+        let leading = scalars.prefix(while: isPrepend).count
+        guard leading < scalars.count else { return Array(scalars.prefix(limit)) }
+        var body = Array(scalars[leading...].prefix(limit))
+        while let scalar = body.last, isJoiner(scalar) {
+            body.removeLast()
+        }
+        return Array(scalars[..<leading].suffix(limit - body.count)) + body
+    }
+
+    /// Whether `scalar` joins the letter after it into one grapheme (Unicode's
+    /// `Prepend`), probed on the toolchain's own segmentation rather than a fixed table.
+    private static func isPrepend(_ scalar: Unicode.Scalar) -> Bool {
+        var probe = String(Character(scalar))
+        probe.append("a")
+        return probe.count == 1
+    }
+
+    /// Keeps whole graphemes of `text` while they fit in `maximumBytes` UTF-8 bytes.
+    /// The cut is at a grapheme boundary of `text`, so the kept prefix segments the
+    /// same way; its trailing grapheme is re-checked against the scalar cap anyway.
     static func truncate(_ text: String, maximumBytes: Int) -> Result {
         var used = 0
         for index in text.indices {
             let width = text[index].utf8.count
-            guard used + width <= maximumBytes else { return (String(text[..<index]), true) }
+            guard used + width <= maximumBytes else {
+                var kept = String(text[..<index])
+                _ = capTrailingGrapheme(&kept)
+                return (kept, true)
+            }
             used += width
         }
         return (text, false)

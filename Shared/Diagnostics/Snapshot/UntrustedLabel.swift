@@ -22,10 +22,17 @@ import Foundation
 ///    merged and replaced once by `withheldMarker`. When anything is withheld the
 ///    label is the redacted source form; otherwise it keeps its allowed joiners and
 ///    presentation selectors.
-/// 3. Each grapheme of the redacted text is limited to
-///    `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
-///    anything, step 2 runs again, since dropping scalars can complete a withheld string.
-/// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary.
+/// 3. Each grapheme of the redacted text, as Swift segments the result, is limited
+///    to `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
+///    anything, step 2 runs again, since dropping scalars can complete a withheld
+///    string, and so on until stable (`settle`, bounded, failing closed).
+/// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary of
+///    the final text. If not even its first grapheme fits, the label is
+///    `withheldMarker` (or empty, flagged truncated, when the marker does not fit
+///    either), never a silently empty string.
+///
+/// Postcondition: every grapheme of `text` has at most `maximumScalarsPerGrapheme`
+/// scalars, and `text` is at most `maximumBytes` UTF-8 bytes.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
 /// matched by a match-form prefix, and a match redacts the rest of the label. One
@@ -65,16 +72,41 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let redacted = UntrustedTextSanitizer.redactMatchForm(
             of: display, withheld: terms, marker: Self.withheldMarker, scanIsComplete: filtered.isComplete
         )
-        let capped = UntrustedTextSanitizer.capGraphemes(redacted.text)
-        // Dropping scalars can complete a withheld string, so a capped text is matched again.
-        let confirmed = capped.changed
-            ? UntrustedTextSanitizer.redactMatchForm(
-                of: capped.text, withheld: terms, marker: Self.withheldMarker, scanIsComplete: true
-            )
-            : capped
-        let cut = UntrustedTextSanitizer.truncate(confirmed.text, maximumBytes: limit)
+        let settled = Self.settle(redacted.text, terms: terms)
+        var cut = UntrustedTextSanitizer.truncate(settled.text, maximumBytes: limit)
+        if cut.text.isEmpty, !settled.text.isEmpty {
+            // The first grapheme alone does not fit: the label is withheld, not silently emptied.
+            cut = (Self.withheldMarker.utf8.count <= limit ? Self.withheldMarker : "", true)
+        }
         text = cut.text
         isTruncated = cut.changed || !filtered.isComplete
-        wasSanitized = filtered.changed || capped.changed || redacted.changed || confirmed.changed
+        wasSanitized = filtered.changed || redacted.changed || settled.changed
+    }
+
+    /// At most this many cap-and-rematch passes run before a label is withheld.
+    static let maximumSettlePasses = 4
+
+    /// Caps graphemes (`capGraphemes`) until the text is stable. Dropping scalars can
+    /// complete a withheld string, so a capped text is matched again; a rematch can drop
+    /// a joiner and merge its neighbours into an oversized grapheme, so a rematched text
+    /// is capped again.
+    /// A pass that caps nothing, or rematches nothing, ends with every grapheme within
+    /// the cap. If `maximumSettlePasses` pass without that, the label fails closed to
+    /// `withheldMarker`.
+    private static func settle(
+        _ text: String, terms: [UntrustedTextSanitizer.WithheldTerm]
+    ) -> UntrustedTextSanitizer.Result {
+        var capped = UntrustedTextSanitizer.capGraphemes(text)
+        var changed = capped.changed
+        for _ in 0..<maximumSettlePasses {
+            guard capped.changed else { return (capped.text, changed) }
+            let again = UntrustedTextSanitizer.redactMatchForm(
+                of: capped.text, withheld: terms, marker: withheldMarker, scanIsComplete: true
+            )
+            guard again.changed else { return (capped.text, changed) }
+            capped = UntrustedTextSanitizer.capGraphemes(again.text)
+            changed = true
+        }
+        return capped.changed ? (withheldMarker, true) : (capped.text, changed)
     }
 }
