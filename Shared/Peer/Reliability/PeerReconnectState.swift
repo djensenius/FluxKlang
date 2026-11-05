@@ -141,10 +141,11 @@ struct PeerReconnectState: Sendable {
     /// `latchGeneration` is the first latch's generation: a restore and test hook
     /// (exhaustion is pinned at `Generation.maximumValue`). It adds no forging
     /// path, because `stamp(_:)` is already the caller-trusted boundary.
+    /// `firstSequence` is the queue's restore and test hook (`PeerOutboundQueue.init`).
     init(session: PeerSyncSession, queueCapacity: Int = PeerOutboundQueue.standardCapacity,
-         latchGeneration: Generation = .initial) throws(PeerOutboundCapacityError) {
+         latchGeneration: Generation = .initial, firstSequence: PeerSequence? = nil) throws(PeerOutboundCapacityError) {
         phase = .connected(session)
-        queue = try PeerOutboundQueue(session: session, capacity: queueCapacity)
+        queue = try PeerOutboundQueue(session: session, capacity: queueCapacity, firstSequence: firstSequence)
         latch = PeerResyncLatch(session: session, generation: latchGeneration)
     }
 
@@ -153,22 +154,28 @@ struct PeerReconnectState: Sendable {
 
     var session: PeerSyncSession { queue.session }
 
-    var isInputEnabled: Bool { phase == .synced(session, awaitingResume: false) }
+    /// Synced, resumed and with envelope sequences left in this session.
+    var isInputEnabled: Bool { isSyncedAndResumed && !queue.isSequenceExhausted }
+
+    private var isSyncedAndResumed: Bool { phase == .synced(session, awaitingResume: false) }
 
     /// Queues a user intent. Refused unless synced and resumed, then as `PeerOutboundQueue.enqueue`.
     mutating func enqueue(_ intent: CommandIntent) throws(PeerOutboundRefusal) {
-        guard isInputEnabled else { throw .inputDisabled }
+        guard isSyncedAndResumed else { throw .inputDisabled }
         try queue.enqueue(intent)
     }
 
     /// The next intent to send, oldest first; nil unless synced and resumed.
-    mutating func takeNextToSend() -> CommandIntent? {
-        guard isInputEnabled else { return nil }
-        return queue.takeNext()
+    /// Throws `sequenceExhausted` once the session's sequences are used up.
+    mutating func takeNextToSend() throws(PeerOutboundRefusal) -> PeerCommandEnvelope? {
+        guard isSyncedAndResumed else { return nil }
+        return try queue.takeNext()
     }
 
-    mutating func acknowledge(_ command: CommandID, session result: PeerSyncSession) throws(PeerOutboundRefusal) {
-        try queue.acknowledge(command, session: result)
+    /// Accepts the host's result only for the exact send it answers; see `PeerOutboundQueue.acknowledge`.
+    mutating func acknowledge(_ result: PeerCommandResult,
+                              session origin: PeerSyncSession) throws(PeerOutboundRefusal) {
+        try queue.acknowledge(result, session: origin)
     }
 
     /// Releases intents held across an in-session resync, after the sync layer

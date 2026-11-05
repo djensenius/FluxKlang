@@ -112,6 +112,16 @@ Pure values only; no sockets, timers or Bonjour.
   whole queue, never replays it, and returns one `PeerDiscardReport`: never-sent intents are
   *discarded*, and sent intents without a result are *outcome unknown*. Events of
   an old session are ignored and reported.
+- Sends are `PeerCommandEnvelope`s numbered from 1 per session. A
+  `PeerCommandResult` is accepted only when its session, command ID and envelope
+  sequence all match an awaiting send; a delayed duplicate for an earlier send of a
+  reused ID is `sequenceMismatch` and changes nothing. An ID is a `duplicate` only
+  while queued or awaiting; once answered (e.g. a transient refusal) it may be
+  enqueued again and is sent under a new sequence. `PeerCommandResult` names no
+  session and sequences restart at 1 per session, so the transport must bind each
+  result to the connection it arrived on and pass that session to `acknowledge`.
+  When a session's sequences run out, enqueue and send refuse with
+  `sequenceExhausted` and input is disabled until a reconnect.
 - Every adoption and every current-session resync request (even while already
   resyncing) starts a new `PeerResyncLatch` (equality only), so earlier stamps go
   stale. Sync events and receiver phases are stamped with `stamp(_:)` when

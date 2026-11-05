@@ -57,6 +57,15 @@ enum PeerReconnectFixture {
                       updates: [gain: ParameterValue(value: 0.25, unit: .normalized)], removals: [])
     }
 
+    static func result(_ raw: String, sequence: Int,
+                       outcome: PeerCommandOutcome = .admitted) -> PeerCommandResult {
+        PeerCommandResult(sequence: self.sequence(sequence), command: id(raw), outcome: outcome)
+    }
+
+    static func result(_ sent: PeerCommandEnvelope, outcome: PeerCommandOutcome = .admitted) -> PeerCommandResult {
+        PeerCommandResult(sequence: sent.sequence, command: sent.intent.id, outcome: outcome)
+    }
+
     static func state(_ session: PeerSyncSession = session(), capacity: Int = 8) -> PeerReconnectState {
         do { return try PeerReconnectState(session: session, queueCapacity: capacity) } catch {
             preconditionFailure("invalid capacity \(capacity)")
@@ -97,7 +106,7 @@ struct PeerReconnectTests {
                 == .entered(.synced(session, awaitingResume: false)))
         #expect(state.isInputEnabled)
         try state.enqueue(Fixture.intent("command.a"))
-        #expect(state.takeNextToSend()?.id == Fixture.id("command.a"))
+        #expect(try state.takeNextToSend()?.intent.id == Fixture.id("command.a"))
     }
 
     @Test func intentsLeaveInStrictOrderWithoutCoalescing() throws {
@@ -106,7 +115,7 @@ struct PeerReconnectTests {
             try state.enqueue(Fixture.intent(raw, value: value))
         }
         var sent: [CommandIntent] = []
-        while let next = state.takeNextToSend() { sent.append(next) }
+        while let next = try state.takeNextToSend() { sent.append(next.intent) }
         #expect(sent.map { $0.id } == ids(["command.c", "command.a", "command.b"]))
         #expect(sent.map { $0.operation } == [0.1, 0.2, 0.3].map {
             CommandOperation.set(Fixture.gain, ParameterValue(value: $0, unit: .normalized))
@@ -117,15 +126,15 @@ struct PeerReconnectTests {
     @Test func aFullQueueRefusesAtCapacityPlusOneAndNeverEvicts() throws {
         var state = Fixture.synced(capacity: 3)
         try state.enqueue(Fixture.intent("command.1"))
-        _ = state.takeNextToSend()
+        _ = try state.takeNextToSend()
         try state.enqueue(Fixture.intent("command.2"))
         try state.enqueue(Fixture.intent("command.3"))
         #expect(state.queue.isFull)
         #expect(throws: PeerOutboundRefusal.full(capacity: 3)) { try state.enqueue(Fixture.intent("command.4")) }
-        #expect(state.queue.awaitingResult.map { $0.id } == ids(["command.1"]))
+        #expect(state.queue.awaitingResult.map { $0.intent.id } == ids(["command.1"]))
         #expect(state.queue.queued.map { $0.id } == ids(["command.2", "command.3"]))
 
-        try state.acknowledge(Fixture.id("command.1"), session: state.session)
+        try state.acknowledge(Fixture.result("command.1", sequence: 1), session: state.session)
         try state.enqueue(Fixture.intent("command.4"))
         #expect(state.queue.count == 3)
     }
@@ -166,11 +175,11 @@ struct PeerReconnectTests {
         #expect(throws: PeerOutboundRefusal.duplicate(Fixture.id("command.a"))) {
             try state.enqueue(Fixture.intent("command.a", value: 0.9))
         }
-        _ = state.takeNextToSend()
+        _ = try state.takeNextToSend()
         #expect(throws: PeerOutboundRefusal.duplicate(Fixture.id("command.a"))) {
             try state.enqueue(Fixture.intent("command.a"))
         }
-        try state.acknowledge(Fixture.id("command.a"), session: state.session)
+        try state.acknowledge(Fixture.result("command.a", sequence: 1), session: state.session)
         try state.enqueue(Fixture.intent("command.a"))
         #expect(state.queue.queued.count == 1)
     }
@@ -180,18 +189,96 @@ struct PeerReconnectTests {
         try state.enqueue(Fixture.intent("command.a"))
         try state.enqueue(Fixture.intent("command.b"))
         #expect(throws: PeerOutboundRefusal.notAwaitingResult(Fixture.id("command.a"))) {
-            try state.acknowledge(Fixture.id("command.a"), session: state.session)
+            try state.acknowledge(Fixture.result("command.a", sequence: 1), session: state.session)
         }
-        _ = state.takeNextToSend()
+        _ = try state.takeNextToSend()
         #expect(throws: PeerOutboundRefusal.staleSession(.connectionEpoch)) {
-            try state.acknowledge(Fixture.id("command.a"), session: Fixture.session(connection: 2))
+            try state.acknowledge(Fixture.result("command.a", sequence: 1), session: Fixture.session(connection: 2))
         }
-        try state.acknowledge(Fixture.id("command.a"), session: state.session)
+        try state.acknowledge(Fixture.result("command.a", sequence: 1), session: state.session)
         #expect(throws: PeerOutboundRefusal.notAwaitingResult(Fixture.id("command.a"))) {
-            try state.acknowledge(Fixture.id("command.a"), session: state.session)
+            try state.acknowledge(Fixture.result("command.a", sequence: 1), session: state.session)
         }
         #expect(state.queue.queued.map { $0.id } == ids(["command.b"]))
         #expect(state.queue.awaitingResult.isEmpty)
+    }
+
+    @Test func aDelayedDuplicateResultOfAReusedIDNeverAnswersTheLaterSend() throws {
+        for first in [PeerCommandOutcome.admitted, .refused(.ledgerFull(capacity: 4))] {
+            var state = Fixture.synced()
+            try state.enqueue(Fixture.intent("command.x"))
+            let taken = try state.takeNextToSend()
+            let original = try #require(taken)
+            try state.acknowledge(Fixture.result(original, outcome: first), session: state.session)
+            try state.enqueue(Fixture.intent("command.x"))
+            let retaken = try state.takeNextToSend()
+            let resent = try #require(retaken)
+            #expect(original.sequence == Fixture.sequence(1) && resent.sequence == Fixture.sequence(2))
+
+            let expected = PeerOutboundRefusal.sequenceMismatch(Fixture.id("command.x"), expected: resent.sequence,
+                                                                 found: original.sequence)
+            #expect(throws: expected) {
+                try state.acknowledge(Fixture.result(original, outcome: first), session: state.session)
+            }
+            #expect(state.queue.awaitingResult == [resent])
+            _ = state.connectionLost(state.session)
+            let report = try state.reconnect(to: Fixture.session(connection: 2))
+            #expect(report.unknownOutcome == [Fixture.id("command.x")])
+            #expect(report.discarded.isEmpty)
+        }
+    }
+
+    @Test func theMatchingResultOfTheResendIsAcceptedAndSequencesRestartPerSession() throws {
+        var state = Fixture.synced()
+        try state.enqueue(Fixture.intent("command.x"))
+        _ = try state.takeNextToSend()
+        try state.acknowledge(Fixture.result("command.x", sequence: 1, outcome: .refused(.ledgerFull(capacity: 4))),
+                              session: state.session)
+        try state.enqueue(Fixture.intent("command.x"))
+        try state.enqueue(Fixture.intent("command.y"))
+        #expect(try state.takeNextToSend()?.sequence == Fixture.sequence(2))
+        #expect(try state.takeNextToSend()?.sequence == Fixture.sequence(3))
+        let later = PeerOutboundRefusal.sequenceMismatch(Fixture.id("command.x"), expected: Fixture.sequence(2),
+                                                          found: Fixture.sequence(3))
+        #expect(throws: later) {
+            try state.acknowledge(Fixture.result("command.x", sequence: 3), session: state.session)
+        }
+        #expect(state.queue.awaitingResult.map { $0.sequence } == [Fixture.sequence(2), Fixture.sequence(3)])
+        try state.acknowledge(Fixture.result("command.x", sequence: 2), session: state.session)
+        #expect(state.queue.awaitingResult.map { $0.intent.id } == ids(["command.y"]))
+        #expect(state.queue.nextSequence == Fixture.sequence(4))
+
+        let second = Fixture.session(connection: 2)
+        _ = state.connectionLost(state.session)
+        let report = try state.reconnect(to: second)
+        #expect(report.unknownOutcome == ids(["command.y"]))
+        #expect(state.queue.nextSequence == Fixture.sequence(1))
+    }
+
+    @Test func exhaustedSequencesRefuseWithATypedErrorUntilAReconnect() throws {
+        let first = Fixture.session()
+        let last = Fixture.sequence(PeerSequence.maximumValue)
+        var state = try PeerReconnectState(session: first, firstSequence: last)
+        var receiver = PeerSyncReceiver(session: first)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(first))), from: receiver)
+        try state.enqueue(Fixture.intent("command.a"))
+        try state.enqueue(Fixture.intent("command.b"))
+        #expect(try state.takeNextToSend()?.sequence == last)
+        #expect(state.queue.isSequenceExhausted && !state.isInputEnabled)
+        #expect(throws: PeerOutboundRefusal.sequenceExhausted) { _ = try state.takeNextToSend() }
+        #expect(throws: PeerOutboundRefusal.sequenceExhausted) { try state.enqueue(Fixture.intent("command.c")) }
+        #expect(state.queue.queued.map { $0.id } == ids(["command.b"]))
+        #expect(state.queue.awaitingResult.map { $0.sequence } == [last])
+
+        let second = Fixture.session(connection: 2)
+        _ = state.connectionLost(first)
+        let report = try state.reconnect(to: second)
+        #expect(report.discarded == ids(["command.b"]) && report.unknownOutcome == ids(["command.a"]))
+        receiver = PeerSyncReceiver(session: second)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(second))), from: receiver)
+        #expect(state.isInputEnabled)
+        try state.enqueue(Fixture.intent("command.c", session: second))
+        #expect(try state.takeNextToSend()?.sequence == Fixture.sequence(1))
     }
 
     @Test func reconnectDropsEverythingAndReportsDiscardedAndUnknownSeparately() throws {
@@ -201,9 +288,9 @@ struct PeerReconnectTests {
         for raw in ["command.d", "command.b", "command.c", "command.a"] {
             try state.enqueue(Fixture.intent(raw, session: first))
         }
-        _ = state.takeNextToSend()
-        _ = state.takeNextToSend()
-        try state.acknowledge(Fixture.id("command.d"), session: first)
+        _ = try state.takeNextToSend()
+        _ = try state.takeNextToSend()
+        try state.acknowledge(Fixture.result("command.d", sequence: 1), session: first)
         #expect(state.connectionLost(state.session) == .entered(.disconnected(first)))
 
         let report = try state.reconnect(to: second)
@@ -222,9 +309,9 @@ struct PeerReconnectTests {
         var receiver = PeerSyncReceiver(session: second)
         #expect(state.observe(state.stamp(receiver.receive(Fixture.snapshot(second))), from: receiver)
                 == .entered(.synced(second, awaitingResume: false)))
-        #expect(state.takeNextToSend() == nil)
+        #expect(try state.takeNextToSend() == nil)
         #expect(throws: PeerOutboundRefusal.notAwaitingResult(Fixture.id("command.b"))) {
-            try state.acknowledge(Fixture.id("command.b"), session: second)
+            try state.acknowledge(Fixture.result("command.b", sequence: 2), session: second)
         }
     }
 
@@ -233,7 +320,7 @@ struct PeerReconnectTests {
         var state = Fixture.synced(first)
         try state.enqueue(Fixture.intent("command.a", session: first))
         try state.enqueue(Fixture.intent("command.b", session: first))
-        _ = state.takeNextToSend()
+        _ = try state.takeNextToSend()
         _ = state.connectionLost(state.session)
         let report = try state.reconnect(to: Fixture.session(connection: 2))
         #expect(report.discarded == [Fixture.id("command.b")])
@@ -252,7 +339,7 @@ struct PeerReconnectTests {
             var state = Fixture.synced(capacity: 80)
             for index in (0..<total).reversed() { try state.enqueue(Fixture.intent("command.q\(1_000 + index)")) }
             for index in (0..<total).reversed() { try state.enqueue(Fixture.intent("command.s\(1_000 + index)")) }
-            for _ in 0..<total { _ = state.takeNextToSend() }
+            for _ in 0..<total { _ = try state.takeNextToSend() }
             _ = state.connectionLost(state.session)
             let report = try state.reconnect(to: Fixture.session(connection: 2))
             let expectedQueued = (0..<min(total, 32)).map { Fixture.id("command.s\(1_000 + $0)") }
