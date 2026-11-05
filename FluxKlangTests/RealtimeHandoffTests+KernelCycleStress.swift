@@ -7,8 +7,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// Start flag, cancel flag, phase counters and joins for the dedicated kernel-cycle stress `Thread`s.
-private final class CycleStressRun: @unchecked Sendable {
+/// Start flag, cancel flag, phase counters and joins for the dedicated kernel-cycle stress `Thread`s. Shared with
+/// `RealtimeHandoffTests+KernelCycleOrderingStress.swift`.
+final class CycleStressRun: @unchecked Sendable {
     /// Every controller wait and every worker's start wait is bounded by this.
     static let waitLimit: Duration = .seconds(15)
     let arrived = Atomic<Int>(0)
@@ -49,7 +50,7 @@ private final class CycleStressRun: @unchecked Sendable {
 
 /// Runs each worker on its own `Thread`, releases the start flag once all have arrived and joins each with a
 /// 15 s deadline. On any timeout this records an `Issue`, cancels and returns `false`.
-private func runCycleWorkers(_ run: CycleStressRun, _ workers: [@Sendable (CycleStressRun) -> Void]) -> Bool {
+func runCycleWorkers(_ run: CycleStressRun, _ workers: [@Sendable (CycleStressRun) -> Void]) -> Bool {
     for worker in workers {
         Thread {
             worker(run)
@@ -75,7 +76,7 @@ private func runCycleWorkers(_ run: CycleStressRun, _ workers: [@Sendable (Cycle
 }
 
 /// Per-worker result slots, written by each worker before it signals `joined`.
-private final class CycleSlots<Value: Sendable>: Sendable {
+final class CycleSlots<Value: Sendable>: Sendable {
     private let values: Mutex<[Value?]>
     init(_ count: Int) { values = Mutex(Array(repeating: nil, count: count)) }
     func set(_ index: Int, _ value: Value) { values.withLock { $0[index] = value } }
@@ -83,7 +84,7 @@ private final class CycleSlots<Value: Sendable>: Sendable {
 }
 
 /// A small deterministic generator, one per worker.
-private struct CycleRandom {
+struct CycleRandom {
     private var state: UInt64
 
     init(seed: UInt64) { state = seed | 1 }
