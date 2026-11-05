@@ -165,8 +165,14 @@ enum SpatialRenderer {
         }
     }
 
+    /// Every request-level check runs here, before the placement loop, so an
+    /// empty request is refused exactly as a populated one would be. Per-placement
+    /// values (blur, width, channels) are validated when the placement is built.
     private static func validate(_ request: SpatialRenderRequest) throws(SpatialRenderError) {
         try SpatialSampleRate.validate(request.sampleRate)
+        guard request.rolloff.isFinite, NeutralDBAP.rolloffRange.contains(request.rolloff) else {
+            throw .layout(.invalidRolloff)
+        }
         guard request.placements.count <= maximumSources else {
             throw .tooManySources(request.placements.count)
         }

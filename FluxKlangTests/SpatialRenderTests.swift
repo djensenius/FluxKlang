@@ -151,6 +151,29 @@ struct SpatialRenderTests {
         #expect(plan == (try SpatialRenderer.plan(good)))
     }
 
+    @Test(arguments: [Double.nan, .infinity, -.infinity, -Double.ulpOfOne, Double(24).nextUp, 25])
+    func emptyRequestRefusesInvalidRolloffLikeOneSource(rolloff: Double) throws {
+        let layout = try Self.quad()
+        let empty = SpatialRenderRequest(layout: layout, placements: [], rolloff: rolloff)
+        let one = SpatialRenderRequest(layout: layout, placements: [try Self.source(0, 0)], rolloff: rolloff)
+        var errors: [SpatialRenderError] = []
+        for request in [empty, one] {
+            do {
+                _ = try SpatialRenderer.plan(request)
+            } catch {
+                errors.append(error)
+            }
+        }
+        #expect(errors == [.layout(.invalidRolloff), .layout(.invalidRolloff)])
+        let (silent, error) = SpatialRenderer.planOrSilence(empty)
+        #expect(error == .layout(.invalidRolloff))
+        #expect(silent.rowCount == 0 && silent.gains.isEmpty && silent.speakerIDs == layout.speakers.map(\.id))
+        for edge in [0.0, 24] {
+            #expect(try SpatialRenderer.plan(SpatialRenderRequest(layout: layout, placements: [], rolloff: edge))
+                .gains.isEmpty)
+        }
+    }
+
     @Test func everyGainStaysFiniteAndBounded() throws {
         let layout = try Self.layout(Self.quadPoints + [(0, 0)], participates: [true, true, true, true, false])
         let entries = try [SpeakerCalibration(speaker: Self.id("spk.1"), trimDecibels: -60)]
