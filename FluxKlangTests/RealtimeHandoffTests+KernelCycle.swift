@@ -38,7 +38,7 @@ struct CycleRig {
         safety = try SafetyFlags(scopes: 2)
         ramps = try RampSlots(parameterCount: 4)
         let parts = KernelCycleParts(events: events, faults: faults, ownership: ownership, safety: safety,
-                                     ramps: ramps, telemetry: telemetry)
+                                     ramps: ramps, telemetry: telemetry, start: .freshFanIn)
         cycle = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: pulsesPerBlock,
                                                               staleTolerance: staleTolerance),
                                 blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)

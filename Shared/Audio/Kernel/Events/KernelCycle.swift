@@ -55,6 +55,18 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     }
 }
 
+/// How a `KernelCycle` takes over its fan-in. Reference model; not RT-certified.
+enum KernelCycleStart: Sendable, Equatable {
+    /// No earlier cycle consumed `events`: the flush watermark starts clear.
+    case freshFanIn
+    /// The fail-safe default: an earlier cycle may have consumed `events` and may have been acknowledged while a
+    /// lane was still flushing, so a pre-fault `noteOn` may still be queued. The cycle starts with every lane's
+    /// flush bit set, as if its first cycle were latched: events drained before a lane is proved empty are marked
+    /// and their `noteOn`s discarded. Liveness is as after any latch: each bit clears once its lane's drain
+    /// delivers fewer than its limit, so a queued `noteOn` is lost but never sounds and sticks.
+    case replacingCycle
+}
+
 /// The render-owned parts one `KernelCycle` composes. Reference model; not RT-certified.
 struct KernelCycleParts {
     /// Render-consumed events; its policy supplies the deadline horizon.
@@ -69,6 +81,8 @@ struct KernelCycleParts {
     /// Fail-closed: with `nil`, control never sees a sample, so `permitsAcknowledgement` never approves and a
     /// critical fault can never be acknowledged through the contract.
     var telemetry: KernelCycleTelemetryOutput?
+    /// `.freshFanIn` only when no earlier cycle consumed `events`; anything else starts flushing (fail-safe).
+    var start = KernelCycleStart.replacingCycle
 }
 
 /// One render-owned kernel cycle per block. Reference model; not RT-certified.
@@ -101,20 +115,25 @@ struct KernelCycleParts {
 /// `emit` gets the event and its frame.
 ///
 /// Flush watermark. A latched loss means some lane may hold a `noteOn` ahead of its refused `noteOff`, possibly
-/// behind a full buffer. Each latched cycle sets every lane's flush bit; a drain clears a lane's bit when it proves
-/// that lane empty (fewer delivered than its limit). Events drained from a flushing lane are marked, and while any
-/// bit is set (even after acknowledgement) or for a marked event, a decided `noteOn` is discarded and counted in
+/// behind a full buffer. Each latched cycle sets every lane's flush bit (a `.replacingCycle` start sets them all
+/// too, see `KernelCycleStart`); a drain clears a lane's bit when it proves that lane empty (fewer delivered than
+/// its limit). Events drained from a flushing lane are marked, and while any bit is set (even after
+/// acknowledgement) or for a marked event, a decided `noteOn` is discarded and counted in
 /// `discardedWhileSilenced`; `noteOff`s apply as usual. Lanes are FIFO, so once every bit clears every pre-fault
 /// event has been drained, and a marked one never sounds. `KernelCycleResult.flushing` reports set bits.
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
-/// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls `ackRequests.request()`
-/// after `observe` and acknowledges only once a published sample's
+/// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls
+/// `ackRequests.request(for: observation)` after `observe`, waits until a published sample's
 /// `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` (the happens-before chain is on `KernelAckRequests`;
-/// its formal model-check is tracked in #190). Step 0 of `run` acquire-loads the epoch before step 2's latch read.
-/// Tickets are bound to this cycle's `ackRequests.identity` (published as `ackCycle`), so a replacement cycle on
-/// the same slots never approves them. Fail-closed: with no telemetry output nothing is ever approved.
+/// its formal model-check is tracked in #190), then calls `acknowledgeCritical(observation, ticket, sample:)`.
+/// Step 0 of `run` acquire-loads the epoch before step 2's latch read. Tickets are bound to this cycle's
+/// `ackRequests.identity` (published as `ackCycle`), so a replacement cycle on the same slots never approves them,
+/// and to the observation they were requested for, so a re-raise after the request needs a new observation, a new
+/// request and a new approval; `acknowledgeCritical` consumes the ticket, so it is never reused. Replacing a cycle
+/// on the same fan-in starts the replacement flushing (`KernelCycleStart.replacingCycle`). Fail-closed: with no
+/// telemetry output nothing is ever approved.
 ///
 /// Stale clocks (E5b decision): the gate's one marker per stall is `KernelCycleResult.resync`, counted with the
 /// gate's counters in telemetry; no `FaultKind.staleClock` is raised and the cycle adds no `FaultLatch.raise` site.
@@ -131,8 +150,8 @@ struct KernelCycleParts {
 ///
 /// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only
 /// (the fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call
-/// back. `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests` is
-/// control's. The parts are kept for
+/// back. `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests` and
+/// `acknowledgeCritical` are control's. The parts are kept for
 /// life. ARC, metadata and target progress are unqualified (X1 probe), as in M5–M7.
 /// `@unchecked Sendable`: all other mutable state is render-only, in storage preallocated in `init`; the refusal
 /// counters and the acknowledgement epoch are atomic.
@@ -152,6 +171,21 @@ final class KernelCycle: @unchecked Sendable {
         case telemetrySlotOutOfRange(Int)
         /// Every `KernelAckRequests` identity was issued.
         case ackIdentitiesExhausted
+    }
+
+    /// Why `acknowledgeCritical` refused. Every refusal leaves the latch, the epoch and the cycle unchanged; the
+    /// ticket is consumed, so control observes, requests and waits for approval again.
+    enum AcknowledgeRefusal: Error, Equatable, Sendable {
+        /// Another cycle's `ackRequests` issued the ticket.
+        case foreignTicket
+        /// `observation` is not of this cycle's critical scope.
+        case notCriticalScope
+        /// The ticket was requested for another observation (an earlier latched state of the scope).
+        case ticketObservationMismatch
+        /// No sample, or the sample does not yet `permitsAcknowledgement` the ticket.
+        case notApproved
+        /// `FaultLatch.acknowledge` refused: the scope was raised on or acknowledged since `observe`.
+        case latchRefused
     }
 
     /// Largest block buffer (inclusive). Ordering is a stable merge sort, so a cycle orders at most
@@ -218,7 +252,7 @@ final class KernelCycle: @unchecked Sendable {
         criticalScope = parts.events.criticalScope
         telemetryOutput = parts.telemetry
         block = KernelBlockBuffer(capacity: blockCapacity)
-        watermark = KernelFlushWatermark(laneCount: parts.events.laneCount)
+        watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
         decider = KernelBlockDecider(deadline: deadline, ownership: parts.ownership, ramps: parts.ramps,
                                      pulses: pulses)
         admissionRefusals = KernelAdmissionRefusals(laneCount: parts.events.laneCount,
@@ -263,6 +297,20 @@ final class KernelCycle: @unchecked Sendable {
                                        releasedNotes: releasedNotes, pending: block.count)
         publishTelemetry(blockStart, ackEpoch, result)
         return result
+    }
+
+    /// Control only; takes the latch's control lock, so never call from render. The Acknowledgement contract's
+    /// entry point: re-arms the critical scope and returns `observation.record` only when `ticket` was issued by
+    /// this cycle for exactly `observation` and `sample` (control's latest read of this cycle's telemetry)
+    /// permits it; otherwise a typed refusal that changes nothing. Consumes `ticket` either way.
+    func acknowledgeCritical(_ observation: FaultObservation, _ ticket: consuming KernelAckTicket,
+                             sample: KernelCycleTelemetry?) throws(AcknowledgeRefusal) -> FaultRecord {
+        guard ticket.cycle == ackRequests.identity else { throw .foreignTicket }
+        guard observation.record.scope == criticalScope else { throw .notCriticalScope }
+        guard ticket.isBound(to: observation) else { throw .ticketObservationMismatch }
+        guard let sample, sample.permitsAcknowledgement(ticket) else { throw .notApproved }
+        guard let record = faults.acknowledge(observation) else { throw .latchRefused }
+        return record
     }
 
     /// Render only. `parameter`'s value at the end of the last block, or `nil` when out of range.

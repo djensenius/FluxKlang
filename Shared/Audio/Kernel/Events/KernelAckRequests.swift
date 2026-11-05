@@ -5,16 +5,32 @@
 import Synchronization
 
 /// An acknowledgement request: the epoch control published after its `observe`, bound to the identity of the
-/// `KernelAckRequests` (so the `KernelCycle`) that issued it. Only `KernelAckRequests.request` makes one.
-/// Reference model; not RT-certified.
-struct KernelAckTicket: Sendable, Equatable {
+/// `KernelAckRequests` (so the `KernelCycle`) that issued it and to the `FaultObservation` it was requested for.
+/// Only `KernelAckRequests.request(for:)` makes one. `~Copyable`: `KernelCycle.acknowledgeCritical` consumes it,
+/// so one ticket can never be presented twice, and that call refuses it for any other observation (a re-raise
+/// after the request makes a new observation, which needs a new request). Reference model; not RT-certified.
+struct KernelAckTicket: ~Copyable, Sendable {
     /// The issuing `KernelAckRequests.identity`; a sample from any other cycle never approves this ticket.
     let cycle: UInt64
     let epoch: UInt64
+    /// The observation's scope, `FaultObservation.tally` and `FaultObservation.epoch`: the words
+    /// `FaultLatch.acknowledge` compares, so equal words mean the same latched state.
+    let scope: FaultScope
+    let observedTally: UInt64
+    let observedEpoch: UInt64
 
-    fileprivate init(cycle: UInt64, epoch: UInt64) {
+    fileprivate init(cycle: UInt64, epoch: UInt64, for observation: FaultObservation) {
         self.cycle = cycle
         self.epoch = epoch
+        scope = observation.record.scope
+        observedTally = observation.tally
+        observedEpoch = observation.epoch
+    }
+
+    /// `true` when this ticket was requested for `observation` (the same scope and latched state).
+    func isBound(to observation: FaultObservation) -> Bool {
+        scope == observation.record.scope && observedTally == observation.tally
+            && observedEpoch == observation.epoch
     }
 }
 
@@ -24,7 +40,7 @@ private let ackRequestIdentities = Atomic<UInt64>(0)
 /// The acknowledgement-request epoch of one `KernelCycle`: a single atomic word, allocated in `init`.
 ///
 /// Happens-before chain (sequential argument; the formal model-check of this handshake is tracked in #190):
-/// 1. control: a raise reaches `FaultLatch.observe`, then `request()` increments the epoch with a releasing
+/// 1. control: a raise reaches `FaultLatch.observe`, then `request(for:)` increments the epoch with a releasing
 ///    compare-exchange, publishing epoch `e`;
 /// 2. render: `loadForRender()` acquire-loads the epoch at the start of `KernelCycle.run`, before
 ///    `FaultLatch.isLatched`; reading `e` or later makes the raise (and every push before it) visible to that
@@ -71,15 +87,15 @@ final class KernelAckRequests: Sendable {
     /// The last epoch requested, or 0 before the first. Any thread; diagnostic only, carries no ordering.
     var lastRequested: UInt64 { epoch.load(ordering: .relaxed) }
 
-    /// Control only, after `FaultLatch.observe`. Publishes the next epoch with a releasing compare-exchange and
-    /// returns it; refuses (never wraps) once `UInt64.max` was requested. Lock-free, allocation-free; retries only
-    /// when another requester raced it.
-    func request() throws(RequestError) -> KernelAckTicket {
+    /// Control only, with the `observation` this request is for (so after `FaultLatch.observe`). Publishes the next
+    /// epoch with a releasing compare-exchange and returns it bound to `observation`; refuses (never wraps) once
+    /// `UInt64.max` was requested. Lock-free, allocation-free; retries only when another requester raced it.
+    func request(for observation: FaultObservation) throws(RequestError) -> KernelAckTicket {
         var current = epoch.load(ordering: .relaxed)
         while current < .max {
             let (exchanged, original) = epoch.compareExchange(
                 expected: current, desired: current &+ 1, successOrdering: .releasing, failureOrdering: .relaxed)
-            if exchanged { return KernelAckTicket(cycle: identity, epoch: current &+ 1) }
+            if exchanged { return KernelAckTicket(cycle: identity, epoch: current &+ 1, for: observation) }
             current = original
         }
         throw .epochExhausted

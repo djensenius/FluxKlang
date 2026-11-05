@@ -12,12 +12,14 @@ final class KernelFlushWatermark {
     /// Drained events `block.append` refused, saturating.
     private let refusedAppends: UnsafeMutablePointer<UInt64>
 
-    init(laneCount: Int) {
+    /// `armed` starts with every lane's bit set, as after `arm()`: a replacement cycle's fail-safe start (see
+    /// `KernelCycleStart`). Each bit then clears only once its lane is proved empty.
+    init(laneCount: Int, armed: Bool) {
         self.laneCount = laneCount
         lanes = .allocate(capacity: laneCount)
-        lanes.initialize(repeating: false, count: laneCount)
+        lanes.initialize(repeating: armed, count: laneCount)
         flushing = .allocate(capacity: 1)
-        flushing.initialize(to: 0)
+        flushing.initialize(to: armed ? laneCount : 0)
         refusedAppends = .allocate(capacity: 1)
         refusedAppends.initialize(to: 0)
     }

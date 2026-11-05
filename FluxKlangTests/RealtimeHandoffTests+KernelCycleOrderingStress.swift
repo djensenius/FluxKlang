@@ -250,14 +250,15 @@ private struct AdmittingSource {
     }
     while !run.renderDone.load(ordering: .acquiring), !run.shouldStop {
         if let observation = rig.faults.observe(CycleRig.criticalScope) {
-            guard let ticket = try? rig.cycle.ackRequests.request() else {
+            guard let ticket = try? rig.cycle.ackRequests.request(for: observation) else {
                 violations.append("acknowledgement epoch exhausted")
                 break
             }
             run.firstObserved.store(true, ordering: .releasing)
             while !read().permitsAcknowledgement(ticket), !run.renderDone.load(ordering: .acquiring),
                   !run.shouldStop {}
-            if previous.permitsAcknowledgement(ticket), rig.faults.acknowledge(observation) != nil {
+            if previous.permitsAcknowledgement(ticket),
+               (try? rig.cycle.acknowledgeCritical(observation, ticket, sample: previous)) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
             }
         }
@@ -276,7 +277,7 @@ extension RealtimeHandoffTests {
         /// one beyond the lookahead or never resets; a race TSan can see.
         @Test func admittingProducersSaturatedDeadlinesAndTelemetryHandshake() throws {
             let slots = try kernelCycleTelemetrySlots()
-            let rig = try CycleRig(lanes: 4, laneCapacity: 32, blockCapacity: 48,
+            let rig = try CycleRig(lanes: 4, laneCapacity: 64, blockCapacity: 48,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 3))
             let setupToken = try #require(rig.events.claimProducer())
             var setupSequence: UInt64 = 0
@@ -310,6 +311,9 @@ extension RealtimeHandoffTests {
             #expect(releases > 0 && status == .refused(.criticalExhausted))
             #expect(setupPush(65, .noteOff(channel: 0, note: 15)) == .refused(.criticalExhausted))
             #expect(rig.faults.isLatched(CycleRig.criticalScope))
+            // More than a block queued in one lane (`noteOn(14)` was drained): the first latched cycle cannot prove
+            // it empty, so at least one cycle reports flushing whatever the producers do.
+            #expect(accepted - 1 > rig.cycle.blockCapacity)
 
             let run = CycleStressRun()
             run.now.store(64, ordering: .relaxed)

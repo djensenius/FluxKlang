@@ -6,6 +6,13 @@
 /// Stale clocks are reported here and in `KernelCycleResult.resync`, not on the `FaultLatch`: a stall is
 /// recoverable and lossy by design (E2 skips stale pulses and keeps one resync marker), so it never needs a sticky,
 /// acknowledged fault, and the cycle adds no `FaultLatch.raise` site.
+///
+/// Single producer, single consumer per slot (`TelemetrySlots`' contract, checked at preparation only): at any
+/// time exactly one `KernelCycle` publishes to a `KernelCycleTelemetryOutput` slot (from the render thread) and
+/// one control/UI reader reads it. During a replacement the old cycle must stop publishing (its last `run`
+/// returned, on the render thread) before the replacement's first `run` publishes; two cycles publishing to one
+/// slot concurrently permanently corrupt that slot. No runtime check exists: `TelemetrySlots` has no owner word,
+/// and a render-path check would cost an atomic per cycle in Release.
 /// Reference model; not RT-certified.
 struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// `run` calls so far, this one included; empty (`frames <= 0`) cycles count. The first cycle is 1.
@@ -50,8 +57,9 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// control's `observe` and `request` and armed the flush watermark. A stale sample (published before render
     /// loaded the epoch, or never refreshed) only delays acknowledgement. The happens-before chain is on
     /// `KernelAckRequests`; its formal model-check is tracked in #190.
-    func permitsAcknowledgement(_ ticket: KernelAckTicket) -> Bool {
-        ackCycle == ticket.cycle && lastFaultedAckEpoch >= ticket.epoch
+    func permitsAcknowledgement(_ ticket: borrowing KernelAckTicket) -> Bool {
+        let epoch = ticket.epoch
+        return ackCycle == ticket.cycle && lastFaultedAckEpoch >= epoch
     }
 
     /// Adds `count` to `counter`, saturating at `UInt64.max`.
@@ -62,7 +70,8 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
 }
 
 /// Where a `KernelCycle` publishes its telemetry: one slot of a render → UI/control `TelemetrySlots`, stamped with a
-/// clock generation that is fixed for the cycle's life. Reference model; not RT-certified.
+/// clock generation that is fixed for the cycle's life. One publishing cycle per slot at a time (see
+/// `KernelCycleTelemetry`), replacements included. Reference model; not RT-certified.
 struct KernelCycleTelemetryOutput: Sendable {
     let slots: TelemetrySlots<KernelCycleTelemetry>
     /// Must be in `0..<slots.slotCount`; `KernelCycle.init` checks it.
