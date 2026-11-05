@@ -45,8 +45,30 @@ speaker list. `x` marks a masked speaker; the text label carries the same state.
 | Remap route | — | "Change route..." on the row | Opens the rig picker (#100), review required |
 | Authorize calibration | Sheet buttons | Tab through outputs, max level, duration; Escape cancels; Command-Return authorizes (no default button) | Sheet is a modal container; summary is read first; "Authorize test signal" is the last element |
 
-Source element: *"Soft Synth, slightly right of centre, in front, width 0.5."* Rotors: **Sources**,
-**Speakers**. Positions are always spoken as words plus numbers, never only as coordinates.
+Source element: *"Soft Synth, slightly right of centre, in front; x 0.10, y 0.60, width 0.50"*. Rotors:
+**Sources**, **Speakers**. Positions are always spoken as words plus numbers, never only as coordinates.
+
+### Spoken positions and edits
+
+Each axis is read as words, then the exact numbers (`SpatialPositionDescription`, #116 PL1). Right is +x and
+front is +y.
+
+| Printed value (absolute) | x words | y words |
+|---|---|---|
+| below 0.05 | centre | centre |
+| 0.05 to 0.34 | slightly left/right of centre | slightly behind/in front |
+| 0.35 to 0.74 | left/right of centre | behind/in front |
+| 0.75 and above | far left/far right | far behind/far in front |
+
+- The band comes from the printed hundredths (rounded half away from zero), so the words always agree with the
+  numbers: 0.0499 prints 0.05 and is "slightly". Each edge belongs to the outer band.
+- The plain x band says "right of centre", not "right", to match "slightly right of centre".
+- Format: `<x words>, <y words>; x <x>, y <y>`, two decimals, never "-0.00". If both axes are centre, the words
+  collapse to "centre": "centre; x 0.00, y 0.00". A stereo source adds ", width 0.50"; a mono source has none.
+- Arrows, drags and the VoiceOver adjustable actions share one edit path. Nudges and drags clamp at ±1. Exact
+  entry refuses out-of-range or non-finite values instead of clamping, and stores −0.0 as 0.
+- Width follows the same rules on stereo sources only. Width edits on a mono source are refused, and the UI
+  hides the Width control for mono sources.
 
 ## Masks and survivors
 
@@ -115,6 +137,20 @@ stateDiagram-v2
 ```
 
 - No test signal plays without the authorization sheet. There are no automatic tones on launch or reconnect.
+- The model (`SpatialCalibrationFlow`, #116 PL1) has no clock and plays nothing. Route status, elapsed time and
+  measured results are injected.
+- Each flow has a caller-supplied ID. An authorization binds the flow ID, plan ID, plan digest and review
+  generation. The first mismatch is refused, in that order, and nothing changes. The digest covers the plan ID,
+  the outputs in order, each output's route, the maximum level and the duration, so re-routing a speaker needs
+  a new review.
+- Running completes only when the injected elapsed time equals the plan's total; earlier results are refused.
+- Panic, Safe Mute and device loss stop a running calibration. In any other state they do nothing, never fail,
+  and report that nothing was playing, so Panic can be broadcast without error handling. Acknowledging a
+  device-loss stop returns to Unavailable; any other stop returns to Planned.
+- Results are staged as a pending calibration set at the applied generation + 1. Only an explicit commit
+  applies them.
+- Provisional policy: the maximum test level is −60…−6 dBFS and each output plays for 0.25…10 s, both
+  inclusive, with at most 64 outputs. The longest run is 64 × 10 s ≈ 10.7 minutes.
 - Results are labelled **relative, uncalibrated**. There are no SPL or "room corrected" claims without a measured reference.
 - Today `dev.iface-b` is missing, so the Calibrate button is disabled with the reason "Interface B missing".
 

@@ -1,0 +1,331 @@
+import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
+@testable import FluxKlang
+#endif
+
+/// Shared calibration fixtures for `SpatialCalibrationFlowTests` and
+/// `SpatialCalibrationAuthorizationTests`.
+extension SpatialEditingFixture {
+    static let quadOutputs = ["spk.fl", "spk.fr", "spk.rl", "spk.rr"]
+    static let relativeLabel = "relative, uncalibrated"
+
+    static func plan(_ id: String = "cal.quad", outputs: [String] = quadOutputs, level: Double = -20,
+                     seconds: Double = 2, routes: Set<RouteID>? = nil,
+                     layout chosen: SpatialLayout? = nil) throws -> SpatialCalibrationPlan {
+        try SpatialCalibrationPlan(id: SpatialCalibrationPlanID(id), outputs: outputs.map(speaker),
+                                   maximumLevelDecibels: level, secondsPerOutput: seconds,
+                                   layout: chosen ?? layout(), availableRoutes: routes ?? Self.routes())
+    }
+
+    static func entries(_ outputs: [String] = quadOutputs) throws -> [SpeakerCalibration] {
+        try outputs.enumerated().map { index, raw in
+            try SpeakerCalibration(speaker: speaker(raw), trimDecibels: -Double(index + 1),
+                                   delaySeconds: Double(index) / 1_000)
+        }
+    }
+
+    /// A flow driven through legal events into `phase`. Running is a finished
+    /// run (elapsed at the plan's total); `startedRun` is one at elapsed 0.
+    static func flow(in phase: SpatialCalibrationPhase, id: String = "flow.a",
+                     applied: SpatialCalibrationSet = .empty,
+                     plan chosen: SpatialCalibrationPlan? = nil) throws -> SpatialCalibrationFlow {
+        let plan = try chosen ?? Self.plan()
+        let flowID = try SpatialCalibrationFlowID(id)
+        var next: SpatialCalibrationFlow
+        switch phase {
+        case .unavailable:
+            return SpatialCalibrationFlow(id: flowID, applied: applied, unavailable: .deviceMissing)
+        case .planned:
+            return SpatialCalibrationFlow(id: flowID, applied: applied, plan: plan)
+        case .awaitingAuthorization:
+            next = try flow(in: .planned, id: id, applied: applied, plan: plan)
+            try next.handle(.review)
+        case .running:
+            next = try startedRun(id: id, applied: applied, plan: plan)
+            try next.handle(.progress(elapsedSeconds: plan.totalSeconds))
+        case .results:
+            next = try flow(in: .running, id: id, applied: applied, plan: plan)
+            try next.handle(.complete(entries(plan.outputs.map(\.rawValue))))
+        case .stopped:
+            next = try flow(in: .running, id: id, applied: applied, plan: plan)
+            next.stop(.panic)
+        case .draft:
+            next = try flow(in: .results, id: id, applied: applied, plan: plan)
+            try next.handle(.stageResults)
+        }
+        return next
+    }
+
+    static func startedRun(id: String = "flow.a", applied: SpatialCalibrationSet = .empty,
+                           plan: SpatialCalibrationPlan? = nil) throws -> SpatialCalibrationFlow {
+        var next = try flow(in: .awaitingAuthorization, id: id, applied: applied, plan: plan)
+        try next.handle(.authorize(SpatialCalibrationAuthorization(authorizing: #require(review(of: next)))))
+        return next
+    }
+
+    static func review(of flow: SpatialCalibrationFlow) -> SpatialCalibrationReview? {
+        if case let .awaitingAuthorization(review) = flow.state { return review }
+        return nil
+    }
+
+    static func run(of flow: SpatialCalibrationFlow) -> SpatialCalibrationRun? {
+        if case let .running(run) = flow.state { return run }
+        return nil
+    }
+
+    static func results(of flow: SpatialCalibrationFlow) -> SpatialCalibrationResults? {
+        if case let .results(results) = flow.state { return results }
+        return nil
+    }
+
+    static func draft(of flow: SpatialCalibrationFlow) -> SpatialCalibrationDraft? {
+        if case let .draft(draft) = flow.state { return draft }
+        return nil
+    }
+
+    /// Handles `event`, requires the typed refusal and that nothing changed.
+    static func expectRefusal(_ flow: inout SpatialCalibrationFlow, _ event: SpatialCalibrationEvent,
+                              _ expected: SpatialCalibrationRefusal,
+                              sourceLocation: SourceLocation = #_sourceLocation) {
+        let before = flow
+        do {
+            try flow.handle(event)
+            Issue.record("\(event.kind) in \(before.phase) was not refused", sourceLocation: sourceLocation)
+        } catch {
+            #expect(error == expected, sourceLocation: sourceLocation)
+        }
+        #expect(flow == before, sourceLocation: sourceLocation)
+    }
+}
+
+@Suite("Spatial calibration flow phases, runs and staging")
+struct SpatialCalibrationFlowTests {
+    private typealias Fixture = SpatialEditingFixture
+    private typealias Phase = SpatialCalibrationPhase
+    private typealias Kind = SpatialCalibrationEventKind
+
+    /// Every legal phase × event pair and the phase it leads to; all others are refused.
+    private static let legal: [Phase: [Kind: Phase]] = [
+        .unavailable: [.routeConfirmed: .planned],
+        .planned: [.routeLost: .unavailable, .revise: .planned, .review: .awaitingAuthorization],
+        .awaitingAuthorization: [.routeLost: .unavailable, .cancel: .planned, .authorize: .running],
+        .running: [.routeLost: .stopped, .progress: .running, .complete: .results],
+        .results: [.stageResults: .draft, .discardResults: .planned],
+        .stopped: [.acknowledgeStop: .planned],
+        .draft: [.commitDraft: .planned, .discardDraft: .planned]
+    ]
+
+    /// A well-formed event of `kind`: authorize and commit carry this flow's own
+    /// review or draft when it has one, else one from a matching helper flow.
+    private static func event(_ kind: Kind, for flow: SpatialCalibrationFlow) throws -> SpatialCalibrationEvent {
+        switch kind {
+        case .authorize:
+            let source = try Fixture.review(of: flow)
+                ?? #require(Fixture.review(of: Fixture.flow(in: .awaitingAuthorization)))
+            return .authorize(SpatialCalibrationAuthorization(authorizing: source))
+        case .commitDraft:
+            let source = try Fixture.draft(of: flow) ?? #require(Fixture.draft(of: Fixture.flow(in: .draft)))
+            return .commitDraft(expected: source)
+        default:
+            let plain: [SpatialCalibrationEvent] = [
+                .routeConfirmed(try Fixture.plan()), .routeLost(.routeUnconfirmed),
+                .revise(try Fixture.plan(level: -30)), .review, .cancel, .progress(elapsedSeconds: 8),
+                .complete(try Fixture.entries()), .stageResults, .discardResults, .acknowledgeStop, .discardDraft
+            ]
+            return try #require(plain.first { $0.kind == kind })
+        }
+    }
+
+    @Test func everyIllegalPhaseEventPairIsRefusedAndChangesNothing() throws {
+        var legalCount = 0
+        var illegalCount = 0
+        for phase in Phase.allCases {
+            for kind in Kind.allCases {
+                var flow = try Fixture.flow(in: phase)
+                #expect(flow.phase == phase)
+                let event = try Self.event(kind, for: flow)
+                #expect(event.kind == kind)
+                if let next = Self.legal[phase]?[kind] {
+                    legalCount += 1
+                    try flow.handle(event)
+                    #expect(flow.phase == next, "\(phase) × \(kind)")
+                } else {
+                    illegalCount += 1
+                    Fixture.expectRefusal(&flow, event, .illegalTransition(from: phase, event: kind))
+                }
+            }
+        }
+        #expect(legalCount == 15 && illegalCount == 76)
+        #expect(Self.legal[.planned]?[.authorize] == nil)
+    }
+
+    @Test func authorizedRunStagesRelativeResultsOneGenerationAhead() throws {
+        let applied = try SpatialCalibrationSet(generation: 3, entries: [
+            SpeakerCalibration(speaker: Fixture.speaker("spk.fl"), trimDecibels: -9)
+        ])
+        let plan = try Fixture.plan()
+        var flow = SpatialCalibrationFlow(id: try SpatialCalibrationFlowID("flow.a"), applied: applied,
+                                          unavailable: .routeUnconfirmed)
+        try flow.handle(.routeConfirmed(plan))
+        try flow.handle(.review)
+        let review = try #require(Fixture.review(of: flow))
+        #expect(review.plan == plan && review.generation == 1 && review.flowID == flow.id)
+        try flow.handle(.authorize(SpatialCalibrationAuthorization(authorizing: review)))
+        try flow.handle(.progress(elapsedSeconds: plan.totalSeconds))
+        let measured = try Fixture.entries()
+        try flow.handle(.complete(measured))
+        let results = try #require(Fixture.results(of: flow))
+        #expect(results.entries == measured && results.label.text == Fixture.relativeLabel)
+        #expect(flow.applied == applied && flow.pending == nil)
+        try flow.handle(.stageResults)
+        let draft = try #require(Fixture.draft(of: flow))
+        #expect(draft.set == (try SpatialCalibrationSet(generation: 4, entries: measured)))
+        #expect(draft.plan == plan && draft.label == .relativeUncalibrated && draft.label.text == Fixture.relativeLabel)
+        #expect(flow.pending == draft.set && flow.applied == applied)
+        try flow.handle(.commitDraft(expected: draft))
+        #expect(flow.state == .planned(plan) && flow.applied == draft.set && flow.pending == nil)
+    }
+
+    @Test func commitNeedsThisFlowsDraftAndDiscardKeepsTheAppliedSet() throws {
+        var flow = try Fixture.flow(in: .draft)
+        let draft = try #require(Fixture.draft(of: flow))
+        let other = try Fixture.flow(in: .draft, applied: SpatialCalibrationSet(generation: 5))
+        let foreign = try #require(Fixture.draft(of: other))
+        Fixture.expectRefusal(&flow, .commitDraft(expected: foreign), .draftMismatch)
+        var discarded = flow
+        try discarded.handle(.discardDraft)
+        #expect(discarded.state == .planned(draft.plan) && discarded.pending == nil && discarded.applied == .empty)
+        try flow.handle(.commitDraft(expected: draft))
+        #expect(flow.applied == draft.set && flow.applied.generation == 1 && flow.pending == nil)
+    }
+
+    @Test func stagingRefusesWhenTheAppliedGenerationCannotAdvance() throws {
+        var flow = try Fixture.flow(in: .results, applied: SpatialCalibrationSet(generation: Int.max))
+        Fixture.expectRefusal(&flow, .stageResults, .calibration(.invalidGeneration(Int.max)))
+        var below = try Fixture.flow(in: .results, applied: SpatialCalibrationSet(generation: Int.max - 1))
+        try below.handle(.stageResults)
+        #expect(below.pending?.generation == Int.max)
+    }
+
+    @Test func resultsMustCoverExactlyThePlannedOutputs() throws {
+        let plan = try Fixture.plan(outputs: ["spk.rr", "spk.fl", "spk.rl", "spk.fr"])
+        var flow = try Fixture.flow(in: .running, plan: plan)
+        let measured = try Fixture.entries(["spk.fr", "spk.rl", "spk.fl", "spk.rr"])
+        let unplanned = try SpeakerCalibration(speaker: Fixture.speaker("spk.c"))
+        Fixture.expectRefusal(&flow, .complete(measured + [unplanned]), .unplannedResult(unplanned.speaker))
+        Fixture.expectRefusal(&flow, .complete([measured[1]] + measured), .duplicateResult(measured[1].speaker))
+        Fixture.expectRefusal(&flow, .complete(Array(measured.dropLast())),
+                              .missingResult(try Fixture.speaker("spk.rr")))
+        Fixture.expectRefusal(&flow, .complete(Array(measured.dropFirst())),
+                              .missingResult(try Fixture.speaker("spk.fr")))
+        Fixture.expectRefusal(&flow, .complete([]), .missingResult(try Fixture.speaker("spk.rr")))
+        try flow.handle(.complete(measured))
+        let results = try #require(Fixture.results(of: flow))
+        #expect(results.entries.map(\.speaker) == plan.outputs)
+        #expect(results.entries.allSatisfy { measured.contains($0) })
+    }
+
+    @Test func resultRefusalsFollowTheDocumentedOrder() throws {
+        var flow = try Fixture.flow(in: .running)
+        let measured = try Fixture.entries()
+        let unplanned = try SpeakerCalibration(speaker: Fixture.speaker("spk.c"))
+        Fixture.expectRefusal(&flow, .complete(Array(measured.dropLast()) + [unplanned]),
+                              .unplannedResult(unplanned.speaker))
+        Fixture.expectRefusal(&flow, .complete([measured[2]] + measured.dropLast()),
+                              .duplicateResult(measured[2].speaker))
+    }
+
+    @Test func completeNeedsTheWholeRun() throws {
+        var flow = try Fixture.startedRun()
+        let measured = try Fixture.entries()
+        Fixture.expectRefusal(&flow, .complete(measured), .runIncomplete(elapsedSeconds: 0, totalSeconds: 8))
+        try flow.handle(.progress(elapsedSeconds: (8.0).nextDown))
+        Fixture.expectRefusal(&flow, .complete(measured),
+                              .runIncomplete(elapsedSeconds: (8.0).nextDown, totalSeconds: 8))
+        try flow.handle(.progress(elapsedSeconds: 8))
+        try flow.handle(.complete(measured))
+        #expect(Fixture.results(of: flow)?.entries == measured)
+    }
+
+    @Test func progressIsInjectedMonotonicAndBoundedByThePlan() throws {
+        var flow = try Fixture.startedRun()
+        let outputs = try Fixture.plan().outputs
+        func run() throws -> SpatialCalibrationRun { try #require(Fixture.run(of: flow)) }
+        #expect(try run().elapsedSeconds == 0 && run().progress == 0 && run().currentOutput == outputs[0])
+        try flow.handle(.progress(elapsedSeconds: (2.0).nextDown))
+        #expect(try run().currentOutput == outputs[0])
+        try flow.handle(.progress(elapsedSeconds: 2))
+        #expect(try run().currentOutput == outputs[1] && run().progress == 0.25)
+        try flow.handle(.progress(elapsedSeconds: 2))
+        Fixture.expectRefusal(&flow, .progress(elapsedSeconds: (2.0).nextDown), .elapsedRegressed)
+        for bad in [Double.nan, .infinity, -.infinity] {
+            Fixture.expectRefusal(&flow, .progress(elapsedSeconds: bad), .invalidElapsed)
+        }
+        Fixture.expectRefusal(&flow, .progress(elapsedSeconds: (8.0).nextUp), .elapsedBeyondPlan)
+        try flow.handle(.progress(elapsedSeconds: 7.0))
+        #expect(try run().currentOutput == outputs[3])
+        try flow.handle(.progress(elapsedSeconds: 8))
+        #expect(try run().currentOutput == outputs[3] && run().progress == 1)
+    }
+
+    @Test func stopsAndRouteLossEndTheRunAndAcknowledgeTruthfully() throws {
+        let plan = try Fixture.plan()
+        let cases: [(SpatialCalibrationStop, SpatialCalibrationState)] = [
+            (.panic, .planned(plan)),
+            (.safeMute, .planned(plan)),
+            (.deviceLost(.deviceMissing), .unavailable(.deviceMissing))
+        ]
+        for (stop, after) in cases {
+            var flow = try Fixture.startedRun()
+            #expect(flow.stop(stop) == .stoppedRun)
+            #expect(flow.state == .stopped(plan, stop))
+            let stopped = flow
+            #expect(flow.stop(.panic) == .nothingPlaying && flow == stopped)
+            try flow.handle(.acknowledgeStop)
+            #expect(flow.state == after && flow.pending == nil)
+        }
+        var lost = try Fixture.startedRun()
+        try lost.handle(.routeLost(.routeUnconfirmed))
+        #expect(lost.state == .stopped(plan, .deviceLost(.routeUnconfirmed)))
+        try lost.handle(.acknowledgeStop)
+        #expect(lost.state == .unavailable(.routeUnconfirmed))
+    }
+
+    @Test func stopsOutsideARunAreNoOpsThatNeverThrow() throws {
+        let stops: [SpatialCalibrationStop] = [.panic, .safeMute, .deviceLost(.deviceMissing)]
+        var checked = 0
+        for phase in Phase.allCases where phase != .running {
+            for stop in stops {
+                var flow = try Fixture.flow(in: phase)
+                let before = flow
+                #expect(flow.stop(stop) == .nothingPlaying, "\(phase) × \(stop)")
+                #expect(flow.stop(stop) == .nothingPlaying && flow == before, "\(phase) × \(stop)")
+                checked += 1
+            }
+        }
+        #expect(checked == 18)
+    }
+
+    @Test func reviseCancelAndDiscardKeepThePlanAndTheAppliedSet() throws {
+        let plan = try Fixture.plan()
+        let revised = try Fixture.plan(level: -30)
+        var flow = try Fixture.flow(in: .unavailable)
+        try flow.handle(.routeConfirmed(plan))
+        #expect(flow.state == .planned(plan))
+        try flow.handle(.revise(revised))
+        try flow.handle(.review)
+        #expect(Fixture.review(of: flow)?.plan == revised)
+        try flow.handle(.cancel)
+        #expect(flow.state == .planned(revised))
+        try flow.handle(.routeLost(.routeUnconfirmed))
+        #expect(flow.state == .unavailable(.routeUnconfirmed))
+        var awaiting = try Fixture.flow(in: .awaitingAuthorization)
+        try awaiting.handle(.routeLost(.deviceMissing))
+        #expect(awaiting.state == .unavailable(.deviceMissing))
+        var results = try Fixture.flow(in: .results)
+        try results.handle(.discardResults)
+        #expect(results.state == .planned(plan) && results.pending == nil && results.applied == .empty)
+    }
+}
