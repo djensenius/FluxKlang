@@ -216,18 +216,24 @@ enum UntrustedTextSanitizer {
     }
 
     /// Keeps whole graphemes of `text` while they fit in `maximumBytes` UTF-8 bytes.
-    /// The cut is at a grapheme boundary of `text`. The kept prefix is capped again
-    /// (defensive: a prefix cut at a boundary never enlarges a grapheme), which only
-    /// ever removes scalars, so it still fits.
-    static func truncate(_ text: String, maximumBytes: Int) -> Result {
+    /// The cut is at a grapheme boundary of `text`, and the kept graphemes are not
+    /// changed: no grapheme cap applies, so a withheld prefix still matches the
+    /// uncapped label it came from.
+    static func graphemePrefix(_ text: String, fittingBytes maximumBytes: Int) -> Result {
         var used = 0
         for index in text.indices {
             let width = text[index].utf8.count
-            guard used + width <= maximumBytes else {
-                return (capGraphemes(String(text[..<index])).text, true)
-            }
+            guard used + width <= maximumBytes else { return (String(text[..<index]), true) }
             used += width
         }
         return (text, false)
+    }
+
+    /// `graphemePrefix` for display text. The kept prefix is capped again (defensive:
+    /// a prefix cut at a boundary never enlarges a grapheme), which only ever removes
+    /// scalars, so it still fits.
+    static func truncate(_ text: String, maximumBytes: Int) -> Result {
+        let cut = graphemePrefix(text, fittingBytes: maximumBytes)
+        return cut.changed ? (capGraphemes(cut.text).text, true) : cut
     }
 }

@@ -66,8 +66,10 @@ extension UntrustedTextSanitizer {
     /// limits becomes a prefix term, which redacts from its first match to the end
     /// of the label. The prefix is cut from the source form (joiners already removed,
     /// so an emoji family is many short characters, not one huge grapheme) to
-    /// `maximumWithheldBytes` on a source-form character boundary, and loses its last
-    /// character, which the scan limit may have split. If fewer than
+    /// `maximumWithheldBytes` on a source-form character boundary (`graphemePrefix`,
+    /// which does not cap the kept graphemes: the label is matched uncapped, so a
+    /// capped prefix could miss it), and loses its last character, which the scan
+    /// limit may have split. If fewer than
     /// `minimumRedactedBytes` remain (one giant grapheme), the term is
     /// `WithheldTerm.failClosed`: it is never dropped.
     /// Returns nil only for a complete string shorter than `minimumRedactedBytes`.
@@ -76,7 +78,7 @@ extension UntrustedTextSanitizer {
         var text = sourceForm(filtered.text)
         var isPrefix = !filtered.isComplete
         if text.utf8.count > maximumWithheldBytes {
-            text = truncate(text, maximumBytes: maximumWithheldBytes).text
+            text = graphemePrefix(text, fittingBytes: maximumWithheldBytes).text
             isPrefix = true
         }
         if isPrefix, !text.isEmpty { text.removeLast() }

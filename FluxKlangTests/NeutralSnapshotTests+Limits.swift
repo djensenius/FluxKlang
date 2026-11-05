@@ -262,6 +262,27 @@ extension NeutralSnapshotTests {
         #expect(label.text == UntrustedLabel.withheldMarker && label.isTruncated && label.wasSanitized)
     }
 
+    /// An overlong withheld string is cut to a prefix without capping its graphemes, so
+    /// the prefix matches the uncapped label. Capping the prefix kept 8 of its 9 leading
+    /// marks, while the label held them all before its own cap (and 7 after it), so the
+    /// tail `-123456-zzz…` was shown.
+    @Test func anOverlongWithheldStringIsCutWithoutCappingItsGraphemes() {
+        let marks = (0x0300...0x0309).filter { $0 != 0x0305 }.compactMap(Unicode.Scalar.init)
+        let secret = String(String.UnicodeScalarView(marks)) + "-123456-" + String(repeating: "z", count: 1_100)
+        let label = UntrustedLabel("Rig q" + secret, withholding: [secret])
+        // The prefix term redacts from the grapheme `q` + marks to the end of the label.
+        #expect(label.text == "Rig " + UntrustedLabel.withheldMarker)
+        #expect(!label.text.contains("123456") && !label.text.contains("z"))
+        let term = UntrustedTextSanitizer.withheldTerm(secret)
+        #expect(term?.isPrefix == true && term?.text.unicodeScalars.prefix(9).elementsEqual(marks) == true)
+        // A cut that splits a grapheme (here inside U+0316, after the composed U+1ED9) would
+        // leave `o` + U+0323 + U+0302, which the label orders as `o` + U+0323 + U+0316 + U+0302.
+        let split = String(repeating: "x", count: 1_020) + "o\u{0323}\u{0316}\u{0302}-123456-"
+            + String(repeating: "z", count: 100)
+        let splitLabel = UntrustedLabel("Rig " + split, withholding: [split])
+        #expect(splitLabel.text == "Rig " + UntrustedLabel.withheldMarker)
+    }
+
     @Test func seededAdversarialLabelsAreCappedIdempotentAndRedacted() {
         let alphabet = [
             "\u{0D4E}", "\u{11A84}", "\u{1F1E8}", "\u{1F1E6}", "\u{200D}", "\u{200C}", "\u{0301}", "\u{1F3FB}",
@@ -269,13 +290,26 @@ extension NeutralSnapshotTests {
             "a", "Z", " ", "-", "SN-", "1234", "SN-1234", "sn-1234", "\u{0D4E}\u{0D4E}\u{0D4E}\u{0D4E}"
         ]
         let terms = UntrustedTextSanitizer.withheldTerms(["SN-1234"])
+        let marks = (0x0300...0x0309).filter { $0 != 0x0305 }.compactMap(Unicode.Scalar.init).map { String($0) }
         var generator = NeutralSnapshotSplitMix64(seed: 0x118_010E)
         for index in 0..<2_000 {
             let count = Int.random(in: 0...40, using: &generator)
-            let raw = (0..<count).map { _ in alphabet.randomElement(using: &generator) ?? "" }.joined()
+            var raw = (0..<count).map { _ in alphabet.randomElement(using: &generator) ?? "" }.joined()
+            var caseTerms = terms
+            if index % 4 == 1 {
+                // An overlong withheld string that starts with combining marks, which join the
+                // label's last grapheme (possibly past the cap) but not the term's.
+                let leading = (0..<Int.random(in: 1...12, using: &generator)).map { _ in
+                    marks.randomElement(using: &generator) ?? ""
+                }
+                let tail = String(repeating: "z", count: Int.random(in: 1_050...1_300, using: &generator))
+                let secret = leading.joined() + "-123456-" + tail
+                raw += secret
+                caseTerms = UntrustedTextSanitizer.withheldTerms(["SN-1234", secret])
+            }
             let limit = index.isMultiple(of: 3) ? 24 : 128
-            let label = UntrustedLabel(raw, maximumBytes: limit, terms: terms)
-            let again = UntrustedLabel(label.text, maximumBytes: limit, terms: terms)
+            let label = UntrustedLabel(raw, maximumBytes: limit, terms: caseTerms)
+            let again = UntrustedLabel(label.text, maximumBytes: limit, terms: caseTerms)
             let context = "\(Array(raw.unicodeScalars))"
             let capped = UntrustedTextSanitizer.capGraphemes(raw).text
             #expect(capped.allSatisfy { $0.unicodeScalars.count <= 8 }, "\(context)")
@@ -283,6 +317,7 @@ extension NeutralSnapshotTests {
             #expect(label.text.utf8.count <= limit, "\(context)")
             #expect(again.text.unicodeScalars.elementsEqual(label.text.unicodeScalars), "\(context)")
             #expect(!label.text.uppercased().contains("SN-1234"), "\(context)")
+            #expect(!label.text.contains("123456") && !label.text.contains("z"), "\(context)")
         }
     }
 }
