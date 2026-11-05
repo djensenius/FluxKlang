@@ -1,0 +1,211 @@
+//
+//  DraftEditFold.swift
+//  FluxKlang
+//
+//  Folds user gestures into the normalized edit list of one draft. The folded
+//  list always passes `GraphEdit.validateBatch`, and applying it to the base
+//  gives the graph that applying every gesture edit one at a time would give,
+//  except for edge order: an identical reconnect keeps the base edge in its
+//  original slot, where one-at-a-time application appends it. Compare drafts
+//  and candidate graphs by content (edges keyed by ID), never by bytes (#62).
+//
+
+/// Folds gestures into a draft's normalized edit list.
+///
+/// - A second move of a node replaces the first; a move back to the base
+///   position drops the move. Moving a draft-added node rewrites its `addNode`.
+/// - Removing a draft-added node drops its add, its moves and the draft
+///   connects touching it (and disconnects base edges that dangled onto it).
+///   Removing a base node drops its move and the draft connects touching it,
+///   and records the removal.
+/// - Disconnecting a draft-added edge drops its connect.
+/// - Reconnecting a base edge with its identical value cancels the disconnect;
+///   any other value under a base edge ID is refused (`edgeIDReuse`).
+/// - A position with a NaN or infinite coordinate is refused (`invalidPosition`), as is
+///   an added node's NaN or infinite `linearGain` (`nonFiniteNodeValue`) or a connected
+///   edge's NaN or infinite `gainCeilingDb` (`nonFiniteEdgeValue`): a NaN never equals
+///   itself, so such a draft would record an undo entry for every later gesture.
+///
+/// The IDs of draft-added nodes and edges are not reserved: once an add or a
+/// connect folds away, the same ID may be added or connected again with other
+/// content. ID-keyed selection (#101, the UI) can therefore name a different
+/// item after an undo or redo and must be revalidated against the draft.
+enum DraftEditFold {
+    /// The edit list after folding `gesture`, in order, onto `edits`. A gesture
+    /// is atomic: if any of its edits is refused, nothing is folded.
+    static func fold(
+        _ gesture: [GraphEdit], onto edits: [GraphEdit], base: GraphDocument
+    ) throws(DraftHistoryRefusal) -> [GraphEdit] {
+        do {
+            try ProjectGraphLimits.check(gesture.count, maximum: ProjectGraphLimits.edits, path: "$.gesture")
+        } catch { throw .bounds(error) }
+        let candidate = try Self.candidate(of: edits, on: base)
+        var state = try FoldState(base: base, candidate: candidate, edits: edits)
+        for (index, edit) in gesture.enumerated() {
+            try state.fold(edit, index: index)
+        }
+        _ = try Self.candidate(of: state.edits, on: base)
+        return state.edits
+    }
+
+    /// Whether `position` is absent or has finite coordinates, as `GraphDocument.validate()` requires.
+    static func isFinite(_ position: GraphPoint?) -> Bool {
+        guard let position else { return true }
+        return position.x.isFinite && position.y.isFinite
+    }
+
+    /// Whether `value` is absent or finite.
+    static func isFiniteValue(_ value: Double?) -> Bool {
+        value?.isFinite ?? true
+    }
+
+    private static func candidate(
+        of edits: [GraphEdit], on base: GraphDocument
+    ) throws(DraftHistoryRefusal) -> GraphDocument {
+        do {
+            return try base.applying(edits)
+        } catch {
+            if case .bounds(let limit) = error { throw .bounds(limit) }
+            throw .invalidDraft(error)
+        }
+    }
+}
+
+/// The candidate graph's IDs while one gesture folds, plus the edit list.
+private struct FoldState {
+    let baseNodes: [NodeID: GraphNode]
+    let baseEdges: [EdgeID: GraphEdge]
+    /// Node IDs of the candidate graph.
+    var nodes: Set<NodeID>
+    /// Edges of the candidate graph.
+    var edges: [EdgeID: GraphEdge]
+    /// Nodes added by this draft.
+    var added: Set<NodeID>
+    /// Edges connected by this draft.
+    var connected: Set<EdgeID>
+    var edits: [GraphEdit]
+
+    init(base: GraphDocument, candidate: GraphDocument, edits: [GraphEdit]) throws(DraftHistoryRefusal) {
+        var baseNodes: [NodeID: GraphNode] = [:]
+        for node in base.nodes {
+            guard baseNodes.updateValue(node, forKey: node.id) == nil else { throw .duplicateBaseNode(node.id) }
+        }
+        var baseEdges: [EdgeID: GraphEdge] = [:]
+        for edge in base.edges {
+            guard baseEdges.updateValue(edge, forKey: edge.id) == nil else { throw .duplicateBaseEdge(edge.id) }
+        }
+        self.baseNodes = baseNodes
+        self.baseEdges = baseEdges
+        nodes = Set(candidate.nodes.map(\.id))
+        self.edges = Dictionary(candidate.edges.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        added = []
+        connected = []
+        for edit in edits {
+            if case .addNode(let node) = edit { added.insert(node.id) }
+            if case .connect(let edge) = edit { connected.insert(edge.id) }
+        }
+        self.edits = edits
+    }
+
+    mutating func fold(_ edit: GraphEdit, index: Int) throws(DraftHistoryRefusal) {
+        switch edit {
+        case .addNode(let node): try add(node, index: index)
+        case .moveNode(let id, let position): try move(id, to: position, index: index)
+        case .removeNode(let id): try remove(id, index: index)
+        case .connect(let edge): try connect(edge, index: index)
+        case .disconnect(let id): try disconnect(id, index: index)
+        }
+    }
+
+    private mutating func add(_ node: GraphNode, index: Int) throws(DraftHistoryRefusal) {
+        guard DraftEditFold.isFinite(node.position) else { throw .invalidPosition(node.id) }
+        guard DraftEditFold.isFiniteValue(node.linearGain) else { throw .nonFiniteNodeValue(node.id) }
+        guard !nodes.contains(node.id) else { throw .edit(index: index, .nodeExists(node.id)) }
+        guard baseNodes[node.id] == nil else { throw .nodeIDReuse(node.id) }
+        try Self.check(nodes.count + 1, maximum: ProjectGraphLimits.nodes, path: "$.nodes")
+        nodes.insert(node.id)
+        added.insert(node.id)
+        edits.append(.addNode(node))
+    }
+
+    private mutating func move(_ id: NodeID, to position: GraphPoint?, index: Int) throws(DraftHistoryRefusal) {
+        guard DraftEditFold.isFinite(position) else { throw .invalidPosition(id) }
+        guard nodes.contains(id) else { throw .edit(index: index, .missingNode(id)) }
+        if added.contains(id) {
+            if let addIndex = edits.firstIndex(where: { Self.adds($0, id) }),
+               case .addNode(var node) = edits[addIndex] {
+                node.position = position
+                edits[addIndex] = .addNode(node)
+            }
+            edits.removeAll { Self.moves($0, id) }
+            return
+        }
+        // A later move replaces the earlier one in place; a move back to the base position is no move.
+        let earlier = edits.firstIndex { Self.moves($0, id) }
+        edits.removeAll { Self.moves($0, id) }
+        guard baseNodes[id]?.position != position else { return }
+        edits.insert(.moveNode(id, to: position), at: earlier ?? edits.endIndex)
+    }
+
+    private mutating func remove(_ id: NodeID, index: Int) throws(DraftHistoryRefusal) {
+        guard nodes.contains(id) else { throw .edit(index: index, .missingNode(id)) }
+        let touching = edges.values.filter { $0.from.node == id || $0.to.node == id }.map(\.id)
+        let dropped = Set(touching.filter { connected.contains($0) })
+        edits.removeAll { edit in
+            switch edit {
+            case .addNode(let node): node.id == id
+            case .moveNode(let node, _): node == id
+            case .connect(let edge): dropped.contains(edge.id)
+            default: false
+            }
+        }
+        connected.subtract(dropped)
+        if added.remove(id) != nil {
+            // A base edge can dangle onto an ID only the draft adds; removing the node removes it too.
+            edits += touching.filter { !dropped.contains($0) }.sorted().map(GraphEdit.disconnect)
+        } else {
+            edits.append(.removeNode(id))
+        }
+        nodes.remove(id)
+        for edge in touching { edges[edge] = nil }
+    }
+
+    private mutating func connect(_ edge: GraphEdge, index: Int) throws(DraftHistoryRefusal) {
+        guard DraftEditFold.isFiniteValue(edge.feedback?.gainCeilingDb) else { throw .nonFiniteEdgeValue(edge.id) }
+        guard edges[edge.id] == nil else { throw .edit(index: index, .edgeExists(edge.id)) }
+        for node in [edge.from.node, edge.to.node] where baseNodes[node] != nil && !nodes.contains(node) {
+            throw .endpointRemoved(edge: edge.id, node: node)
+        }
+        try Self.check(edges.count + 1, maximum: ProjectGraphLimits.edges, path: "$.edges")
+        if let baseEdge = baseEdges[edge.id] {
+            guard baseEdge == edge else { throw .edgeIDReuse(edge.id) }
+            edits.removeAll { $0 == .disconnect(edge.id) }
+        } else {
+            connected.insert(edge.id)
+            edits.append(.connect(edge))
+        }
+        edges[edge.id] = edge
+    }
+
+    private mutating func disconnect(_ id: EdgeID, index: Int) throws(DraftHistoryRefusal) {
+        guard edges[id] != nil else { throw .edit(index: index, .missingEdge(id)) }
+        if connected.remove(id) != nil {
+            edits.removeAll { if case .connect(let edge) = $0 { edge.id == id } else { false } }
+        } else {
+            edits.append(.disconnect(id))
+        }
+        edges[id] = nil
+    }
+
+    private static func adds(_ edit: GraphEdit, _ id: NodeID) -> Bool {
+        if case .addNode(let node) = edit { node.id == id } else { false }
+    }
+
+    private static func moves(_ edit: GraphEdit, _ id: NodeID) -> Bool {
+        if case .moveNode(let node, _) = edit { node == id } else { false }
+    }
+
+    private static func check(_ count: Int, maximum: Int, path: String) throws(DraftHistoryRefusal) {
+        do { try ProjectGraphLimits.check(count, maximum: maximum, path: path) } catch { throw .bounds(error) }
+    }
+}
