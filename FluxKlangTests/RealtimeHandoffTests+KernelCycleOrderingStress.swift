@@ -229,7 +229,7 @@ private struct AdmittingSource {
     return model
 }
 
-/// Acknowledges each observed fault only once telemetry proves a faulted cycle began after the observation,
+/// Acknowledges each observed fault only once telemetry shows a faulted cycle that loaded its request epoch,
 /// checks that the cumulative counters never go backwards, and requests safety actions.
 @Sendable private func acknowledgeByTelemetry(_ rig: CycleRig, _ run: CycleStressRun,
                                               _ slots: TelemetrySlots<KernelCycleTelemetry>) -> [String] {
@@ -238,10 +238,11 @@ private struct AdmittingSource {
     var random = CycleRandom(seed: 0xACC0_7E1E)
     var previous = KernelCycleTelemetry()
     func read() -> KernelCycleTelemetry {
-        let value = latestCycleSample(slots)?.value ?? previous
+        let value = latestKernelCycleSample(slots)?.value ?? previous
         if value.cycle < previous.cycle || value.droppedLate < previous.droppedLate || value.resyncs
             < previous.resyncs || value.skippedStale < previous.skippedStale || value.rateLimited
-            < previous.rateLimited || value.lastFaultedCycle < previous.lastFaultedCycle {
+            < previous.rateLimited || value.lastFaultedCycle < previous.lastFaultedCycle
+            || value.ackEpochSeen < previous.ackEpochSeen || value.lastFaultedAckEpoch < previous.lastFaultedAckEpoch {
             violations.append("telemetry went backwards: \(previous) → \(value)")
         }
         previous = value
@@ -249,11 +250,14 @@ private struct AdmittingSource {
     }
     while !run.renderDone.load(ordering: .acquiring), !run.shouldStop {
         if let observation = rig.faults.observe(CycleRig.criticalScope) {
-            let readCycle = read().cycle
+            guard let ticket = try? rig.cycle.ackRequests.request() else {
+                violations.append("acknowledgement epoch exhausted")
+                break
+            }
             run.firstObserved.store(true, ordering: .releasing)
-            while !read().provesFaultedCycleBegan(after: readCycle), !run.renderDone.load(ordering: .acquiring),
+            while !read().permitsAcknowledgement(ticket), !run.renderDone.load(ordering: .acquiring),
                   !run.shouldStop {}
-            if previous.provesFaultedCycleBegan(after: readCycle), rig.faults.acknowledge(observation) != nil {
+            if previous.permitsAcknowledgement(ticket), rig.faults.acknowledge(observation) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
             }
         }
@@ -271,7 +275,7 @@ extension RealtimeHandoffTests {
         /// that diverges from the results or goes backwards; admission that refuses an admissible frame, admits
         /// one beyond the lookahead or never resets; a race TSan can see.
         @Test func admittingProducersSaturatedDeadlinesAndTelemetryHandshake() throws {
-            let slots = try cycleTelemetrySlots()
+            let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(lanes: 4, laneCapacity: 32, blockCapacity: 48,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 3))
             let setupToken = try #require(rig.events.claimProducer())
@@ -347,11 +351,11 @@ extension RealtimeHandoffTests {
             #expect(producers.allSatisfy { $0.resets > 0 }, "\(producers.map(\.resets))")
             #expect(producers.reduce(0) { $0 + $1.beyondLookahead } > 0 && observed.flushingCycles > 0)
 
-            let final = try #require(latestCycleSample(slots))
+            let final = try #require(latestKernelCycleSample(slots))
             #expect(final.stamp == TelemetryStamp(clockGeneration: 3, frame: blockStart &- 512))
             let nonMonotonic = producers.reduce(0) { $0 + $1.refusedNonMonotonic }
             let beyondLookahead = producers.reduce(0) { $0 + $1.refusedBeyondLookahead }
-            let expected = KernelCycleTelemetry(cycle: observed.cycles, lastFaultedCycle: observed.lastFaultedCycle,
+            var expected = KernelCycleTelemetry(cycle: observed.cycles, lastFaultedCycle: observed.lastFaultedCycle,
                                                 droppedLate: observed.droppedLate, resyncs: observed.resyncs,
                                                 skippedStale: UInt64(rig.cycle.pulses.skippedStale),
                                                 rateLimited: UInt64(rig.cycle.pulses.rateLimited),
@@ -360,6 +364,11 @@ extension RealtimeHandoffTests {
                                                 discardedSuperseded: observed.discardedSuperseded,
                                                 refusedNonMonotonic: nonMonotonic,
                                                 refusedBeyondLookahead: beyondLookahead, blockAppendRefused: 0)
+            // Every request precedes the quiescent cycles; the last faulted cycle loaded some requested epoch.
+            expected.ackEpochSeen = rig.cycle.ackRequests.lastRequested
+            expected.lastFaultedAckEpoch = final.value.lastFaultedAckEpoch
+            expected.ackCycle = rig.cycle.ackRequests.identity
+            #expect(expected.ackEpochSeen >= 1 && (1...expected.ackEpochSeen).contains(expected.lastFaultedAckEpoch))
             #expect(final.value == expected && final.value.droppedLate >= 1)
             #expect(final.value.refusedNonMonotonic > 0 && final.value.refusedBeyondLookahead > 0)
 

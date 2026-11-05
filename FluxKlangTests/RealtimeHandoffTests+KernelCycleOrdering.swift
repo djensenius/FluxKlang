@@ -13,15 +13,15 @@ private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 
 
 /// Render → control telemetry slots for one `KernelCycle`. Shared with
 /// `RealtimeHandoffTests+KernelCycleOrderingStress.swift`.
-func cycleTelemetrySlots() throws -> TelemetrySlots<KernelCycleTelemetry> {
+func kernelCycleTelemetrySlots() throws -> TelemetrySlots<KernelCycleTelemetry> {
     try TelemetrySlots(policy: Root.policy(purpose: .telemetry, producer: .render, consumer: .control, capacity: 2,
                                            ordering: .latestOnly, deadline: .none, overflow: .overwriteLatest),
                        slotCount: 2)
 }
 
 /// The latest published telemetry sample, if any.
-func latestCycleSample(_ slots: TelemetrySlots<KernelCycleTelemetry>,
-                       slot: Int = 1) -> TelemetrySample<KernelCycleTelemetry>? {
+func latestKernelCycleSample(_ slots: TelemetrySlots<KernelCycleTelemetry>,
+                             slot: Int = 1) -> TelemetrySample<KernelCycleTelemetry>? {
     guard case .measured(let sample) = slots.latest(slot: slot) else { return nil }
     return sample
 }
@@ -113,7 +113,7 @@ extension RealtimeHandoffTests {
         /// Kills: telemetry not published, published with the wrong stamp, or counters that are per cycle rather
         /// than cumulative or that disagree with the results and the gate.
         @Test func telemetryPublishesCumulativeCountersEveryCycle() throws {
-            let slots = try cycleTelemetrySlots()
+            let slots = try kernelCycleTelemetrySlots()
             let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 7)
             let rig = try CycleRig(laneCapacity: 32, pulsesPerBlock: 1, telemetry: output)
             let token = try #require(rig.events.claimProducer())
@@ -127,11 +127,12 @@ extension RealtimeHandoffTests {
             for (blockStart, frames) in [(Int64(1_000), Int64(64)), (1_064, 0), (1_064, 64)] {
                 results.append(rig.run(blockStart, frames).0)
             }
-            let sample = try #require(latestCycleSample(slots))
+            let sample = try #require(latestKernelCycleSample(slots))
             #expect(sample.stamp == TelemetryStamp(clockGeneration: 7, frame: 1_064) && sample.sequence == 3)
             #expect(sample.value == rig.cycle.telemetry)
             let expected = KernelCycleTelemetry(cycle: 3, lastFaultedCycle: 0, droppedLate: 1, resyncs: 1,
-                                                skippedStale: 4, rateLimited: 1, pending: 1, flushing: false)
+                                                skippedStale: 4, rateLimited: 1, pending: 1, flushing: false,
+                                                ackCycle: rig.cycle.ackRequests.identity)
             #expect(sample.value == expected)
             #expect(results.map(\.droppedLate) == [1, 0, 0])
             #expect(results.map(\.resync) == [true, false, false])
@@ -184,7 +185,7 @@ extension RealtimeHandoffTests {
         /// quota keeps cutting lane 1 short. Kills: an already clear bit cleared again (the count falls to 0 while
         /// lane 1 is set); a `noteOn` from a cleared lane decided while another lane still flushes.
         @Test func clearedLaneNoteOnDiscardedWhileAnotherLaneFlushes() throws {
-            let slots = try cycleTelemetrySlots()
+            let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(laneCapacity: 24, perLaneQuota: 2,
                                    telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
             let cleared = try #require(rig.events.claimProducer())
@@ -200,9 +201,9 @@ extension RealtimeHandoffTests {
             #expect(second.drained == 3 && second.flushing && second.discardedWhileSilenced == 1)
             #expect(emitted.map(\.event.payload) == [control(2), control(3)])
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
-            #expect(latestCycleSample(slots)?.value.flushing == true && rig.cycle.telemetry.flushing)
+            #expect(latestKernelCycleSample(slots)?.value.flushing == true && rig.cycle.telemetry.flushing)
             let (third, _) = rig.run(128, 64)
-            #expect(third.drained == 1 && !third.flushing && latestCycleSample(slots)?.value.flushing == false)
+            #expect(third.drained == 1 && !third.flushing && latestKernelCycleSample(slots)?.value.flushing == false)
         }
 
         /// Ruling (E5b round 3): a drain never pops what the block cannot hold. Kills: a `limit` past the room
@@ -278,7 +279,7 @@ extension RealtimeHandoffTests {
         /// Kills: a slot outside the telemetry slots accepted at preparation.
         @Test func telemetrySlotOutOfRangeRefusedAtPreparation() throws {
             let rig = try CycleRig()
-            let slots = try cycleTelemetrySlots()
+            let slots = try kernelCycleTelemetrySlots()
             let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 0)
             for slot in [-1, 2, Int.max] {
                 let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
@@ -291,27 +292,122 @@ extension RealtimeHandoffTests {
             }
         }
 
-        /// The acknowledgement handshake. Kills: accepting the cycle that may have begun before the read (`+ 1`),
-        /// an older faulted cycle, or a wrapping comparison.
-        @Test func handshakeNeedsAFaultedCycleThatBeganAfterTheRead() throws {
-            let slots = try cycleTelemetrySlots()
+        /// (a) A stale sample never approves: neither a never-published read nor a cached front sample (no publish
+        /// since, so `latest` keeps it on its relaxed path) with many faulted cycles. (c) Liveness: the next faulted
+        /// cycle publishes the requested epoch and approves. Kills: acknowledging on cycle counts, on the epoch of
+        /// any cycle rather than a faulted one, `>` for `>=`, render never loading the epoch.
+        @Test func staleSampleDelaysAcknowledgementAndFreshFaultedEpochApproves() throws {
+            let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
-            #expect(rig.run(0, 64).0.status == .ok)
-            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 64) == .ok)
+            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
-            let readCycle = try #require(latestCycleSample(slots)).value.cycle
-            #expect(readCycle == 1)
-            var proofs: [Bool] = []
-            for block in Int64(1)...3 {
-                #expect(rig.run(block * 64, 64).0.status == .silenced(.scopeFaulted))
-                proofs.append(try #require(latestCycleSample(slots)).value.provesFaultedCycleBegan(after: readCycle))
+            let ticket = try rig.cycle.ackRequests.request()
+            #expect(ticket.epoch == 1 && rig.cycle.ackRequests.lastRequested == 1)
+            #expect(latestKernelCycleSample(slots) == nil && !KernelCycleTelemetry().permitsAcknowledgement(ticket))
+            let stale = KernelCycleTelemetry(cycle: 9, lastFaultedCycle: 9, ackEpochSeen: 0, lastFaultedAckEpoch: 0)
+            #expect(!stale.permitsAcknowledgement(ticket))
+            #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
+            let fresh = try #require(latestKernelCycleSample(slots)).value
+            #expect(fresh.ackEpochSeen == 1 && fresh.lastFaultedAckEpoch == 1 && fresh.permitsAcknowledgement(ticket))
+            // A second request; the front sample stays cached (nothing published since) and must not approve it.
+            let second = try rig.cycle.ackRequests.request()
+            for _ in 0..<3 {
+                let cached = try #require(latestKernelCycleSample(slots)).value
+                #expect(cached == fresh && !cached.permitsAcknowledgement(second))
             }
-            #expect(proofs == [false, true, true])
+            #expect(rig.run(64, 64).0.status == .silenced(.scopeFaulted))
+            #expect(try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(second))
             #expect(rig.faults.acknowledge(observation) != nil)
-            let stale = KernelCycleTelemetry(cycle: 9, lastFaultedCycle: 4)
-            #expect(!stale.provesFaultedCycleBegan(after: 5) && !stale.provesFaultedCycleBegan(after: 4))
-            #expect(KernelCycleTelemetry(lastFaultedCycle: .max).provesFaultedCycleBegan(after: .max - 2))
-            #expect(!KernelCycleTelemetry(lastFaultedCycle: 1).provesFaultedCycleBegan(after: .max))
+            // An unsilenced cycle sees a newer epoch but is no faulted cycle, so it never approves.
+            let third = try rig.cycle.ackRequests.request()
+            #expect(rig.run(128, 64).0.status == .ok)
+            let quiet = try #require(latestKernelCycleSample(slots)).value
+            #expect(quiet.ackEpochSeen == 3 && quiet.lastFaultedAckEpoch == 2 && !quiet.permitsAcknowledgement(third))
+        }
+
+        /// Render loads the epoch before the latch: a request made mid-cycle (here from `emit`, after the latch
+        /// read) is not covered by that cycle, only by the next. Kills: the epoch loaded after the latch read.
+        @Test func requestAfterTheLatchReadWaitsForTheNextFaultedCycle() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+            let token = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(0, noteOn(4)), token) == .ok)
+            #expect(rig.run(0, 64).1.count == 1)
+            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 64) == .ok)
+            var ticket: KernelAckTicket?
+            let result = rig.cycle.run(blockStart: 64, frames: 64) { _, _ in
+                if ticket == nil { ticket = try? rig.cycle.ackRequests.request() }
+            }
+            #expect(result.status == .silenced(.scopeFaulted) && result.releasedNotes == 1)
+            let midCycle = try #require(ticket)
+            #expect(!(try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(midCycle)))
+            #expect(rig.run(128, 64).0.status == .silenced(.scopeFaulted))
+            #expect(try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(midCycle))
+        }
+
+        /// (b) The review's counterexample, cycle by cycle: control acknowledges F1, a producer queues `noteOn(X)`
+        /// and its `noteOff` is refused (F2), control observes F2 but reads a stale sample. The old criterion
+        /// (a faulted cycle two past the stale read cycle) approves at once and X sounds and sticks; the epoch
+        /// refuses until a faulted cycle loaded F2's epoch, which drains and discards X.
+        @Test func staleReadAfterReRaiseCannotLetAQueuedNoteOnSound() throws {
+            for oldCriterion in [true, false] {
+                let slots = try kernelCycleTelemetrySlots()
+                let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+                let token = try #require(rig.events.claimProducer())
+                #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+                let first = try #require(rig.faults.observe(CycleRig.criticalScope))
+                let firstTicket = try rig.cycle.ackRequests.request()
+                #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
+                let staleRead = try #require(latestKernelCycleSample(slots)).value
+                #expect(staleRead.permitsAcknowledgement(firstTicket))
+                for block in Int64(1)...2 { #expect(rig.run(block * 64, 64).0.status == .silenced(.scopeFaulted)) }
+                #expect(rig.faults.acknowledge(first) != nil)
+                #expect(rig.push(cycleEvent(192, noteOn(9)), token) == .ok)
+                #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 192) == .ok)
+                let second = try #require(rig.faults.observe(CycleRig.criticalScope))
+                let secondTicket = try rig.cycle.ackRequests.request()
+                let now = try #require(latestKernelCycleSample(slots)).value
+                #expect(now.lastFaultedCycle >= staleRead.cycle + 2 && !now.permitsAcknowledgement(secondTicket))
+                if oldCriterion { #expect(rig.faults.acknowledge(second) != nil) }
+                var sounded = false
+                for block in Int64(3)...6 {
+                    let (result, emitted) = rig.run(block * 64, 64)
+                    sounded = sounded || emitted.contains { $0.event.payload == noteOn(9) }
+                    if !oldCriterion, result.status != .ok {
+                        #expect(result.discardedWhileSilenced == 1)
+                        #expect(try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(secondTicket))
+                        #expect(rig.faults.acknowledge(second) != nil)
+                    }
+                }
+                #expect(sounded == oldCriterion && rig.ownership.isOwned(scope: 0, channel: 0, note: 9) == oldCriterion)
+            }
+        }
+
+        /// A replacement cycle on the same telemetry slots restarts its epochs at 0; its faulted cycle at epoch 1
+        /// approves its own ticket only, never the replaced cycle's epoch-1 ticket. Kills: ignoring the identity.
+        @Test func replacementCycleOnTheSameSlotsNeverApprovesAnOldTicket() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
+            let replaced = try CycleRig(telemetry: output)
+            #expect(replaced.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+            let oldTicket = try replaced.cycle.ackRequests.request()
+            let replacement = try CycleRig(telemetry: output)
+            #expect(replacement.cycle.ackRequests.identity != replaced.cycle.ackRequests.identity)
+            #expect(replacement.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+            let newTicket = try replacement.cycle.ackRequests.request()
+            #expect(oldTicket.epoch == newTicket.epoch && oldTicket != newTicket)
+            #expect(replacement.run(0, 64).0.status == .silenced(.scopeFaulted))
+            let sample = try #require(latestKernelCycleSample(slots)).value
+            #expect(sample.ackCycle == replacement.cycle.ackRequests.identity && sample.lastFaultedAckEpoch == 1)
+            #expect(sample.permitsAcknowledgement(newTicket) && !sample.permitsAcknowledgement(oldTicket))
+        }
+
+        /// Kills: an epoch that wraps instead of refusing once `UInt64.max` was requested.
+        @Test func exhaustedAckEpochRefusesWithoutWrapping() throws {
+            let requests = try #require(KernelAckRequests(lastRequestedForTesting: .max - 1))
+            #expect(try requests.request().epoch == .max)
+            #expect(throws: KernelAckRequests.RequestError.epochExhausted) { try requests.request() }
+            #expect(requests.lastRequested == .max)
         }
 
         /// Kills: `lastAdmittedFrame` advanced by a refused or full push; admission skipped; lookahead not checked

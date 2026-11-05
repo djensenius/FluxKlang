@@ -36,14 +36,22 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// room-clamped total. Never trapped.
     var blockAppendRefused: UInt64 = 0
 
-    /// Control only: the acknowledgement handshake. `readCycle` is the `cycle` of a sample control read after
-    /// `FaultLatch.observe` (0 when none was published yet). At that read cycle `readCycle + 1` had not published
-    /// and may have been running since before the observation; cycle `readCycle + 2` starts only after
-    /// `readCycle + 1` publishes, so after the read. `true` (this later sample shows a `.scopeFaulted` cycle at
-    /// or after `readCycle + 2`) proves the flush watermark was armed after the observed loss, so control may
-    /// acknowledge. The argument is sequential; the memory-model proof for the latch's callers is #190's.
-    func provesFaultedCycleBegan(after readCycle: UInt64) -> Bool {
-        lastFaultedCycle > readCycle && lastFaultedCycle &- readCycle >= 2
+    /// `KernelAckRequests.loadForRender()` at the start of this cycle: the latest requested epoch render saw.
+    var ackEpochSeen: UInt64 = 0
+    /// The `ackEpochSeen` of the latest `.silenced(.scopeFaulted)` cycle (the one `lastFaultedCycle` names); 0
+    /// before any.
+    var lastFaultedAckEpoch: UInt64 = 0
+    /// The publishing cycle's `KernelAckRequests.identity`; 0 for a sample no cycle made.
+    var ackCycle: UInt64 = 0
+
+    /// Control only: the acknowledgement handshake. `true` when this sample was published by the cycle that issued
+    /// `ticket` (`ackCycle == ticket.cycle`; any other cycle never approves it, even on the same slots) and shows a
+    /// `.scopeFaulted` cycle that loaded `ticket`'s epoch or a later one before reading the latch, so it began after
+    /// control's `observe` and `request` and armed the flush watermark. A stale sample (published before render
+    /// loaded the epoch, or never refreshed) only delays acknowledgement. The happens-before chain is on
+    /// `KernelAckRequests`; its formal model-check is tracked in #190.
+    func permitsAcknowledgement(_ ticket: KernelAckTicket) -> Bool {
+        ackCycle == ticket.cycle && lastFaultedAckEpoch >= ticket.epoch
     }
 
     /// Adds `count` to `counter`, saturating at `UInt64.max`.

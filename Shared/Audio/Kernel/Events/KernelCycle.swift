@@ -66,12 +66,16 @@ struct KernelCycleParts {
     let safety: SafetyFlags
     let ramps: RampSlots
     /// Where every cycle publishes its `KernelCycleTelemetry`; `nil` publishes nothing (the cycle still keeps it).
+    /// Fail-closed: with `nil`, control never sees a sample, so `permitsAcknowledgement` never approves and a
+    /// critical fault can never be acknowledged through the contract.
     var telemetry: KernelCycleTelemetryOutput?
 }
 
 /// One render-owned kernel cycle per block. Reference model; not RT-certified.
 ///
 /// `run` does, in order:
+/// 0. Acknowledgement epoch: `ackRequests.loadForRender()` (acquire), before any latch read; published in step 7
+///    as `ackEpochSeen`, and as `lastFaultedAckEpoch` by a `.scopeFaulted` cycle.
 /// 1. Safety: takes every scope's `SafetyFlags`; any request releases that scope's owned notes (bits, never
 ///    queue-capacity dependent); `panic` also silences this cycle (`.safetyMute`) for every scope.
 /// 2. Faults: while `faults.isLatched(events.criticalScope)` (a critical `noteOff` was refused) every owned note
@@ -105,8 +109,12 @@ struct KernelCycleParts {
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
-/// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control proves it with the telemetry
-/// handshake `KernelCycleTelemetry.provesFaultedCycleBegan(after:)`.
+/// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls `ackRequests.request()`
+/// after `observe` and acknowledges only once a published sample's
+/// `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` (the happens-before chain is on `KernelAckRequests`;
+/// its formal model-check is tracked in #190). Step 0 of `run` acquire-loads the epoch before step 2's latch read.
+/// Tickets are bound to this cycle's `ackRequests.identity` (published as `ackCycle`), so a replacement cycle on
+/// the same slots never approves them. Fail-closed: with no telemetry output nothing is ever approved.
 ///
 /// Stale clocks (E5b decision): the gate's one marker per stall is `KernelCycleResult.resync`, counted with the
 /// gate's counters in telemetry; no `FaultKind.staleClock` is raised and the cycle adds no `FaultLatch.raise` site.
@@ -123,10 +131,11 @@ struct KernelCycleParts {
 ///
 /// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only
 /// (the fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call
-/// back. `admissionRefusals` is any thread's (producers count through `ProducerAdmission`). The parts are kept for
+/// back. `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests` is
+/// control's. The parts are kept for
 /// life. ARC, metadata and target progress are unqualified (X1 probe), as in M5–M7.
 /// `@unchecked Sendable`: all other mutable state is render-only, in storage preallocated in `init`; the refusal
-/// counters are atomic.
+/// counters and the acknowledgement epoch are atomic.
 final class KernelCycle: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
         /// The fan-in is not `.events` consumed on `.render`.
@@ -141,6 +150,8 @@ final class KernelCycle: @unchecked Sendable {
         case scopeCountMismatch(ownership: Int, safety: Int)
         /// The telemetry output's `slot` is outside its slots.
         case telemetrySlotOutOfRange(Int)
+        /// Every `KernelAckRequests` identity was issued.
+        case ackIdentitiesExhausted
     }
 
     /// Largest block buffer (inclusive). Ordering is a stable merge sort, so a cycle orders at most
@@ -156,6 +167,9 @@ final class KernelCycle: @unchecked Sendable {
     /// The producers' admission refusal counts for `events` (see `ProducerAdmission`): producers count through it,
     /// and each cycle publishes its totals. Its API only counts and reads; its storage is private.
     let admissionRefusals: KernelAdmissionRefusals
+    /// Control's acknowledgement requests (see the type's Acknowledgement contract). Its API only requests and
+    /// loads; its epoch is private.
+    let ackRequests: KernelAckRequests
 
     // Render-owned components and parts; private, so only this file can reach them.
     private let events: FanInHandoff<KernelEvent>
@@ -193,6 +207,8 @@ final class KernelCycle: @unchecked Sendable {
         if let output = parts.telemetry, output.slot < 0 || output.slot >= output.slots.slotCount {
             throw .telemetrySlotOutOfRange(output.slot)
         }
+        guard let ackRequests = KernelAckRequests() else { throw .ackIdentitiesExhausted }
+        self.ackRequests = ackRequests
         self.blockCapacity = blockCapacity
         self.perLaneQuota = perLaneQuota
         events = parts.events
@@ -208,7 +224,7 @@ final class KernelCycle: @unchecked Sendable {
         admissionRefusals = KernelAdmissionRefusals(laneCount: parts.events.laneCount,
                                                     handoff: parts.events.identity)
         counters = .allocate(capacity: 1)
-        counters.initialize(to: KernelCycleTelemetry())
+        counters.initialize(to: KernelCycleTelemetry(ackCycle: ackRequests.identity))
     }
 
     /// Control-side teardown only.
@@ -219,6 +235,8 @@ final class KernelCycle: @unchecked Sendable {
     /// Render only. Runs one block `[blockStart, blockStart + frames)`; see the type's steps. Never throws, traps
     /// or blocks, for any `blockStart` and `frames`.
     func run(blockStart: Int64, frames: Int64, emit: (KernelEvent, Int64) -> Void) -> KernelCycleResult {
+        // Step 0: before the latch read, so a latched read here follows every request this epoch covers.
+        let ackEpoch = ackRequests.loadForRender()
         var status = KernelStatus.ok
         var releasedNotes = 0
         let panicked = applySafety(blockStart, &releasedNotes, emit)
@@ -243,7 +261,7 @@ final class KernelCycle: @unchecked Sendable {
         if frames > 0 { decider.advanceRamps(to: frames) }
         let result = KernelCycleResult(status: status, drained: drained, tally: tally, flushing: flushing,
                                        releasedNotes: releasedNotes, pending: block.count)
-        publishTelemetry(blockStart, result)
+        publishTelemetry(blockStart, ackEpoch, result)
         return result
     }
 
@@ -260,10 +278,14 @@ final class KernelCycle: @unchecked Sendable {
     var telemetry: KernelCycleTelemetry { counters.pointee }
 
     /// Step 7: folds `result` into the cumulative counters and publishes them when an output is set.
-    private func publishTelemetry(_ blockStart: Int64, _ result: KernelCycleResult) {
+    private func publishTelemetry(_ blockStart: Int64, _ ackEpoch: UInt64, _ result: KernelCycleResult) {
         var totals = counters.pointee
         totals.cycle = KernelCycleTelemetry.saturatingAdd(totals.cycle, 1)
-        if result.status == .silenced(.scopeFaulted) { totals.lastFaultedCycle = totals.cycle }
+        totals.ackEpochSeen = ackEpoch
+        if result.status == .silenced(.scopeFaulted) {
+            totals.lastFaultedCycle = totals.cycle
+            totals.lastFaultedAckEpoch = ackEpoch
+        }
         totals.droppedLate = KernelCycleTelemetry.saturatingAdd(totals.droppedLate, result.droppedLate)
         if result.resync { totals.resyncs = KernelCycleTelemetry.saturatingAdd(totals.resyncs, 1) }
         totals.skippedStale = decider.pulses.skippedStale

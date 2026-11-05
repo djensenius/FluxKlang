@@ -21,9 +21,8 @@ final class CycleStressRun: @unchecked Sendable {
     let acknowledged = Atomic<Int>(0)
     /// Render's cycle index, stored before each cycle runs (the first is 1).
     let cycleStarted = Atomic<Int>(0)
-    /// The index of render's latest `.scopeFaulted` cycle, stored after it ran. Control acknowledges each
-    /// observation only once this passes the `cycleStarted` it read after `observe` (the KernelCycle contract).
-    let lastFaultedCycle = Atomic<Int>(0)
+    /// Bounded waits that hit `waitLimit` (each also ends its wait).
+    let spinOverruns = Atomic<Int>(0)
     /// Set by control after its first `observe`; render's first cycle waits for it.
     let firstObserved = Atomic<Bool>(false)
     /// Set by the render worker once it stops running cycles.
@@ -229,10 +228,9 @@ private func stressPayload(_ random: inout CycleRandom, note: UInt8, index: Int)
     var blockStart: Int64 = 0
     while run.producersDone.load(ordering: .acquiring) < producers || run.acknowledged.load(ordering: .acquiring) == 0,
           !run.shouldStop {
-        let index = run.cycleStarted.add(1, ordering: .sequentiallyConsistent).newValue
+        run.cycleStarted.add(1, ordering: .sequentiallyConsistent)
         let (result, emitted) = rig.run(blockStart, 64)
         model.record(result, emitted, blockStart: blockStart, frames: 64)
-        if result.status == .silenced(.scopeFaulted) { run.lastFaultedCycle.store(index, ordering: .releasing) }
         blockStart &+= 64
         run.now.store(blockStart, ordering: .relaxed)
     }
@@ -240,19 +238,36 @@ private func stressPayload(_ random: inout CycleRandom, note: UInt8, index: Int)
     return model
 }
 
-/// Acknowledges each observed critical fault only after a `.scopeFaulted` cycle that began after the observation,
-/// and requests safety actions while render runs.
-@Sendable private func control(_ rig: CycleRig, _ run: CycleStressRun) {
+/// Spins until `condition` holds (`true`), the run is cancelled or render is done (`false`), or `waitLimit` passes
+/// (`false`, counted in `spinOverruns`).
+private func awaitBounded(_ run: CycleStressRun, _ condition: () -> Bool) -> Bool {
+    let deadline = ContinuousClock.now + CycleStressRun.waitLimit
+    var spins = 0
+    while !condition() {
+        spins &+= 1
+        if run.shouldStop || run.renderDone.load(ordering: .acquiring) { return false }
+        if spins & 1_023 == 0, ContinuousClock.now >= deadline {
+            run.spinOverruns.add(1, ordering: .relaxed)
+            return false
+        }
+    }
+    return true
+}
+
+/// Acknowledges each observed critical fault only once telemetry shows a `.scopeFaulted` cycle that loaded the
+/// epoch requested after the observation (the KernelCycle contract), and requests safety actions while render runs.
+@Sendable private func control(_ rig: CycleRig, _ run: CycleStressRun,
+                               _ slots: TelemetrySlots<KernelCycleTelemetry>) {
     guard run.arriveAndWait() else { return }
     var random = CycleRandom(seed: 0xC0FFEE)
     while !run.renderDone.load(ordering: .acquiring), !run.shouldStop {
-        if let observation = rig.faults.observe(CycleRig.criticalScope) {
+        if let observation = rig.faults.observe(CycleRig.criticalScope),
+           let ticket = try? rig.cycle.ackRequests.request() {
             run.firstObserved.store(true, ordering: .releasing)
-            let observedAt = run.cycleStarted.load(ordering: .sequentiallyConsistent)
-            while run.lastFaultedCycle.load(ordering: .acquiring) <= observedAt,
-                  !run.renderDone.load(ordering: .acquiring), !run.shouldStop {}
-            if run.lastFaultedCycle.load(ordering: .acquiring) > observedAt,
-               rig.faults.acknowledge(observation) != nil {
+            let permitted = awaitBounded(run) {
+                latestKernelCycleSample(slots)?.value.permitsAcknowledgement(ticket) == true
+            }
+            if permitted, rig.faults.acknowledge(observation) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
             }
         }
@@ -279,6 +294,80 @@ private func latchCriticalScope(_ rig: CycleRig) throws -> Int {
     return accepted
 }
 
+/// The rounds each re-raising producer has raised so far, published (release) after each raise.
+private final class ReRaisedRounds: Sendable {
+    private let low = Atomic<Int>(0)
+    private let high = Atomic<Int>(0)
+    func publish(_ producer: Int, _ round: Int) {
+        if producer == 0 { low.store(round, ordering: .releasing) } else { high.store(round, ordering: .releasing) }
+    }
+    func load(_ producer: Int) -> Int {
+        producer == 0 ? low.load(ordering: .acquiring) : high.load(ordering: .acquiring)
+    }
+    /// Producer `p`'s note in scope 1: 15 or 7, which no other producer uses there.
+    static func note(_ producer: Int) -> UInt8 { producer == 0 ? 15 : 7 }
+}
+
+/// A re-raising producer: each round, once an acknowledgement has landed since its last raise (bounded), queues
+/// `noteOn(note)` in scope 1 with velocity `round`, raises the critical scope as its refused `noteOff` would, then
+/// publishes the round. Returns rule breaks.
+@Sendable private func reRaise(_ rig: CycleRig, _ run: CycleStressRun, _ rounds: ReRaisedRounds, producer: Int,
+                               count: Int) -> [String] {
+    var violations: [String] = []
+    guard run.arriveAndWait(), let token = rig.events.claimProducer() else { return ["producer \(producer) not run"] }
+    var acknowledgedBefore = -1
+    for round in 1...count where !run.shouldStop {
+        guard awaitBounded(run, { run.acknowledged.load(ordering: .acquiring) > acknowledgedBefore }) else {
+            violations.append("producer \(producer) round \(round): no acknowledgement in time")
+            break
+        }
+        let frame = run.now.load(ordering: .relaxed) &+ 64
+        let payload = KernelEventPayload.noteOn(channel: 0, note: ReRaisedRounds.note(producer),
+                                                velocity: UInt16(round))
+        let noteOn = cycleEvent(frame, payload, scope: 1, sequence: UInt64(round))
+        guard awaitBounded(run, { rig.push(noteOn, token) == .ok }) else {
+            violations.append("producer \(producer) round \(round): noteOn never queued")
+            break
+        }
+        acknowledgedBefore = run.acknowledged.load(ordering: .acquiring)
+        if rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: frame) != .ok {
+            violations.append("producer \(producer) round \(round): raise refused")
+        }
+        rounds.publish(producer, round)
+    }
+    _ = rig.events.releaseProducer(token)
+    run.producersDone.add(1, ordering: .releasing)
+    return violations
+}
+
+/// Runs 64-frame cycles until both re-raising producers are done. A `noteOn` of round `r` emitted by a cycle that
+/// began after its producer published `r` (so after the raise) is a violation: it was queued before that fault and
+/// sounded although no faulted cycle (and so no acknowledgement) can have preceded its flush.
+@Sendable private func reRaiseRender(_ rig: CycleRig, _ run: CycleStressRun, _ rounds: ReRaisedRounds) -> CycleModel {
+    var model = CycleModel()
+    guard run.arriveAndWait() else { return model }
+    var blockStart: Int64 = 0
+    let deadline = ContinuousClock.now + CycleStressRun.waitLimit
+    while run.producersDone.load(ordering: .acquiring) < 2, !run.shouldStop, ContinuousClock.now < deadline {
+        let raised = (rounds.load(0), rounds.load(1))
+        run.cycleStarted.add(1, ordering: .sequentiallyConsistent)
+        let (result, emitted) = rig.run(blockStart, 64)
+        model.record(result, emitted, blockStart: blockStart, frames: 64)
+        for emission in emitted where emission.event.scope == 1 {
+            guard case .noteOn(_, let note, let round) = emission.event.payload else { continue }
+            if (note == ReRaisedRounds.note(0) && Int(round) <= raised.0)
+                || (note == ReRaisedRounds.note(1) && Int(round) <= raised.1) {
+                model.violations.append("round \(round) noteOn(\(note)) sounded after its fault at \(blockStart)")
+            }
+        }
+        blockStart &+= 64
+        run.now.store(blockStart, ordering: .relaxed)
+    }
+    if ContinuousClock.now >= deadline { run.spinOverruns.add(1, ordering: .relaxed) }
+    run.renderDone.store(true, ordering: .releasing)
+    return model
+}
+
 extension RealtimeHandoffTests {
     @Suite(.serialized) struct CycleStress {
         /// Kills: a lost, duplicated or doubly-counted event; an emission outside its block or out of frame order;
@@ -286,7 +375,9 @@ extension RealtimeHandoffTests {
         /// while flushing; a note left owned after its `noteOff` was refused; ownership diverging from what was
         /// emitted; a race TSan can see.
         @Test func concurrentProducersRenderAndControlKeepEveryEventAccounted() throws {
-            let rig = try CycleRig(lanes: 3, laneCapacity: 32, blockCapacity: 48)
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(lanes: 3, laneCapacity: 32, blockCapacity: 48,
+                                   telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
             let burst = try latchCriticalScope(rig)
             let run = CycleStressRun()
             let outcomes = CycleSlots<ProducerOutcome>(2)
@@ -295,9 +386,10 @@ extension RealtimeHandoffTests {
                 { outcomes.set(0, produce(rig, $0, seed: 0x1234_5678, noteBase: 0, pushes: 20_000)) },
                 { outcomes.set(1, produce(rig, $0, seed: 0x9ABC_DEF0, noteBase: 8, pushes: 20_000)) },
                 { model.set(0, render(rig, $0, producers: 2)) },
-                { control(rig, $0) }
+                { control(rig, $0, slots) }
             ]
             try #require(runCycleWorkers(run, workers))
+            #expect(run.spinOverruns.load(ordering: .acquiring) == 0)
             var observed = try #require(model.get(0))
             let first = try #require(outcomes.get(0))
             let second = try #require(outcomes.get(1))
@@ -334,6 +426,43 @@ extension RealtimeHandoffTests {
                 #expect(rig.ownership.ownedCount(scope: scope) == (0..<16).count {
                     observed.sounding & CycleModel.bit(scope, UInt8($0)) != 0
                 })
+            }
+        }
+
+        /// Finding 4: producers re-raise the critical scope after acknowledgements, mid-run, each with a `noteOn`
+        /// queued just before its raise. Kills: an acknowledgement before a faulted cycle loaded its request epoch
+        /// (a queued `noteOn` sounds after its fault); an unbounded wait; a note left owned.
+        @Test func producersReRaiseAfterAcknowledgementsMidRun() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+            let run = CycleStressRun()
+            let rounds = ReRaisedRounds()
+            let breaks = CycleSlots<[String]>(2)
+            let model = CycleSlots<CycleModel>(1)
+            let workers: [@Sendable (CycleStressRun) -> Void] = [
+                { breaks.set(0, reRaise(rig, $0, rounds, producer: 0, count: 40)) },
+                { breaks.set(1, reRaise(rig, $0, rounds, producer: 1, count: 40)) },
+                { model.set(0, reRaiseRender(rig, $0, rounds)) },
+                { control(rig, $0, slots) }
+            ]
+            try #require(runCycleWorkers(run, workers))
+            var observed = try #require(model.get(0))
+            #expect(breaks.get(0) == [] && breaks.get(1) == [])
+            #expect(run.spinOverruns.load(ordering: .acquiring) == 0 && run.acknowledged.load(ordering: .acquiring) > 1)
+            // Quiescent: acknowledge any last latch after one faulted cycle, then run until nothing is left.
+            let observation = rig.faults.observe(CycleRig.criticalScope)
+            var blockStart = run.now.load(ordering: .relaxed)
+            for cycle in 0..<64 {
+                if cycle == 1, let observation { _ = rig.faults.acknowledge(observation) }
+                let (result, emitted) = rig.run(blockStart, 512)
+                observed.record(result, emitted, blockStart: blockStart, frames: 512)
+                blockStart &+= 512
+                if cycle > 1, result.status == .ok, !result.flushing, rig.cycle.bufferedCount == 0 { break }
+            }
+            #expect(observed.violations.isEmpty, "\(observed.violations.prefix(5))")
+            #expect(observed.silencedCycles > 1 && !rig.faults.isLatched(CycleRig.criticalScope))
+            for producer in 0..<2 {
+                #expect(!rig.ownership.isOwned(scope: 1, channel: 0, note: ReRaisedRounds.note(producer)))
             }
         }
     }
