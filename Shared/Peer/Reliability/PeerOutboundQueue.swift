@@ -31,9 +31,11 @@
 
 import Foundation
 
-/// Thrown only by the queue and reconnect-state initializers.
+/// Thrown only by the queue and reconnect-state initializers; nothing is constructed.
 enum PeerOutboundCapacityError: Error, Hashable, Sendable {
     case invalidCapacity(Int)
+    /// `origin` (0) means "before the first command": the first send must be at least 1.
+    case invalidFirstSequence(PeerSequence)
 }
 
 /// Why the remote refused to queue or acknowledge an intent.
@@ -72,10 +74,11 @@ struct PeerOutboundQueue: Sendable {
 
     /// `firstSequence` overrides the session's first envelope sequence (default 1):
     /// a restore and test hook (exhaustion is pinned at `PeerSequence.maximumValue`).
-    /// A reconnect always restarts at 1.
+    /// A reconnect always restarts at 1. `origin` is refused, so no stream starts at 0.
     init(session: PeerSyncSession, capacity: Int = Self.standardCapacity,
          firstSequence: PeerSequence? = nil) throws(PeerOutboundCapacityError) {
         guard Self.capacityBounds.contains(capacity) else { throw .invalidCapacity(capacity) }
+        if let firstSequence, firstSequence.value < 1 { throw .invalidFirstSequence(firstSequence) }
         self.session = session
         self.capacity = capacity
         nextSequence = firstSequence ?? Self.firstSequence

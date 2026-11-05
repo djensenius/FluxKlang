@@ -440,3 +440,29 @@ struct PeerReconnectEpochTests {
         }
     }
 }
+
+extension PeerReconnectEpochTests {
+    @Test func theFirstSequenceHookRefusesOriginAndAcceptsOneThroughTheMaximum() throws {
+        let session = Fixture.session()
+        #expect(throws: PeerOutboundCapacityError.invalidFirstSequence(.origin)) {
+            try PeerOutboundQueue(session: session, firstSequence: .origin)
+        }
+        #expect(throws: PeerOutboundCapacityError.invalidFirstSequence(.origin)) {
+            try PeerReconnectState(session: session, firstSequence: .origin)
+        }
+        #expect(throws: PeerOutboundCapacityError.invalidCapacity(0)) {
+            try PeerOutboundQueue(session: session, capacity: 0, firstSequence: .origin)
+        }
+        var queue = try PeerOutboundQueue(session: session, firstSequence: Fixture.sequence(1))
+        try queue.enqueue(Fixture.intent("command.a"))
+        #expect(try queue.takeNext()?.sequence == Fixture.sequence(1))
+        var state = try PeerReconnectState(session: session, firstSequence: Fixture.sequence(1))
+        var receiver = PeerSyncReceiver(session: session)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(session))), from: receiver)
+        try state.enqueue(Fixture.intent("command.b"))
+        #expect(try state.takeNextToSend()?.sequence == Fixture.sequence(1))
+        let last = Fixture.sequence(PeerSequence.maximumValue)
+        let restored = try PeerOutboundQueue(session: session, firstSequence: last)
+        #expect(restored.nextSequence == last && !restored.isSequenceExhausted)
+    }
+}

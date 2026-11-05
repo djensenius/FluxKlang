@@ -141,7 +141,8 @@ struct PeerReconnectState: Sendable {
     /// `latchGeneration` is the first latch's generation: a restore and test hook
     /// (exhaustion is pinned at `Generation.maximumValue`). It adds no forging
     /// path, because `stamp(_:)` is already the caller-trusted boundary.
-    /// `firstSequence` is the queue's restore and test hook (`PeerOutboundQueue.init`).
+    /// `firstSequence` is the queue's restore and test hook (`PeerOutboundQueue.init`);
+    /// `origin` is refused with `invalidFirstSequence`.
     init(session: PeerSyncSession, queueCapacity: Int = PeerOutboundQueue.standardCapacity,
          latchGeneration: Generation = .initial, firstSequence: PeerSequence? = nil) throws(PeerOutboundCapacityError) {
         phase = .connected(session)
