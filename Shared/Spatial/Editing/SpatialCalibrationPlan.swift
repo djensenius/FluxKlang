@@ -137,8 +137,45 @@ struct SpatialCalibrationPlan: Hashable, Sendable {
                                           seconds: secondsPerOutput)
     }
 
-    /// The whole run: `secondsPerOutput × outputs.count`.
-    var totalSeconds: Double { secondsPerOutput * Double(outputs.count) }
+    /// The whole run: the boundary after the last output.
+    var totalSeconds: Double { Self.boundarySeconds(outputs.count, secondsPerOutput: secondsPerOutput) }
+
+    /// When output `index` starts: `secondsPerOutput × index`, and index
+    /// `outputs.count` is the end of the run. This is the only place a boundary
+    /// is computed, so `totalSeconds` and the output under test agree bit for bit.
+    static func boundarySeconds(_ index: Int, secondsPerOutput: Double) -> Double {
+        secondsPerOutput * Double(index)
+    }
+
+    /// The output under test at `elapsed`: the last of `count` outputs whose
+    /// boundary is at or before it. Before the second boundary (or for NaN) it
+    /// is the first output; from the last boundary on, including the end of the
+    /// run, it is the last.
+    ///
+    /// The truncated quotient `elapsed / secondsPerOutput` is only a guess. At
+    /// a boundary it can fall just short (3 × 0.7 / 0.7 is 2.9999999999999996),
+    /// and just before one it can reach it, so the guess is corrected by one
+    /// step against the computed boundaries, never by an epsilon.
+    static func outputIndex(at elapsed: Double, secondsPerOutput: Double, count: Int) -> Int {
+        guard count > 1, elapsed >= boundarySeconds(1, secondsPerOutput: secondsPerOutput) else { return 0 }
+        let last = count - 1
+        guard elapsed < boundarySeconds(last, secondsPerOutput: secondsPerOutput) else { return last }
+        // Boundary 1 <= elapsed < boundary `last`: the duration is positive and
+        // finite, and the answer is in 1..<last.
+        let quotient = (elapsed / secondsPerOutput).rounded(.towardZero)
+        var index = min(max(Int(exactly: quotient) ?? last, 1), last - 1)
+        if elapsed < boundarySeconds(index, secondsPerOutput: secondsPerOutput) {
+            index -= 1
+        } else if boundarySeconds(index + 1, secondsPerOutput: secondsPerOutput) <= elapsed {
+            index += 1
+        }
+        return index
+    }
+
+    /// The index of the output under test `elapsed` seconds into a run of this plan.
+    func outputIndex(at elapsed: Double) -> Int {
+        Self.outputIndex(at: elapsed, secondsPerOutput: secondsPerOutput, count: outputs.count)
+    }
 }
 
 /// Consent to run one reviewed plan. It can only be made from a review (the

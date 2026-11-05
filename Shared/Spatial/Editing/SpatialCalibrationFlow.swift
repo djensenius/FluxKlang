@@ -108,13 +108,10 @@ struct SpatialCalibrationRun: Hashable, Sendable {
     /// Elapsed time as a fraction `0…1` of the plan's total duration.
     var progress: Double { elapsedSeconds / review.plan.totalSeconds }
 
-    /// The output under test: each takes `secondsPerOutput`, in plan order; the
-    /// end of the run belongs to the last output.
-    var currentOutput: SpeakerID {
-        let outputs = review.plan.outputs
-        let index = Int(elapsedSeconds / review.plan.secondsPerOutput)
-        return outputs[min(index, outputs.count - 1)]
-    }
+    /// The output under test: each takes `secondsPerOutput`, in plan order, and
+    /// starts exactly at its planned boundary; the end of the run belongs to the
+    /// last output. See `SpatialCalibrationPlan.outputIndex(at:secondsPerOutput:count:)`.
+    var currentOutput: SpeakerID { review.plan.outputs[review.plan.outputIndex(at: elapsedSeconds)] }
 
     /// Refuses a non-finite, earlier or over-long elapsed time.
     fileprivate func advanced(to elapsed: Double) throws(SpatialCalibrationRefusal) -> Self {

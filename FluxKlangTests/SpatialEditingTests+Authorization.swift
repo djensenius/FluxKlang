@@ -186,6 +186,38 @@ struct SpatialCalibrationAuthorizationTests {
         }
     }
 
+    /// Every boundary, for durations whose quotients drift either way, starts
+    /// its own output; the value just before it belongs to the previous one.
+    @Test func eachPlannedBoundaryStartsItsOwnOutput() {
+        typealias Plan = SpatialCalibrationPlan
+        let count = Plan.maximumOutputs
+        func index(_ elapsed: Double, _ seconds: Double, count: Int = SpatialCalibrationPlan.maximumOutputs) -> Int {
+            Plan.outputIndex(at: elapsed, secondsPerOutput: seconds, count: count)
+        }
+        for seconds in [0.1, 0.7, 1.0 / 3, 0.3, 1e-3, 0.25, 9.9, 10, 1e9, 1e300] {
+            for output in 0..<count {
+                let start = Plan.boundarySeconds(output, secondsPerOutput: seconds)
+                #expect(start.bitPattern == (seconds * Double(output)).bitPattern)
+                #expect(index(start, seconds) == output, "\(seconds) × \(output)")
+                if output > 0 { #expect(index(start.nextDown, seconds) == output - 1, "\(seconds) × \(output)⁻") }
+            }
+            let end = Plan.boundarySeconds(count, secondsPerOutput: seconds)
+            for elapsed in [end.nextDown, end, end.nextUp, .greatestFiniteMagnitude, .infinity] {
+                #expect(index(elapsed, seconds) == count - 1, "\(seconds) at \(elapsed)")
+            }
+            for elapsed in [-0.0, -seconds, -.greatestFiniteMagnitude, -.infinity, .nan] {
+                #expect(index(elapsed, seconds) == 0, "\(seconds) at \(elapsed)")
+            }
+            #expect(index(seconds * 5, seconds, count: 1) == 0 && index(seconds, seconds, count: 2) == 1)
+        }
+        // Durations a plan refuses still give an index in range, never a trap.
+        for seconds in [0.0, -1, .nan, .infinity, -.infinity, .leastNonzeroMagnitude] {
+            for elapsed in [-1.0, 0, 1, .nan, .infinity, -.infinity] {
+                #expect((0..<count).contains(index(elapsed, seconds)) && index(elapsed, seconds, count: 1) == 0)
+            }
+        }
+    }
+
     @Test func levelAndDurationEdgesAreInclusive() throws {
         for level in [-60.0, -6] {
             #expect(try Fixture.plan(level: level).maximumLevelDecibels == level)

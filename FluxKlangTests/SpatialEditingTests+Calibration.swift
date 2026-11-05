@@ -278,6 +278,33 @@ struct SpatialCalibrationFlowTests {
         #expect(try run().currentOutput == outputs[3] && run().progress == 1)
     }
 
+    /// 3 × 0.7 / 0.7 is 2.9999999999999996, so a truncated quotient would name
+    /// the third speaker at the fourth's planned start (Copilot 4485408153).
+    @Test func theOutputUnderTestChangesExactlyAtEachPlannedBoundary() throws {
+        var copilot = try Fixture.startedRun(plan: Fixture.plan(seconds: 0.7))
+        let fourth = try Fixture.speaker("spk.rr")
+        #expect(3 * 0.7 / 0.7 < 3)
+        try copilot.handle(.progress(elapsedSeconds: 3 * 0.7))
+        #expect(Fixture.run(of: copilot)?.currentOutput == fourth)
+        // Each output starts exactly at its boundary, and the value just before belongs to the previous output.
+        for seconds in [0.7, 1.0 / 3, 0.3, 0.65, 9.9, 0.25, 10] {
+            let plan = try Fixture.plan(seconds: seconds)
+            var flow = try Fixture.startedRun(plan: plan)
+            for (index, output) in plan.outputs.enumerated() {
+                let start = seconds * Double(index)
+                if index > 0 {
+                    try flow.handle(.progress(elapsedSeconds: start.nextDown))
+                    #expect(Fixture.run(of: flow)?.currentOutput == plan.outputs[index - 1], "\(seconds) × \(index)⁻")
+                }
+                try flow.handle(.progress(elapsedSeconds: start))
+                #expect(Fixture.run(of: flow)?.currentOutput == output, "\(seconds) × \(index)")
+            }
+            #expect(plan.totalSeconds.bitPattern == (seconds * 4).bitPattern)
+            try flow.handle(.progress(elapsedSeconds: plan.totalSeconds))
+            #expect(Fixture.run(of: flow)?.currentOutput == plan.outputs.last, "\(seconds) at the end")
+        }
+    }
+
     @Test func stopsAndRouteLossEndTheRunAndAcknowledgeTruthfully() throws {
         let plan = try Fixture.plan()
         let cases: [(SpatialCalibrationStop, SpatialCalibrationState)] = [
