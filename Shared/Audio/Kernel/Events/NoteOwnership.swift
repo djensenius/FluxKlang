@@ -88,6 +88,26 @@ final class NoteOwnership: @unchecked Sendable {
         return released
     }
 
+    /// Like `releaseAll`, but releases at most `limit` owned notes of `scope`, the first in (channel, note) order,
+    /// clearing each note's bit before its `emit`; the rest stay owned. Visits at most 32 words; returns the count
+    /// (0 for `limit <= 0` or an out-of-range scope). `emit` must not call back.
+    func releaseFirst(scope: UInt32, limit: Int, _ emit: (UInt8, UInt8) -> Void) -> Int {
+        guard limit > 0, let base = scopeBase(scope) else { return 0 }
+        var released = 0
+        for offset in 0..<Self.wordsPerScope {
+            let channel = UInt8(truncatingIfNeeded: offset &>> 1)
+            let high = UInt8(truncatingIfNeeded: (offset & 1) &<< 6)
+            while words[base &+ offset] != 0 {
+                guard released < limit else { return released }
+                let bits = words[base &+ offset]
+                words[base &+ offset] = bits & (bits &- 1)
+                emit(channel, high | UInt8(truncatingIfNeeded: bits.trailingZeroBitCount))
+                released &+= 1
+            }
+        }
+        return released
+    }
+
     /// `false` for an unowned or out-of-range note.
     func isOwned(scope: UInt32, channel: UInt8, note: UInt8) -> Bool {
         guard let index = wordIndex(scope: scope, channel: channel, note: note) else { return false }

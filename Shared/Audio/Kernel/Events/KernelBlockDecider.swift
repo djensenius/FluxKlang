@@ -28,12 +28,24 @@ final class KernelBlockDecider {
     private let values: UnsafeMutablePointer<Float>
     /// Each parameter's frame offset already advanced in the current block.
     private let advanced: UnsafeMutablePointer<Int64>
+    /// The next scope a `.replacingCycle` takeover releases; `ownership.scopeCount` once none is pending.
+    private let takeoverScope: UnsafeMutablePointer<Int>
+    /// One bit per note key (`NoteOwnership`'s layout) the takeover released: the key's next unowned `noteOff` is
+    /// consumed silently, never emitted a second time. An owned (re-struck) note's `noteOff` releases it as usual.
+    private let takenOver: UnsafeMutablePointer<UInt64>
 
-    init(deadline: DeadlinePolicy, ownership: NoteOwnership, ramps: RampSlots, pulses: ClockPulseGate) {
+    /// `takeover`: a `.replacingCycle` start, so the notes `ownership` marks sounding are released (see
+    /// `releaseTakeover`).
+    init(deadline: DeadlinePolicy, ownership: NoteOwnership, ramps: RampSlots, pulses: ClockPulseGate,
+         takeover: Bool) {
         self.deadline = deadline
         self.ownership = ownership
         self.ramps = ramps
         tombstones = ReleaseTombstones(scopes: ownership.scopeCount)
+        takeoverScope = .allocate(capacity: 1)
+        takeoverScope.initialize(to: takeover ? 0 : ownership.scopeCount)
+        takenOver = .allocate(capacity: ownership.scopeCount &* NoteOwnership.wordsPerScope)
+        takenOver.initialize(repeating: 0, count: ownership.scopeCount &* NoteOwnership.wordsPerScope)
         gate = .allocate(capacity: 1)
         gate.initialize(to: pulses)
         values = .allocate(capacity: ramps.parameterCount)
@@ -46,6 +58,51 @@ final class KernelBlockDecider {
         gate.deallocate()
         values.deallocate()
         advanced.deallocate()
+        takeoverScope.deallocate()
+        takenOver.deallocate()
+    }
+
+    /// A `.replacingCycle` takeover still has notes to release; every decided `noteOn` is discarded meanwhile, so
+    /// the takeover only ever cuts notes the retired cycle left sounding.
+    var takeoverPending: Bool { takeoverScope.pointee < ownership.scopeCount }
+
+    /// Step 1, `.replacingCycle` only: releases at most `limit` notes `ownership` still marks sounding (left by the
+    /// retired cycle, whose buffered `noteOff`s this cycle never sees), in (scope, channel, note) order, each as a
+    /// synthesized `noteOff` at `blockStart` with `releaseSequence`, and clears their ownership. The rest carry to
+    /// the next cycle; nothing is dropped. Returns the count.
+    func releaseTakeover(_ blockStart: Int64, limit: Int, sequence: UInt64,
+                         _ emit: (KernelEvent, Int64) -> Void) -> Int {
+        var released = 0
+        while takeoverScope.pointee < ownership.scopeCount {
+            let scope = UInt32(truncatingIfNeeded: takeoverScope.pointee)
+            released &+= ownership.releaseFirst(scope: scope, limit: limit &- released) { channel, note in
+                takenOver[Self.key(scope, channel, note)] |= Self.bit(note)
+                emit(KernelEvent(frame: blockStart, scope: scope, sequence: sequence,
+                                 payload: .noteOff(channel: channel, note: note)), blockStart)
+            }
+            guard ownership.ownedCount(scope: scope) == 0 else { break }
+            takeoverScope.pointee &+= 1
+        }
+        return released
+    }
+
+    /// Clears the key's takeover bit; `true` when it was set (the takeover already released that note).
+    private func clearTakenOver(_ scope: UInt32, _ channel: UInt8, _ note: UInt8) -> Bool {
+        guard scope < UInt32(truncatingIfNeeded: ownership.scopeCount), Int(channel) < NoteOwnership.channels,
+              Int(note) < NoteOwnership.notesPerChannel else { return false }
+        let index = Self.key(scope, channel, note)
+        let bit = Self.bit(note)
+        guard takenOver[index] & bit != 0 else { return false }
+        takenOver[index] &= ~bit
+        return true
+    }
+
+    private static func key(_ scope: UInt32, _ channel: UInt8, _ note: UInt8) -> Int {
+        Int(scope) &* NoteOwnership.wordsPerScope &+ Int(channel) &* 2 &+ Int(note &>> 6)
+    }
+
+    private static func bit(_ note: UInt8) -> UInt64 {
+        1 &<< UInt64(note & 63)
     }
 
     /// The gate's cumulative counters and resync state.
@@ -58,10 +115,11 @@ final class KernelBlockDecider {
     }
 
     /// Step 4: decides and applies `block`'s entries in order; keeps the first `notYet` and everything after it.
-    /// `flushing`: a lane's flush bit is set, so every decided `noteOn` is discarded.
+    /// `flushing`: a lane's flush bit is set, so every decided `noteOn` is discarded (as while `takeoverPending`).
     func decide(_ block: KernelBlockBuffer, flushing: Bool, _ window: (start: Int64, frames: Int64),
                 _ tally: inout KernelCycleTally, _ emit: (KernelEvent, Int64) -> Void) {
         let (blockStart, frames) = window
+        let discarding = flushing || takeoverPending
         var index = 0
         while index < block.count {
             let entry = block[index]
@@ -74,7 +132,7 @@ final class KernelBlockDecider {
             case .dropLate:
                 tally.droppedLate &+= 1
             case .dispatch(let frame), .dispatchLate(let frame):
-                if case .noteOn = event.payload, entry.flushed || flushing {
+                if case .noteOn = event.payload, entry.flushed || discarding {
                     tally.discardedWhileSilenced &+= 1
                 } else {
                     apply(event, at: frame, blockStart, &tally, emit)
@@ -124,7 +182,12 @@ final class KernelBlockDecider {
             }
         case .noteOff(let channel, let note):
             tombstones.release(event)
-            _ = ownership.noteOff(scope: event.scope, channel: channel, note: note)
+            if !ownership.noteOff(scope: event.scope, channel: channel, note: note),
+               clearTakenOver(event.scope, channel, note) {
+                // The takeover already released this note: its late `noteOff` is consumed, never emitted twice.
+                tally.discardedWhileSilenced &+= 1
+                return
+            }
         case .clockPulse:
             guard gate.pointee.admit(pulseFrame: event.frame, blockStart: blockStart) == .emit else {
                 tally.skippedPulses &+= 1

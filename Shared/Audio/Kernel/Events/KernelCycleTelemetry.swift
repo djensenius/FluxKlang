@@ -15,7 +15,10 @@
 /// render-path check would cost an atomic per cycle in Release. The only reads are `KernelCycle.latestTelemetry()` and
 /// `KernelCycle.acknowledgeCritical`, both on that control thread and never concurrently; a UI meter gets samples from
 /// control, never reads the slot itself. Approval never comes from a caller-held value, so a forged
-/// `KernelCycleTelemetry` (all fields are settable) cannot approve a ticket. Reference model; not RT-certified.
+/// `KernelCycleTelemetry` (all fields are settable: a report, not a capability) cannot approve a ticket. Anything
+/// holding the `TelemetrySlots` could still publish one into the cycle's slot, breaking the single-producer
+/// contract; as with `FaultLatch.acknowledge`, that is trusted control code, not type-restricted.
+/// Reference model; not RT-certified.
 struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// `run` calls so far, this one included; empty (`frames <= 0`) cycles count. The first cycle is 1.
     var cycle: UInt64 = 0
@@ -59,10 +62,11 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// slots) and shows a `.scopeFaulted` cycle that loaded `ticket`'s epoch or a later one before reading the
     /// latch, so it began after control's `observe` and `request` and armed the flush watermark. A stale sample
     /// (published before render loaded the epoch, or never refreshed) only delays acknowledgement. The
-    /// happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190.
+    /// happens-before chain is on `KernelAckRequests`; its formal model-check is tracked in #190. Epoch 0 (never
+    /// handed out) is refused as defence in depth: every sample has `lastFaultedAckEpoch >= 0`.
     func permitsAcknowledgement(_ ticket: borrowing KernelAckTicket) -> Bool {
-        let epoch = ticket.epoch
-        return ackCycle == ticket.cycle && lastFaultedAckEpoch >= epoch
+        let (epoch, cycle) = (ticket.epoch, ticket.cycle)
+        return epoch > 0 && ackCycle == cycle && lastFaultedAckEpoch >= epoch
     }
 
     /// Adds `count` to `counter`, saturating at `UInt64.max`.

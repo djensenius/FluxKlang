@@ -10,34 +10,36 @@
 /// Reference model; not RT-certified.
 struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
     /// `.ok`; `.silenced(.scopeFaulted)` while the critical scope is latched; else `.silenced(.safetyMute)` on panic.
-    private(set) var status: KernelStatus = .ok
+    private(set) var status: KernelStatus
     /// Events moved from the fan-in into the block buffer.
-    private(set) var drained = 0
+    private(set) var drained: Int
     /// Events passed to `emit`, on time or late; in a silenced cycle, only `noteOff`s that released an owned note.
-    private(set) var dispatched = 0
+    private(set) var dispatched: Int
     /// `noteOn`s later than the deadline tolerance: discarded and counted, never emitted (E2 `dropLate`).
-    private(set) var droppedLate = 0
+    private(set) var droppedLate: Int
     /// Due events the cycle could not apply and did not emit: a `noteOn` that `NoteOwnership` refused (scope,
     /// channel or note out of range) or a `rampTo` that `RampSlots` refused (parameter out of range, non-finite).
-    private(set) var refused = 0
+    private(set) var refused: Int
     /// Due clock pulses the gate skipped (stale or rate-limited); the gate keeps the cumulative counters.
-    private(set) var skippedPulses = 0
-    /// Note events consumed without emitting: a silenced cycle's buffered `noteOn`s and unowned `noteOff`s, and
-    /// `noteOn`s decided while flushing (see the type's Flush watermark).
-    private(set) var discardedWhileSilenced = 0
+    private(set) var skippedPulses: Int
+    /// Note events consumed without emitting: a silenced cycle's buffered `noteOn`s and unowned `noteOff`s,
+    /// `noteOn`s decided while flushing (see the type's Flush watermark) or while a takeover is pending, and the
+    /// first `noteOff` for a note a takeover released (see the type's Takeover).
+    private(set) var discardedWhileSilenced: Int
     /// Decided `noteOn`s a same-key `noteOff` strictly after their frame already released (`ReleaseTombstones`).
-    private(set) var discardedSuperseded = 0
+    private(set) var discardedSuperseded: Int
     /// A lane was still flushing after this cycle's drain (see the type's Flush watermark).
-    private(set) var flushing = false
-    /// Owned notes released by safety requests or by critical-fault recovery, each emitted as a synthesized
-    /// `noteOff` at `blockStart`.
-    private(set) var releasedNotes = 0
+    private(set) var flushing: Bool
+    /// Owned notes released by a `.replacingCycle` takeover, safety requests or critical-fault recovery, each
+    /// emitted as a synthesized `noteOff` at `blockStart`.
+    private(set) var releasedNotes: Int
     /// The gate's single resync marker for the current stall was taken in this cycle.
-    private(set) var resync = false
+    private(set) var resync: Bool
     /// Events left in the block buffer for a later cycle.
-    private(set) var pending = 0
+    private(set) var pending: Int
 
-    /// The only construction: `KernelCycle.run` folds one cycle in. Nothing else can make or edit a result.
+    /// The only construction: `KernelCycle.run` folds one cycle in. Nothing else can make or edit a result: no
+    /// field has a default value, so an extension initializer in another file cannot make one either.
     fileprivate init(status: KernelStatus, drained: Int, tally: KernelCycleTally, flushing: Bool, releasedNotes: Int,
                      pending: Int) {
         self.status = status
@@ -63,7 +65,8 @@ enum KernelCycleStart: Sendable, Equatable {
     /// lane was still flushing, so a pre-fault `noteOn` may still be queued. The cycle starts with every lane's
     /// flush bit set, as if its first cycle were latched: events drained before a lane is proved empty are marked
     /// and their `noteOn`s discarded. Liveness is as after any latch: each bit clears once its lane's drain
-    /// delivers fewer than its limit, so a queued `noteOn` is lost but never sounds and sticks.
+    /// delivers fewer than its limit, so a queued `noteOn` is lost but never sounds and sticks. It also takes over
+    /// the shared `NoteOwnership`: every note still marked sounding is released (see `KernelCycle`'s Takeover).
     case replacingCycle
 }
 
@@ -92,7 +95,8 @@ struct KernelCycleParts {
 /// `run` does, in order:
 /// 0. Acknowledgement epoch: `ackRequests.loadForRender()` (acquire), before any latch read; published in step 7
 ///    as `ackEpochSeen`, and as `lastFaultedAckEpoch` by a `.scopeFaulted` cycle.
-/// 1. Safety: takes every scope's `SafetyFlags`; any request releases that scope's owned notes (bits, never
+/// 1. Takeover, `.replacingCycle` only, while pending: at most `blockCapacity` synthesized releases (see Takeover).
+///    Safety: takes every scope's `SafetyFlags`; any request releases that scope's owned notes (bits, never
 ///    queue-capacity dependent); `panic` also silences this cycle (`.safetyMute`) for every scope.
 /// 2. Faults: while `faults.isLatched(events.criticalScope)` (a critical `noteOff` was refused) every owned note
 ///    in every scope is released, every lane's flush bit is set and the cycle reports `.silenced(.scopeFaulted)`
@@ -124,6 +128,17 @@ struct KernelCycleParts {
 /// `discardedWhileSilenced`; `noteOff`s apply as usual. Lanes are FIFO, so once every bit clears every pre-fault
 /// event has been drained, and a marked one never sounds. `KernelCycleResult.flushing` reports set bits.
 ///
+/// Takeover. A replacement shares the retired cycle's `NoteOwnership` but not its block buffer, so a `noteOff`
+/// buffered only there would never reach it and its note would stick. A `.replacingCycle` start therefore releases
+/// every note the ownership still marks sounding, through the same synthesized `noteOff` path as safety releases,
+/// and clears that ownership, independent of the retired cycle's buffers. It cuts those notes short by design: no
+/// stuck note beats exact durations. Each cycle releases at most `blockCapacity` of them, in (scope, channel, note)
+/// order, and carries the rest to the next cycle, so with `n` notes sounding the takeover ends after
+/// `ceil(n / blockCapacity)` cycles (`n <= scopes × 2,048`); nothing is dropped. Until it ends every decided
+/// `noteOn` is discarded, so it only cuts the retired cycle's notes. The first unowned `noteOff` for a released key
+/// (the retired cycle's event re-delivered, say) is consumed and counted in `discardedWhileSilenced`, never emitted
+/// twice and never latched; a re-struck (owned) key's `noteOff` is emitted as usual. `.freshFanIn` takes nothing over.
+///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
 /// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls
@@ -148,10 +163,11 @@ struct KernelCycleParts {
 /// and sticks; producers must put the `noteOff` at least a frame later.
 ///
 /// Bounds. All storage (block and scratch buffers, telemetry, flush bits, admission refusal counters, tombstones,
-/// gate, ramp words) is allocated in `init`, inside the private components. A cycle drains at most the free room,
-/// sorts in O(n log n) moves, passes the buffer once more, visits each owned-note word at most twice, each ramp
-/// parameter once and each lane at most three times (drain, then the two refusal totals); a buffer full of future
-/// (or, while silenced, non-note) events stops draining (M4/M5 backpressure; the lanes are decided later).
+/// takeover bits, gate, ramp words) is allocated in `init`, inside the private components. A cycle drains at most the
+/// free room, sorts in O(n log n) moves, passes the buffer once more, visits each owned-note word at most twice (a
+/// pending takeover adds at most two passes over each scope it reaches), each ramp parameter once and each lane at most
+/// three times (drain, then the two refusal totals); a buffer full of future (or, while silenced, non-note) events
+/// stops draining (M4/M5 backpressure; the lanes are decided later).
 ///
 /// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only (the
 /// fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call back.
@@ -267,7 +283,7 @@ final class KernelCycle: @unchecked Sendable {
         block = KernelBlockBuffer(capacity: blockCapacity)
         watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
         decider = KernelBlockDecider(deadline: deadline, ownership: parts.ownership, ramps: parts.ramps,
-                                     pulses: pulses)
+                                     pulses: pulses, takeover: parts.start == .replacingCycle)
         admissionRefusals = KernelAdmissionRefusals(laneCount: parts.events.laneCount,
                                                     handoff: parts.events.identity)
         counters = .allocate(capacity: 1)
@@ -286,6 +302,10 @@ final class KernelCycle: @unchecked Sendable {
         let ackEpoch = ackRequests.loadForRender()
         var status = KernelStatus.ok
         var releasedNotes = 0
+        if decider.takeoverPending {
+            releasedNotes &+= decider.releaseTakeover(blockStart, limit: blockCapacity, sequence: Self.releaseSequence,
+                                                      emit)
+        }
         let panicked = applySafety(blockStart, &releasedNotes, emit)
         if faults.isLatched(criticalScope) {
             for scope in 0..<ownership.scopeCount {

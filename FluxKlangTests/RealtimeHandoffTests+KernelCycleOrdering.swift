@@ -107,7 +107,7 @@ extension RealtimeHandoffTests {
         }
 
         /// Kills: telemetry not published, published with the wrong stamp, or counters that are per cycle rather
-        /// than cumulative or that disagree with the results and the gate.
+        /// than cumulative or that disagree with the results and the gate; a `.safetyMute` cycle counted as faulted.
         @Test func telemetryPublishesCumulativeCountersEveryCycle() throws {
             let slots = try kernelCycleTelemetrySlots()
             let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 7)
@@ -135,6 +135,10 @@ extension RealtimeHandoffTests {
             #expect(slots.latest(slot: 0) == .unavailable(.neverPublished))
             #expect(KernelCycleTelemetry.saturatingAdd(.max - 1, 5) == .max)
             #expect(KernelCycleTelemetry.saturatingAdd(3, -2) == 3)
+            _ = rig.safety.request(.panic, scope: 0)
+            #expect(rig.run(1_128, 64).0.status == .silenced(.safetyMute))
+            let muted = rig.cycle.telemetry
+            #expect(muted.cycle == 4 && muted.lastFaultedCycle == 0 && muted.lastFaultedAckEpoch == 0)
         }
 
         /// Ruling (E5b round 1): `.staleClock` stays off the `FaultLatch`. Kills: a stale pulse raising any fault

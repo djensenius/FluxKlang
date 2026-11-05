@@ -7,25 +7,34 @@ import Synchronization
 /// An acknowledgement request: the epoch control published after its `observe`, bound to the identity of the
 /// `KernelAckRequests` (so the `KernelCycle`) that issued it and to the `FaultObservation` it was requested for.
 /// Only `KernelAckRequests.request(for:)` makes one, and only for an observation of its cycle's own latch and
-/// critical scope. `~Copyable`: `KernelCycle.acknowledgeCritical` consumes it,
-/// so one ticket can never be presented twice, and that call refuses it for any other observation (a re-raise
-/// after the request makes a new observation, which needs a new request). Reference model; not RT-certified.
+/// critical scope: every stored property is `private` behind a read-only accessor (as `ProducerToken`), so no
+/// other file can build one, not even through an extension initializer. `~Copyable`:
+/// `KernelCycle.acknowledgeCritical` consumes it, so one ticket can never be presented twice, and that call
+/// refuses it for any other observation (a re-raise after the request makes a new observation, which needs a new
+/// request). Reference model; not RT-certified.
 struct KernelAckTicket: ~Copyable, Sendable {
+    private let issuedCycle: UInt64
+    private let issuedEpoch: UInt64
+    private let issuedScope: FaultScope
+    private let issuedTally: UInt64
+    private let issuedObservationEpoch: UInt64
+
     /// The issuing `KernelAckRequests.identity`; a sample from any other cycle never approves this ticket.
-    let cycle: UInt64
-    let epoch: UInt64
+    var cycle: UInt64 { issuedCycle }
+    /// The requested epoch; at least 1 (`request(for:)` never hands out 0).
+    var epoch: UInt64 { issuedEpoch }
     /// The observation's scope, `FaultObservation.tally` and `FaultObservation.epoch`: the words
     /// `FaultLatch.acknowledge` compares, so equal words mean the same latched state.
-    let scope: FaultScope
-    let observedTally: UInt64
-    let observedEpoch: UInt64
+    var scope: FaultScope { issuedScope }
+    var observedTally: UInt64 { issuedTally }
+    var observedEpoch: UInt64 { issuedObservationEpoch }
 
     fileprivate init(cycle: UInt64, epoch: UInt64, for observation: FaultObservation) {
-        self.cycle = cycle
-        self.epoch = epoch
-        scope = observation.record.scope
-        observedTally = observation.tally
-        observedEpoch = observation.epoch
+        issuedCycle = cycle
+        issuedEpoch = epoch
+        issuedScope = observation.record.scope
+        issuedTally = observation.tally
+        issuedObservationEpoch = observation.epoch
     }
 
     /// `true` when this ticket was requested for `observation` (the same scope and latched state).
