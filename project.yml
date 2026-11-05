@@ -226,6 +226,11 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/MIDIClockMathTests.swift
+      - path: FluxKlangTests/MIDIClockFollowerTests.swift
+      - path: FluxKlangTests/MIDIClockTempoTests.swift
+      - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
+      - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
