@@ -8,7 +8,7 @@ import Testing
 enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
     case fifteenChannels, seventeenChannels, shortControllers, controllerValue, storedModeController
     case shortPolyPressure, polyPressureValue, pitchBend, channelPressure, program
-    case parameterValue, parameterNumber, unsortedParameters, duplicateParameter, parametersOverBound
+    case parameterValue, parameterNumber, unsortedParameters, duplicateParameter, parametersOverBound, nilKindSelected
     case noteNumber, duplicateNote, unsortedNotes, zeroVelocity, notesOverBound, sustainedWithoutPedal, monoChannels
     case storedRPNNull, storedNRPNNull
 
@@ -23,7 +23,8 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         case .pitchBend: .pitchBend
         case .channelPressure: .channelPressure
         case .program: .program
-        case .parameterValue, .parameterNumber, .unsortedParameters, .duplicateParameter, .parametersOverBound:
+        case .parameterValue, .parameterNumber, .unsortedParameters, .duplicateParameter, .parametersOverBound,
+             .nilKindSelected:
             .parameters
         case .monoChannels: .mode
         default: nullField ?? .heldNotes
@@ -74,6 +75,11 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         .zeroVelocity: { $0.heldNotes[0] = MIDI1HeldNote(note: $0.heldNotes[0].note, velocity: 0, phase: .keyDown) },
         .sustainedWithoutPedal: { $0.controllers[64] = 63 },
         .monoChannels: { $0.mode.voices = .mono(channels: 17) },
+        .nilKindSelected: {
+            $0.activeParameterKind = nil
+            $0.controllers[101] = 0
+            $0.controllers[100] = 1
+        },
         .storedRPNNull: { $0.parameters.insert(MIDI1ParameterValue(number: rpnNull, value: 0), at: 2) }
     ]
 
@@ -167,6 +173,75 @@ struct MIDI1PerformanceSnapshotTests {
         _ = try empty.apply(Fixture.control(100, 0))
         #expect(try empty.apply(Fixture.control(6, 3)).effect
             == .parameter(MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 0), value: 384))
+    }
+
+    static let dataEntry: [MIDI1Semantic] = [6, 38, 96, 97].map { Fixture.control($0, 1) }
+
+    static func outcome(
+        _ message: MIDI1Semantic, in state: MIDI1PerformanceState
+    ) -> Result<MIDI1StateUpdate, MIDI1StateRefusal> {
+        var copy = state
+        return Result { () throws(MIDI1StateRefusal) in try copy.apply(message) }
+    }
+
+    /// Every live path that changes the selection or the kind, including both that leave the kind nil.
+    @Test
+    func liveSelectionPathsRoundTrip() throws {
+        let open = try #require(MIDI1StatePolicy(nrpnNullDeselects: false))
+        let paths: [(MIDI1StatePolicy, [(UInt8, UInt8)])] = [
+            (.standard, []),
+            (.standard, [(101, 0), (100, 1), (121, 0)]),
+            (.standard, [(99, 1), (121, 0), (98, 2)]),
+            (.standard, [(101, 0), (100, 1), (101, 127), (100, 127)]),
+            (.standard, [(99, 127), (98, 127)]),
+            (open, [(99, 127), (98, 127)]),
+            (.standard, [(101, 0)]),
+            (.standard, [(99, 3), (98, 4), (101, 0), (100, 1)]),
+            (.standard, [(101, 0), (100, 1), (98, 5)])
+        ]
+        for (policy, controls) in paths {
+            let live = try Fixture.state(controls.map { Fixture.control($0.0, $0.1) }, policy: policy)
+            let restored = try MIDI1PerformanceState(snapshot: live.snapshot)
+            #expect(restored == live)
+            for message in Self.dataEntry {
+                #expect(Self.outcome(message, in: restored) == Self.outcome(message, in: live))
+            }
+        }
+    }
+
+    /// A restore is accepted exactly when a live replay reaches the same selector state, and then behaves the same.
+    @Test
+    func selectorRestoresMatchLiveStates() throws {
+        let selectorBytes: [[UInt8]] = [
+            [127, 127, 127, 127], [127, 127, 1, 0], [4, 3, 127, 127], [0, 0, 0, 0], [127, 127, 127, 0]
+        ]
+        for kind in [nil, MIDI1ParameterKind.registered, .nonRegistered] {
+            for bytes in selectorBytes {
+                var snapshot = MIDI1PerformanceState().snapshot
+                snapshot.channels[0].activeParameterKind = kind
+                snapshot.channels[0].controllers.replaceSubrange(98...101, with: bytes)
+                let nrpn = [(UInt8(99), bytes[1]), (98, bytes[0])]
+                let rpn = [(UInt8(101), bytes[3]), (100, bytes[2])]
+                let replay: [(UInt8, UInt8)]? = switch kind {
+                case nil: bytes.allSatisfy { $0 == 127 } ? [] : nil
+                case .registered: nrpn + rpn
+                case .nonRegistered: rpn + nrpn
+                }
+                let restored = try? MIDI1PerformanceState(snapshot: snapshot)
+                #expect((restored != nil) == (replay != nil))
+                if replay == nil {
+                    #expect(throws: MIDI1StateRefusal.invalidSnapshot(.parameters)) {
+                        try MIDI1PerformanceState(snapshot: snapshot)
+                    }
+                }
+                guard let restored, let replay else { continue }
+                let live = try Fixture.state(replay.map { Fixture.control($0.0, $0.1) })
+                #expect(restored == live)
+                for message in Self.dataEntry {
+                    #expect(Self.outcome(message, in: restored) == Self.outcome(message, in: live))
+                }
+            }
+        }
     }
 
     @Test(arguments: MIDI1SnapshotCorruption.allCases)

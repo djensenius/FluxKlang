@@ -246,6 +246,11 @@ extension MIDI1ChannelState {
         let program = snapshot.program.map { [$0.bankMSB, $0.bankLSB, $0.program] } ?? []
         try require(program.allSatisfy { $0 < 0x80 }, .program)
         try require(Self.validParameters(snapshot.parameters, policy: policy), .parameters)
+        // Only power-up and Reset All Controllers leave no kind, and both leave every selector byte at 127.
+        // With a kind, any selector bytes are reachable and the selected number is derived from them.
+        if snapshot.activeParameterKind == nil {
+            try require(controllers[98...101].allSatisfy { $0 == 0x7F }, .parameters)
+        }
         if let null = snapshot.parameters.first(where: { $0.number.isNullFunction(policy: policy) }) {
             throw .invalidSnapshot(.nullParameter(channel: channel, number: null.number))
         }
