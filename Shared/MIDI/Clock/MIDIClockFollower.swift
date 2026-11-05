@@ -10,9 +10,10 @@
 //  Clocks sharing one host time are valid and are ordinary pulses. The tempo
 //  estimator measures the span of its timestamp window, so batched or late
 //  delivery only costs an endpoint error of (maximum lag) / window. A window
-//  whose halves disagree by more than 4 x (maximum lag) / window holds the last
-//  estimate, and while locked the estimate follows gradual ramps. One absolute
-//  dropout bound governs both arriving gaps and the silence check.
+//  whose halves disagree by more than the lag allows holds the last
+//  estimate, and while locked the estimate follows gradual ramps. One dropout
+//  timeout, widened for endpoint lag, governs both arriving gaps and the
+//  silence check.
 //
 
 /// What a received clock message did to the follower.

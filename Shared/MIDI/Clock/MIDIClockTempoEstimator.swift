@@ -15,15 +15,17 @@
 //  whose span is zero has no estimate and never locks.
 //
 //  Consistency gate: a source may stamp a pulse up to L pulses late (L = 2 by
-//  default). Each half of a full window then errs by at most L / (W / 2) of the
-//  period, so the per-pulse periods of the older and newer halves may differ by
-//  at most g = 4L / W of the window estimate (1/3 for W = 24, L = 2). The gate
-//  is computed from the configured W and L. A window that fails it holds: it
+//  default). Halves of n1 = W / 2 and n2 = W - n1 intervals then err by at most
+//  L / n1 and L / n2 of the period, so their per-pulse periods may differ by at
+//  most L (1 / n1 + 1 / n2) of the window estimate: g = 4L / W for even W (1/3
+//  for W = 24, L = 2). Measuring the period from the window's own span S keeps
+//  the bound exact at every lag vertex, so a lag of at most L always passes. The
+//  gate is computed from the configured W and L. A window that fails it holds: it
 //  never locks, and while locked it changes neither the reported estimate nor
 //  the outlier run. A failing gate alone never reports the source lost.
 //
 //  Lock: acquisition locks once the window spans W intervals and passes the
-//  gate. While locked, a gate-passing window estimate beyond g of the tracking
+//  gate. While locked, a gate-passing window estimate beyond 4L / W of the tracking
 //  reference is an outlier and is not reported; any other gate-passing
 //  estimate is reported and becomes the reference, so ramps of at most a few
 //  percent per pulse are followed. 24 consecutive outliers report the source
@@ -35,11 +37,18 @@
 //  414,000 us per quarter over six pulses) and is then held while the gate
 //  fails, until the run reports the source lost and it relocks.
 //
-//  Dropout: one absolute bound, 4x the window period clamped to 50...500 ms
-//  (500 ms before 6 intervals with a positive span), governs both an arriving
-//  gap and the elapsed-time silence check in `poll`; neither is scaled by
-//  batching. A dropout resets the window. A source that batches a whole beat
-//  behind a silence longer than the bound is therefore treated as lost, by design.
+//  Dropout: one timeout governs both an arriving gap and the elapsed-time
+//  silence check in `poll`; neither is scaled by batching. Endpoint lag can only
+//  shorten a window of n intervals: its span T >= (n - L) P, so P <= T / (n - L).
+//  The timeout is 4 x T / (n - L), clamped to 50...500 ms and rounded up to whole
+//  host ticks, so lag never makes it shorter than 4P while one lagged gap is at
+//  most (L + 1) P <= 3P. Before 6 intervals with a positive span there is no
+//  window period and the timeout is the 500 ms ceiling (n - L >= 4 whenever a
+//  period exists, since n >= 6 and L <= 2). With lag it is at most
+//  4 (n + L) / (n - L) P: 4.73P for a full W = 24 window, 8P for a 6-interval
+//  window (W = 6 or early acquisition), within the clamp. A dropout resets the
+//  window. A source that batches a whole beat behind a silence longer than the
+//  timeout is therefore treated as lost, by design.
 //
 
 /// A tempo measured from the accepted window, clamped to the `TempoSegment` range.
@@ -109,7 +118,9 @@ struct MIDIClockTempoEstimator: Sendable {
     private var reported: Period?
 
     /// `maximumLagPulses` is limited to 1...2: a lag of L pulses can stretch one arriving gap to (L + 1)
-    /// periods, which must stay below the fixed 4x dropout bound, so L >= 3 would report false dropouts.
+    /// periods, which must stay below the 4x dropout bound, so L >= 3 would report false dropouts.
+    /// `windowIntervals` >= 6 keeps n - L >= 4 for every window period and W >= 2L, which the gate and
+    /// outlier band need to admit any lag up to L.
     init(timebase: HostTimebase, windowIntervals: Int = defaultWindowIntervals,
          maximumLagPulses: Int = defaultMaximumLagPulses) throws(MIDIClockError) {
         guard timebase.numer > 0, timebase.denom > 0 else { throw .invalidTimebase }
@@ -168,16 +179,23 @@ struct MIDIClockTempoEstimator: Sendable {
         return wasLocked ? .lost(lastPulse: lastPulse) : nil
     }
 
-    /// Whether `gap` host ticks exceed 4x the window period clamped to 50...500 ms
-    /// (500 ms without a window period).
+    /// Whether `gap` host ticks exceed the shared arrival and `poll` timeout.
     func isDropout(gap: UInt64) -> Bool {
-        let gapNanos = Int128(gap) * Int128(timebase.numer)
-        guard let mean = windowPeriod else { return gapNanos > Self.maximumDropoutNanos * Int128(timebase.denom) }
-        let scale = Int128(mean.intervals) * Int128(timebase.denom)
+        Int128(gap) > dropoutTicks
+    }
+
+    /// The timeout in host ticks: 4x the lag-tolerant period bound T / (n - L) of the window's n intervals
+    /// spanning T, clamped to 50...500 ms and rounded up (the 500 ms ceiling without a window period).
+    private var dropoutTicks: Int128 {
+        let numer = Int128(timebase.numer)
+        let denom = Int128(timebase.denom)
+        guard let mean = windowPeriod else { return ExactMath.ceilDiv(Self.maximumDropoutNanos * denom, numer) }
+        let lagFree = Int128(mean.intervals - maximumLagPulses)
+        let scale = lagFree * denom
         let lower = Self.minimumDropoutNanos * scale
         let upper = Self.maximumDropoutNanos * scale
-        let threshold = min(max(Self.dropoutMeanMultiple * Int128(mean.span) * Int128(timebase.numer), lower), upper)
-        return gapNanos * Int128(mean.intervals) > threshold
+        let threshold = min(max(Self.dropoutMeanMultiple * Int128(mean.span) * numer, lower), upper)
+        return ExactMath.ceilDiv(threshold, lagFree * numer)
     }
 
     private mutating func acquire() -> MIDIClockLockEvent? {
@@ -215,8 +233,8 @@ struct MIDIClockTempoEstimator: Sendable {
         return period(from: 0, to: count - 1)
     }
 
-    /// The full window's period when its halves' per-pulse periods differ by at most 4L / W of it:
-    /// |s1 / n1 - s2 / n2| <= (4L / W) * S / W, cross-multiplied into exact integers.
+    /// The full window's period when its halves' per-pulse periods differ by at most L (1 / n1 + 1 / n2) of it:
+    /// |s1 / n1 - s2 / n2| <= L * S / (n1 * n2), cross-multiplied into exact integers.
     private var consistentWindowPeriod: Period? {
         guard count - 1 == windowIntervals, let whole = period(from: 0, to: windowIntervals) else { return nil }
         let middle = windowIntervals / 2
@@ -224,9 +242,8 @@ struct MIDIClockTempoEstimator: Sendable {
         let newer = Int128(windowIntervals - middle)
         let olderSpan = Int128(stamp(middle) - stamp(0))
         let newerSpan = Int128(stamp(windowIntervals) - stamp(middle))
-        let window = Int128(windowIntervals)
-        let difference = abs(olderSpan * newer - newerSpan * older) * window * window
-        return difference <= 4 * Int128(maximumLagPulses) * Int128(whole.span) * older * newer ? whole : nil
+        let difference = abs(olderSpan * newer - newerSpan * older)
+        return difference <= Int128(maximumLagPulses) * Int128(whole.span) ? whole : nil
     }
 
     private func period(from first: Int, to last: Int) -> Period? {
@@ -235,7 +252,8 @@ struct MIDIClockTempoEstimator: Sendable {
         return Period(span: span, intervals: last - first)
     }
 
-    /// Beyond 4L / W of the per-pulse `reference`, the same tolerance as the gate.
+    /// Beyond 4L / W of the per-pulse `reference` (the gate tolerance for even W). Lagged estimates differ
+    /// by at most 2L / (W - L) of each other, within the band whenever W >= 2L.
     private func isOutlier(_ period: Period, against reference: Period) -> Bool {
         let difference = abs(Int128(period.span) * Int128(reference.intervals)
             - Int128(reference.span) * Int128(period.intervals))

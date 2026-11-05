@@ -63,6 +63,14 @@ struct MIDIClockTempoEstimatorTests {
         return intervals
     }
 
+    /// Pulse `i` stamped at `i * period + lag[i % 7]`, the lag pattern from the Copilot review of #327.
+    private static func lagged(count: Int) -> [UInt64] {
+        let lags: [UInt64] = [40_000_000, 20_000_000, 0, 0, 0, 0, 0]
+        return (1..<count).map { index in
+            UInt64(index) * period + lags[index % 7] - UInt64(index - 1) * period - lags[(index - 1) % 7]
+        }
+    }
+
     @Test
     func locksOnceTheWindowSpansItsIntervals() throws {
         var estimator = try MIDIClockTempoEstimator(timebase: Self.nanos)
@@ -256,7 +264,7 @@ struct MIDIClockTempoEstimatorTests {
 
         var running = try Self.locked(at: Self.period)
         let last = try #require(running.lastPulse)
-        for (gap, lost) in [(UInt64(80_000_000), false), (80_000_001, true), (24 * Self.period, true)] {
+        for (gap, lost) in [(UInt64(87_272_728), false), (87_272_729, true), (24 * Self.period, true)] {
             var arriving = running
             var polled = running
             let expected: [MIDIClockLockEvent] = lost ? [.lost(lastPulse: last)] : []
@@ -279,7 +287,8 @@ struct MIDIClockTempoEstimatorTests {
 
     @Test
     func dropoutBoundIsFourMeansClampedToFiftyAndFiveHundredMilliseconds() throws {
-        for (interval, threshold) in [(UInt64(2_500_000), UInt64(50_000_000)), (Self.period, 80_000_000),
+        // 4 x T / (W - L) rounded up: 4 x 480 ms / 22 = 87.2727... ms for a clean 20 ms window.
+        for (interval, threshold) in [(UInt64(2_500_000), UInt64(50_000_000)), (Self.period, 87_272_728),
                                       (130_000_000, 500_000_000)] {
             var estimator = try Self.locked(at: interval)
             let last = try #require(estimator.lastPulse)
@@ -311,7 +320,7 @@ struct MIDIClockTempoEstimatorTests {
         try Self.pulse(&estimator, intervals: Array(repeating: Self.period, count: 5))
         #expect(!estimator.isDropout(gap: 500_000_000) && estimator.isDropout(gap: 500_000_001))
         try Self.pulse(&estimator, intervals: [Self.period])
-        #expect(!estimator.isDropout(gap: 80_000_000) && estimator.isDropout(gap: 80_000_001))
+        #expect(!estimator.isDropout(gap: 120_000_000) && estimator.isDropout(gap: 120_000_001))
     }
 
     @Test
@@ -366,5 +375,58 @@ struct MIDIClockTempoEstimatorTests {
         var slow = try MIDIClockTempoEstimator(timebase: HostTimebase(numer: .max, denom: 1))
         try Self.pulse(&slow, from: 0, intervals: [1, .max - 1])
         #expect(slow.lock == .acquiring(goodIntervals: 0))
+    }
+
+    @Test(arguments: [24, 6])
+    func lagWithinTwoPulsesNeverTimesOut(window: Int) throws {
+        var estimator = try MIDIClockTempoEstimator(timebase: Self.nanos, windowIntervals: window)
+        var host: UInt64 = 40_000_000
+        _ = try estimator.observePulse(at: HostStamp(ticks: host))
+        var events: [MIDIClockLockEvent] = []
+        var acquired = 0
+        for interval in Self.lagged(count: 701) {
+            #expect(try estimator.poll(now: HostStamp(ticks: host + interval)) == nil)
+            host += interval
+            if let event = try estimator.observePulse(at: HostStamp(ticks: host)) { events.append(event) }
+            if case .acquiring(let good) = estimator.lock {
+                #expect(good > acquired && events.isEmpty)
+                acquired = good
+            } else {
+                #expect(estimator.lock == .locked)
+            }
+        }
+        #expect(events.count == 1 && events.first?.bumpReason == nil && estimator.lock == .locked)
+        // The window's upper period bound is at most (n + L) / (n - L) P, so a real silence is caught by then.
+        let bound: UInt64 = window == 24 ? 94_545_456 : 160_000_001
+        let last = try #require(estimator.lastPulse)
+        var arriving = estimator
+        #expect(try Self.pulse(&arriving, intervals: [bound]) == [.lost(lastPulse: last)])
+        #expect(try estimator.poll(now: HostStamp(ticks: last.ticks + bound)) == .lost(lastPulse: last))
+    }
+
+    @Test
+    func aSixIntervalWindowTimesOutAtFourUpperBoundPeriods() throws {
+        var estimator = try MIDIClockTempoEstimator(timebase: Self.nanos, windowIntervals: 6)
+        try Self.pulse(&estimator, intervals: Array(repeating: Self.period, count: 6))
+        let last = try #require(estimator.lastPulse)
+        // 4 x 120 ms / (6 - 2) = 120 ms.
+        for (gap, lost) in [(UInt64(120_000_000), false), (120_000_001, true)] {
+            var arriving = estimator
+            var polled = estimator
+            let expected: [MIDIClockLockEvent] = lost ? [.lost(lastPulse: last)] : []
+            #expect(try Self.pulse(&arriving, intervals: [gap]) == expected)
+            #expect(try polled.poll(now: HostStamp(ticks: last.ticks + gap)) == expected.first)
+        }
+    }
+
+    @Test
+    func anOddWindowGateAdmitsTheLagBoundAtUnequalHalves() throws {
+        // W = 7, L = 1: the oldest and newest pulses each one period late; halves of 3 and 4 intervals.
+        let gaps: [UInt64] = [0] + Array(repeating: Self.period, count: 5)
+        var edge = try MIDIClockTempoEstimator(timebase: Self.nanos, windowIntervals: 7, maximumLagPulses: 1)
+        #expect(try Self.pulse(&edge, from: Self.period, intervals: gaps + [40_000_000]) == [.acquired(Self.trueTempo)])
+        var beyond = try MIDIClockTempoEstimator(timebase: Self.nanos, windowIntervals: 7, maximumLagPulses: 1)
+        #expect(try Self.pulse(&beyond, from: Self.period, intervals: gaps + [40_000_001]).isEmpty)
+        #expect(beyond.lock == .acquiring(goodIntervals: 7))
     }
 }
