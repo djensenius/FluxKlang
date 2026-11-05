@@ -26,7 +26,8 @@ import Foundation
 /// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
-/// matched by prefix, and a match redacts the rest of the label.
+/// matched by a match-form prefix, and a match redacts the rest of the label. One
+/// with no safe prefix (a single giant grapheme) withholds the whole label.
 ///
 /// Scanning stops once `UntrustedTextSanitizer.scanLimit(maximumBytes:withheld:)`
 /// match-form scalars have been kept. Removed scalars and joiners are read but not

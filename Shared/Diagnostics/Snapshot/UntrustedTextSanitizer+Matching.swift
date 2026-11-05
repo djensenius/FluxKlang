@@ -41,8 +41,12 @@ extension UntrustedTextSanitizer {
     static let maximumWithheldBytes = 1_024
 
     /// A withheld string in match form. When `isPrefix` is true the source was
-    /// longer than `maximumWithheldBytes` and this is a safe prefix of it.
+    /// longer than `maximumWithheldBytes` and this is a safe prefix of it. An empty
+    /// prefix term (`failClosed`) stands for a long string with no safe prefix and
+    /// withholds every label it is applied to.
     struct WithheldTerm: Hashable, Sendable {
+        static let failClosed = WithheldTerm(text: "", isPrefix: true)
+
         let text: String
         let isPrefix: Bool
         /// `text` case-folded scalar by scalar (`fold`), the form that is matched.
@@ -58,22 +62,26 @@ extension UntrustedTextSanitizer {
     /// Prepares a withheld string like a label (filtering, match form), then trims
     /// surrounding whitespace. No display cap applies: graphemes are not capped, so
     /// a term matches the uncapped label it came from. A string over the matching
-    /// limits fails closed: it is cut to `maximumWithheldBytes`, loses its last
-    /// grapheme (which the cut may have split) and becomes a prefix term, which
-    /// redacts from its first match to the end of the label.
-    /// Returns nil when fewer than `minimumRedactedBytes` remain.
+    /// limits becomes a prefix term, which redacts from its first match to the end
+    /// of the label. The prefix is cut from the match form (joiners already removed,
+    /// so an emoji family is many short characters, not one huge grapheme) to
+    /// `maximumWithheldBytes` on a match-form character boundary, and loses its last
+    /// character, which the scan limit may have split. If fewer than
+    /// `minimumRedactedBytes` remain (one giant grapheme), the term is
+    /// `WithheldTerm.failClosed`: it is never dropped.
+    /// Returns nil only for a complete string shorter than `minimumRedactedBytes`.
     static func withheldTerm(_ raw: String) -> WithheldTerm? {
         let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes)
-        var display = filtered.text
+        var text = matchForm(filtered.text)
         var isPrefix = !filtered.isComplete
-        if display.utf8.count > maximumWithheldBytes {
-            display = truncate(display, maximumBytes: maximumWithheldBytes).text
+        if text.utf8.count > maximumWithheldBytes {
+            text = truncate(text, maximumBytes: maximumWithheldBytes).text
             isPrefix = true
         }
-        if isPrefix, !display.isEmpty { display.removeLast() }
-        let text = matchForm(display)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.utf8.count >= minimumRedactedBytes ? WithheldTerm(text: text, isPrefix: isPrefix) : nil
+        if isPrefix, !text.isEmpty { text.removeLast() }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.utf8.count >= minimumRedactedBytes else { return isPrefix ? .failClosed : nil }
+        return WithheldTerm(text: text, isPrefix: isPrefix)
     }
 
     /// The distinct terms for `raw` strings, sorted for determinism.
@@ -122,6 +130,7 @@ extension UntrustedTextSanitizer {
     }
 
     /// Scalar ranges of `text` to withhold:
+    /// - all of it when a term is `WithheldTerm.failClosed`;
     /// - every occurrence of every term, overlapping ones included, found on the
     ///   case-folded text and mapped back through the fold's source index (a match
     ///   that starts or ends inside one scalar's folding covers that whole scalar);
@@ -140,6 +149,7 @@ extension UntrustedTextSanitizer {
     static func withheldRanges(
         in text: [Unicode.Scalar], terms: [WithheldTerm], scanIsComplete: Bool
     ) -> [Range<Int>] {
+        if terms.contains(.failClosed), !text.isEmpty { return [0..<text.count] }
         var folded: [Unicode.Scalar] = []
         var source: [Int] = []
         for (index, scalar) in text.enumerated() {
@@ -185,16 +195,33 @@ extension UntrustedTextSanitizer {
         return merged
     }
 
-    /// Full case folding, approximated per scalar as the lowercase mapping of the
-    /// uppercase mapping: `ß`, `SS` and `ss` fold to `ss`; `ς`, `σ` and `Σ` to `σ`.
-    /// Lengths may change, which is why matches are mapped back through a source index.
+    /// Full case folding per scalar, the same function for terms and labels: the
+    /// lowercase mapping of the uppercase mapping, repeated to a fixed point (at most
+    /// `maximumFoldRounds`). One round is not enough: `ẞ` gives `ß`, and only the
+    /// second round gives `ss`. Lengths may change, which is why matches are mapped
+    /// back through a source index.
+    ///
+    /// Checked against CaseFolding.txt (statuses C and F) over every scalar the
+    /// toolchain assigns: two scalars fold equal here exactly when they do under C+F,
+    /// except that dotless `ı` also folds with `i` (over-redaction only). Scalars the
+    /// toolchain leaves unassigned are removed by `filterScalars` before matching.
+    /// `String.folding(options: .caseInsensitive)` was not used: per character it
+    /// leaves U+1C80–U+1C88 unfolded, which C+F folds to Cyrillic lowercase.
     static func fold(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
         if scalar.isASCII {
             let value = UInt8(scalar.value)
             return [Unicode.Scalar((65...90).contains(value) ? value + 32 : value)]
         }
-        return scalar.properties.uppercaseMapping.unicodeScalars.flatMap { upper in
-            upper.properties.lowercaseMapping.unicodeScalars
+        var folding = [scalar]
+        for _ in 0..<maximumFoldRounds {
+            let next = folding.flatMap(\.properties.uppercaseMapping.unicodeScalars)
+                .flatMap(\.properties.lowercaseMapping.unicodeScalars)
+            if next == folding { break }
+            folding = next
         }
+        return folding
     }
+
+    /// Every scalar reaches its fixed point within two rounds; three leaves a margin.
+    static let maximumFoldRounds = 3
 }
