@@ -145,8 +145,72 @@ struct PeerSyncTests {
         let late = try host.step(3, gain: 0.3)
         _ = controller.receive(PeerSyncDelta(session: late.session, sequence: Fixture.sequence(3),
                                              revisions: late.revisions, updates: late.updates, removals: late.removals))
-        #expect(controller.receive(early)
-            == .refused(.snapshotBehind(current: Fixture.sequence(1), found: .origin)))
+        #expect(controller.receive(early) == .resyncRequested(PeerResyncRequest(
+            session: host.session, lastApplied: Fixture.sequence(1),
+            reason: .snapshotRefused(.snapshotBehind(current: Fixture.sequence(3), found: .origin)))))
+    }
+
+    @Test func snapshotLoweringARevisionRelatchesASyncedReceiver() {
+        var controller = PeerSyncReceiver(session: Fixture.session())
+        #expect(controller.receive(snapshot(5, parameter: 5)) == .applied(Fixture.sequence(5)))
+        let request = PeerResyncRequest(session: Fixture.session(), lastApplied: Fixture.sequence(5),
+                                        reason: .snapshotRefused(.revisionRegressed))
+        #expect(controller.receive(snapshot(6, parameter: 3, gain: 0.9)) == .resyncRequested(request))
+        #expect(controller.phase == .resyncRequired(request))
+        #expect(controller.state == nil)
+        #expect(controller.revisionFloor == Fixture.revisions(parameter: 5))
+        #expect(controller.highWaterMark == Fixture.sequence(5))
+        #expect(controller.receive(snapshot(6, parameter: 3, gain: 0.9)) == .resyncRequested(request))
+        #expect(controller.receive(snapshot(7, parameter: 5)) == .applied(Fixture.sequence(7)))
+        #expect(controller.state?.values == [Fixture.gain: Fixture.value(0.5)])
+        #expect(controller.state?.revisions == Fixture.revisions(parameter: 5))
+    }
+
+    @Test func revisionFloorSurvivesTheResyncLatch() {
+        var controller = PeerSyncReceiver(session: Fixture.session())
+        _ = controller.receive(snapshot(5, parameter: 5))
+        let gap = PeerResyncRequest(session: Fixture.session(), lastApplied: Fixture.sequence(5),
+                                    reason: .gap(expected: Fixture.sequence(6), found: Fixture.sequence(7)))
+        #expect(controller.receive(delta(7, parameter: 7)) == .resyncRequested(gap))
+        #expect(controller.revisionFloor == Fixture.revisions(parameter: 5))
+        let refused = PeerResyncRequest(session: Fixture.session(), lastApplied: Fixture.sequence(5),
+                                        reason: .snapshotRefused(.revisionRegressed))
+        #expect(controller.receive(snapshot(8, parameter: 3)) == .resyncRequested(refused))
+        #expect(controller.phase == .resyncRequired(refused))
+        #expect(controller.state == nil)
+        #expect(controller.receive(snapshot(8, parameter: 8)) == .applied(Fixture.sequence(8)))
+    }
+
+    @Test func revisionFloorFollowsAppliedDeltas() {
+        var controller = PeerSyncReceiver(session: Fixture.session())
+        _ = controller.receive(snapshot(0, parameter: 0))
+        #expect(controller.receive(delta(1, parameter: 4)) == .applied(Fixture.sequence(1)))
+        _ = controller.receive(delta(3, parameter: 5))
+        let refused = PeerResyncRequest(session: Fixture.session(), lastApplied: Fixture.sequence(1),
+                                        reason: .snapshotRefused(.revisionRegressed))
+        #expect(controller.receive(snapshot(3, parameter: 2)) == .resyncRequested(refused))
+        #expect(controller.state == nil)
+    }
+
+    @Test func staleRecoverySnapshotKeepsTheResyncLatch() throws {
+        var host = try publisher()
+        var controller = PeerSyncReceiver(session: host.session)
+        #expect(controller.receive(host.snapshot()) == .applied(.origin))
+        _ = try host.step(1, gain: 0.1)
+        let second = try host.step(2, gain: 0.2)
+        let stale = host.snapshot()
+        let third = try host.step(3, gain: 0.3)
+        let gap = PeerResyncRequest(session: host.session, lastApplied: .origin,
+                                    reason: .gap(expected: Fixture.sequence(1), found: Fixture.sequence(2)))
+        #expect(controller.receive(second) == .resyncRequested(gap))
+        #expect(controller.receive(third) == .discardedAwaitingSnapshot(Fixture.sequence(3)))
+        #expect(controller.highWaterMark == Fixture.sequence(3))
+        let behind = PeerResyncRequest(session: host.session, lastApplied: .origin, reason: .snapshotRefused(
+            .snapshotBehind(current: Fixture.sequence(3), found: Fixture.sequence(2))))
+        #expect(controller.receive(stale) == .resyncRequested(behind))
+        #expect(controller.phase == .resyncRequired(behind))
+        #expect(controller.receive(host.snapshot()) == .applied(Fixture.sequence(3)))
+        #expect(controller.state == host.state)
     }
 
     @Test func oversizeSnapshotsAndDeltasAreRefused() throws {
@@ -298,4 +362,9 @@ private func values(_ count: Int) -> [ParameterID: ParameterValue] {
 private func snapshot(values count: Int) -> PeerSyncSnapshot {
     PeerSyncSnapshot(session: Fixture.session(), sequence: .origin, revisions: Fixture.revisions(),
                      values: values(count))
+}
+
+private func snapshot(_ sequence: Int, parameter: Int, gain: Double = 0.5) -> PeerSyncSnapshot {
+    PeerSyncSnapshot(session: Fixture.session(), sequence: Fixture.sequence(sequence),
+                     revisions: Fixture.revisions(parameter: parameter), values: [Fixture.gain: Fixture.value(gain)])
 }
