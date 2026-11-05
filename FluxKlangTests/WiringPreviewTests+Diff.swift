@@ -116,6 +116,11 @@ struct WiringReviewDiffTests {
         nan.nodes[0].position = GraphPoint(x: .nan, y: 0)
         #expect(try Self.diff([.disconnect(Fixture.id("edg.echo-verb"))], on: nan).changes
             == [.removedEdge(Self.edge("edg.echo-verb"))])
+        // Nor is an untouched edge whose record never equals itself (NaN feedback gain).
+        let feedback = try #require(nan.edges.firstIndex { $0.id.rawValue == "edg.delay-verb-fb" })
+        nan.edges[feedback].feedback?.gainCeilingDb = .nan
+        #expect(try Self.diff([.disconnect(Fixture.id("edg.echo-verb"))], on: nan).changes
+            == [.removedEdge(Self.edge("edg.echo-verb"))])
     }
 
     @Test func eachChangeAppearsExactlyOnce() throws {
@@ -128,6 +133,59 @@ struct WiringReviewDiffTests {
         let moveThenRemove = [GraphEdit.moveNode(delay.id, to: nil), .removeNode(delay.id)]
         #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.contradictoryNode(delay.id))) {
             try Self.diff(moveThenRemove)
+        }
+        // A node ID never survives with a new record: removing and re-adding it is contradictory.
+        var rebuilt = delay
+        rebuilt.ports = [Fixture.audio("in", .input, 1)]
+        #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.contradictoryNode(delay.id))) {
+            try Self.diff([.removeNode(delay.id), .addNode(rebuilt)])
+        }
+    }
+
+    /// Copilot round 1: removing nod.echo cascades edg.echo-verb, and the draft then connects that ID again on a
+    /// new route. Both routes are rows. The other ways to reconnect the ID (connecting first, a plain reconnect
+    /// without a node removal, and the old route back) do not apply, so no draft keeps an ID with a hidden route.
+    @Test func cascadeRemovedEdgeReconnectedUnderItsIDShowsBothRoutes() throws {
+        let echo = try #require(Fixture.graph.node(Fixture.id("nod.echo")))
+        let old = Self.edge("edg.echo-verb")
+        let rerouted = Fixture.edge("edg.echo-verb", Fixture.address("nod.keys", "out"),
+                                    Fixture.address("nod.mains", "in"))
+        let diff = try Self.diff([.removeNode(echo.id), .connect(rerouted)])
+        #expect(diff.groups.map(\.kind) == [.removedNode, .addedEdge, .removedEdge])
+        #expect(diff.changes == [.removedNode(echo), .addedEdge(rerouted), .removedEdge(old)])
+        #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.edgeExists(old.id))) {
+            try Self.diff([.connect(rerouted), .removeNode(echo.id)])
+        }
+        #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.contradictoryEdge(old.id))) {
+            try Self.diff([.disconnect(old.id), .connect(rerouted)])
+        }
+        #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.contradictoryEdge(old.id))) {
+            try Self.diff([.disconnect(old.id), .connect(old)])
+        }
+        #expect(throws: WiringPreviewRefusal.draftDoesNotApply(.contradictoryNode(echo.id))) {
+            try Self.diff([.removeNode(echo.id), .connect(old)])
+        }
+    }
+
+    /// A reconnect that keeps one endpoint is still a new route, in any applicable edit order; the removed node's
+    /// other edge is only removed.
+    @Test func reconnectKeepingOneEndpointShowsBothRoutes() throws {
+        let delay = try #require(Fixture.graph.node(Fixture.id("nod.delay")))
+        let mains = Fixture.id("nod.mains") as NodeID
+        let rerouted = Fixture.edge("edg.verb-delay", Fixture.address("nod.verb", "out"),
+                                    Fixture.address("nod.echo", "in"))
+        let expected: [WiringReviewChange] = [
+            .movedNode(mains, from: GraphPoint(x: 3, y: 0), to: Self.mainsAt), .removedNode(delay),
+            .addedEdge(rerouted), .removedEdge(Self.edge("edg.delay-verb-fb")),
+            .removedEdge(Self.edge("edg.verb-delay"))
+        ]
+        let move = GraphEdit.moveNode(mains, to: Self.mainsAt)
+        let orders: [[GraphEdit]] = [
+            [.removeNode(delay.id), .connect(rerouted), move], [move, .removeNode(delay.id), .connect(rerouted)],
+            [.removeNode(delay.id), move, .connect(rerouted)]
+        ]
+        for edits in orders {
+            #expect(try Self.diff(edits).changes == expected)
         }
     }
 

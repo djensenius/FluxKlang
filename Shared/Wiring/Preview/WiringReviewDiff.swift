@@ -6,7 +6,9 @@
 //  It compares the two graphs, not the edit list, so edit order never matters,
 //  every change appears exactly once (edges removed with their node included),
 //  and a draft-added node that was later moved is only "added", at its final
-//  position. Rows are grouped by kind and sorted by ID within each group.
+//  position. An edge ID the draft connects again on a new route (after removing
+//  one of its nodes) is both a removed row (old route) and an added row (new
+//  route). Rows are grouped by kind and sorted by ID within each group.
 //
 
 /// The kind of a review row, in heading order.
@@ -28,9 +30,10 @@ enum WiringReviewChange: Hashable, Sendable {
     case movedNode(NodeID, from: GraphPoint?, to: GraphPoint?)
     /// An active node the draft removes.
     case removedNode(GraphNode)
-    /// An edge the draft adds.
+    /// An edge the draft adds, or the new route of an active edge ID it reconnects.
     case addedEdge(GraphEdge)
-    /// An active edge the draft removes, directly or with one of its nodes.
+    /// An active edge the draft removes, directly or with one of its nodes, or
+    /// the old route of an edge ID it reconnects.
     case removedEdge(GraphEdge)
 
     var kind: WiringReviewChangeKind {
@@ -102,7 +105,10 @@ struct WiringReviewDiff: Hashable, Sendable {
             if case .moveNode(let id, _) = edit { return id }
             return nil
         })
+        let rerouted = reroutedEdges(candidate, before: beforeEdges, draft: draft)
         var changes: [WiringReviewChange] = []
+        // A surviving node differs only in position: removing and re-adding one
+        // node ID is contradictory, and only moveNode changes a node in place.
         for node in candidate.nodes {
             guard let old = before[node.id] else {
                 changes.append(.addedNode(node))
@@ -113,9 +119,29 @@ struct WiringReviewDiff: Hashable, Sendable {
             }
         }
         changes += active.nodes.filter { !afterIDs.contains($0.id) }.map(WiringReviewChange.removedNode)
-        changes += candidate.edges.filter { beforeEdges[$0.id] == nil }.map(WiringReviewChange.addedEdge)
-        changes += active.edges.filter { !afterEdgeIDs.contains($0.id) }.map(WiringReviewChange.removedEdge)
+        changes += candidate.edges.filter { beforeEdges[$0.id] == nil || rerouted.contains($0.id) }
+            .map(WiringReviewChange.addedEdge)
+        changes += active.edges.filter { !afterEdgeIDs.contains($0.id) || rerouted.contains($0.id) }
+            .map(WiringReviewChange.removedEdge)
         return WiringReviewDiff(groups: grouped(changes))
+    }
+
+    /// Active edge IDs that survive with a new record. A draft can connect an
+    /// active edge ID only after removing one of its nodes (disconnecting and
+    /// connecting one ID is contradictory, and no edit changes an edge in place),
+    /// so only connected IDs are compared: an untouched edge whose record never
+    /// equals itself (NaN) is not a row.
+    private static func reroutedEdges(
+        _ candidate: GraphDocument, before: [EdgeID: GraphEdge], draft: DraftEdits
+    ) -> Set<EdgeID> {
+        let connected = Set(draft.edits.compactMap { edit -> EdgeID? in
+            if case .connect(let edge) = edit { return edge.id }
+            return nil
+        })
+        return Set(candidate.edges.compactMap { edge -> EdgeID? in
+            guard connected.contains(edge.id), let old = before[edge.id], old != edge else { return nil }
+            return edge.id
+        })
     }
 
     private static func grouped(_ changes: [WiringReviewChange]) -> [WiringReviewGroup] {
