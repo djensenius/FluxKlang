@@ -229,9 +229,13 @@ enum SpatialCalibrationState: Hashable, Sendable {
 /// A route loss while results, a stop or a draft are shown (including the
 /// loss that stopped a run) is kept in `routeChange`: leaving lands in
 /// unavailable with its reason instead of planned, and a later route
-/// confirmation lands in planned with the confirmed plan.
+/// confirmation lands in planned with the confirmed plan. Only one
+/// confirmation follows a loss: a second `routeConfirmed` is refused with
+/// `illegalTransition` until another `routeLost` is recorded.
 ///
 /// Panic, Safe Mute and device loss go to `stop(_:)`, which never throws.
+/// Outside running and awaitingAuthorization a device-loss stop records
+/// nothing, so hosts must also send `routeLost`.
 ///
 /// Running is reachable only from awaitingAuthorization, with an authorization
 /// whose flow ID, plan and generation all match the current review.
@@ -295,7 +299,9 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
     /// authorization is cancelled to planned (unavailable after a device loss),
     /// and the next review gets a new generation. In any other phase nothing is
     /// playing, so the flow is unchanged; repeating a stop is harmless. Route
-    /// status still arrives as `routeLost`.
+    /// status still arrives as `routeLost`: in results, stopped or draft a
+    /// device-loss stop does not record the loss (and in planned it does not
+    /// leave), so hosts must also send `routeLost` for the loss to count.
     @discardableResult
     mutating func stop(_ reason: SpatialCalibrationStop) -> SpatialCalibrationStopOutcome {
         switch state {
@@ -320,7 +326,8 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
     }
 
     /// Records a route loss (the latest wins), or a confirmation after one,
-    /// while results, a stop or a draft are shown.
+    /// while results, a stop or a draft are shown. A confirmation without a
+    /// loss, or a second one after a restore, is illegal.
     private mutating func noteRoute(_ event: SpatialCalibrationEvent) throws(SpatialCalibrationRefusal) {
         switch (event, routeChange) {
         case let (.routeLost(reason), _):

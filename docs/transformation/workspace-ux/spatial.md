@@ -128,13 +128,26 @@ renormalization, then the trim.
 stateDiagram-v2
   [*] --> Unavailable: device missing (now)
   Unavailable --> Planned: device present + route confirmed
+  Planned --> Unavailable: route lost
   Planned --> AwaitingAuthorization: user reviews outputs, max level, duration
   AwaitingAuthorization --> Running: host authorizes (hazardous)
   AwaitingAuthorization --> Planned: cancel / Panic / Safe Mute
+  AwaitingAuthorization --> Unavailable: device or route lost
   Running --> Results: completed
-  Running --> Stopped: Panic / Safe Mute / device lost
+  Running --> Stopped: Panic / Safe Mute / device or route lost
   Results --> Draft: apply delays and trims as a draft
+  Results --> Planned: discard
+  Results --> Unavailable: discard after a recorded loss
+  Stopped --> Planned: acknowledge
+  Stopped --> Unavailable: acknowledge after a recorded loss
+  Draft --> Planned: commit / discard
+  Draft --> Unavailable: commit / discard after a recorded loss
 ```
+
+The diagram shows phase changes only. Revising a plan, reporting progress, and recording a route loss or
+confirmation while Results, Stopped or Draft are shown keep the phase. "Device lost" is a device-loss stop or
+`routeLost`; "route lost" is `routeLost` alone. A recorded loss is one that stopped the run, or a `routeLost`
+received in Results, Stopped or Draft, with no route confirmation after it.
 
 - No test signal plays without the authorization sheet. There are no automatic tones on launch or reconnect.
 - The model (`SpatialCalibrationFlow`, #116 PL1) has no clock and plays nothing. Route status, elapsed time and
@@ -152,11 +165,14 @@ stateDiagram-v2
 - Panic, Safe Mute and device loss stop a running calibration. While a review awaits authorization they cancel
   it to Planned (Unavailable after a device loss); the next review gets a new generation, so the old
   authorization is refused. Outside Running and AwaitingAuthorization they are idempotent no-ops: they never
-  fail and report that nothing was playing, so Panic can be broadcast without error handling.
+  fail and report that nothing was playing, so Panic can be broadcast without error handling. A device-loss
+  stop there records nothing, so hosts must also send `routeLost` for the loss to move Planned to Unavailable
+  or to be recorded in Results, Stopped or Draft.
 - A route loss while results, a stop or a draft are shown keeps them on screen (a draft can still be committed
   or discarded) and records the loss, as does the device loss that stopped a run. Leaving then lands in
   Unavailable with the loss reason instead of Planned. A route confirmation after the loss clears it, and
-  leaving lands in Planned with the newly confirmed plan.
+  leaving lands in Planned with the newly confirmed plan. Only one confirmation follows a loss: a second
+  confirmation, or one without a loss, is refused as an illegal transition until another `routeLost` arrives.
 - Results are staged as a pending calibration set at the applied generation + 1. Only an explicit commit
   applies them.
 - Provisional policy: the maximum test level is −60…−6 dBFS and each output plays for 0.25…10 s, both
