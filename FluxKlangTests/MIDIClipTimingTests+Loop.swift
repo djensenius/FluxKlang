@@ -309,4 +309,25 @@ struct MIDIClipLoopTests {
         #expect(played.last?.message == Self.off(60))
         #expect(scheduler.soundingCount == 0 && scheduler.stop().isEmpty)
     }
+
+    @Test
+    func onlyControlChangesAreCheckedForHoldAndModeNumbers() throws {
+        // First data bytes 64, 66, 69 and 120...127 in messages other than Control Change are ordinary content.
+        let messages: [MIDI1Semantic] = [
+            .programChange(channel: 1, program: 64), .polyphonicPressure(channel: 1, note: 64, pressure: 69),
+            .channelPressure(channel: 1, pressure: 66), .programChange(channel: 2, program: 69),
+            .programChange(channel: 3, program: 120), .channelPressure(channel: 2, pressure: 127),
+            .polyphonicPressure(channel: 2, note: 121, pressure: 64), .pitchBend(channel: 1, value: 64),
+            .pitchBend(channel: 2, value: 0x3F7F)
+        ]
+        let notes = [UInt8(64), 66, 69, 120, 127].map { Base.note(0, Self.quarter, pitch: $0) }
+        let items = notes + messages.map { MIDIClipItem.event(ticks: Self.quarter / 2, message: $0) }
+        let clip = try MIDIClip.make(lengthTicks: 4 * Self.quarter, items: items)
+        #expect(clip.items == items)
+        let played = try Base.events(try Base.placement(items), 0, 30_000)
+        #expect(played.filter { $0.frame == 12_000 }.map(\.message) == messages)
+        #expect(played.filter { $0.frame == 24_000 }.count == notes.count)
+        // CC 64 itself is still refused (see also holdControllersAreRefusedAtAdmission).
+        #expect(Self.admission(items + [Self.controller(64)]) == .unsupportedMessage(item: items.count))
+    }
 }
