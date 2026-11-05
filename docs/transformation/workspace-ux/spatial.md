@@ -72,6 +72,34 @@ an import result holds at most 64 sources. Decoding re-validates every value and
 **1e-3…2√2** neutral units, or non-finite, is refused with `.invalidBlur`. The upper bound is the plane diagonal; the
 lower bound is policy against degenerate near-zero blur. Imported legacy blur is always 0.30.
 
+### Render planning (M1)
+
+`SpatialRenderer` (`Shared/Spatial/Render/`) is a control-rate planner. It runs off the audio thread and
+allocates; the allocation-free execution path and the mapping to device channels come later. A plan is a gain
+matrix: one row per source channel, in source order, and one column (output) per layout speaker, in layout order.
+Each gain is finite and within 0…1. The pipeline is the neutral DBAP law, then masks, then optional
+renormalization, then the trim.
+
+- **Masks:** a muted speaker, or a speaker that is not soloed while another is, gets exactly 0, and every
+  survivor keeps its law gain. Mute wins over solo, so if every soloed speaker is also muted the output is
+  silent. A speaker whose route is missing on this host is **lost**, which only zeroes it. Masks are capped at
+  128, one mute and one solo per speaker.
+- **Renormalization:** `renormalizeSurvivors` is off by default. When on, it rescales the survivors of a mute
+  or solo by `min(1/√P, 2)`, where P is the survivors' power, so the boost is at most +6.02 dB and never above
+  unit power. Route loss never triggers renormalization.
+- **Calibration:** each speaker has a trim of −60…0 dB (attenuation only) and a delay of 0–50 ms. The delay is
+  rounded half-up to whole frames at a sample rate of 8–384 kHz. A plan reads one applied
+  `SpatialCalibrationSet` and records its non-negative generation. A pending set is staged at exactly the
+  applied generation + 1 and has no effect until `promote` swaps it in whole.
+- **Ramps:** `SpatialGainRamp` interpolates linearly between two plans over 0–48,000 frames. Both plans need
+  identical row sources and identical ordered speaker IDs; a layout reorder or membership change is refused
+  (`columnMismatch`) and needs a fresh plan (a jump). ID-aligned ramps are an M2 follow-up. Frames before 0
+  give the start plan; frames from the duration on (so any frame ≥ 0 of a 0-frame ramp) give the end plan,
+  and no frame yields NaN. Linear amplitude dips in power mid-ramp (to about −3 dB between disjoint speakers)
+  and never rises above the endpoints.
+- **Silence:** any refusal is typed (`SpatialRenderError`), and `planOrSilence` returns all-zero gains of the
+  request's shape alongside the error.
+
 ## Calibration (staged and authorized)
 
 ```mermaid
