@@ -119,7 +119,8 @@ struct ShowCursor: Hashable, Sendable {
     var bounceTicks: UInt64 { storedBounceTicks }
     /// In declaration order.
     var sources: [ShowInputSourceID] { storedSources }
-    /// `nil` only while the setlist is empty at creation.
+    /// `nil` until the first move for a cursor made on an empty setlist. While `nil`, `currentStop` returns `nil`
+    /// if the setlist is live and throws `cursorTargetRemoved(.setlistRemoved)` once it is removed.
     var position: ShowPosition? { storedPosition }
 
     private init(setlist: SetlistID, bounceTicks: UInt64, sources: [ShowInputSourceID], position: ShowPosition?) {

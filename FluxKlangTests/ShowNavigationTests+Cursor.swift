@@ -430,4 +430,33 @@ extension ShowNavigationCursorTests {
         #expect(cursor.position == nil)
         #expect(try cursor.currentStop(in: empty, catalog: rig.catalog) == nil)
     }
+
+    /// A cursor made on an empty setlist stays unpositioned when entries are added: `currentStop` is still `nil`,
+    /// the previous commands refuse with `atStart` and change nothing, and a next command starts at the first entry.
+    @Test
+    func anUnpositionedCursorStartsAtTheFirstEntryOnceItsSetlistGainsEntries() throws {
+        let rig = try Rig()
+        let empty = try rig.library.replacingSetlist(ShowSetlist.make(id: Fix.main, title: "Main"))
+        let created = try Fix.cursor(empty)
+        let grown = try empty.replacingSetlist(#require(rig.library.setlist(Fix.main)))
+        #expect(created.status(in: grown) == .current)
+        #expect(try created.currentStop(in: grown, catalog: rig.catalog) == nil)
+        var cursor = created
+        for command: ShowNavigationCommand in [.previousPart, .previousSong] {
+            let input = ShowNavigationInput(command, source: Fix.foot, sequence: 1, tick: 1)
+            #expect(throws: ShowRefusal.atStart) { try cursor.navigate(input, in: grown, catalog: rig.catalog) }
+        }
+        #expect(cursor == created)
+        let first = ShowPosition(setlist: Fix.main, entry: Fix.entries[0], part: Fix.partID("a1"))
+        for command: ShowNavigationCommand in [.nextSong, .nextPart] {
+            cursor = created
+            let result = try cursor.navigate(ShowNavigationInput(command, source: Fix.foot, sequence: 1, tick: 1),
+                                             in: grown, catalog: rig.catalog)
+            let stop = try #require(try cursor.currentStop(in: grown, catalog: rig.catalog))
+            #expect(result == .moved(stop))
+            #expect(stop.position == first)
+            #expect(stop.song == Fix.songA)
+            #expect(cursor.position == first)
+        }
+    }
 }
