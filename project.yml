@@ -226,9 +226,11 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
-      - path: FluxKlangTests/MetronomeGridTests.swift
-      - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
-      - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
+      - path: FluxKlangTests/MIDIClockMathTests.swift
+      - path: FluxKlangTests/MIDIClockFollowerTests.swift
+      - path: FluxKlangTests/MIDIClockTempoTests.swift
+      - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
+      - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
@@ -248,6 +250,8 @@ targets:
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
       - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ControlHostTruthTests.swift
+      - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
       - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift
