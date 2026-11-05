@@ -9,6 +9,8 @@ enum MIDI1SnapshotField: Equatable, Hashable, Sendable {
     case parameters
     case heldNotes
     case mode
+    /// A stored null-function key (RPN 127/127, or NRPN 127/127 when it deselects), which Data Entry never writes.
+    case nullParameter(channel: UInt8, number: MIDI1ParameterNumber)
 }
 
 /// Every refusal leaves the whole state unchanged. Channels are 1...16.

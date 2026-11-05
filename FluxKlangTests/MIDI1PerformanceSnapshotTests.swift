@@ -10,6 +10,10 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
     case shortPolyPressure, polyPressureValue, pitchBend, channelPressure, program
     case parameterValue, parameterNumber, unsortedParameters, duplicateParameter, parametersOverBound
     case noteNumber, duplicateNote, unsortedNotes, zeroVelocity, notesOverBound, sustainedWithoutPedal, monoChannels
+    case storedRPNNull, storedNRPNNull
+
+    static let rpnNull = MIDI1ParameterNumber(kind: .registered, msb: 127, lsb: 127)
+    static let nrpnNull = MIDI1ParameterNumber(kind: .nonRegistered, msb: 127, lsb: 127)
 
     var field: MIDI1SnapshotField {
         switch self {
@@ -22,7 +26,15 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         case .parameterValue, .parameterNumber, .unsortedParameters, .duplicateParameter, .parametersOverBound:
             .parameters
         case .monoChannels: .mode
-        default: .heldNotes
+        default: nullField ?? .heldNotes
+        }
+    }
+
+    private var nullField: MIDI1SnapshotField? {
+        switch self {
+        case .storedRPNNull: .nullParameter(channel: 1, number: Self.rpnNull)
+        case .storedNRPNNull: .nullParameter(channel: 16, number: Self.nrpnNull)
+        default: nil
         }
     }
 
@@ -31,6 +43,7 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         case .fifteenChannels: snapshot.channels.removeLast()
         case .seventeenChannels: snapshot.channels.append(snapshot.channels[0])
         case .notesOverBound: snapshot.policy = MIDI1StatePolicy(maximumHeldNotes: 2) ?? .standard
+        case .storedNRPNNull: snapshot.channels[15].parameters = [MIDI1ParameterValue(number: Self.nrpnNull, value: 1)]
         case .parametersOverBound: snapshot.policy = MIDI1StatePolicy(maximumParameterValues: 2) ?? .standard
         default: corrupt(&snapshot.channels[0])
         }
@@ -60,7 +73,8 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         .unsortedNotes: { $0.heldNotes.reverse() },
         .zeroVelocity: { $0.heldNotes[0] = MIDI1HeldNote(note: $0.heldNotes[0].note, velocity: 0, phase: .keyDown) },
         .sustainedWithoutPedal: { $0.controllers[64] = 63 },
-        .monoChannels: { $0.mode.voices = .mono(channels: 17) }
+        .monoChannels: { $0.mode.voices = .mono(channels: 17) },
+        .storedRPNNull: { $0.parameters.insert(MIDI1ParameterValue(number: rpnNull, value: 0), at: 2) }
     ]
 
     private func corrupt(_ channel: inout MIDI1ChannelSnapshot) {
@@ -118,6 +132,41 @@ struct MIDI1PerformanceSnapshotTests {
         let bounded = try #require(MIDI1StatePolicy(maximumHeldNotes: 3, maximumParameterValues: 3))
         let atBounds = try Self.richState(policy: bounded)
         #expect(try MIDI1PerformanceState(snapshot: atBounds.snapshot) == atBounds)
+    }
+
+    @Test
+    func nullParameterKeysOnlyRestoreWhenOrdinary() throws {
+        let open = try #require(MIDI1StatePolicy(nrpnNullDeselects: false))
+        let ordinary = try Fixture.state([Fixture.control(99, 127), Fixture.control(98, 127), Fixture.control(6, 1)],
+                                         policy: open)
+        #expect(try Fixture.first(ordinary).parameterValue(MIDI1SnapshotCorruption.nrpnNull) == 128)
+        #expect(try MIDI1PerformanceState(snapshot: ordinary.snapshot) == ordinary)
+        var deselecting = ordinary.snapshot
+        deselecting.policy = .standard
+        let nrpnNull = MIDI1SnapshotCorruption.nrpnNull
+        let refusal = MIDI1StateRefusal.invalidSnapshot(.nullParameter(channel: 1, number: nrpnNull))
+        #expect(throws: refusal) { try MIDI1PerformanceState(snapshot: deselecting) }
+    }
+
+    @Test
+    func nullParameterCannotFillTheStore() throws {
+        let single = try #require(MIDI1StatePolicy(maximumParameterValues: 1))
+        var snapshot = MIDI1PerformanceState(policy: single).snapshot
+        let rpnNull = MIDI1SnapshotCorruption.rpnNull
+        snapshot.channels[0].parameters = [MIDI1ParameterValue(number: rpnNull, value: 0)]
+        let refusal = MIDI1StateRefusal.invalidSnapshot(.nullParameter(channel: 1, number: rpnNull))
+        #expect(throws: refusal) { try MIDI1PerformanceState(snapshot: snapshot) }
+        let fineTuning = MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 1)
+        snapshot.channels[0].parameters = [MIDI1ParameterValue(number: fineTuning, value: 5)]
+        var restored = try MIDI1PerformanceState(snapshot: snapshot)
+        _ = try restored.apply(Fixture.control(101, 0))
+        #expect(try restored.apply(Fixture.control(100, 1)).effect == .parameterSelected(fineTuning))
+        #expect(try restored.apply(Fixture.control(6, 2)).effect == .parameter(fineTuning, value: 256))
+        var empty = try MIDI1PerformanceState(snapshot: MIDI1PerformanceState(policy: single).snapshot)
+        _ = try empty.apply(Fixture.control(101, 0))
+        _ = try empty.apply(Fixture.control(100, 0))
+        #expect(try empty.apply(Fixture.control(6, 3)).effect
+            == .parameter(MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 0), value: 384))
     }
 
     @Test(arguments: MIDI1SnapshotCorruption.allCases)

@@ -14,6 +14,11 @@ struct MIDI1ParameterNumber: Hashable, Comparable, Sendable {
 
     var isValid: Bool { msb < 0x80 && lsb < 0x80 }
 
+    /// RPN 127/127 is always the null function; NRPN 127/127 is when `policy.nrpnNullDeselects`.
+    func isNullFunction(policy: MIDI1StatePolicy) -> Bool {
+        msb == 0x7F && lsb == 0x7F && (kind == .registered || policy.nrpnNullDeselects)
+    }
+
     static func < (lhs: Self, rhs: Self) -> Bool {
         let lhsOrder = lhs.kind == .registered ? 0 : 1
         let rhsOrder = rhs.kind == .registered ? 0 : 1

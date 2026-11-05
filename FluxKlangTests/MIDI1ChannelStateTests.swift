@@ -258,6 +258,47 @@ struct MIDI1ChannelStateTests {
         #expect(state == before)
     }
 
+    /// Each semantic paired with the raw event it denotes; both overloads must agree.
+    static let malformedSystemMessages: [(MIDI1Semantic, MIDI1Event)] = [
+        (.realTime(status: 0x90), .realTime(status: 0x90)),
+        (.realTime(status: 0xF7), .realTime(status: 0xF7)),
+        (.systemCommon(status: 0xF1, data1: nil, data2: nil), .systemCommon(status: 0xF1, data1: nil, data2: nil)),
+        (.systemCommon(status: 0xF1, data1: 1, data2: 2), .systemCommon(status: 0xF1, data1: 1, data2: 2)),
+        (.systemCommon(status: 0xF3, data1: 0x80, data2: nil), .systemCommon(status: 0xF3, data1: 0x80, data2: nil)),
+        (.systemCommon(status: 0xF2, data1: 1, data2: nil), .systemCommon(status: 0xF2, data1: 1, data2: nil)),
+        (.systemCommon(status: 0xF2, data1: 1, data2: 0x80), .systemCommon(status: 0xF2, data1: 1, data2: 0x80)),
+        (.systemCommon(status: 0xF6, data1: 0, data2: nil), .systemCommon(status: 0xF6, data1: 0, data2: nil)),
+        (.systemCommon(status: 0xF0, data1: nil, data2: nil), .systemCommon(status: 0xF0, data1: nil, data2: nil)),
+        (.systemCommon(status: 0xF8, data1: nil, data2: nil), .systemCommon(status: 0xF8, data1: nil, data2: nil)),
+        (.sysEx(payload: [0x80]), .sysEx(payload: [0x80])),
+        (.sysEx(payload: [0x01, 0xFF]), .sysEx(payload: [0x01, 0xFF]))
+    ]
+
+    @Test
+    func systemValidationParity() throws {
+        let state = try Fixture.state([Fixture.noteOn(60), Fixture.control(101, 0), Fixture.control(100, 0)])
+        for (semantic, event) in Self.malformedSystemMessages {
+            #expect(event.semantic == nil)
+            Fixture.expectRefused(semantic, .malformedEvent, in: state)
+            var copy = state
+            #expect(throws: MIDI1StateRefusal.malformedEvent) { try copy.apply(event) }
+            #expect(copy == state)
+        }
+        let valid: [MIDI1Event] = [
+            .realTime(status: 0xF8), .realTime(status: 0xFF), .systemCommon(status: 0xF1, data1: 0x7F, data2: nil),
+            .systemCommon(status: 0xF2, data1: 0x7F, data2: 0x7F), .systemCommon(status: 0xF3, data1: 0, data2: nil),
+            .systemCommon(status: 0xF4, data1: nil, data2: nil), .systemCommon(status: 0xF7, data1: nil, data2: nil),
+            .sysEx(payload: []), .sysEx(payload: [0x7F])
+        ]
+        for event in valid {
+            var copy = state
+            let semantic = try #require(event.semantic)
+            #expect(try copy.apply(semantic) == MIDI1StateUpdate(channel: nil, effect: .unchanged))
+            #expect(try copy.apply(event) == MIDI1StateUpdate(channel: nil, effect: .unchanged))
+            #expect(copy == state)
+        }
+    }
+
     @Test
     func malformedEventsRefused() throws {
         let state = try Fixture.state([Fixture.noteOn(60), Fixture.control(64, 127)])

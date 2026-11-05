@@ -24,7 +24,11 @@ struct MIDI1PerformanceState: Equatable, Sendable {
     }
 
     mutating func apply(_ semantic: MIDI1Semantic) throws(MIDI1StateRefusal) -> MIDI1StateUpdate {
-        guard let channel = semantic.stateChannel else { return MIDI1StateUpdate(channel: nil, effect: .unchanged) }
+        guard let channel = semantic.stateChannel else {
+            // Shared by both overloads, so a forged system semantic fails exactly as its raw event does.
+            guard semantic.isValidSystemMessage else { throw .malformedEvent }
+            return MIDI1StateUpdate(channel: nil, effect: .unchanged)
+        }
         guard (1...UInt8(Self.channelCount)).contains(channel), semantic.hasValidChannelData else {
             throw .malformedEvent
         }
@@ -60,8 +64,9 @@ extension MIDI1PerformanceState {
     init(snapshot: MIDI1PerformanceSnapshot) throws(MIDI1StateRefusal) {
         guard snapshot.channels.count == Self.channelCount else { throw .invalidSnapshot(.channelCount) }
         var restored: [MIDI1ChannelState] = []
-        for channel in snapshot.channels {
-            restored.append(try MIDI1ChannelState(snapshot: channel, policy: snapshot.policy))
+        for (index, channel) in snapshot.channels.enumerated() {
+            let number = UInt8(index + 1)
+            restored.append(try MIDI1ChannelState(snapshot: channel, policy: snapshot.policy, channel: number))
         }
         policy = snapshot.policy
         channels = restored
@@ -79,6 +84,32 @@ private extension MIDI1Semantic {
             channel
         case .systemCommon, .realTime, .sysEx:
             nil
+        }
+    }
+
+    /// Same contract as `MIDI1Event.semantic`: realtime F8...FF, System Common status and length with 7-bit data,
+    /// and 7-bit SysEx payload bytes. Channel voice messages are never system messages.
+    var isValidSystemMessage: Bool {
+        switch self {
+        case let .realTime(status):
+            status >= 0xF8
+        case let .systemCommon(status, data1, data2):
+            Self.validSystemCommon(status: status, data1: data1, data2: data2)
+        case let .sysEx(payload):
+            payload.allSatisfy { $0 < 0x80 }
+        default:
+            false
+        }
+    }
+
+    private static func validSystemCommon(status: UInt8, data1: UInt8?, data2: UInt8?) -> Bool {
+        let dataBytes = [data1, data2].compactMap(\.self)
+        guard dataBytes.allSatisfy({ $0 < 0x80 }) else { return false }
+        switch status {
+        case 0xF1, 0xF3: return data1 != nil && data2 == nil
+        case 0xF2: return data1 != nil && data2 != nil
+        case 0xF4...0xF7: return data1 == nil && data2 == nil
+        default: return false
         }
     }
 

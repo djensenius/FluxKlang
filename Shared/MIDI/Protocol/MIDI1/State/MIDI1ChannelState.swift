@@ -43,9 +43,7 @@ struct MIDI1ChannelState: Equatable, Sendable {
         let number = kind == .registered
             ? MIDI1ParameterNumber(kind: kind, msb: controllers[101], lsb: controllers[100])
             : MIDI1ParameterNumber(kind: kind, msb: controllers[99], lsb: controllers[98])
-        let isNull = number.msb == 0x7F && number.lsb == 0x7F
-        guard !isNull || (kind == .nonRegistered && !policy.nrpnNullDeselects) else { return nil }
-        return number
+        return number.isNullFunction(policy: policy) ? nil : number
     }
 
     func parameterValue(_ number: MIDI1ParameterNumber) -> UInt16? {
@@ -234,8 +232,8 @@ extension MIDI1ChannelState {
         )
     }
 
-    /// Refuses any snapshot this type could not have reached under `policy`.
-    init(snapshot: MIDI1ChannelSnapshot, policy: MIDI1StatePolicy) throws(MIDI1StateRefusal) {
+    /// Refuses any snapshot this type could not have reached under `policy`; `channel` (1...16) names refusals.
+    init(snapshot: MIDI1ChannelSnapshot, policy: MIDI1StatePolicy, channel: UInt8) throws(MIDI1StateRefusal) {
         func require(_ condition: Bool, _ field: MIDI1SnapshotField) throws(MIDI1StateRefusal) {
             if !condition { throw .invalidSnapshot(field) }
         }
@@ -248,6 +246,9 @@ extension MIDI1ChannelState {
         let program = snapshot.program.map { [$0.bankMSB, $0.bankLSB, $0.program] } ?? []
         try require(program.allSatisfy { $0 < 0x80 }, .program)
         try require(Self.validParameters(snapshot.parameters, policy: policy), .parameters)
+        if let null = snapshot.parameters.first(where: { $0.number.isNullFunction(policy: policy) }) {
+            throw .invalidSnapshot(.nullParameter(channel: channel, number: null.number))
+        }
         if case let .mono(channels) = snapshot.mode.voices { try require(channels <= 16, .mode) }
         let sustainDown = controllers[64] >= 64
         guard let held = MIDI1HeldNotes(notes: snapshot.heldNotes, limit: policy.maximumHeldNotes,
