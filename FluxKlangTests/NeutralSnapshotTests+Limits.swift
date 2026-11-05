@@ -322,6 +322,67 @@ extension NeutralSnapshotTests {
     }
 }
 
+extension NeutralSnapshotTests {
+    // MARK: - Round 11
+
+    /// A label holds a withheld string verbatim with marks of mixed classes on both sides
+    /// (ccc 1, 10, 216, 220, 230 and 240, which folds to `ι`). NFD sorts them in among the
+    /// term's own edge marks, and the label is still redacted, exactly and idempotently.
+    @Test func seededMarksAroundAWithheldStringNeverHideIt() {
+        let marks = ["\u{0316}", "\u{0323}", "\u{0300}", "\u{0301}", "\u{0345}", "\u{031B}", "\u{0334}", "\u{05B0}"]
+        var generator = NeutralSnapshotSplitMix64(seed: 0x118_0011)
+        func run() -> String {
+            (0..<Int.random(in: 0...3, using: &generator)).map { _ in
+                marks.randomElement(using: &generator) ?? ""
+            }.joined()
+        }
+        for _ in 0..<1_000 {
+            let (before, lead, trail, after) = (run(), run(), run(), run())
+            let secret = lead + "SN-123456e" + trail
+            let label = UntrustedLabel("Rig a" + before + secret + after + " ok", withholding: [secret])
+            // The marks before the term stay on `a` unless the term's own leading marks join them.
+            let kept = (lead.isEmpty ? "Rig a" + before : "Rig ").precomposedStringWithCanonicalMapping
+            let expected = kept + UntrustedLabel.withheldMarker + " ok"
+            let context = "\(Array((before + secret + after).unicodeScalars))"
+            #expect(label.text.unicodeScalars.elementsEqual(expected.unicodeScalars), "\(context)")
+            let again = UntrustedLabel(label.text, withholding: [secret])
+            #expect(again.text.unicodeScalars.elementsEqual(label.text.unicodeScalars), "\(context)")
+        }
+    }
+
+    /// The scan budget `maximumBytes × 8 + longest` saturates at `Int.max`, an upper bound,
+    /// so every accepted byte limit has one. It is exact up to `Int.max / 8` bytes (budget
+    /// `Int.max − 7`) and saturates from the next byte, where the multiplication trapped
+    /// before round 11; with an eight-scalar term the addition trapped from `Int.max / 8`.
+    @Test func theScanBudgetSaturatesInsteadOfOverflowing() {
+        let edge = Int.max / UntrustedTextSanitizer.maximumScalarsPerGrapheme
+        func budget(_ bytes: Int, _ withheld: [String] = []) -> Int {
+            UntrustedTextSanitizer.scanLimit(maximumBytes: bytes, withheld: withheld)
+        }
+        #expect(budget(edge) == Int.max - 7)
+        #expect(budget(edge + 1) == .max)
+        #expect(budget(edge - 1, ["SN-12345"]) == Int.max - 7)
+        #expect(budget(edge, ["SN-1234"]) == .max)
+        #expect(budget(edge, ["SN-12345"]) == .max)
+        #expect(budget(.max, ["SN-12345"]) == .max)
+        #expect(budget(0) == 4_096 && budget(1_000, ["SN-12345"]) == 8_008)
+    }
+
+    /// Any byte limit the API accepts labels and redacts without trapping, up to `Int.max`.
+    @Test(arguments: [Int.max / 8 - 1, Int.max / 8, Int.max / 8 + 1, .max])
+    func everyAcceptedByteLimitRedactsWithoutTrapping(limit: Int) throws {
+        let label = UntrustedLabel("Rig SN-12345 ok", maximumBytes: limit, withholding: ["SN-12345"])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker) ok" && !label.isTruncated)
+        let inputs = try Self.sampleInputs()
+        var limits = Snapshot.Limits()
+        limits.labelBytes = limit
+        let snapshot = Snapshot.build(from: inputs, limits: limits)
+        let reference = Snapshot.build(from: inputs)
+        #expect(snapshot.nodes.map(\.label) == reference.nodes.map(\.label))
+        #expect(snapshot.graph.label == reference.graph.label && snapshot.graph.label?.text == "Main")
+    }
+}
+
 /// A fixed-seed generator, so the fuzz cases are the same on every run.
 private struct NeutralSnapshotSplitMix64: RandomNumberGenerator {
     private var state: UInt64

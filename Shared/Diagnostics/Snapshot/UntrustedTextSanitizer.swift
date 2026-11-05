@@ -28,11 +28,21 @@ enum UntrustedTextSanitizer {
         case keep, remove, replaceWithSpace
     }
 
-    /// Bounds how many raw scalars are read: enough for the byte limit with
+    /// Bounds how many raw scalars are kept: enough for the byte limit with
     /// capped graphemes, plus room to recognise a withheld string at the cut.
+    ///
+    /// The budget `maximumBytes × maximumScalarsPerGrapheme + longest` is an upper
+    /// bound, so it saturates at `Int.max` instead of overflowing, and every byte limit
+    /// the API accepts (any `Int`, including `Limits.labelBytes`; `UntrustedLabel` clamps
+    /// a negative one to 0) gives a budget without trapping. It is exact while
+    /// `maximumBytes ≤ (Int.max − longest) / maximumScalarsPerGrapheme`: with no terms that
+    /// is `Int.max / 8`, whose budget is `Int.max − 7`, and one more byte saturates.
     static func scanLimit(maximumBytes: Int, withheld: [String]) -> Int {
         let longest = withheld.map(\.unicodeScalars.count).max() ?? 0
-        return max(4_096, maximumBytes * maximumScalarsPerGrapheme + longest)
+        let graphemes = maximumBytes.multipliedReportingOverflow(by: maximumScalarsPerGrapheme)
+        let budget = graphemes.partialValue.addingReportingOverflow(longest)
+        guard !graphemes.overflow, !budget.overflow else { return .max }
+        return max(4_096, budget.partialValue)
     }
 
     /// Filters scalars until `limit` of them have been kept. Removed scalars and

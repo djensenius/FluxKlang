@@ -52,11 +52,19 @@ extension UntrustedTextSanitizer {
         let isPrefix: Bool
         /// The canonical caseless form of `text` (`caselessForm`), the form that is matched.
         let folded: [Unicode.Scalar]
+        /// The indices of `folded` from its first to its last starter (`matchClass` 0),
+        /// matched in place. The marks before and after it are matched per class
+        /// (`marksFit`), because a label's marks can be reordered in among them. Empty
+        /// when `folded` has no starter.
+        let core: Range<Int>
 
         init(text: String, isPrefix: Bool) {
             self.text = text
             self.isPrefix = isPrefix
-            folded = UntrustedTextSanitizer.caselessForm(text.unicodeScalars)
+            let folded = UntrustedTextSanitizer.caselessForm(text.unicodeScalars)
+            let starters = folded.indices.filter { UntrustedTextSanitizer.matchClass(folded[$0]) == 0 }
+            self.folded = folded
+            core = (starters.first ?? 0)..<((starters.last ?? -1) + 1)
         }
     }
 
@@ -135,9 +143,10 @@ extension UntrustedTextSanitizer {
 
     /// Source scalar ranges to withhold, always whole source graphemes:
     /// - all of the text when a term is `WithheldTerm.failClosed`;
-    /// - every occurrence of every term in the caseless form, overlapping ones
-    ///   included, expanded to the source graphemes that contain its first and last
-    ///   scalars (`CaselessMap`), which also covers marks that NFD reordered;
+    /// - every occurrence of every term in the caseless form (`occurrences`),
+    ///   overlapping ones included, expanded to the source graphemes that contain its
+    ///   first and last scalars (`CaselessMap`), which also covers marks that NFD
+    ///   reordered;
     /// - for a prefix term, its first match through the end of the text;
     /// - when the scan was cut and a term exists, the last `L - 1` caseless scalars,
     ///   where `L` is the longest caseless term, extended back to the start of the
@@ -152,15 +161,15 @@ extension UntrustedTextSanitizer {
     /// Cost: each term is tried at every caseless position, O(n·m) for n caseless
     /// text scalars and m caseless term scalars. n is linear in the scan limit
     /// (a scalar folds to at most three and NFD expands it by a bounded factor) and
-    /// m in `maximumWithheldBytes`.
+    /// m in `maximumWithheldBytes`. The edge checks add O(n + m) per match.
     static func withheldRanges(in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool) -> [Range<Int>] {
         guard map.sourceCount > 0 else { return [] }
         if terms.contains(.failClosed) { return [0..<map.sourceCount] }
         var ranges: [Range<Int>] = []
         for term in terms where !term.folded.isEmpty {
-            for start in occurrences(of: term.folded, in: map.scalars, firstOnly: term.isPrefix) {
-                let end = term.isPrefix ? map.sourceCount : map.graphemeEnd[start + term.folded.count - 1]
-                ranges.append(map.graphemeStart[start]..<end)
+            for match in occurrences(of: term, in: map.scalars, firstOnly: term.isPrefix) {
+                let end = term.isPrefix ? map.sourceCount : map.graphemeEnd[match.upperBound - 1]
+                ranges.append(map.graphemeStart[match.lowerBound]..<end)
             }
         }
         if !scanIsComplete, let longest = terms.map(\.folded.count).max(), longest > 1 {
@@ -170,16 +179,107 @@ extension UntrustedTextSanitizer {
         return ranges
     }
 
-    /// Start offsets of every occurrence of `term` in `text`, overlapping ones included.
-    static func occurrences(of term: [Unicode.Scalar], in text: [Unicode.Scalar], firstOnly: Bool) -> [Int] {
-        guard let first = term.first, term.count <= text.count else { return [] }
-        var found: [Int] = []
-        for start in 0...(text.count - term.count) where text[start] == first {
-            guard text[start..<(start + term.count)].elementsEqual(term) else { continue }
-            found.append(start)
+    /// Caseless ranges of every occurrence of `term` in `text`, overlapping ones included.
+    ///
+    /// The term's `core` (first to last starter) must appear in place. Canonical
+    /// reordering never moves a mark across a starter, so inside the core both forms
+    /// agree. At its edges it can: NFD sorts the label's marks next to the term's leading
+    /// or trailing marks by class, so `q` + U+0300 + U+0316 + `SN…` holds U+0316 + `SN…`
+    /// but its caseless form is `q` U+0316 U+0300 `s n…`, and `é` + U+0316 (displayed in
+    /// NFC as U+00E9 U+0316, which holds `SN-12345é` verbatim) is `e` U+0316 U+0301. So the
+    /// term's leading marks must be placeable at the end of the label's run of marks before
+    /// the core, and its trailing marks at the start of the run after it (`marksFit`). A
+    /// term with no starter must be placeable inside one run. The match covers those runs.
+    static func occurrences(of term: WithheldTerm, in text: [Unicode.Scalar], firstOnly: Bool) -> [Range<Int>] {
+        let core = term.folded[term.core]
+        guard let first = core.first else { return markRuns(holding: term.folded[...], in: text, firstOnly: firstOnly) }
+        guard core.count <= text.count else { return [] }
+        let lead = term.folded[..<term.core.lowerBound]
+        let trail = term.folded[term.core.upperBound...]
+        var found: [Range<Int>] = []
+        for start in 0...(text.count - core.count) where text[start] == first {
+            let end = start + core.count
+            guard text[start..<end].elementsEqual(core) else { continue }
+            let before = runStart(before: start, in: text)
+            let after = runEnd(from: end, in: text)
+            guard marksFit(lead, at: .end, of: text[before..<start]),
+                  marksFit(trail, at: .start, of: text[end..<after]) else { continue }
+            // The run after the core is part of its last grapheme; the run before it
+            // belongs to the previous grapheme, which is withheld only for leading marks.
+            found.append((lead.isEmpty ? start : before)..<after)
             if firstOnly { break }
         }
         return found
+    }
+
+    /// Runs of `text` where a term made only of marks can be placed (see `occurrences`).
+    private static func markRuns(
+        holding marks: ArraySlice<Unicode.Scalar>, in text: [Unicode.Scalar], firstOnly: Bool
+    ) -> [Range<Int>] {
+        var found: [Range<Int>] = []
+        var start = 0
+        while start < text.count {
+            guard matchClass(text[start]) != 0 else {
+                start += 1
+                continue
+            }
+            let end = runEnd(from: start, in: text)
+            if marksFit(marks, at: .inside, of: text[start..<end]) {
+                found.append(start..<end)
+                if firstOnly { break }
+            }
+            start = end
+        }
+        return found
+    }
+
+    /// The canonical combining class used to find runs of marks. `ι` counts as 240
+    /// because it is also the fold of U+0345 (ccc 240), the one mark that folding turns
+    /// into a starter: `α` U+0345 + U+0301 is `α` U+0301 `ι` in caseless form. A real `ι`
+    /// therefore joins a run too, which can only widen a match.
+    static func matchClass(_ scalar: Unicode.Scalar) -> UInt8 {
+        scalar == "\u{03B9}" ? 240 : scalar.properties.canonicalCombiningClass.rawValue
+    }
+
+    private static func runStart(before index: Int, in text: [Unicode.Scalar]) -> Int {
+        var start = index
+        while start > 0, matchClass(text[start - 1]) != 0 { start -= 1 }
+        return start
+    }
+
+    private static func runEnd(from index: Int, in text: [Unicode.Scalar]) -> Int {
+        var end = index
+        while end < text.count, matchClass(text[end]) != 0 { end += 1 }
+        return end
+    }
+
+    enum RunEdge {
+        case start, end, inside
+    }
+
+    /// Whether canonical reordering of `run` (a label's run of marks) can bring `marks`
+    /// (a term's edge marks, in canonical order) together at its `edge`. Reordering keeps
+    /// the order of marks of one class and may move marks of different classes past each
+    /// other, so it can exactly when, for each class, the term's marks of that class are
+    /// the run's first (`.start`), last (`.end`) or some consecutive (`.inside`) marks of
+    /// that class. Linear in `run` and `marks` for the edges.
+    static func marksFit(
+        _ marks: ArraySlice<Unicode.Scalar>, at edge: RunEdge, of run: ArraySlice<Unicode.Scalar>
+    ) -> Bool {
+        var wanted: [UInt8: [Unicode.Scalar]] = [:]
+        for mark in marks { wanted[matchClass(mark), default: []].append(mark) }
+        var held: [UInt8: [Unicode.Scalar]] = [:]
+        for mark in run where wanted[matchClass(mark)] != nil { held[matchClass(mark), default: []].append(mark) }
+        return wanted.allSatisfy { ccc, want in
+            let have = held[ccc] ?? []
+            switch edge {
+            case .start: return have.prefix(want.count).elementsEqual(want)
+            case .end: return have.suffix(want.count).elementsEqual(want)
+            case .inside:
+                return want.count <= have.count
+                    && (0...(have.count - want.count)).contains { have[$0..<($0 + want.count)].elementsEqual(want) }
+            }
+        }
     }
 
     /// Sorts ranges and merges overlapping or adjacent ones.

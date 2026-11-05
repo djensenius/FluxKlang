@@ -313,6 +313,9 @@ extension NeutralSnapshotTests {
         // A term ending on a base letter withholds the marks on it too (over-redaction).
         #expect(UntrustedLabel("Rig SN-12345\u{00C5} ok", withholding: ["SN-12345A"]).text == "Rig \(marker) ok")
         #expect(UntrustedLabel("Rig ID-1234q\u{0323}\u{0307} ok", withholding: ["ID-1234q"]).text == "Rig \(marker) ok")
+        // The grapheme can go on past the term with a starter (a spacing mark, ccc 0), not only marks.
+        #expect(UntrustedLabel("Rig SN-1234\u{0915}\u{093E} ok", withholding: ["SN-1234\u{0915}"]).text
+            == "Rig \(marker) ok")
     }
 
     @Test func aScanCutTailNeverEndsInsideANormalizationSegment() {
@@ -375,5 +378,44 @@ extension NeutralSnapshotTests {
 
     static func serials(_ range: some Sequence<Int>) -> [String] {
         range.map { "serial-" + String(repeating: "0", count: max(0, 4 - String($0).count)) + String($0) }
+    }
+}
+
+extension NeutralSnapshotTests {
+    // MARK: - Round 11: marks reordered into a term's edges
+
+    /// Each label holds its withheld string verbatim, raw or in its NFC display form, but
+    /// NFD sorts the label's own marks in among the term's leading or trailing marks
+    /// (`é` U+0316 is `e` U+0316 U+0301; `α` U+0345 U+0301 folds to `α` U+0301 `ι`), so until
+    /// round 11 the caseless forms were not contiguous and every label was shown as is.
+    @Test(arguments: [
+        ("Rig SN-12345\u{00E9}\u{0316} ok", "SN-12345\u{00E9}"),
+        ("Rig SN-12345e\u{0301}\u{0316} ok", "SN-12345\u{00E9}"),
+        ("Rig \u{00E1}\u{0316}SN-123456 ok", "\u{0316}SN-123456"),
+        ("Rig q\u{0300}\u{0316}SN-123456 ok", "\u{0316}SN-123456"),
+        ("Rig ID-1234\u{03B1}\u{0345}\u{0301} ok", "ID-1234\u{1FB3}"),
+        ("Rig SN-12345e" + String(repeating: "\u{0316}", count: 8) + "\u{0301} ok", "SN-12345\u{00E9}"),
+        ("Rig a\u{0300}\u{0316}\u{0301}\u{0302} ok", "\u{0316}\u{0301}\u{0302}")
+    ])
+    func marksReorderedIntoATermsEdgesDoNotHideIt(raw: String, withheld: String) {
+        let label = UntrustedLabel(raw, withholding: [withheld])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker) ok", "\(Array(label.text.unicodeScalars))")
+        #expect(label.wasSanitized && !label.isTruncated)
+    }
+
+    /// The edge rule is canonical equivalence, not a looser match. A label mark of the
+    /// same class in front of the term's edge mark makes a different text (`è` U+0301 is
+    /// not `é` U+0300; `q` U+0316 U+0323 does not hold U+0323 `S`), a leading mark must be
+    /// there, and a term made of marks must be consecutive marks of each class.
+    @Test(arguments: [
+        ("Rig SN-12345e\u{0300}\u{0301} ok", "SN-12345\u{00E9}"),
+        ("Rig q\u{0316}\u{0323}SN-123456 ok", "\u{0316}SN-123456"),
+        ("Rig SN-123456 ok", "\u{0316}SN-123456"),
+        ("Rig a\u{0301}\u{0300}\u{0302}\u{0303} ok", "\u{0301}\u{0302}\u{0303}")
+    ])
+    func marksThatCannotBeReorderedIntoATermKeepItFromMatching(raw: String, withheld: String) {
+        let label = UntrustedLabel(raw, withholding: [withheld])
+        #expect(label.text.unicodeScalars.elementsEqual(raw.precomposedStringWithCanonicalMapping.unicodeScalars))
+        #expect(!label.text.contains(UntrustedLabel.withheldMarker))
     }
 }

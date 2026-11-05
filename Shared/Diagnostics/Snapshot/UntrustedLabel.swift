@@ -18,7 +18,10 @@ import Foundation
 /// 2. Withheld strings are found by canonical caseless matching (NFD, full case
 ///    folding, NFD) on the full, uncapped source form (the text without ZWJ/ZWNJ or
 ///    variation selectors, renormalized to NFC), together with the tail of a
-///    scan-cut text. Every range covers whole source graphemes; all ranges are
+///    scan-cut text. A term's marks before its first and after its last starter are
+///    matched per combining class, since NFD can reorder a label's neighbouring marks in
+///    among them (`UntrustedTextSanitizer.occurrences`). Every range covers whole source
+///    graphemes; all ranges are
 ///    merged and replaced once by `withheldMarker`. When anything is withheld the
 ///    label is the redacted source form; otherwise it keeps its allowed joiners and
 ///    presentation selectors.
@@ -37,18 +40,23 @@ import Foundation
 ///
 /// Postcondition: every grapheme of `text`, as Swift segments the whole string, has at
 /// most `maximumScalarsPerGrapheme` scalars; `text` is at most `maximumBytes` UTF-8
-/// bytes; and labelling `text` again with the same terms returns `text`.
+/// bytes; and labelling `text` again with the same terms returns `text`. So the emitted
+/// text is the text the last pass matched (up to canonical equivalence, which matching
+/// ignores): every renormalization, cap and cut is matched again before it is shown.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
 /// matched by a match-form prefix, and a match redacts the rest of the label. One
 /// with no safe prefix (a single giant grapheme) withholds the whole label.
 ///
 /// Scanning stops once `UntrustedTextSanitizer.scanLimit(maximumBytes:withheld:)`
-/// match-form scalars have been kept. Removed scalars and joiners are read but not
+/// match-form scalars have been kept (saturating at `Int.max`, so no byte limit traps).
+/// Removed scalars and joiners are read but not
 /// counted, so the work is linear in the input and the kept text is bounded.
 ///
 /// Not handled (accepted for A1): visible combining marks placed on the characters
-/// of a withheld string keep it from matching.
+/// of a withheld string, between its first and last starter or in front of its own
+/// edge marks of the same class, keep it from matching. Marks of other classes next
+/// to its edges do not.
 struct UntrustedLabel: Hashable, Sendable, Encodable {
     static let defaultMaximumBytes = 128
     static let withheldMarker = "[withheld]"
