@@ -1,0 +1,50 @@
+/// Capacity of one note ledger. Both bounds fail closed: work that does not fit is refused before anything is sent.
+/// Only the validating initializer builds one; the capacities are read-only.
+struct MIDINoteLedgerPolicy: Hashable, Sendable {
+    static let noteCapacityBounds = 1...4096
+    static let pedalCapacityBounds = 1...1024
+    static let standard = MIDINoteLedgerPolicy(validatedNoteCapacity: 1024, pedalCapacity: 256)
+
+    /// Note-on instances (one per layer of each press) that are still held by a key or a pedal.
+    var noteCapacity: Int { storedNoteCapacity }
+    /// Pedal holds, one per (route, channel, pedal, input).
+    var pedalCapacity: Int { storedPedalCapacity }
+
+    // Private `let` storage behind get-only accessors: only this file's initializers can set it, so an initializer
+    // in an extension elsewhere cannot skip the validation, and nothing changes it afterwards.
+    private let storedNoteCapacity: Int
+    private let storedPedalCapacity: Int
+
+    init?(noteCapacity: Int = 1024, pedalCapacity: Int = 256) {
+        guard Self.noteCapacityBounds.contains(noteCapacity),
+              Self.pedalCapacityBounds.contains(pedalCapacity) else { return nil }
+        self.init(validatedNoteCapacity: noteCapacity, pedalCapacity: pedalCapacity)
+    }
+
+    private init(validatedNoteCapacity noteCapacity: Int, pedalCapacity: Int) {
+        storedNoteCapacity = noteCapacity
+        storedPedalCapacity = pedalCapacity
+    }
+}
+
+/// Every refusal appends no output and leaves the ledger unchanged. Channels are 1...16.
+enum MIDIPerformanceRefusal: Error, Equatable, Hashable, Sendable {
+    /// A channel outside 1...16, a data byte above 127 or a pitch bend above 16_383.
+    case malformedEvent
+    /// System messages are not routed by the note ledger.
+    case systemMessage
+    /// Recording every layer of this Note On would exceed the note capacity; nothing was sent.
+    case noteLedgerFull(input: MIDIInputID, channel: UInt8, note: UInt8)
+    /// Recording this pedal-down on every target, or carrying a held pedal to a Note On's new routes, would exceed the
+    /// pedal capacity; nothing was sent.
+    case pedalLedgerFull(input: MIDIInputID, channel: UInt8, pedal: MIDIPedal)
+    /// A Note Off (or Note On with velocity 0) or poly pressure for a note this input has no key down on, on this
+    /// channel. Benign and frequent in normal playing: poly aftertouch trailing a Note Off, a key released after a
+    /// panic or after its route or input was lost, a repeated Note Off. Callers count or log it; it is not an error.
+    /// A Note Off held back because another copy of the note is still down is not refused.
+    case unownedNote(input: MIDIInputID, channel: UInt8, note: UInt8)
+    /// A pedal-up (value 0...63) from an input that holds that pedal on no route on this channel. Benign and frequent,
+    /// as above: a continuous pedal sends many values below 64, and only the first releases. Count or log it.
+    /// A pedal-up held back because another input still holds the pedal is not refused.
+    case unownedPedal(input: MIDIInputID, channel: UInt8, pedal: MIDIPedal)
+}
