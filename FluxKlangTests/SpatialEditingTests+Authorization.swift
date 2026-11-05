@@ -186,6 +186,7 @@ struct SpatialCalibrationAuthorizationTests {
         }
     }
 
+    // A static plan test, so it sits with the plan tests here and spends none of the flow suite's line budget.
     /// Every boundary, for durations whose quotients drift either way, starts
     /// its own output; the value just before it belongs to the previous one.
     @Test func eachPlannedBoundaryStartsItsOwnOutput() {
@@ -208,12 +209,15 @@ struct SpatialCalibrationAuthorizationTests {
             for elapsed in [-0.0, -seconds, -.greatestFiniteMagnitude, -.infinity, .nan] {
                 #expect(index(elapsed, seconds) == 0, "\(seconds) at \(elapsed)")
             }
-            #expect(index(seconds * 5, seconds, count: 1) == 0 && index(seconds, seconds, count: 2) == 1)
+            #expect(index(seconds * 5, seconds, count: 1) == 0, "\(seconds)")
+            #expect(index(seconds, seconds, count: 2) == 1, "\(seconds)")
+            #expect(index(seconds, seconds, count: 0) == 0, "\(seconds)")
         }
         // Durations a plan refuses still give an index in range, never a trap.
         for seconds in [0.0, -1, .nan, .infinity, -.infinity, .leastNonzeroMagnitude] {
             for elapsed in [-1.0, 0, 1, .nan, .infinity, -.infinity] {
-                #expect((0..<count).contains(index(elapsed, seconds)) && index(elapsed, seconds, count: 1) == 0)
+                #expect((0..<count).contains(index(elapsed, seconds)), "\(seconds) at \(elapsed)")
+                #expect(index(elapsed, seconds, count: 1) == 0, "\(seconds) at \(elapsed)")
             }
         }
     }

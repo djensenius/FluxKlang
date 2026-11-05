@@ -156,6 +156,14 @@ struct SpatialCalibrationPlan: Hashable, Sendable {
     /// a boundary it can fall just short (3 × 0.7 / 0.7 is 2.9999999999999996),
     /// and just before one it can reach it, so the guess is corrected by one
     /// step against the computed boundaries, never by an epsilon.
+    ///
+    /// That exact answer needs what a plan guarantees: `count` in
+    /// `1...maximumOutputs` and a positive, finite duration. Other inputs never
+    /// trap and, for any `count` of at least 1, still give an index in
+    /// `0..<count`, but not always the last output at or before `elapsed`
+    /// (counts far beyond a plan's, such as 2^62, can be off by one once the
+    /// boundaries lose precision). A `count` of 0 (or less) gives 0, which is
+    /// not a valid index, so callers must have at least one output.
     static func outputIndex(at elapsed: Double, secondsPerOutput: Double, count: Int) -> Int {
         guard count > 1, elapsed >= boundarySeconds(1, secondsPerOutput: secondsPerOutput) else { return 0 }
         let last = count - 1
