@@ -5,8 +5,9 @@ enum AutomationInterpolation: Hashable, Sendable {
     /// Holds this breakpoint's value up to the next breakpoint, which then applies at once.
     case step
     case linear
-    /// `start * (1 - f^exponent) + end * f^exponent` over the segment fraction `f`: between the two
-    /// values, exact at both ends. Exponents above 1 start slowly; below 1 start quickly.
+    /// Moves from the start value toward the end value by the segment fraction `f` raised to
+    /// `exponent`: between the two values, monotonic, exact at both ends. Exponents above 1 start
+    /// slowly; below 1 start quickly.
     case power(Double)
 
     static let exponentRange: ClosedRange<Double> = 0.125...8
@@ -145,13 +146,26 @@ struct AutomationLane: Hashable, Sendable {
         return blend(start.value, end.value, at: shaped)
     }
 
-    /// `from` weighted by `1 - fraction` plus `to` weighted by `fraction`, clamped to `0...1`. Weighting
-    /// both ends cannot overflow a finite range (unlike `from + (to - from) * fraction`); a fraction of 0
-    /// gives `from` and 1 gives `to` exactly, and the clamp keeps the result between them, so flat spans
-    /// are exact.
+    /// The point `fraction` (clamped to `0...1`) of the way from `from` to `to`; 0 gives `from` and 1
+    /// gives `to` exactly. The result never decreases (or, for `to < from`, never increases) as
+    /// `fraction` grows, and always lies between the two ends, so a catch sees the same crossings
+    /// however a segment is sampled.
+    ///
+    /// With both ends on the same side of zero, `to - from` cannot overflow and is one rounded
+    /// constant, so `from + (to - from) * fraction` is a chain of correctly rounded operations, each
+    /// monotonic in its varying operand. With ends of opposite signs `to - from` can overflow, but
+    /// `from * (1 - fraction)` and `to * fraction` each move monotonically toward their own end and
+    /// their exact sum lies between the ends, so the rounded sum does too and keeps the direction.
+    /// Weighting both ends for same-sign values is not monotonic: between adjacent values, rounding
+    /// can return the upper one early and the lower one later. Below a fraction of 1 the scaled
+    /// difference never exceeds `to - from` in size, so neither form leaves the span; the final clamp
+    /// is only a guard. A non-finite fraction, which no caller produces, fails closed to `from`.
     static func blend(_ from: Double, _ to: Double, at fraction: Double) -> Double {
+        guard fraction.isFinite else { return from }
         let weight = min(max(fraction, 0), 1)
-        let value = from * (1 - weight) + to * weight
+        if weight == 1 { return to }
+        let sameSign = (from >= 0 && to >= 0) || (from <= 0 && to <= 0)
+        let value = sameSign ? from + (to - from) * weight : from * (1 - weight) + to * weight
         return min(max(value, min(from, to)), max(from, to))
     }
 
