@@ -33,13 +33,14 @@ enum UntrustedTextSanitizer {
     ///
     /// The budget `maximumBytes × maximumScalarsPerGrapheme + longest` is an upper
     /// bound, so it saturates at `Int.max` instead of overflowing, and every byte limit
-    /// the API accepts (any `Int`, including `Limits.labelBytes`; `UntrustedLabel` clamps
-    /// a negative one to 0) gives a budget without trapping. It is exact while
+    /// the API accepts (any `Int`, including `Limits.labelBytes`) gives a budget without
+    /// trapping. A negative limit counts as 0, as in `UntrustedLabel`, so the function is
+    /// total. It is exact while
     /// `maximumBytes ≤ (Int.max − longest) / maximumScalarsPerGrapheme`: with no terms that
     /// is `Int.max / 8`, whose budget is `Int.max − 7`, and one more byte saturates.
     static func scanLimit(maximumBytes: Int, withheld: [String]) -> Int {
         let longest = withheld.map(\.unicodeScalars.count).max() ?? 0
-        let graphemes = maximumBytes.multipliedReportingOverflow(by: maximumScalarsPerGrapheme)
+        let graphemes = max(0, maximumBytes).multipliedReportingOverflow(by: maximumScalarsPerGrapheme)
         let budget = graphemes.partialValue.addingReportingOverflow(longest)
         guard !graphemes.overflow, !budget.overflow else { return .max }
         return max(4_096, budget.partialValue)

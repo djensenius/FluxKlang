@@ -368,6 +368,14 @@ extension NeutralSnapshotTests {
         #expect(budget(0) == 4_096 && budget(1_000, ["SN-12345"]) == 8_008)
     }
 
+    /// A negative byte limit counts as 0 (round 11b), so the budget is total: until then
+    /// one below `Int.min / 8` overflowed and saturated to `Int.max`.
+    @Test func aNegativeByteLimitGivesTheFloorBudget() {
+        for bytes in [-1, Int.min / 8, Int.min / 8 - 1, .min] {
+            #expect(UntrustedTextSanitizer.scanLimit(maximumBytes: bytes, withheld: ["SN-12345"]) == 4_096)
+        }
+    }
+
     /// Any byte limit the API accepts labels and redacts without trapping, up to `Int.max`.
     @Test(arguments: [Int.max / 8 - 1, Int.max / 8, Int.max / 8 + 1, .max])
     func everyAcceptedByteLimitRedactsWithoutTrapping(limit: Int) throws {
@@ -380,6 +388,59 @@ extension NeutralSnapshotTests {
         let reference = Snapshot.build(from: inputs)
         #expect(snapshot.nodes.map(\.label) == reference.nodes.map(\.label))
         #expect(snapshot.graph.label == reference.graph.label && snapshot.graph.label?.text == "Main")
+    }
+}
+
+extension NeutralSnapshotTests {
+    // MARK: - Round 11b: the scan-cut tail window
+
+    /// A match may hold any number of label marks between a term's core and its trailing
+    /// marks, so a scan cut inside that run hid only the run's last `L − 1` scalars and
+    /// showed `SN-12345` until round 11b. The cut that leaves one mark of the run is the
+    /// smallest that leaked: the old window then began at `N`.
+    @Test func aScanCutInsideATermsTrailingMarksWithholdsTheWholeTerm() {
+        let marker = UntrustedLabel.withheldMarker
+        let secret = "SN-12345\u{00E9}"
+        let long = UntrustedLabel("x SN-12345e" + String(repeating: "\u{0316}", count: 5_000) + "\u{0301} ok",
+                                  withholding: [secret])
+        #expect(long.text == "x \(marker)" && long.isTruncated, "\(Array(long.text.unicodeScalars))")
+        let rig = UntrustedLabel("Rig SN-12345e" + String(repeating: "\u{0316}", count: 5_000) + "\u{0301} ok",
+                                 withholding: [secret])
+        #expect(rig.text == "Rig \(marker)" && rig.isTruncated)
+        let short = UntrustedLabel("x SN-12345e" + String(repeating: "\u{0316}", count: 50) + "\u{0301} ok",
+                                   withholding: [secret])
+        #expect(short.text == "x \(marker) ok" && !short.isTruncated)
+        // 4,084 padding marks put the cut right after the first U+0316 after `e`.
+        let padding = "x" + String(repeating: "\u{0331}", count: 4_084) + " "
+        let oneMark = UntrustedLabel(padding + "SN-12345e\u{0316}\u{0301} ok", withholding: [secret])
+        #expect(!oneMark.text.contains("N") && oneMark.text.hasSuffix(" \(marker)") && oneMark.isTruncated)
+    }
+
+    /// The general case: for each shape (trailing marks, leading marks, a term of marks
+    /// only) the scan is cut after every scalar of the body, which holds a 40-mark run
+    /// (four times the old `L − 1` window) next to the secret, and no scalar of the secret
+    /// is ever shown. Padding marks of another class (U+0331, on their own `x`) move the
+    /// cut; they are capped in the display.
+    @Test func aScanCutAnywhereNearALongMarkRunShowsNoPartOfTheSecret() {
+        let run = String(repeating: "\u{0300}", count: 40)
+        let shapes = [
+            ("SN-12345\u{00E9}", "SN-12345e" + String(repeating: "\u{0316}", count: 40) + "\u{0301} ok"),
+            ("\u{0316}SN-123456", "q\u{0316}" + run + "SN-123456 ok"),
+            ("\u{0316}\u{0301}\u{0302}", "a" + run + "\u{0316}\u{0301}\u{0302} ok")
+        ]
+        let limit = UntrustedTextSanitizer.scanLimit(maximumBytes: UntrustedLabel.defaultMaximumBytes, withheld: [])
+        for (secret, body) in shapes {
+            let nfd = secret.decomposedStringWithCanonicalMapping
+            let forbidden = Set(nfd.lowercased().unicodeScalars).union(nfd.uppercased().unicodeScalars)
+            // The scan keeps `limit` scalars: the padding and then the first `kept` of `body`.
+            for kept in 1...body.unicodeScalars.count {
+                let padding = "x" + String(repeating: "\u{0331}", count: limit - 2 - kept) + " "
+                let label = UntrustedLabel(padding + body, withholding: [secret])
+                let shown = label.text.replacingOccurrences(of: UntrustedLabel.withheldMarker, with: "")
+                #expect(!shown.decomposedStringWithCanonicalMapping.unicodeScalars.contains(where: forbidden.contains),
+                        "\(Array(secret.unicodeScalars)) \(kept)")
+            }
+        }
     }
 }
 

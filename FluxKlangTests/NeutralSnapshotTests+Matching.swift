@@ -418,4 +418,23 @@ extension NeutralSnapshotTests {
         #expect(label.text.unicodeScalars.elementsEqual(raw.precomposedStringWithCanonicalMapping.unicodeScalars))
         #expect(!label.text.contains(UntrustedLabel.withheldMarker))
     }
+
+    /// `matchClass` counts a real `ι` as a mark (240), so an overlong run of `ι` becomes a
+    /// prefix term made only of "marks". It is matched as a run (`markRuns`, first match
+    /// only) and withholds the label from there to the end (round 11b).
+    @Test func anOverlongIotaRunIsAMarksOnlyPrefixTerm() throws {
+        let iotas = String(repeating: "\u{03B9}", count: 600)
+        let term = try #require(UntrustedTextSanitizer.withheldTerm(iotas))
+        #expect(term.isPrefix && term.core.isEmpty && term.folded.count == 511)
+        let label = UntrustedLabel("Rig " + iotas + " ok " + iotas, withholding: [iotas])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker)")
+    }
+
+    /// A run of marks before a term's core may cross a real `ι` (ccc 0, counted as 240).
+    /// The match then starts at the run's start, so `à` is withheld too: an over-match,
+    /// never a miss (round 11b).
+    @Test func aLeadingRunThatCrossesAnIotaIsWithheldFromItsStart() {
+        let label = UntrustedLabel("Rig a\u{0300}\u{03B9}\u{0316}SN-123456 ok", withholding: ["\u{0316}SN-123456"])
+        #expect(label.text == "Rig \(UntrustedLabel.withheldMarker) ok", "\(Array(label.text.unicodeScalars))")
+    }
 }

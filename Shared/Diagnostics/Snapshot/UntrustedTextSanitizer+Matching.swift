@@ -148,20 +148,34 @@ extension UntrustedTextSanitizer {
     ///   first and last scalars (`CaselessMap`), which also covers marks that NFD
     ///   reordered;
     /// - for a prefix term, its first match through the end of the text;
-    /// - when the scan was cut and a term exists, the last `L - 1` caseless scalars,
-    ///   where `L` is the longest caseless term, extended back to the start of the
-    ///   source grapheme that holds the first of them. A cut-off secret is a proper
-    ///   prefix of an occurrence, so its caseless form is at most `L - 1` scalars,
-    ///   and the grapheme extension covers a normalization segment the cut left
-    ///   unfinished (Hangul L+V+T, a run of combining marks). The cost is
-    ///   over-redaction of up to `L - 1` trailing caseless scalars plus one grapheme
-    ///   of a label whose input exceeded the scan limit (at least 4,096 kept scalars,
-    ///   far past the default 128-byte label).
+    /// - when the scan was cut and a term exists, the text's final run of marks (under
+    ///   `matchClass`, possibly empty) plus the `L - 1` caseless scalars before it, where
+    ///   `L` is the longest caseless term, extended back to the start of the source
+    ///   grapheme that holds the first of them. A cut-off secret is a proper prefix of an
+    ///   occurrence, and an occurrence may hold any number of label marks in the runs
+    ///   next to its core (`occurrences`), so the window starts before the final run:
+    ///   - a cut in the run after the core leaves the core and the term's leading marks
+    ///     within `L - 1` scalars before that run;
+    ///   - a cut in the core leaves fewer than `L - lead` of its scalars (`lead` leading
+    ///     marks), so the window reaches into the run before the core when there are
+    ///     leading marks, and the grapheme extension withholds that run's base and all of
+    ///     its marks (a real `ι` in the run starts a grapheme of its own, but in an
+    ///     equivalent occurrence everything from such an `ι` to the core is the term's
+    ///     own, so within the window; otherwise only the `ι` over-match put it there);
+    ///   - a cut in the run before the core, or in the one run a term of marks only lies
+    ///     in, leaves that run final.
+    ///
+    ///   The grapheme extension also covers a normalization segment the cut left
+    ///   unfinished (Hangul L+V+T). The cost is over-redaction of the final run, up to
+    ///   `L - 1` caseless scalars and one grapheme of a label whose input exceeded the
+    ///   scan limit (at least 4,096 kept scalars, far past the default 128-byte label).
+    ///   Finding the run is one backward walk, linear in the text.
     ///
     /// Cost: each term is tried at every caseless position, O(n·m) for n caseless
     /// text scalars and m caseless term scalars. n is linear in the scan limit
     /// (a scalar folds to at most three and NFD expands it by a bounded factor) and
-    /// m in `maximumWithheldBytes`. The edge checks add O(n + m) per match.
+    /// m in `maximumWithheldBytes`. Per term, the edge checks add O(n) for the runs and
+    /// O(m) per match, within that bound.
     static func withheldRanges(in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool) -> [Range<Int>] {
         guard map.sourceCount > 0 else { return [] }
         if terms.contains(.failClosed) { return [0..<map.sourceCount] }
@@ -173,7 +187,8 @@ extension UntrustedTextSanitizer {
             }
         }
         if !scanIsComplete, let longest = terms.map(\.folded.count).max(), longest > 1 {
-            let first = max(0, map.scalars.count - (longest - 1))
+            let tail = runStart(before: map.scalars.count, in: map.scalars)
+            let first = max(0, tail - (longest - 1))
             ranges.append(map.graphemeStart[first]..<map.sourceCount)
         }
         return ranges
@@ -189,7 +204,11 @@ extension UntrustedTextSanitizer {
     /// NFC as U+00E9 U+0316, which holds `SN-12345é` verbatim) is `e` U+0316 U+0301. So the
     /// term's leading marks must be placeable at the end of the label's run of marks before
     /// the core, and its trailing marks at the start of the run after it (`marksFit`). A
-    /// term with no starter must be placeable inside one run. The match covers those runs.
+    /// term with no starter must be placeable inside one run. The match covers those runs,
+    /// which may hold any number of the label's own marks (see the scan-cut window in
+    /// `withheldRanges`). This never misses a canonically caseless-equivalent placement of
+    /// the edges; it may over-match (over-redact) around a real `ι`, which `matchClass`
+    /// counts as a mark.
     static func occurrences(of term: WithheldTerm, in text: [Unicode.Scalar], firstOnly: Bool) -> [Range<Int>] {
         let core = term.folded[term.core]
         guard let first = core.first else { return markRuns(holding: term.folded[...], in: text, firstOnly: firstOnly) }
