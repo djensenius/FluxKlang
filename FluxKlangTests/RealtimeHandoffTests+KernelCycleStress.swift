@@ -264,12 +264,10 @@ private func awaitBounded(_ run: CycleStressRun, _ condition: () -> Bool) -> Boo
         if let observation = rig.faults.observe(CycleRig.criticalScope),
            let ticket = try? rig.cycle.ackRequests.request(for: observation) {
             run.firstObserved.store(true, ordering: .releasing)
-            var sample: KernelCycleTelemetry?
             let permitted = awaitBounded(run) {
-                sample = latestKernelCycleSample(slots)?.value
-                return sample?.permitsAcknowledgement(ticket) == true
+                latestKernelCycleSample(slots)?.value.permitsAcknowledgement(ticket) == true
             }
-            if permitted, (try? rig.cycle.acknowledgeCritical(observation, ticket, sample: sample)) != nil {
+            if permitted, (try? rig.cycle.acknowledgeCritical(observation, ticket)) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
             }
         }

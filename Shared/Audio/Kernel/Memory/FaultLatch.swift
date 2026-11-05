@@ -35,15 +35,15 @@ struct FaultRecord: Sendable, BitwiseCopyable, Equatable {
 
 /// One control-side observation of a latched scope, bound to the latch that made it. Only `FaultLatch.observe`
 /// creates one, and `FaultLatch.acknowledge(_:)` accepts it only while nothing has been raised or acknowledged on
-/// its scope since. Holds its latch strongly. `tally` and `epoch` (the words `acknowledge` compares) are readable,
-/// never settable, so a caller can bind to exactly this observation (#64 E5b). Reference model; not RT-certified.
+/// its scope since. Holds its latch (`owner`) strongly. `owner`, `tally` and `epoch` are readable, never settable,
+/// so a caller can bind to exactly this latch and observation (#64 E5b). Reference model; not RT-certified.
 struct FaultObservation: Sendable {
     /// The latched record; `kind` is only the first kind raised, so recovery must cover the whole scope.
     let record: FaultRecord
     /// `false` when acknowledging can never succeed (count saturated or epoch exhausted): the scope then stays
     /// latched until the latch is replaced while quiescent.
     let isAcknowledgeable: Bool
-    fileprivate let owner: FaultLatch
+    let owner: FaultLatch
     fileprivate let index: Int
     let tally: UInt64
     fileprivate let claim: WordPair

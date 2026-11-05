@@ -321,7 +321,7 @@ extension RealtimeHandoffTests {
             #expect(rig.run(64, 64).0.status == .silenced(.scopeFaulted))
             let approving = try #require(latestKernelCycleSample(slots)).value
             #expect(approving.permitsAcknowledgement(second) && approving.lastFaultedAckEpoch == 2)
-            #expect(try rig.cycle.acknowledgeCritical(observation, second, sample: approving) == observation.record)
+            #expect(try rig.cycle.acknowledgeCritical(observation, second) == observation.record)
             // An unsilenced cycle sees a newer epoch but is no faulted cycle, so it never approves.
             let third = try rig.cycle.ackRequests.request(for: observation)
             #expect(rig.run(128, 64).0.status == .ok)
@@ -413,8 +413,9 @@ extension RealtimeHandoffTests {
 
         /// Kills: an epoch that wraps instead of refusing once `UInt64.max` was requested.
         @Test func exhaustedAckEpochRefusesWithoutWrapping() throws {
-            let requests = try #require(KernelAckRequests(lastRequestedForTesting: .max - 1))
             let rig = try CycleRig()
+            let requests = try #require(KernelAckRequests(
+                faults: rig.faults, criticalScope: CycleRig.criticalScope, lastRequestedForTesting: .max - 1))
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
             let last = try requests.request(for: observation)

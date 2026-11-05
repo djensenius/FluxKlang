@@ -6,7 +6,8 @@ import Synchronization
 
 /// An acknowledgement request: the epoch control published after its `observe`, bound to the identity of the
 /// `KernelAckRequests` (so the `KernelCycle`) that issued it and to the `FaultObservation` it was requested for.
-/// Only `KernelAckRequests.request(for:)` makes one. `~Copyable`: `KernelCycle.acknowledgeCritical` consumes it,
+/// Only `KernelAckRequests.request(for:)` makes one, and only for an observation of its cycle's own latch and
+/// critical scope. `~Copyable`: `KernelCycle.acknowledgeCritical` consumes it,
 /// so one ticket can never be presented twice, and that call refuses it for any other observation (a re-raise
 /// after the request makes a new observation, which needs a new request). Reference model; not RT-certified.
 struct KernelAckTicket: ~Copyable, Sendable {
@@ -56,6 +57,9 @@ final class KernelAckRequests: Sendable {
         /// `UInt64.max` epochs were requested; the epoch never wraps, so no acknowledgement can be requested again
         /// until the cycle is replaced while quiescent.
         case epochExhausted
+        /// The observation is not of this cycle's `FaultLatch` (`FaultObservation.owner`) or not of its critical
+        /// scope. Checked before the epoch moves, so nothing changes.
+        case foreignObservation
     }
 
     /// This instance's process-unique identity (never 0). `KernelCycle` publishes it with every sample as
@@ -63,15 +67,21 @@ final class KernelAckRequests: Sendable {
     /// at 0, cannot approve a ticket of the cycle it replaced.
     let identity: UInt64
     private let epoch: Atomic<UInt64>
+    /// The cycle's latch and critical scope: `request(for:)` accepts only their observations. Control-side only;
+    /// render never touches them.
+    private let faults: FaultLatch
+    private let criticalScope: FaultScope
 
-    /// Control-side preparation with no epoch requested yet; `nil` once every identity was issued.
-    convenience init?() {
-        self.init(lastRequestedForTesting: 0)
+    /// Control-side preparation for `faults`' `criticalScope`, with no epoch requested yet; `nil` once every
+    /// identity was issued.
+    convenience init?(faults: FaultLatch, criticalScope: FaultScope) {
+        self.init(faults: faults, criticalScope: criticalScope, lastRequestedForTesting: 0)
     }
 
     /// Test-only (SwiftLint source policy, not compiler isolation): seeds the epoch at `lastRequestedForTesting`,
-    /// for exhaustion tests. Production prepares through `init()`. `nil` once every identity was issued.
-    init?(lastRequestedForTesting lastRequested: UInt64) {
+    /// for exhaustion tests. Production prepares through `init(faults:criticalScope:)`. `nil` once every identity
+    /// was issued.
+    init?(faults: FaultLatch, criticalScope: FaultScope, lastRequestedForTesting lastRequested: UInt64) {
         var current = ackRequestIdentities.load(ordering: .relaxed)
         var issued: UInt64?
         while issued == nil, current < .max {
@@ -82,15 +92,21 @@ final class KernelAckRequests: Sendable {
         guard let issued else { return nil }
         identity = issued
         epoch = Atomic(lastRequested)
+        self.faults = faults
+        self.criticalScope = criticalScope
     }
 
     /// The last epoch requested, or 0 before the first. Any thread; diagnostic only, carries no ordering.
     var lastRequested: UInt64 { epoch.load(ordering: .relaxed) }
 
     /// Control only, with the `observation` this request is for (so after `FaultLatch.observe`). Publishes the next
-    /// epoch with a releasing compare-exchange and returns it bound to `observation`; refuses (never wraps) once
-    /// `UInt64.max` was requested. Lock-free, allocation-free; retries only when another requester raced it.
+    /// epoch with a releasing compare-exchange and returns it bound to `observation`; refuses another latch's or
+    /// scope's observation, and (never wraps) once `UInt64.max` was requested, changing nothing. Lock-free,
+    /// allocation-free; retries only when another requester raced it.
     func request(for observation: FaultObservation) throws(RequestError) -> KernelAckTicket {
+        guard observation.owner === faults, observation.record.scope == criticalScope else {
+            throw .foreignObservation
+        }
         var current = epoch.load(ordering: .relaxed)
         while current < .max {
             let (exchanged, original) = epoch.compareExchange(

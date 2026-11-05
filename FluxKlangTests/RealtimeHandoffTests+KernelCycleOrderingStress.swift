@@ -208,7 +208,8 @@ private struct AdmittingSource {
     return outcome
 }
 
-/// Runs 64-frame cycles from frame 64 until every producer is done and control has acknowledged a fault.
+/// Runs 64-frame cycles from `run.now` (after the setup's cycles) until every producer is done and control has
+/// acknowledged a fault.
 @Sendable private func renderCycles(_ rig: CycleRig, _ run: CycleStressRun, setup: OrderingModel,
                                     producers: Int) -> OrderingModel {
     var model = setup
@@ -216,7 +217,7 @@ private struct AdmittingSource {
     let deadline = ContinuousClock.now + CycleStressRun.waitLimit
     while !run.firstObserved.load(ordering: .acquiring), !run.shouldStop, ContinuousClock.now < deadline {}
     Thread.sleep(forTimeInterval: 0.002)
-    var blockStart: Int64 = 64
+    var blockStart = run.now.load(ordering: .relaxed)
     while run.producersDone.load(ordering: .acquiring) < producers || run.acknowledged.load(ordering: .acquiring) == 0,
           !run.shouldStop {
         run.cycleStarted.add(1, ordering: .sequentiallyConsistent)
@@ -258,7 +259,7 @@ private struct AdmittingSource {
             while !read().permitsAcknowledgement(ticket), !run.renderDone.load(ordering: .acquiring),
                   !run.shouldStop {}
             if previous.permitsAcknowledgement(ticket),
-               (try? rig.cycle.acknowledgeCritical(observation, ticket, sample: previous)) != nil {
+               (try? rig.cycle.acknowledgeCritical(observation, ticket)) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
             }
         }
@@ -292,31 +293,32 @@ extension RealtimeHandoffTests {
             let (dropped, nothing) = rig.run(0, 64)
             setup.record(dropped, nothing, blockStart: 0, frames: 64)
             #expect(dropped.droppedLate == 1 && nothing.isEmpty)
-            var accepted = 1
             #expect(setupPush(64, .noteOn(channel: 0, note: 15, velocity: 90)) == .ok)
-            accepted += 1
-            var status = KernelStatus.ok
-            while status == .ok {
-                status = setupPush(64, .control(channel: 0, controller: 7, value: 0))
-                if status == .ok { accepted += 1 }
+            func fill(_ payload: KernelEventPayload) -> (count: Int, refusal: KernelStatus) {
+                var count = 0
+                var status = setupPush(64, payload)
+                while status == .ok {
+                    count += 1
+                    status = setupPush(64, payload)
+                }
+                return (count, status)
             }
-            #expect(status == .refused(.full))
-            var releases = 0
-            status = .ok
-            while status == .ok {
-                status = setupPush(64, .noteOff(channel: 0, note: 7))
-                if status == .ok { releases += 1 }
-            }
-            accepted += releases
-            #expect(releases > 0 && status == .refused(.criticalExhausted))
+            let controls = fill(.control(channel: 0, controller: 7, value: 0))
+            let releases = fill(.noteOff(channel: 0, note: 7))
+            // `noteOn(14)`, `noteOn(15)`, then the fills.
+            let accepted = 2 + controls.count + releases.count
+            #expect(controls.refusal == .refused(.full))
+            #expect(releases.count > 0 && releases.refusal == .refused(.criticalExhausted))
             #expect(setupPush(65, .noteOff(channel: 0, note: 15)) == .refused(.criticalExhausted))
             #expect(rig.faults.isLatched(CycleRig.criticalScope))
-            // More than a block queued in one lane (`noteOn(14)` was drained): the first latched cycle cannot prove
-            // it empty, so at least one cycle reports flushing whatever the producers do.
-            #expect(accepted - 1 > rig.cycle.blockCapacity)
+            // More than a block is queued, so the first latched cycle (run here, before any producer starts) cannot
+            // prove the lanes empty: it reports flushing whatever the producers later do.
+            let (latched, latchedEmitted) = rig.run(64, 64)
+            setup.record(latched, latchedEmitted, blockStart: 64, frames: 64)
+            #expect(latched.status == .silenced(.scopeFaulted) && latched.flushing)
 
             let run = CycleStressRun()
-            run.now.store(64, ordering: .relaxed)
+            run.now.store(128, ordering: .relaxed)
             let outcomes = CycleSlots<AdmittingOutcome>(3)
             let model = CycleSlots<OrderingModel>(1)
             let control = CycleSlots<[String]>(1)

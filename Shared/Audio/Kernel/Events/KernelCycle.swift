@@ -78,8 +78,8 @@ struct KernelCycleParts {
     let safety: SafetyFlags
     let ramps: RampSlots
     /// Where every cycle publishes its `KernelCycleTelemetry`; `nil` publishes nothing (the cycle still keeps it).
-    /// Fail-closed: with `nil`, control never sees a sample, so `permitsAcknowledgement` never approves and a
-    /// critical fault can never be acknowledged through the contract.
+    /// Fail-closed: with `nil`, `acknowledgeCritical` has no sample to read, so it never approves and a critical
+    /// fault can never be acknowledged through the contract.
     var telemetry: KernelCycleTelemetryOutput?
     /// `.freshFanIn` only when no earlier cycle consumed `events`; anything else starts flushing (fail-safe).
     var start = KernelCycleStart.replacingCycle
@@ -125,15 +125,18 @@ struct KernelCycleParts {
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
 /// acknowledgement can let a queued `noteOn` sound and stick. Off-thread, control calls
-/// `ackRequests.request(for: observation)` after `observe`, waits until a published sample's
-/// `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` (the happens-before chain is on `KernelAckRequests`;
-/// its formal model-check is tracked in #190), then calls `acknowledgeCritical(observation, ticket, sample:)`.
+/// `ackRequests.request(for: observation)` after `observe` (only this cycle's latch and critical scope), then
+/// `acknowledgeCritical(observation, ticket)`, which reads this cycle's own telemetry slot and acknowledges only
+/// when that sample's `KernelCycleTelemetry.permitsAcknowledgement(_:)` is `true` (the happens-before chain is on
+/// `KernelAckRequests`; its formal model-check is tracked in #190). No caller-supplied sample is ever trusted.
 /// Step 0 of `run` acquire-loads the epoch before step 2's latch read. Tickets are bound to this cycle's
 /// `ackRequests.identity` (published as `ackCycle`), so a replacement cycle on the same slots never approves them,
 /// and to the observation they were requested for, so a re-raise after the request needs a new observation, a new
 /// request and a new approval; `acknowledgeCritical` consumes the ticket, so it is never reused. Replacing a cycle
 /// on the same fan-in starts the replacement flushing (`KernelCycleStart.replacingCycle`). Fail-closed: with no
-/// telemetry output nothing is ever approved.
+/// telemetry output nothing is ever approved. Residual (#190): control must acknowledge critical scopes only via
+/// `acknowledgeCritical`; `FaultLatch.acknowledge` is a shared API and is not type-restricted for critical scopes.
+/// The ticket is type-enforced only for callers of `acknowledgeCritical`.
 ///
 /// Stale clocks (E5b decision): the gate's one marker per stall is `KernelCycleResult.resync`, counted with the
 /// gate's counters in telemetry; no `FaultKind.staleClock` is raised and the cycle adds no `FaultLatch.raise` site.
@@ -173,8 +176,9 @@ final class KernelCycle: @unchecked Sendable {
         case ackIdentitiesExhausted
     }
 
-    /// Why `acknowledgeCritical` refused. Every refusal leaves the latch, the epoch and the cycle unchanged; the
-    /// ticket is consumed, so control observes, requests and waits for approval again.
+    /// Why `acknowledgeCritical` refused, checked in this order. Every refusal leaves the latch, the epoch and the
+    /// cycle unchanged (`.notApproved` and `.latchRefused` have read the telemetry slot, which only moves the
+    /// consumer to its latest sample); the ticket is consumed, so control observes, requests and waits again.
     enum AcknowledgeRefusal: Error, Equatable, Sendable {
         /// Another cycle's `ackRequests` issued the ticket.
         case foreignTicket
@@ -182,7 +186,8 @@ final class KernelCycle: @unchecked Sendable {
         case notCriticalScope
         /// The ticket was requested for another observation (an earlier latched state of the scope).
         case ticketObservationMismatch
-        /// No sample, or the sample does not yet `permitsAcknowledgement` the ticket.
+        /// This cycle publishes no telemetry, its slot holds no sample yet, or the latest one does not yet
+        /// `permitsAcknowledgement` the ticket.
         case notApproved
         /// `FaultLatch.acknowledge` refused: the scope was raised on or acknowledged since `observe`.
         case latchRefused
@@ -241,7 +246,8 @@ final class KernelCycle: @unchecked Sendable {
         if let output = parts.telemetry, output.slot < 0 || output.slot >= output.slots.slotCount {
             throw .telemetrySlotOutOfRange(output.slot)
         }
-        guard let ackRequests = KernelAckRequests() else { throw .ackIdentitiesExhausted }
+        guard let ackRequests = KernelAckRequests(faults: parts.faults, criticalScope: parts.events.criticalScope)
+        else { throw .ackIdentitiesExhausted }
         self.ackRequests = ackRequests
         self.blockCapacity = blockCapacity
         self.perLaneQuota = perLaneQuota
@@ -301,14 +307,17 @@ final class KernelCycle: @unchecked Sendable {
 
     /// Control only; takes the latch's control lock, so never call from render. The Acknowledgement contract's
     /// entry point: re-arms the critical scope and returns `observation.record` only when `ticket` was issued by
-    /// this cycle for exactly `observation` and `sample` (control's latest read of this cycle's telemetry)
-    /// permits it; otherwise a typed refusal that changes nothing. Consumes `ticket` either way.
-    func acknowledgeCritical(_ observation: FaultObservation, _ ticket: consuming KernelAckTicket,
-                             sample: KernelCycleTelemetry?) throws(AcknowledgeRefusal) -> FaultRecord {
+    /// this cycle for exactly `observation` and the latest sample in this cycle's own telemetry slot permits it;
+    /// otherwise a typed refusal that changes nothing. Consumes `ticket` either way. It reads the slot as its
+    /// single consumer (`TelemetrySlots.latest`), so call it only from the thread that is that slot's one reader,
+    /// never concurrently with another read of the slot.
+    func acknowledgeCritical(_ observation: FaultObservation,
+                             _ ticket: consuming KernelAckTicket) throws(AcknowledgeRefusal) -> FaultRecord {
         guard ticket.cycle == ackRequests.identity else { throw .foreignTicket }
         guard observation.record.scope == criticalScope else { throw .notCriticalScope }
         guard ticket.isBound(to: observation) else { throw .ticketObservationMismatch }
-        guard let sample, sample.permitsAcknowledgement(ticket) else { throw .notApproved }
+        guard let output = telemetryOutput, case .measured(let sample) = output.slots.latest(slot: output.slot),
+              sample.value.permitsAcknowledgement(ticket) else { throw .notApproved }
         guard let record = faults.acknowledge(observation) else { throw .latchRefused }
         return record
     }

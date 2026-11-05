@@ -9,10 +9,10 @@ private func noteOn(_ note: UInt8) -> KernelEventPayload { .noteOn(channel: 0, n
 private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 0, controller: 7, value: value) }
 
 /// `acknowledgeCritical` as a value, so a refusal can be compared and the ticket is consumed outside `#expect`.
-private func acknowledging(_ cycle: KernelCycle, _ observation: FaultObservation, _ ticket: consuming KernelAckTicket,
-                           _ sample: KernelCycleTelemetry?) -> Result<FaultRecord, KernelCycle.AcknowledgeRefusal> {
+private func acknowledging(_ cycle: KernelCycle, _ observation: FaultObservation,
+                           _ ticket: consuming KernelAckTicket) -> Result<FaultRecord, KernelCycle.AcknowledgeRefusal> {
     do {
-        return .success(try cycle.acknowledgeCritical(observation, ticket, sample: sample))
+        return .success(try cycle.acknowledgeCritical(observation, ticket))
     } catch {
         return .failure(error)
     }
@@ -57,7 +57,7 @@ extension RealtimeHandoffTests {
             let second = try #require(rig.faults.observe(CycleRig.criticalScope))
             #expect(second.epoch == first.epoch && second.tally != first.tally)
             let before = AcknowledgeState(rig)
-            let reuse = acknowledging(rig.cycle, second, reused, approving)
+            let reuse = acknowledging(rig.cycle, second, reused)
             #expect(reuse == .failure(.ticketObservationMismatch))
             #expect(AcknowledgeState(rig) == before && before.latched && before.record == second.record)
 
@@ -65,8 +65,7 @@ extension RealtimeHandoffTests {
             let (silenced, released) = rig.run(64, 64)
             #expect(silenced.status == .silenced(.scopeFaulted) && silenced.discardedWhileSilenced == 1)
             #expect(released.isEmpty)
-            let approval = try #require(latestKernelCycleSample(slots)).value
-            let acknowledged = acknowledging(rig.cycle, second, fresh, approval)
+            let acknowledged = acknowledging(rig.cycle, second, fresh)
             #expect(acknowledged == .success(second.record) && !rig.faults.isLatched(CycleRig.criticalScope))
             for block in Int64(2)...4 {
                 let (result, emitted) = rig.run(block * 64, 64)
@@ -75,41 +74,108 @@ extension RealtimeHandoffTests {
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9) && rig.cycle.bufferedCount == 0)
         }
 
-        /// Each refusal is typed and leaves the latch, the epoch and the cycle unchanged. Kills: the issuing-cycle,
-        /// critical-scope or approval check skipped.
+        /// Each refusal is typed, comes in the documented order and leaves the latch, the epoch and the cycle
+        /// unchanged. Kills: the issuing-cycle, critical-scope, approval or latch check skipped; the binding checked
+        /// before the issuing cycle (the foreign ticket is also bound to another observation).
         @Test func acknowledgeRefusalsChangeNothing() throws {
             let slots = try kernelCycleTelemetrySlots()
             let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
             let other = try CycleRig()
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
             #expect(rig.faults.raise(CycleRig.slotsScope, .producerSlotsExhausted, frame: 0) == .ok)
+            for frame in Int64(0)..<2 {
+                #expect(other.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: frame) == .ok)
+            }
             let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
             let slotsObservation = try #require(rig.faults.observe(CycleRig.slotsScope))
-            var before = AcknowledgeState(rig)
+            let otherObservation = try #require(other.faults.observe(CycleRig.criticalScope))
+            #expect(otherObservation.tally != observation.tally)
             let unpublished = try rig.cycle.ackRequests.request(for: observation)
-            let early = try rig.cycle.ackRequests.request(for: observation)
-            let foreign = try other.cycle.ackRequests.request(for: observation)
-            let wrongScope = try rig.cycle.ackRequests.request(for: slotsObservation)
+            let foreign = try other.cycle.ackRequests.request(for: otherObservation)
+            let wrongScope = try rig.cycle.ackRequests.request(for: observation)
             let beforeRace = try rig.cycle.ackRequests.request(for: observation)
-            before = AcknowledgeState(rig)
-            #expect(before.lastRequested == 4)
-            let noSample = acknowledging(rig.cycle, observation, unpublished, nil)
-            let notYet = acknowledging(rig.cycle, observation, early, rig.cycle.telemetry)
-            #expect(noSample == .failure(.notApproved) && notYet == .failure(.notApproved))
-            #expect(AcknowledgeState(rig) == before)
+            var before = AcknowledgeState(rig)
+            #expect(before.lastRequested == 3)
+            let notYet = acknowledging(rig.cycle, observation, unpublished)
+            #expect(notYet == .failure(.notApproved) && AcknowledgeState(rig) == before)
 
             #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
-            let approving = try #require(latestKernelCycleSample(slots)).value
-            #expect(approving.lastFaultedAckEpoch == 4)
+            #expect(try #require(latestKernelCycleSample(slots)).value.lastFaultedAckEpoch == 3)
             before = AcknowledgeState(rig)
-            let foreignOutcome = acknowledging(rig.cycle, observation, foreign, approving)
-            let scopeOutcome = acknowledging(rig.cycle, slotsObservation, wrongScope, approving)
+            let foreignOutcome = acknowledging(rig.cycle, observation, foreign)
+            let scopeOutcome = acknowledging(rig.cycle, slotsObservation, wrongScope)
             #expect(foreignOutcome == .failure(.foreignTicket) && scopeOutcome == .failure(.notCriticalScope))
             #expect(AcknowledgeState(rig) == before && rig.faults.isLatched(CycleRig.slotsScope))
             #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 64) == .ok)
             before = AcknowledgeState(rig)
-            let raced = acknowledging(rig.cycle, observation, beforeRace, approving)
+            let raced = acknowledging(rig.cycle, observation, beforeRace)
             #expect(raced == .failure(.latchRefused) && AcknowledgeState(rig) == before && before.latched)
+        }
+
+        /// Round 2d: no caller-supplied sample is trusted. A forged sample would approve, but `acknowledgeCritical`
+        /// reads only its own slot: before a faulted cycle, after a replacement cycle (another identity) published
+        /// a faulted sample on that slot, and with no telemetry at all (fail-closed), it refuses. Kills: approval
+        /// ignored; identity ignored.
+        @Test func forgedOrForeignSampleNeverApproves() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
+            let rig = try CycleRig(telemetry: output)
+            #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+            let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
+            let early = try rig.cycle.ackRequests.request(for: observation)
+            let forged = KernelCycleTelemetry(lastFaultedAckEpoch: .max, ackCycle: rig.cycle.ackRequests.identity)
+            let forgedApproves = forged.permitsAcknowledgement(early)
+            var before = AcknowledgeState(rig)
+            let earlyOutcome = acknowledging(rig.cycle, observation, early)
+            #expect(forgedApproves && earlyOutcome == .failure(.notApproved))
+            #expect(AcknowledgeState(rig) == before)
+
+            let ticket = try rig.cycle.ackRequests.request(for: observation)
+            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                         safety: rig.safety, ramps: rig.ramps, telemetry: output)
+            let replacement = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4,
+                                                                             staleTolerance: 48),
+                                              blockCapacity: 64, perLaneQuota: 64)
+            #expect(replacement.run(blockStart: 0, frames: 64) { _, _ in }.status == .silenced(.scopeFaulted))
+            let foreignSample = try #require(latestKernelCycleSample(slots)).value
+            #expect(foreignSample.lastFaultedAckEpoch == 0 && foreignSample.ackCycle != rig.cycle.ackRequests.identity)
+            before = AcknowledgeState(rig)
+            let foreignOutcome = acknowledging(rig.cycle, observation, ticket)
+            #expect(foreignOutcome == .failure(.notApproved))
+            #expect(AcknowledgeState(rig) == before)
+
+            let silent = try CycleRig()
+            #expect(silent.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+            let silentObservation = try #require(silent.faults.observe(CycleRig.criticalScope))
+            let silentTicket = try silent.cycle.ackRequests.request(for: silentObservation)
+            #expect(silent.run(0, 64).0.status == .silenced(.scopeFaulted))
+            let silentOutcome = acknowledging(silent.cycle, silentObservation, silentTicket)
+            #expect(silentOutcome == .failure(.notApproved))
+            #expect(silent.faults.isLatched(CycleRig.criticalScope))
+        }
+
+        /// Round 2d: `request(for:)` takes only an observation of its cycle's own latch and critical scope. A
+        /// foreign latch's observation with the same words, and the same latch's other scope, are refused before
+        /// the epoch moves. Kills: the latch or the scope check skipped.
+        @Test func requestRefusesAForeignLatchOrScopeObservation() throws {
+            let rig = try CycleRig()
+            let twin = try FaultLatch(scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
+            for latch in [rig.faults, twin] {
+                #expect(latch.raise(CycleRig.criticalScope, .criticalExhausted, frame: 7) == .ok)
+            }
+            #expect(rig.faults.raise(CycleRig.slotsScope, .producerSlotsExhausted, frame: 7) == .ok)
+            let own = try #require(rig.faults.observe(CycleRig.criticalScope))
+            let foreign = try #require(twin.observe(CycleRig.criticalScope))
+            let slotsObservation = try #require(rig.faults.observe(CycleRig.slotsScope))
+            #expect(foreign.record == own.record && foreign.tally == own.tally && foreign.epoch == own.epoch)
+            for observation in [foreign, slotsObservation] {
+                #expect(throws: KernelAckRequests.RequestError.foreignObservation) {
+                    _ = try rig.cycle.ackRequests.request(for: observation)
+                }
+                #expect(rig.cycle.ackRequests.lastRequested == 0)
+            }
+            let ticket = try rig.cycle.ackRequests.request(for: own)
+            #expect(ticket.epoch == 1 && ticket.isBound(to: own))
         }
 
         /// Round 2c L1: the old cycle is acknowledged while its lane is still flushing (the quota cut it short, so
@@ -131,8 +197,7 @@ extension RealtimeHandoffTests {
                 let ticket = try rig.cycle.ackRequests.request(for: observation)
                 let faulted = rig.run(0, 64).0
                 #expect(faulted.status == .silenced(.scopeFaulted) && faulted.flushing && faulted.drained == 2)
-                let sample = try #require(latestKernelCycleSample(slots)).value
-                let acknowledged = acknowledging(rig.cycle, observation, ticket, sample)
+                let acknowledged = acknowledging(rig.cycle, observation, ticket)
                 #expect(acknowledged == .success(observation.record))
 
                 var parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
