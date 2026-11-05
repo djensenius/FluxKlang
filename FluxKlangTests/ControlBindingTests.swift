@@ -267,10 +267,11 @@ extension ControlBindingTests {
 
     static func binding(
         _ target: ParameterID, unit: ParameterUnit, _ profile: EncoderProfile,
-        step: Double? = nil, lower: Double? = nil, upper: Double? = nil
+        step: Double? = nil, lower: Double? = nil, upper: Double? = nil, pickup: PickupMode? = nil
     ) throws -> ControlBinding {
         try ControlBinding(.init(id: BindingID(validated: "bnd.test"), source: ControlSourceID(validated: "ctl.test"),
-                                 target: target, unit: unit, profile: profile, step: step, lower: lower, upper: upper))
+                                 target: target, unit: unit, profile: profile, step: step, lower: lower, upper: upper,
+                                 pickup: pickup ?? (profile.isRelative ? nil : .jump)))
     }
 
     static func descriptor(

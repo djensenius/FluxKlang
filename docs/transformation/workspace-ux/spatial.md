@@ -64,6 +64,14 @@ so unit-space constants must double too or the existing DBAP golden outputs chan
 The y-flip does not change distances. A legacy stereo source (`left`/`right` `WingNodeRef`) becomes one source
 on a 2-channel port. Its console references are evidence only, and the import stays inert until reviewed.
 
+### Neutral layout contract (v1)
+
+`SpatialLayout` (`fluxklang.spatial-layout` v1, `Shared/Spatial/Adapter/`) holds at most 64 speakers and 64 groups;
+an import result holds at most 64 sources. Decoding re-validates every value and refuses invalid data with a typed
+`SpatialLayoutError`. Points outside −1…1 are refused (`.coordinateOutOfRange`), and a source placement's `blur` outside
+**1e-3…2√2** neutral units, or non-finite, is refused with `.invalidBlur`. The upper bound is the plane diagonal; the
+lower bound is policy against degenerate near-zero blur. Imported legacy blur is always 0.30.
+
 ## Calibration (staged and authorized)
 
 ```mermaid
