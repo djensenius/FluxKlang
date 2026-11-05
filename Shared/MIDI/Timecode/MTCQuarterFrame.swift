@@ -8,7 +8,7 @@ struct MTCQuarterFrame: Equatable, Hashable, Sendable {
     let nibble: UInt8
 
     init(piece: UInt8, nibble: UInt8) throws(TimecodeError) {
-        guard piece < 8, nibble < 0x10 else { throw .dataByteOutOfRange((piece << 4) | nibble) }
+        guard piece < 8, nibble < 0x10 else { throw .invalidPiece(piece: piece, nibble: nibble) }
         guard nibble & ~Self.allowedBits[Int(piece)] == 0 else {
             throw .reservedBitsSet(piece: piece, nibble: nibble)
         }
@@ -44,9 +44,13 @@ struct MTCQuarterFrame: Equatable, Hashable, Sendable {
         return nibbles.enumerated().map { MTCQuarterFrame(validated: UInt8($0.offset), nibble: $0.element) }
     }
 
-    /// Joins eight nibbles indexed by piece into a validated time.
+    /// Joins eight nibbles indexed by piece into a validated time. Every element passes the same piece-level
+    /// validation as `init(piece:nibble:)` first, so the field extraction below never masks away bad bits.
     static func time(fromNibbles nibbles: [UInt8]) throws(TimecodeError) -> SMPTETime {
         guard nibbles.count == pieceCount else { throw .lengthMismatch(expected: pieceCount, actual: nibbles.count) }
+        for (piece, nibble) in nibbles.enumerated() {
+            _ = try MTCQuarterFrame(piece: UInt8(piece), nibble: nibble)
+        }
         func join(_ low: Int) -> Int { Int(nibbles[low]) | Int(nibbles[low + 1]) << 4 }
         let rate = try SMPTEFrameRate(code: (nibbles[7] >> 1) & 0x03)
         let hours = Int(nibbles[6]) | Int(nibbles[7] & 0x01) << 4

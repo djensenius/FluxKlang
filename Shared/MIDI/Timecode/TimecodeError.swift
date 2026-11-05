@@ -17,6 +17,8 @@ enum TimecodeError: Error, Equatable, Hashable, Sendable {
     case dataByteOutOfRange(UInt8)
     /// Not a single-data-byte F1 System Common event.
     case notQuarterFrame
+    /// A piece index above 7 or a value that is not a nibble (0...15).
+    case invalidPiece(piece: UInt8, nibble: UInt8)
     /// A quarter-frame nibble carried bits the MTC piece defines as zero.
     case reservedBitsSet(piece: UInt8, nibble: UInt8)
     /// The SysEx header does not identify the expected Universal Real Time message.
