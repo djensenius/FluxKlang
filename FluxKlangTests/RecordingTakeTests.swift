@@ -353,4 +353,52 @@ struct RecordingTakeTests {
         let take = try ledger.finish(Fixture.take1, reason: .user)
         #expect(take.segments.count == 1_024 && take.fileFrames == Int64(limit))
     }
+
+    /// Round 6 (Copilot): a recorded stop keeps bounding the next restart after its take is finished
+    /// or discarded (§8.3: capture ended no later than the restart's `previousFrame`). Equal is
+    /// accepted: both frames are exclusive ends, so capture ended exactly where the generation did.
+    @Test
+    func recordedStopBoundsARestartAfterItsTakeCloses() throws {
+        for reason in [RuntimeCaptureStopReason.deviceLost, .diskFull] {
+            for finishes in [true, false] {
+                var ledger = try Fixture.ledger()
+                try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 1000))
+                #expect(try ledger.ingest(Fixture.stop(1, 1000, reason)) == [.recorded(Fixture.take1)])
+                let early = Fixture.restart(2, 0, previousFrame: 999, host: 2_500_000_000)
+                let refusal = TakeLedgerError.stopAfterRestart(Fixture.take1, stopFrame: 1000, previousFrame: 999)
+                Fixture.refusal(refusal) { () throws(TakeLedgerError) in _ = try ledger.ingest(early) }
+                var finished: RecordingTake?
+                var discarded: DiscardedTake?
+                if finishes {
+                    finished = try ledger.finish(Fixture.take1, reason: TakeStopReason(reason))
+                } else {
+                    discarded = try ledger.discard(Fixture.take1, reason: .abandoned)
+                }
+                Fixture.refusal(refusal) { () throws(TakeLedgerError) in _ = try ledger.ingest(early) }
+                #expect(ledger.take(Fixture.take1) == finished && ledger.discarded(Fixture.take1) == discarded)
+                // Nothing changed: generation 1 is still the latest and the restart is still unused.
+                try ledger.open(Fixture.opening(Fixture.take2, 1, 1000))
+                let boundary = Fixture.restart(2, 0, previousFrame: 1000, host: 2_500_000_000)
+                #expect(try ledger.ingest(boundary) == [.split(Fixture.take2)])
+                #expect(ledger.order == [Fixture.take1, Fixture.take2])
+            }
+        }
+    }
+
+    /// Round 6: a take the ledger ended stays exempt after it is finished or discarded.
+    @Test
+    func ledgerEndedTakeNeverBoundsARestartAfterItCloses() throws {
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        for finishes in [true, false] {
+            var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+            try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+            #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+            if finishes {
+                #expect(try ledger.finish(Fixture.take1, reason: ended).segments.map(\.frames) == [1000])
+            } else {
+                #expect(try ledger.discard(Fixture.take1, reason: .abandoned).stop?.frame == 2000)
+            }
+            #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 600, host: 2_500_000_000)).isEmpty)
+        }
+    }
 }

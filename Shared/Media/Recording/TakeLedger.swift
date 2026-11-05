@@ -265,10 +265,12 @@ struct TakeLedger: Sendable {
             throw .staleGeneration(generation)
         }
         guard restarts.count < Self.maximumGenerationRecords else { throw .tooManyGenerationRecords }
-        // A stopped take is passed by, but its stop must not lie past the restart (§8.3). A take
-        // the ledger ended at a discontinuity is exempt: its frames predate the jump.
+        // A stopped take is passed by, but its recorded stop must not lie past the restart (§8.3),
+        // whether the take is still open, finished or discarded: its state, stop included, stays in
+        // `states` (at most `maximumTakes` stops). A take the ledger ended at a discontinuity is
+        // exempt: its frames predate the jump.
         for id in order {
-            guard let state = states[id], state.isOpen, state.opening.startClockSlot == sample.clock,
+            guard let state = states[id], state.opening.startClockSlot == sample.clock,
                   let stop = state.stop, !stop.reason.isLedgerStop, stop.generation + 1 == generation,
                   stop.frame > previousFrame else { continue }
             throw .stopAfterRestart(id, stopFrame: stop.frame, previousFrame: previousFrame)
