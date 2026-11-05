@@ -63,4 +63,8 @@ enum ControlBindingRefusal: Error, Hashable, Sendable {
     case invalidValue(ParameterValueError)
     /// The controller is stale or missing; its pickup state is `.unavailable`.
     case pickupUnavailable
+    /// The target is not in the host's current catalog (for example it was removed).
+    case targetMissing(ParameterID)
+    /// The host reports no current value for the target; none is ever assumed or cached.
+    case valueUnavailable(ParameterID)
 }
