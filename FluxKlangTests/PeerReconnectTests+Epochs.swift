@@ -99,10 +99,10 @@ struct PeerReconnectEpochTests {
         let second = try #require(PeerSyncSession(hostEpoch: hostEpoch,
                                                   connectionEpoch: try issuer.issue(for: Fixture.connection)))
         #expect(!issuer.isCurrent(firstEpoch))
-        _ = state.connectionLost()
+        _ = state.connectionLost(state.session)
         #expect(try state.reconnect(to: second).discarded == [Fixture.id("command.a")])
         var receiver = PeerSyncReceiver(session: second)
-        _ = state.observe(receiver.receive(Fixture.snapshot(second)), from: receiver)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(second))), from: receiver)
         #expect(throws: PeerOutboundRefusal.staleSession(.connectionEpoch)) {
             try state.enqueue(Fixture.intent("command.b", session: first))
         }
@@ -113,24 +113,24 @@ struct PeerReconnectEpochTests {
         let old = Fixture.session(host: 1, connection: 1)
         let live = Fixture.session(host: 1, connection: 2)
         var state = Fixture.synced(old)
-        _ = state.connectionLost()
+        _ = state.connectionLost(state.session)
         _ = try state.reconnect(to: live)
         var oldReceiver = PeerSyncReceiver(session: old)
         let oldApplied = oldReceiver.receive(Fixture.snapshot(old))
-        #expect(state.observe(oldApplied, from: oldReceiver) == .ignored(.oldSession(.connectionEpoch)))
-        #expect(state.observe(oldReceiver) == .ignored(.oldSession(.connectionEpoch)))
+        #expect(state.observe(state.stamp(oldApplied), from: oldReceiver) == .ignored(.oldSession(.connectionEpoch)))
+        #expect(state.observe(state.stamp(oldReceiver)) == .ignored(.oldSession(.connectionEpoch)))
         var oldHost = PeerSyncReceiver(session: Fixture.session(host: 2, connection: 2))
         let hostApplied = oldHost.receive(Fixture.snapshot(oldHost.session))
-        #expect(state.observe(hostApplied, from: oldHost) == .ignored(.oldSession(.hostEpoch)))
+        #expect(state.observe(state.stamp(hostApplied), from: oldHost) == .ignored(.oldSession(.hostEpoch)))
         #expect(state.phase == .resyncing(live))
         #expect(!state.isInputEnabled)
 
         var receiver = PeerSyncReceiver(session: live)
         let stale = receiver.receive(Fixture.snapshot(old))
         #expect(stale == .stale(.connectionEpoch))
-        #expect(state.observe(stale, from: receiver) == .ignored(.oldSession(.connectionEpoch)))
+        #expect(state.observe(state.stamp(stale), from: receiver) == .ignored(.oldSession(.connectionEpoch)))
         #expect(!state.isInputEnabled)
-        #expect(state.observe(receiver.receive(Fixture.snapshot(live)), from: receiver)
+        #expect(state.observe(state.stamp(receiver.receive(Fixture.snapshot(live))), from: receiver)
                 == .entered(.synced(live, awaitingResume: false)))
     }
 
@@ -138,14 +138,15 @@ struct PeerReconnectEpochTests {
         let session = Fixture.session()
         var state = Fixture.synced(session)
         try state.enqueue(Fixture.intent("command.a"))
-        #expect(state.connectionLost() == .entered(.disconnected(session)))
-        #expect(state.connectionLost() == .unchanged)
+        #expect(state.connectionLost(state.session) == .entered(.disconnected(session)))
+        #expect(state.connectionLost(state.session) == .unchanged)
         #expect(!state.isInputEnabled)
         #expect(state.takeNextToSend() == nil)
         #expect(throws: PeerOutboundRefusal.inputDisabled) { try state.enqueue(Fixture.intent("command.b")) }
         var receiver = PeerSyncReceiver(session: session)
-        #expect(state.observe(receiver.receive(Fixture.snapshot(session)), from: receiver) == .ignored(.disconnected))
-        #expect(state.observe(receiver) == .ignored(.disconnected))
+        let late = state.stamp(receiver.receive(Fixture.snapshot(session)))
+        #expect(state.observe(late, from: receiver) == .ignored(.disconnected))
+        #expect(state.observe(state.stamp(receiver)) == .ignored(.disconnected))
         #expect(state.phase == .disconnected(session))
         #expect(state.queue.count == 1)
     }
@@ -154,27 +155,27 @@ struct PeerReconnectEpochTests {
         let session = Fixture.session()
         var state = Fixture.state(session)
         var receiver = PeerSyncReceiver(session: session)
-        _ = state.observe(receiver.receive(Fixture.snapshot(session)), from: receiver)
-        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume() }
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(session))), from: receiver)
+        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume(state.latch) }
         try state.enqueue(Fixture.intent("command.a"))
         let gap = receiver.receive(Fixture.delta(session, sequence: 3))
-        #expect(state.observe(gap, from: receiver) == .entered(.resyncing(session)))
-        #expect(state.observe(receiver) == .unchanged)
+        #expect(state.observe(state.stamp(gap), from: receiver) == .entered(.resyncing(session)))
+        #expect(state.observe(state.stamp(receiver)) == .unchanged)
         #expect(!state.isInputEnabled)
         #expect(state.takeNextToSend() == nil)
         #expect(throws: PeerOutboundRefusal.inputDisabled) { try state.enqueue(Fixture.intent("command.b")) }
-        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume() }
-        #expect(state.observe(.refused(.emptyDelta), from: receiver) == .unchanged)
+        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume(state.latch) }
+        #expect(state.observe(state.stamp(PeerSyncEvent.refused(.emptyDelta)), from: receiver) == .unchanged)
 
         _ = receiver.receive(Fixture.snapshot(session, sequence: 3))
-        #expect(state.observe(receiver) == .entered(.synced(session, awaitingResume: true)))
-        #expect(state.observe(receiver) == .unchanged)
+        #expect(state.observe(state.stamp(receiver)) == .entered(.synced(session, awaitingResume: true)))
+        #expect(state.observe(state.stamp(receiver)) == .unchanged)
         #expect(!state.isInputEnabled)
         #expect(state.takeNextToSend() == nil)
         #expect(throws: PeerOutboundRefusal.inputDisabled) { try state.enqueue(Fixture.intent("command.b")) }
-        try state.resume()
+        try state.resume(state.latch)
         #expect(state.phase == .synced(session, awaitingResume: false))
-        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume() }
+        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume(state.latch) }
         #expect(state.takeNextToSend()?.id == Fixture.id("command.a"))
     }
 
@@ -182,19 +183,192 @@ struct PeerReconnectEpochTests {
         let session = Fixture.session()
         var state = Fixture.state(session)
         var receiver = PeerSyncReceiver(session: session)
-        #expect(state.observe(receiver) == .unchanged)
+        #expect(state.observe(state.stamp(receiver)) == .unchanged)
         let request = PeerResyncRequest(session: session, lastApplied: .origin, reason: .repeated(.origin))
-        #expect(state.observe(.resyncRequested(request), from: receiver) == .unchanged)
+        #expect(state.observe(state.stamp(PeerSyncEvent.resyncRequested(request)), from: receiver) == .unchanged)
         #expect(state.phase == .connected(session))
         _ = receiver.receive(Fixture.snapshot(session))
-        #expect(state.observe(receiver) == .entered(.synced(session, awaitingResume: false)))
+        #expect(state.observe(state.stamp(receiver)) == .entered(.synced(session, awaitingResume: false)))
         _ = receiver.receive(Fixture.delta(session, sequence: 2))
-        #expect(state.observe(receiver) == .entered(.resyncing(session)))
+        #expect(state.observe(state.stamp(receiver)) == .entered(.resyncing(session)))
         let foreign = PeerResyncRequest(session: Fixture.session(connection: 9), lastApplied: .origin,
                                         reason: .repeated(.origin))
-        _ = state.observe(.applied(.origin), from: receiver)
-        #expect(state.observe(.resyncRequested(foreign), from: receiver) == .ignored(.oldSession(.connectionEpoch)))
+        #expect(!state.isInputEnabled)
+        let recovered = receiver.receive(Fixture.snapshot(session, sequence: 2))
+        #expect(state.observe(state.stamp(recovered), from: receiver)
+                == .entered(.synced(session, awaitingResume: false)))
+        #expect(state.observe(state.stamp(PeerSyncEvent.resyncRequested(foreign)), from: receiver)
+                == .ignored(.oldSession(.connectionEpoch)))
         #expect(state.isInputEnabled)
+    }
+
+    @Test func aDelayedAppliedFromAnEarlierLatchNeverClearsTheNewOne() throws {
+        let session = Fixture.session()
+        var state = Fixture.state(session)
+        var receiver = PeerSyncReceiver(session: session)
+        let first = state.stamp(receiver.receive(Fixture.snapshot(session)))
+        let earlier = state.latch
+        #expect(state.observe(first, from: receiver) == .entered(.synced(session, awaitingResume: false)))
+        let syncedCopy = state.stamp(receiver)
+        try state.enqueue(Fixture.intent("command.a"))
+        let gap = state.stamp(receiver.receive(Fixture.delta(session, sequence: 3)))
+        #expect(state.observe(gap, from: receiver) == .entered(.resyncing(session)))
+        let current = state.latch
+        #expect(current != earlier && current.session == session)
+
+        let stale = PeerReconnectIgnored.staleLatch(expected: current, found: earlier)
+        #expect(state.observe(first, from: receiver) == .ignored(stale))
+        #expect(state.observe(syncedCopy) == .ignored(stale))
+        #expect(state.phase == .resyncing(session))
+        #expect(!state.isInputEnabled)
+        #expect(state.takeNextToSend() == nil)
+        #expect(throws: PeerReconnectError.staleLatch(expected: current, found: earlier)) { try state.resume(earlier) }
+        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume(current) }
+
+        let recovered = state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 3)))
+        #expect(state.observe(recovered, from: receiver) == .entered(.synced(session, awaitingResume: true)))
+        #expect(state.latch == current)
+        try state.resume(current)
+        #expect(state.isInputEnabled)
+        #expect(state.takeNextToSend()?.id == Fixture.id("command.a"))
+    }
+
+    @Test func anAppliedDeliveredAfterTheReceiverRelatchedIsIgnored() throws {
+        let session = Fixture.session()
+        var state = Fixture.synced(session)
+        var receiver = PeerSyncReceiver(session: session)
+        _ = receiver.receive(Fixture.snapshot(session))
+        _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: 3))), from: receiver)
+        let applied = state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 3)))
+        let relatched = state.stamp(receiver.receive(Fixture.delta(session, sequence: 6)))
+        #expect(state.observe(applied, from: receiver) == .ignored(.receiverNotSynced(receiver.phase)))
+        #expect(state.phase == .resyncing(session))
+        #expect(!state.isInputEnabled)
+        #expect(state.observe(relatched, from: receiver) == .unchanged)
+        let answer = state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 6)))
+        #expect(state.observe(answer, from: receiver) == .entered(.synced(session, awaitingResume: false)))
+        #expect(state.isInputEnabled)
+    }
+
+    @Test func aDelayedSyncedPhaseCopyCannotReopenInputAfterAReLatch() throws {
+        let session = Fixture.session()
+        var state = Fixture.synced(session)
+        var receiver = PeerSyncReceiver(session: session)
+        _ = receiver.receive(Fixture.snapshot(session))
+        _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: 3))), from: receiver)
+        let second = state.latch
+        _ = receiver.receive(Fixture.snapshot(session, sequence: 3))
+        let syncedCopy = state.stamp(receiver)
+        let relatch = state.stamp(receiver.receive(Fixture.delta(session, sequence: 6)))
+        #expect(state.observe(relatch, from: receiver) == .unchanged)
+        let third = state.latch
+        #expect(third != second && third.session == session)
+        #expect(state.observe(syncedCopy) == .ignored(.staleLatch(expected: third, found: second)))
+        #expect(state.phase == .resyncing(session))
+        #expect(!state.isInputEnabled)
+        #expect(throws: PeerReconnectError.notAwaitingResume) { try state.resume(third) }
+
+        _ = receiver.receive(Fixture.snapshot(session, sequence: 6))
+        #expect(state.observe(state.stamp(receiver)) == .entered(.synced(session, awaitingResume: false)))
+        #expect(state.isInputEnabled)
+    }
+
+    @Test func anAppliedFromBeforeAReLatchIsIgnoredAndRecoveryStillCompletes() throws {
+        let session = Fixture.session()
+        var state = Fixture.synced(session)
+        var receiver = PeerSyncReceiver(session: session)
+        _ = receiver.receive(Fixture.snapshot(session))
+        _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: 3))), from: receiver)
+        let second = state.latch
+        let early = state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 3)))
+        let syncedCopy = state.stamp(receiver)
+        _ = receiver.receive(Fixture.delta(session, sequence: 6))
+        #expect(state.observe(state.stamp(receiver)) == .unchanged)
+        let third = state.latch
+        #expect(state.observe(syncedCopy) == .ignored(.staleLatch(expected: third, found: second)))
+        let answer = state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 6)))
+        #expect(state.observe(early, from: receiver) == .ignored(.staleLatch(expected: third, found: second)))
+        #expect(state.phase == .resyncing(session))
+        #expect(!state.isInputEnabled)
+        #expect(state.observe(answer, from: receiver) == .entered(.synced(session, awaitingResume: false)))
+        #expect(state.latch == third)
+        #expect(state.isInputEnabled)
+    }
+
+    @Test func aDelayedResumeFromAnEarlierLatchIsRefused() throws {
+        let session = Fixture.session()
+        var state = Fixture.synced(session)
+        var receiver = PeerSyncReceiver(session: session)
+        _ = receiver.receive(Fixture.snapshot(session))
+        try state.enqueue(Fixture.intent("command.a"))
+        for sequence in [3, 6] {
+            _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: sequence))), from: receiver)
+            _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(session, sequence: sequence))),
+                              from: receiver)
+            #expect(state.phase == .synced(session, awaitingResume: true))
+            if sequence == 3 {
+                let revalidated = state.latch
+                _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: 5))), from: receiver)
+                #expect(state.phase == .resyncing(session))
+                _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(session, sequence: 5))),
+                                  from: receiver)
+                let current = state.latch
+                #expect(throws: PeerReconnectError.staleLatch(expected: current, found: revalidated)) {
+                    try state.resume(revalidated)
+                }
+                #expect(state.phase == .synced(session, awaitingResume: true))
+                #expect(state.takeNextToSend() == nil)
+            }
+        }
+        try state.resume(state.latch)
+        #expect(state.takeNextToSend()?.id == Fixture.id("command.a"))
+    }
+
+    @Test func lateConnectionSignalsOfAnEarlierSessionChangeNothing() throws {
+        let first = Fixture.session(connection: 1)
+        let second = Fixture.session(connection: 2)
+        var state = Fixture.synced(first)
+        try state.enqueue(Fixture.intent("command.a", session: first))
+        let taken = state.takeNextToSend()
+        let sent = try #require(taken)
+        #expect(throws: PeerReconnectError.notDisconnected) { try state.nextAttemptDelay(after: first, jitter: 0) }
+        _ = state.connectionLost(first)
+        #expect(throws: PeerReconnectError.backoff(.invalidJitterUnit)) {
+            try state.nextAttemptDelay(after: first, jitter: 1)
+        }
+        _ = try state.nextAttemptDelay(after: first, jitter: 0)
+        let report = try state.reconnect(to: second)
+        #expect(report.unknownOutcome == [sent.id])
+        #expect(state.latch.session == second)
+
+        #expect(state.connectionLost(first) == .ignored(.oldSession(.connectionEpoch)))
+        #expect(state.phase == .resyncing(second))
+        #expect(throws: PeerReconnectError.oldSession(.connectionEpoch)) {
+            try state.nextAttemptDelay(after: first, jitter: 0)
+        }
+        #expect(throws: PeerOutboundRefusal.staleSession(.connectionEpoch)) {
+            try state.acknowledge(sent.id, session: first)
+        }
+        #expect(state.attempts.count == 1)
+        _ = state.connectionLost(second)
+        #expect(throws: PeerReconnectError.oldSession(.connectionEpoch)) {
+            try state.nextAttemptDelay(after: first, jitter: 0)
+        }
+        #expect(state.attempts.count == 1)
+        #expect(try state.nextAttemptDelay(after: second, jitter: 0) == .milliseconds(250))
+    }
+
+    @Test func aResultDelayedAcrossAnInSessionResyncIsStillAccepted() throws {
+        let session = Fixture.session()
+        var state = Fixture.synced(session)
+        var receiver = PeerSyncReceiver(session: session)
+        _ = receiver.receive(Fixture.snapshot(session))
+        try state.enqueue(Fixture.intent("command.a"))
+        let taken = state.takeNextToSend()
+        let sent = try #require(taken)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.delta(session, sequence: 3))), from: receiver)
+        try state.acknowledge(sent.id, session: session)
+        #expect(state.queue.awaitingResult.isEmpty)
     }
 
     @Test func sessionsFromPerHostEpochIssuersAreAdoptedInOrder() throws {
@@ -210,10 +384,10 @@ struct PeerReconnectEpochTests {
         #expect(sessions.map { $0.connectionEpoch.generation.value } == [1, 2, 1])
         var state = Fixture.state(sessions[0])
         for next in sessions.dropFirst() {
-            _ = state.connectionLost()
+            _ = state.connectionLost(state.session)
             _ = try state.reconnect(to: next)
         }
-        _ = state.connectionLost()
+        _ = state.connectionLost(state.session)
         for stale in sessions {
             #expect(throws: PeerReconnectError.staleSession(stale)) { try state.reconnect(to: stale) }
         }
@@ -239,16 +413,16 @@ struct PeerReconnectEpochTests {
         let session = Fixture.session(connection: 1)
         let next = Fixture.session(connection: 2)
         var state = Fixture.synced(session)
-        _ = state.connectionLost()
-        #expect(try state.nextAttemptDelay(jitter: 0) == .milliseconds(125))
-        #expect(try state.nextAttemptDelay(jitter: 0) == .milliseconds(250))
+        _ = state.connectionLost(state.session)
+        #expect(try state.nextAttemptDelay(after: state.session, jitter: 0) == .milliseconds(125))
+        #expect(try state.nextAttemptDelay(after: state.session, jitter: 0) == .milliseconds(250))
         _ = try state.reconnect(to: next)
         #expect(state.attempts.count == 2)
         var receiver = PeerSyncReceiver(session: next)
-        _ = state.observe(receiver.receive(Fixture.snapshot(next)), from: receiver)
+        _ = state.observe(state.stamp(receiver.receive(Fixture.snapshot(next))), from: receiver)
         #expect(state.attempts.count == 0)
-        _ = state.connectionLost()
-        #expect(try state.nextAttemptDelay(jitter: 0) == .milliseconds(125))
+        _ = state.connectionLost(state.session)
+        #expect(try state.nextAttemptDelay(after: state.session, jitter: 0) == .milliseconds(125))
     }
 
     @Test func backoffIsCappedExponentialWithEqualJitter() throws {

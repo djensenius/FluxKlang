@@ -104,14 +104,25 @@ Pure values only; no sockets, timers or Bonjour.
 - `PeerReconnectState` moves connected → synced → resyncing → synced, with
   disconnected from any phase. It reads the session from the receiver it observes.
   Input and sending are enabled only when synced and resumed. After an in-session
-  resync, held intents wait for an explicit `resume()` from the sync layer; nothing
-  flushes on its own. A reconnect is allowed only after `connectionLost()` and only
+  resync, held intents wait for an explicit `resume(_:)` from the sync layer; nothing
+  flushes on its own. A reconnect is allowed only after `connectionLost(_:)` and only
   to the same host, whose (host generation, connection generation) pair must
   strictly increase over the current session; another host is adopted only through
   the explicit `changeHost(to:)`, which restarts that order. Adoption drops the
   whole queue, never replays it, and returns one `PeerDiscardReport`: never-sent intents are
   *discarded*, and sent intents without a result are *outcome unknown*. Events of
   an old session are ignored and reported.
+- Every adoption and every current-session resync request (even while already
+  resyncing) starts a new `PeerResyncLatch` (equality only), so earlier stamps go
+  stale. Sync events and receiver phases are stamped with `stamp(_:)` when
+  produced; only the snapshot answering the current latch, while the receiver is
+  still synced, clears it. Every observed current `.resyncRequired` phase (a poll
+  included) starts a new latch, so an `.applied` stamped before it is ignored;
+  recovery completes on the next `.synced` read or `.applied` stamped after the
+  last observed request. Exhausted generations fail closed (`latchExhausted`,
+  input off, every signal ignored) until a reconnect. A late signal of an earlier latch or session (event,
+  receiver phase, `resume(_:)`, `connectionLost(_:)`, backoff tick) is a typed
+  ignore or refusal and changes nothing.
 - `PeerReconnectBackoff` is pure math: 250 ms × 2^attempt, capped at 30 s, with
   equal jitter from a caller-supplied unit in [0, 1). `PeerReconnectAttempts`
   counts attempts (saturating at 32) and is reset by a successful sync.
