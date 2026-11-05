@@ -261,6 +261,8 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
