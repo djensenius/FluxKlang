@@ -232,14 +232,13 @@ private struct AdmittingSource {
 
 /// Acknowledges each observed fault only once telemetry shows a faulted cycle that loaded its request epoch,
 /// checks that the cumulative counters never go backwards, and requests safety actions.
-@Sendable private func acknowledgeByTelemetry(_ rig: CycleRig, _ run: CycleStressRun,
-                                              _ slots: TelemetrySlots<KernelCycleTelemetry>) -> [String] {
+@Sendable private func acknowledgeByTelemetry(_ rig: CycleRig, _ run: CycleStressRun) -> [String] {
     var violations: [String] = []
     guard run.arriveAndWait() else { return violations }
     var random = CycleRandom(seed: 0xACC0_7E1E)
     var previous = KernelCycleTelemetry()
     func read() -> KernelCycleTelemetry {
-        let value = latestKernelCycleSample(slots)?.value ?? previous
+        let value = rig.cycle.latestTelemetry()?.value ?? previous
         if value.cycle < previous.cycle || value.droppedLate < previous.droppedLate || value.resyncs
             < previous.resyncs || value.skippedStale < previous.skippedStale || value.rateLimited
             < previous.rateLimited || value.lastFaultedCycle < previous.lastFaultedCycle
@@ -328,7 +327,7 @@ extension RealtimeHandoffTests {
                 { outcomes.set(1, admitAndPush(rig, $0, id: 1, pushes: 12_000)) },
                 { outcomes.set(2, admitAndPush(rig, $0, id: 2, pushes: 12_000)) },
                 { model.set(0, renderCycles(rig, $0, setup: frozenSetup, producers: 3)) },
-                { control.set(0, acknowledgeByTelemetry(rig, $0, slots)) }
+                { control.set(0, acknowledgeByTelemetry(rig, $0)) }
             ]
             try #require(runCycleWorkers(run, workers))
             var observed = try #require(model.get(0))
@@ -357,7 +356,7 @@ extension RealtimeHandoffTests {
             #expect(producers.allSatisfy { $0.resets > 0 }, "\(producers.map(\.resets))")
             #expect(producers.reduce(0) { $0 + $1.beyondLookahead } > 0 && observed.flushingCycles > 0)
 
-            let final = try #require(latestKernelCycleSample(slots))
+            let final = try #require(rig.cycle.latestTelemetry())
             #expect(final.stamp == TelemetryStamp(clockGeneration: 3, frame: blockStart &- 512))
             let nonMonotonic = producers.reduce(0) { $0 + $1.refusedNonMonotonic }
             let beyondLookahead = producers.reduce(0) { $0 + $1.refusedBeyondLookahead }

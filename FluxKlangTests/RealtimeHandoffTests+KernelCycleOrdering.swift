@@ -19,13 +19,6 @@ func kernelCycleTelemetrySlots() throws -> TelemetrySlots<KernelCycleTelemetry> 
                        slotCount: 2)
 }
 
-/// The latest published telemetry sample, if any.
-func latestKernelCycleSample(_ slots: TelemetrySlots<KernelCycleTelemetry>,
-                             slot: Int = 1) -> TelemetrySample<KernelCycleTelemetry>? {
-    guard case .measured(let sample) = slots.latest(slot: slot) else { return nil }
-    return sample
-}
-
 /// Thrown when a ticket the test expected was never requested.
 private struct CycleOrderingTicketMissing: Error {}
 
@@ -120,7 +113,7 @@ extension RealtimeHandoffTests {
             let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 7)
             let rig = try CycleRig(laneCapacity: 32, pulsesPerBlock: 1, telemetry: output)
             let token = try #require(rig.events.claimProducer())
-            #expect(slots.latest(slot: 1) == .unavailable(.neverPublished))
+            #expect(rig.cycle.latestTelemetry() == nil)
             for event in [cycleEvent(0, noteOn(1)), cycleEvent(1, .clockPulse), cycleEvent(400, .clockPulse),
                           cycleEvent(401, .clockPulse), cycleEvent(402, .clockPulse), cycleEvent(5_000, noteOn(2)),
                           cycleEvent(1_070, .clockPulse), cycleEvent(1_071, .clockPulse)] {
@@ -130,7 +123,7 @@ extension RealtimeHandoffTests {
             for (blockStart, frames) in [(Int64(1_000), Int64(64)), (1_064, 0), (1_064, 64)] {
                 results.append(rig.run(blockStart, frames).0)
             }
-            let sample = try #require(latestKernelCycleSample(slots))
+            let sample = try #require(rig.cycle.latestTelemetry())
             #expect(sample.stamp == TelemetryStamp(clockGeneration: 7, frame: 1_064) && sample.sequence == 3)
             #expect(sample.value == rig.cycle.telemetry)
             let expected = KernelCycleTelemetry(cycle: 3, lastFaultedCycle: 0, droppedLate: 1, resyncs: 1,
@@ -204,9 +197,9 @@ extension RealtimeHandoffTests {
             #expect(second.drained == 3 && second.flushing && second.discardedWhileSilenced == 1)
             #expect(emitted.map(\.event.payload) == [control(2), control(3)])
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
-            #expect(latestKernelCycleSample(slots)?.value.flushing == true && rig.cycle.telemetry.flushing)
+            #expect(rig.cycle.latestTelemetry()?.value.flushing == true && rig.cycle.telemetry.flushing)
             let (third, _) = rig.run(128, 64)
-            #expect(third.drained == 1 && !third.flushing && latestKernelCycleSample(slots)?.value.flushing == false)
+            #expect(third.drained == 1 && !third.flushing && rig.cycle.latestTelemetry()?.value.flushing == false)
         }
 
         /// Ruling (E5b round 3): a drain never pops what the block cannot hold. Kills: a `limit` past the room
@@ -306,26 +299,26 @@ extension RealtimeHandoffTests {
             let observation = try #require(rig.faults.observe(CycleRig.criticalScope))
             let ticket = try rig.cycle.ackRequests.request(for: observation)
             #expect(ticket.epoch == 1 && rig.cycle.ackRequests.lastRequested == 1)
-            #expect(latestKernelCycleSample(slots) == nil && !KernelCycleTelemetry().permitsAcknowledgement(ticket))
+            #expect(rig.cycle.latestTelemetry() == nil && !KernelCycleTelemetry().permitsAcknowledgement(ticket))
             let stale = KernelCycleTelemetry(cycle: 9, lastFaultedCycle: 9, ackEpochSeen: 0, lastFaultedAckEpoch: 0)
             #expect(!stale.permitsAcknowledgement(ticket) && stale.lastFaultedAckEpoch == 0)
             #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
-            let fresh = try #require(latestKernelCycleSample(slots)).value
+            let fresh = try #require(rig.cycle.latestTelemetry()).value
             #expect(fresh.ackEpochSeen == 1 && fresh.lastFaultedAckEpoch == 1 && fresh.permitsAcknowledgement(ticket))
             // A second request; the front sample stays cached (nothing published since) and must not approve it.
             let second = try rig.cycle.ackRequests.request(for: observation)
             for _ in 0..<3 {
-                let cached = try #require(latestKernelCycleSample(slots)).value
+                let cached = try #require(rig.cycle.latestTelemetry()).value
                 #expect(cached == fresh && !cached.permitsAcknowledgement(second))
             }
             #expect(rig.run(64, 64).0.status == .silenced(.scopeFaulted))
-            let approving = try #require(latestKernelCycleSample(slots)).value
+            let approving = try #require(rig.cycle.latestTelemetry()).value
             #expect(approving.permitsAcknowledgement(second) && approving.lastFaultedAckEpoch == 2)
             #expect(try rig.cycle.acknowledgeCritical(observation, second) == observation.record)
             // An unsilenced cycle sees a newer epoch but is no faulted cycle, so it never approves.
             let third = try rig.cycle.ackRequests.request(for: observation)
             #expect(rig.run(128, 64).0.status == .ok)
-            let quiet = try #require(latestKernelCycleSample(slots)).value
+            let quiet = try #require(rig.cycle.latestTelemetry()).value
             #expect(quiet.ackEpochSeen == 3 && quiet.lastFaultedAckEpoch == 2 && !quiet.permitsAcknowledgement(third))
         }
 
@@ -345,9 +338,9 @@ extension RealtimeHandoffTests {
             }
             #expect(result.status == .silenced(.scopeFaulted) && result.releasedNotes == 1)
             guard let midCycle = ticket.take() else { throw CycleOrderingTicketMissing() }
-            let early = try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(midCycle)
+            let early = try #require(rig.cycle.latestTelemetry()).value.permitsAcknowledgement(midCycle)
             #expect(rig.run(128, 64).0.status == .silenced(.scopeFaulted))
-            let next = try #require(latestKernelCycleSample(slots)).value.permitsAcknowledgement(midCycle)
+            let next = try #require(rig.cycle.latestTelemetry()).value.permitsAcknowledgement(midCycle)
             #expect(!early && next)
         }
 
@@ -364,7 +357,7 @@ extension RealtimeHandoffTests {
                 let first = try #require(rig.faults.observe(CycleRig.criticalScope))
                 let firstTicket = try rig.cycle.ackRequests.request(for: first)
                 #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
-                let staleRead = try #require(latestKernelCycleSample(slots)).value
+                let staleRead = try #require(rig.cycle.latestTelemetry()).value
                 #expect(staleRead.permitsAcknowledgement(firstTicket) && staleRead.lastFaultedAckEpoch == 1)
                 for block in Int64(1)...2 { #expect(rig.run(block * 64, 64).0.status == .silenced(.scopeFaulted)) }
                 #expect(rig.faults.acknowledge(first) != nil)
@@ -372,7 +365,7 @@ extension RealtimeHandoffTests {
                 #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 192) == .ok)
                 let second = try #require(rig.faults.observe(CycleRig.criticalScope))
                 let secondTicket = try rig.cycle.ackRequests.request(for: second)
-                let now = try #require(latestKernelCycleSample(slots)).value
+                let now = try #require(rig.cycle.latestTelemetry()).value
                 #expect(now.lastFaultedCycle >= staleRead.cycle + 2 && !now.permitsAcknowledgement(secondTicket))
                 if oldCriterion { #expect(rig.faults.acknowledge(second) != nil) }
                 var sounded = false
@@ -381,7 +374,7 @@ extension RealtimeHandoffTests {
                     sounded = sounded || emitted.contains { $0.event.payload == noteOn(9) }
                     if !oldCriterion, result.status != .ok {
                         #expect(result.discardedWhileSilenced == 1)
-                        let sample = try #require(latestKernelCycleSample(slots)).value
+                        let sample = try #require(rig.cycle.latestTelemetry()).value
                         #expect(sample.permitsAcknowledgement(secondTicket) && sample.lastFaultedAckEpoch == 2)
                         #expect(rig.faults.acknowledge(second) != nil)
                     }
@@ -406,7 +399,7 @@ extension RealtimeHandoffTests {
                 for: try #require(replacement.faults.observe(CycleRig.criticalScope)))
             #expect(oldTicket.epoch == newTicket.epoch && oldTicket.cycle != newTicket.cycle)
             #expect(replacement.run(0, 64).0.status == .silenced(.scopeFaulted))
-            let sample = try #require(latestKernelCycleSample(slots)).value
+            let sample = try #require(replacement.cycle.latestTelemetry()).value
             #expect(sample.ackCycle == replacement.cycle.ackRequests.identity && sample.lastFaultedAckEpoch == 1)
             #expect(sample.permitsAcknowledgement(newTicket) && !sample.permitsAcknowledgement(oldTicket))
         }

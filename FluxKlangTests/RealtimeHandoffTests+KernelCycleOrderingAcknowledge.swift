@@ -48,7 +48,7 @@ extension RealtimeHandoffTests {
             let first = try #require(rig.faults.observe(CycleRig.criticalScope))
             let reused = try rig.cycle.ackRequests.request(for: first)
             #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
-            let approving = try #require(latestKernelCycleSample(slots)).value
+            let approving = try #require(rig.cycle.latestTelemetry()).value
             let approved = approving.permitsAcknowledgement(reused)
             #expect(approved && !approving.flushing)
             #expect(rig.push(cycleEvent(64, noteOn(9)), token) == .ok)
@@ -100,7 +100,7 @@ extension RealtimeHandoffTests {
             #expect(notYet == .failure(.notApproved) && AcknowledgeState(rig) == before)
 
             #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
-            #expect(try #require(latestKernelCycleSample(slots)).value.lastFaultedAckEpoch == 3)
+            #expect(try #require(rig.cycle.latestTelemetry()).value.lastFaultedAckEpoch == 3)
             before = AcknowledgeState(rig)
             let foreignOutcome = acknowledging(rig.cycle, observation, foreign)
             let scopeOutcome = acknowledging(rig.cycle, slotsObservation, wrongScope)
@@ -137,7 +137,7 @@ extension RealtimeHandoffTests {
                                                                              staleTolerance: 48),
                                               blockCapacity: 64, perLaneQuota: 64)
             #expect(replacement.run(blockStart: 0, frames: 64) { _, _ in }.status == .silenced(.scopeFaulted))
-            let foreignSample = try #require(latestKernelCycleSample(slots)).value
+            let foreignSample = try #require(replacement.latestTelemetry()).value
             #expect(foreignSample.lastFaultedAckEpoch == 0 && foreignSample.ackCycle != rig.cycle.ackRequests.identity)
             before = AcknowledgeState(rig)
             let foreignOutcome = acknowledging(rig.cycle, observation, ticket)
@@ -152,6 +152,36 @@ extension RealtimeHandoffTests {
             let silentOutcome = acknowledging(silent.cycle, silentObservation, silentTicket)
             #expect(silentOutcome == .failure(.notApproved))
             #expect(silent.faults.isLatched(CycleRig.criticalScope))
+        }
+
+        /// Round 2e: a twin latch's observation with the same words is refused as `.foreignObservation` before the
+        /// slot is read (no faulted cycle yet, where reading it would give `.notApproved`) and after an approving
+        /// cycle (where the latch would give `.latchRefused`), changing nothing; the own observation then succeeds.
+        /// Kills: the latch-identity guard skipped.
+        @Test func acknowledgeRefusesATwinLatchObservation() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+            let twin = try FaultLatch(scopes: [CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope])
+            for latch in [rig.faults, twin] {
+                #expect(latch.raise(CycleRig.criticalScope, .criticalExhausted, frame: 7) == .ok)
+            }
+            let own = try #require(rig.faults.observe(CycleRig.criticalScope))
+            let foreign = try #require(twin.observe(CycleRig.criticalScope))
+            #expect(foreign.record == own.record && foreign.tally == own.tally && foreign.epoch == own.epoch)
+            let unread = try rig.cycle.ackRequests.request(for: own)
+            let approved = try rig.cycle.ackRequests.request(for: own)
+            let ticket = try rig.cycle.ackRequests.request(for: own)
+            var before = AcknowledgeState(rig)
+            let early = acknowledging(rig.cycle, foreign, unread)
+            #expect(early == .failure(.foreignObservation) && AcknowledgeState(rig) == before)
+            #expect(rig.cycle.latestTelemetry() == nil)
+            #expect(rig.run(0, 64).0.status == .silenced(.scopeFaulted))
+            before = AcknowledgeState(rig)
+            let late = acknowledging(rig.cycle, foreign, approved)
+            #expect(late == .failure(.foreignObservation) && AcknowledgeState(rig) == before)
+            #expect(twin.isLatched(CycleRig.criticalScope))
+            #expect(acknowledging(rig.cycle, own, ticket) == .success(own.record))
+            #expect(!rig.faults.isLatched(CycleRig.criticalScope) && twin.isLatched(CycleRig.criticalScope))
         }
 
         /// Round 2d: `request(for:)` takes only an observation of its cycle's own latch and critical scope. A

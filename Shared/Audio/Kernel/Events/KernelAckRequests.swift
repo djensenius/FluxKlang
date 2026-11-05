@@ -57,8 +57,8 @@ final class KernelAckRequests: Sendable {
         /// `UInt64.max` epochs were requested; the epoch never wraps, so no acknowledgement can be requested again
         /// until the cycle is replaced while quiescent.
         case epochExhausted
-        /// The observation is not of this cycle's `FaultLatch` (`FaultObservation.owner`) or not of its critical
-        /// scope. Checked before the epoch moves, so nothing changes.
+        /// The observation is not of this cycle's `FaultLatch` (`FaultObservation.isObservation(of:)`) or not of its
+        /// critical scope. Checked before the epoch moves, so nothing changes.
         case foreignObservation
     }
 
@@ -104,7 +104,7 @@ final class KernelAckRequests: Sendable {
     /// scope's observation, and (never wraps) once `UInt64.max` was requested, changing nothing. Lock-free,
     /// allocation-free; retries only when another requester raced it.
     func request(for observation: FaultObservation) throws(RequestError) -> KernelAckTicket {
-        guard observation.owner === faults, observation.record.scope == criticalScope else {
+        guard observation.isObservation(of: faults), observation.record.scope == criticalScope else {
             throw .foreignObservation
         }
         var current = epoch.load(ordering: .relaxed)

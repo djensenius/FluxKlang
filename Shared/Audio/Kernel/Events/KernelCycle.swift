@@ -79,7 +79,9 @@ struct KernelCycleParts {
     let ramps: RampSlots
     /// Where every cycle publishes its `KernelCycleTelemetry`; `nil` publishes nothing (the cycle still keeps it).
     /// Fail-closed: with `nil`, `acknowledgeCritical` has no sample to read, so it never approves and a critical
-    /// fault can never be acknowledged through the contract.
+    /// fault can never be acknowledged through the contract. The slot's single consumer is the control thread that
+    /// acknowledges: read it only through `KernelCycle.latestTelemetry()` and `acknowledgeCritical` on that thread
+    /// (a UI meter gets samples from control, never reads the slot itself from another thread).
     var telemetry: KernelCycleTelemetryOutput?
     /// `.freshFanIn` only when no earlier cycle consumed `events`; anything else starts flushing (fail-safe).
     var start = KernelCycleStart.replacingCycle
@@ -151,11 +153,12 @@ struct KernelCycleParts {
 /// parameter once and each lane at most three times (drain, then the two refusal totals); a buffer full of future
 /// (or, while silenced, non-note) events stops draining (M4/M5 backpressure; the lanes are decided later).
 ///
-/// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only
-/// (the fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call
-/// back. `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests` and
-/// `acknowledgeCritical` are control's. The parts are kept for
-/// life. ARC, metadata and target progress are unqualified (X1 probe), as in M5–M7.
+/// Contracts. `run`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's only (the
+/// fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not call back.
+/// `admissionRefusals` is any thread's (producers count through `ProducerAdmission`); `ackRequests`,
+/// `latestTelemetry()` and `acknowledgeCritical` are control's, the last two being the only reads of the telemetry slot
+/// (its single consumer, on the acknowledging control thread). The parts are kept for life. ARC, metadata and target
+/// progress are unqualified (X1 probe), as in M5–M7.
 /// `@unchecked Sendable`: all other mutable state is render-only, in storage preallocated in `init`; the refusal
 /// counters and the acknowledgement epoch are atomic.
 final class KernelCycle: @unchecked Sendable {
@@ -182,6 +185,9 @@ final class KernelCycle: @unchecked Sendable {
     enum AcknowledgeRefusal: Error, Equatable, Sendable {
         /// Another cycle's `ackRequests` issued the ticket.
         case foreignTicket
+        /// `observation` was made by another `FaultLatch` (even one whose words match); checked before the slot is
+        /// read.
+        case foreignObservation
         /// `observation` is not of this cycle's critical scope.
         case notCriticalScope
         /// The ticket was requested for another observation (an earlier latched state of the scope).
@@ -189,7 +195,8 @@ final class KernelCycle: @unchecked Sendable {
         /// This cycle publishes no telemetry, its slot holds no sample yet, or the latest one does not yet
         /// `permitsAcknowledgement` the ticket.
         case notApproved
-        /// `FaultLatch.acknowledge` refused: the scope was raised on or acknowledged since `observe`.
+        /// `FaultLatch.acknowledge` refused this cycle's own observation: the scope was raised on or acknowledged
+        /// since `observe` (another latch's observation is `.foreignObservation`).
         case latchRefused
     }
 
@@ -307,19 +314,31 @@ final class KernelCycle: @unchecked Sendable {
 
     /// Control only; takes the latch's control lock, so never call from render. The Acknowledgement contract's
     /// entry point: re-arms the critical scope and returns `observation.record` only when `ticket` was issued by
-    /// this cycle for exactly `observation` and the latest sample in this cycle's own telemetry slot permits it;
-    /// otherwise a typed refusal that changes nothing. Consumes `ticket` either way. It reads the slot as its
-    /// single consumer (`TelemetrySlots.latest`), so call it only from the thread that is that slot's one reader,
-    /// never concurrently with another read of the slot.
+    /// this cycle for exactly `observation` (made by this cycle's latch, of its critical scope) and the latest
+    /// sample in this cycle's own telemetry slot permits it; otherwise a typed refusal that changes nothing, in
+    /// `AcknowledgeRefusal`'s order (identity checks before the slot is read). Consumes `ticket` either way. It
+    /// reads the slot through `latestTelemetry()`, as its single consumer, so call it only from the acknowledging
+    /// control thread, never concurrently with another read of the slot.
     func acknowledgeCritical(_ observation: FaultObservation,
                              _ ticket: consuming KernelAckTicket) throws(AcknowledgeRefusal) -> FaultRecord {
         guard ticket.cycle == ackRequests.identity else { throw .foreignTicket }
+        guard observation.isObservation(of: faults) else { throw .foreignObservation }
         guard observation.record.scope == criticalScope else { throw .notCriticalScope }
         guard ticket.isBound(to: observation) else { throw .ticketObservationMismatch }
-        guard let output = telemetryOutput, case .measured(let sample) = output.slots.latest(slot: output.slot),
-              sample.value.permitsAcknowledgement(ticket) else { throw .notApproved }
+        guard let sample = latestTelemetry(), sample.value.permitsAcknowledgement(ticket) else { throw .notApproved }
         guard let record = faults.acknowledge(observation) else { throw .latchRefused }
         return record
+    }
+
+    /// Control only: this cycle's latest published sample, or `nil` with no telemetry output or before the first
+    /// publish. With `acknowledgeCritical`, the only read of this cycle's telemetry slot: both are its single
+    /// consumer, so call them only from the acknowledging control thread, never concurrently. A UI meter gets
+    /// samples from control and never reads the slot itself.
+    func latestTelemetry() -> TelemetrySample<KernelCycleTelemetry>? {
+        guard let output = telemetryOutput, case .measured(let sample) = output.slots.latest(slot: output.slot) else {
+            return nil
+        }
+        return sample
     }
 
     /// Render only. `parameter`'s value at the end of the last block, or `nil` when out of range.

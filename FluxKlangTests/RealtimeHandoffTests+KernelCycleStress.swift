@@ -256,8 +256,7 @@ private func awaitBounded(_ run: CycleStressRun, _ condition: () -> Bool) -> Boo
 
 /// Acknowledges each observed critical fault only once telemetry shows a `.scopeFaulted` cycle that loaded the
 /// epoch requested after the observation (the KernelCycle contract), and requests safety actions while render runs.
-@Sendable private func control(_ rig: CycleRig, _ run: CycleStressRun,
-                               _ slots: TelemetrySlots<KernelCycleTelemetry>) {
+@Sendable private func control(_ rig: CycleRig, _ run: CycleStressRun) {
     guard run.arriveAndWait() else { return }
     var random = CycleRandom(seed: 0xC0FFEE)
     while !run.renderDone.load(ordering: .acquiring), !run.shouldStop {
@@ -265,7 +264,7 @@ private func awaitBounded(_ run: CycleStressRun, _ condition: () -> Bool) -> Boo
            let ticket = try? rig.cycle.ackRequests.request(for: observation) {
             run.firstObserved.store(true, ordering: .releasing)
             let permitted = awaitBounded(run) {
-                latestKernelCycleSample(slots)?.value.permitsAcknowledgement(ticket) == true
+                rig.cycle.latestTelemetry()?.value.permitsAcknowledgement(ticket) == true
             }
             if permitted, (try? rig.cycle.acknowledgeCritical(observation, ticket)) != nil {
                 run.acknowledged.add(1, ordering: .releasing)
@@ -386,7 +385,7 @@ extension RealtimeHandoffTests {
                 { outcomes.set(0, produce(rig, $0, seed: 0x1234_5678, noteBase: 0, pushes: 20_000)) },
                 { outcomes.set(1, produce(rig, $0, seed: 0x9ABC_DEF0, noteBase: 8, pushes: 20_000)) },
                 { model.set(0, render(rig, $0, producers: 2)) },
-                { control(rig, $0, slots) }
+                { control(rig, $0) }
             ]
             try #require(runCycleWorkers(run, workers))
             #expect(run.spinOverruns.load(ordering: .acquiring) == 0)
@@ -443,7 +442,7 @@ extension RealtimeHandoffTests {
                 { breaks.set(0, reRaise(rig, $0, rounds, producer: 0, count: 40)) },
                 { breaks.set(1, reRaise(rig, $0, rounds, producer: 1, count: 40)) },
                 { model.set(0, reRaiseRender(rig, $0, rounds)) },
-                { control(rig, $0, slots) }
+                { control(rig, $0) }
             ]
             try #require(runCycleWorkers(run, workers))
             var observed = try #require(model.get(0))

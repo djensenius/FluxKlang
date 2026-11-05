@@ -7,16 +7,15 @@
 /// recoverable and lossy by design (E2 skips stale pulses and keeps one resync marker), so it never needs a sticky,
 /// acknowledged fault, and the cycle adds no `FaultLatch.raise` site.
 ///
-/// Single producer, single consumer per slot (`TelemetrySlots`' contract, checked at preparation only): at any
-/// time exactly one `KernelCycle` publishes to a `KernelCycleTelemetryOutput` slot (from the render thread) and
-/// one control/UI reader reads it. During a replacement the old cycle must stop publishing (its last `run`
-/// returned, on the render thread) before the replacement's first `run` publishes; two cycles publishing to one
-/// slot concurrently permanently corrupt that slot. No runtime check exists: `TelemetrySlots` has no owner word,
-/// and a render-path check would cost an atomic per cycle in Release. `KernelCycle.acknowledgeCritical` reads the
-/// cycle's slot itself, as that one reader: control makes every read of the slot (its own `latest` calls and
-/// `acknowledgeCritical`) from one thread, never concurrently. Approval never comes from a caller-held value, so a
-/// forged `KernelCycleTelemetry` (all fields are settable) cannot approve a ticket.
-/// Reference model; not RT-certified.
+/// Single producer, single consumer per slot (`TelemetrySlots`' contract, checked at preparation only): at any time
+/// exactly one `KernelCycle` publishes to a `KernelCycleTelemetryOutput` slot (from the render thread) and one reader
+/// reads it: the control thread that acknowledges. During a replacement the old cycle must stop publishing (its last
+/// `run` returned, on the render thread) before the replacement's first `run` publishes; two cycles publishing to one
+/// slot concurrently permanently corrupt that slot. No runtime check exists: `TelemetrySlots` has no owner word, and a
+/// render-path check would cost an atomic per cycle in Release. The only reads are `KernelCycle.latestTelemetry()` and
+/// `KernelCycle.acknowledgeCritical`, both on that control thread and never concurrently; a UI meter gets samples from
+/// control, never reads the slot itself. Approval never comes from a caller-held value, so a forged
+/// `KernelCycleTelemetry` (all fields are settable) cannot approve a ticket. Reference model; not RT-certified.
 struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     /// `run` calls so far, this one included; empty (`frames <= 0`) cycles count. The first cycle is 1.
     var cycle: UInt64 = 0
@@ -73,9 +72,10 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     }
 }
 
-/// Where a `KernelCycle` publishes its telemetry: one slot of a render → UI/control `TelemetrySlots`, stamped with a
+/// Where a `KernelCycle` publishes its telemetry: one slot of a render → control `TelemetrySlots`, stamped with a
 /// clock generation that is fixed for the cycle's life. One publishing cycle per slot at a time (see
-/// `KernelCycleTelemetry`), replacements included. Reference model; not RT-certified.
+/// `KernelCycleTelemetry`), replacements included; read the slot only through `KernelCycle.latestTelemetry()`.
+/// Reference model; not RT-certified.
 struct KernelCycleTelemetryOutput: Sendable {
     let slots: TelemetrySlots<KernelCycleTelemetry>
     /// Must be in `0..<slots.slotCount`; `KernelCycle.init` checks it.
