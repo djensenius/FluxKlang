@@ -226,6 +226,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/MIDIPerformanceTests.swift
+      - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
+      - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
+      - path: FluxKlangTests/MIDIPerformanceRecoveryTests+ReleaseMarkers.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
