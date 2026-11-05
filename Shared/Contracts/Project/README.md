@@ -136,5 +136,45 @@ Non-goals:
   destination does not remove that output. Callers must give the writer a
   destination no other process mutates until the write returns.
 
-Project and graph documents are not decoded here. Migration, bookmark
-resolution, document lifecycle and activation remain separate obligations.
+The reader and writer do not decode project or graph documents; that is the
+next layer.
+
+## Package documents
+
+`ProjectPackageDocuments(contents:)` decodes the project and every pinned graph,
+in manifest order, only from the original bytes of their listed members, then
+runs the manifest's `validateReferences`. It deliberately does not call
+`ProjectDocument.validate(graphs:)`: graph and project validation is the
+caller's job, so packages whose graphs require review stay readable.
+The source `ProjectPackageContents` is retained unchanged, including opaque,
+unlisted and resource members.
+
+`ProjectPackageContents.make(project:graphs:extraFiles:policy:)` encodes the
+project and graphs at caller-chosen member paths, records their actual byte
+counts, lists `.opaqueState` extra files in supplied order and keeps `.unlisted`
+ones out of the manifest. Extra files keep their exact bytes; other roles,
+including resources, are refused. Parent directories are derived from the
+member paths. The manifest is encoded within the P2 policy, references are
+checked, and the result passes through the same in-memory P1/P3 construction.
+Documents round-trip semantically (unknown fields and extension bags), in
+canonical encoding rather than their original bytes.
+
+Refusals are typed `ProjectPackageDocumentError` cases: undecodable, future
+version or unsupported `requiredFeatures` (unsupported), unversioned or older
+(legacy, never upgraded here), over-limit (bounds), unencodable (`make` refuses
+documents the encoder rejects, e.g. unsupported `requiredFeatures`), or wrapped
+P1/P2/P3 errors. `version: 0` and wrong-contract documents are reported as
+undecodable, not unsupported. Refusals carry only graph IDs, never paths,
+payload bytes or Foundation text. Graph documents above 4 MiB or beyond the
+package limits refuse before decoding; nothing here does file IO.
+
+`make` charges extra files against the entry and total byte limits before
+encoding anything, then each document as soon as it is encoded, so the first
+member that crosses a limit refuses before later graphs are encoded. These size
+checks run before path uniqueness, so input that is both oversized and has a
+duplicate path (a repeated extra, or an extra sharing a document's path) may
+report a size error rather than `duplicatePath`; it is refused either way.
+
+Later slices own writer concurrent-mutation limits, staged export, migration
+and adoption, including packaging legacy imports. Bookmark resolution, document
+lifecycle and activation also remain separate obligations.
