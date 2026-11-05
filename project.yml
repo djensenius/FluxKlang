@@ -260,6 +260,8 @@ targets:
       - path: FluxKlangTests/MIDI1PerformanceSnapshotTests.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
+      - path: FluxKlangTests/PatchVariationTests+Editing.swift
+      - path: FluxKlangTests/PatchVariationTests+Repair.swift
       - path: FluxKlangTests/PeerSyncTests.swift
       - path: FluxKlangTests/PeerSyncTests+Commands.swift
       - path: FluxKlangTests/PeerTrustTests.swift
