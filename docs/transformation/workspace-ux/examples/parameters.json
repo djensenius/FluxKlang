@@ -34,8 +34,8 @@
     {"id": "bnd.knob1-mix", "control": "ctl.knob-1", "parameter": "par.verb.mix", "state": "stale",
      "pickup": {"mode": "catch", "state": "unavailable"}, "feedback": "unavailable"},
     {"id": "bnd.enc2-mains", "control": "ctl.enc-2", "parameter": "par.mains.gain", "state": "stale",
-     "encoderProfile": "twosComplement", "stepDb": 0.5, "pickup": {"mode": "relative", "state": "unavailable"},
-     "feedback": "unavailable"},
+     "encoderProfile": "twosComplement", "step": 0.5, "unit": "dB",
+     "pickup": {"state": "unavailable"}, "feedback": "unavailable"},
     {"id": "bnd.fader3-width", "control": "ctl.fader-3", "parameter": "par.space.width", "state": "active",
      "pickup": {"mode": "catch", "state": "waiting", "hardwareValue": 0.2, "parameterValue": 0.5},
      "feedback": "unsupported"}

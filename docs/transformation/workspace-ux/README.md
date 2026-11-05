@@ -185,7 +185,12 @@ Device/parameter (#55): (1) Is there one parameter revision stream per project, 
 class set on the parameter or on the command? (3) Do epochs use host + connection only, or also a lease generation?
 (4) What vocabulary describes identity evidence and Stale versus Missing? (5) Which staleness window turns
 telemetry into Unavailable? (6) Do capability matches work by count ("≥ 3 inputs") or by exact layout? (7) Does pickup
-state belong to bindings (#87) or to the parameter value?
+state belong to bindings (#87) or to the parameter value? Answered by #87: to bindings. Pickup mode (`catch` or `jump`)
+is binding configuration, required for absolute controls and absent for relative ones, which never wait (so
+`bnd.enc2-mains` in `parameters.json` shows a pickup state but no mode). Pickup state is runtime-only per binding:
+never persisted and never part of the parameter value. The pickup target is always host truth, and a host value
+outside the binding's range is held, not caught at the range end. The `pickup.state` shown in `parameters.json` is a
+display projection.
 
 Authority (#62/#94/#123): (1) May a paired remote or observer trigger Panic/Safe Mute at all, and does the
 freshness rule then apply (`cmd.0007` is rejected as stale here)? Not granted in these examples (#94). (2) When two
