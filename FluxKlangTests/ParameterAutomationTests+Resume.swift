@@ -83,6 +83,42 @@ extension ParameterAutomationTests {
     }
 
     @Test
+    func extremeGlidesStayFiniteMonotoneAndExactAtTheirEnds() throws {
+        #expect(AutomationLane.blend(-1e308, 1e308, at: 0).bitPattern == (-1e308).bitPattern)
+        #expect(AutomationLane.blend(-1e308, 1e308, at: 1).bitPattern == (1e308).bitPattern)
+        #expect(AutomationLane.blend(-1e308, 1e308, at: 0.5) == 0)
+        #expect(AutomationLane.blend(0.1, 0.1, at: 0.3) == 0.1)
+        let wide = try Self.descriptor(unit: .decibels, range: -1e308...1e308)
+        for (held, target) in [(-1e308, 1e308), (1e308, -1e308)] {
+            let lane = try Self.lane([.init(ticks: 0, value: target)], wide)
+            var arbiter = try Self.arbiter(.touch, .glide(ticks: 100), lane: lane)
+            _ = try arbiter.touch(Self.fader, priority: 0, at: 0)
+            _ = try arbiter.move(Self.fader, to: held, at: 0)
+            let released = try arbiter.release(Self.fader, at: 10)
+            #expect(released.owner == .gliding(from: held, start: 10))
+            #expect(try #require(released.value).bitPattern == held.bitPattern)
+            var previous = held
+            for ticks in stride(from: 11.0, through: 109, by: 1) {
+                let value = try #require(try arbiter.advance(to: ticks).value)
+                #expect(value.isFinite && (target > held ? value >= previous : value <= previous))
+                if ticks == 60 { #expect(value == 0) }
+                previous = value
+            }
+            let landed = try arbiter.advance(to: 110)
+            #expect(landed.owner == .automation)
+            #expect(try #require(landed.value).bitPattern == target.bitPattern)
+        }
+    }
+
+    @Test
+    func flatGlidesHoldTheirValueExactly() throws {
+        var arbiter = try Self.arbiter(.touch, .glide(ticks: 100), lane: Self.lane([.init(ticks: 0, value: 0.1)]))
+        _ = try arbiter.touch(Self.fader, priority: 0, at: 0)
+        _ = try arbiter.release(Self.fader, at: 0)
+        for ticks in stride(from: 1.0, through: 100, by: 1) { #expect(try arbiter.advance(to: ticks).value == 0.1) }
+    }
+
+    @Test
     func emptyLaneResumeKeepsTheGestureValue() throws {
         for resume in [AutomationResume.glide(ticks: 100), .catch] {
             var arbiter = try Self.arbiter(.touch, resume, lane: Self.lane([]))

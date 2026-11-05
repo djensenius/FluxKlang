@@ -247,8 +247,9 @@ struct ParameterArbiter: Hashable, Sendable {
                 value = curve
                 return
             }
-            let mixed = from + (curve - from) * progress
-            value = lane.isStepped ? mixed.rounded() : mixed
+            let mixed = AutomationLane.blend(from, curve, at: progress)
+            let bounded = min(max(mixed, lane.range.lowerBound), lane.range.upperBound)
+            value = lane.isStepped ? bounded.rounded() : bounded
         case .catching:
             guard let held = value else { return }
             if try lane.reaches(held, from: catchSince, through: ticks) {

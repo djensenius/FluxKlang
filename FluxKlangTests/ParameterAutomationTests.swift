@@ -255,6 +255,80 @@ struct ParameterAutomationTests {
         }
     }
 
+    @Test
+    func reachesIgnoresBreakpointsShadowedAtTheSameTick() throws {
+        let hidden = try Self.lane([.init(ticks: 0, value: 0, interpolation: .step),
+                                    .init(ticks: 100, value: 1, interpolation: .step), .init(ticks: 100, value: 0)])
+        for ticks in stride(from: -10.0, through: 200, by: 0.5) { #expect(try hidden.value(at: ticks) == 0) }
+        #expect(try !hidden.reaches(0.5, from: 0, through: 100))
+        #expect(try !hidden.reaches(1, from: 0, through: 200))
+        let approach = try Self.lane([.init(ticks: 0, value: 0), .init(ticks: 100, value: 1),
+                                      .init(ticks: 100, value: 0)])
+        #expect(try approach.reaches(0.5, from: 0, through: 100))
+        #expect(try !approach.reaches(1, from: 0, through: 200))
+        var arbiter = try Self.arbiter(.touch, .catch, lane: hidden)
+        _ = try arbiter.touch(Self.fader, priority: 0, at: 0)
+        _ = try arbiter.move(Self.fader, to: 0.5, at: 0)
+        _ = try arbiter.release(Self.fader, at: 10)
+        #expect(try arbiter.advance(to: 100) == .init(outcome: .applied, owner: .catching, value: 0.5))
+        #expect(try arbiter.advance(to: 1_000) == .init(outcome: .applied, owner: .catching, value: 0.5))
+    }
+
+    /// `reaches` against a brute-force walk of `value(at:)` at every tick, the position just before
+    /// it and the half tick, over a seeded family of small lanes with duplicate ticks and extreme values.
+    @Test
+    func reachesMatchesABruteForceWalkOfValueAt() throws {
+        let wide = try Self.descriptor(unit: .decibels, range: -1e308...1e308)
+        let values = [-1e308, -2, -1, 0, 0.5, 1, 2, 1e308]
+        let targets = [-1e308, -1.5, -1, -0.5, 0, 0.25, 0.5, 1, 1.5, 1e308]
+        var random = SplitMix(state: 0x108)
+        for _ in 0..<400 {
+            var points: [AutomationBreakpoint] = []
+            var ticks = Int64(random.int(0...2))
+            for index in 0..<random.int(1...6) {
+                if index > 0 {
+                    let tripled = index > 1 && points[index - 2].ticks == ticks
+                    ticks += Int64(random.int(tripled ? 1...3 : 0...3))
+                }
+                let interpolation: AutomationInterpolation = random.int(0...1) == 0 ? .step : .linear
+                points.append(.init(ticks: ticks, value: values[random.int(0...7)], interpolation: interpolation))
+            }
+            let lane = try Self.lane(points, wide)
+            for _ in 0..<4 {
+                let start = Double(random.int(-2...20)) / 2
+                let end = start + Double(random.int(0...24)) / 2
+                let samples = try Self.walk(from: start, through: end).map { try #require(try lane.value(at: $0)) }
+                for target in targets {
+                    let first = samples[0]
+                    let reference = samples.contains { $0 == target || ($0 < target) != (first < target) }
+                    #expect(try lane.reaches(target, from: start, through: end) == reference,
+                            "\(points) \(start)...\(end) target \(target)")
+                }
+            }
+        }
+    }
+
+    static func walk(from start: Double, through end: Double) -> [Double] {
+        var positions = [start]
+        var tick = start.rounded(.down)
+        while tick <= end {
+            positions += [tick.nextDown, tick, tick + 0.5].filter { $0 > start && $0 <= end }
+            tick += 1
+        }
+        return positions + [end]
+    }
+
+    struct SplitMix {
+        var state: UInt64
+
+        mutating func int(_ range: ClosedRange<Int>) -> Int {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var mixed = (state ^ (state >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            mixed = (mixed ^ (mixed >> 27)) &* 0x94D0_49BB_1331_11EB
+            return range.lowerBound + Int((mixed ^ (mixed >> 31)) % UInt64(range.count))
+        }
+    }
+
     static func descriptor(
         unit: ParameterUnit = .normalized, range: ClosedRange<Double> = 0...1, curve: ParameterCurve = .linear,
         ceiling: Double? = nil, controlClass: ControlClass = .live, defaultValue: Double? = nil

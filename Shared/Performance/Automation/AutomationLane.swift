@@ -96,9 +96,15 @@ struct AutomationLane: Hashable, Sendable {
         try Self.admit(value, to: range, stepped: isStepped)
     }
 
-    /// Whether the curve reaches or crosses `target` anywhere in `start...end`. Each segment is
-    /// monotonic, so sampling both ends and every breakpoint between them is exact and does not
-    /// depend on how the interval was split into calls.
+    /// Whether the observable trajectory, the values `value(at:)` returns over `start...end`, equals
+    /// `target` or passes it (including by a jump). Each segment is monotonic, so it is exact to sample
+    /// the start, every breakpoint the trajectory shows, and the end; the result does not depend on
+    /// how the interval was split into calls.
+    ///
+    /// A breakpoint followed by another at the same tick is shadowed: `value(at:)` never returns it at
+    /// that tick. Its incoming segment is sampled at the last position before the tick instead, so a
+    /// step into it holds the step's value and a linear approach counts only the values it attains,
+    /// never the shadowed end itself.
     func reaches(_ target: Double, from start: Double, through end: Double) throws(AutomationRefusal) -> Bool {
         guard target.isFinite, end.isFinite else { throw .nonFinite }
         guard let first = try value(at: start) else { return false }
@@ -107,7 +113,10 @@ struct AutomationLane: Hashable, Sendable {
         if departs(first) { return true }
         var index = firstIndex(after: start)
         while index < breakpoints.count, Double(breakpoints[index].ticks) <= end {
-            if departs(breakpoints[index].value) { return true }
+            let point = breakpoints[index]
+            let shadowed = index + 1 < breakpoints.count && breakpoints[index + 1].ticks == point.ticks
+            let shown = shadowed ? try value(at: Double(point.ticks).nextDown) ?? first : point.value
+            if departs(shown) { return true }
             index += 1
         }
         return try departs(value(at: end) ?? first)
@@ -133,9 +142,17 @@ struct AutomationLane: Hashable, Sendable {
         case .linear: shaped = fraction
         case .power(let exponent): shaped = pow(fraction, exponent)
         }
-        // Weighting both ends cannot overflow a finite range; the clamp keeps flat segments exact.
-        let value = start.value * (1 - shaped) + end.value * shaped
-        return min(max(value, min(start.value, end.value)), max(start.value, end.value))
+        return blend(start.value, end.value, at: shaped)
+    }
+
+    /// `from` weighted by `1 - fraction` plus `to` weighted by `fraction`, clamped to `0...1`. Weighting
+    /// both ends cannot overflow a finite range (unlike `from + (to - from) * fraction`); a fraction of 0
+    /// gives `from` and 1 gives `to` exactly, and the clamp keeps the result between them, so flat spans
+    /// are exact.
+    static func blend(_ from: Double, _ to: Double, at fraction: Double) -> Double {
+        let weight = min(max(fraction, 0), 1)
+        let value = from * (1 - weight) + to * weight
+        return min(max(value, min(from, to)), max(from, to))
     }
 
     private static func validate(_ interpolation: AutomationInterpolation,
