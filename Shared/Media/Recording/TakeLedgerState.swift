@@ -215,7 +215,9 @@ struct TakeLedgerState: Sendable {
     /// Whether this take owns the record (§8.3): same stream and clock, a segment of the
     /// same generation, and overlapping frames. While capturing, the current segment extends
     /// past the frontier, so a record beyond capture progress is owned, then refused, never
-    /// ignored, and an empty current segment also owns a `captureStopped` at its start.
+    /// ignored, and an empty current segment also owns a `captureStopped` at its start. An
+    /// overflow without a length (nil or 0 frames) is owned like a 1-frame one: ownership is
+    /// decided first, then `appendOverflow` refuses the length (`.missingOverflowFrames`).
     func owns(stream: UInt32, sample: RuntimeSampleStamp, kind: RuntimeDiscontinuityKind, frames: UInt32?) -> Bool {
         guard stream == opening.streamSlot, sample.clock == opening.startClockSlot else { return false }
         // Ended by the ledger at a discontinuity: later records describe audio after the jump.
@@ -230,7 +232,8 @@ struct TakeLedgerState: Sendable {
                 let atEmptyStart = isCapturingCurrent && segment.isEmpty && sample.frame == segment.startFrame
                 return (segment.startFrame < sample.frame || atEmptyStart) && sample.frame <= upper
             }
-            let (end, overflow) = sample.frame.addingReportingOverflow(Int64(frames ?? 0))
+            let length = max(Int64(frames ?? 0), 1)
+            let (end, overflow) = sample.frame.addingReportingOverflow(length)
             return sample.frame < upper && (overflow || end > segment.startFrame)
         }
     }

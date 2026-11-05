@@ -172,6 +172,8 @@ struct TakeLedger: Sendable {
     /// (underrun, locate, …) or a record before every open take of its stream and generation
     /// (pre-roll, other streams). A record a take on its stream could have owned is never dropped:
     /// unowned, it is refused `.recordNotOwned` (a take the ledger ended owns no further record).
+    /// Ownership is decided before the frames are checked: an overflow without a length is routed
+    /// like a 1-frame one, then its owner refuses it (`.missingOverflowFrames`, or `.takeSealed`).
     mutating func ingest(_ record: RuntimeDiscontinuity) throws(TakeLedgerError) -> [TakeIngestEffect] {
         switch record.kind {
         case .clockRestart(let previousFrame):

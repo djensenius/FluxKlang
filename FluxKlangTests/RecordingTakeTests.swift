@@ -401,4 +401,83 @@ struct RecordingTakeTests {
             #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 600, host: 2_500_000_000)).isEmpty)
         }
     }
+
+    /// Round 7 (Copilot): an overflow without a length (nil or 0 frames) is owned like a 1-frame
+    /// overflow, so one at a segment's start is owned. Ownership is decided first; then
+    /// `appendOverflow` refuses the length `.missingOverflowFrames` and nothing changes.
+    @Test
+    func overflowWithoutFramesIsOwnedLikeOneFrame() throws {
+        var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+        for frames in [nil, 0] as [UInt32?] {
+            // The segment's start, inside it, and its frontier (a capturing segment owns past it).
+            for frame: Int64 in [1000, 1500, 2000] {
+                let record = Fixture.overflow(1, frame, frames: frames)
+                #expect(ledger.owner(of: record) == Fixture.take1)
+                #expect(ledger.owner(of: Fixture.overflow(1, frame, frames: 1)) == Fixture.take1)
+                Fixture.refusal(.missingOverflowFrames) { () throws(TakeLedgerError) in _ = try ledger.ingest(record) }
+            }
+            // Pre-roll stays unowned and ignored, as for a 1-frame overflow.
+            #expect(ledger.owner(of: Fixture.overflow(1, 999, frames: frames)) == nil)
+            #expect(try ledger.ingest(Fixture.overflow(1, 999, frames: frames)).isEmpty)
+        }
+        #expect(try ledger.ingest(Fixture.overflow(1, 1000, frames: 1)) == [.recorded(Fixture.take1)])
+        let interval = try OverflowInterval(startFrame: 1000, frames: 1)
+        let take = try ledger.finish(Fixture.take1, reason: .user)
+        #expect(take.segments.map(\.overflows) == [[interval]] && take.droppedFrames == 1)
+    }
+
+    /// Round 7: outside every segment's half-open range (a closed segment's end is exclusive) a
+    /// lengthless overflow is still refused `.recordNotOwned`, or ignored as pre-roll. A closed take
+    /// that owns one refuses it `.takeSealed`: ownership first, then the length.
+    @Test
+    func overflowWithoutFramesOutsideEverySegmentIsNotOwned() throws {
+        var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+        #expect(try ledger.ingest(Fixture.jump(1, 5000)) == [.split(Fixture.take1)])
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 6000))
+        for frames in [nil, 0] as [UInt32?] {
+            for frame: Int64 in [1000, 1999, 5000] {
+                Fixture.refusal(.missingOverflowFrames) { () throws(TakeLedgerError) in
+                    _ = try ledger.ingest(Fixture.overflow(1, frame, frames: frames))
+                }
+            }
+            // The closed segment's exclusive end, and the gap before the jump's target.
+            for frame: Int64 in [2000, 3000] {
+                #expect(ledger.owner(of: Fixture.overflow(1, frame, frames: 1)) == nil)
+                let refusal = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: frame)
+                Fixture.refusal(refusal) { () throws(TakeLedgerError) in
+                    _ = try ledger.ingest(Fixture.overflow(1, frame, frames: frames))
+                }
+            }
+            #expect(try ledger.ingest(Fixture.overflow(1, 999, frames: frames)).isEmpty)
+        }
+        let take = try ledger.finish(Fixture.take1, reason: .user)
+        #expect(take.segments.map(\.frames) == [1000, 1000] && take.droppedFrames == 0)
+        Fixture.refusal(.takeSealed(Fixture.take1)) { () throws(TakeLedgerError) in
+            _ = try ledger.ingest(Fixture.overflow(1, 1000, frames: nil))
+        }
+    }
+
+    /// Round 7: the round-5 jump-target rule is unchanged for a lengthless overflow. Once a new take
+    /// records from the jump's target, it owns one at its start, so the length is refused instead.
+    @Test
+    func overflowWithoutFramesKeepsTheJumpTargetRule() throws {
+        var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+        let ended = TakeIngestEffect.ended(Fixture.take1, .discontinuity(.jumpBeforeTakeStart))
+        #expect(try ledger.ingest(Fixture.jump(1, 500)) == [ended])
+        for frame: Int64 in [500, 600, 1000] {
+            let refusal = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: frame)
+            Fixture.refusal(refusal) { () throws(TakeLedgerError) in
+                _ = try ledger.ingest(Fixture.overflow(1, frame, frames: nil))
+            }
+        }
+        try ledger.open(Fixture.opening(Fixture.take2, 1, 500))
+        Fixture.refusal(.missingOverflowFrames) { () throws(TakeLedgerError) in
+            _ = try ledger.ingest(Fixture.overflow(1, 500, frames: nil))
+        }
+        try ledger.advance(Fixture.take2, to: Fixture.stamp(1, 600))
+        #expect(try ledger.ingest(Fixture.overflow(1, 500, frames: 1)) == [.recorded(Fixture.take2)])
+    }
 }
