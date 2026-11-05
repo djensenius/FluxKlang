@@ -39,7 +39,9 @@ enum SpatialCalibrationEventKind: Hashable, Sendable, CaseIterable {
 
 /// An input to the flow. Each is legal in only some phases; see `SpatialCalibrationFlow`.
 enum SpatialCalibrationEvent: Hashable, Sendable {
-    /// The device is present and its routes are confirmed; the plan was built against them.
+    /// The device is present and its routes are confirmed; the plan was built
+    /// against them. Also restores the routes after a loss while results, a
+    /// stop or a draft are shown.
     case routeConfirmed(SpatialCalibrationPlan)
     case routeLost(SpatialCalibrationUnavailableReason)
     /// Replaces the plan before review.
@@ -171,8 +173,21 @@ struct SpatialCalibrationDraft: Hashable, Sendable {
 enum SpatialCalibrationStopOutcome: Hashable, Sendable {
     /// A run was playing and is now stopped.
     case stoppedRun
+    /// Nothing was playing, but a review awaiting authorization was cancelled,
+    /// so its authorization can no longer start a run.
+    case cancelledReview
     /// Nothing was playing; the flow is unchanged.
     case nothingPlaying
+}
+
+/// A route change reported while results, a stop or a draft are shown. They
+/// stay on screen, and leaving them lands where the change says.
+enum SpatialCalibrationRouteChange: Hashable, Sendable {
+    /// The device or a route was lost: leaving lands in unavailable with this reason.
+    case lost(SpatialCalibrationUnavailableReason)
+    /// The routes were confirmed again after a loss: leaving lands in planned
+    /// with this plan, which was built against them.
+    case restored(SpatialCalibrationPlan)
 }
 
 enum SpatialCalibrationState: Hashable, Sendable {
@@ -207,22 +222,31 @@ enum SpatialCalibrationState: Hashable, Sendable {
 /// | awaitingAuthorization | routeLost / cancel / authorize | unavailable / planned / running |
 /// | running | routeLost / progress / complete | stopped / running / results |
 /// | results | stageResults / discardResults | draft / planned |
-/// | stopped | acknowledgeStop | planned, or unavailable after a device loss |
+/// | stopped | acknowledgeStop | planned |
 /// | draft | commitDraft / discardDraft | planned |
+/// | results, stopped, draft | routeLost, or routeConfirmed after a loss | unchanged |
+///
+/// A route loss while results, a stop or a draft are shown (including the
+/// loss that stopped a run) is kept in `routeChange`: leaving lands in
+/// unavailable with its reason instead of planned, and a later route
+/// confirmation lands in planned with the confirmed plan.
 ///
 /// Panic, Safe Mute and device loss go to `stop(_:)`, which never throws.
 ///
 /// Running is reachable only from awaitingAuthorization, with an authorization
-/// whose flow ID, plan ID, digest and generation all match the current review.
+/// whose flow ID, plan and generation all match the current review.
 struct SpatialCalibrationFlow: Hashable, Sendable {
     let id: SpatialCalibrationFlowID
     private(set) var state: SpatialCalibrationState
+    /// Set only while results, a stop or a draft are shown; nil otherwise.
+    private(set) var routeChange: SpatialCalibrationRouteChange?
     private var stage: SpatialCalibrationStage
     /// The last review generation issued; the next review gets one more. Every
     /// flow starts at 0, and its ID keeps its reviews apart from other flows'.
     private(set) var lastReviewGeneration: UInt64 = 0
 
     /// Starts unavailable (the Calibrate button is disabled with `reason`).
+    /// `id` must be unique to this flow instance; see `SpatialCalibrationFlowID`.
     init(id: SpatialCalibrationFlowID, applied: SpatialCalibrationSet = .empty,
          unavailable reason: SpatialCalibrationUnavailableReason) {
         self.id = id
@@ -230,7 +254,8 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
         stage = SpatialCalibrationStage(applied: applied)
     }
 
-    /// Starts planned, for a device that is already present with confirmed routes.
+    /// Starts planned, for a device that is already present with confirmed
+    /// routes. `id` must be unique to this flow instance.
     init(id: SpatialCalibrationFlowID, applied: SpatialCalibrationSet = .empty, plan: SpatialCalibrationPlan) {
         self.id = id
         state = .planned(plan)
@@ -259,21 +284,63 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
         case let .awaitingAuthorization(review): try next.fromAwaitingAuthorization(review, event)
         case let .running(run): try next.fromRunning(run, event)
         case let .results(results): try next.fromResults(results, event)
-        case let .stopped(plan, stop): try next.fromStopped(plan, stop, event)
+        case let .stopped(plan, _): try next.fromStopped(plan, event)
         case let .draft(draft): try next.fromDraft(draft, event)
         }
         self = next
     }
 
     /// Panic, Safe Mute or device loss. It never throws, so a broadcast needs no
-    /// error handling: a running calibration stops; in any other phase nothing
-    /// is playing, so the flow is unchanged. Repeating a stop is harmless.
-    /// Route status still arrives as `routeLost`.
+    /// error handling. A running calibration stops. A review awaiting
+    /// authorization is cancelled to planned (unavailable after a device loss),
+    /// and the next review gets a new generation. In any other phase nothing is
+    /// playing, so the flow is unchanged; repeating a stop is harmless. Route
+    /// status still arrives as `routeLost`.
     @discardableResult
     mutating func stop(_ reason: SpatialCalibrationStop) -> SpatialCalibrationStopOutcome {
-        guard case let .running(run) = state else { return .nothingPlaying }
+        switch state {
+        case let .running(run):
+            halt(run, reason)
+            return .stoppedRun
+        case let .awaitingAuthorization(review):
+            if case let .deviceLost(lost) = reason {
+                state = .unavailable(lost)
+            } else {
+                state = .planned(review.plan)
+            }
+            return .cancelledReview
+        default:
+            return .nothingPlaying
+        }
+    }
+
+    private mutating func halt(_ run: SpatialCalibrationRun, _ reason: SpatialCalibrationStop) {
         state = .stopped(run.review.plan, reason)
-        return .stoppedRun
+        if case let .deviceLost(lost) = reason { routeChange = .lost(lost) }
+    }
+
+    /// Records a route loss (the latest wins), or a confirmation after one,
+    /// while results, a stop or a draft are shown.
+    private mutating func noteRoute(_ event: SpatialCalibrationEvent) throws(SpatialCalibrationRefusal) {
+        switch (event, routeChange) {
+        case let (.routeLost(reason), _):
+            routeChange = .lost(reason)
+        case let (.routeConfirmed(plan), .lost?):
+            routeChange = .restored(plan)
+        default:
+            throw illegal(event)
+        }
+    }
+
+    /// Leaves results, a stop or a draft: to planned with `plan`, unless the
+    /// route changed meanwhile.
+    private mutating func leave(toPlanned plan: SpatialCalibrationPlan) {
+        switch routeChange {
+        case let .lost(reason): state = .unavailable(reason)
+        case let .restored(confirmed): state = .planned(confirmed)
+        case nil: state = .planned(plan)
+        }
+        routeChange = nil
     }
 
     private func illegal(_ event: SpatialCalibrationEvent) -> SpatialCalibrationRefusal {
@@ -317,12 +384,14 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
         }
     }
 
-    /// The first binding that does not match: flow ID, plan ID, digest, then generation.
+    /// The first binding that does not match: flow ID, plan ID, the rest of the
+    /// plan (reported as `.digest`), then generation. The whole plan is compared,
+    /// so a digest collision cannot pass.
     private static func defect(of authorization: SpatialCalibrationAuthorization,
                                for review: SpatialCalibrationReview) -> SpatialCalibrationAuthorizationDefect? {
         if authorization.flowID != review.flowID { return .flowID }
         if authorization.planID != review.plan.id { return .planID }
-        if authorization.digest != review.plan.digest { return .digest }
+        if authorization.plan != review.plan { return .digest }
         if authorization.generation != review.generation { return .generation }
         return nil
     }
@@ -331,10 +400,11 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
         throws(SpatialCalibrationRefusal) {
         switch event {
         case let .routeLost(reason):
-            state = .stopped(run.review.plan, .deviceLost(reason))
+            halt(run, .deviceLost(reason))
         case let .progress(elapsed):
             state = .running(try run.advanced(to: elapsed))
         case let .complete(entries):
+            // An early completion is refused before its entries are checked.
             let total = run.review.plan.totalSeconds
             guard run.elapsedSeconds == total else {
                 throw .runIncomplete(elapsedSeconds: run.elapsedSeconds, totalSeconds: total)
@@ -348,6 +418,8 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
     private mutating func fromResults(_ results: SpatialCalibrationResults, _ event: SpatialCalibrationEvent)
         throws(SpatialCalibrationRefusal) {
         switch event {
+        case .routeLost, .routeConfirmed:
+            try noteRoute(event)
         case .stageResults:
             let current = stage.applied.generation
             let (generation, overflow) = current.addingReportingOverflow(1)
@@ -361,25 +433,29 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
             }
             state = .draft(SpatialCalibrationDraft(plan: results.review.plan, set: set))
         case .discardResults:
-            state = .planned(results.review.plan)
+            leave(toPlanned: results.review.plan)
         default:
             throw illegal(event)
         }
     }
 
-    private mutating func fromStopped(_ plan: SpatialCalibrationPlan, _ stop: SpatialCalibrationStop,
-                                      _ event: SpatialCalibrationEvent) throws(SpatialCalibrationRefusal) {
-        guard event == .acknowledgeStop else { throw illegal(event) }
-        if case let .deviceLost(reason) = stop {
-            state = .unavailable(reason)
-        } else {
-            state = .planned(plan)
+    private mutating func fromStopped(_ plan: SpatialCalibrationPlan, _ event: SpatialCalibrationEvent)
+        throws(SpatialCalibrationRefusal) {
+        switch event {
+        case .routeLost, .routeConfirmed:
+            try noteRoute(event)
+        case .acknowledgeStop:
+            leave(toPlanned: plan)
+        default:
+            throw illegal(event)
         }
     }
 
     private mutating func fromDraft(_ draft: SpatialCalibrationDraft, _ event: SpatialCalibrationEvent)
         throws(SpatialCalibrationRefusal) {
         switch event {
+        case .routeLost, .routeConfirmed:
+            try noteRoute(event)
         case let .commitDraft(expected):
             guard expected == draft else { throw .draftMismatch }
             do {
@@ -387,10 +463,10 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
             } catch {
                 throw .calibration(error)
             }
-            state = .planned(draft.plan)
+            leave(toPlanned: draft.plan)
         case .discardDraft:
             stage.discard()
-            state = .planned(draft.plan)
+            leave(toPlanned: draft.plan)
         default:
             throw illegal(event)
         }

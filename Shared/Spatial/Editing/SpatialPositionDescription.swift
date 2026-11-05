@@ -104,12 +104,13 @@ enum SpatialPositionDescription {
     }
 
     /// The spoken value of one adjustable element: "slightly right of centre, 0.10"
-    /// for X, "in front, 0.60" for Y and "0.50" for Width.
-    static func value(of axis: SpatialEditAxis, in placement: SpatialSourcePlacement) -> String {
+    /// for X, "in front, 0.60" for Y and "0.50" for Width. Nil for Width on a
+    /// mono source, which has no width: `describe(_:)` omits it and the UI hides it.
+    static func value(of axis: SpatialEditAxis, in placement: SpatialSourcePlacement) -> String? {
         switch axis {
         case .x: "\(words(forX: placement.position.x)), \(number(placement.position.x))"
         case .y: "\(words(forY: placement.position.y)), \(number(placement.position.y))"
-        case .width: number(placement.width)
+        case .width: placement.channelCount == 2 ? number(placement.width) : nil
         }
     }
 }

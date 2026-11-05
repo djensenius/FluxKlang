@@ -67,8 +67,8 @@ front is +y.
   collapse to "centre": "centre; x 0.00, y 0.00". A stereo source adds ", width 0.50"; a mono source has none.
 - Arrows, drags and the VoiceOver adjustable actions share one edit path. Nudges and drags clamp at ±1. Exact
   entry refuses out-of-range or non-finite values instead of clamping, and stores −0.0 as 0.
-- Width follows the same rules on stereo sources only. Width edits on a mono source are refused, and the UI
-  hides the Width control for mono sources.
+- Width follows the same rules on stereo sources only. Width edits on a mono source are refused, the UI hides
+  the Width control for mono sources, and a mono source has no spoken Width value.
 
 ## Masks and survivors
 
@@ -130,7 +130,7 @@ stateDiagram-v2
   Unavailable --> Planned: device present + route confirmed
   Planned --> AwaitingAuthorization: user reviews outputs, max level, duration
   AwaitingAuthorization --> Running: host authorizes (hazardous)
-  AwaitingAuthorization --> Planned: cancel
+  AwaitingAuthorization --> Planned: cancel / Panic / Safe Mute
   Running --> Results: completed
   Running --> Stopped: Panic / Safe Mute / device lost
   Results --> Draft: apply delays and trims as a draft
@@ -139,14 +139,24 @@ stateDiagram-v2
 - No test signal plays without the authorization sheet. There are no automatic tones on launch or reconnect.
 - The model (`SpatialCalibrationFlow`, #116 PL1) has no clock and plays nothing. Route status, elapsed time and
   measured results are injected.
-- Each flow has a caller-supplied ID. An authorization binds the flow ID, plan ID, plan digest and review
-  generation. The first mismatch is refused, in that order, and nothing changes. The digest covers the plan ID,
-  the outputs in order, each output's route, the maximum level and the duration, so re-routing a speaker needs
-  a new review.
+- Each flow has a caller-supplied ID, which must be unique to that flow instance (a flow rebuilt after relaunch
+  gets a new one). A flow must not be snapshotted and restored while it awaits authorization, because the
+  restored copy would accept the same authorization again. Single-use consumption of authorizations comes with
+  the #62 hazardous-action tokens.
+- An authorization binds the flow ID, the whole reviewed plan and the review generation. The flow checks the
+  flow ID, the plan ID, the rest of the plan, then the generation; the first mismatch is refused and nothing
+  changes. The plan includes the outputs in order, each output's route, the maximum level and the duration, so
+  re-routing a speaker needs a new review. The plan's digest is a 64-bit FNV-1a summary for display and logs.
+  It is not cryptographic and does not resist an adversary; the binding compares the whole plan, not the digest.
 - Running completes only when the injected elapsed time equals the plan's total; earlier results are refused.
-- Panic, Safe Mute and device loss stop a running calibration. In any other state they do nothing, never fail,
-  and report that nothing was playing, so Panic can be broadcast without error handling. Acknowledging a
-  device-loss stop returns to Unavailable; any other stop returns to Planned.
+- Panic, Safe Mute and device loss stop a running calibration. While a review awaits authorization they cancel
+  it to Planned (Unavailable after a device loss); the next review gets a new generation, so the old
+  authorization is refused. Outside Running and AwaitingAuthorization they are idempotent no-ops: they never
+  fail and report that nothing was playing, so Panic can be broadcast without error handling.
+- A route loss while results, a stop or a draft are shown keeps them on screen (a draft can still be committed
+  or discarded) and records the loss, as does the device loss that stopped a run. Leaving then lands in
+  Unavailable with the loss reason instead of Planned. A route confirmation after the loss clears it, and
+  leaving lands in Planned with the newly confirmed plan.
 - Results are staged as a pending calibration set at the applied generation + 1. Only an explicit commit
   applies them.
 - Provisional policy: the maximum test level is −60…−6 dBFS and each output plays for 0.25…10 s, both

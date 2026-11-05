@@ -112,9 +112,9 @@ struct SpatialCalibrationFlowTests {
         .planned: [.routeLost: .unavailable, .revise: .planned, .review: .awaitingAuthorization],
         .awaitingAuthorization: [.routeLost: .unavailable, .cancel: .planned, .authorize: .running],
         .running: [.routeLost: .stopped, .progress: .running, .complete: .results],
-        .results: [.stageResults: .draft, .discardResults: .planned],
-        .stopped: [.acknowledgeStop: .planned],
-        .draft: [.commitDraft: .planned, .discardDraft: .planned]
+        .results: [.routeLost: .results, .stageResults: .draft, .discardResults: .planned],
+        .stopped: [.routeLost: .stopped, .acknowledgeStop: .planned],
+        .draft: [.routeLost: .draft, .commitDraft: .planned, .discardDraft: .planned]
     ]
 
     /// A well-formed event of `kind`: authorize and commit carry this flow's own
@@ -157,7 +157,7 @@ struct SpatialCalibrationFlowTests {
                 }
             }
         }
-        #expect(legalCount == 15 && illegalCount == 76)
+        #expect(legalCount == 18 && illegalCount == 73)
         #expect(Self.legal[.planned]?[.authorize] == nil)
     }
 
@@ -237,6 +237,14 @@ struct SpatialCalibrationFlowTests {
                               .duplicateResult(measured[2].speaker))
     }
 
+    @Test func earlyCompletionIsRefusedBeforeItsEntriesAreChecked() throws {
+        var flow = try Fixture.startedRun()
+        let unplanned = try SpeakerCalibration(speaker: Fixture.speaker("spk.c"))
+        Fixture.expectRefusal(&flow, .complete([unplanned]), .runIncomplete(elapsedSeconds: 0, totalSeconds: 8))
+        try flow.handle(.progress(elapsedSeconds: 8))
+        Fixture.expectRefusal(&flow, .complete([unplanned]), .unplannedResult(unplanned.speaker))
+    }
+
     @Test func completeNeedsTheWholeRun() throws {
         var flow = try Fixture.startedRun()
         let measured = try Fixture.entries()
@@ -293,10 +301,10 @@ struct SpatialCalibrationFlowTests {
         #expect(lost.state == .unavailable(.routeUnconfirmed))
     }
 
-    @Test func stopsOutsideARunAreNoOpsThatNeverThrow() throws {
+    @Test func stopsOutsideARunOrReviewAreNoOpsThatNeverThrow() throws {
         let stops: [SpatialCalibrationStop] = [.panic, .safeMute, .deviceLost(.deviceMissing)]
         var checked = 0
-        for phase in Phase.allCases where phase != .running {
+        for phase in Phase.allCases where phase != .running && phase != .awaitingAuthorization {
             for stop in stops {
                 var flow = try Fixture.flow(in: phase)
                 let before = flow
@@ -305,7 +313,74 @@ struct SpatialCalibrationFlowTests {
                 checked += 1
             }
         }
-        #expect(checked == 18)
+        #expect(checked == 15)
+    }
+
+    @Test func routeLossAfterAPanicStopLeavesToUnavailable() throws {
+        let plan = try Fixture.plan()
+        var flow = try Fixture.flow(in: .stopped)
+        #expect(flow.state == .stopped(plan, .panic) && flow.routeChange == nil)
+        try flow.handle(.routeLost(.routeUnconfirmed))
+        try flow.handle(.routeLost(.deviceMissing))
+        #expect(flow.state == .stopped(plan, .panic) && flow.routeChange == .lost(.deviceMissing))
+        #expect(flow.stop(.deviceLost(.routeUnconfirmed)) == .nothingPlaying)
+        #expect(flow.routeChange == .lost(.deviceMissing))
+        try flow.handle(.acknowledgeStop)
+        #expect(flow.state == .unavailable(.deviceMissing) && flow.routeChange == nil)
+    }
+
+    @Test func routeLossWhileResultsAreShownKeepsThemAndLeavesToUnavailable() throws {
+        var flow = try Fixture.flow(in: .results)
+        let shown = flow.state
+        try flow.handle(.routeLost(.routeUnconfirmed))
+        #expect(flow.state == shown && flow.routeChange == .lost(.routeUnconfirmed))
+        try flow.handle(.discardResults)
+        #expect(flow.state == .unavailable(.routeUnconfirmed) && flow.routeChange == nil && flow.pending == nil)
+    }
+
+    @Test func routeLossDuringADraftStillCommitsAndLeavesToUnavailable() throws {
+        var staged = try Fixture.flow(in: .results)
+        try staged.handle(.routeLost(.deviceMissing))
+        try staged.handle(.stageResults)
+        let draft = try #require(Fixture.draft(of: staged))
+        #expect(staged.routeChange == .lost(.deviceMissing) && staged.pending == draft.set)
+        try staged.handle(.discardDraft)
+        #expect(staged.state == .unavailable(.deviceMissing) && staged.pending == nil && staged.applied == .empty)
+        var flow = try Fixture.flow(in: .draft)
+        try flow.handle(.routeLost(.routeUnconfirmed))
+        #expect(Fixture.draft(of: flow) == draft && flow.pending == draft.set)
+        try flow.handle(.commitDraft(expected: draft))
+        #expect(flow.state == .unavailable(.routeUnconfirmed) && flow.applied == draft.set && flow.pending == nil)
+        #expect(flow.routeChange == nil)
+    }
+
+    @Test func confirmedRoutesAfterALossLeaveToTheConfirmedPlan() throws {
+        let confirmed = try Fixture.plan(level: -30)
+        let exits: [(Phase, SpatialCalibrationEvent)] = [
+            (.results, .discardResults), (.stopped, .acknowledgeStop), (.draft, .discardDraft)
+        ]
+        for (phase, exit) in exits {
+            var flow = try Fixture.flow(in: phase)
+            let unexpected = SpatialCalibrationRefusal.illegalTransition(from: phase, event: .routeConfirmed)
+            Fixture.expectRefusal(&flow, .routeConfirmed(confirmed), unexpected)
+            try flow.handle(.routeLost(.deviceMissing))
+            let shown = flow.state
+            try flow.handle(.routeConfirmed(confirmed))
+            #expect(flow.state == shown && flow.routeChange == .restored(confirmed))
+            Fixture.expectRefusal(&flow, .routeConfirmed(confirmed), unexpected)
+            var relost = flow
+            try relost.handle(.routeLost(.routeUnconfirmed))
+            try relost.handle(exit)
+            #expect(relost.state == .unavailable(.routeUnconfirmed))
+            try flow.handle(exit)
+            #expect(flow.state == .planned(confirmed) && flow.routeChange == nil, "\(phase)")
+        }
+        var lost = try Fixture.startedRun()
+        try lost.handle(.routeLost(.deviceMissing))
+        #expect(lost.routeChange == .lost(.deviceMissing))
+        try lost.handle(.routeConfirmed(confirmed))
+        try lost.handle(.acknowledgeStop)
+        #expect(lost.state == .planned(confirmed) && lost.routeChange == nil)
     }
 
     @Test func reviseCancelAndDiscardKeepThePlanAndTheAppliedSet() throws {

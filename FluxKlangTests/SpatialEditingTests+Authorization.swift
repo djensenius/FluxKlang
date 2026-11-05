@@ -90,6 +90,27 @@ struct SpatialCalibrationAuthorizationTests {
         Fixture.expectRefusal(&flow, .authorize(stale), .authorizationMismatch(.planID))
     }
 
+    @Test func stopsCancelAPendingReviewAndStaleItsAuthorization() throws {
+        let plan = try Fixture.plan()
+        let cases: [(SpatialCalibrationStop, SpatialCalibrationState)] = [
+            (.panic, .planned(plan)), (.safeMute, .planned(plan)),
+            (.deviceLost(.deviceMissing), .unavailable(.deviceMissing))
+        ]
+        for (stop, after) in cases {
+            var flow = try Fixture.flow(in: .awaitingAuthorization)
+            let stale = SpatialCalibrationAuthorization(authorizing: try #require(Fixture.review(of: flow)))
+            #expect(flow.stop(stop) == .cancelledReview, "\(stop)")
+            #expect(flow.state == after && flow.lastReviewGeneration == 1, "\(stop)")
+            let cancelled = flow
+            #expect(flow.stop(stop) == .nothingPlaying && flow == cancelled)
+            Fixture.expectRefusal(&flow, .authorize(stale), .illegalTransition(from: after.phase, event: .authorize))
+            if after.phase == .unavailable { try flow.handle(.routeConfirmed(plan)) }
+            try flow.handle(.review)
+            #expect(Fixture.review(of: flow)?.generation == 2)
+            Fixture.expectRefusal(&flow, .authorize(stale), .authorizationMismatch(.generation))
+        }
+    }
+
     @Test func reviewGenerationsAdvanceWithoutWrapping() throws {
         #expect(try SpatialCalibrationFlow.reviewGeneration(after: 0) == 1)
         #expect(try SpatialCalibrationFlow.reviewGeneration(after: .max - 1) == .max)

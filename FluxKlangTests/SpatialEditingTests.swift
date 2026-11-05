@@ -381,5 +381,7 @@ struct SpatialEditingTests {
         #expect(Words.value(of: .x, in: stereo) == "slightly right of centre, 0.10")
         #expect(Words.value(of: .y, in: stereo) == "in front, 0.60")
         #expect(Words.value(of: .width, in: stereo) == "0.50")
+        #expect(Words.value(of: .x, in: mono) == "centre, 0.00" && Words.value(of: .y, in: mono) == "centre, 0.00")
+        #expect(Words.value(of: .width, in: mono) == nil)
     }
 }

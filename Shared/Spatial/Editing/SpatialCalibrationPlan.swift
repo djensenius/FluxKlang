@@ -10,10 +10,15 @@
 enum SpatialCalibrationPlanTag: ContractIDTag {}
 typealias SpatialCalibrationPlanID = ContractID<SpatialCalibrationPlanTag>
 
-/// Names one calibration flow. The caller supplies it (a new one for each flow,
-/// including one restored after relaunch), and every review and authorization
-/// carries it, so an authorization from another flow is refused even when its
-/// plan and review generation match.
+/// Names one calibration flow. The caller supplies it, and every review and
+/// authorization carries it, so an authorization from another flow is refused
+/// even when its plan and review generation match.
+///
+/// Each flow instance needs its own ID, including a flow rebuilt after
+/// relaunch. A flow value must not be snapshotted and restored while it awaits
+/// authorization: the restored copy would accept the same authorization
+/// again. Single-use consumption of authorizations comes with the #62
+/// hazardous-action tokens.
 enum SpatialCalibrationFlowTag: ContractIDTag {}
 typealias SpatialCalibrationFlowID = ContractID<SpatialCalibrationFlowTag>
 
@@ -38,8 +43,9 @@ enum SpatialCalibrationLabel: Hashable, Sendable {
     var text: String { "relative, uncalibrated" }
 }
 
-/// A deterministic 64-bit FNV-1a digest of a plan's reviewed fields. It binds
-/// an authorization to exactly what was reviewed; it is not cryptographic.
+/// A deterministic 64-bit FNV-1a digest of a plan's reviewed fields, for
+/// display and logs. It is not cryptographic and does not resist an
+/// adversary; the flow compares the whole reviewed plan instead.
 struct SpatialCalibrationDigest: Hashable, Sendable {
     let value: UInt64
 
@@ -137,17 +143,20 @@ struct SpatialCalibrationPlan: Hashable, Sendable {
 
 /// Consent to run one reviewed plan. It can only be made from a review (the
 /// sheet confirms exactly what it showed), and it binds that review's flow,
-/// plan ID, digest and generation; the flow refuses it for any other review.
+/// whole plan and generation; the flow refuses it for any other review.
 struct SpatialCalibrationAuthorization: Hashable, Sendable {
     let flowID: SpatialCalibrationFlowID
-    let planID: SpatialCalibrationPlanID
-    let digest: SpatialCalibrationDigest
+    /// The reviewed plan, compared field by field, so the binding never rests
+    /// on the 64-bit digest alone.
+    let plan: SpatialCalibrationPlan
     let generation: UInt64
+
+    var planID: SpatialCalibrationPlanID { plan.id }
+    var digest: SpatialCalibrationDigest { plan.digest }
 
     init(authorizing review: SpatialCalibrationReview) {
         flowID = review.flowID
-        planID = review.plan.id
-        digest = review.plan.digest
+        plan = review.plan
         generation = review.generation
     }
 }

@@ -27,6 +27,8 @@ enum SpatialCalibrationAuthorizationDefect: Hashable, Sendable, CaseIterable {
     /// The authorization was issued by another flow.
     case flowID
     case planID
+    /// Same plan ID, but the reviewed contents (outputs, routes, level or
+    /// duration, and so the digest) differ.
     case digest
     case generation
 }
@@ -56,7 +58,8 @@ enum SpatialCalibrationRefusal: Error, Equatable, Sendable {
     case elapsedRegressed
     /// An injected elapsed time is later than the plan's total duration.
     case elapsedBeyondPlan
-    /// Results arrived before the injected elapsed time reached the plan's total.
+    /// Results arrived before the injected elapsed time reached the plan's
+    /// total. Checked before the results themselves.
     case runIncomplete(elapsedSeconds: Double, totalSeconds: Double)
     case duplicateResult(SpeakerID)
     /// A result names a speaker the plan did not test.
