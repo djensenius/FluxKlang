@@ -25,9 +25,15 @@
 ///   an added node's NaN or infinite `linearGain` (`nonFiniteNodeValue`) or a connected
 ///   edge's NaN or infinite `gainCeilingDb` (`nonFiniteEdgeValue`): a NaN never equals
 ///   itself, so such a draft would record an undo entry for every later gesture.
+/// - For the same reason, a NaN or infinite number nested anywhere in an extension bag or
+///   unknown member of an added node (or its ports or position), a moved position or a
+///   connected edge (or its endpoints, conversion or feedback) is refused
+///   (`nonFiniteNodeExtension`, `nonFiniteEdgeExtension`): `JSONValue` equality never
+///   matches a NaN with itself either.
 /// - Node and edge counts, and an added node's ports and combined required and advisory
-///   capabilities, are checked against `ProjectGraphLimits` (`bounds`) as each edit folds,
-///   so a later edit that normalizes the add or connect away cannot admit it.
+///   capabilities (`GraphNode.checkCollectionBounds()`), are checked against
+///   `ProjectGraphLimits` (`bounds`) as each edit folds, so a later edit that normalizes the
+///   add or connect away cannot admit it.
 ///
 /// The IDs of draft-added nodes and edges are not reserved: once an add or a
 /// connect folds away, the same ID may be added or connected again with other
@@ -60,6 +66,72 @@ enum DraftEditFold {
     /// Whether `value` is absent or finite.
     static func isFiniteValue(_ value: Double?) -> Bool {
         value?.isFinite ?? true
+    }
+
+    /// The JSON path, relative to `node`, of the first NaN or infinite number in an extension bag or unknown
+    /// member of its ports, its position or the node itself, or nil.
+    static func nonFiniteNumber(in node: GraphNode) -> String? {
+        for (index, port) in node.ports.enumerated() {
+            if let path = nonFiniteNumber(port.extensions, port.unknownFields) { return ".ports[\(index)]" + path }
+        }
+        return nonFiniteNumber(in: node.position) ?? nonFiniteNumber(node.extensions, node.unknownFields)
+    }
+
+    /// The JSON path, relative to the node, of the first NaN or infinite number in `position`, or nil.
+    static func nonFiniteNumber(in position: GraphPoint?) -> String? {
+        guard let position, let path = nonFiniteNumber(position.extensions, position.unknownFields) else { return nil }
+        return ".position" + path
+    }
+
+    /// The JSON path, relative to `edge`, of the first NaN or infinite number in an extension bag or unknown
+    /// member of its endpoints, conversion, feedback or the edge itself, or nil.
+    static func nonFiniteNumber(in edge: GraphEdge) -> String? {
+        if let path = nonFiniteNumber(edge.from.extensions, edge.from.unknownFields) { return ".from" + path }
+        if let path = nonFiniteNumber(edge.to.extensions, edge.to.unknownFields) { return ".to" + path }
+        if let conversion = edge.conversion,
+           let path = nonFiniteNumber(conversion.extensions, conversion.unknownFields) {
+            return ".conversion" + path
+        }
+        if let feedback = edge.feedback, let path = nonFiniteNumber(feedback.extensions, feedback.unknownFields) {
+            return ".feedback" + path
+        }
+        return nonFiniteNumber(edge.extensions, edge.unknownFields)
+    }
+
+    /// The path of the first NaN or infinite number in `value`, relative to it, or nil. Object members are
+    /// visited in sorted order, so the path is deterministic. Decoding never produces such a number (JSON has
+    /// no literal for one and `JSONDecoder` refuses out-of-range numbers); only a value built in memory can
+    /// hold one, and it is not held to the 512-level nesting limit of `ContractCoding.decode`, so this walks
+    /// an explicit stack instead of recursing. Each value is visited once.
+    static func nonFiniteNumber(in value: JSONValue) -> String? {
+        // One frame per open container: its path segment and its unvisited children, the next one last.
+        var stack: [(segment: String, children: [(String, JSONValue)])] = [("", [("", value)])]
+        while !stack.isEmpty {
+            guard let (segment, child) = stack[stack.count - 1].children.popLast() else {
+                stack.removeLast()
+                continue
+            }
+            switch child {
+            case .double(let number) where !number.isFinite:
+                return stack.map { $0.segment }.joined() + segment
+            case .array(let elements):
+                stack.append((segment, elements.indices.reversed().map { ("[\($0)]", elements[$0]) }))
+            case .object(let members):
+                stack.append((segment, members.sorted { $0.key > $1.key }.map { (".\($0.key)", $0.value) }))
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    /// The path of the first NaN or infinite number in one object's extension bag (under `.extensions`), then
+    /// in its unknown members (encoded beside its known members).
+    private static func nonFiniteNumber(
+        _ extensions: [String: JSONValue]?, _ unknown: [String: JSONValue]
+    ) -> String? {
+        if let extensions, let path = nonFiniteNumber(in: .object(extensions)) { return ".extensions" + path }
+        return nonFiniteNumber(in: .object(unknown))
     }
 
     private static func candidate(
@@ -123,13 +195,14 @@ private struct FoldState {
     private mutating func add(_ node: GraphNode, index: Int) throws(DraftHistoryRefusal) {
         guard DraftEditFold.isFinite(node.position) else { throw .invalidPosition(node.id) }
         guard DraftEditFold.isFiniteValue(node.linearGain) else { throw .nonFiniteNodeValue(node.id) }
+        if let path = DraftEditFold.nonFiniteNumber(in: node) {
+            throw .nonFiniteNodeExtension(node.id, path: "$.nodes[\(node.id)]" + path)
+        }
         guard !nodes.contains(node.id) else { throw .edit(index: index, .nodeExists(node.id)) }
         guard baseNodes[node.id] == nil else { throw .nodeIDReuse(node.id) }
         try Self.check(nodes.count + 1, maximum: ProjectGraphLimits.nodes, path: "$.nodes")
-        // The per-node limits of `checkCollectionBounds`, checked now so a later remove cannot erase them.
-        try Self.check(node.ports.count, maximum: ProjectGraphLimits.portsPerNode, path: "$.nodes[\(node.id)].ports")
-        try Self.check(node.requiredCapabilities.count + node.advisoryCapabilities.count,
-                       maximum: ProjectGraphLimits.capabilities, path: "$.nodes[\(node.id)].capabilities")
+        // The per-node limits `applying` checks, checked now so a later remove cannot erase them.
+        do { try node.checkCollectionBounds() } catch { throw .bounds(error) }
         nodes.insert(node.id)
         added.insert(node.id)
         edits.append(.addNode(node))
@@ -137,6 +210,9 @@ private struct FoldState {
 
     private mutating func move(_ id: NodeID, to position: GraphPoint?, index: Int) throws(DraftHistoryRefusal) {
         guard DraftEditFold.isFinite(position) else { throw .invalidPosition(id) }
+        if let path = DraftEditFold.nonFiniteNumber(in: position) {
+            throw .nonFiniteNodeExtension(id, path: "$.nodes[\(id)]" + path)
+        }
         guard nodes.contains(id) else { throw .edit(index: index, .missingNode(id)) }
         if added.contains(id) {
             if let addIndex = edits.firstIndex(where: { Self.adds($0, id) }),
@@ -179,6 +255,9 @@ private struct FoldState {
 
     private mutating func connect(_ edge: GraphEdge, index: Int) throws(DraftHistoryRefusal) {
         guard DraftEditFold.isFiniteValue(edge.feedback?.gainCeilingDb) else { throw .nonFiniteEdgeValue(edge.id) }
+        if let path = DraftEditFold.nonFiniteNumber(in: edge) {
+            throw .nonFiniteEdgeExtension(edge.id, path: "$.edges[\(edge.id)]" + path)
+        }
         guard edges[edge.id] == nil else { throw .edit(index: index, .edgeExists(edge.id)) }
         for node in [edge.from.node, edge.to.node] where baseNodes[node] != nil && !nodes.contains(node) {
             throw .endpointRemoved(edge: edge.id, node: node)

@@ -362,24 +362,27 @@ struct DraftHistoryTests {
     }
 
     /// `applying` an added node over a per-node limit fails, so the fold refuses it when it is added, before a
-    /// later remove in the gesture can normalize it away. A node exactly at the limit is accepted.
-    @Test(arguments: ["ports", "capabilities"])
+    /// later remove in the gesture can normalize it away. A node exactly at the limit is accepted. A node over
+    /// both limits reports its ports first, as `applying` does.
+    @Test(arguments: ["ports", "capabilities", "both"])
     func addedNodesAreBoundedByThePerNodeLimitsEvenWhenRemovedInTheGesture(kind: String) throws {
         let base = try Fixture.base()
-        let limit = kind == "ports" ? ProjectGraphLimits.portsPerNode : ProjectGraphLimits.capabilities
-        func node(_ count: Int) throws -> GraphNode {
+        let reported = kind == "capabilities" ? kind : "ports"
+        let limit = reported == "ports" ? ProjectGraphLimits.portsPerNode : ProjectGraphLimits.capabilities
+        func node(_ excess: Int) throws -> GraphNode {
             var node = try Fixture.node("d0")
-            if kind == "ports" {
-                node.ports = Array(repeating: node.ports[0], count: count)
-                return node
+            if kind != "capabilities" {
+                node.ports = Array(repeating: node.ports[0], count: ProjectGraphLimits.portsPerNode + excess)
             }
+            guard kind != "ports" else { return node }
             // Required and advisory capabilities count together; neither half alone is over the limit.
+            let count = ProjectGraphLimits.capabilities + excess
             node.requiredCapabilities = Array(repeating: try CapabilityID("cap.one"), count: count - count / 2)
             node.advisoryCapabilities = Array(repeating: try CapabilityID("cap.two"), count: count / 2)
             return node
         }
-        let (over, atLimit) = try (node(limit + 1), node(limit))
-        let exceeded = ProjectGraphLimitError.exceeded(path: "$.nodes[d0].\(kind)", maximum: limit)
+        let (over, atLimit) = try (node(1), node(0))
+        let exceeded = ProjectGraphLimitError.exceeded(path: "$.nodes[d0].\(reported)", maximum: limit)
         #expect(throws: GraphEditError.bounds(exceeded)) { try base.applying([.addNode(over)]) }
         var history = try DraftHistory.make(draft: DraftID("draft"), base: base, depth: 10)
         try history.apply([.moveNode(Fixture.nodeID("b0"), to: nil)], on: base)

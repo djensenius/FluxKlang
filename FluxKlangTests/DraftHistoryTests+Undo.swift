@@ -247,7 +247,7 @@ struct DraftUndoTests {
         var finite = base
         finite.nodes[1] = try GraphNode(id: Fixture.nodeID("b1"), kind: .audioGain, label: "b1", linearGain: 0.5)
         finite.edges[2].feedback = EdgeFeedback(gainCeilingDb: -6)
-        finite.nodes[0].extensions = ["k": .double(bad.isNaN ? 1 : bad)]
+        finite.nodes[0].extensions = ["k": .double(1)]
         _ = try Self.history(base: finite)
     }
 
@@ -282,18 +282,6 @@ struct DraftUndoTests {
         #expect(history.draft.edits == (try Self.move(1) + [.addNode(finiteGain), .connect(feedback)]))
         #expect(try history.apply([], on: base) == .unchanged)
         try history.undo(on: base)
-        #expect(history.draft.edits == (try Self.move(1)))
-    }
-
-    /// `JSONValue` compares a NaN equal to itself, so a NaN in an extension bag does not lock the history.
-    @Test func aNaNInAnExtensionBagDoesNotLockTheHistory() throws {
-        var base = try Fixture.base()
-        base.nodes[3].extensions = ["k": .array([.double(.nan)])]
-        base.edges[0].extensions = ["k": .double(.nan)]
-        var history = try Self.history(base: base)
-        try history.apply(Self.move(1), on: base)
-        try history.undo(on: base)
-        try history.redo(on: base)
         #expect(history.draft.edits == (try Self.move(1)))
     }
 
@@ -400,5 +388,112 @@ struct DraftUndoTests {
             try GraphEdit.validateBatch(history.draft.edits)
             _ = try base.applying(history.draft.edits)
         }
+    }
+}
+
+/// `JSONValue` equality never matches a NaN with itself, so separately built bases or gestures holding one in a
+/// node's or edge's JSON differ. A NaN or infinity nested anywhere in that JSON is refused at creation and per edit.
+extension DraftUndoTests {
+    /// A NaN or infinite number at depth 3, after finite siblings; its path from the bag is `.k[1].n`.
+    static func nested(_ number: Double) -> [String: JSONValue] {
+        ["j": .double(2), "k": .array([.int(1), .object(["m": .double(-0.0), "n": .double(number)])])]
+    }
+
+    /// `bag` is the path of the poisoned bag relative to the node; "" is the node's unknown members.
+    @Test(arguments: [".extensions", "", ".ports[1].extensions", ".position"], [Double.nan, .infinity, -.infinity])
+    func nonFiniteNumbersInANodesJSONAreRefused(bag: String, bad: Double) throws {
+        func poison(_ node: inout GraphNode) {
+            switch bag {
+            case ".extensions": node.extensions = Self.nested(bad)
+            case ".ports[1].extensions": node.ports[1].extensions = Self.nested(bad)
+            case ".position": node.position?.unknownFields = Self.nested(bad)
+            default: node.unknownFields = Self.nested(bad)
+            }
+        }
+        var bases = try [Fixture.base(), Fixture.base()]
+        for index in bases.indices { poison(&bases[index].nodes[2]) }
+        #expect((bases[0] == bases[1]) == !bad.isNaN)
+        let nodeB2 = try Fixture.nodeID("b2")
+        let atB2 = DraftHistoryRefusal.nonFiniteNodeExtension(nodeB2, path: "$.nodes[b2]\(bag).k[1].n")
+        for base in bases { #expect(throws: atB2) { try Self.history(base: base) } }
+        var history = try Self.history()
+        try history.apply(Self.move(1), on: Fixture.base())
+        let before = history
+        var added = try Fixture.node("d0", at: Fixture.point(5))
+        poison(&added)
+        let refusal = DraftHistoryRefusal.nonFiniteNodeExtension(added.id, path: "$.nodes[d0]\(bag).k[1].n")
+        for gesture: [GraphEdit] in [[.addNode(added)], [.addNode(added), .removeNode(added.id)]] {
+            #expect(throws: refusal) { try history.apply(gesture, on: Fixture.base()) }
+        }
+        let moves: [GraphEdit] = [.moveNode(nodeB2, to: added.position), .moveNode(nodeB2, to: Fixture.point(20))]
+        for gesture in bag == ".position" ? [[moves[0]], moves] : [] {
+            #expect(throws: atB2) { try history.apply(gesture, on: Fixture.base()) }
+        }
+        #expect(history == before)
+    }
+
+    /// `bag` is the path of the poisoned bag relative to the edge; "" is the edge's unknown members.
+    @Test(arguments: [".extensions", "", ".from.extensions", ".to", ".conversion.extensions", ".feedback"],
+          [Double.nan, .infinity, -.infinity])
+    func nonFiniteNumbersInAnEdgesJSONAreRefused(bag: String, bad: Double) throws {
+        func poison(_ edge: inout GraphEdge) {
+            edge.conversion = EdgeConversion(map: [[0], [1]])
+            edge.feedback = EdgeFeedback(gainCeilingDb: -6)
+            switch bag {
+            case ".extensions": edge.extensions = Self.nested(bad)
+            case ".from.extensions": edge.from.extensions = Self.nested(bad)
+            case ".to": edge.to.unknownFields = Self.nested(bad)
+            case ".conversion.extensions": edge.conversion?.extensions = Self.nested(bad)
+            case ".feedback": edge.feedback?.unknownFields = Self.nested(bad)
+            default: edge.unknownFields = Self.nested(bad)
+            }
+        }
+        var bases = try [Fixture.base(), Fixture.base()]
+        for index in bases.indices { poison(&bases[index].edges[1]) }
+        #expect((bases[0] == bases[1]) == !bad.isNaN)
+        let atE1 = DraftHistoryRefusal.nonFiniteEdgeExtension(bases[0].edges[1].id, path: "$.edges[e1]\(bag).k[1].n")
+        for base in bases { #expect(throws: atE1) { try Self.history(base: base) } }
+        var history = try Self.history()
+        try history.apply(Self.move(1), on: Fixture.base())
+        let before = history
+        var edge = try Fixture.edge("f0", "b3", "b0")
+        poison(&edge)
+        let refusal = DraftHistoryRefusal.nonFiniteEdgeExtension(edge.id, path: "$.edges[f0]\(bag).k[1].n")
+        for gesture: [GraphEdit] in [[.connect(edge)], [.connect(edge), .disconnect(edge.id)]] {
+            #expect(throws: refusal) { try history.apply(gesture, on: Fixture.base()) }
+        }
+        #expect(history == before)
+    }
+
+    /// Finite nested numbers are kept, and -0.0 equals 0.0 in `JSONValue` (both are the integer zero), so separately
+    /// built bases and gestures that differ only in the sign of a zero match through apply, undo and redo.
+    @Test func finiteNestedNumbersMatchAcrossSeparatelyBuiltBasesAndGestures() throws {
+        func base(_ zero: Double) throws -> GraphDocument {
+            var base = try Fixture.base()
+            base.nodes[1].extensions = ["k": .array([.int(1), .object(["n": .double(zero), "m": .double(-1e308)])])]
+            base.edges[0].feedback = EdgeFeedback(gainCeilingDb: -6)
+            base.edges[0].feedback?.extensions = ["k": .object(["n": .double(zero)])]
+            return base
+        }
+        func node(_ zero: Double) throws -> GraphNode {
+            var node = try Fixture.node("d0")
+            node.ports[0].extensions = ["k": .array([.object(["n": .double(zero)])])]
+            return node
+        }
+        let (negative, positive) = try (base(-0.0), base(0.0))
+        #expect(negative == positive)
+        var history = try Self.history(base: negative)
+        #expect(try history.apply([.addNode(node(-0.0))], on: positive) == .recorded)
+        let readd = try [GraphEdit.removeNode(Fixture.nodeID("d0")), .addNode(node(0.0))]
+        #expect(try history.apply(readd, on: base(-0.0)) == .unchanged)
+        var edge = try Fixture.edge("f0", "d0", "b2")
+        edge.to.unknownFields = ["k": .array([.double(-0.0), .double(2.5)])]
+        #expect(try history.apply([.connect(edge)], on: base(0.0)) == .recorded)
+        try history.undo(on: base(-0.0))
+        try history.undo(on: positive)
+        try history.redo(on: base(0.0))
+        try history.redo(on: negative)
+        #expect(history.draft.edits == [.addNode(try node(0.0)), .connect(edge)])
+        #expect(history.undoCount == 2 && history.redoCount == 0)
     }
 }

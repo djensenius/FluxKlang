@@ -40,8 +40,9 @@ enum DraftGestureOutcome: Hashable, Sendable {
 /// comparison). The document label, `requiresReview`, capabilities, required
 /// features and extensions are not compared, because the fold does not read
 /// them. Any other base is refused and the history is never replayed onto it.
-/// A base with a NaN or infinite position, `linearGain` or `gainCeilingDb` is
-/// refused at creation, since a NaN never equals itself and would lock the history.
+/// A base with a NaN or infinite position, `linearGain` or `gainCeilingDb`, or with one
+/// nested in a node's or edge's extension bags or unknown members, is refused at creation,
+/// since a NaN never equals itself (in `JSONValue` too) and would lock the history.
 ///
 /// Drafts are equal by their folded edit lists, not by the graphs they produce:
 /// base edges keep their original slot, so edge order can differ from applying
@@ -80,12 +81,22 @@ struct DraftHistory: Hashable, Sendable {
         _ = try DraftEditFold.fold([], onto: [], base: base)
         // A NaN position never equals itself, so such a base could not be recognised again.
         for node in base.nodes where !DraftEditFold.isFinite(node.position) { throw .invalidPosition(node.id) }
-        // `JSONValue` compares a NaN equal to itself, so numbers in extension bags cannot lock the history.
         for node in base.nodes where !DraftEditFold.isFiniteValue(node.linearGain) {
             throw .nonFiniteNodeValue(node.id)
         }
         for edge in base.edges where !DraftEditFold.isFiniteValue(edge.feedback?.gainCeilingDb) {
             throw .nonFiniteEdgeValue(edge.id)
+        }
+        // `JSONValue` equality never matches a NaN with itself either, so extension bags are scanned too.
+        for node in base.nodes {
+            if let path = DraftEditFold.nonFiniteNumber(in: node) {
+                throw .nonFiniteNodeExtension(node.id, path: "$.nodes[\(node.id)]" + path)
+            }
+        }
+        for edge in base.edges {
+            if let path = DraftEditFold.nonFiniteNumber(in: edge) {
+                throw .nonFiniteEdgeExtension(edge.id, path: "$.edges[\(edge.id)]" + path)
+            }
         }
         let draft = DraftEdits(id: id, graph: base.id, baseRevision: base.revision, edits: [])
         return DraftHistory(draft: draft, depth: depth, base: base)

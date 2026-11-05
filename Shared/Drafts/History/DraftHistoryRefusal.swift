@@ -23,6 +23,12 @@ enum DraftHistoryRefusal: Error, Hashable, Sendable {
     case nonFiniteNodeValue(NodeID)
     /// An edge connected by a gesture, or a base edge of a new history, has a NaN or infinite `gainCeilingDb`.
     case nonFiniteEdgeValue(EdgeID)
+    /// A node added or moved by a gesture, or a base node of a new history, holds a NaN or infinite number in an
+    /// extension bag or unknown member (of the node, a port or the position), at the JSON `path`.
+    case nonFiniteNodeExtension(NodeID, path: String)
+    /// An edge connected by a gesture, or a base edge of a new history, holds a NaN or infinite number in an
+    /// extension bag or unknown member (of the edge, an endpoint, the conversion or the feedback), at `path`.
+    case nonFiniteEdgeExtension(EdgeID, path: String)
     /// The base graph lists two nodes with one ID, so draft edits on it are ambiguous.
     case duplicateBaseNode(NodeID)
     /// The base graph lists two edges with one ID, so draft edits on it are ambiguous.
