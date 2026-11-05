@@ -226,6 +226,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/MIDITimecodeTests.swift
+      - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/MetronomeGridTests.swift
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
