@@ -394,10 +394,6 @@ struct PeerReconnectEpochTests {
     }
 
     @Test func attemptsSaturateAndResetOnASuccessfulSync() throws {
-        #if false
-        // Must not compile: the count is only ever 0 at creation.
-        _ = PeerReconnectAttempts(count: 99)
-        #endif
         var attempts = PeerReconnectAttempts()
         #expect(try attempts.next(jitter: 0) == .milliseconds(125))
         #expect(try attempts.next(jitter: 0) == .milliseconds(250))
