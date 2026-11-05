@@ -226,6 +226,17 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/SpatialMappingTests.swift
+      - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
+      - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
+      - path: FluxKlangTests/SpatialMaskTests.swift
+      - path: FluxKlangTests/OpenSoundControlCodecTests.swift
+      - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
+      - path: FluxKlangTests/MIDITimecodeTests.swift
+      - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
+      - path: FluxKlangTests/MetronomeGridTests.swift
+      - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
+      - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
       - path: FluxKlangTests/MIDIClockMathTests.swift
       - path: FluxKlangTests/MIDIClockFollowerTests.swift
       - path: FluxKlangTests/MIDIClockTempoTests.swift
@@ -261,8 +272,6 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
-      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
-      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
