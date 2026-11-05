@@ -13,9 +13,10 @@
 //  any unfinished take can be discarded with a typed reason. A take the ledger
 //  ended owns no further record, through `ingest` or `append`, and never blocks
 //  a restart; `ingest` reports `.ended` so the caller can open a new take. For
-//  #109: until that ended take is finished or discarded, a post-jump overflow no
-//  take records is refused `.recordNotOwned`, and a late pre-jump overflow for it
-//  is refused, never attached. A restart needs every
+//  #109: until that ended take is finished or discarded, a post-jump overflow (at
+//  or after the jump's frame, in its generation) no take records is refused
+//  `.recordNotOwned`, and a late pre-jump overflow for it is refused, never
+//  attached. A restart needs every
 //  capturing take on its clock at `previousFrame`: one lagging take refuses it
 //  for all (typed, nothing changes) until its progress is advanced.
 //  Pure bookkeeping: no file I/O, handoffs or resampling. Deterministic and
@@ -194,13 +195,16 @@ struct TakeLedger: Sendable {
 
     /// An unowned record is refused when an open take records its stream and clock and it is
     /// not pre-roll: any `captureStopped`, or an overflow at or after the start of one of that
-    /// take's segments in the record's generation (a late one past a closed segment's end, or
-    /// one after the ledger ended the take).
+    /// take's segments in the record's generation (a late one past a closed segment's end), or,
+    /// once the ledger ended the take, at or after the jump's target in the jump's generation
+    /// (post-jump audio, even below the old segment's start).
     private func mustBeOwned(_ record: RuntimeDiscontinuity, stream: UInt32) -> Bool {
         states.values.contains { state in
             guard state.isOpen, state.opening.streamSlot == stream,
                   state.opening.startClockSlot == record.sample.clock else { return false }
             if case .captureStopped = record.kind { return true }
+            if let stop = state.stop, stop.reason.isLedgerStop, stop.reportedGeneration == record.sample.generation,
+               stop.reportedFrame <= record.sample.frame { return true }
             return state.segments.contains {
                 $0.generation == record.sample.generation && $0.startFrame <= record.sample.frame
             }

@@ -347,4 +347,79 @@ struct RecordingTakeDiscontinuityTests {
         #expect(take.segments.count == 1 && take.segments[0].startFrame == limit && take.fileFrames == 10)
         #expect(take.boundaries.count == 2_048 && take.boundaries.allSatisfy(\.droppedEmptySegment))
     }
+
+    /// Round 5 (Copilot): while a take the ledger ended is open, an unowned overflow at or after the
+    /// jump's target in its generation is refused, below the old segment's start too. Earlier frames
+    /// stay pre-roll and another generation is not the take's. Finishing or discarding the take
+    /// returns the same overflows to `[]`.
+    @Test
+    func overflowFromTheJumpTargetIsRefusedUntilTheEndedTakeCloses() throws {
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        for finishes in [true, false] {
+            var ledger = try TakeLedger(timebase: Fixture.timebase)
+            try ledger.observe(Fixture.anchor(1, 0, host: 0), nominalRate: 48_000)
+            try ledger.open(Fixture.opening(Fixture.take1, 1, 1000))
+            try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+            #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+            for frame: Int64 in [500, 600, 999, 1000, 2500] {
+                Fixture.refusal(.recordNotOwned(stream: 0, frame: frame)) { () throws(TakeLedgerError) in
+                    _ = try ledger.ingest(Fixture.overflow(1, frame, frames: 10))
+                }
+            }
+            #expect(try ledger.ingest(Fixture.overflow(1, 490, frames: 10)).isEmpty)
+            #expect(try ledger.ingest(Fixture.overflow(2, 600, frames: 10)).isEmpty)
+            #expect(ledger.isOpen(Fixture.take1) && ledger.ledgerStop(Fixture.take1) == ended)
+            #expect(ledger.order == [Fixture.take1])
+            if finishes {
+                let take = try ledger.finish(Fixture.take1, reason: ended)
+                #expect(take.droppedFrames == 0 && take.segments.map(\.frames) == [1000])
+                #expect(take.stopMark?.frame == 2000 && take.stopMark?.reportedFrame == 500)
+            } else {
+                let record = try ledger.discard(Fixture.take1, reason: .abandoned)
+                #expect(record.segments.map(\.overflows) == [[]] && record.segments.map(\.endFrame) == [2000])
+                #expect(record.stop?.reason == ended && record.stop?.reportedFrame == 500)
+            }
+            for frame: Int64 in [500, 600, 1000, 2500] {
+                #expect(try ledger.ingest(Fixture.overflow(1, frame, frames: 10)).isEmpty)
+            }
+        }
+    }
+
+    /// Round 5: the target is the jump's own generation and frame. Here the take's first segment came
+    /// from a restart, so the jump ends it in generation 2, not in the generation it opened in.
+    @Test
+    func jumpTargetRefusalFollowsTheJumpsGeneration() throws {
+        var ledger = try Fixture.ledger()
+        let restart = Fixture.restart(2, 1000, previousFrame: 0, host: 2_500_000_000)
+        #expect(try ledger.ingest(restart) == [.split(Fixture.take1)])
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(2, 2000))
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        #expect(try ledger.ingest(Fixture.jump(2, 500)) == [.ended(Fixture.take1, ended)])
+        for frame: Int64 in [500, 600, 1000] {
+            Fixture.refusal(.recordNotOwned(stream: 0, frame: frame)) { () throws(TakeLedgerError) in
+                _ = try ledger.ingest(Fixture.overflow(2, frame, frames: 10))
+            }
+        }
+        #expect(try ledger.ingest(Fixture.overflow(2, 490, frames: 10)).isEmpty)
+        #expect(try ledger.ingest(Fixture.overflow(1, 600, frames: 10)).isEmpty)
+        let take = try ledger.finish(Fixture.take1, reason: ended)
+        #expect(take.droppedFrames == 0 && take.segments.map(\.frames) == [1000])
+        #expect(take.stopMark?.generation.value == 2 && take.stopMark?.reportedGeneration.value == 2)
+        #expect(take.stopMark?.frame == 2000 && take.stopMark?.reportedFrame == 500)
+    }
+
+    /// Round 5: a take the device stopped (no ledger stop) still refuses an unowned overflow exactly
+    /// at its empty segment's start; that edge does not rest on the jump-target rule.
+    @Test
+    func overflowAtAStoppedTakesEmptySegmentStartIsRefused() throws {
+        var ledger = try Fixture.ledger()
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 1000))
+        _ = try ledger.ingest(Fixture.restart(2, 0, previousFrame: 1000, host: 2_500_000_000))
+        #expect(try ledger.ingest(Fixture.stop(2, 0, .deviceLost)) == [.recorded(Fixture.take1)])
+        Fixture.refusal(.recordNotOwned(stream: 0, frame: 0)) { () throws(TakeLedgerError) in
+            _ = try ledger.ingest(Fixture.overflow(2, 0, frames: 10))
+        }
+        let take = try ledger.finish(Fixture.take1, reason: .deviceLost)
+        #expect(take.droppedFrames == 0 && take.segments.map(\.frames) == [1000])
+    }
 }
