@@ -44,7 +44,8 @@ enum ShowRefusal: Error, Hashable, Sendable {
     case atEnd
     case atStart
     case emptySetlist(SetlistID)
-    /// A relative command cannot move from a position that no longer exists; only `jump` recovers.
+    /// A relative command cannot move from a position that no longer exists or is stale; only `jump` recovers.
+    /// Checked before the bounce window, and it consumes nothing.
     case cursorTargetRemoved(ShowCursorStatus)
     case positionMismatch(expected: ShowPosition, actual: ShowPosition?)
     case staleSequence(last: UInt64, received: UInt64)

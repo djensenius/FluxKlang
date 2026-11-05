@@ -15,7 +15,7 @@
 struct ShowPosition: Hashable, Sendable {
     let setlist: SetlistID
     let entry: SetlistEntryID
-    /// `nil` only for a song without parts.
+    /// `nil` only for a song without parts; once that song gains parts the cursor's status is `.partsAdded`.
     let part: SongPartID?
 }
 
@@ -99,6 +99,9 @@ enum ShowCursorStatus: Hashable, Sendable {
     case setlistRemoved(SetlistID)
     case entryRemoved(SetlistEntryID)
     case partRemoved(SongPartID)
+    /// The cursor is on a song without parts (`part == nil`) that has since gained parts. Stale like a removed
+    /// part: no stop is built, relative commands are refused and only a jump recovers.
+    case partsAdded(SongID)
 }
 
 struct ShowCursor: Hashable, Sendable {
@@ -141,6 +144,8 @@ struct ShowCursor: Hashable, Sendable {
         return ShowCursor(setlist: id, bounceTicks: bounceTicks, sources: sources, position: position)
     }
 
+    /// Anything but `.current` means the target is gone or stale: `currentStop` and relative commands refuse with
+    /// `cursorTargetRemoved` until a jump. A `nil` part is valid only while its song has no parts.
     func status(in library: ShowLibrary) -> ShowCursorStatus {
         guard let setlist = library.setlist(storedSetlist) else { return .setlistRemoved(storedSetlist) }
         guard let position = storedPosition else { return .current }
@@ -148,6 +153,7 @@ struct ShowCursor: Hashable, Sendable {
             return .entryRemoved(position.entry)
         }
         if let part = position.part, library.song(entry.song)?.part(part) == nil { return .partRemoved(part) }
+        if position.part == nil, library.song(entry.song)?.parts.isEmpty == false { return .partsAdded(entry.song) }
         return .current
     }
 
@@ -158,8 +164,17 @@ struct ShowCursor: Hashable, Sendable {
         return try Self.stop(at: position, in: library, catalog: catalog)
     }
 
-    /// A refusal or an ignored press changes no bounce slot, and a refusal changes nothing at all, not even the
-    /// remembered sequence. Bounce is per command across sources.
+    /// Checks run in this order; the first that applies decides:
+    /// 1. `unknownInputSource`.
+    /// 2. The source's sequence: a repeat is `.ignored(.duplicateSequence)`, a lower one `staleSequence`.
+    /// 3. `ticksWentBackwards` on the shared clock.
+    /// 4. Relative commands only: `cursorTargetRemoved` unless `status` is `.current` (removed or stale target).
+    /// 5. Relative commands only: `.ignored(.bounce)` inside that command's window (per command, across sources).
+    /// 6. `positionMismatch` when `expected` no longer holds.
+    /// 7. The target: `emptySetlist`, `atStart`, `atEnd`; for a jump `cursorTargetRemoved(.setlistRemoved)`,
+    ///    `unknownEntry` or `unknownPart`.
+    /// A refusal changes nothing, not even the remembered sequence or tick. A duplicate records nothing and a bounce
+    /// only the sequence and tick. Only a move writes a bounce slot, its own command's.
     mutating func navigate(_ input: ShowNavigationInput, in library: ShowLibrary,
                            catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowNavigationResult {
         guard storedSources.contains(input.source) else { throw .unknownInputSource(input.source) }
@@ -170,6 +185,7 @@ struct ShowCursor: Hashable, Sendable {
             }
         }
         if let lastTick, input.tick < lastTick { throw .ticksWentBackwards(last: lastTick, received: input.tick) }
+        try requireCurrentTarget(for: input.command, in: library)
         let slot = input.command.bounceSlot
         if let slot, let accepted = lastAcceptedTicks[slot] {
             let elapsed = input.tick - accepted
@@ -191,6 +207,15 @@ struct ShowCursor: Hashable, Sendable {
         return .moved(stop)
     }
 
+    /// Step 4 of `navigate`: a relative command (one with a bounce slot) needs a `.current` status. A jump skips
+    /// this, because a jump is how a stale cursor recovers.
+    private func requireCurrentTarget(for command: ShowNavigationCommand,
+                                      in library: ShowLibrary) throws(ShowRefusal) {
+        guard command.bounceSlot != nil else { return }
+        let status = status(in: library)
+        guard status == .current else { throw .cursorTargetRemoved(status) }
+    }
+
     private func target(for command: ShowNavigationCommand, in library: ShowLibrary) throws(ShowRefusal)
         -> ShowPosition {
         guard let setlist = library.setlist(storedSetlist) else {
@@ -202,8 +227,7 @@ struct ShowCursor: Hashable, Sendable {
             // A part from another song is refused by `stop(at:)` (`resolvedLinks`) before the cursor moves.
             return ShowPosition(setlist: setlist.id, entry: entryID, part: partID)
         }
-        let status = status(in: library)
-        guard status == .current else { throw .cursorTargetRemoved(status) }
+        // A relative command gets here only with a `.current` status, checked in `navigate` before the bounce window.
         guard !setlist.entries.isEmpty else { throw .emptySetlist(setlist.id) }
         guard let position = storedPosition, let index = setlist.index(of: position.entry) else {
             guard command == .nextPart || command == .nextSong else { throw .atStart }

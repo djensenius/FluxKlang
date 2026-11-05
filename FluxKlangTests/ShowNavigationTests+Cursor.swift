@@ -15,10 +15,10 @@ struct ShowNavigationCursorTests {
         var sequence: UInt64 = 0
         let catalog: ShowLinkCatalog
 
-        init(bounce: UInt64 = 100) throws {
+        init(bounce: UInt64 = 100, catalog: ShowLinkCatalog? = nil) throws {
             library = try Fix.library()
             cursor = try Fix.cursor(library, bounce: bounce)
-            catalog = try ShowLinkCatalog.make()
+            self.catalog = try catalog ?? ShowLinkCatalog.make()
         }
 
         mutating func press(_ command: ShowNavigationCommand, tick: UInt64? = nil, sequence explicit: UInt64? = nil,
@@ -285,5 +285,122 @@ struct ShowNavigationCursorTests {
         #expect(throws: ShowRefusal.cursorTargetRemoved(.setlistRemoved(Fix.main))) {
             try rig.press(.jump(Fix.entries[0], nil))
         }
+    }
+
+    @Test
+    func aPartlessSongThatGainsPartsNeedsAJump() throws {
+        let patch = PatchID(validated: "pat.c")
+        let links = try SongPartLinks.make(patch: patch)
+        for viaInsertingPart in [true, false] {
+            var rig = try Rig(catalog: ShowLinkCatalog.make(patches: [(patch, [])]))
+            _ = try rig.press(.jump(Fix.entries[3], nil))
+            #expect(try rig.cursor.currentStop(in: rig.library, catalog: rig.catalog)?.position.part == nil)
+            let songC = try #require(rig.library.song(Fix.songC))
+            let parts = try [Fix.part("c1", links: links), Fix.part("c2")]
+            let grown = try viaInsertingPart ? songC.insertingPart(parts[0], in: rig.catalog)
+                : ShowSong.make(id: Fix.songC, title: songC.title, parts: parts)
+            rig.library = try rig.library.upsertingSong(grown, in: rig.catalog)
+            let stale = ShowCursorStatus.partsAdded(Fix.songC)
+            #expect(rig.cursor.status(in: rig.library) == stale)
+            #expect(throws: ShowRefusal.cursorTargetRemoved(stale)) {
+                try rig.cursor.currentStop(in: rig.library, catalog: rig.catalog)
+            }
+            for command in [ShowNavigationCommand.nextPart, .previousPart, .nextSong, .previousSong] {
+                #expect(throws: ShowRefusal.cursorTargetRemoved(stale)) { try rig.press(command) }
+            }
+            #expect(rig.here == "e4/-")
+            #expect(try rig.cursor.status(in: rig.library.upsertingSong(songC, in: rig.catalog)) == .current)
+            guard case let .moved(stop) = try rig.press(.jump(Fix.entries[3], nil)) else {
+                Issue.record("the jump did not recover")
+                return
+            }
+            #expect(rig.here == "e4/c1")
+            #expect(stop.links.links == links)
+            #expect(try rig.cursor.currentStop(in: rig.library, catalog: rig.catalog) == stop)
+        }
+    }
+
+    @Test
+    func aSongThatLosesItsLastPartNeedsAJump() throws {
+        var rig = try Rig()
+        _ = try rig.press(.jump(Fix.entries[1], Fix.partID("b2")))
+        let lastOnly = try #require(rig.library.song(Fix.songB)).removingPart(Fix.partID("b1"))
+        rig.library = try rig.library.upsertingSong(lastOnly, in: rig.catalog)
+        #expect(rig.cursor.status(in: rig.library) == .current)
+        rig.library = try rig.library.upsertingSong(lastOnly.removingPart(Fix.partID("b2")), in: rig.catalog)
+        let stale = ShowCursorStatus.partRemoved(Fix.partID("b2"))
+        #expect(rig.cursor.status(in: rig.library) == stale)
+        #expect(throws: ShowRefusal.cursorTargetRemoved(stale)) {
+            try rig.cursor.currentStop(in: rig.library, catalog: rig.catalog)
+        }
+        for command in [ShowNavigationCommand.nextPart, .previousPart, .nextSong, .previousSong] {
+            #expect(throws: ShowRefusal.cursorTargetRemoved(stale)) { try rig.press(command) }
+        }
+        #expect(rig.here == "e2/b2")
+        _ = try rig.press(.jump(Fix.entries[1], nil))
+        #expect(rig.here == "e2/-")
+        #expect(try rig.cursor.currentStop(in: rig.library, catalog: rig.catalog)?.position.part == nil)
+        _ = try rig.press(.nextPart)
+        #expect(rig.here == "e3/a1")
+    }
+
+    @Test
+    func aRemovedTargetRefusesInsideTheBounceWindowAndConsumesNothing() throws {
+        var rig = try Rig(bounce: 100)
+        _ = try rig.press(.nextSong, tick: 1_000, sequence: 1)
+        let setlist = try #require(rig.library.setlist(Fix.main))
+        rig.library = try rig.library.replacingSetlist(setlist.removing(Fix.entries[1]))
+        #expect(throws: ShowRefusal.cursorTargetRemoved(.entryRemoved(Fix.entries[1]))) {
+            try rig.press(.nextSong, tick: 1_050, sequence: 2)
+        }
+        #expect(rig.here == "e2/b1")
+        guard case .moved = try rig.press(.jump(Fix.entries[2], nil), tick: 1_040, sequence: 2) else {
+            Issue.record("the refusal consumed its sequence or tick")
+            return
+        }
+        #expect(rig.here == "e3/a1")
+        #expect(try rig.press(.nextSong, tick: 1_070, sequence: 3) == .ignored(.bounce(ticksSinceAccepted: 70)))
+        guard case .moved = try rig.press(.nextSong, tick: 1_100, sequence: 4) else {
+            Issue.record("the refusal moved the bounce slot")
+            return
+        }
+        #expect(rig.here == "e4/-")
+    }
+
+    /// Pins `navigate`'s order: source, sequence, tick, status (relative only), bounce, expected, target.
+    @Test
+    func navigationChecksRunInTheDocumentedOrder() throws {
+        var rig = try Rig()
+        let pedal = ShowInputSourceID(validated: "src.pedal")
+        let elsewhere = ShowPosition(setlist: Fix.main, entry: Fix.entries[2], part: Fix.partID("a1"))
+        _ = try rig.press(.nextSong, tick: 1_000, sequence: 5)
+        let stored = rig.cursor.position
+        #expect(throws: ShowRefusal.unknownInputSource(pedal)) { try rig.press(.nextSong, tick: 999, from: pedal) }
+        #expect(try rig.press(.nextSong, tick: 999, sequence: 5) == .ignored(.duplicateSequence(5)))
+        #expect(throws: ShowRefusal.staleSequence(last: 5, received: 4)) {
+            try rig.press(.nextSong, tick: 999, sequence: 4)
+        }
+        #expect(try rig.press(.nextSong, tick: 1_050, sequence: 6, expected: elsewhere)
+            == .ignored(.bounce(ticksSinceAccepted: 50)))
+        #expect(throws: ShowRefusal.positionMismatch(expected: elsewhere, actual: stored)) {
+            try rig.press(.jump(Fix.entryID("e9"), nil), tick: 1_060, sequence: 7, expected: elsewhere)
+        }
+        let setlist = try #require(rig.library.setlist(Fix.main))
+        rig.library = try rig.library.replacingSetlist(setlist.removing(Fix.entries[1]))
+        let removed = ShowRefusal.cursorTargetRemoved(.entryRemoved(Fix.entries[1]))
+        #expect(throws: ShowRefusal.ticksWentBackwards(last: 1_050, received: 1_049)) {
+            try rig.press(.nextSong, tick: 1_049, sequence: 7)
+        }
+        #expect(try rig.press(.nextSong, tick: 1_060, sequence: 6) == .ignored(.duplicateSequence(6)))
+        #expect(throws: removed) { try rig.press(.nextSong, tick: 1_060, sequence: 7, expected: elsewhere) }
+        #expect(throws: removed) { try rig.press(.previousPart, tick: 1_060, sequence: 7, expected: elsewhere) }
+        #expect(throws: ShowRefusal.positionMismatch(expected: elsewhere, actual: stored)) {
+            try rig.press(.jump(Fix.entries[2], nil), tick: 1_060, sequence: 7, expected: elsewhere)
+        }
+        guard case .moved = try rig.press(.jump(Fix.entries[2], nil), tick: 1_060, sequence: 7, expected: stored) else {
+            Issue.record("a jump checked the cursor status")
+            return
+        }
+        #expect(rig.here == "e3/a1")
     }
 }
