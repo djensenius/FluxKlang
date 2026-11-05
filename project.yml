@@ -226,6 +226,24 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/DeclarativeActionTests.swift
+      - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
+      - path: FluxKlangTests/SpatialRenderTests.swift
+      - path: FluxKlangTests/SpatialRenderTests+Masks.swift
+      - path: FluxKlangTests/SpatialRenderTests+Calibration.swift
+      - path: FluxKlangTests/MIDI1ChannelStateTests.swift
+      - path: FluxKlangTests/MIDI1ParameterStateTests.swift
+      - path: FluxKlangTests/MIDI1PerformanceSnapshotTests.swift
+      - path: FluxKlangTests/PatchVariationTests.swift
+      - path: FluxKlangTests/PatchVariationTests+Recall.swift
+      - path: FluxKlangTests/PeerSyncTests.swift
+      - path: FluxKlangTests/PeerSyncTests+Commands.swift
+      - path: FluxKlangTests/PeerTrustTests.swift
+      - path: FluxKlangTests/PeerTrustTests+Pairing.swift
+      - path: FluxKlangTests/PeerTrustTests+Storage.swift
+      - path: FluxKlangTests/PeerTrustTests+Vectors.swift
+      - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
       - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift
       - path: FluxKlangTests/SpatialAdapterTests+Decoding.swift
@@ -237,6 +255,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
+      - path: FluxKlangTests/WorkspaceNavigationTests+Projects.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift

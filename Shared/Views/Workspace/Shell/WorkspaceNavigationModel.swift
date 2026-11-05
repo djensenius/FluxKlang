@@ -3,8 +3,8 @@
 //  FluxKlang
 //
 //  The pure navigation state of the workspace shell (#99): each window's
-//  surface, Edit/Perform mode, width class, selection and inspector request,
-//  plus the presentation derived from them. Layout follows width; mode and
+//  surface, Edit/Perform mode, width class, selection, inspector request and
+//  project, each project's revision, plus the presentation derived from them. Layout follows width; mode and
 //  permissions never do (workspace-ux README principle 4, perform.md "Edit
 //  versus Perform"). Only `WorkspaceNavigationState.apply(_:)` changes the state:
 //  it reduces an action on a private staged transition and commits it only after
@@ -116,22 +116,29 @@ struct WorkspaceWindowState: Equatable, Sendable {
 /// The navigation of every workspace window on one host. It holds no
 /// permissions. Only `apply(_:)` changes it, and a refusal leaves it unchanged.
 ///
-/// W1 models a single open document: every window shows the graph revisions of one
-/// project, so `lastAppliedRevision` and `revisionApplied` are global across windows.
-/// A multi-project host must key the revision state by `ProjectID` before the shell
-/// is wired to this model (a W2 follow-up).
+/// Every window is bound to one project when it opens. A project is open while any
+/// of its windows is, and its revision state lives exactly that long: revisions are
+/// monotonic per project, and closing a project's last window discards its revision.
 struct WorkspaceNavigationState: Equatable, Sendable {
     static let maxWindows = 16
+    static let maxProjects = 8
     static let maxSelection = 256
 
     private(set) var windows: [WindowID: WorkspaceWindowState] = [:]
-    /// Shared by every window; it stays expanded while any window shows an advanced surface.
+    /// The project of each open window; its keys are exactly the keys of `windows`.
+    private(set) var windowProjects: [WindowID: ProjectID] = [:]
+    /// Shared by every window of every project; it stays expanded while any window shows an advanced surface.
     private(set) var isAdvancedExpanded = false
-    /// The newest revision applied to the selections. It is shared by every window
-    /// because W1 models a single open document (see the type note).
-    private(set) var lastAppliedRevision: ContractRevision?
+    /// The newest revision applied to each open project's selections; only open projects have one.
+    private(set) var lastAppliedRevisions: [ProjectID: ContractRevision] = [:]
 
     init() {}
+
+    /// The projects with at least one open window.
+    var openProjects: Set<ProjectID> { Set(windowProjects.values) }
+
+    /// nil if `project` has no applied revision or no open window.
+    func lastAppliedRevision(for project: ProjectID) -> ContractRevision? { lastAppliedRevisions[project] }
 
     /// Reduces `action` on a staged transition and commits it only if every check passes.
     mutating func apply(_ action: WorkspaceNavigationAction) throws(WorkspaceNavigationError) {
@@ -147,8 +154,9 @@ struct WorkspaceNavigationState: Equatable, Sendable {
 
     private mutating func commit(_ transition: WorkspaceNavigationTransition) {
         windows = transition.windows
+        windowProjects = transition.windowProjects
         isAdvancedExpanded = transition.isAdvancedExpanded
-        lastAppliedRevision = transition.lastAppliedRevision
+        lastAppliedRevisions = transition.lastAppliedRevisions
     }
 }
 
@@ -158,37 +166,55 @@ struct WorkspaceNavigationState: Equatable, Sendable {
 /// creates and commits one, and only after every check has passed.
 private struct WorkspaceNavigationTransition {
     var windows: [WindowID: WorkspaceWindowState]
+    var windowProjects: [WindowID: ProjectID]
     var isAdvancedExpanded: Bool
-    var lastAppliedRevision: ContractRevision?
+    var lastAppliedRevisions: [ProjectID: ContractRevision]
 
     init(_ state: WorkspaceNavigationState) {
         windows = state.windows
+        windowProjects = state.windowProjects
         isAdvancedExpanded = state.isAdvancedExpanded
-        lastAppliedRevision = state.lastAppliedRevision
+        lastAppliedRevisions = state.lastAppliedRevisions
     }
 
     mutating func reduce(_ action: WorkspaceNavigationAction) throws(WorkspaceNavigationError) {
         switch action {
-        case let .openWindow(window):
-            try open(window)
+        case let .openWindow(window, project):
+            try open(window, project: project)
         case let .closeWindow(window):
-            guard windows[window] != nil else { throw .unknownWindow(window) }
-            windows[window] = nil
+            try close(window)
         case let .setAdvancedExpanded(expanded):
             try setAdvancedExpanded(expanded)
-        case let .revisionApplied(revision, present):
-            try applyRevision(revision, present: present)
+        case let .revisionApplied(revision, project, present):
+            try applyRevision(revision, project: project, present: present)
         case let .selectSurface(_, window), let .setMode(_, window), let .setWidthClass(_, window),
              let .select(_, window), let .clearSelection(window), let .setInspectorRequested(_, window):
             try edit(window, with: action)
         }
     }
 
-    private mutating func open(_ window: WindowID) throws(WorkspaceNavigationError) {
+    private var openProjects: Set<ProjectID> { Set(windowProjects.values) }
+
+    /// Refuses a duplicate window, then a full host, then a new project beyond `maxProjects`.
+    private mutating func open(_ window: WindowID, project: ProjectID) throws(WorkspaceNavigationError) {
         guard windows[window] == nil else { throw .duplicateWindow(window) }
-        let maximum = WorkspaceNavigationState.maxWindows
-        guard windows.count < maximum else { throw .windowLimitExceeded(maximum: maximum) }
+        let maxWindows = WorkspaceNavigationState.maxWindows
+        guard windows.count < maxWindows else { throw .windowLimitExceeded(maximum: maxWindows) }
+        let projects = openProjects
+        let maxProjects = WorkspaceNavigationState.maxProjects
+        guard projects.contains(project) || projects.count < maxProjects else {
+            throw .projectLimitExceeded(maximum: maxProjects)
+        }
         windows[window] = WorkspaceWindowState()
+        windowProjects[window] = project
+    }
+
+    /// Discards the project's revision with its last window, so a reopened project starts fresh.
+    private mutating func close(_ window: WindowID) throws(WorkspaceNavigationError) {
+        guard windows[window] != nil, let project = windowProjects[window] else { throw .unknownWindow(window) }
+        windows[window] = nil
+        windowProjects[window] = nil
+        if !openProjects.contains(project) { lastAppliedRevisions[project] = nil }
     }
 
     /// Changes only the named window's own fields, plus Advanced when it selects an advanced surface.
@@ -223,19 +249,21 @@ private struct WorkspaceNavigationTransition {
         isAdvancedExpanded = expanded
     }
 
+    /// Checks and marks only `project`'s windows; other projects keep their selections and revisions.
     private mutating func applyRevision(
-        _ revision: ContractRevision, present: Set<WorkspaceItemRef>
+        _ revision: ContractRevision, project: ProjectID, present: Set<WorkspaceItemRef>
     ) throws(WorkspaceNavigationError) {
-        if let lastAppliedRevision, revision <= lastAppliedRevision { throw .staleRevision(revision) }
-        windows = windows.mapValues { window in
-            var window = window
+        guard openProjects.contains(project) else { throw .unknownProject(project) }
+        if let last = lastAppliedRevisions[project], revision <= last { throw .staleRevision(revision) }
+        for (id, owner) in windowProjects where owner == project {
+            guard var window = windows[id] else { continue }
             window.selection = window.selection.map { entry in
                 guard case let .live(item) = entry, !item.isPresent(in: present) else { return entry }
                 return .removed(item, in: revision)
             }
-            return window
+            windows[id] = window
         }
-        lastAppliedRevision = revision
+        lastAppliedRevisions[project] = revision
     }
 
     /// Refuses over-limit or duplicate input instead of truncating or deduplicating it.
