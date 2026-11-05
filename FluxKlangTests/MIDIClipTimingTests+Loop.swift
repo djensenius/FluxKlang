@@ -239,4 +239,74 @@ struct MIDIClipLoopTests {
             == [24_000])
         #expect(scheduler.binding == Self.live && scheduler.cursor == 30_000)
     }
+
+    static func controller(_ number: UInt8, value: UInt8 = 127, ticks: Int64 = 0,
+                           channel: UInt8 = 1) -> MIDIClipItem {
+        .event(ticks: ticks, message: .controlChange(channel: channel, controller: number, value: value))
+    }
+
+    static func admission(_ items: [MIDIClipItem], length: Int64 = 4 * quarter) -> MIDIClipRefusal? {
+        let before = items
+        let refusal = Base.refusal { try MIDIClip.make(lengthTicks: length, items: items) }
+        #expect(items == before)
+        return refusal
+    }
+
+    @Test(arguments: [UInt8(64), 66, 69])
+    func holdControllersAreRefusedAtAdmission(controller: UInt8) throws {
+        for value: UInt8 in [127, 0] {
+            #expect(Self.admission([Self.controller(controller, value: value)]) == .unsupportedMessage(item: 0))
+            let items = [Base.note(0, Self.quarter), Base.controlChange(1),
+                         Self.controller(controller, value: value, ticks: 2, channel: 16)]
+            #expect(Self.admission(items) == .unsupportedMessage(item: 2))
+        }
+    }
+
+    @Test
+    func stoppingBeforeSustainPedalUpIsUnreachable() throws {
+        // Copilot's case: Note On, CC 64 down, the note ends, then stop before CC 64 up. The clip is refused at
+        // admission, so no scheduler can hold a sustained note that stop() cannot release.
+        let items = [Base.note(0, Self.quarter), Self.controller(64, value: 127, ticks: Self.quarter / 2),
+                     Self.controller(64, value: 0, ticks: 3 * Self.quarter)]
+        #expect(Self.admission(items) == .unsupportedMessage(item: 1))
+        #expect(Base.refusal { try Base.placement(items) } == .unsupportedMessage(item: 1))
+    }
+
+    @Test(arguments: UInt8(120)...127)
+    func channelModeMessagesAreRefusedAtAdmission(controller: UInt8) throws {
+        let items = [Base.controlChange(0), Base.note(0, 1), Self.controller(controller, value: 0, ticks: 1)]
+        #expect(Self.admission(items) == .unsupportedMessage(item: 2))
+        #expect(Self.admission([Self.controller(controller, value: 127)]) == .unsupportedMessage(item: 0))
+    }
+
+    @Test
+    func theFirstNoteHoldingItemIsReportedAfterThePerItemChecks() throws {
+        let length = 4 * Self.quarter
+        #expect(Self.admission([Base.controlChange(0), Self.controller(66), Self.controller(120),
+                                Self.controller(64), Self.controller(69)]) == .unsupportedMessage(item: 1))
+        #expect(Self.admission([Self.controller(1), Self.controller(127), Self.controller(64)])
+            == .unsupportedMessage(item: 1))
+        // Per-item checks run first, in item order; the hold check runs before the overlap check.
+        #expect(Self.admission([Self.controller(64, channel: 0)]) == .invalidChannel(item: 0, channel: 0))
+        #expect(Self.admission([Self.controller(64, value: 128)]) == .invalidData(item: 0))
+        #expect(Self.admission([Self.controller(64), Self.controller(1, ticks: length)])
+            == .eventOutsideClip(item: 1, ticks: length))
+        #expect(Self.admission([Self.controller(64), .event(ticks: 0, message: .sysEx(payload: [1]))])
+            == .unsupportedMessage(item: 1))
+        #expect(Self.admission([Base.note(0, 10), Base.note(5, 15), Self.controller(64)])
+            == .unsupportedMessage(item: 2))
+    }
+
+    @Test
+    func ordinaryControllersAreStillScheduled() throws {
+        let ordinary: [UInt8] = [0, 1, 7, 10, 11, 63, 65, 67, 68, 70, 119]
+        let items = [Base.note(0, Self.quarter)] + ordinary.map { Self.controller($0, ticks: Self.quarter / 2) }
+        var scheduler = MIDIClipScheduler(placement: try Base.placement(items))
+        let played = try scheduler.render(from: 0, to: 30_000, clock: Base.clock(), current: Self.live)
+        #expect(played.map(\.frame) == [0] + Array(repeating: 12_000, count: ordinary.count) + [24_000])
+        #expect(played.dropFirst().dropLast().map(\.message)
+            == ordinary.map { .controlChange(channel: 1, controller: $0, value: 127) })
+        #expect(played.last?.message == Self.off(60))
+        #expect(scheduler.soundingCount == 0 && scheduler.stop().isEmpty)
+    }
 }

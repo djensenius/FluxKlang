@@ -241,7 +241,8 @@ struct MIDIClipTimingTests {
             .event(ticks: 0, message: .polyphonicPressure(channel: 1, note: 127, pressure: 127)),
             .event(ticks: 0, message: .channelPressure(channel: 1, pressure: 127)),
             .event(ticks: 0, message: .programChange(channel: 1, program: 127)),
-            .event(ticks: 0, message: .controlChange(channel: 1, controller: 127, value: 127))
+            // Controllers 120...127 (channel mode) and the hold pedals 64, 66 and 69 are refused; see the loop suite.
+            .event(ticks: 0, message: .controlChange(channel: 1, controller: 119, value: 127))
         ]
         #expect(try MIDIClip.make(lengthTicks: length, items: valid).items == valid)
     }

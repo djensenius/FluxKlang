@@ -41,7 +41,17 @@ struct MIDIClip: Equatable, Sendable {
         self.items = items
     }
 
-    /// A clip of `lengthTicks` holding `items` in authoring order, or the first refusal found.
+    /// Controllers that hold notes past their Note Off: sustain (64), sostenuto (66) and hold 2 (69).
+    private static let holdControllers: Set<UInt8> = [64, 66, 69]
+    /// Channel mode messages (all sound off … poly on) act on notes the clip does not own.
+    private static let channelModeControllers: ClosedRange<UInt8> = 120...127
+
+    /// A clip of `lengthTicks` holding `items` in authoring order, or the first refusal found. Checks run in a fixed
+    /// order: length, item count, then each item in authoring order (channel, data ranges, then the note span, or
+    /// for an event its kind and then its tick), then note-holding controllers, then overlapping notes. The
+    /// note-holding check refuses the first item, in authoring order, that is a hold controller (64, 66, 69) or a
+    /// channel mode message (120...127) at any value, with `.unsupportedMessage(item:)`: stop() releases notes
+    /// only with Note Offs, so a clip may not sustain or touch notes beyond its own spans.
     static func make(lengthTicks: Int64, items: [MIDIClipItem]) throws(MIDIClipRefusal) -> MIDIClip {
         guard (1...maximumLengthTicks).contains(lengthTicks) else { throw .lengthOutOfRange(lengthTicks) }
         guard items.count <= maximumItems else { throw .tooManyItems(count: items.count, limit: maximumItems) }
@@ -57,6 +67,7 @@ struct MIDIClip: Equatable, Sendable {
                 guard ticks >= 0, ticks < lengthTicks else { throw .eventOutsideClip(item: index, ticks: ticks) }
             }
         }
+        if let item = items.firstIndex(where: holdsNotes) { throw .unsupportedMessage(item: item) }
         for key in spans.keys.sorted() {
             let sorted = spans[key, default: []].sorted { ($0.start, $0.item) < ($1.start, $1.item) }
             for (earlier, later) in zip(sorted, sorted.dropFirst()) where earlier.end > later.start {
@@ -76,6 +87,13 @@ struct MIDIClip: Equatable, Sendable {
         let start: Int64
         let end: Int64
         let item: Int
+    }
+
+    /// Whether `item` is a hold controller or a channel mode message, either of which may leave notes sounding
+    /// that stop() cannot release, or act on notes the clip does not own.
+    private static func holdsNotes(_ item: MIDIClipItem) -> Bool {
+        guard case .event(_, .controlChange(_, let controller, _)) = item else { return false }
+        return holdControllers.contains(controller) || channelModeControllers.contains(controller)
     }
 
     private static func check(_ note: MIDIClipNote, item: Int, lengthTicks: Int64) throws(MIDIClipRefusal) {

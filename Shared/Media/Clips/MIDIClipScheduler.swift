@@ -74,7 +74,8 @@ struct MIDIClipScheduler: Equatable, Sendable {
 
     /// Stops playback at the cursor: one Note Off per sounding note, by pass then authoring order. The scheduler
     /// then starts afresh: the next render may start anywhere and binds to its own generations. A second stop
-    /// releases nothing.
+    /// releases nothing. These Note Offs are complete: `MIDIClip.make` refuses hold controllers (CC 64, 66, 69)
+    /// and channel mode messages, so no clip note can sound past its Note Off.
     mutating func stop() -> [MIDIClipEvent] {
         defer {
             sounding = []

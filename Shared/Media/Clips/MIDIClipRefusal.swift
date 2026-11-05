@@ -29,7 +29,10 @@ enum MIDIClipRefusal: Error, Equatable, Sendable {
     case eventOutsideClip(item: Int, ticks: Int64)
     /// Note On and Note Off are authored only as note spans.
     case noteMessageOutsideSpan(item: Int)
-    /// System common, real-time and SysEx messages are not clip content in v1.
+    /// System common, real-time and SysEx messages are not clip content in v1 (found in the per-item checks).
+    /// Nor are hold controllers (CC 64, 66, 69) or channel mode messages (CC 120...127) at any value. They are
+    /// refused after the per-item checks and before the overlap check, and `item` is the first such item in
+    /// authoring order.
     case unsupportedMessage(item: Int)
     /// Two spans of one channel and note overlap; `first` starts no later than `second`.
     case overlappingNotes(first: Int, second: Int)
