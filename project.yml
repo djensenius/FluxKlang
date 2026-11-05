@@ -226,6 +226,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/PeerReconnectTests.swift
+      - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
       - path: FluxKlangTests/ParameterAutomationTests+Arbitration.swift
       - path: FluxKlangTests/ParameterAutomationTests+Resume.swift
