@@ -181,21 +181,22 @@ extension OpenSoundControl {
 
         /// Admits the whole packet or refuses it unchanged. Returns the new batches
         /// in pre-order; a packet without messages admits nothing but its arrival.
+        /// The planner refuses at the first batch or message past the room the
+        /// pending capacities leave, before storing it.
         mutating func admit(_ packet: Packet, now: HostStamp) throws(SchedulingRefusal) -> [ScheduledBatch] {
             try requireMonotonic(now)
             let current = self
+            let budget = PlanningBudget(
+                batches: policy.maximumPendingBatches - pending.count, batchLimit: policy.maximumPendingBatches,
+                messages: policy.maximumPendingMessages - pendingMessageCount,
+                messageLimit: policy.maximumPendingMessages
+            )
             let plans = try BundlePlanner.plan(
-                packet, allowList: allowList, maximumBundleDepth: policy.maximumBundleDepth
+                packet, allowList: allowList, maximumBundleDepth: policy.maximumBundleDepth, budget: budget
             ) { timeTag throws(SchedulingRefusal) in
                 try current.resolve(timeTag, mapping: current.mapping, now: now)
             }
             let messageCount = plans.reduce(0) { $0 + $1.messages.count }
-            guard plans.count <= policy.maximumPendingBatches - pending.count else {
-                throw .capacityExceeded(.pendingBatches, limit: policy.maximumPendingBatches)
-            }
-            guard messageCount <= policy.maximumPendingMessages - pendingMessageCount else {
-                throw .capacityExceeded(.pendingMessages, limit: policy.maximumPendingMessages)
-            }
             let (arrivalAfter, arrivalOverflow) = nextArrival.addingReportingOverflow(1)
             let (batchAfter, batchOverflow) = nextBatch.addingReportingOverflow(UInt64(plans.count))
             guard !arrivalOverflow, !batchOverflow else { throw .arithmeticOverflow }

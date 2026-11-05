@@ -34,6 +34,8 @@ extension OpenSoundControl {
         /// OSC 1.0: an enclosed bundle's time must not precede its enclosing bundle's.
         case nestedTimeTagEarlier(enclosing: TimeTag, inner: TimeTag)
         case bundleTooDeep(limit: Int)
+        /// More than `SchedulingPolicy.maximumPacketElements` bundle elements, at any depth.
+        case tooManyElements(limit: Int)
         /// Incoming patterns cannot be proven to address only allowed methods.
         case wildcardAddress(String)
         case disallowedAddress(String)

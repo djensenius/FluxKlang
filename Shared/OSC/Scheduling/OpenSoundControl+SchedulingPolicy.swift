@@ -14,6 +14,10 @@ extension OpenSoundControl {
         static let defaultMaximumPendingMessages = 4_096
         /// Matches the codec's default `Limits.maximumBundleDepth`.
         static let defaultMaximumBundleDepth = 8
+        /// Most bundle elements one packet may hold, counted at any depth as the
+        /// codec counts them: its default `Limits.maximumBundleElements`. Bounds
+        /// planning work for packets built in memory, which skip the decoder.
+        static let maximumPacketElements = Limits.standard.maximumBundleElements
         /// Hard ceiling for either capacity.
         static let capacityLimit = 1 << 20
         static let bundleDepthLimit = 64

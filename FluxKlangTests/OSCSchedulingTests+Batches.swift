@@ -133,6 +133,120 @@ extension OSCSchedulingTests {
         #expect(Fixture.refusal(fresh) { try $0.admit(four, now: Fixture.host(0)) } == full)
     }
 
+    /// The planner's budgets are the capacities minus what is pending: N more are
+    /// accepted and N + 1 refused, for batches and for messages.
+    @Test func planningBudgetsAreWhatThePendingStateLeaves() throws {
+        let tag = Fixture.tag(after: 1)
+        var batches = try Fixture.scheduler(policy: Fixture.policy(batches: 4))
+        _ = try batches.admit(Fixture.message(), now: Fixture.host(0))
+        let three = Fixture.bundle(tag, [try Fixture.message(), try Fixture.timed(tag, 1), try Fixture.timed(tag, 2)])
+        var acceptedBatches = batches
+        #expect(try acceptedBatches.admit(three, now: Fixture.host(0)).count == 3 && acceptedBatches.pending.count == 4)
+        let four = Fixture.bundle(tag, [try Fixture.message(), three])
+        #expect(Fixture.refusal(batches) { try $0.admit(four, now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingBatches, limit: 4))
+        var messages = try Fixture.scheduler(policy: Fixture.policy(messages: 5))
+        _ = try messages.admit(Fixture.timed(tag, 1, 2), now: Fixture.host(0))
+        let fits = Fixture.bundle(tag, [try Fixture.message(), try Fixture.timed(tag, 2, 3)])
+        var acceptedMessages = messages
+        #expect(try acceptedMessages.admit(fits, now: Fixture.host(0)).count == 2)
+        #expect(acceptedMessages.pendingMessageCount == 5)
+        let over = Fixture.bundle(tag, [try Fixture.message(), try Fixture.timed(tag, 2, 3, 4)])
+        #expect(Fixture.refusal(messages) { try $0.admit(over, now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingMessages, limit: 5))
+    }
+
+    /// Room is checked before each message is stored, so a full budget refuses the
+    /// packet there, before any later message, bundle or tag is examined. When one
+    /// message would exceed both budgets its batch is named; its address comes first.
+    @Test func capacityRefusalPrecedesTheRestOfThePacket() throws {
+        let secret = try Fixture.message(0, "/secret")
+        let fewMessages = try Fixture.scheduler(policy: Fixture.policy(messages: 2))
+        let messages = Fixture.bundle(.immediate, [
+            try Fixture.message(1), try Fixture.message(2), try Fixture.message(3), secret
+        ])
+        #expect(Fixture.refusal(fewMessages) { try $0.admit(messages, now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingMessages, limit: 2))
+        let oneBatch = try Fixture.scheduler(policy: Fixture.policy(batches: 1))
+        let batches = Fixture.bundle(.immediate, [
+            try Fixture.message(1), Fixture.bundle(.immediate, [try Fixture.message(2), secret])
+        ])
+        #expect(Fixture.refusal(oneBatch) { try $0.admit(batches, now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingBatches, limit: 1))
+        var full = try Fixture.scheduler(policy: Fixture.policy(batches: 1, messages: 1))
+        _ = try full.admit(Fixture.message(1), now: Fixture.host(0))
+        #expect(Fixture.refusal(full) { try $0.admit(Fixture.message(2), now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingBatches, limit: 1))
+        #expect(Fixture.refusal(full) { try $0.admit(secret, now: Fixture.host(0)) } == .disallowedAddress("/secret"))
+    }
+
+    /// Copilot 4485219346: a packet built in memory skips the decoder's limits and may
+    /// repeat one shared child. This depth-8 packet names 4⁷ = 16 384 leaf batches. With
+    /// both capacities 1 it is refused at the second leaf, before the raw-0 bundle at its
+    /// end, so the other subtrees are never walked or stored. The immediate stage, which
+    /// has no capacities, stops at the element bound, also before the end.
+    @Test func sharedSubtreesAreRefusedAtTheFirstBatchPastTheBudget() throws {
+        let scheduler = try Fixture.scheduler(policy: Fixture.policy(batches: 1, messages: 1))
+        let subtree = Fixture.tree(Fixture.bundle(.immediate, [try Fixture.message()]), levels: 7, fanOut: 4)
+        let tail = Fixture.bundle(OSC.TimeTag(rawValue: 0))
+        let packet = Fixture.bundle(.immediate, Array(repeating: subtree, count: 4) + [tail])
+        #expect(Fixture.refusal(scheduler) { try $0.admit(packet, now: Fixture.host(0)) }
+            == .capacityExceeded(.pendingBatches, limit: 1))
+        #expect(throws: Refusal.tooManyElements(limit: 1_024)) {
+            try OSC.ImmediateStage.admit(packet, allowList: Fixture.allowList())
+        }
+    }
+
+    /// The element bound is the codec's: every element of every bundle, at any depth,
+    /// as the encoder and decoder count them. 1 024 are planned; 1 025 are refused.
+    @Test func packetElementsAreBoundedAsTheCodecBoundsThem() throws {
+        let limit = OSC.SchedulingPolicy.maximumPacketElements
+        #expect(limit == OSC.Limits.standard.maximumBundleElements && limit == 1_024)
+        let messages = try (0..<limit).map { try Fixture.message(Int32($0)) }
+        let flat = Fixture.bundle(.immediate, messages)
+        let nested = Fixture.bundle(.immediate, [Fixture.bundle(.immediate, Array(messages.dropLast()))])
+        let scheduler = try Fixture.scheduler()
+        for (packet, count) in [(flat, 1_024), (nested, 1_023)] {
+            var accepted = scheduler
+            #expect(try accepted.admit(packet, now: Fixture.host(0)).flatMap(\.messages).count == count)
+            _ = try OSC.Encoder().encode(packet)
+        }
+        let over = Fixture.bundle(.immediate, [flat])
+        #expect(Fixture.refusal(scheduler) { try $0.admit(over, now: Fixture.host(0)) }
+            == .tooManyElements(limit: limit))
+        #expect(throws: Refusal.tooManyElements(limit: limit)) {
+            try OSC.ImmediateStage.admit(over, allowList: Fixture.allowList())
+        }
+        #expect(throws: OSC.CodecError.tooManyElements(limit: limit)) { try OSC.Encoder().encode(over) }
+    }
+
+    /// Bundles without messages never touch the pending budgets, so only the element
+    /// bound stops a shared tree of 4⁷ empty leaves (21 844 elements).
+    @Test func exponentialEmptyTreesExhaustTheElementBudget() throws {
+        let tree = Fixture.tree(Fixture.bundle(.immediate), levels: 8, fanOut: 4)
+        let scheduler = try Fixture.scheduler()
+        #expect(Fixture.refusal(scheduler) { try $0.admit(tree, now: Fixture.host(0)) }
+            == .tooManyElements(limit: 1_024))
+        #expect(throws: Refusal.tooManyElements(limit: 1_024)) {
+            try OSC.ImmediateStage.admit(tree, allowList: Fixture.allowList())
+        }
+    }
+
+    /// Depth is checked on entry to each bundle, before its elements are counted or
+    /// visited, so a constructed chain stops at the limit.
+    @Test func constructedPacketDepthIsCheckedBeforeItsContents() throws {
+        let scheduler = try Fixture.scheduler()
+        var chain = try Fixture.message()
+        for _ in 0..<100 { chain = Fixture.bundle(.immediate, [chain]) }
+        #expect(Fixture.refusal(scheduler) { try $0.admit(chain, now: Fixture.host(0)) } == .bundleTooDeep(limit: 8))
+        #expect(throws: Refusal.bundleTooDeep(limit: 8)) {
+            try OSC.ImmediateStage.admit(chain, allowList: Fixture.allowList())
+        }
+        var wide = Fixture.bundle(.immediate, Array(repeating: try Fixture.message(), count: 2_000))
+        for _ in 0..<8 { wide = Fixture.bundle(.immediate, [wide]) }
+        #expect(Fixture.refusal(scheduler) { try $0.admit(wide, now: Fixture.host(0)) } == .bundleTooDeep(limit: 8))
+    }
+
     @Test func cancelRemovesExactlyOnePendingBatch() throws {
         var scheduler = try Fixture.scheduler()
         let inner = try Fixture.timed(Fixture.tag(after: 2), 2, 3)
@@ -277,5 +391,16 @@ private extension Array {
 private extension OSCSchedulingFixture {
     static func timed(_ timeTag: OSC.TimeTag, _ values: [Int32]) throws -> OSC.Packet {
         bundle(timeTag, try values.map { try message($0) })
+    }
+
+    /// `levels` nested immediate bundles around `leaf` (the innermost level), each
+    /// repeating one shared child `fanOut` times: `fanOut^(levels - 1)` leaves in
+    /// memory proportional to `levels`.
+    static func tree(_ leaf: OSC.Packet, levels: Int, fanOut: Int) -> OSC.Packet {
+        var level = leaf
+        for _ in 1..<levels {
+            level = bundle(.immediate, Array(repeating: level, count: fanOut))
+        }
+        return level
     }
 }
