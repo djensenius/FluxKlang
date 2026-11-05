@@ -6,7 +6,7 @@ struct MIDINoteLedgerPolicy: Hashable, Sendable {
     static let standard = MIDINoteLedgerPolicy(validatedNoteCapacity: 1024, pedalCapacity: 256)
 
     /// Note-on instances (one per layer of each press) that are still held by a key or a pedal, plus release markers
-    /// (one per lost key-down press whose Note Off is still to come; see `MIDINoteLedger.releaseMarkers`).
+    /// (one per lost key-down press older than a held press of its key; see `MIDINoteLedger.releaseMarkers`).
     var noteCapacity: Int { storedNoteCapacity }
     /// Pedal holds, one per (route, channel, pedal, input).
     var pedalCapacity: Int { storedPedalCapacity }
@@ -35,8 +35,9 @@ enum MIDIPerformanceRefusal: Error, Equatable, Hashable, Sendable {
     /// System messages are not routed by the note ledger.
     case systemMessage
     /// Recording every layer of this Note On would exceed the note capacity, which release markers share; nothing was
-    /// sent. A marker's entry is freed by its Note Off, CC 120 or 123...127 of its input and channel, the loss of its
-    /// input, or a full panic.
+    /// sent. A marker lives only while a newer key-down press of its key is held: its entry is freed by its Note Off,
+    /// by a route loss or route-scoped panic that leaves it no such press, by CC 120 or 123...127 of its input and
+    /// channel, by the loss of its input, or by a full panic.
     case noteLedgerFull(input: MIDIInputID, channel: UInt8, note: UInt8)
     /// Recording this pedal-down on every target, or carrying a held pedal to a Note On's new routes, would exceed the
     /// pedal capacity; nothing was sent.
@@ -44,8 +45,8 @@ enum MIDIPerformanceRefusal: Error, Equatable, Hashable, Sendable {
     /// A Note Off (or Note On with velocity 0) or poly pressure for a note this input has no key down on, on this
     /// channel. Benign and frequent in normal playing: poly aftertouch trailing a Note Off, a key released after a
     /// full panic or after its input was lost, a repeated Note Off. Callers count or log it; it is not an error.
-    /// A Note Off held back because another copy of the note is still down is not refused, nor is the first Note Off
-    /// of a press whose route was lost or panicked: its release marker takes it, sending nothing.
+    /// A Note Off held back because another copy of the note is still down is not refused, nor is the Note Off of a
+    /// press whose route was lost or panicked while a newer press of the key was down: its release marker takes it.
     case unownedNote(input: MIDIInputID, channel: UInt8, note: UInt8)
     /// A pedal-up (value 0...63) from an input that holds that pedal on no route on this channel. Benign and frequent,
     /// as above: a continuous pedal sends many values below 64, and only the first releases. Count or log it.

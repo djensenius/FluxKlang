@@ -2,8 +2,9 @@
 /// received the note-on whatever the current routing is. Nothing expires: only a release, the loss of the input or
 /// the route, or a panic removes an entry. Storage is reserved up front and never grows past the policy.
 ///
-/// A key-down press that loses every layer to `routeLost` or a route-scoped panic leaves a release marker in its
-/// place, so its own Note Off sends nothing instead of releasing a newer press of the same key (`releaseMarkers`).
+/// A key-down press that loses every layer to `routeLost` or a route-scoped panic while a newer key-down press of the
+/// same key is held leaves a release marker, so its own Note Off sends nothing instead of releasing that newer press
+/// (`releaseMarkers`). A press that reached no route records nothing, so its Note Off can end the key's next press.
 ///
 /// Every change goes through `route`, `panic`, `routeLost` and `inputLost`. The primitives they share are private to
 /// this file: they keep the ledger's invariants only after their caller's capacity check.
@@ -11,9 +12,9 @@
 /// Cost: one routed note, pedal or channel message is O(k · n) for k rules or layers over n held instances. Bulk
 /// key-ups (CC 120, CC 123...127, `inputLost`) are O(n²): each key-up rescans the ledger for another key-down copy
 /// and removes in place. `routeLost` and a route-scoped panic are O(n²) too: each lost key-down instance rescans the
-/// notes for a layer that stays and the markers for its place. The CC 121/124...127 preflight rescans the notes and
-/// holds once per current rule (O(rules · (notes + holds))). All of this is control-side work, never for a realtime
-/// thread; an indexed ledger is a follow-up.
+/// notes for a layer that stays, and each marker for a newer press. The CC 121/124...127 preflight rescans the notes
+/// and holds once per current rule (O(rules · (notes + holds))). All of this is control-side work, never for a
+/// realtime thread; an indexed ledger is a follow-up.
 struct MIDINoteLedger: Equatable, Sendable {
     /// Release velocity of synthesized note-offs (panic, loss, All Notes Off); MIDI 1.0's default.
     static let releaseVelocity: UInt8 = 64
@@ -25,9 +26,8 @@ struct MIDINoteLedger: Equatable, Sendable {
     let policy: MIDINoteLedgerPolicy
     /// Arrival order, so the first key-down instance of an input note belongs to its oldest press.
     private(set) var notes: [MIDINoteInstance] = []
-    /// Ascending by press and unique: lost key-down presses whose Note Off is still to come. They share
-    /// `policy.noteCapacity` with `notes`; only that Note Off, CC 120/123...127 of the input and channel, the loss of
-    /// the input, or a full panic removes one.
+    /// Ascending by press and unique: lost key-down presses, each kept only while a newer key-down press of its key is
+    /// (`markPressesLosingEveryLayer`). They share `policy.noteCapacity` with `notes`.
     private(set) var releaseMarkers: [MIDIReleaseMarker] = []
     /// Ascending and unique.
     private(set) var pedalHolds: [MIDIPedalHold] = []
@@ -126,8 +126,8 @@ extension MIDINoteLedger {
 
     /// Carries held pedals to the note's new routes, then sends one note-on per distinct (route, transformed note) of
     /// the matching rules, recorded as one press. Refused whole, before anything is sent, when the notes or the
-    /// carried holds do not fit; release markers count toward the note capacity. A press of a key that still has
-    /// release markers queues behind them: their Note Offs come first.
+    /// carried holds do not fit; release markers count toward the note capacity. A press of a key with release markers
+    /// ends after them and after the held presses they order.
     private mutating func pressNote(
         _ note: UInt8, velocity: UInt8, context: MIDIRoutingContext, into outputs: inout [MIDIRoutedOutput]
     ) throws(MIDIPerformanceRefusal) {
@@ -324,8 +324,7 @@ extension MIDINoteLedger {
 extension MIDINoteLedger {
     /// Returns `panicPlan(scope, allNotesAndSoundOff:)` and forgets everything in `scope`, so a second panic emits
     /// nothing until a new note-on or pedal-down. A full panic also drops every release marker, so a key or pedal
-    /// released after it is refused as unowned. A route-scoped panic leaves a release marker for each key-down press
-    /// it takes every layer of, as `routeLost` does, and keeps the markers it finds.
+    /// released after it is refused as unowned. A route-scoped panic marks and prunes as `routeLost` does.
     mutating func panic(_ scope: MIDIPanicScope = .all, allNotesAndSoundOff: Bool = true) -> [MIDIRoutedOutput] {
         let outputs = panicPlan(scope, allNotesAndSoundOff: allNotesAndSoundOff)
         if scope == .all {
@@ -339,7 +338,7 @@ extension MIDINoteLedger {
 
     /// Removes the route's instances and holds and reports them; nothing is sent. Later releases and panics no
     /// longer target the route. A key-down press with no layer left keeps its place in its key's release FIFO as a
-    /// release marker, so its Note Off sends nothing instead of releasing a newer press; other markers stay.
+    /// release marker while a newer key-down press of the key is held; markers left ordering nothing are dropped.
     mutating func routeLost(_ route: MIDIRouteID) -> MIDIOrphanedRoute {
         let orphaned = MIDIOrphanedRoute(
             route: route, notes: notes.filter { $0.route == route }, pedalHolds: pedalHolds.filter { $0.route == route }
@@ -443,14 +442,20 @@ extension MIDINoteLedger {
         pedalHolds.removeAll(where: holdPredicate)
     }
 
-    /// Before `forget`: a release marker, in press order, for each key-down press whose every layer is `lost`.
-    /// Each marker replaces at least one forgotten instance, so markers and notes stay within the note capacity.
+    /// Before `forget`, keeps each key's release order across the loss of the instances `lost`. A release marker stays,
+    /// and a key-down press whose every layer is lost becomes one (in press order), only while a newer key-down press
+    /// of its key keeps a layer. Nothing else strands a marker: a Note Off ends its key's oldest entry; CC 120,
+    /// 123...127, `inputLost` and a full panic drop it with the presses. Each replaces a forgotten instance.
     private mutating func markPressesLosingEveryLayer(_ lost: (MIDINoteInstance) -> Bool) {
+        let notes = notes
+        releaseMarkers.removeAll { marker in !notes.contains { marker.orders($0) && !lost($0) } }
         for instance in notes where instance.keyDown && lost(instance)
             && !notes.contains(where: { $0.press == instance.press && !lost($0) }) {
+            let marker = MIDIReleaseMarker(of: instance)
             let index = releaseMarkers.firstIndex { $0.press >= instance.press } ?? releaseMarkers.endIndex
-            guard index == releaseMarkers.endIndex || releaseMarkers[index].press != instance.press else { continue }
-            releaseMarkers.insert(MIDIReleaseMarker(of: instance), at: index)
+            guard index == releaseMarkers.endIndex || releaseMarkers[index].press != instance.press,
+                  notes.contains(where: { marker.orders($0) && !lost($0) }) else { continue }
+            releaseMarkers.insert(marker, at: index)
         }
     }
 

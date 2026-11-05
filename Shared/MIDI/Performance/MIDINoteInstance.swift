@@ -36,7 +36,8 @@ struct MIDINoteInstance: Equatable, Sendable {
 
 /// A key-down press whose every layer went with a lost route or a route-scoped panic. It sounds nothing and owns no
 /// destination; it keeps the press's place in its key's release FIFO, so the press's own Note Off is consumed here
-/// and sends nothing instead of releasing a newer press of the same key.
+/// and sends nothing instead of releasing a newer press of the same key. It exists only while it orders such a
+/// newer key-down press (`orders`); with none left it would only swallow the Note Off of the key's next press.
 struct MIDIReleaseMarker: Equatable, Sendable {
     let press: UInt64
     let input: MIDIInputID
@@ -50,5 +51,12 @@ extension MIDIReleaseMarker {
         self.init(
             press: instance.press, input: instance.input, channel: instance.channel, inputNote: instance.inputNote
         )
+    }
+
+    /// `instance` belongs to a newer key-down press of the same input, channel and input note, whose Note Off must
+    /// come after this marker's.
+    func orders(_ instance: MIDINoteInstance) -> Bool {
+        instance.keyDown && instance.press > press && instance.input == input && instance.channel == channel
+            && instance.inputNote == inputNote
     }
 }
