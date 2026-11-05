@@ -101,7 +101,7 @@ struct UMPScalingTests {
             try Self.down(0x1_0000, 16, 7)
         }
         #expect(throws: UMPRefusal.valueOutOfRange(field: .scaledValue, value: 2)) { try Self.up(2, 1, 8) }
-        #expect(try Self.up(1, 1, 8) == 0x80)
+        #expect(try Self.up(1, 1, 8) == 0xFF)
     }
 
     @Test func widthsAreChecked() throws {
@@ -111,7 +111,62 @@ struct UMPScalingTests {
         for (from, to) in [(7, 0), (7, 8), (33, 7), (7, -1)] {
             #expect(throws: UMPRefusal.invalidScale(fromBits: from, toBits: to)) { try Self.down(0, from, to) }
         }
-        #expect(try Self.up(1, 1, 32) == 0x8000_0000)
+        #expect(try Self.up(1, 1, 32) == 0xFFFF_FFFF)
         #expect(try Self.down(0x8000_0000, 32, 1) == 1)
+    }
+
+    @Test func oneBitSourceMapsToMinimumAndMaximum() throws {
+        // The documented exception to centre preservation: a 1-bit source's centre is its maximum.
+        for to in [1, 7, 8, 14, 16, 32] {
+            let maxOut = UInt32.max >> UInt32(32 - to)
+            #expect(try Self.up(0, 1, to) == 0, "1→\(to) 0")
+            #expect(try Self.up(1, 1, to) == maxOut, "1→\(to) 1")
+        }
+        #expect(try Self.up(1, 1, 7) == 0x7F)
+        #expect(try Self.up(1, 1, 14) == 0x3FFF)
+        #expect(try Self.up(1, 1, 16) == 0xFFFF)
+    }
+
+    @Test func oneBitRoundTripsAreTheIdentity() throws {
+        for to in 1...32 {
+            for value: UInt32 in [0, 1] {
+                #expect(try Self.down(Self.up(value, 1, to), to, 1) == value, "1→\(to)→1 \(value)")
+            }
+            // Downscaling to 1 bit stays a right shift: the top bit decides.
+            let centreOut = UInt32(1) << UInt32(to - 1)
+            #expect(try Self.down(centreOut, to, 1) == 1)
+            #expect(try Self.down(centreOut - 1, to, 1) == 0)
+        }
+    }
+
+    @Test func onlyOneBitSourcesHaveMaximumEqualToCentre() throws {
+        for from in 1...32 {
+            let maxIn = UInt32.max >> UInt32(32 - from)
+            let centre = UInt32(1) << UInt32(from - 1)
+            #expect((maxIn == centre) == (from == 1), "from \(from)")
+            for to in from...32 {
+                let maxOut = UInt32.max >> UInt32(32 - to)
+                let centreOut = UInt32(1) << UInt32(to - 1)
+                #expect(try Self.up(0, from, to) == 0, "\(from)→\(to) min")
+                #expect(try Self.up(maxIn, from, to) == maxOut, "\(from)→\(to) max")
+                #expect(try Self.up(centre, from, to) == (from == 1 ? maxOut : centreOut), "\(from)→\(to) centre")
+            }
+        }
+    }
+
+    @Test func twoBitSourcesFollowTheNormalAlgorithm() throws {
+        #expect(try Self.up(0, 2, 8) == 0)
+        #expect(try Self.up(1, 2, 8) == 0x40)
+        #expect(try Self.up(2, 2, 8) == 0x80)
+        #expect(try Self.up(3, 2, 8) == 0xFF)
+        #expect(try Self.up(1, 2, 7) == 0x20)
+        #expect(try Self.up(2, 2, 7) == 0x40)
+        #expect(try Self.up(3, 2, 7) == 0x7F)
+        #expect(try Self.up(1, 2, 32) == 0x4000_0000)
+        #expect(try Self.up(2, 2, 32) == 0x8000_0000)
+        #expect(try Self.up(3, 2, 32) == 0xFFFF_FFFF)
+        for value: UInt32 in 0...3 {
+            #expect(try Self.down(Self.up(value, 2, 16), 16, 2) == value)
+        }
     }
 }

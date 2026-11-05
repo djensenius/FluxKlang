@@ -6,6 +6,11 @@
 /// Protocol". Minimum maps to minimum, centre to centre, maximum to maximum, and
 /// `scaleDown(scaleUp(x))` returns `x` for every source value. Contract vectors: `scaleUp(100, 7→16) = 0xC924`,
 /// `scaleUp(64, 7→32) = 0x80000000`.
+///
+/// One-bit sources are the documented exception to centre preservation: their centre (1) is also their maximum, so
+/// `scaleUp` maps 0 to 0 and 1 to the destination maximum (all destination bits set). Every source of 2 or more bits
+/// has a centre below its maximum and follows the algorithm above. Downscaling to 1 bit stays a right shift (the
+/// source's top bit), so 1 → N → 1 is the identity.
 enum UMPScaling {
     /// Scales `value` (which must fit in `fromBits`) up to `toBits`, with 1 ≤ `fromBits` ≤ `toBits` ≤ 32.
     static func scaleUp(_ value: UInt32, fromBits: Int, toBits: Int) throws(UMPRefusal) -> UInt32 {
@@ -14,6 +19,7 @@ enum UMPScaling {
         }
         try checkFits(value, bits: fromBits)
         let scaleBits = UInt32(toBits - fromBits)
+        if fromBits == 1 { return value == 0 ? 0 : UInt32.max >> UInt32(32 - toBits) }
         var result = value << scaleBits
         let centre: UInt32 = 1 << UInt32(fromBits - 1)
         guard value > centre else { return result }
