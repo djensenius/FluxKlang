@@ -155,25 +155,6 @@ struct RecordingTakeRecoveryTests {
         #expect(take.unplacedSegments == [0, 1, 2] && take.fileFrames == 1110)
     }
 
-    /// Round 3: the caller sees `.ended` when the jump arrives; the ended take's pre-jump frames
-    /// never block a later restart, and both takes stay recoverable.
-    @Test
-    func ledgerEndedTakeNeverBlocksARestart() throws {
-        var ledger = try TakeLedger(timebase: Fixture.timebase)
-        try ledger.observe(Fixture.anchor(1, 0, host: 0), nominalRate: 48_000)
-        try ledger.open(Fixture.opening(Fixture.take1, 1, 1000))
-        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
-        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
-        #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
-        try ledger.open(Fixture.opening(Fixture.take2, 1, 500))
-        try ledger.advance(Fixture.take2, to: Fixture.stamp(1, 1500))
-        let restart = Fixture.restart(2, 0, previousFrame: 1500, host: 2_500_000_000)
-        #expect(try ledger.ingest(restart) == [.split(Fixture.take2)])
-        try ledger.advance(Fixture.take2, to: Fixture.stamp(2, 100))
-        #expect(try ledger.finish(Fixture.take1, reason: ended).segments.map(\.frames) == [1000])
-        #expect(try ledger.finish(Fixture.take2, reason: .user).segments.map(\.frames) == [1000, 100])
-    }
-
     /// Round 3, the reviewer's repro: after a jump ends take 1, an overflow at 1200 (inside its old
     /// segment's frame numbers) is refused or routed to the take that owns the post-jump range.
     @Test

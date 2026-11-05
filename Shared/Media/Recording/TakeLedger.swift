@@ -11,14 +11,17 @@
 //  take stuck: a segment without an anchor finishes unplaced with typed
 //  evidence, a jump before the take's start ends it at its last good frame, and
 //  any unfinished take can be discarded with a typed reason. A take the ledger
-//  ended owns no further record, through `ingest` or `append`, and never blocks
-//  a restart; `ingest` reports `.ended` so the caller can open a new take. For
+//  ended owns no further record, through `ingest` or `append`, and its stop never
+//  blocks a restart; `ingest` reports `.ended` so the caller can open a new take. For
 //  #109: until that ended take is finished or discarded, a post-jump overflow (at
 //  or after the jump's frame, in its generation) no take records is refused
 //  `.recordNotOwned`, and a late pre-jump overflow for it is refused, never
 //  attached. A restart needs every
 //  capturing take on its clock at `previousFrame`: one lagging take refuses it
-//  for all (typed, nothing changes) until its progress is advanced.
+//  for all (typed, nothing changes) until its progress is advanced. No take on
+//  the clock, whether capturing, stopped, ended by the ledger, finished or
+//  discarded, keeps a segment past its generation's `previousFrame`: one closed
+//  before a backward jump refuses the restart, never trimmed.
 //  Pure bookkeeping: no file I/O, handoffs or resampling. Deterministic and
 //  append-only; a refused input changes nothing (stale anchors are remembered).
 //
@@ -257,7 +260,10 @@ struct TakeLedger: Sendable {
 
     /// Every capturing take on the clock must stand at `previousFrame`: one lagging take's
     /// frontier refuses the restart for all (`.segmentEndMismatch`, nothing changes) until its
-    /// progress is advanced, then the same restart is accepted.
+    /// progress is advanced, then the same restart is accepted. No take on the clock (capturing,
+    /// stopped, ended by the ledger, finished or discarded) may keep a stored segment of the ending
+    /// generation past `previousFrame`; one closed before a backward jump refuses the restart
+    /// (`.segmentAfterRestart`, nothing changes).
     private mutating func restart(_ sample: RuntimeSampleStamp,
                                   previousFrame: Int64) throws(TakeLedgerError) -> [TakeIngestEffect] {
         let generation = sample.generation
@@ -267,15 +273,22 @@ struct TakeLedger: Sendable {
             throw .staleGeneration(generation)
         }
         guard restarts.count < Self.maximumGenerationRecords else { throw .tooManyGenerationRecords }
-        // A stopped take is passed by, but its recorded stop must not lie past the restart (§8.3),
-        // whether the take is still open, finished or discarded: its state, stop included, stays in
-        // `states` (at most `maximumTakes` stops). A take the ledger ended at a discontinuity is
-        // exempt: its frames predate the jump.
+        // A take that is not capturing is passed by, but no stored segment of the generation the
+        // restart ends may lie past the restart (§8.3; a segment closed before a backward jump can),
+        // nor may a recorded stop, whether the take is still open, finished or discarded: its state,
+        // stop and segments included, stays in `states` (at most `maximumTakes` takes). A ledger stop
+        // is exempt from the stop check only: it sits at its last stored segment's end, which the
+        // segment check covers, or, in a take that captured nothing, bounds nothing. `split` gives
+        // capturing takes the segment check after their frontier check.
         for id in order {
-            guard let state = states[id], state.opening.startClockSlot == sample.clock,
-                  let stop = state.stop, !stop.reason.isLedgerStop, stop.generation + 1 == generation,
-                  stop.frame > previousFrame else { continue }
-            throw .stopAfterRestart(id, stopFrame: stop.frame, previousFrame: previousFrame)
+            guard let state = states[id], state.opening.startClockSlot == sample.clock, !state.isCapturing else {
+                continue
+            }
+            if let stop = state.stop, !stop.reason.isLedgerStop, stop.generation + 1 == generation,
+               stop.frame > previousFrame {
+                throw .stopAfterRestart(id, stopFrame: stop.frame, previousFrame: previousFrame)
+            }
+            try state.validateGenerationEnd(generation - 1, at: previousFrame)
         }
         let affected = try split(.clockRestart(previousFrame: previousFrame), at: sample, stream: nil)
         restarts.insert(slot)

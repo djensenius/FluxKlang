@@ -245,6 +245,18 @@ struct TakeLedgerState: Sendable {
         segments[0].generation == sample.generation && sample.frame < segments[0].startFrame
     }
 
+    /// §8.3: no stored segment of `generation`, the last included, ends after the `previousFrame` a
+    /// restart gives it. One closed before a backward jump can; the restart is then refused, never
+    /// trimmed: the segment's frames already sit in the file ahead of later segments, and its
+    /// overflows stay recorded. Ending exactly at `previousFrame` is accepted (both are exclusive).
+    /// Shared by capturing takes (`validateBoundary`) and every other take on the clock
+    /// (`TakeLedger.restart`): stopped, ended by the ledger, finished or discarded.
+    func validateGenerationEnd(_ generation: UInt64, at previousFrame: Int64) throws(TakeLedgerError) {
+        guard let late = storedSegments.first(where: { $0.generation == generation && $0.endFrame > previousFrame })
+        else { return }
+        throw .segmentAfterRestart(opening.take, segmentEnd: late.endFrame, previousFrame: previousFrame)
+    }
+
     func validateBoundary(_ reason: SegmentBoundaryReason, into generation: UInt64) throws(TakeLedgerError) {
         switch reason {
         case .clockRestart(let previousFrame):
@@ -254,6 +266,7 @@ struct TakeLedgerState: Sendable {
             guard current.endFrame == previousFrame else {
                 throw .segmentEndMismatch(frontier: current.endFrame, previousFrame: previousFrame)
             }
+            try validateGenerationEnd(current.generation, at: previousFrame)
         case .sampleJump:
             guard current.generation == generation else { throw .missedRestart(opening.take) }
         }

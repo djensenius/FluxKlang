@@ -385,20 +385,33 @@ struct RecordingTakeTests {
         }
     }
 
-    /// Round 6: a take the ledger ended stays exempt after it is finished or discarded.
+    /// Round 6, revised in round 8b: after a take the ledger ended is finished or discarded, its
+    /// segment still bounds a restart (§8.3). One ending past `previousFrame` (N + 1, and below)
+    /// refuses it and nothing changes; one ending at it (N) is accepted.
     @Test
-    func ledgerEndedTakeNeverBoundsARestartAfterItCloses() throws {
+    func ledgerEndedTakeBoundsARestartAfterItCloses() throws {
         let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
         for finishes in [true, false] {
             var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
             try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
             #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+            var finished: RecordingTake?
+            var discarded: DiscardedTake?
             if finishes {
-                #expect(try ledger.finish(Fixture.take1, reason: ended).segments.map(\.frames) == [1000])
+                finished = try ledger.finish(Fixture.take1, reason: ended)
+                #expect(finished?.segments.map(\.frames) == [1000])
             } else {
-                #expect(try ledger.discard(Fixture.take1, reason: .abandoned).stop?.frame == 2000)
+                discarded = try ledger.discard(Fixture.take1, reason: .abandoned)
+                #expect(discarded?.stop?.frame == 2000)
             }
-            #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 600, host: 2_500_000_000)).isEmpty)
+            for previous: Int64 in [600, 1999] {
+                let early = Fixture.restart(2, 0, previousFrame: previous, host: 2_500_000_000)
+                let refusal = TakeLedgerError.segmentAfterRestart(Fixture.take1, segmentEnd: 2000,
+                                                                  previousFrame: previous)
+                Fixture.refusal(refusal) { () throws(TakeLedgerError) in _ = try ledger.ingest(early) }
+            }
+            #expect(ledger.take(Fixture.take1) == finished && ledger.discarded(Fixture.take1) == discarded)
+            #expect(try ledger.ingest(Fixture.restart(2, 0, previousFrame: 2000, host: 2_500_000_000)).isEmpty)
         }
     }
 

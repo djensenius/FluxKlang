@@ -58,6 +58,9 @@ enum TakeLedgerError: Error, Equatable, Sendable {
     case recordNotOwned(stream: UInt32, frame: Int64)
     /// A stopped take's stop lies past the restart's `previousFrame` (§8.3).
     case stopAfterRestart(TakeID, stopFrame: Int64, previousFrame: Int64)
+    /// A stored segment of the generation the restart ends, such as one closed before a backward
+    /// jump, lies past its `previousFrame` (§8.3). Refused, never trimmed.
+    case segmentAfterRestart(TakeID, segmentEnd: Int64, previousFrame: Int64)
     /// `noCapturedFrames` names a take that holds frames.
     case discardReasonMismatch(TakeDiscardReason)
     case inconsistentRecord(TakeRecordFault)

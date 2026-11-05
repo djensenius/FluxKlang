@@ -35,7 +35,8 @@ enum TakeStopReason: Hashable, Sendable {
         }
     }
 
-    /// Set by the ledger itself; such a take owns no further record and never blocks a restart.
+    /// Set by the ledger itself; such a take owns no further record, and its stop never blocks a
+    /// restart (its segments still do, §8.3).
     var isLedgerStop: Bool {
         if case .discontinuity = self { true } else { false }
     }
