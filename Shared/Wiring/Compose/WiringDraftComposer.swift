@@ -11,19 +11,11 @@
 
 /// Builds connects into drafts and lists a draft's destinations. Pure and deterministic.
 enum WiringDraftComposer {
-    /// `active.applying(draft.edits)`, after checking that the draft edits this graph
-    /// (`.preview(.draftGraphMismatch)`) and that it is based on the active revision (`.staleDraft`).
+    /// `active.applying(draft.edits)`, checked by `WiringDraftGraph` exactly as the review diff checks
+    /// it: graph ID, then base revision (`.preview(.draftBaseMismatch)`), then repeated node or edge
+    /// IDs in the active graph, then bounds and applicability.
     static func draftGraph(active: GraphDocument, draft: DraftEdits) throws(WiringComposeRefusal) -> GraphDocument {
-        guard draft.graph == active.id else {
-            throw .preview(.draftGraphMismatch(draft: draft.graph, active: active.id))
-        }
-        if let stale = WiringStaleDraft.check(draft, activeRevision: active.revision) { throw .staleDraft(stale) }
-        do {
-            return try active.applying(draft.edits)
-        } catch {
-            if case .bounds(let limit) = error { throw .preview(.bounds(limit)) }
-            throw .preview(.draftDoesNotApply(error))
-        }
+        do { return try WiringDraftGraph.make(active: active, draft: draft).graph } catch { throw .preview(error) }
     }
 
     /// Every destination of `source` in the draft's graph, grouped by connection class.
@@ -48,7 +40,12 @@ enum WiringDraftComposer {
             conversion: request.conversion, feedback: request.feedback
         )
         let edits = draft.edits + [.connect(edge)]
-        do { try GraphEdit.validateBatch(edits) } catch { throw .batchInvalid(error) }
+        do {
+            try GraphEdit.validateBatch(edits)
+        } catch {
+            if case .bounds(let limit) = error { throw .preview(.bounds(limit)) }
+            throw .batchInvalid(error)
+        }
         do {
             _ = try active.applying(edits)
         } catch {

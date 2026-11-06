@@ -86,19 +86,10 @@ struct WiringReviewDiff: Hashable, Sendable {
     /// Diffs `active` against `active.applying(draft.edits)`. The draft must name
     /// this graph and revision; it is never rebased.
     static func make(active: GraphDocument, draft: DraftEdits) throws(WiringPreviewRefusal) -> WiringReviewDiff {
-        guard draft.graph == active.id else { throw .draftGraphMismatch(draft: draft.graph, active: active.id) }
-        guard draft.baseRevision == active.revision else {
-            throw .draftBaseMismatch(draft: draft.baseRevision, active: active.revision)
-        }
-        let before = try uniqueNodes(active)
-        let beforeEdges = try uniqueEdges(active)
-        let candidate: GraphDocument
-        do {
-            candidate = try active.applying(draft.edits)
-        } catch {
-            if case .bounds(let limit) = error { throw .bounds(limit) }
-            throw .draftDoesNotApply(error)
-        }
+        let checked = try WiringDraftGraph.make(active: active, draft: draft)
+        let before = checked.activeNodes
+        let beforeEdges = checked.activeEdges
+        let candidate = checked.graph
         let afterIDs = Set(candidate.nodes.map(\.id))
         let afterEdgeIDs = Set(candidate.edges.map(\.id))
         let moved = Set(draft.edits.compactMap { edit -> NodeID? in
@@ -149,6 +140,38 @@ struct WiringReviewDiff: Hashable, Sendable {
         return WiringReviewChangeKind.allCases.compactMap { kind in
             guard let rows = byKind[kind], !rows.isEmpty else { return nil }
             return WiringReviewGroup(kind: kind, changes: rows.sorted { $0.sortID < $1.sortID })
+        }
+    }
+}
+
+/// The draft's graph, `active.applying(draft.edits)`, and the active graph's nodes and edges by ID,
+/// checked once for the review diff and the composer. Refusals, in order: the draft edits another
+/// graph (`draftGraphMismatch`); it is based on another revision (`draftBaseMismatch`, never
+/// rebased); the active graph repeats a node or edge ID (`ambiguousNode` / `ambiguousEdge`); the
+/// edits exceed `ProjectGraphLimits` (`bounds`) or do not apply (`draftDoesNotApply`).
+struct WiringDraftGraph {
+    let activeNodes: [NodeID: GraphNode]
+    let activeEdges: [EdgeID: GraphEdge]
+    let graph: GraphDocument
+
+    private init(activeNodes: [NodeID: GraphNode], activeEdges: [EdgeID: GraphEdge], graph: GraphDocument) {
+        self.activeNodes = activeNodes
+        self.activeEdges = activeEdges
+        self.graph = graph
+    }
+
+    static func make(active: GraphDocument, draft: DraftEdits) throws(WiringPreviewRefusal) -> WiringDraftGraph {
+        guard draft.graph == active.id else { throw .draftGraphMismatch(draft: draft.graph, active: active.id) }
+        guard draft.baseRevision == active.revision else {
+            throw .draftBaseMismatch(draft: draft.baseRevision, active: active.revision)
+        }
+        let nodes = try uniqueNodes(active)
+        let edges = try uniqueEdges(active)
+        do {
+            return WiringDraftGraph(activeNodes: nodes, activeEdges: edges, graph: try active.applying(draft.edits))
+        } catch {
+            if case .bounds(let limit) = error { throw .bounds(limit) }
+            throw .draftDoesNotApply(error)
         }
     }
 

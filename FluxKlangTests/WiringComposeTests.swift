@@ -193,6 +193,10 @@ struct WiringComposeTests {
             try Compose.compose(Compose.request("edg.verb-echo", ("nod.verb", "out"), ("nod.echo", "in"),
                                                 conversion: identity, feedback: Fixture.feedback))
         }
+        #expect(throws: WiringComposeRefusal.conversionNotNeeded(identity)) {
+            try Compose.compose(Compose.request("edg.keys-mains", ("nod.keys", "out"), ("nod.mains", "in"),
+                                                conversion: identity, feedback: Fixture.feedback))
+        }
     }
 
     @Test func structuralClassesHaveDistinctRefusalsEvenWithAttributes() {
@@ -236,22 +240,63 @@ struct WiringComposeTests {
         var older = Fixture.graph
         older.revision = Compose.revision(42)
         let draft = Compose.draft(on: older)
-        let report = try #require(WiringStaleDraft.check(draft, activeRevision: active.revision))
+        let report = try #require(WiringStaleDraft.check(draft, active: active))
         #expect(report.description == "Based on rev 42; active is 43")
         #expect(report.draft == Compose.draftID)
         #expect(report.baseRevision == Compose.revision(42) && report.activeRevision == Compose.revision(43))
-        #expect(WiringStaleDraft.check(draft, activeRevision: Compose.revision(42)) == nil)
+        #expect(report.refusal == .draftBaseMismatch(draft: Compose.revision(42), active: Compose.revision(43)))
+        #expect(WiringStaleDraft.check(draft, active: older) == nil)
+        // One refusal shape for the same stale draft: compose, destinations and the review diff agree.
         let request = Compose.request("edg.keys-mains", ("nod.keys", "out"), ("nod.mains", "in"))
-        #expect(throws: WiringComposeRefusal.staleDraft(report)) {
+        #expect(throws: WiringComposeRefusal.preview(report.refusal)) {
             try WiringDraftComposer.compose(request, into: draft, active: active)
         }
-        // A draft based on a later revision than the active one is stale too.
-        let ahead = try #require(WiringStaleDraft.check(draft, activeRevision: Compose.revision(41)))
-        #expect(ahead.description == "Based on rev 42; active is 41")
-        #expect(throws: WiringComposeRefusal.staleDraft(report)) {
+        #expect(throws: WiringComposeRefusal.preview(report.refusal)) {
             try WiringDraftComposer.destinations(from: request.from, active: active, draft: draft)
         }
+        #expect(throws: report.refusal) { try WiringReviewDiff.make(active: active, draft: draft) }
+        // A draft based on a later revision than the active one is stale too.
+        var behind = active
+        behind.revision = Compose.revision(41)
+        let ahead = try #require(WiringStaleDraft.check(draft, active: behind))
+        #expect(ahead.description == "Based on rev 42; active is 41")
+        #expect(throws: WiringComposeRefusal.preview(ahead.refusal)) {
+            try WiringDraftComposer.compose(request, into: draft, active: behind)
+        }
         #expect(draft.baseRevision == Compose.revision(42))
+    }
+
+    @Test func foreignAndStaleDraftReportsGraphMismatch() {
+        var active = Fixture.graph
+        active.revision = Compose.revision(43)
+        var foreign = Compose.draft()
+        foreign.graph = Fixture.id("gph.other")
+        // Another graph's revisions are not comparable: no stale report, a graph mismatch everywhere.
+        #expect(WiringStaleDraft.check(foreign, active: active) == nil)
+        let mismatch = WiringPreviewRefusal.draftGraphMismatch(draft: Fixture.id("gph.other"), active: Fixture.graphID)
+        let request = Compose.request("edg.keys-mains", ("nod.keys", "out"), ("nod.mains", "in"))
+        #expect(throws: WiringComposeRefusal.preview(mismatch)) {
+            try WiringDraftComposer.compose(request, into: foreign, active: active)
+        }
+        #expect(throws: WiringComposeRefusal.preview(mismatch)) {
+            try WiringDraftComposer.destinations(from: request.from, active: active, draft: foreign)
+        }
+        #expect(throws: mismatch) { try WiringReviewDiff.make(active: active, draft: foreign) }
+    }
+
+    @Test func repeatedActiveNodeIDIsRefusedUpFront() {
+        // A later node repeats nod.mains: the composer refuses the graph as the review diff does.
+        let active = Fixture.with([], nodes: [Fixture.stereo("nod.mains", at: 20)])
+        let draft = Compose.draft(on: active)
+        let request = Compose.request("edg.keys-echo", ("nod.keys", "out"), ("nod.echo", "in"))
+        let refusal = WiringPreviewRefusal.ambiguousNode(Fixture.id("nod.mains"))
+        #expect(throws: WiringComposeRefusal.preview(refusal)) {
+            try Compose.compose(request, into: draft, active: active)
+        }
+        #expect(throws: WiringComposeRefusal.preview(refusal)) {
+            try WiringDraftComposer.destinations(from: request.from, active: active, draft: draft)
+        }
+        #expect(throws: refusal) { try WiringReviewDiff.make(active: active, draft: draft) }
     }
 
     @Test func foreignGraphAndDraftsThatDoNotApplyAreRefused() {
@@ -298,9 +343,26 @@ struct WiringComposeTests {
         // N − 1 earlier edits plus the connect is exactly N: accepted.
         let composed = try Compose.compose(request, into: Compose.draft(Array(adds.dropLast())))
         #expect(composed.edits.count == ProjectGraphLimits.edits)
-        // N earlier edits plus the connect is N + 1: the batch is refused with the underlying error.
-        #expect(throws: WiringComposeRefusal.batchInvalid(.bounds(limit))) {
+        // N earlier edits plus the connect is N + 1: every bound is the one bounds refusal.
+        #expect(throws: WiringComposeRefusal.preview(.bounds(limit))) {
             try Compose.compose(request, into: Compose.draft(adds))
+        }
+    }
+
+    @Test func connectAtTheEdgeBoundIsRefusedWithBounds() {
+        // Dangling padding fills the graph to exactly the edge bound; the graph itself is within bounds.
+        let padding = (Fixture.graph.edges.count..<ProjectGraphLimits.edges).map { index in
+            Fixture.edge("edg.pad.\(index)", Fixture.address("nod.gone", "out"), Fixture.address("nod.gone", "in"))
+        }
+        let full = Fixture.with(padding)
+        #expect(full.edges.count == ProjectGraphLimits.edges)
+        let limit = ProjectGraphLimitError.exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges)
+        let request = Compose.request("edg.keys-mains", ("nod.keys", "out"), ("nod.mains", "in"))
+        #expect(throws: WiringComposeRefusal.preview(.bounds(limit))) {
+            try Compose.compose(request, into: Compose.draft(on: full), active: full)
+        }
+        #expect(throws: WiringComposeRefusal.preview(.bounds(limit))) {
+            try WiringDraftComposer.destinations(from: request.from, active: full, draft: Compose.draft(on: full))
         }
     }
 
