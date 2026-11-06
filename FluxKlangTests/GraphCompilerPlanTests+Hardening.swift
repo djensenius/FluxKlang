@@ -206,6 +206,64 @@ extension GraphCompilerPlanTests {
     }
 
     @Test
+    func endpointRolesMustBeUniqueAcrossLists() throws {
+        let valid = try Self.twoInputTwoOutputPlan()
+        let request = try Self.request(frames: 1)
+        let baseline = Self.scheduleDraft(valid)
+        #expect(try RoutingSchedule.make(draft: baseline, request: request) == valid)
+
+        var draft = baseline
+        let inputRole = valid.inputs[0].endpoint.role
+        draft.outputs[0] = Self.replacingRole(valid.outputs[0], with: inputRole)
+        #expect(throws: RoutingScheduleRefusal.duplicateRoleBinding(inputRole)) {
+            try RoutingSchedule.make(draft: draft, request: request)
+        }
+        draft.outputs[0] = valid.outputs[0]
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+
+        let repeatedInputRole = valid.inputs[0].endpoint.role
+        draft.inputs[1] = Self.replacingRole(valid.inputs[1], with: repeatedInputRole)
+        #expect(throws: RoutingScheduleRefusal.duplicateRoleBinding(repeatedInputRole)) {
+            try RoutingSchedule.make(draft: draft, request: request)
+        }
+        draft.inputs[1] = valid.inputs[1]
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+
+        let repeatedOutputRole = valid.outputs[0].endpoint.role
+        draft.outputs[1] = Self.replacingRole(valid.outputs[1], with: repeatedOutputRole)
+        #expect(throws: RoutingScheduleRefusal.duplicateRoleBinding(repeatedOutputRole)) {
+            try RoutingSchedule.make(draft: draft, request: request)
+        }
+        draft.outputs[1] = valid.outputs[1]
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+    }
+
+    @Test
+    func scaleOperationPayloadsAreValidated() throws {
+        let request = try Self.request()
+        let gainID = NodeID(validated: "budget.gain")
+        let valid = try RoutingScheduleBuilder.build(Self.gainGraph(0.5), request: request)
+        let stepIndex = try #require(valid.steps.firstIndex { $0.node == gainID })
+        let step = valid.steps[stepIndex]
+        #expect(step.operation == .scale(Float(0.5)))
+        var draft = Self.scheduleDraft(valid)
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+
+        let invalidCoefficients: [Float] = [
+            .nan, .infinity, -.infinity, .zero, -.zero, -1,
+            Float.leastNonzeroMagnitude, Float(16).nextUp
+        ]
+        for coefficient in invalidCoefficients {
+            draft.steps[stepIndex] = Self.replacingOperation(step, with: .scale(coefficient))
+            #expect(throws: RoutingScheduleRefusal.invalidGain(gainID)) {
+                try RoutingSchedule.make(draft: draft, request: request)
+            }
+        }
+        draft.steps[stepIndex] = step
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+    }
+
+    @Test
     func silentConversionRowsBuildAndPreserveOtherFanInTerms() throws {
         let (silentGraph, _) = Self.conversionGraph(map: [[0], []])
         let silentPlan = try RoutingScheduleBuilder.build(silentGraph, request: Self.request(frames: 1))
@@ -276,6 +334,53 @@ extension GraphCompilerPlanTests {
 
     static func replacingDelayed(_ line: RoutingDelayLine, with slot: RoutingSlot) -> RoutingDelayLine {
         RoutingDelayLine(cut: line.cut, source: line.source, delayed: slot, storage: line.storage)
+    }
+
+    static func replacingRole(_ endpoint: RoutingEndpoint, with role: RoleID) -> RoutingEndpoint {
+        let value = endpoint.endpoint
+        return RoutingEndpoint(
+            endpoint: AudioRoutingEndpoint(
+                node: value.node, port: value.port, role: role, channels: value.channels,
+                firstChannel: value.firstChannel
+            ),
+            slot: endpoint.slot
+        )
+    }
+
+    static func replacingOperation(_ step: RoutingStep, with operation: RoutingOperation) -> RoutingStep {
+        RoutingStep(
+            node: step.node, level: step.level, operation: operation, output: step.output,
+            rows: step.rows, mixOrder: step.mixOrder
+        )
+    }
+
+    static func twoInputTwoOutputPlan() throws -> RoutingSchedule {
+        let inputAID = NodeID(validated: "hardening.roles.input.a")
+        let inputBID = NodeID(validated: "hardening.roles.input.b")
+        let outputAID = NodeID(validated: "hardening.roles.output.a")
+        let outputBID = NodeID(validated: "hardening.roles.output.b")
+        let inputAPort = PortID(validated: "hardening.roles.input.a.port")
+        let inputBPort = PortID(validated: "hardening.roles.input.b.port")
+        let outputAPort = PortID(validated: "hardening.roles.output.a.port")
+        let outputBPort = PortID(validated: "hardening.roles.output.b.port")
+        let inputA = Self.roleInput(inputAID, port: inputAPort, role: RoleID(validated: "hardening.roles.a"))
+        let inputB = Self.roleInput(inputBID, port: inputBPort, role: RoleID(validated: "hardening.roles.b"))
+        let outputA = Self.roleOutput(outputAID, port: outputAPort, role: RoleID(validated: "hardening.roles.c"))
+        let outputB = Self.roleOutput(outputBID, port: outputBPort, role: RoleID(validated: "hardening.roles.d"))
+        let edges = [
+            GraphEdge(
+                id: EdgeID(validated: "hardening.roles.edge.a"),
+                from: PortAddress(node: inputAID, port: inputAPort),
+                to: PortAddress(node: outputAID, port: outputAPort)
+            ),
+            GraphEdge(
+                id: EdgeID(validated: "hardening.roles.edge.b"),
+                from: PortAddress(node: inputBID, port: inputBPort),
+                to: PortAddress(node: outputBID, port: outputBPort)
+            )
+        ]
+        let graph = GraphDocument(id: Self.graphID, nodes: [inputA, inputB, outputA, outputB], edges: edges)
+        return try RoutingScheduleBuilder.build(graph, request: Self.request(frames: 1))
     }
 
     static func conversionGraph(

@@ -49,11 +49,13 @@ struct RoutingSchedule: Equatable, Sendable {
         let result = try account(draft, blockFrames: request.blockFrames, scratchFloats: cursor)
         try enforce(result, request: request)
         try verifyStepShapes(draft)
+        try verifyStepOperations(draft.steps)
         try verifyCausality(draft, readers: readableSlots(draft))
         let inputByNode = Dictionary(uniqueKeysWithValues: draft.inputs.map { ($0.endpoint.node, $0.slot) })
         let outputByNode = Dictionary(uniqueKeysWithValues: draft.steps.map { ($0.node, $0.output) })
         try verifyEndpoints(draft.inputs, expected: inputByNode, resource: .inputChannels)
         try verifyEndpoints(draft.outputs, expected: outputByNode, resource: .outputChannels)
+        try verifyUniqueEndpointRoles(inputs: draft.inputs, outputs: draft.outputs)
         return result.accounting
     }
 
@@ -97,6 +99,16 @@ struct RoutingSchedule: Equatable, Sendable {
                 throw .inconsistentSchedule(.rowShape)
             }
             previous = (step.level, step.node)
+        }
+    }
+
+    private static func verifyStepOperations(_ steps: [RoutingStep]) throws(RoutingScheduleRefusal) {
+        for step in steps {
+            if case .scale(let gain) = step.operation {
+                guard GraphNode.isValidLinearGain(Double(gain)) else {
+                    throw .invalidGain(step.node)
+                }
+            }
         }
     }
 
@@ -208,6 +220,28 @@ struct RoutingSchedule: Equatable, Sendable {
             }
             previous = item.endpoint.node
             channel = try RoutingMath.add(channel, item.endpoint.channels, resource: resource)
+        }
+    }
+
+    private static func verifyUniqueEndpointRoles(
+        inputs: [RoutingEndpoint], outputs: [RoutingEndpoint]
+    ) throws(RoutingScheduleRefusal) {
+        var inputRoles: Set<RoleID> = []
+        for endpoint in inputs {
+            guard inputRoles.insert(endpoint.endpoint.role).inserted else {
+                throw .duplicateRoleBinding(endpoint.endpoint.role)
+            }
+        }
+        var outputRoles: Set<RoleID> = []
+        for endpoint in outputs {
+            guard outputRoles.insert(endpoint.endpoint.role).inserted else {
+                throw .duplicateRoleBinding(endpoint.endpoint.role)
+            }
+        }
+        for endpoint in inputs {
+            guard !outputRoles.contains(endpoint.endpoint.role) else {
+                throw .duplicateRoleBinding(endpoint.endpoint.role)
+            }
         }
     }
 
