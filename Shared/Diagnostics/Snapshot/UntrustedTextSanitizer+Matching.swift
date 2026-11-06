@@ -50,7 +50,47 @@ extension UntrustedTextSanitizer {
 
         let text: String
         let isPrefix: Bool
+        /// The spaces of `text` that replaced a control or separator (`Scan.separators`):
+        /// ordinals among its U+0020 scalars, ascending and in range.
+        let separators: [Int]
+        /// The form of `text` that is matched.
+        let form: MatchForm
+        /// The form of `text` without its `separators`, matched against labels without
+        /// theirs; `form` when there are none, and nil when that text is shorter than
+        /// `minimumRedactedBytes`.
+        let compactForm: MatchForm?
+
         /// The canonical caseless form of `text` (`caselessForm`), the form that is matched.
+        var folded: [Unicode.Scalar] { form.folded }
+        /// See `MatchForm.core`.
+        var core: Range<Int> { form.core }
+
+        init(text: String, isPrefix: Bool, separators: [Int] = []) {
+            self.text = text
+            self.isPrefix = isPrefix
+            let spaces = text.unicodeScalars.count { $0 == " " }
+            self.separators = Set(separators).filter { (0..<spaces).contains($0) }.sorted()
+            form = MatchForm(text.unicodeScalars)
+            let compact = UntrustedTextSanitizer.dropping(self.separators, from: text)
+            compactForm = self.separators.isEmpty ? form
+                : compact.utf8.count < minimumRedactedBytes ? nil : MatchForm(compact.unicodeScalars)
+        }
+
+        /// Terms are equal when their prepared text and `isPrefix` are, so preparing a
+        /// prepared string returns an equal term; `separators` only add a form to match.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.text == rhs.text && lhs.isPrefix == rhs.isPrefix
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(text)
+            hasher.combine(isPrefix)
+        }
+    }
+
+    /// A text in the canonical caseless form it is matched in.
+    struct MatchForm: Hashable, Sendable {
+        /// The canonical caseless form of the text (`caselessForm`).
         let folded: [Unicode.Scalar]
         /// The indices of `folded` from its first to its last starter (`matchClass` 0),
         /// matched in place. The marks before and after it are matched per class
@@ -58,10 +98,8 @@ extension UntrustedTextSanitizer {
         /// when `folded` has no starter.
         let core: Range<Int>
 
-        init(text: String, isPrefix: Bool) {
-            self.text = text
-            self.isPrefix = isPrefix
-            let folded = UntrustedTextSanitizer.caselessForm(text.unicodeScalars)
+        init(_ text: some Sequence<Unicode.Scalar>) {
+            let folded = UntrustedTextSanitizer.caselessForm(text)
             let starters = folded.indices.filter { UntrustedTextSanitizer.matchClass(folded[$0]) == 0 }
             self.folded = folded
             core = (starters.first ?? 0)..<((starters.last ?? -1) + 1)
@@ -86,6 +124,11 @@ extension UntrustedTextSanitizer {
     /// Returns nil only for a complete string shorter than `minimumRedactedBytes`.
     static func withheldTerm(_ raw: String) -> WithheldTerm? {
         let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes, trimmed: true)
+        return withheldTerm(filtered)
+    }
+
+    /// Builds a term from the shared trimmed scan also used by `RefusedIdentities`.
+    static func withheldTerm(_ filtered: Scan) -> WithheldTerm? {
         var text = sourceForm(filtered.text)
         var isPrefix = !filtered.isComplete
         // Trailing whitespace kept within the limit must not push a complete string over the
@@ -98,24 +141,47 @@ extension UntrustedTextSanitizer {
         if isPrefix, !text.isEmpty { text.removeLast() }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.utf8.count >= minimumRedactedBytes else { return isPrefix ? .failClosed : nil }
-        return WithheldTerm(text: text, isPrefix: isPrefix)
+        return WithheldTerm(text: text, isPrefix: isPrefix, separators: filtered.separators)
     }
 
-    /// The distinct terms for `raw` strings, sorted for determinism.
+    /// The distinct terms for `raw` strings, sorted for determinism. Equal terms with
+    /// different `separators` are all kept, since each is also matched without its own.
     static func withheldTerms(_ raw: [String]) -> [WithheldTerm] {
-        Set(raw.compactMap(withheldTerm)).sorted { lhs, rhs in
-            lhs.text != rhs.text ? lhs.text < rhs.text : !lhs.isPrefix && rhs.isPrefix
+        let scans = raw.map {
+            filterScalars($0.unicodeScalars, keeping: maximumWithheldBytes, trimmed: true)
         }
+        return withheldTerms(scans)
+    }
+
+    /// Prepares terms from scans already shared with the identity-form pipeline.
+    static func withheldTerms(_ scans: [Scan]) -> [WithheldTerm] {
+        let sorted = scans.compactMap(withheldTerm).sorted { lhs, rhs in
+            if lhs.text != rhs.text { return lhs.text < rhs.text }
+            if lhs.isPrefix != rhs.isPrefix { return !lhs.isPrefix }
+            return lhs.separators.lexicographicallyPrecedes(rhs.separators)
+        }
+        var terms: [WithheldTerm] = []
+        for term in sorted where terms.last != term || terms.last?.separators != term.separators {
+            terms.append(term)
+        }
+        return terms
     }
 
     /// Redacts withheld terms found in the source form of `display`. When anything
     /// is withheld the result is the redacted source form; otherwise `display` is
     /// unchanged and keeps its joiners and presentation selectors (so an emoji
     /// family loses them only when the label also contains a withheld string).
+    ///
+    /// `separators` are the spaces of `display` that replaced a control or separator
+    /// (`Scan.separators`); they keep their ordinals in the source form, because
+    /// normalization neither creates nor removes U+0020.
     static func redactMatchForm(
-        of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool
+        of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int] = []
     ) -> Result {
-        let redacted = redact(sourceForm(display), withheld: withheld, marker: marker, scanIsComplete: scanIsComplete)
+        let redacted = redact(
+            sourceForm(display), withheld: withheld, marker: marker, scanIsComplete: scanIsComplete,
+            separators: separators
+        )
         return redacted.changed ? redacted : (display, false)
     }
 
@@ -125,16 +191,31 @@ extension UntrustedTextSanitizer {
     /// result therefore does not depend on term order, and no replacement can hide
     /// another term or the scan-cut tail.
     ///
+    /// A control or separator only splits a secret into two words, so the text is also
+    /// matched without its `separators` (ordinals among its U+0020 scalars), against
+    /// every term without its own (`WithheldTerm.compactForm`). Its ranges are added, so
+    /// this only withholds more: `SN-1\u{2028}2345` is withheld for `SN-12345`, and
+    /// `SN-12345` for a withheld `SN-1\n2345`.
+    ///
     /// Accepted limit: only whole terms are found. A partial quote of a secret,
     /// short or long (for example the first 300 bytes of a 2,000-byte secret,
     /// shorter than its 1,024-byte prefix term), is not redacted, except in the
     /// withheld tail of a scan-cut label.
     static func redact(
-        _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool = true
+        _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool = true,
+        separators: [Int] = []
     ) -> Result {
         let scalars = Array(text.unicodeScalars)
         let map = CaselessMap(text)
-        let ranges = merge(withheldRanges(in: map, terms: withheld, scanIsComplete: scanIsComplete))
+        var found = withheldRanges(in: map, terms: withheld, scanIsComplete: scanIsComplete)
+        if separators.isEmpty {
+            let split = withheld.filter { !$0.separators.isEmpty }
+            found += withheldRanges(in: map, terms: split, scanIsComplete: scanIsComplete, compact: true)
+        } else {
+            let compact = CaselessMap(text, dropping: separators)
+            found += withheldRanges(in: compact, terms: withheld, scanIsComplete: scanIsComplete, compact: true)
+        }
+        let ranges = merge(found)
         guard !ranges.isEmpty else { return (text, false) }
         var result = String.UnicodeScalarView()
         var cursor = 0
@@ -177,22 +258,30 @@ extension UntrustedTextSanitizer {
     ///   scan limit (at least 4,096 kept scalars, far past the default 128-byte label).
     ///   Finding the run is one backward walk, linear in the text.
     ///
+    /// With `compact`, each term's `compactForm` is matched instead (a term without one is
+    /// skipped), in a map that may hold no scalars (a text of dropped separators only).
+    ///
     /// Cost: each term is tried at every caseless position, O(n·m) for n caseless
     /// text scalars and m caseless term scalars. n is linear in the scan limit
     /// (a scalar folds to at most three and NFD expands it by a bounded factor) and
     /// m in `maximumWithheldBytes`. Per term, the edge checks add O(n) for the runs and
-    /// O(m) per match, within that bound.
-    static func withheldRanges(in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool) -> [Range<Int>] {
+    /// O(m) per match, within that bound. The compact pass at most doubles it.
+    static func withheldRanges(
+        in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool, compact: Bool = false
+    ) -> [Range<Int>] {
         guard map.sourceCount > 0 else { return [] }
         if terms.contains(.failClosed) { return [0..<map.sourceCount] }
         var ranges: [Range<Int>] = []
-        for term in terms where !term.folded.isEmpty {
-            for match in occurrences(of: term, in: map.scalars, firstOnly: term.isPrefix) {
+        let forms = terms.map { compact ? $0.compactForm : $0.form }
+        for (term, form) in zip(terms, forms) {
+            guard let form, !form.folded.isEmpty else { continue }
+            for match in occurrences(of: form, in: map.scalars, firstOnly: term.isPrefix) {
                 let end = term.isPrefix ? map.sourceCount : map.graphemeEnd[match.upperBound - 1]
                 ranges.append(map.graphemeStart[match.lowerBound]..<end)
             }
         }
-        if !scanIsComplete, let longest = terms.map(\.folded.count).max(), longest > 1 {
+        if !scanIsComplete, !map.scalars.isEmpty, let longest = forms.compactMap({ $0?.folded.count }).max(),
+           longest > 1 {
             let tail = runStart(before: map.scalars.count, in: map.scalars)
             let first = max(0, tail - (longest - 1))
             ranges.append(map.graphemeStart[first]..<map.sourceCount)
@@ -215,7 +304,7 @@ extension UntrustedTextSanitizer {
     /// `withheldRanges`). This never misses a canonically caseless-equivalent placement of
     /// the edges; it may over-match (over-redact) around a real `ι`, which `matchClass`
     /// counts as a mark.
-    static func occurrences(of term: WithheldTerm, in text: [Unicode.Scalar], firstOnly: Bool) -> [Range<Int>] {
+    static func occurrences(of term: MatchForm, in text: [Unicode.Scalar], firstOnly: Bool) -> [Range<Int>] {
         let core = term.folded[term.core]
         guard let first = core.first else { return markRuns(holding: term.folded[...], in: text, firstOnly: firstOnly) }
         guard core.count <= text.count else { return [] }
@@ -319,73 +408,4 @@ extension UntrustedTextSanitizer {
         }
         return merged
     }
-
-    /// The canonical caseless form NFD(fold(NFD(text))) of Unicode D145, the one
-    /// form both terms and labels are matched in. `fold` is full case folding.
-    static func caselessForm(_ text: some Sequence<Unicode.Scalar>) -> [Unicode.Scalar] {
-        let scalars = Array(text)
-        if scalars.allSatisfy(\.isASCII) { return scalars.flatMap(fold) }
-        let decomposed = String(String.UnicodeScalarView(scalars)).decomposedStringWithCanonicalMapping
-        let folded = String.UnicodeScalarView(decomposed.unicodeScalars.flatMap(fold))
-        return Array(String(folded).decomposedStringWithCanonicalMapping.unicodeScalars)
-    }
-
-    /// The caseless form of a source text, with every caseless scalar mapped to
-    /// the source scalar range of the grapheme that contains it.
-    ///
-    /// It is built grapheme by grapheme, which equals the caseless form of the
-    /// complete text: NFD only reorders runs of nonstarters (ccc ≠ 0), and every
-    /// nonstarter extends the grapheme before it except after a control, line or
-    /// paragraph separator, which `filterScalars` has replaced with a space. Case
-    /// folding is per scalar and its output is already NFD; only U+0345 changes
-    /// class (240 to ι), and nothing it could reorder past follows it. Checked over
-    /// every assigned scalar on this toolchain; `caselessMapMatchesTheWholeText`
-    /// pins it for the test corpus.
-    struct CaselessMap {
-        private(set) var scalars: [Unicode.Scalar] = []
-        private(set) var graphemeStart: [Int] = []
-        private(set) var graphemeEnd: [Int] = []
-        private(set) var sourceCount = 0
-
-        init(_ text: String) {
-            for grapheme in text {
-                let width = grapheme.unicodeScalars.count
-                let form = UntrustedTextSanitizer.caselessForm(grapheme.unicodeScalars)
-                scalars.append(contentsOf: form)
-                graphemeStart.append(contentsOf: repeatElement(sourceCount, count: form.count))
-                graphemeEnd.append(contentsOf: repeatElement(sourceCount + width, count: form.count))
-                sourceCount += width
-            }
-        }
-    }
-
-    /// Full case folding per scalar, the same function for terms and labels: the
-    /// lowercase mapping of the uppercase mapping, repeated to a fixed point (at most
-    /// `maximumFoldRounds`). One round is not enough: `ẞ` gives `ß`, and only the
-    /// second round gives `ss`. Lengths may change, which is why matches are mapped
-    /// back through a source index.
-    ///
-    /// Checked against CaseFolding.txt (statuses C and F) over every scalar the
-    /// toolchain assigns: two scalars fold equal here exactly when they do under C+F,
-    /// except that dotless `ı` also folds with `i` (over-redaction only). Scalars the
-    /// toolchain leaves unassigned are removed by `filterScalars` before matching.
-    /// `String.folding(options: .caseInsensitive)` was not used: per character it
-    /// leaves U+1C80–U+1C88 unfolded, which C+F folds to Cyrillic lowercase.
-    static func fold(_ scalar: Unicode.Scalar) -> [Unicode.Scalar] {
-        if scalar.isASCII {
-            let value = UInt8(scalar.value)
-            return [Unicode.Scalar((65...90).contains(value) ? value + 32 : value)]
-        }
-        var folding = [scalar]
-        for _ in 0..<maximumFoldRounds {
-            let next = folding.flatMap(\.properties.uppercaseMapping.unicodeScalars)
-                .flatMap(\.properties.lowercaseMapping.unicodeScalars)
-            if next == folding { break }
-            folding = next
-        }
-        return folding
-    }
-
-    /// Every scalar reaches its fixed point within two rounds; three leaves a margin.
-    static let maximumFoldRounds = 3
 }

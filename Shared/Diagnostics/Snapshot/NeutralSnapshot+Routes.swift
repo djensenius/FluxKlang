@@ -186,6 +186,11 @@ struct RefusedIdentities {
         let filtered = UntrustedTextSanitizer.filterScalars(
             raw.unicodeScalars, keeping: maximumIdentityScalars, trimmed: true
         )
+        return identityForm(filtered)
+    }
+
+    /// Builds an identity form from the same trimmed scan used to prepare its withheld term.
+    static func identityForm(_ filtered: UntrustedTextSanitizer.Scan) -> IdentityForm {
         let source = UntrustedTextSanitizer.sourceForm(filtered.text).trimmingCharacters(in: .whitespacesAndNewlines)
         if source.unicodeScalars.count > maximumIdentityFormBytes { return .tooLong }
         guard filtered.isComplete else { return .unknown }

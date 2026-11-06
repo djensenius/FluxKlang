@@ -12,10 +12,6 @@ enum UntrustedTextSanitizer {
     typealias Result = (text: String, changed: Bool)
 
     static let maximumScalarsPerGrapheme = 8
-    /// Hangul fillers, halfwidth Hangul filler, the blank Braille pattern, the Khitan
-    /// small script filler (a combining mark, not default-ignorable) and the musical
-    /// null notehead (So) render as nothing.
-    static let blankLookalikes: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x1D159]
     static let zeroWidthJoiner: Unicode.Scalar = "\u{200D}"
     static let zeroWidthNonJoiner: Unicode.Scalar = "\u{200C}"
 
@@ -24,6 +20,16 @@ enum UntrustedTextSanitizer {
         let changed: Bool
         /// False when the kept-scalar limit stopped the scan before the end of the input.
         let isComplete: Bool
+        /// The spaces that replaced a control, line or paragraph separator, as ordinals
+        /// among the U+0020 scalars of `text` (ascending). Matching also tries the text
+        /// without them, so `SN-1\u{2028}2345` is withheld for `SN-12345`.
+        let separators: [Int]
+    }
+
+    /// Work done by `filterScalars`, counted so tests can pin the ASCII-space precheck.
+    struct ScanWork {
+        /// Scalars classified by `disposition`; an ASCII space is kept without it.
+        var dispositions = 0
     }
 
     private enum Disposition {
@@ -64,37 +70,57 @@ enum UntrustedTextSanitizer {
     /// at a content scalar. So surrounding whitespace never cuts the text, and kept text is
     /// still bounded. A long whitespace run is read to its end, linear as above.
     static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int, trimmed: Bool = false) -> Scan {
+        var work = ScanWork()
+        return filterScalars(scalars, keeping: limit, trimmed: trimmed, work: &work)
+    }
+
+    /// `filterScalars`, counting its work. An ASCII space, the commonest padding of a long
+    /// withheld string, is kept without classifying it (`disposition` keeps it anyway).
+    static func filterScalars(
+        _ scalars: String.UnicodeScalarView, keeping limit: Int, trimmed: Bool, work: inout ScanWork
+    ) -> Scan {
         var kept = String.UnicodeScalarView()
         var keptCount = 0
         var changed = false
+        var spaces = 0
+        var separators: [Int] = []
         var index = scalars.startIndex
         while index != scalars.endIndex {
             let scalar = scalars[index]
             let nextIndex = scalars.index(after: index)
             let next = nextIndex == scalars.endIndex ? nil : scalars[nextIndex]
-            let action = disposition(of: scalar, after: kept, before: next)
+            let action: Disposition
+            if scalar == " " {
+                action = .keep
+            } else {
+                work.dispositions += 1
+                action = disposition(of: scalar, after: kept, before: next)
+            }
             if trimmed, kept.isEmpty || keptCount >= limit, action != .remove, !isContent(scalar, action) {
                 changed = true
                 index = nextIndex
                 continue
             }
             if keptCount >= limit, action != .remove {
-                return Scan(text: String(kept), changed: changed, isComplete: false)
+                return Scan(text: String(kept), changed: changed, isComplete: false, separators: separators)
             }
             switch action {
             case .keep:
                 kept.append(scalar)
                 keptCount += isMatchIgnorable(scalar) ? 0 : 1
+                spaces += scalar == " " ? 1 : 0
             case .remove:
                 changed = true
             case .replaceWithSpace:
                 kept.append(" ")
                 keptCount += 1
                 changed = true
+                separators.append(spaces)
+                spaces += 1
             }
             index = nextIndex
         }
-        return Scan(text: String(kept), changed: changed, isComplete: true)
+        return Scan(text: String(kept), changed: changed, isComplete: true, separators: separators)
     }
 
     private static func disposition(
@@ -272,8 +298,39 @@ enum UntrustedTextSanitizer {
     /// `graphemePrefix` for display text. The kept prefix is capped again (defensive:
     /// a prefix cut at a boundary never enlarges a grapheme), which only ever removes
     /// scalars, so it still fits.
-    static func truncate(_ text: String, maximumBytes: Int) -> Result {
-        let cut = graphemePrefix(text, fittingBytes: maximumBytes)
+    ///
+    /// A cut never shows part of `marker` (`UntrustedLabel.withheldMarker`): one that
+    /// splits an occurrence moves back to the last grapheme boundary at or before the
+    /// occurrence, so the text keeps the whole marker or ends before it (`Rig [withheld]
+    /// tail` cut to 8 bytes is `Rig `, not `Rig [wit`). Literal marker text is cut alike.
+    static func truncate(_ text: String, maximumBytes: Int, marker: String) -> Result {
+        var cut = graphemePrefix(text, fittingBytes: maximumBytes)
+        if cut.changed, let start = splitOccurrence(of: marker, in: text, at: cut.text.unicodeScalars.count) {
+            cut.text = prefix(of: text, atOrBefore: start)
+        }
         return cut.changed ? (capGraphemes(cut.text).text, true) : cut
+    }
+
+    /// The scalar offset of the first occurrence of `marker` in `text` that starts before
+    /// the scalar offset `cut` and ends after it, if any.
+    private static func splitOccurrence(of marker: String, in text: String, at cut: Int) -> Int? {
+        let marker = Array(marker.unicodeScalars)
+        let scalars = Array(text.unicodeScalars)
+        return stride(from: max(0, cut - marker.count + 1), to: cut, by: 1).first { start in
+            start + marker.count <= scalars.count && scalars[start..<(start + marker.count)].elementsEqual(marker)
+        }
+    }
+
+    /// The longest prefix of `text` that ends on a grapheme boundary at or before the
+    /// scalar offset `offset`.
+    private static func prefix(of text: String, atOrBefore offset: Int) -> String {
+        var scalars = 0
+        var end = text.startIndex
+        for index in text.indices {
+            guard scalars <= offset else { break }
+            end = index
+            scalars += text[index].unicodeScalars.count
+        }
+        return String(text[..<end])
     }
 }

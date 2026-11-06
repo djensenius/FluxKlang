@@ -24,13 +24,20 @@ import Foundation
 ///    graphemes; all ranges are
 ///    merged and replaced once by `withheldMarker`. When anything is withheld the
 ///    label is the redacted source form; otherwise it keeps its allowed joiners and
-///    presentation selectors.
+///    presentation selectors. The text is also matched without the spaces that replaced
+///    a control or separator, and each term without its own, so a line break cannot
+///    split a secret (`SN-1\n2345` is withheld for `SN-12345`, and the other way round).
+///    When terms are active and the text holds a scalar Foundation does not normalize
+///    reliably (`UntrustedTextSanitizer.hasUnreliableNormalization`), the whole label
+///    is withheld instead, since its match form cannot be trusted.
 /// 3. Each grapheme of the redacted text, as Swift segments the result, is limited
 ///    to `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
 ///    anything, step 2 runs again, since dropping scalars can complete a withheld
 ///    string, and so on until stable (`settle`, bounded, failing closed).
 /// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary of
-///    the final text. If not even its first grapheme fits, the label is
+///    the final text, before any `withheldMarker` the cut would split (a cut marker
+///    such as `[with` could pass for label text). If not even its first grapheme fits,
+///    the label is
 ///    `withheldMarker` (or empty, flagged truncated, when the marker does not fit
 ///    either), never a silently empty string.
 ///
@@ -58,6 +65,11 @@ import Foundation
 /// of a withheld string, between its first and last starter or in front of its own
 /// edge marks of the same class, keep it from matching. Marks of other classes next
 /// to its edges do not.
+///
+/// Non-goal: compatibility equivalence (NFKC). A fullwidth `ＳＮ-ＡＢＣ12345` does not
+/// match `SN-ABC12345`. Labels come from device and network names, where a fullwidth
+/// copy of a serial is not a realistic leak, and folding compatibility forms would
+/// rewrite ordinary labels (ligatures, superscripts) that are shown in their match form.
 struct UntrustedLabel: Hashable, Sendable, Encodable {
     static let defaultMaximumBytes = 128
     static let withheldMarker = "[withheld]"
@@ -128,11 +140,16 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let scan = UntrustedTextSanitizer.scanLimit(maximumBytes: limit, withheld: terms.map(\.text))
         let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: scan)
         let display = filtered.text.precomposedStringWithCanonicalMapping
-        let redacted = UntrustedTextSanitizer.redactMatchForm(
-            of: display, withheld: terms, marker: withheldMarker, scanIsComplete: filtered.isComplete
-        )
+        let unreliable = !terms.isEmpty
+            && UntrustedTextSanitizer.hasUnreliableNormalization(filtered.text.unicodeScalars)
+        let redacted = unreliable
+            ? (text: withheldMarker, changed: true)
+            : UntrustedTextSanitizer.redactMatchForm(
+                of: display, withheld: terms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
+                separators: filtered.separators
+            )
         let settled = settle(redacted.text, terms: terms)
-        var cut = UntrustedTextSanitizer.truncate(settled.text, maximumBytes: limit)
+        var cut = UntrustedTextSanitizer.truncate(settled.text, maximumBytes: limit, marker: withheldMarker)
         if cut.text.isEmpty, !settled.text.isEmpty {
             // The first grapheme alone does not fit: the label is withheld, not silently emptied.
             cut = (withheldMarker.utf8.count <= limit ? withheldMarker : "", true)

@@ -357,6 +357,34 @@ extension NeutralSnapshotTests {
         #expect(!RefusedIdentities(["dev.b"], terms: []).refuses(joined))
     }
 
+    /// Assembly shares one trimmed scalar scan between the identity and term forms,
+    /// without changing complete, separator-bearing or scan-cut results.
+    @Test func assembledIdentityAndTermFormsShareOneTrimmedScan() {
+        let limit = RefusedIdentities.maximumIdentityScalars
+        let identities = [
+            "\u{0001} DEV.A\u{0007}",
+            "SN-1\n2345",
+            "DEV.IFACE-B" + String(repeating: " ", count: limit - 11) + "Z"
+        ]
+        #expect(limit == UntrustedTextSanitizer.maximumWithheldBytes)
+        for raw in identities {
+            let scan = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: limit, trimmed: true)
+            #expect(RefusedIdentities.identityForm(scan) == RefusedIdentities.identityForm(raw))
+            #expect(UntrustedTextSanitizer.withheldTerm(scan) == UntrustedTextSanitizer.withheldTerm(raw))
+        }
+
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph)
+        inputs.hardwareIdentifiers = identities
+        let assembly = NeutralSnapshotAssembly(inputs: inputs, limits: Snapshot.Limits())
+        #expect(assembly.withheld == identities.compactMap { raw in
+            RefusedIdentities.identityForm(raw).scalars.map { _ in raw }
+        }.sorted())
+        #expect(assembly.withheldForms == Set(identities.compactMap(RefusedIdentities.form)))
+        #expect(assembly.redacted == UntrustedTextSanitizer.withheldTerms(identities))
+        #expect(assembly.withheldOverflow == 1)
+        #expect(assembly.label("Rig SN-12345").text == "Rig \(UntrustedLabel.withheldMarker)")
+    }
+
     /// Bounded filtering completes at exactly `maximumIdentityScalars` kept scalars (round
     /// 12c: leading whitespace does not count). One more kept scalar after interior padding
     /// and the form is unknown: as a compared value it is refused, and as a withheld identity
@@ -364,7 +392,7 @@ extension NeutralSnapshotTests {
     /// still refuses).
     @Test func anIdentityTooLongToFilterIsCountedNotDropped() throws {
         let limit = RefusedIdentities.maximumIdentityScalars
-        let fits = String(repeating: " ", count: limit - 5) + "DEV.A"
+        let fits = "DEV.A" + String(repeating: " ", count: limit - 5)
         let over = "DEV.A" + String(repeating: " ", count: limit - 5) + "Z"
         let complete = "DEV.A" + String(repeating: " ", count: limit - 6) + "Z"
         #expect(RefusedIdentities.identityForm(fits).scalars != nil && RefusedIdentities.identityForm(over) == .unknown)
