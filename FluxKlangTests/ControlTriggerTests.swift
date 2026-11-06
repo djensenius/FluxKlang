@@ -133,6 +133,67 @@ struct ControlTriggerTests {
     }
 
     @Test
+    func rawMIDIStepsCrossThresholdsAtTheGoldenRawValues() throws {
+        // At resolution 128 raw r is r / 127: pressAt 0.5 first holds at raw 64 (63 is 0.496), and releaseAt 0.25
+        // first holds at raw 31 (32 is 0.252).
+        let fields = try Self.fields(emitsRelease: true)
+        var detector = try ControlTriggerDetector(bindings: [ControlTriggerBinding(fields)])
+        var edges: [Int: ControlTriggerAction] = [:]
+        for raw in Array(0...127) + Array((0...126).reversed()) {
+            let input = try fields.profile.decode(raw: raw)
+            if let command = try detector.handle(input, from: Self.pedal, binding: fields.id, truth: Self.truth()) {
+                edges[raw] = command.action
+            }
+        }
+        #expect(edges == [64: .press, 31: .release])
+        #expect(detector.lastSequence == 2)
+    }
+
+    @Test
+    func emitsReleaseFalseIsNormalisedToNil() throws {
+        #expect(try Self.fields(emitsRelease: false) == Self.fields(emitsRelease: nil))
+        #expect(try Self.binding(emitsRelease: false) == Self.binding())
+        #expect(try Self.fields(emitsRelease: false).emitsRelease == nil)
+        #expect(try Self.fields(emitsRelease: true).emitsRelease == true)
+        #expect(try Self.fields(emitsRelease: true) != Self.fields())
+        let wire = #"{"emitsRelease":false,"id":"bnd.trigger","mode":"momentary","pressAt":0.5,"#
+            + #""profile":{"absolute":{"resolution":128}},"releaseAt":0.25,"source":"ctl.pedal-1","#
+            + #""target":"trg.show.next"}"#
+        let decoded = try ContractCoding.decode(ControlTriggerBinding.self, from: Data(wire.utf8))
+        #expect(decoded.fields == (try Self.fields()))
+        #expect(try ContractCoding.makeEncoder().encode(decoded) == Data(wire.utf8))
+        let opted = wire.replacingOccurrences(of: #""emitsRelease":false"#, with: #""emitsRelease":true"#)
+        let optedIn = try ContractCoding.decode(ControlTriggerBinding.self, from: Data(opted.utf8))
+        #expect(optedIn.fields == (try Self.fields(emitsRelease: true)))
+        #expect(try ContractCoding.makeEncoder().encode(optedIn) == Data(opted.utf8))
+    }
+
+    @Test
+    func bindingsOnOneSourceFanOutIndependently() throws {
+        let low = try Self.binding("bnd.low", pressAt: 0.3, releaseAt: 0.1, emitsRelease: true)
+        let high = try Self.binding("bnd.high", mode: .toggle, pressAt: 0.8, releaseAt: 0.6)
+        var detector = try ControlTriggerDetector(bindings: [low, high])
+        var commands: [ControlTriggerCommand] = []
+        for position in [0.5, 0.9, 0.7, 0.5, 0.05, 0.9] {
+            for id in ["bnd.low", "bnd.high"] {
+                if let command = try Self.feed(&detector, position, id) { commands.append(command) }
+            }
+        }
+        let fired = commands.map { "\($0.binding.rawValue) \($0.action.rawValue) \($0.sequence)" }
+        #expect(fired == ["bnd.low press 1", "bnd.high switchedOn 2", "bnd.low release 3", "bnd.low press 4",
+                          "bnd.high switchedOff 5"])
+        #expect(try detector.forgetHeld(on: [Self.button]) == [])
+        #expect(detector.state(of: low.id)?.held == true)
+        #expect(detector.state(of: high.id)?.held == true)
+        let released = try detector.forgetHeld(on: [Self.pedal])
+        #expect(released.map(\.binding) == [low.id])
+        #expect(released.map(\.sequence) == [6])
+        #expect(detector.state(of: low.id)?.held == false)
+        #expect(detector.state(of: high.id)?.held == false)
+        #expect(detector.state(of: high.id)?.isOn == false)
+    }
+
+    @Test
     func momentaryReleaseIsOptInButHeldStateIsAlwaysTracked() throws {
         let id = try BindingID("bnd.trigger")
         let cases: [(Bool?, ControlTriggerAction?)] = [(nil, nil), (false, nil), (true, .release)]
@@ -155,7 +216,7 @@ struct ControlTriggerTests {
         #expect(actions == [.switchedOn, nil, nil, .switchedOff, nil, nil, .switchedOn, nil])
         #expect(detector.state(of: id)?.isOn == true)
         #expect(detector.lastSequence == 3)
-        #expect(throws: ControlTriggerRefusal.notLatch(.toggle)) { try detector.clear(id, truth: Self.truth()) }
+        #expect(throws: ControlTriggerRefusal.notLatch(.toggle)) { try detector.clear(id) }
     }
 
     @Test
@@ -165,12 +226,12 @@ struct ControlTriggerTests {
         let actions = try Self.actions(&detector, [0.9, 0, 0.9, 0, 1])
         #expect(actions == [.switchedOn, nil, nil, nil, nil])
         #expect(detector.lastSequence == 1)
-        let cleared = try detector.clear(id, truth: Self.truth())
+        let cleared = try detector.clear(id)
         #expect(cleared?.action == .switchedOff)
         #expect(cleared?.sequence == 2)
         #expect(detector.state(of: id)?.isOn == false)
         #expect(detector.state(of: id)?.held == true)
-        #expect(try detector.clear(id, truth: Self.truth()) == nil)
+        #expect(try detector.clear(id) == nil)
         #expect(detector.lastSequence == 2)
         #expect(try Self.actions(&detector, [1, 0, 0.8]) == [nil, nil, .switchedOn])
         #expect(detector.lastSequence == 3)
@@ -180,10 +241,10 @@ struct ControlTriggerTests {
     func clearIsLatchOnly() throws {
         var detector = try ControlTriggerDetector(bindings: [Self.binding()])
         #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) {
-            try detector.clear(BindingID("bnd.trigger"), truth: Self.truth())
+            try detector.clear(BindingID("bnd.trigger"))
         }
         #expect(throws: ControlTriggerRefusal.unknownBinding(try BindingID("bnd.other"))) {
-            try detector.clear(BindingID("bnd.other"), truth: Self.truth())
+            try detector.clear(BindingID("bnd.other"))
         }
     }
 }

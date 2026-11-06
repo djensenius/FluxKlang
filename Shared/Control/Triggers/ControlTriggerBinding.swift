@@ -19,7 +19,8 @@ enum ControlTriggerMode: String, Codable, Hashable, Sendable, CaseIterable {
 /// One absolute control (a button, pedal, fader or knob) bound to one trigger target. The control's normalized
 /// position is read with hysteresis: it presses when it rises to at least `pressAt` and releases only when it falls
 /// to at most `releaseAt`, so values inside the band never chatter. Both thresholds are explicit; nothing assumes
-/// a centre. `emitsRelease` (momentary only; `nil` means `false`) makes release edges commands too.
+/// a centre. `emitsRelease` (momentary only) makes release edges commands too; `false` is normalised to `nil` when
+/// built or decoded, so bindings that behave identically compare equal (a decoded `false` still round-trips).
 struct ControlTriggerBindingFields: ControlFields {
     static let knownKeys: Set<String> = [
         "id", "source", "target", "profile", "mode", "pressAt", "releaseAt", "emitsRelease"
@@ -32,7 +33,32 @@ struct ControlTriggerBindingFields: ControlFields {
     let mode: ControlTriggerMode
     let pressAt: Double
     let releaseAt: Double
-    var emitsRelease: Bool?
+    /// `true` or `nil`; never `false`.
+    let emitsRelease: Bool?
+
+    init(id: BindingID, source: ControlSourceID, target: ControlTriggerTargetID, profile: EncoderProfile,
+         mode: ControlTriggerMode, pressAt: Double, releaseAt: Double, emitsRelease: Bool? = nil) {
+        self.id = id
+        self.source = source
+        self.target = target
+        self.profile = profile
+        self.mode = mode
+        self.pressAt = pressAt
+        self.releaseAt = releaseAt
+        self.emitsRelease = emitsRelease == true ? true : nil
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(id: container.decode(BindingID.self, forKey: .id),
+                      source: container.decode(ControlSourceID.self, forKey: .source),
+                      target: container.decode(ControlTriggerTargetID.self, forKey: .target),
+                      profile: container.decode(EncoderProfile.self, forKey: .profile),
+                      mode: container.decode(ControlTriggerMode.self, forKey: .mode),
+                      pressAt: container.decode(Double.self, forKey: .pressAt),
+                      releaseAt: container.decode(Double.self, forKey: .releaseAt),
+                      emitsRelease: container.decodeIfPresent(Bool.self, forKey: .emitsRelease))
+    }
 
     func validate() throws {
         try profile.validate()

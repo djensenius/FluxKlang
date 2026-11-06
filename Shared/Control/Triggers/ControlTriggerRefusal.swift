@@ -13,11 +13,13 @@ enum ControlTriggerRefusal: Error, Hashable, Sendable {
     case unknownBinding(BindingID)
     /// The input came from another control than the binding's.
     case sourceMismatch(expected: ControlSourceID, found: ControlSourceID)
-    /// The binding's controller is not among the host's current sources (disconnected or replaced).
+    /// The binding's control source is not among the host's current sources (disconnected or replaced).
     case controllerStale(ControlSourceID)
-    /// The host does not classify the target now (for example it was removed); a class is never assumed.
+    /// The host does not classify the target now (for example it was removed); a class is never assumed. Release
+    /// edges and latch clears are exempt: they only end an action.
     case targetMissing(ControlTriggerTargetID)
-    /// Only `.live` targets fire; hazardous, safety, structural and proposal targets are refused.
+    /// Only `.live` targets fire; hazardous, safety, structural and proposal targets are refused. Release edges and
+    /// latch clears are exempt: they only end an action.
     case targetClass(ControlTriggerTargetID, ControlClass)
     /// A relative input reached an absolute trigger.
     case inputMismatch
@@ -25,15 +27,19 @@ enum ControlTriggerRefusal: Error, Hashable, Sendable {
     case inputOutOfRange(Double)
     /// Only a latch can be cleared; a toggle turns off on its own press.
     case notLatch(ControlTriggerMode)
-    /// The last sequence was `UInt64.max`; sequences saturate rather than wrap, so no further command is emitted.
+    /// Sequences saturate at `UInt64.max` rather than wrap. A press, switch-on or clear is refused unless the
+    /// sequences left also cover every release still owed (each held momentary binding with `emitsRelease`), so
+    /// releases are never refused for exhaustion.
     case sequenceExhausted
 }
 
-/// The host's current truth for firing triggers: which controllers are current and how each target is classified.
-/// The caller builds it fresh for every call; the detector never caches it, so a removed controller or a target
-/// reclassed as hazardous is judged by what the host reports now.
+/// The host's current truth for firing triggers: which control sources are current and how each target is
+/// classified. The caller rebuilds it whenever host truth changes; the detector never caches it, so a removed
+/// control source or a target reclassed as hazardous is judged by what the host reports now. Like the detector, it
+/// belongs on the control thread, never the audio thread.
 struct ControlTriggerHostTruth: Hashable, Sendable {
-    static let maximumSources = 256
+    /// Equal to `ControlTriggerDetector.maximumBindings`, so every binding may have its own current source.
+    static let maximumSources = ControlTriggerDetector.maximumBindings
     static let maximumTargets = 4096
     private let storedSources: Set<ControlSourceID>
     private let storedTargets: [ControlTriggerTargetID: ControlClass]

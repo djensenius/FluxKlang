@@ -21,6 +21,7 @@ struct ControlTriggerDetectorTests {
         #expect(first?.target == Fixture.fire)
         #expect(first?.source == Fixture.button)
         #expect(first?.action == .switchedOn)
+        #expect(first?.cause == .input)
         #expect(first?.sequence == 1)
         let second = try Fixture.feed(&detector, 0.9)
         #expect(second?.binding == pedal.id)
@@ -62,13 +63,13 @@ struct ControlTriggerDetectorTests {
         var latch = try ControlTriggerDetector(bindings: [Fixture.binding(mode: .latch)], after: .max - 1)
         #expect(try Fixture.feed(&latch, 1)?.sequence == .max)
         let latched = latch
-        #expect(throws: ControlTriggerRefusal.sequenceExhausted) { try latch.clear(Self.id, truth: Fixture.truth()) }
+        #expect(throws: ControlTriggerRefusal.sequenceExhausted) { try latch.clear(Self.id) }
         #expect(latch == latched)
         #expect(latch.state(of: Self.id)?.isOn == true)
     }
 
     @Test
-    func staleControllerIsRefusedWithoutStateChange() throws {
+    func staleControlSourceIsRefusedWithoutStateChange() throws {
         var detector = try ControlTriggerDetector(bindings: [Fixture.binding(mode: .toggle)])
         #expect(try Fixture.feed(&detector, 1)?.action == .switchedOn)
         let before = detector
@@ -81,21 +82,13 @@ struct ControlTriggerDetectorTests {
         }
         #expect(detector == before)
         #expect(detector.state(of: Self.id)?.held == true)
-        detector.forgetHeld(on: Fixture.button)
+        #expect(try detector.forgetHeld(on: [Fixture.button]) == [])
         #expect(detector == before)
-        detector.forgetHeld(on: Fixture.pedal)
+        #expect(try detector.forgetHeld(on: [Fixture.pedal]) == [])
         #expect(detector.state(of: Self.id)?.held == false)
         #expect(detector.state(of: Self.id)?.isOn == true)
         #expect(detector.lastSequence == 1)
         #expect(try Fixture.feed(&detector, 1)?.action == .switchedOff)
-    }
-
-    @Test
-    func clearDoesNotRequireACurrentController() throws {
-        var detector = try ControlTriggerDetector(bindings: [Fixture.binding(mode: .latch)])
-        #expect(try Fixture.feed(&detector, 1)?.action == .switchedOn)
-        let cleared = try detector.clear(Self.id, truth: Fixture.truth(sources: []))
-        #expect(cleared?.action == .switchedOff)
     }
 
     @Test
@@ -117,14 +110,109 @@ struct ControlTriggerDetectorTests {
         #expect(detector.lastSequence == 0)
         #expect(try Fixture.feed(&detector, 1)?.action == .switchedOn)
         let hazardous = try Fixture.truth(targets: [Fixture.next: .hazardous])
-        let latched = detector
+        let held = detector
         #expect(throws: ControlTriggerRefusal.targetClass(Fixture.next, .hazardous)) {
-            try detector.clear(Self.id, truth: hazardous)
+            try detector.handle(.absolute(normalized: 0.4), from: Fixture.pedal, binding: Self.id, truth: hazardous)
         }
-        #expect(throws: ControlTriggerRefusal.targetMissing(Fixture.next)) {
-            try detector.clear(Self.id, truth: missing)
+        #expect(detector == held)
+        // Clearing only ends an action: it needs no truth, so a hazardous or missing target cannot leave it stuck.
+        let cleared = try detector.clear(Self.id)
+        #expect(cleared?.action == .switchedOff)
+        #expect(cleared?.cause == .clear)
+        #expect(cleared?.sequence == 2)
+    }
+
+    @Test
+    func releaseEdgesSkipTheTargetChecks() throws {
+        let gone = try Fixture.truth(targets: [Fixture.fire: .live])
+        var truths = [gone]
+        for controlClass in ControlClass.allCases where controlClass != .live {
+            truths.append(try Fixture.truth(targets: [Fixture.next: controlClass]))
         }
-        #expect(detector == latched)
+        for truth in truths {
+            var detector = try ControlTriggerDetector(bindings: [Fixture.binding(emitsRelease: true)])
+            #expect(try Fixture.feed(&detector, 1)?.action == .press)
+            let release = try detector.handle(.absolute(normalized: 0), from: Fixture.pedal, binding: Self.id,
+                                              truth: truth)
+            #expect(release?.action == .release)
+            #expect(release?.cause == .input)
+            #expect(release?.sequence == 2)
+            #expect(detector.state(of: Self.id)?.held == false)
+            #expect(throws: ControlTriggerRefusal.self) {
+                try detector.handle(.absolute(normalized: 1), from: Fixture.pedal, binding: Self.id, truth: truth)
+            }
+            #expect(detector.state(of: Self.id)?.held == false)
+        }
+        var toggle = try ControlTriggerDetector(bindings: [Fixture.binding(mode: .toggle)])
+        #expect(try Fixture.feed(&toggle, 1)?.action == .switchedOn)
+        #expect(try toggle.handle(.absolute(normalized: 0), from: Fixture.pedal, binding: Self.id, truth: gone) == nil)
+        #expect(toggle.state(of: Self.id)?.held == false)
+        #expect(toggle.state(of: Self.id)?.isOn == true)
+    }
+
+    @Test
+    func forgetHeldReleasesHeldOptedInMomentaryBindingsInIDOrder() throws {
+        let bindings = [
+            try Fixture.binding("bnd.c", emitsRelease: true), try Fixture.binding("bnd.a", emitsRelease: true),
+            try Fixture.binding("bnd.b"), try Fixture.binding("bnd.d", source: Fixture.button, emitsRelease: true),
+            try Fixture.binding("bnd.t", mode: .toggle), try Fixture.binding("bnd.l", mode: .latch)
+        ]
+        var detector = try ControlTriggerDetector(bindings: bindings)
+        for binding in bindings {
+            #expect(try Fixture.feed(&detector, 1, binding.id.rawValue, source: binding.source) != nil)
+        }
+        let released = try detector.forgetHeld(on: [Fixture.pedal])
+        #expect(released.map(\.binding) == [try BindingID("bnd.a"), try BindingID("bnd.c")])
+        #expect(released.map(\.action) == [.release, .release])
+        #expect(released.map(\.cause) == [.disconnect, .disconnect])
+        #expect(released.map(\.sequence) == [7, 8])
+        #expect(released.allSatisfy { $0.source == Fixture.pedal && $0.target == Fixture.next })
+        #expect(detector.lastSequence == 8)
+        for binding in bindings {
+            #expect(detector.state(of: binding.id)?.held == (binding.source == Fixture.button))
+            #expect(detector.state(of: binding.id)?.isOn == [ControlTriggerMode.toggle, .latch].contains(binding.mode))
+        }
+        #expect(try detector.forgetHeld(on: [Fixture.pedal]) == [])
+        #expect(detector.lastSequence == 8)
+        #expect(try Fixture.feed(&detector, 1, "bnd.a")?.sequence == 9)
+        #expect(try Fixture.feed(&detector, 1, "bnd.t")?.action == .switchedOff)
+    }
+
+    @Test
+    func forgetHeldOrdersManyReleasesByBindingID() throws {
+        let names = (0..<16).map { "bnd.k\(String(format: "%02d", $0))" }
+        var detector = try ControlTriggerDetector(bindings: names.map { try Fixture.binding($0, emitsRelease: true) },
+                                                  after: 100)
+        for name in names.reversed() { _ = try Fixture.feed(&detector, 1, name) }
+        let released = try detector.forgetHeld(on: [Fixture.pedal, Fixture.button])
+        #expect(released.map(\.binding.rawValue) == names)
+        #expect(released.map(\.sequence) == Array(117...132))
+    }
+
+    @Test
+    func pressesReserveSequencesForEveryOwedRelease() throws {
+        let first = try Fixture.binding("bnd.a", emitsRelease: true)
+        let second = try Fixture.binding("bnd.b", emitsRelease: true)
+        let plain = try Fixture.binding("bnd.c")
+        var detector = try ControlTriggerDetector(bindings: [first, second, plain], after: .max - 3)
+        #expect(try Fixture.feed(&detector, 1, "bnd.a")?.sequence == .max - 2)
+        let before = detector
+        #expect(throws: ControlTriggerRefusal.sequenceExhausted) { try Fixture.feed(&detector, 1, "bnd.b") }
+        #expect(detector == before)
+        #expect(try Fixture.feed(&detector, 1, "bnd.c")?.sequence == .max - 1)
+        #expect(try Fixture.feed(&detector, 0, "bnd.c") == nil)
+        #expect(throws: ControlTriggerRefusal.sequenceExhausted) { try Fixture.feed(&detector, 1, "bnd.c") }
+        let release = try Fixture.feed(&detector, 0, "bnd.a")
+        #expect(release?.action == .release)
+        #expect(release?.sequence == .max)
+
+        var single = try ControlTriggerDetector(bindings: [first], after: .max - 1)
+        #expect(throws: ControlTriggerRefusal.sequenceExhausted) { try Fixture.feed(&single, 1, "bnd.a") }
+        #expect(single.state(of: first.id)?.held == false)
+        var disconnected = try ControlTriggerDetector(bindings: [first, second], after: .max - 4)
+        #expect(try Fixture.feed(&disconnected, 1, "bnd.a")?.sequence == .max - 3)
+        #expect(try Fixture.feed(&disconnected, 1, "bnd.b")?.sequence == .max - 2)
+        #expect(try disconnected.forgetHeld(on: [Fixture.pedal]).map(\.sequence) == [.max - 1, .max])
     }
 
     @Test
@@ -143,18 +231,25 @@ struct ControlTriggerDetectorTests {
             try detector.handle(.relative(delta: 1), from: Fixture.pedal, binding: Self.id, truth: empty)
         }
         let unsafe = try Fixture.truth(targets: [Fixture.next: .safety])
-        #expect(throws: ControlTriggerRefusal.targetClass(Fixture.next, .safety)) {
+        #expect(throws: ControlTriggerRefusal.inputMismatch) {
             try detector.handle(.relative(delta: 1), from: Fixture.pedal, binding: Self.id, truth: unsafe)
         }
-        let live = try Fixture.truth()
-        #expect(throws: ControlTriggerRefusal.inputMismatch) {
-            try detector.handle(.relative(delta: 1), from: Fixture.pedal, binding: Self.id, truth: live)
-        }
         for value in [Double.nan, .infinity, -.infinity] {
-            #expect(throws: ControlTriggerRefusal.nonFinite) { try Fixture.feed(&detector, value) }
+            #expect(throws: ControlTriggerRefusal.nonFinite) {
+                try detector.handle(.absolute(normalized: value), from: Fixture.pedal, binding: Self.id, truth: unsafe)
+            }
         }
         for value in [-0.01, 1.01] {
-            #expect(throws: ControlTriggerRefusal.inputOutOfRange(value)) { try Fixture.feed(&detector, value) }
+            #expect(throws: ControlTriggerRefusal.inputOutOfRange(value)) {
+                try detector.handle(.absolute(normalized: value), from: Fixture.pedal, binding: Self.id, truth: unsafe)
+            }
+        }
+        let missing = try Fixture.truth(targets: [Fixture.fire: .safety])
+        #expect(throws: ControlTriggerRefusal.targetMissing(Fixture.next)) {
+            try detector.handle(.absolute(normalized: 1), from: Fixture.pedal, binding: Self.id, truth: missing)
+        }
+        #expect(throws: ControlTriggerRefusal.targetClass(Fixture.next, .safety)) {
+            try detector.handle(.absolute(normalized: 1), from: Fixture.pedal, binding: Self.id, truth: unsafe)
         }
         #expect(detector == before)
     }
@@ -170,6 +265,7 @@ struct ControlTriggerDetectorTests {
         #expect(throws: ControlTriggerRefusal.tooManyBindings(bindings.count)) {
             try ControlTriggerDetector(bindings: bindings)
         }
+        #expect(ControlTriggerHostTruth.maximumSources == ControlTriggerDetector.maximumBindings)
         let sources = try Set((0...ControlTriggerHostTruth.maximumSources).map { try ControlSourceID("ctl.s\($0)") })
         _ = try ControlTriggerHostTruth(sources: Set(sources.dropFirst()), targets: [:])
         #expect(throws: ControlTriggerRefusal.tooManySources(sources.count)) {
