@@ -24,6 +24,9 @@ enum ActionSetSubmitRefusal: Error, Sendable {
     /// A requirement of the stamp at `index` is not current in the submit snapshot. An old epoch
     /// is refused here rather than admitted as an immediately stale completion.
     case staleRequirement(index: Int, GenerationKey)
+    /// A requirement of the stamp at `index` names a counter the submit snapshot's ledger never
+    /// declared (no generation at all). A caller error, kept distinct from `staleRequirement`.
+    case undeclaredRequirement(index: Int, GenerationKey)
     /// The pending registry refused the stamp at `index` (for example `duplicatePending`).
     case registry(index: Int, ActionSetRefusal)
     /// The scheduler refused the stamp at `index`; its error is kept as thrown, never stringified.
@@ -36,8 +39,8 @@ enum ActionSetSubmitRefusal: Error, Sendable {
     /// The member index the refusal names, if any.
     var memberIndex: Int? {
         switch self {
-        case .memberMismatch(let index), .staleRequirement(let index, _), .registry(let index, _),
-             .scheduler(let index, _):
+        case .memberMismatch(let index), .staleRequirement(let index, _), .undeclaredRequirement(let index, _),
+             .registry(let index, _), .scheduler(let index, _):
             index
         case .decision, .setMismatch, .memberCount, .pendingCapacity, .cancel, .sweep:
             nil

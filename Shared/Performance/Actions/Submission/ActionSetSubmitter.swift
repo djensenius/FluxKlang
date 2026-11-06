@@ -13,11 +13,21 @@
 //  fire or sweep. This is control-plane work only, never the render thread.
 //
 //  v1 keeps `notReady` as drop and report: a dropped decision submits
-//  nothing and is returned unchanged; it is never deferred.
+//  nothing and is returned unchanged; it is never deferred. `submit`
+//  re-checks every member's readiness against the submit snapshot, so a
+//  member that stopped being ready after `decide` drops the whole set with
+//  nothing reserved. A readiness change AFTER admission can still drop that
+//  member at commit (`.dropped`, `notReady`); that is the scheduler's job.
 //
 
-/// The caller's claim and CURRENT trusted snapshots for one submission: the session token it believes
+/// The caller's claim and trusted snapshots for one submission: the session token it believes
 /// current, and the ledger/readiness the scheduler and registry are checked against.
+///
+/// This is a SNAPSHOT: `scheduler` holds copies of the ledger and readiness taken when it was built.
+/// It MUST be rebuilt after every ledger bump, including `ActionSetSubmitter.userCancel`, which bumps
+/// the caller's ledger `inout`, never this copy. A stale context still names the old cancel-scope
+/// generation as current, so an old epoch would pass the staleness check and become pending handles
+/// that commit later cancels.
 struct ActionSetSubmitContext: Sendable {
     let session: TriggerSessionToken
     let scheduler: TriggerSchedulerContext
@@ -40,24 +50,29 @@ enum ActionSetSubmitter {
         } catch {
             throw .decision(error)
         }
-        return try submit(decision, of: resolved.set, context: context, scheduler: &scheduler, pending: &pending)
+        return try submit(decision, of: resolved, context: context, scheduler: &scheduler, pending: &pending)
     }
 
-    /// Submits a decision for `set` all or nothing. Check order, all before any publication:
+    /// Submits a decision for `resolved` all or nothing. Check order, all before any publication:
     /// 1. shape (one stamp per member, in member order, one shared cancel-scope generation);
     /// 2. registry capacity for every member, before any scheduler submit;
-    /// 3. every requirement current in `context.ledger` (an old epoch is refused, never admitted stale);
-    /// 4. registry staging (`duplicatePending`);
-    /// 5. scheduler staging, member by member; the scheduler's error is kept as thrown.
-    static func submit(_ decision: ActionSetFireDecision, of set: PerformanceActionSet,
+    /// 3. every requirement declared (`undeclaredRequirement`) and current (`staleRequirement`) in
+    ///    `context.ledger`; an old epoch is refused, never admitted stale;
+    /// 4. every member's readiness current (`ActionReadiness.isCurrent`) in `context.scheduler.readiness`;
+    ///    otherwise the whole set is `.dropped` with an `ActionSetReadinessAggregate.evaluate` report and
+    ///    nothing is reserved (no scheduler or registry entry, no trigger ID consumed);
+    /// 5. registry staging (`duplicatePending`);
+    /// 6. scheduler staging, member by member; the scheduler's error is kept as thrown.
+    static func submit(_ decision: ActionSetFireDecision, of resolved: ResolvedActionSet,
                        context: ActionSetSubmitContext, scheduler: inout TriggerScheduler,
                        pending: inout ActionSetPendingTriggers) throws(ActionSetSubmitRefusal) -> ActionSetSubmission {
         switch decision {
         case .dropped(let report):
-            guard report.set == set.id else { throw .setMismatch(expected: set.id, actual: report.set) }
+            let expected = resolved.set.id
+            guard report.set == expected else { throw .setMismatch(expected: expected, actual: report.set) }
             return .dropped(report)
         case .fire(let stamps):
-            return .fired(try admit(stamps, of: set, context: context, scheduler: &scheduler, pending: &pending))
+            return try admit(stamps, of: resolved, context: context, scheduler: &scheduler, pending: &pending)
         }
     }
 
@@ -66,8 +81,11 @@ enum ActionSetSubmitter {
     /// `scope` that were still pending in the scheduler. Every set sharing the scope is cancelled
     /// together; other scopes survive. Repeating it bumps again and returns `[]`.
     ///
-    /// The sweep also cancels any other request already stale against the ledger; those are not
-    /// returned here, but their outcomes reach `drain` like every cancellation. A refusal changes nothing.
+    /// The sweep is broader than `scope`: `cancelStale` also cancels, early, any request in another
+    /// scope that was already stale against the ledger, with the same `.cancelled` outcome its commit
+    /// would have produced. Those handles are not returned here; their outcomes reach `drain` like
+    /// every cancellation, and their registry entries remain until `settle`d. A refusal changes nothing.
+    /// Rebuild any `ActionSetSubmitContext` afterwards: the bump goes to `ledger`, not to a context.
     static func userCancel(scope: GenerationSubject, ledger: inout GenerationLedger,
                            scheduler: inout TriggerScheduler,
                            pending: inout ActionSetPendingTriggers) throws(ActionSetSubmitRefusal) -> [TriggerHandle] {
@@ -95,28 +113,42 @@ enum ActionSetSubmitter {
 
     /// Forgets every drained outcome's trigger in the registry, so the registry and scheduler agree
     /// after `drain`. Returns, in outcome order, the triggers that were still registered.
+    ///
+    /// Matches the full handle: an outcome counts only when its handle's session is `scheduler`'s
+    /// current session (pass the live scheduler the outcomes were drained from). Trigger IDs are unique
+    /// only within a session, so a late outcome from before a `rotateSession` is skipped and can never
+    /// remove a refired trigger's live entry. Settle before rotating: after a rotation, an old session's
+    /// unsettled entries are cleared only by a `userCancel` of their scope.
+    ///
+    /// The registry holds at most `ActionSetPendingTriggers.maximumPending` (256) triggers, and only
+    /// `settle` and a scope's `userCancel` forget them: a caller that drains but never settles fills it,
+    /// after which every fire is refused with `.pendingCapacity`.
     @discardableResult
-    static func settle(_ outcomes: [SessionOutcome], pending: inout ActionSetPendingTriggers) -> [TriggerID] {
+    static func settle(_ outcomes: [SessionOutcome], scheduler: TriggerScheduler,
+                       pending: inout ActionSetPendingTriggers) -> [TriggerID] {
+        let session = scheduler.currentToken
         var settled: [TriggerID] = []
-        for outcome in outcomes where pending.complete(outcome.handle.trigger) {
+        for outcome in outcomes where outcome.handle.session == session && pending.complete(outcome.handle.trigger) {
             settled.append(outcome.handle.trigger)
         }
         return settled
     }
 
-    private static func admit(_ stamps: [TriggerStamp], of set: PerformanceActionSet,
+    private static func admit(_ stamps: [TriggerStamp], of resolved: ResolvedActionSet,
                               context: ActionSetSubmitContext, scheduler: inout TriggerScheduler,
                               pending: inout ActionSetPendingTriggers) throws(ActionSetSubmitRefusal)
-        -> ActionSetFireRecord {
+        -> ActionSetSubmission {
+        let set = resolved.set
         _ = try ActionSetFireRecord.scope(of: stamps, set: set)
         guard stamps.count <= ActionSetPendingTriggers.maximumPending - pending.count else {
             throw .pendingCapacity(pending: pending.count, requested: stamps.count)
         }
         let ledger = context.ledger
-        for (index, stamp) in stamps.enumerated() {
-            if let stale = stamp.requires.first(where: { !ledger.isCurrent($0) }) {
-                throw .staleRequirement(index: index, stale.key)
-            }
+        try requireCurrent(stamps, ledger: ledger)
+        let readiness = context.scheduler.readiness
+        guard stamps.allSatisfy({ readiness.isCurrent($0.action, ledger: ledger) }) else {
+            let report = ActionSetReadinessAggregate.evaluate(resolved, readiness: readiness, ledger: ledger)
+            return .dropped(ActionSetDropReport(set: set.id, reason: .notReady, readiness: report))
         }
         var stagedPending = pending
         for (index, stamp) in stamps.enumerated() {
@@ -139,6 +171,20 @@ enum ActionSetSubmitter {
         let record = try ActionSetFireRecord.make(set: set, stamps: stamps, handles: handles)
         scheduler = stagedScheduler
         pending = stagedPending
-        return record
+        return .fired(record)
+    }
+
+    /// In member order, then requirement order: the first requirement the ledger never declared or
+    /// holds at another generation refuses the fire.
+    private static func requireCurrent(_ stamps: [TriggerStamp],
+                                       ledger: GenerationLedger) throws(ActionSetSubmitRefusal) {
+        for (index, stamp) in stamps.enumerated() {
+            for requirement in stamp.requires {
+                guard let live = ledger.generation(requirement.key) else {
+                    throw .undeclaredRequirement(index: index, requirement.key)
+                }
+                guard live == requirement.generation else { throw .staleRequirement(index: index, requirement.key) }
+            }
+        }
     }
 }

@@ -37,7 +37,7 @@ struct ActionSetSubmissionCancelTests {
         #expect(outcomes.allSatisfy {
             $0.outcome.result == .cancelled && $0.outcome.stale == .generation(Self.sceneKey)
         })
-        #expect(ActionSetSubmitter.settle(outcomes, pending: &harness.pending).isEmpty)
+        #expect(harness.settle(outcomes).isEmpty)
         // Repeating is idempotent: it bumps again but cancels nothing.
         let before = try harness.snapshot()
         #expect(try harness.cancel(ActionSetFixture.scene).isEmpty)
@@ -63,7 +63,7 @@ struct ActionSetSubmissionCancelTests {
         #expect(outcomes.map(\.outcome.stale) == [.generation(ActionSetFixture.context),
                                                   .generation(ActionSetFixture.context)])
         #expect(harness.pending.count == 1)
-        #expect(ActionSetSubmitter.settle(outcomes, pending: &harness.pending) == other.handles.map(\.trigger))
+        #expect(harness.settle(outcomes) == other.handles.map(\.trigger))
         #expect(harness.pending.count == 0)
     }
 
@@ -80,7 +80,7 @@ struct ActionSetSubmissionCancelTests {
         let outcomes = harness.scheduler.drain()
         #expect(outcomes.map(\.outcome.result) == [.fired, .cancelled, .cancelled])
         #expect(harness.pending.count == 0)
-        #expect(ActionSetSubmitter.settle(outcomes, pending: &harness.pending).isEmpty)
+        #expect(harness.settle(outcomes).isEmpty)
     }
 
     @Test
@@ -88,12 +88,12 @@ struct ActionSetSubmissionCancelTests {
         var harness = try Harness()
         let resolved = try harness.resolved()
         let old = try harness.decide(resolved)
-        _ = try harness.submit(old, of: resolved.set)
+        _ = try harness.submit(old, of: resolved)
         #expect(try harness.cancel(ActionSetFixture.scene).count == 3)
         let outcomes = harness.scheduler.drain()
-        ActionSetSubmitter.settle(outcomes, pending: &harness.pending)
+        harness.settle(outcomes)
         let before = try harness.snapshot()
-        let stale = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(old, of: resolved.set) }
+        let stale = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(old, of: resolved) }
         guard case .staleRequirement(index: 0, Self.sceneKey) = stale else {
             Issue.record("Expected staleRequirement(0, scene), got \(String(describing: stale))")
             return
@@ -102,7 +102,7 @@ struct ActionSetSubmissionCancelTests {
         // Re-deciding under the old trigger IDs is still refused by the scheduler's session identity.
         let reused = try harness.decide(resolved)
         let duplicate = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(reused, of: resolved.set)
+            try harness.submit(reused, of: resolved)
         }
         guard case .scheduler(index: 0, let error) = duplicate else {
             Issue.record("Expected scheduler(0), got \(String(describing: duplicate))")
@@ -143,10 +143,37 @@ struct ActionSetSubmissionCancelTests {
         let outcomes = harness.scheduler.drain()
         #expect(outcomes.map(\.handle) == record.handles)
         #expect(outcomes.allSatisfy { $0.outcome.result == .fired && $0.outcome.frame == 480 })
-        let settled = ActionSetSubmitter.settle(outcomes, pending: &harness.pending)
+        let settled = harness.settle(outcomes)
         #expect(settled == record.handles.map(\.trigger))
         #expect(harness.pending.count == 0 && harness.scheduler.pendingCount == 0)
         #expect(harness.scheduler.reservedOutcomeCount == 0)
-        #expect(ActionSetSubmitter.settle(outcomes, pending: &harness.pending).isEmpty)
+        #expect(harness.settle(outcomes).isEmpty)
+    }
+
+    /// Settle matches the full handle: a late outcome from before a session rotation never removes the
+    /// refired trigger's live entry, so the next scope cancel still returns the live handle.
+    @Test
+    func lateSettleFromARotatedSessionKeepsTheRefiredEntry() throws {
+        var harness = try Harness(members: 1)
+        try harness.observe()
+        let resolved = try harness.resolved()
+        let first = try harness.fire(resolved)
+        let horizon = SampleStamp(clock: ActionSetFixture.primary, generation: .initial, frame: 480)
+        try harness.scheduler.commit(first.handles[0], at: horizon, nominalRate: 48_000,
+                                     ledger: harness.fixture.ledger, readiness: harness.fixture.readiness)
+        let late = harness.scheduler.drain()
+        #expect(late.map(\.handle) == first.handles && late.map(\.outcome.result) == [.fired])
+        // Not settled: the cancel forgets the scope's entry, then the session goes quiescent and rotates.
+        #expect(try harness.cancel(ActionSetFixture.scene).isEmpty)
+        #expect(harness.pending.count == 0)
+        #expect(harness.scheduler.drain().isEmpty)
+        let oldSession = harness.scheduler.currentToken
+        _ = try harness.scheduler.rotateSession(expected: oldSession)
+        let refired = try harness.fire(resolved)
+        #expect(refired.handles.map(\.trigger) == first.handles.map(\.trigger) && refired.handles != first.handles)
+        #expect(harness.settle(late).isEmpty)
+        #expect(harness.pending.pending(in: ActionSetFixture.scene) == refired.handles.map(\.trigger))
+        #expect(try harness.cancel(ActionSetFixture.scene) == refired.handles)
+        #expect(harness.pending.count == 0)
     }
 }

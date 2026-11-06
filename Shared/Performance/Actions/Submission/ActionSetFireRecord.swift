@@ -12,7 +12,9 @@
 enum ActionSetSubmission: Hashable, Sendable {
     /// Every member was admitted and registered.
     case fired(ActionSetFireRecord)
-    /// The set was not ready (v1 drop and report); nothing was submitted. The report is returned unchanged.
+    /// The set was not ready (v1 drop and report); nothing was submitted or reserved. A dropped decision's
+    /// report is returned unchanged; a fire whose member is no longer ready at submit is dropped whole with
+    /// a report from `ActionSetReadinessAggregate.evaluate` against the submit snapshot.
     case dropped(ActionSetDropReport)
 }
 

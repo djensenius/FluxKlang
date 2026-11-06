@@ -8,6 +8,11 @@ import Testing
 
 /// Real scheduler, real registry and the A1 fixture's fake readiness provider (#107 A2).
 struct ActionSetSubmissionHarness {
+    /// Thrown by a helper after it records the issue, so the calling test stops.
+    private enum HarnessError: Error {
+        case notFired, notFire
+    }
+
     /// Every observable piece of state a refused submission must leave unchanged.
     struct Snapshot: Equatable {
         let token: TriggerSessionToken
@@ -63,12 +68,12 @@ struct ActionSetSubmissionHarness {
         try ActionSetSubmissionHarness.stamps(decide(resolved, base, target: target))
     }
 
-    mutating func submit(_ decision: ActionSetFireDecision, of set: PerformanceActionSet,
+    mutating func submit(_ decision: ActionSetFireDecision, of resolved: ResolvedActionSet,
                          token: TriggerSessionToken? = nil,
                          context: TriggerSchedulerContext? = nil) throws(ActionSetSubmitRefusal)
         -> ActionSetSubmission {
         let claim = ActionSetSubmitContext(session: token ?? scheduler.currentToken, scheduler: context ?? self.context)
-        return try ActionSetSubmitter.submit(decision, of: set, context: claim, scheduler: &scheduler,
+        return try ActionSetSubmitter.submit(decision, of: resolved, context: claim, scheduler: &scheduler,
                                              pending: &pending)
     }
 
@@ -78,7 +83,7 @@ struct ActionSetSubmissionHarness {
                                                      pending: &pending)
         guard case .fired(let record) = submission else {
             Issue.record("Expected a fired record, got \(submission)")
-            throw ActionSetRefusal.emptySet
+            throw HarnessError.notFired
         }
         return record
     }
@@ -86,6 +91,12 @@ struct ActionSetSubmissionHarness {
     mutating func cancel(_ scope: GenerationSubject) throws(ActionSetSubmitRefusal) -> [TriggerHandle] {
         try ActionSetSubmitter.userCancel(scope: scope, ledger: &fixture.ledger, scheduler: &scheduler,
                                           pending: &pending)
+    }
+
+    /// Settles against the live scheduler the outcomes were drained from.
+    @discardableResult
+    mutating func settle(_ outcomes: [SessionOutcome]) -> [TriggerID] {
+        ActionSetSubmitter.settle(outcomes, scheduler: scheduler, pending: &pending)
     }
 
     /// Registers stamps of throwaway fires straight into the registry until it holds `count`.
@@ -121,7 +132,7 @@ struct ActionSetSubmissionHarness {
     static func stamps(_ decision: ActionSetFireDecision) throws -> [TriggerStamp] {
         guard case .fire(let stamps) = decision else {
             Issue.record("Expected a fire decision, got \(decision)")
-            throw ActionSetRefusal.emptySet
+            throw HarnessError.notFire
         }
         return stamps
     }
@@ -175,7 +186,7 @@ struct ActionSetSubmissionTests {
         let resolved = try harness.resolved()
         let decision = try harness.decide(resolved)
         let stamps = try ActionSetSubmissionHarness.stamps(decision)
-        guard case .fired(let record) = try harness.submit(decision, of: resolved.set) else {
+        guard case .fired(let record) = try harness.submit(decision, of: resolved) else {
             Issue.record("A ready decision must fire")
             return
         }
@@ -198,49 +209,46 @@ struct ActionSetSubmissionTests {
             return
         }
         let before = try harness.snapshot()
-        #expect(try harness.submit(decision, of: resolved.set) == .dropped(report))
+        #expect(try harness.submit(decision, of: resolved) == .dropped(report))
         let viaFire = try ActionSetSubmitter.fire(resolved, request: ActionSetFixture.request(),
                                                   context: harness.submitContext, scheduler: &harness.scheduler,
                                                   pending: &harness.pending)
         #expect(viaFire == .dropped(report))
         #expect(try harness.snapshot() == before)
-        let foreign = try harness.resolved(set: "set.other").set
+        let foreign = try harness.resolved(set: "set.other")
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(decision, of: foreign) }
         guard case .setMismatch(let expected, let actual) = refusal else {
             Issue.record("Expected setMismatch, got \(String(describing: refusal))")
             return
         }
-        #expect(expected == foreign.id && actual == resolved.set.id)
+        #expect(expected == foreign.set.id && actual == resolved.set.id)
         #expect(try harness.snapshot() == before)
     }
 
-    /// A refusal at member k publishes nothing: no handle, no consumed ID, no registry entry.
+    /// A refusal at member k publishes nothing: no handle, no consumed ID, no registry entry. Every member is
+    /// ready in the submit snapshot, so the members before k pass every check and are staged first.
     @Test(arguments: ActionSetSubmissionSchedulerCase.allCases)
     func schedulerRefusalAtMemberLeavesEverythingUnchanged(scenario: ActionSetSubmissionSchedulerCase) throws {
         var harness = try Harness(capacity: scenario == .outcomeCapacity ? 2 : 64)
         let resolved = try harness.resolved()
-        let musical = scenario == .musicalFirst || scenario == .musicalLast
-        let decision = try harness.decide(resolved, target: musical ? .grid(ticks: 960) : .asap)
-        let stamps = try ActionSetSubmissionHarness.stamps(decision)
+        var stamps = try harness.stamps(resolved, target: scenario == .musicalFirst ? .grid(ticks: 960) : .asap)
         let token = harness.scheduler.currentToken
-        var context = harness.context
+        let context = harness.context
         switch scenario {
         case .staleSession:
             _ = try harness.scheduler.rotateSession(expected: token)
-        case .duplicateID:
-            _ = try harness.scheduler.submit(stamps[1], session: token, context: context)
+        case .duplicateID, .duplicateLast:
+            _ = try harness.scheduler.submit(stamps[scenario.index], session: token, context: context)
         case .musicalLast:
-            var readiness = ActionReadiness()
-            try readiness.transition(harness.ids[2], to: .preparing)
-            try readiness.markReady(harness.ids[2], preparedAgainst: [], ledger: harness.fixture.ledger)
-            context = TriggerSchedulerContext(ledger: harness.fixture.ledger, readiness: readiness,
-                                              musicalSequence: nil)
+            // Only the last member is musical, so only it needs the (unprepared) musical timeline.
+            stamps[2] = try harness.stamps(resolved, target: .grid(ticks: 960))[2]
         case .outcomeCapacity, .musicalFirst:
             break
         }
+        #expect(stamps.allSatisfy { context.readiness.isCurrent($0.action, ledger: context.ledger) })
         let before = try harness.snapshot()
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(decision, of: resolved.set, token: token, context: context)
+            try harness.submit(.fire(stamps), of: resolved, token: token, context: context)
         }
         #expect(refusal?.memberIndex == scenario.index)
         guard case .scheduler(let index, let error) = refusal else {
@@ -269,7 +277,7 @@ struct ActionSetSubmissionTests {
         _ = try harness.scheduler.rotateSession(expected: staleToken)
         let before = try harness.snapshot()
         let full = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(decision, of: resolved.set, token: staleToken)
+            try harness.submit(decision, of: resolved, token: staleToken)
         }
         guard case .pendingCapacity(let pendingCount, let requested) = full else {
             Issue.record("Expected pendingCapacity, got \(String(describing: full))")
@@ -305,7 +313,7 @@ struct ActionSetSubmissionTests {
         ]
         for (fire, expected) in cases {
             let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-                try harness.submit(.fire(fire), of: resolved.set, token: staleToken)
+                try harness.submit(.fire(fire), of: resolved, token: staleToken)
             }
             #expect(String(describing: refusal) == String(describing: Optional(expected)))
             #expect(try harness.snapshot() == before)
@@ -314,7 +322,7 @@ struct ActionSetSubmissionTests {
         try harness.fixture.ledger.bump(ActionSetSubmissionHarness.sceneKey, reason: .userCancel)
         let mixed = try [stamps[0], stamps[1], harness.stamps(resolved, "trg.fire")[2]]
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(.fire(mixed), of: resolved.set)
+            try harness.submit(.fire(mixed), of: resolved)
         }
         guard case .memberMismatch(index: 2) = refusal else {
             Issue.record("Expected memberMismatch(2), got \(String(describing: refusal))")
@@ -336,7 +344,7 @@ struct ActionSetSubmissionTests {
         _ = try harness.scheduler.rotateSession(expected: staleToken)
         let before = try harness.snapshot()
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(decision, of: resolved.set, token: staleToken)
+            try harness.submit(decision, of: resolved, token: staleToken)
         }
         guard case .staleRequirement(index: 2, let key) = refusal else {
             Issue.record("Expected staleRequirement(2), got \(String(describing: refusal))")
@@ -346,7 +354,7 @@ struct ActionSetSubmissionTests {
         #expect(try harness.snapshot() == before)
         try harness.fixture.ledger.bump(ActionSetFixture.context, reason: .contextChange)
         let first = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(decision, of: resolved.set)
+            try harness.submit(decision, of: resolved)
         }
         guard case .staleRequirement(index: 0, ActionSetFixture.context) = first else {
             Issue.record("Expected staleRequirement(0, context), got \(String(describing: first))")
@@ -366,7 +374,7 @@ struct ActionSetSubmissionTests {
         _ = try harness.scheduler.rotateSession(expected: staleToken)
         let before = try harness.snapshot()
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
-            try harness.submit(decision, of: resolved.set, token: staleToken)
+            try harness.submit(decision, of: resolved, token: staleToken)
         }
         guard case .registry(index: 1, .duplicatePending(let id)) = refusal else {
             Issue.record("Expected registry(1, duplicatePending), got \(String(describing: refusal))")
@@ -417,20 +425,20 @@ struct ActionSetSubmissionTests {
 }
 
 enum ActionSetSubmissionSchedulerCase: CaseIterable, Sendable {
-    case staleSession, duplicateID, outcomeCapacity, musicalFirst, musicalLast
+    case staleSession, duplicateID, duplicateLast, outcomeCapacity, musicalFirst, musicalLast
 
     var index: Int {
         switch self {
         case .staleSession, .musicalFirst: 0
         case .duplicateID: 1
-        case .outcomeCapacity, .musicalLast: 2
+        case .duplicateLast, .outcomeCapacity, .musicalLast: 2
         }
     }
 
     func matches(_ error: any Error) -> Bool {
         switch self {
         case .staleSession: error as? TriggerSessionError == .staleSession
-        case .duplicateID: error as? TriggerSessionError == .duplicateID
+        case .duplicateID, .duplicateLast: error as? TriggerSessionError == .duplicateID
         case .outcomeCapacity: error as? TriggerSessionError == .outcomeCapacity
         case .musicalFirst, .musicalLast: error as? TriggerSchedulerError == .musicalContextRequired
         }
