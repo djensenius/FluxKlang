@@ -304,6 +304,9 @@ targets:
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
+      - path: FluxKlangTests/TunerPitchTests.swift
+      - path: FluxKlangTests/TunerPitchTests+Smoother.swift
+      - path: FluxKlangTests/TunerPitchTests+Fixtures.swift
       - path: FluxKlangTests/MetronomeGridTests.swift
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
