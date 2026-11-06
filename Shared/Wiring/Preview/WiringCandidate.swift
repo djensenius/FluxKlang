@@ -48,8 +48,8 @@ enum WiringConnection: Hashable, Sendable {
     }
 }
 
-/// A classified port pair. Built only by `classify`, so the class always
-/// matches the graph and attributes it was computed from.
+/// A classified port pair. Built only by `classify` (or, bare, by `WiringCandidateBatch`, which
+/// gives the same class), so the class always matches the graph and attributes it was computed from.
 struct WiringCandidate: Hashable, Sendable {
     private(set) var from: PortAddress
     private(set) var to: PortAddress
@@ -59,7 +59,7 @@ struct WiringCandidate: Hashable, Sendable {
     private(set) var feedback: EdgeFeedback?
     private(set) var connection: WiringConnection
 
-    private init(
+    fileprivate init(
         from: PortAddress, to: PortAddress, conversion: EdgeConversion?, feedback: EdgeFeedback?,
         connection: WiringConnection
     ) {
@@ -81,6 +81,31 @@ struct WiringCandidate: Hashable, Sendable {
         )
         return WiringCandidate(
             from: from, to: to, conversion: conversion, feedback: feedback, connection: connection
+        )
+    }
+}
+
+/// Bare candidates of one source port in one graph, classified against one shared
+/// `WiringCandidateContext`: the graph is validated once per batch instead of once per pair.
+/// Every candidate (or refusal) equals what `WiringCandidate.classify(from:to:in:)` gives for the
+/// same pair, except the deviations documented on `WiringDestinationList.make`; source- and
+/// graph-level refusals are thrown once, by `init`.
+struct WiringCandidateBatch {
+    private var context: WiringCandidateContext
+
+    /// The graph is validated exactly once, internally; `onValidate` is called just before and only
+    /// observes it (a test seam that cannot change any class or refusal).
+    init(
+        from source: PortAddress, in graph: GraphDocument, onValidate: () -> Void = {}
+    ) throws(WiringPreviewRefusal) {
+        context = try WiringCandidateContext(source: source, in: graph, onValidate: onValidate)
+    }
+
+    /// The bare candidate source → `destination`, or the refusal of that pair alone.
+    mutating func classify(to destination: PortAddress) throws(WiringPreviewRefusal) -> WiringCandidate {
+        let connection = try context.connection(to: destination)
+        return WiringCandidate(
+            from: context.source, to: destination, conversion: nil, feedback: nil, connection: connection
         )
     }
 }
