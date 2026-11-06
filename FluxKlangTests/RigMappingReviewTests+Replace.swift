@@ -128,6 +128,44 @@ struct RigMappingReviewReplaceTests {
         #expect(change.stillUnmapped.isEmpty && change.kept.count == limit - 1)
     }
 
+    @Test func twoLostRolesCanBeReplacedAtFullRouteCapacity() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fillers = try (1..<(limit - 1)).map { index in
+            try Fixture.route("rte.fill.\(index)", role: "role.fill.\(index)", device: "dev.fill",
+                              direction: .input, channels: [0], binding: .stale)
+        }
+        let base = try Fixture.document([Fixture.device("dev.a", outputs: 1),
+                                         Fixture.device("dev.b", outputs: 1),
+                                         Fixture.device("dev.fill", inputs: 1),
+                                         Fixture.device("dev.missing", outputs: 1, presence: .missing)],
+                                        routes: [
+                                            Fixture.route("rte.a-lost", role: "role.a", device: "dev.missing",
+                                                          channels: [0], binding: .deviceMissing),
+                                            Fixture.route("rte.b-lost", role: "role.b", device: "dev.missing",
+                                                          channels: [0], binding: .deviceMissing)
+                                        ] + fillers)
+        let roles = try [Fixture.role("role.a", channels: 1), Fixture.role("role.b", channels: 1)]
+        #expect(base.routes.count == limit)
+
+        let review = try RigMappingReview.make(roles: roles, document: base)
+        let offersA = try #require(review.replacementOffers[RoleID("role.a")])
+        let offersB = try #require(review.replacementOffers[RoleID("role.b")])
+        let offerA = try #require(offersA.first { $0.device.rawValue == "dev.a" })
+        let offerB = try #require(offersB.first { $0.device.rawValue == "dev.b" })
+        #expect(offerA.role.rawValue == "role.a" && offerB.role.rawValue == "role.b")
+
+        // Both valid swaps are net-zero together: applying them must not surface a route-capacity refusal.
+        let decisions = try RigMappingDecisions.make(routes: [
+            .replace(try RouteID("rte.a-lost"), with: offerA, id: try RouteID("rte.a-new")),
+            .replace(try RouteID("rte.b-lost"), with: offerB, id: try RouteID("rte.b-new"))
+        ])
+        let change = try review.apply(decisions, to: base)
+        #expect(change.document.routes.count == base.routes.count)
+        #expect(change.added.map(\.rawValue) == ["rte.a-new", "rte.b-new"])
+        #expect(change.removed.map(\.rawValue) == ["rte.a-lost", "rte.b-lost"])
+        #expect(change.stillUnmapped.isEmpty)
+    }
+
     @Test func aRoleOrderedCapacityMissCanBeRetriedAfterRemovingAnotherRoute() throws {
         let limit = DeviceCapabilityLimits.routes
         let fillers = try (1..<limit).map { index in
