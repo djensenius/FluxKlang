@@ -318,4 +318,23 @@ struct AutomationRenderTests {
         #expect(events.first?.reason == .start)
         #expect(renderer.binding == current)
     }
+
+    @Test func aGestureBetweenBlocksOnALaneWithoutBreakpointsIsRenderedWhenAutomationResumesAtOnce() throws {
+        let clock = try Self.clock()
+        var renderer = try Self.renderer(Self.lane([]))
+        #expect(try renderer.render(from: 0, to: 100, clock: clock, current: Self.live).isEmpty)
+        // With nothing to resume from, a released touch hands the value straight back: automation owns it again
+        // before the next block, which must show what the gesture left, not the value shown before it.
+        for (index, value) in [0.25, 0.75, 0.5].enumerated() {
+            let start = Int64(100 * (index + 1))
+            _ = try renderer.perform(.touch(Self.fader, priority: 1))
+            _ = try renderer.perform(.move(Self.fader, to: value))
+            #expect(try renderer.perform(.release(Self.fader)).owner == .automation)
+            let events = try renderer.render(from: start, to: start + 100, clock: clock, current: Self.live)
+            #expect(events == [AutomationRampEvent(frame: start, offset: 0, value: value, rampFrames: 0,
+                                                   reason: .resume)])
+            #expect(renderer.isRenderingLane)
+        }
+        #expect(try renderer.render(from: 400, to: 500, clock: clock, current: Self.live).isEmpty)
+    }
 }

@@ -73,7 +73,8 @@ struct AutomationBlockRenderer: Hashable, Sendable {
     private(set) var cursor: Int64?
     /// The generations of the first render since creation or `reset()`; later renders must match them.
     private(set) var binding: AutomationRenderGenerations?
-    /// Whether automation owned the parameter at the last advance point, so lane events are being emitted.
+    /// Whether automation owned the parameter at the last advance point and no gesture has taken it since, so lane
+    /// events are being emitted.
     private(set) var isRenderingLane = false
     /// The position the next block starts at (the loop start when a wrap falls on the cursor).
     private var cursorTicks: AutomationExactTicks?
@@ -140,7 +141,9 @@ struct AutomationBlockRenderer: Hashable, Sendable {
     /// Applies a gesture at the arbiter's position (the end of the last block). Its effect on the output
     /// starts with the next block. A touch that takes the value from automation holds what the host shows on the
     /// next block's first frame rather than the exact curve (a power sub-ramp only approximates it), so touching
-    /// without moving never jumps.
+    /// without moving never jumps. A gesture that takes the value from automation ends lane rendering even when
+    /// automation resumes before the next block (a lane without breakpoints resumes at once), so that block
+    /// renders the value automation resumed with.
     mutating func perform(_ gesture: AutomationRenderGesture) throws(AutomationRenderRefusal) -> ArbitrationResult {
         guard let cursor, let position = arbiter.position else { throw .notStarted }
         var next = arbiter
@@ -160,6 +163,7 @@ struct AutomationBlockRenderer: Hashable, Sendable {
             throw .automation(error)
         }
         arbiter = next
+        if next.owner != .automation { isRenderingLane = false }
         return ArbitrationResult(outcome: result.outcome, owner: next.owner, value: next.value)
     }
 
