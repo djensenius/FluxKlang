@@ -10,8 +10,8 @@ enum ControlTriggerMode: String, Codable, Hashable, Sendable, CaseIterable {
     /// Every press edge is a `press` command; release edges are commands only when the binding asks.
     case momentary
     /// Each press edge flips the output and emits `switchedOn` or `switchedOff`. The switch-off press goes through
-    /// the target checks like any press, so a toggle can stay on while its target is not `.live`; a host clear for
-    /// toggles is tracked in #363.
+    /// the target checks like any press, so a toggle can stay on while its target is not `.live`; the host can
+    /// still switch it off with an explicit clear, which needs no target checks.
     case toggle
     /// The first press edge emits `switchedOn`; the output stays on, ignoring presses, until an explicit clear
     /// emits `switchedOff`.
