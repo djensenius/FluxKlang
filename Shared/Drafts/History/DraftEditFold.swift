@@ -25,11 +25,13 @@
 ///   an added node's NaN or infinite `linearGain` (`nonFiniteNodeValue`) or a connected
 ///   edge's NaN or infinite `gainCeilingDb` (`nonFiniteEdgeValue`): a NaN never equals
 ///   itself, so such a draft would record an undo entry for every later gesture.
-/// - For the same reason, a NaN or infinite number nested anywhere in an extension bag or
-///   unknown member of an added node (or its ports or position), a moved position or a
-///   connected edge (or its endpoints, conversion or feedback) is refused
-///   (`nonFiniteNodeExtension`, `nonFiniteEdgeExtension`): `JSONValue` equality never
-///   matches a NaN with itself either.
+/// - A NaN or infinite number nested anywhere in an extension bag or unknown member of an
+///   added node (or its ports or position), a moved position or a connected edge (or its
+///   endpoints, conversion or feedback) is refused (`nonFiniteNodeExtension`,
+///   `nonFiniteEdgeExtension`). A NaN because `JSONValue` equality never matches it with
+///   itself, which would lock the history; ±∞ (which does equal itself) because `JSONValue`
+///   cannot encode a non-finite number (encoding throws), and for consistency with the
+///   position and gain rules.
 /// - Node and edge counts, and an added node's ports and combined required and advisory
 ///   capabilities (`GraphNode.checkCollectionBounds()`), are checked against
 ///   `ProjectGraphLimits` (`bounds`) as each edit folds, so a later edit that normalizes the
@@ -70,6 +72,10 @@ enum DraftEditFold {
 
     /// The JSON path, relative to `node`, of the first NaN or infinite number in an extension bag or unknown
     /// member of its ports, its position or the node itself, or nil.
+    ///
+    /// Ports are addressed by index (`.ports[1]`), unlike `GraphValidation`, which uses the port ID. This is
+    /// deliberate: neither `DraftHistory.make` nor the fold validates port-ID uniqueness (`applying` does not
+    /// run `GraphDocument.validate()`), so an ID could name two ports while the index names exactly one.
     static func nonFiniteNumber(in node: GraphNode) -> String? {
         for (index, port) in node.ports.enumerated() {
             if let path = nonFiniteNumber(port.extensions, port.unknownFields) { return ".ports[\(index)]" + path }
@@ -99,10 +105,14 @@ enum DraftEditFold {
     }
 
     /// The path of the first NaN or infinite number in `value`, relative to it, or nil. Object members are
-    /// visited in sorted order, so the path is deterministic. Decoding never produces such a number (JSON has
-    /// no literal for one and `JSONDecoder` refuses out-of-range numbers); only a value built in memory can
-    /// hold one, and it is not held to the 512-level nesting limit of `ContractCoding.decode`, so this walks
-    /// an explicit stack instead of recursing. Each value is visited once.
+    /// visited in ascending key order and array elements in ascending index order, depth first, so the path is
+    /// deterministic. The path is diagnostic only: object keys are written verbatim (`.key`, not escaped or
+    /// quoted), as in the other contract paths, so a key containing `.` or `[` reads ambiguously.
+    ///
+    /// Decoding never produces such a number (JSON has no literal for one and `JSONDecoder` refuses
+    /// out-of-range numbers); only a value built in memory can hold one, and it is not held to the 512-level
+    /// nesting limit of `ContractCoding.decode`, so this walks an explicit stack instead of recursing. Each
+    /// value is visited once.
     static func nonFiniteNumber(in value: JSONValue) -> String? {
         // One frame per open container: its path segment and its unvisited children, the next one last.
         var stack: [(segment: String, children: [(String, JSONValue)])] = [("", [("", value)])]

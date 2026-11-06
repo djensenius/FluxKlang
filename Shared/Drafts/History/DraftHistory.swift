@@ -41,8 +41,10 @@ enum DraftGestureOutcome: Hashable, Sendable {
 /// features and extensions are not compared, because the fold does not read
 /// them. Any other base is refused and the history is never replayed onto it.
 /// A base with a NaN or infinite position, `linearGain` or `gainCeilingDb`, or with one
-/// nested in a node's or edge's extension bags or unknown members, is refused at creation,
-/// since a NaN never equals itself (in `JSONValue` too) and would lock the history.
+/// nested in a node's or edge's extension bags or unknown members, is refused at creation.
+/// A NaN never equals itself (in `JSONValue` too) and would lock the history; ±∞ is refused
+/// because `JSONValue` cannot encode a non-finite number (encoding throws), and for
+/// consistency with the position and gain rules.
 ///
 /// Drafts are equal by their folded edit lists, not by the graphs they produce:
 /// base edges keep their original slot, so edge order can differ from applying

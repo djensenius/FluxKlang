@@ -420,6 +420,25 @@ struct DraftHistoryTests {
         #expect(!DraftEditFold.isFinite(position))
     }
 
+    /// With several non-finite numbers in one bag, the first in the scan's order is reported: keys ascending (not
+    /// in the order written), then array elements by ascending index.
+    @Test func severalNonFiniteNumbersInOneBagReportTheFirstInScanOrder() throws {
+        let bag: [String: JSONValue] = [
+            "z": .double(.nan), "b": .array([.int(0), .double(.infinity), .double(-.infinity)]), "a": .double(1)
+        ]
+        #expect(DraftEditFold.nonFiniteNumber(in: .object(bag)) == ".b[1]")
+        var base = try Fixture.base()
+        base.nodes[2].extensions = bag
+        let atB2 = try DraftHistoryRefusal.nonFiniteNodeExtension(
+            Fixture.nodeID("b2"), path: "$.nodes[b2].extensions.b[1]"
+        )
+        #expect(throws: atB2) { try DraftHistory.make(draft: DraftID("draft"), base: base, depth: 10) }
+        var added = try Fixture.node("d0")
+        added.extensions = bag
+        let atD0 = DraftHistoryRefusal.nonFiniteNodeExtension(added.id, path: "$.nodes[d0].extensions.b[1]")
+        #expect(throws: atD0) { try DraftEditFold.fold([.addNode(added)], onto: [], base: Fixture.base()) }
+    }
+
     /// Seeded random gestures: every accepted fold validates, applies, and equals
     /// applying the gesture edits one at a time; a gesture that cannot apply
     /// one edit at a time is always refused.
