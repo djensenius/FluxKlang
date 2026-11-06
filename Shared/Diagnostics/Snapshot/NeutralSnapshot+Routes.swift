@@ -81,9 +81,9 @@ extension NeutralSnapshotAssembly {
 /// label preparation (`filterScalars` keeping at most `maximumIdentityScalars`,
 /// `sourceForm`, trimmed) in caseless form. The bound applies to the NORMALIZED
 /// form, never to the raw bytes: removed padding (ZWSP, U+2060, U+00AD, a variation
-/// selector after a letter) does not count, so `dev.a` padded to 197 bytes is still
-/// the identity `dev.a`, on either side. Short identities stay here even though they
-/// are too short to be withheld terms (`minimumRedactedBytes`).
+/// selector after a letter) and surrounding whitespace do not count, so `dev.a` padded
+/// to 197 bytes is still the identity `dev.a`, on either side. Short identities stay
+/// here even though they are too short to be withheld terms (`minimumRedactedBytes`).
 ///
 /// An exposable device ID is ASCII and at most `DeviceID.maximumLength` bytes
 /// (`ContractID.validate`), so its form is that long at most. An identity whose form
@@ -159,24 +159,33 @@ struct RefusedIdentities {
     }
 
     /// The bounded identity pipeline, with no bound on the raw bytes: `filterScalars`
-    /// (keeping `maximumIdentityScalars`), `sourceForm`, trim, `caselessForm`.
+    /// (keeping `maximumIdentityScalars`, `trimmed`), `sourceForm`, trim, `caselessForm`.
     ///
     /// Early out: a trimmed source of more than `maximumIdentityFormBytes` scalars is
     /// `.tooLong` without building its caseless form, complete or not. Let w(x) be the
     /// scalar count of `caselessForm(x)` = NFD(fold(NFD(x))). NFD is a per-scalar
     /// decomposition (never empty) plus a reordering, and `fold` maps each scalar to at
-    /// least one, so w is additive over concatenation, depends only on NFD(x) (so NFC
-    /// keeps it), and w(x) ≥ |x|. Whitespace scalars are starters that NFC never
-    /// composes, decomposes into or produces from other scalars, and the trim is per
-    /// scalar, so the trimmed source is NFC of the kept text's core (first to last
-    /// non-whitespace scalar, joiners and selectors removed). Filtering keeps a prefix of
-    /// what unbounded filtering keeps, so the full core is the kept core plus more:
-    /// w(full) ≥ w(kept core) ≥ |trimmed source|. Every scalar is at least one UTF-8
-    /// byte, so the full form has more than `maximumIdentityFormBytes` bytes.
-    /// (Checked over every scalar on this toolchain: no empty fold or NFD; whitespace
-    /// has ccc 0 and is in no multi-scalar decomposition.)
+    /// least one, so w is additive over concatenation, w(x) ≥ |x|, and w(x) ≥ |NFC(x)|
+    /// (NFC only composes NFD(x)). A complete source is the full source, and its form
+    /// has w(source) ≥ |source| scalars. For a cut one: the trimmed filter keeps no
+    /// leading whitespace and keeps a prefix of what unbounded trimmed filtering keeps;
+    /// the trim removes only the kept text's trailing whitespace (whitespace is never the
+    /// second scalar of an NFC composition, and its NFC image is one whitespace scalar).
+    /// So the trimmed source is NFC of the kept core (joiners and selectors removed), the
+    /// full core is the kept core plus more, and w(full core) ≥ w(kept core) ≥ |trimmed
+    /// source|. When NFC keeps canonical equivalence, w(NFC(x)) = w(x), so the full form
+    /// has w(full core) scalars. Every scalar is at least one UTF-8 byte, so the full form
+    /// has more than `maximumIdentityFormBytes` bytes. Foundation's NFC on this toolchain
+    /// does not always keep equivalence (it composes U+2000 U+113C2 into U+113C5 and
+    /// U+10041 U+0300 into U+00C0; see the documented normalization limit), which can only
+    /// affect a cut identity: it stays out of the equality set and `withheldOverflow`,
+    /// and its prefix or fail-closed term still applies. (Checked over every scalar and
+    /// every whitespace pair on this toolchain: no empty fold or NFD; no NFC composition
+    /// has whitespace second.)
     static func identityForm(_ raw: String) -> IdentityForm {
-        let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: maximumIdentityScalars)
+        let filtered = UntrustedTextSanitizer.filterScalars(
+            raw.unicodeScalars, keeping: maximumIdentityScalars, trimmed: true
+        )
         let source = UntrustedTextSanitizer.sourceForm(filtered.text).trimmingCharacters(in: .whitespacesAndNewlines)
         if source.unicodeScalars.count > maximumIdentityFormBytes { return .tooLong }
         guard filtered.isComplete else { return .unknown }

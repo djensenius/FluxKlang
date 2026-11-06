@@ -69,7 +69,10 @@ extension UntrustedTextSanitizer {
     }
 
     /// Prepares a withheld string like a label (filtering, source form), then trims
-    /// surrounding whitespace. No display cap applies: graphemes are not capped, so
+    /// surrounding whitespace. Filtering is `trimmed`, so surrounding whitespace and
+    /// controls, however long, neither count toward the limit nor cut the string (an
+    /// all-whitespace string gives no term), and a complete string is trimmed before the
+    /// byte limit applies. No display cap applies: graphemes are not capped, so
     /// a term matches the uncapped label it came from. A string over the matching
     /// limits becomes a prefix term, which redacts from its first match to the end
     /// of the label. The prefix is cut from the source form (joiners already removed,
@@ -82,9 +85,12 @@ extension UntrustedTextSanitizer {
     /// `WithheldTerm.failClosed`: it is never dropped.
     /// Returns nil only for a complete string shorter than `minimumRedactedBytes`.
     static func withheldTerm(_ raw: String) -> WithheldTerm? {
-        let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes)
+        let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes, trimmed: true)
         var text = sourceForm(filtered.text)
         var isPrefix = !filtered.isComplete
+        // Trailing whitespace kept within the limit must not push a complete string over the
+        // byte limit; a cut string keeps it so its split last character is still dropped.
+        if !isPrefix { text = text.trimmingCharacters(in: .whitespacesAndNewlines) }
         if text.utf8.count > maximumWithheldBytes {
             text = graphemePrefix(text, fittingBytes: maximumWithheldBytes).text
             isPrefix = true

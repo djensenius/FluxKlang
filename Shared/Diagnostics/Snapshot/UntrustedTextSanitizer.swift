@@ -12,9 +12,10 @@ enum UntrustedTextSanitizer {
     typealias Result = (text: String, changed: Bool)
 
     static let maximumScalarsPerGrapheme = 8
-    /// Hangul fillers, halfwidth Hangul filler, the blank Braille pattern and the Khitan
-    /// small script filler (a combining mark, not default-ignorable) render as nothing.
-    static let blankLookalikes: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4]
+    /// Hangul fillers, halfwidth Hangul filler, the blank Braille pattern, the Khitan
+    /// small script filler (a combining mark, not default-ignorable) and the musical
+    /// null notehead (So) render as nothing.
+    static let blankLookalikes: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x1D159]
     static let zeroWidthJoiner: Unicode.Scalar = "\u{200D}"
     static let zeroWidthNonJoiner: Unicode.Scalar = "\u{200C}"
 
@@ -56,7 +57,13 @@ enum UntrustedTextSanitizer {
     /// keep once `limit` are kept; removable scalars past the limit are still
     /// scanned and removed, so trailing padding never makes the scan incomplete
     /// (still linear in the input).
-    static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int) -> Scan {
+    ///
+    /// `trimmed` is for text that is trimmed afterwards (withheld terms and identities):
+    /// whitespace and joiners/selectors are not kept before the first content scalar (kept,
+    /// not whitespace, not match-ignorable) or once `limit` are kept, and the scan stops only
+    /// at a content scalar. So surrounding whitespace never cuts the text, and kept text is
+    /// still bounded. A long whitespace run is read to its end, linear as above.
+    static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int, trimmed: Bool = false) -> Scan {
         var kept = String.UnicodeScalarView()
         var keptCount = 0
         var changed = false
@@ -66,6 +73,11 @@ enum UntrustedTextSanitizer {
             let nextIndex = scalars.index(after: index)
             let next = nextIndex == scalars.endIndex ? nil : scalars[nextIndex]
             let action = disposition(of: scalar, after: kept, before: next)
+            if trimmed, kept.isEmpty || keptCount >= limit, action != .remove, !isContent(scalar, action) {
+                changed = true
+                index = nextIndex
+                continue
+            }
             if keptCount >= limit, action != .remove {
                 return Scan(text: String(kept), changed: changed, isComplete: false)
             }
@@ -109,6 +121,16 @@ enum UntrustedTextSanitizer {
             return .keep
         }
     }
+
+    /// Whether a scalar that is not removed survives `sourceForm` and the trim of
+    /// `.whitespacesAndNewlines` (a replaced scalar becomes a space). The only ASCII
+    /// whitespace `disposition` keeps is the space; ASCII controls are replaced.
+    private static func isContent(_ scalar: Unicode.Scalar, _ action: Disposition) -> Bool {
+        guard action == .keep, !isMatchIgnorable(scalar) else { return false }
+        return scalar.isASCII ? scalar != " " : !trimmedWhitespace.contains(scalar)
+    }
+
+    private static let trimmedWhitespace = CharacterSet.whitespacesAndNewlines
 
     static func isJoiner(_ scalar: Unicode.Scalar) -> Bool {
         scalar == zeroWidthJoiner || scalar == zeroWidthNonJoiner

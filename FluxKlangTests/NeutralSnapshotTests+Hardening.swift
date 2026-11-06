@@ -58,7 +58,7 @@ extension NeutralSnapshotTests {
     @Test(arguments: [
         ("a\u{E000}b\u{F8FF}c\u{F0000}", "abc"),
         ("a\u{0378}b\u{E01F0}c", "abc"),
-        ("a\u{3164}b\u{115F}c\u{1160}d\u{FFA0}e\u{2800}f\u{16FE4}g", "abcdefg"),
+        ("a\u{3164}b\u{115F}c\u{1160}d\u{FFA0}e\u{2800}f\u{16FE4}g\u{1D159}h", "abcdefgh"),
         ("a\u{FE00}b\u{E0100}c\u{180B}", "abc"),
         ("\u{FE0F}a \u{FE0F}b\u{0301}\u{FE0E}", "a b\u{0301}"),
         ("✈\u{FE0F}x\u{FE0E}", "✈\u{FE0F}x"),
@@ -302,7 +302,8 @@ extension NeutralSnapshotTests {
     /// Identities of five bytes are too short to be withheld terms, so only the
     /// equality path can refuse `dev.a`; each needs the scalar filter and the trim.
     @Test(arguments: [
-        "\u{0001}dev.a", "\u{E000} DEV.A\u{0007}", "dev.\u{2060}a", "\u{FEFF}DEV.A\u{00AD}", "dev.a\u{16FE4}"
+        "\u{0001}dev.a", "\u{E000} DEV.A\u{0007}", "dev.\u{2060}a", "\u{FEFF}DEV.A\u{00AD}", "dev.a\u{16FE4}",
+        "dev.\u{1D159}a"
     ])
     func theEqualityPathFiltersAndTrimsIdentities(identity: String) throws {
         #expect(UntrustedTextSanitizer.withheldTerm(identity) == nil)
@@ -356,15 +357,18 @@ extension NeutralSnapshotTests {
         #expect(!RefusedIdentities(["dev.b"], terms: []).refuses(joined))
     }
 
-    /// Bounded filtering completes at exactly `maximumIdentityScalars` kept scalars, so a
-    /// long but finite identity still refuses `dev.a`. One more kept scalar and its form is
-    /// unknown: as a compared value it is refused, and as a withheld identity it is counted
-    /// in `withheldOverflow` instead of being dropped (its fail-closed term still refuses).
+    /// Bounded filtering completes at exactly `maximumIdentityScalars` kept scalars (round
+    /// 12c: leading whitespace does not count). One more kept scalar after interior padding
+    /// and the form is unknown: as a compared value it is refused, and as a withheld identity
+    /// it is counted in `withheldOverflow` instead of being dropped (its fail-closed term
+    /// still refuses).
     @Test func anIdentityTooLongToFilterIsCountedNotDropped() throws {
         let limit = RefusedIdentities.maximumIdentityScalars
         let fits = String(repeating: " ", count: limit - 5) + "DEV.A"
-        let over = String(repeating: " ", count: limit - 4) + "DEV.A"
+        let over = "DEV.A" + String(repeating: " ", count: limit - 5) + "Z"
+        let complete = "DEV.A" + String(repeating: " ", count: limit - 6) + "Z"
         #expect(RefusedIdentities.identityForm(fits).scalars != nil && RefusedIdentities.identityForm(over) == .unknown)
+        #expect(RefusedIdentities.identityForm(complete) == .tooLong)
         #expect(RefusedIdentities.none.refuses(over) && !RefusedIdentities.none.refuses("dev.a"))
         var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
         input.route.device = DeviceID(validated: "dev.a")
@@ -395,8 +399,10 @@ extension NeutralSnapshotTests {
         let cases: [(String, RefusedIdentities.IdentityForm)] = [
             (dees(limit), .form(Array(dees(limit).unicodeScalars))), (dees(limit + 1), .tooLong),
             (spaces(800) + dees(limit), .form(Array(dees(limit).unicodeScalars))),
+            (dees(limit) + spaces(800), .form(Array(dees(limit).unicodeScalars))),
             (String(repeating: "\u{00E9}", count: 65), .tooLong), (String(repeating: "Q7", count: 570), .tooLong),
-            (spaces(896) + dees(limit + 1), .unknown), (spaces(895) + dees(limit + 2), .tooLong)
+            (dees(limit) + spaces(1_024 - limit) + "x", .unknown),
+            (dees(limit + 1) + spaces(1_023 - limit) + "x", .tooLong)
         ]
         for (identity, expected) in cases {
             #expect(RefusedIdentities.identityForm(identity) == expected, "\(identity.unicodeScalars.count)")
@@ -408,12 +414,13 @@ extension NeutralSnapshotTests {
     }
 
     /// An identity cut by the filter whose kept core still fits is refused through its prefix
-    /// term, not the equality path: only routes that term matches are withheld.
-    @Test(arguments: [(1_014, 0, "DEV.IFACE"), (0, 1_014, "DEV.IFACE-B")])
-    func aLongIdentityRefusesThroughItsPrefixTerm(lead: Int, trail: Int, term: String) throws {
-        let identity = String(repeating: " ", count: lead) + "DEV.IFACE-B" + String(repeating: " ", count: trail)
+    /// term, not the equality path: only routes that term matches are withheld. (Round 12c:
+    /// the cut comes from interior padding; surrounding whitespace no longer cuts.)
+    @Test(arguments: [1_013, 5_000])
+    func aLongIdentityRefusesThroughItsPrefixTerm(padding: Int) throws {
+        let identity = "DEV.IFACE-B" + String(repeating: " ", count: padding) + "Z"
         #expect(RefusedIdentities.identityForm(identity) == .unknown)
-        #expect(UntrustedTextSanitizer.withheldTerm(identity) == .init(text: term, isPrefix: true))
+        #expect(UntrustedTextSanitizer.withheldTerm(identity) == .init(text: "DEV.IFACE-B", isPrefix: true))
         var first = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
         first.route.device = DeviceID(validated: "dev.iface-b")
         var second = try Self.routeInput("rte.y", binding: .confirmed, presence: .present)

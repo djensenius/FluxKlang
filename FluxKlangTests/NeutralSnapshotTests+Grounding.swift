@@ -111,3 +111,79 @@ extension NeutralSnapshotTests {
             == .route(id: RouteID(validated: "rte.space")))
     }
 }
+
+// MARK: - Round 12c: surrounding whitespace never cuts a withheld string
+
+extension NeutralSnapshotTests {
+    /// Surrounding whitespace and controls neither count toward the filter limit nor cut a
+    /// withheld string, so padding never makes it the fail-closed term that withholds every
+    /// label and alias: all-whitespace padding gives no term, and padded content keeps its
+    /// exact, complete term. Each string is one route's evidence.
+    @Test(arguments: [
+        (String(repeating: " ", count: 1_025), nil), (String(repeating: "\n", count: 1_025), nil),
+        ("OK" + String(repeating: " ", count: 1_100), nil), (String(repeating: " ", count: 1_024) + "\u{200B}", nil),
+        (String(repeating: " ", count: 1_023) + "#\u{FE0F}", nil),
+        (String(repeating: "\t\u{0007}\u{2028}\u{0085}\u{00A0}", count: 400), nil),
+        (String(repeating: " ", count: 1_014) + "DEV.IFACE-B", "DEV.IFACE-B"),
+        (String(repeating: " ", count: 1_018) + "DEV.IFACE-B", "DEV.IFACE-B"),
+        (String(repeating: " ", count: 1_019) + "DEV.IFACE-B", "DEV.IFACE-B"),
+        (String(repeating: " ", count: 100_000) + "DEV.IFACE-B", "DEV.IFACE-B"),
+        ("DEV.IFACE-B" + String(repeating: " ", count: 2_000), "DEV.IFACE-B"),
+        (String(repeating: "\u{3000}", count: 1_100) + "DEV.IFACE-B" + String(repeating: "\u{00A0}", count: 1_100),
+         "DEV.IFACE-B"),
+        (String(repeating: "\t\u{0001}\r\n", count: 400) + "DEV.IFACE-B"
+            + String(repeating: "\u{2029}\u{0085}", count: 600), "DEV.IFACE-B")
+    ] as [(String, String?)])
+    func surroundingWhitespaceNeverCutsAWithheldString(evidence: String, term: String?) throws {
+        #expect(UntrustedTextSanitizer.withheldTerm(evidence) == term.map { .init(text: $0, isPrefix: false) })
+        let identity = RefusedIdentities.identityForm(evidence)
+        #expect(term == nil ? identity != .unknown : identity == .form(Array("dev.iface-b".unicodeScalars)))
+        var first = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        first.route.device = DeviceID(validated: "dev.phone-audio")
+        first.route.evidence = evidence
+        var second = try Self.routeInput("rte.y", binding: .confirmed, presence: .present)
+        second.route.device = DeviceID(validated: "dev.iface-b")
+        let graph = try GraphDocument(
+            id: GraphID(validated: "graph.pad"), nodes: [Self.node("node.a", label: "Main Out")]
+        )
+        let snapshot = Snapshot.build(from: Snapshot.Inputs(graph: graph, routes: [first, second]))
+        #expect(snapshot.route(RouteID(validated: "rte.x"))?.device?.rawValue == "dev.phone-audio")
+        #expect(snapshot.route(RouteID(validated: "rte.y"))?.isDeviceWithheld == (term != nil))
+        #expect(snapshot.node(Self.nodeA)?.label.text == "Main Out")
+        #expect(snapshot.truncation.withheldOverflow == 0 && !snapshot.truncation.isTruncated)
+    }
+
+    /// Labels keep their own whitespace and the counting scan, so a label's leading whitespace
+    /// still counts: a secret past the scan is never shown and one within it is redacted. A
+    /// whitespace-padded withheld string redacts by its exact term, not every label.
+    @Test func whitespaceAroundASecretNeverUncoversIt() {
+        let marker = UntrustedLabel.withheldMarker
+        let padded = String(repeating: "\n", count: 5_000) + "SN-778899" + String(repeating: " ", count: 5_000)
+        #expect(UntrustedLabel("Rig sn-778899 out", withholding: [padded]).text == "Rig \(marker) out")
+        #expect(UntrustedLabel("Main Out", withholding: [padded]).text == "Main Out")
+        let near = UntrustedLabel(String(repeating: " ", count: 100) + "SN-778899", withholding: ["SN-778899"])
+        #expect(near.text == String(repeating: " ", count: 100) + marker && !near.isTruncated)
+        for lead in [4_090, 4_093, 100_000] {
+            let far = UntrustedLabel(String(repeating: " ", count: lead) + "SN-778899 x", withholding: ["SN-778899"])
+            #expect(far.isTruncated && !far.text.contains("SN") && !far.text.contains("77"), "\(lead)")
+        }
+    }
+
+    /// The trimmed filter stores no surrounding whitespace, skips whitespace, joiners and
+    /// selectors past its limit, and stops only at content. Labels still count whitespace.
+    @Test func trimmedFilteringStopsOnlyAtContent() {
+        let spaces = String(repeating: " ", count: 100_000)
+        let filter = { (text: String, limit: Int) in
+            UntrustedTextSanitizer.filterScalars(text.unicodeScalars, keeping: limit, trimmed: true)
+        }
+        let whole = filter(spaces + "abc" + spaces, 3)
+        #expect(whole.text == "abc" && whole.isComplete)
+        let cut = filter("ab" + spaces + "c", 4)
+        #expect(cut.text == "ab  " && !cut.isComplete)
+        let emoji = filter("ab#\u{FE0F} \u{200B}", 3)
+        #expect(emoji.text == "ab#" && emoji.isComplete)
+        #expect(!UntrustedTextSanitizer.filterScalars(" a".unicodeScalars, keeping: 1).isComplete)
+        let selected = "x" + String(repeating: " ", count: 1_022) + "#\u{FE0F}"
+        #expect(UntrustedTextSanitizer.withheldTerm(selected)?.isPrefix == false)
+    }
+}
