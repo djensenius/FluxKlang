@@ -86,7 +86,7 @@ struct RigMappingReview: Hashable, Sendable {
     ///
     /// Capacity: a `replace` swaps one route for one, so it is not counted against
     /// `DeviceCapabilityLimits.routes` and is accepted at 4,096 routes. A `choose` is checked against
-    /// the final candidate count, excluding held offers and including explicit removals and replacements.
+    /// the final candidate count, excluding held offers and including removals, replacements and declines.
     /// RG1 still hands its route budget to
     /// single-candidate roles in `RoleID` order, so near the limit a role can get no offer (its
     /// `replace` is refused with `candidateNotOffered`); remove another eligible route to free capacity,

@@ -231,7 +231,7 @@ struct RigMappingReviewReplaceTests {
         #expect(change.document.routes.count == limit && change.added == [firstID])
     }
 
-    @Test func replacingTheHeldRouteCountsTheFinalCandidateAndDecliningFreesItsSlot() throws {
+    @Test func replacingTheHeldRouteCountsTheFinalCandidate() throws {
         let limit = DeviceCapabilityLimits.routes
         let fixture = try Self.heldOfferChoiceFixture(["role.a-input"])
         let inputRole = try #require(fixture.inputRoles.first)
@@ -426,5 +426,39 @@ struct RigMappingReviewCapacityTests {
         )
         #expect(Fixture.refusal { _ = try fixture.review.apply(decisions, to: fixture.document) }
                 == .mapping(.routeCapacityExhausted(limit: limit)))
+    }
+
+    @Test func decliningCountsOnlyRoutesThatRemainSelectedAtCapacity() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try RigMappingReviewReplaceTests.heldOfferChoiceFixture(
+            ["role.a-input", "role.b-input"]
+        )
+        let before = fixture.review
+        let first = try RoleID("role.a-input")
+        let second = try RoleID("role.b-input")
+        let firstChoice = try #require(fixture.choices[first])
+        let secondChoice = try #require(fixture.choices[second])
+        let firstID = try #require(fixture.choiceIDs[first])
+        let secondID = try #require(fixture.choiceIDs[second])
+        let held = fixture.outputRole
+        #expect(fixture.document.routes.count == limit - 1)
+
+        let selected = try before.choosing(secondChoice, id: secondID)
+        let selectedBefore = selected
+        let exact = try RigMappingDecisions.make(roles: [
+            .choose(firstChoice, id: firstID), .leaveUnmapped(second), .leaveUnmapped(held)
+        ])
+        let change = try selected.apply(exact, to: fixture.document)
+        #expect(change.document.routes.count == limit && change.added == [firstID])
+        #expect(change.stillUnmapped.contains(second) && change.stillUnmapped.contains(held))
+        #expect(selected == selectedBefore && fixture.review == before)
+
+        let overLimit = try RigMappingDecisions.make(roles: [
+            .choose(firstChoice, id: firstID), .choose(secondChoice, id: secondID), .leaveUnmapped(held)
+        ])
+        #expect(Fixture.refusal { _ = try before.apply(overLimit, to: fixture.document) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
+        #expect(fixture.review == before && selected == selectedBefore)
+        #expect(fixture.document.routes.count == limit - 1)
     }
 }
