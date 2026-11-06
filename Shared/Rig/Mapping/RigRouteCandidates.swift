@@ -45,6 +45,11 @@ struct RigCandidateTruncation: Hashable, Sendable {
     let total: Int
     /// How many compatible blocks are not listed.
     var omitted: Int { total - listed }
+
+    fileprivate init(listed: Int, total: Int) {
+        self.listed = listed
+        self.total = total
+    }
 }
 
 /// The candidates for one role, in (device, first channel) order, with any truncation stated.
@@ -53,27 +58,44 @@ struct RigRoleCandidates: Hashable, Sendable {
     let candidates: [RigRouteCandidate]
     /// Non-nil exactly when compatible blocks exist beyond the listed ones.
     let truncation: RigCandidateTruncation?
+
+    fileprivate init(candidates: [RigRouteCandidate], truncation: RigCandidateTruncation?) {
+        self.candidates = candidates
+        self.truncation = truncation
+    }
+}
+
+/// Devices that may offer audio blocks, already filtered and sorted. Only
+/// `RigRouteCandidates.eligibleDevices(_:)` creates this, so candidates are never
+/// enumerated over unfiltered devices.
+struct RigEligibleDevices: Hashable, Sendable {
+    /// Present devices with a channel layout that are not MIDI controllers, sorted by `DeviceID`.
+    let devices: [DeviceDescriptor]
+
+    fileprivate init(devices: [DeviceDescriptor]) {
+        self.devices = devices
+    }
 }
 
 /// Enumerates contiguous candidate blocks.
 enum RigRouteCandidates {
     /// Devices that may offer audio blocks: present, with a channel layout, and not a MIDI
     /// controller. Missing or stale devices never offer candidates. Sorted by `DeviceID`.
-    static func eligibleDevices(_ devices: [DeviceDescriptor]) -> [DeviceDescriptor] {
-        devices.filter { $0.presence == .present && $0.layout != nil && $0.kind != .midiController }
-            .sorted { $0.id < $1.id }
+    static func eligibleDevices(_ devices: [DeviceDescriptor]) -> RigEligibleDevices {
+        let eligible = devices.filter { $0.presence == .present && $0.layout != nil && $0.kind != .midiController }
+        return RigEligibleDevices(devices: eligible.sorted { $0.id < $1.id })
     }
 
-    /// The contiguous blocks of `requirement` on `devices` (already eligible and sorted), capped
-    /// at `RigMappingLimits.candidatesPerRole`. The total is counted arithmetically, so the work
+    /// The contiguous blocks of `requirement` on the eligible devices, capped at
+    /// `RigMappingLimits.candidatesPerRole`. The total is counted arithmetically, so the work
     /// per role is bounded by the device count and the cap, not by the channel count.
     static func candidates(
-        for role: RoleID, requirement: RouteRoleRequirement, on devices: [DeviceDescriptor]
+        for role: RoleID, requirement: RouteRoleRequirement, on eligible: RigEligibleDevices
     ) -> RigRoleCandidates {
         let width = requirement.channelCount
         var listed: [RigRouteCandidate] = []
         var total = 0
-        for device in devices {
+        for device in eligible.devices {
             guard let layout = device.layout, width > 0 else { continue }
             let blocks = max(0, layout.channelCount(requirement.direction) - width + 1)
             total += blocks

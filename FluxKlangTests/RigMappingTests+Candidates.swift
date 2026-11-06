@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 private typealias Fixture = RigMappingFixture
 
@@ -22,28 +26,28 @@ struct RigMappingCandidateTests {
                                                    "role.mono"))
         #expect(wide.candidates.count == RigMappingLimits.candidatesPerRole)
         #expect(wide.candidates.last?.firstChannel == 63)
-        #expect(wide.truncation == RigCandidateTruncation(listed: 64, total: 100))
+        #expect(Fixture.counts(wide.truncation) == [64, 100])
         #expect(wide.truncation?.omitted == 36)
 
         let split = try #require(Fixture.candidates(Fixture.proposal(mono, [
             Fixture.device("dev.a", outputs: 40), Fixture.device("dev.b", outputs: 40)
         ]), "role.mono"))
         #expect(split.candidates.filter { $0.device.rawValue == "dev.b" }.count == 24)
-        #expect(split.truncation == RigCandidateTruncation(listed: 64, total: 80))
+        #expect(Fixture.counts(split.truncation) == [64, 80])
 
         let exact = try #require(Fixture.candidates(Fixture.proposal(mono, [Fixture.device("dev.a", outputs: 64)]),
                                                     "role.mono"))
         #expect(exact.candidates.count == 64 && exact.truncation == nil)
         let over = try #require(Fixture.candidates(Fixture.proposal(mono, [Fixture.device("dev.a", outputs: 65)]),
                                                    "role.mono"))
-        #expect(over.candidates.count == 64 && over.truncation == RigCandidateTruncation(listed: 64, total: 65))
+        #expect(over.candidates.count == 64 && Fixture.counts(over.truncation) == [64, 65])
     }
 
     @Test func blocksPastTheCapCannotBeChosen() throws {
         let mono = try [Fixture.role("role.mono", channels: 1)]
         let devices = try [Fixture.device("dev.a", outputs: 100), Fixture.device("dev.b", outputs: 1)]
         let capped = try Fixture.proposal(mono, devices)
-        #expect(Fixture.candidates(capped, "role.mono")?.truncation == RigCandidateTruncation(listed: 64, total: 101))
+        #expect(Fixture.counts(Fixture.candidates(capped, "role.mono")?.truncation) == [64, 101])
         // The same dev.b block, offered by a proposal without dev.a, is past the cap in `capped`.
         let alone = try Fixture.proposal(mono + [Fixture.role("role.pad", channels: 1)],
                                          [Fixture.device("dev.b", outputs: 2)])
@@ -80,6 +84,12 @@ struct RigMappingCandidateTests {
         let proposal = try RigMappingProposal.make(roles: [Fixture.role("role.mains")], devices: document)
         #expect(proposal.proposedRoutes.map(\.id.rawValue) == ["route.proposed.role.mains.2"])
         try Fixture.expectValid(proposal, over: document)
+        // A derived `.2` ID is also another role's stem: that role moves on to `.2.2`.
+        let crossed = try RigMappingProposal.make(
+            roles: [Fixture.role("role.mains.2"), Fixture.role("role.mains")], devices: document
+        )
+        #expect(crossed.proposedRoutes.map(\.id.rawValue)
+            == ["route.proposed.role.mains.2", "route.proposed.role.mains.2.2"])
 
         let long = String(repeating: "r", count: RoleID.maximumLength)
         let longProposal = try Fixture.proposal([Fixture.role(long)], devices)
@@ -93,6 +103,62 @@ struct RigMappingCandidateTests {
         let twins = try [Fixture.role(long), Fixture.role(String(long.dropLast()) + "s")]
         let twinIDs = try Fixture.proposal(twins, devices).proposedRoutes.map(\.id.rawValue)
         #expect(twinIDs == [id, id + ".2"])
+    }
+
+    @Test func manyRolesSharingALongStemGetDistinctIDsQuickly() throws {
+        // 110 shared characters: every role's 120-byte stem is the same.
+        let shared = String(repeating: "s", count: 110)
+        let roles = try (0..<2_000).map { try Fixture.role(shared + ".\($0)", channels: 1) }
+        let devices = try [Fixture.device("dev.a", outputs: 1)]
+        var proposal: RigMappingProposal?
+        let elapsed = try ContinuousClock().measure { proposal = try Fixture.proposal(roles, devices) }
+        let ids = try #require(proposal).proposedRoutes.map(\.id.rawValue)
+        let stem = String(("route.proposed." + shared).prefix(RouteID.maximumLength - 8))
+        #expect(ids == [stem] + (2...2_000).map { "\(stem).\($0)" })
+        #expect(ids.last == stem + ".2000")
+        // Rescanning each stem from `.2` took about 17 s here in debug; resuming takes well under 0.1 s.
+        #expect(elapsed < .seconds(5))
+    }
+
+    @Test func proposalsStopAtTheRouteCapacityInRoleOrder() throws {
+        let devices = try [Fixture.device("dev.a", outputs: 2)]
+        let filler = try (1..<DeviceCapabilityLimits.routes).map {
+            try Fixture.route("route.fill.\($0)", role: "role.fill", device: "dev.a", binding: .stale)
+        }
+        let roles = try [Fixture.role("role.b"), Fixture.role("role.a")]
+        let proposal = try Fixture.proposal(roles, devices, routes: filler)
+        #expect(filler.count == 4_095 && proposal.orphanRoutes.count == 4_095)
+        #expect(proposal.proposedRoutes.map(\.role.rawValue) == ["role.a"])
+        #expect(Fixture.outcome(proposal, "role.b") == .unmapped(.routeCapacityExhausted(limit: 4_096)))
+        #expect(proposal.unmapped.map(\.rawValue) == ["role.b"])
+        #expect(try Fixture.document(devices, routes: filler + proposal.proposedRoutes).routes.count == 4_096)
+
+        let roomy = try Fixture.proposal(roles, devices, routes: Array(filler.dropLast()))
+        #expect(roomy.proposedRoutes.map(\.role.rawValue) == ["role.a", "role.b"])
+        let full = try Fixture.proposal(roles, devices, routes: filler + [
+            Fixture.route("route.fill.0", role: "role.fill", device: "dev.a", binding: .stale)
+        ])
+        #expect(full.proposedRoutes.isEmpty && full.unmapped.map(\.rawValue) == ["role.a", "role.b"])
+    }
+
+    @Test func choicesStopAtTheRouteCapacity() throws {
+        let devices = try [Fixture.device("dev.a", outputs: 3)]
+        let filler = try (2..<DeviceCapabilityLimits.routes).map {
+            try Fixture.route("route.fill.\($0)", role: "role.fill", device: "dev.a", binding: .stale)
+        }
+        let roles = try [Fixture.role("role.a"), Fixture.role("role.b"), Fixture.role("role.c")]
+        let proposal = try Fixture.proposal(roles, devices, routes: filler)
+        #expect(proposal.awaitingChoice.count == 3)
+        let first = try proposal.choosing(#require(Fixture.candidates(proposal, "role.a")?.candidates.first),
+                                          id: RouteID("route.user.a"))
+        let second = try first.choosing(#require(Fixture.candidates(first, "role.b")?.candidates.last),
+                                        id: RouteID("route.user.b"))
+        #expect(filler.count + second.proposedRoutes.count == 4_096)
+        let last = try #require(Fixture.candidates(second, "role.c")?.candidates.first)
+        #expect(throws: RigMappingRefusal.routeCapacityExhausted(limit: 4_096)) {
+            try second.choosing(last, id: RouteID("route.user.c"))
+        }
+        #expect(try Fixture.document(devices, routes: filler + second.proposedRoutes).routes.count == 4_096)
     }
 
     @Test func zeroWidthRequirementsOfferNothing() throws {

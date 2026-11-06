@@ -10,12 +10,16 @@
 
 /// Why an audio role cannot be offered any route.
 enum RigUnmappedReason: Hashable, Sendable {
-    /// The role's channel count is not confirmed (`nil`), e.g. an adopted legacy role.
+    /// The role's channel count is not confirmed (`nil`), e.g. an adopted legacy role, and the
+    /// role has no existing confirmed or proposed route.
     case unconfirmedChannelCount
     /// The role's channel count is outside `GraphPort.channelRange`.
     case invalidChannelCount(Int)
     /// No present device offers a contiguous block of the role's direction and channel count.
     case noCompatibleBlock
+    /// Exactly one block fits, but the existing routes plus the proposals for roles that sort
+    /// earlier already fill `DeviceCapabilityLimits.routes` (`limit`).
+    case routeCapacityExhausted(limit: Int)
 }
 
 /// How a role enters the mapping.

@@ -31,4 +31,7 @@ enum RigMappingRefusal: Error, Hashable, Sendable {
     case candidateNotOffered(RigRouteCandidate)
     /// A chosen route ID is already used by an existing or proposed route.
     case routeIDInUse(RouteID)
+    /// The existing and proposed routes already fill `DeviceCapabilityLimits.routes`; one more
+    /// route would make the device document invalid.
+    case routeCapacityExhausted(limit: Int)
 }

@@ -1,5 +1,9 @@
 import Testing
+#if canImport(FluxKlangMac)
+@testable import FluxKlangMac
+#else
 @testable import FluxKlang
+#endif
 
 /// Shared builders for the rig mapping suites.
 enum RigMappingFixture {
@@ -49,6 +53,11 @@ enum RigMappingFixture {
 
     static func candidates(_ proposal: RigMappingProposal, _ role: String) -> RigRoleCandidates? {
         if case .awaitingChoice(let found) = outcome(proposal, role) { found } else { nil }
+    }
+
+    /// A truncation as `[listed, total]`; truncations are only created by the candidate enumeration.
+    static func counts(_ truncation: RigCandidateTruncation?) -> [Int]? {
+        truncation.map { [$0.listed, $0.total] }
     }
 
     /// The document with the proposal's routes appended must pass the contract's role validation.
@@ -249,14 +258,66 @@ struct RigMappingTests {
         var document = try Fixture.document(devices)
         document.routes = try [Fixture.route("route.x", role: "role.mains", device: "dev.nowhere", binding: .proposed)]
         let mains = try [Fixture.role("role.mains")]
-        do {
-            _ = try RigMappingProposal.make(roles: mains, devices: document)
-            Issue.record("expected invalidDevices")
-        } catch {
-            guard case .invalidDevices = error else {
-                Issue.record("unexpected refusal \(error)")
-                return
-            }
+        let unknown = try RouteValidationError.unknownDevice(RouteID("route.x"), DeviceID("dev.nowhere"))
+        #expect(throws: RigMappingRefusal.invalidDevices(String(describing: unknown))) {
+            try RigMappingProposal.make(roles: mains, devices: document)
         }
+    }
+
+    @Test func existingRoutesThatNoLongerFitTheRoleAreMismatchedNeverDoubled() throws {
+        let devices = try [Fixture.device("dev.a", inputs: 2, outputs: 2)]
+        let routes = try [
+            // A mono route left over from before the role became stereo.
+            Fixture.route("route.mono", role: "role.stereo", device: "dev.a", channels: [0], binding: .confirmed),
+            // A route proposed before the role's direction was flipped.
+            Fixture.route("route.flip", role: "role.flip", device: "dev.a", direction: .input, binding: .proposed),
+            Fixture.route("route.z.bad", role: "role.mixed", device: "dev.a", channels: [1], binding: .proposed),
+            Fixture.route("route.ok", role: "role.mixed", device: "dev.a", binding: .confirmed),
+            Fixture.route("route.b.bad", role: "role.mixed", device: "dev.a", direction: .input, binding: .proposed)
+        ]
+        let roles = try [Fixture.role("role.stereo"), Fixture.role("role.flip"), Fixture.role("role.mixed")]
+        let proposal = try Fixture.proposal(roles, devices, routes: routes)
+        #expect(try Fixture.outcome(proposal, "role.stereo") == .mismatchedRoute([RouteID("route.mono")]))
+        #expect(try Fixture.outcome(proposal, "role.flip") == .mismatchedRoute([RouteID("route.flip")]))
+        #expect(try Fixture.outcome(proposal, "role.mixed")
+            == .mismatchedRoute([RouteID("route.b.bad"), RouteID("route.z.bad")]))
+        #expect(proposal.mismatched.map(\.rawValue) == ["role.flip", "role.mixed", "role.stereo"])
+        // Each role had exactly one free block, yet no second route is proposed beside the stale one.
+        #expect(proposal.proposedRoutes.isEmpty && proposal.awaitingChoice.isEmpty && proposal.unmapped.isEmpty)
+        #expect(proposal.requirements.count == 3)
+    }
+
+    @Test func legacyRolesWithoutAChannelCountKeepTheirExistingRoutes() throws {
+        let devices = try [Fixture.device("dev.a", inputs: 2, outputs: 2)]
+        let routes = try [
+            Fixture.route("route.legacy", role: "role.legacy", device: "dev.a", binding: .confirmed),
+            Fixture.route("route.flip", role: "role.legacy.flip", device: "dev.a", direction: .input,
+                          binding: .confirmed),
+            Fixture.route("route.huge", role: "role.huge", device: "dev.a", binding: .confirmed)
+        ]
+        let roles = try [Fixture.role("role.legacy", channels: nil), Fixture.role("role.legacy.flip", channels: nil),
+                         Fixture.role("role.legacy.none", channels: nil), Fixture.role("role.huge", channels: 65)]
+        let proposal = try Fixture.proposal(roles, devices, routes: routes)
+        #expect(try Fixture.outcome(proposal, "role.legacy") == .alreadyRouted([RouteID("route.legacy")]))
+        #expect(try Fixture.outcome(proposal, "role.legacy.flip") == .mismatchedRoute([RouteID("route.flip")]))
+        #expect(Fixture.outcome(proposal, "role.legacy.none") == .unmapped(.unconfirmedChannelCount))
+        // An out-of-range count is a malformed role whatever routes it has.
+        #expect(Fixture.outcome(proposal, "role.huge") == .unmapped(.invalidChannelCount(65)))
+        #expect(proposal.unmapped.map(\.rawValue) == ["role.huge", "role.legacy.none"])
+        #expect(proposal.requirements.isEmpty && proposal.proposedRoutes.isEmpty)
+    }
+
+    @Test func routesForRolesOutsideTheInputAreReportedAsOrphans() throws {
+        let devices = try [Fixture.device("dev.a", outputs: 2)]
+        let routes = try [
+            Fixture.route("route.z", role: "role.gone", device: "dev.a", binding: .confirmed),
+            Fixture.route("route.mains", role: "role.mains", device: "dev.a", binding: .proposed),
+            Fixture.route("route.a", role: "role.old", device: "dev.a", binding: .stale)
+        ]
+        let mains = try [Fixture.role("role.mains")]
+        let proposal = try Fixture.proposal(mains, devices, routes: routes)
+        #expect(proposal.orphanRoutes.map(\.rawValue) == ["route.a", "route.z"])
+        #expect(try Fixture.outcome(proposal, "role.mains") == .alreadyRouted([RouteID("route.mains")]))
+        #expect(try Fixture.proposal(mains, devices, routes: [routes[1]]).orphanRoutes.isEmpty)
     }
 }

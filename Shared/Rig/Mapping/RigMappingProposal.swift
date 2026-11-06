@@ -8,14 +8,29 @@
 //  plays a tone. Confirmation stays with the device contract's host-local
 //  evidence path.
 //
-//  Per role, in this precedence: a non-audio role is skipped (out of scope);
-//  an audio role without a valid channel count is unmapped; a role with an
-//  existing confirmed or proposed route is left alone; otherwise exactly one
-//  candidate yields a proposed route, more than one awaits the caller's choice
-//  (nothing is auto-picked), and none leaves the role unmapped.
+//  Per role, in this precedence:
+//  1. a non-audio role is skipped (out of scope);
+//  2. an audio role with an out-of-range channel count is unmapped;
+//  3. a role with existing confirmed or proposed routes is left alone: it is
+//     already routed when every such route still fits the role (direction,
+//     and channel count and device bounds when the count is known), and
+//     otherwise reports the routes that no longer fit (`mismatchedRoute`),
+//     with no new proposal, so a role never gets a second route beside a
+//     stale one; the caller removes or replaces the mismatched routes;
+//  4. an audio role with an unconfirmed (`nil`) channel count is unmapped;
+//  5. otherwise exactly one candidate yields a proposed route, more than one
+//     awaits the caller's choice (nothing is auto-picked), and none leaves the
+//     role unmapped.
+//
+//  Route budget: the existing routes plus all proposed routes never exceed
+//  `DeviceCapabilityLimits.routes`. `make` hands the remaining budget to
+//  single-candidate roles in `RoleID` order; a later single-candidate role is
+//  unmapped with `.routeCapacityExhausted`, the rest of the proposal stands.
+//  `choosing` refuses a choice that would exceed the budget.
 //
 //  Existing `stale` and `deviceMissing` routes are reported, never reused:
-//  their IDs, bindings and evidence are not carried into any proposal.
+//  their IDs, bindings and evidence are not carried into any proposal. Routes
+//  for roles that are not in the input are reported as orphans.
 //
 
 /// The state of an existing route that is reported instead of reused.
@@ -38,8 +53,12 @@ enum RigRoleOutcome: Hashable, Sendable {
     case proposed(AudioRoute, from: RigRouteCandidate)
     /// More than one candidate fits; nothing is picked until the caller chooses one.
     case awaitingChoice(RigRoleCandidates)
-    /// The role already has confirmed or proposed routes (sorted by ID); nothing more is proposed.
+    /// The role already has confirmed or proposed routes (sorted by ID) that all fit it; nothing
+    /// more is proposed.
     case alreadyRouted([RouteID])
+    /// Existing confirmed or proposed routes of the role (sorted by ID) no longer fit it (direction
+    /// or channel count). Nothing is proposed: the caller removes or replaces these routes.
+    case mismatchedRoute([RouteID])
     /// The audio role cannot be offered a route.
     case unmapped(RigUnmappedReason)
     /// A non-audio role (MIDI, control, clock), out of scope for route mapping.
@@ -68,6 +87,9 @@ struct RigMappingProposal: Hashable, Sendable {
     let requirements: [RoleID: RouteRoleRequirement]
     /// Existing `stale`/`deviceMissing` routes, sorted by `RouteID`.
     let existingRoutes: [RigExistingRouteReport]
+    /// Existing routes (any binding) whose role is not in the input, sorted. They fail
+    /// `validate(roles:)` until the caller removes them or supplies their roles.
+    let orphanRoutes: [RouteID]
     /// Devices that are missing or stale and therefore offer no candidates, sorted by `DeviceID`.
     let absentDevices: [DeviceID]
     /// The device document's route IDs, which no proposed route may reuse.
@@ -93,11 +115,18 @@ struct RigMappingProposal: Hashable, Sendable {
         mappings.compactMap { if case .skipped = $0.outcome { $0.role } else { nil } }
     }
 
+    /// Roles whose existing routes no longer fit them, sorted.
+    var mismatched: [RoleID] {
+        mappings.compactMap { if case .mismatchedRoute = $0.outcome { $0.role } else { nil } }
+    }
+
     private init(mappings: [RigRoleMapping], requirements: [RoleID: RouteRoleRequirement],
-                 existingRoutes: [RigExistingRouteReport], absentDevices: [DeviceID], documentRouteIDs: Set<RouteID>) {
+                 existingRoutes: [RigExistingRouteReport], orphanRoutes: [RouteID], absentDevices: [DeviceID],
+                 documentRouteIDs: Set<RouteID>) {
         self.mappings = mappings
         self.requirements = requirements
         self.existingRoutes = existingRoutes
+        self.orphanRoutes = orphanRoutes
         self.absentDevices = absentDevices
         self.documentRouteIDs = documentRouteIDs
     }
@@ -114,27 +143,35 @@ struct RigMappingProposal: Hashable, Sendable {
         do { try document.validate() } catch { throw .invalidDevices(String(describing: error)) }
 
         let eligible = RigRouteCandidates.eligibleDevices(document.devices)
-        var routedRoles: [RoleID: [RouteID]] = [:]
+        var routedRoles: [RoleID: [AudioRoute]] = [:]
         for route in document.routes where route.binding == .confirmed || route.binding == .proposed {
-            routedRoles[route.role, default: []].append(route.id)
+            routedRoles[route.role, default: []].append(route)
         }
-        var usedIDs = Set(document.routes.map(\.id))
+        let layouts = Dictionary(uniqueKeysWithValues: document.devices.map { ($0.id, $0.layout) })
+        var ids = RigRouteIDAllocator(used: Set(document.routes.map(\.id)))
+        // `document.validate()` bounds the routes by the limit, so the budget is never negative.
+        var budget = DeviceCapabilityLimits.routes - document.routes.count
         var requirements: [RoleID: RouteRoleRequirement] = [:]
         var mappings: [RigRoleMapping] = []
         for role in roles.sorted(by: { $0.id < $1.id }) {
             let outcome: RigRoleOutcome
+            let direction = RigRoleRequirements.direction(of: role.direction)
             switch RigRoleRequirements.requirement(for: role) {
             case .notAudio(let signal):
                 outcome = .skipped(signal)
+            case .unmappable(.invalidChannelCount(let count)):
+                outcome = .unmapped(.invalidChannelCount(count))
             case .unmappable(let reason):
-                outcome = .unmapped(reason)
+                outcome = Self.existingOutcome(routedRoles[role.id], direction: direction, requirement: nil,
+                                               layouts: layouts) ?? .unmapped(reason)
             case .audio(let requirement):
                 requirements[role.id] = requirement
-                if let routed = routedRoles[role.id] {
-                    outcome = .alreadyRouted(routed.sorted())
+                if let routed = Self.existingOutcome(routedRoles[role.id], direction: direction,
+                                                     requirement: requirement, layouts: layouts) {
+                    outcome = routed
                 } else {
                     let found = RigRouteCandidates.candidates(for: role.id, requirement: requirement, on: eligible)
-                    outcome = Self.outcome(for: found, usedIDs: &usedIDs)
+                    outcome = Self.outcome(for: found, ids: &ids, budget: &budget)
                 }
             }
             mappings.append(RigRoleMapping(role: role.id, outcome: outcome))
@@ -142,6 +179,7 @@ struct RigMappingProposal: Hashable, Sendable {
         return RigMappingProposal(
             mappings: mappings, requirements: requirements,
             existingRoutes: Self.reports(document.routes),
+            orphanRoutes: document.routes.filter { !seen.contains($0.role) }.map(\.id).sorted(),
             absentDevices: document.devices.filter { $0.presence != .present }.map(\.id).sorted(),
             documentRouteIDs: Set(document.routes.map(\.id))
         )
@@ -157,7 +195,11 @@ struct RigMappingProposal: Hashable, Sendable {
               offered.candidates.contains(candidate) else {
             throw .candidateNotOffered(candidate)
         }
-        guard !documentRouteIDs.contains(id), !proposedRoutes.contains(where: { $0.id == id }) else {
+        let proposed = proposedRoutes
+        guard documentRouteIDs.count + proposed.count < DeviceCapabilityLimits.routes else {
+            throw .routeCapacityExhausted(limit: DeviceCapabilityLimits.routes)
+        }
+        guard !documentRouteIDs.contains(id), !proposed.contains(where: { $0.id == id }) else {
             throw .routeIDInUse(id)
         }
         var updated = self
@@ -167,15 +209,33 @@ struct RigMappingProposal: Hashable, Sendable {
         return updated
     }
 
-    private static func outcome(for found: RigRoleCandidates, usedIDs: inout Set<RouteID>) -> RigRoleOutcome {
+    /// The outcome for a role with existing confirmed or proposed routes, or `nil` when it has none.
+    /// With a known requirement every route must pass `validate(layout:role:)`; with an unconfirmed
+    /// channel count only the direction can be checked.
+    private static func existingOutcome(
+        _ routes: [AudioRoute]?, direction: RouteDirection, requirement: RouteRoleRequirement?,
+        layouts: [DeviceID: ChannelLayout?]
+    ) -> RigRoleOutcome? {
+        guard let routes else { return nil }
+        let mismatched = routes.filter { route in
+            guard let requirement else { return route.direction != direction }
+            return (try? route.validate(layout: layouts[route.device] ?? nil, role: requirement)) == nil
+        }
+        guard mismatched.isEmpty else { return .mismatchedRoute(mismatched.map(\.id).sorted()) }
+        return .alreadyRouted(routes.map(\.id).sorted())
+    }
+
+    private static func outcome(
+        for found: RigRoleCandidates, ids: inout RigRouteIDAllocator, budget: inout Int
+    ) -> RigRoleOutcome {
         switch found.candidates.count {
         case 0:
             return .unmapped(.noCompatibleBlock)
         case 1:
+            guard budget > 0 else { return .unmapped(.routeCapacityExhausted(limit: DeviceCapabilityLimits.routes)) }
+            budget -= 1
             let candidate = found.candidates[0]
-            let id = routeID(for: candidate.role, avoiding: usedIDs)
-            usedIDs.insert(id)
-            return .proposed(route(for: candidate, id: id), from: candidate)
+            return .proposed(route(for: candidate, id: ids.next(for: candidate.role)), from: candidate)
         default:
             return .awaitingChoice(found)
         }
@@ -187,15 +247,11 @@ struct RigMappingProposal: Hashable, Sendable {
     }
 
     /// `route.proposed.<role>`, shortened to leave room for a `.<n>` suffix; the first unused
-    /// of the stem, `stem.2`, `stem.3`, … is chosen.
+    /// of the stem, `stem.2`, `stem.3`, … is chosen. One call tries at most `used.count + 1`
+    /// suffixes; `make` derives all its IDs through one `RigRouteIDAllocator`.
     static func routeID(for role: RoleID, avoiding used: Set<RouteID>) -> RouteID {
-        let stem = String((routeIDPrefix + role.rawValue).prefix(RouteID.maximumLength - 8))
-        for suffix in 1...(used.count + 1) {
-            if let id = RouteID(rawValue: suffix == 1 ? stem : "\(stem).\(suffix)"), !used.contains(id) {
-                return id
-            }
-        }
-        preconditionFailure("A route ID among \(used.count + 1) suffixes is always unused")
+        var allocator = RigRouteIDAllocator(used: used)
+        return allocator.next(for: role)
     }
 
     private static func reports(_ routes: [AudioRoute]) -> [RigExistingRouteReport] {
@@ -208,5 +264,31 @@ struct RigMappingProposal: Hashable, Sendable {
             }
             return RigExistingRouteReport(route: route.id, role: route.role, device: route.device, state: state)
         }.sorted { $0.route < $1.route }
+    }
+}
+
+/// Derives `route.proposed.<role>` IDs for one proposal. Each stem remembers its next suffix, so
+/// roles that share a shortened stem resume where the previous one stopped instead of rescanning
+/// from `.2`. Any used ID is skipped at most twice (as some stem's `.n` and as a stem itself), so
+/// deriving `r` IDs over `d` document IDs costs at most `r + 2 * (r + d)` attempts.
+private struct RigRouteIDAllocator {
+    private var used: Set<RouteID>
+    private var nextSuffix: [String: Int] = [:]
+
+    init(used: Set<RouteID>) {
+        self.used = used
+    }
+
+    mutating func next(for role: RoleID) -> RouteID {
+        let stem = String((RigMappingProposal.routeIDPrefix + role.rawValue).prefix(RouteID.maximumLength - 8))
+        let start = nextSuffix[stem, default: 1]
+        // The `used` check stays as a backstop: suffixes taken by document IDs are skipped.
+        for suffix in start...(start + used.count) {
+            if let id = RouteID(rawValue: suffix == 1 ? stem : "\(stem).\(suffix)"), used.insert(id).inserted {
+                nextSuffix[stem] = suffix + 1
+                return id
+            }
+        }
+        preconditionFailure("A route ID among \(used.count + 1) suffixes is always unused")
     }
 }
