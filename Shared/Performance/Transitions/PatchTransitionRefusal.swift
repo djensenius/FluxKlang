@@ -9,8 +9,8 @@
 /// both invalid and over budget is refused, never deferred. A prepare stops at the first refusal in this order:
 /// 1. the recall plan itself: `.changesWithoutVariationChange`, `.tooManyParameterChanges`, then per change in order
 ///    `.unsorted`, `.nonFinite`, `.unitMismatch`, `.unchanged`;
-/// 2. merging with the deferred changes: `.discontinuousVariation`, then `.discontinuous` per change in order, then
-///    the merged capacity `.tooManyMergedChanges`;
+/// 2. merging with the tracker's state: `.discontinuousVariation` against the recalled patch's recorded variation,
+///    then `.discontinuous` per change in order, then the merged capacity `.tooManyMergedChanges`;
 /// 3. `.unboundRoute` (lowest first), `.recallPatchNotRouted`, then (tracker only) `.untrackedRoute`.
 enum PatchTransitionRefusal: Error, Hashable, Sendable {
     /// A budget outside `PatchTransitionBudget.retainedRouteBounds` or `tailSlotBounds`.
@@ -50,7 +50,8 @@ enum PatchRecallDefect: Hashable, Sendable {
     case changesWithoutVariationChange
     /// A change whose `from` is not the `to` of the change still deferred for the same patch and parameter.
     case discontinuous(ParameterID)
-    /// The recall's `from` is not `expected`, the variation the patch's deferred changes lead to (nil: the
-    /// baseline). Refused even when the recall changes none of the deferred parameters.
+    /// The recall's `from` is not `expected`, the variation the tracker records for the patch while retained routes
+    /// play it (nil: the baseline). Refused even when the recall changes none of the deferred parameters, and even
+    /// once every deferred change has cancelled (A→B→C).
     case discontinuousVariation(PatchID, expected: PatchVariationID?)
 }

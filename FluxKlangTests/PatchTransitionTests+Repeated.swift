@@ -188,6 +188,103 @@ struct PatchTransitionRepeatedTests {
         #expect(plan.parameterChanges.map(\.variation) == [Fixture.verse, Fixture.verse])
     }
 
+    /// nil → verse defers gain -12 → -6 and verse → chorus moves it back, so the change cancels. The tracker still
+    /// records chorus while the retained route plays the patch, so a stale verse → bridge recall is refused.
+    @Test
+    func staleRecallAfterEveryDeferredChangeCancelledIsRefused() throws {
+        let routingA = try Fixture.routing(Fixture.routeA)
+        let routingShared = try Fixture.routing(Fixture.routeShared)
+        var tracker = try Fixture.tracker(routingA)
+        var ledger = MIDINoteLedger()
+        try Fixture.play(Fixture.on(48), on: &ledger, routing: routingA)
+        let toVerse = Fixture.recall(
+            Fixture.patchA, from: nil, to: Fixture.verse, Fixture.change(Fixture.gain, -12, -6)
+        )
+        try tracker.recall(to: routingShared, recall: toVerse, ledger: ledger)
+        let toChorus = Fixture.recall(
+            Fixture.patchA, from: Fixture.verse, to: Fixture.chorus, Fixture.change(Fixture.gain, -6, -12)
+        )
+        let cancelled = try tracker.recall(to: routingShared, recall: toChorus, ledger: ledger)
+        #expect(cancelled.parameterChanges.isEmpty && tracker.deferredChanges.isEmpty)
+        #expect(tracker.retainedRoutes == [Fixture.routeA])
+        #expect(tracker.deferredVariations == [Fixture.patchA: Fixture.chorus])
+
+        let before = tracker
+        let stale = Fixture.recall(
+            Fixture.patchA, from: Fixture.verse, to: Fixture.bridge, Fixture.change(Fixture.mix, 1, 2)
+        )
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
+            try tracker.recall(to: routingShared, recall: stale, ledger: ledger)
+        } == .invalidRecallPlan(.discontinuousVariation(Fixture.patchA, expected: Fixture.chorus)))
+        #expect(tracker == before)
+
+        let onward = Fixture.recall(
+            Fixture.patchA, from: Fixture.chorus, to: Fixture.bridge, Fixture.change(Fixture.mix, 1, 2)
+        )
+        let plan = try tracker.recall(to: routingShared, recall: onward, ledger: ledger)
+        #expect(plan.parameterChanges.map(\.change) == [Fixture.change(Fixture.mix, 1, 2)])
+        #expect(plan.parameterChanges.map(\.variation) == [Fixture.bridge])
+        #expect(plan.parameterChanges.map(\.waitingOn) == [[Fixture.routeA]])
+        #expect(tracker.deferredVariations == [Fixture.patchA: Fixture.bridge])
+    }
+
+    /// A recall back to the baseline is recorded as the baseline, not as no record.
+    @Test
+    func staleRecallAfterCancellingBackToTheBaselineIsRefused() throws {
+        let routingA = try Fixture.routing(Fixture.routeA)
+        let routingShared = try Fixture.routing(Fixture.routeShared)
+        var tracker = try Fixture.tracker(routingA)
+        var ledger = MIDINoteLedger()
+        try Fixture.play(Fixture.on(48), on: &ledger, routing: routingA)
+        try tracker.recall(
+            to: routingShared, recall: Fixture.planned(Fixture.patchA, from: nil, to: Fixture.verse), ledger: ledger
+        )
+        try tracker.recall(
+            to: routingShared, recall: Fixture.planned(Fixture.patchA, from: Fixture.verse, to: nil), ledger: ledger
+        )
+        #expect(tracker.deferredChanges.isEmpty)
+        #expect(tracker.deferredVariations == [Fixture.patchA: PatchVariationID?.none])
+        let before = tracker
+        let stale = try Fixture.planned(Fixture.patchA, from: Fixture.verse, to: Fixture.chorus)
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
+            try tracker.recall(to: routingShared, recall: stale, ledger: ledger)
+        } == .invalidRecallPlan(.discontinuousVariation(Fixture.patchA, expected: nil)))
+        #expect(tracker == before)
+    }
+
+    /// The record lives only while a retained route plays the patch: once the last one drains, or becomes current
+    /// again, the next recall may start from any variation.
+    @Test
+    func variationRecordClearsWhenThePatchHasNoRetainedRouteLeft() throws {
+        let routingA = try Fixture.routing(Fixture.routeA)
+        let routingShared = try Fixture.routing(Fixture.routeShared)
+        var ledger = MIDINoteLedger()
+        try Fixture.play(Fixture.on(48), on: &ledger, routing: routingA)
+        let toChorus = Fixture.recall(
+            Fixture.patchA, from: nil, to: Fixture.chorus, Fixture.change(Fixture.gain, -12, 0)
+        )
+        let elsewhere = Fixture.recall(
+            Fixture.patchA, from: Fixture.bridge, to: Fixture.verse, Fixture.change(Fixture.mix, 2, 1)
+        )
+
+        var drained = try Fixture.tracker(routingA)
+        try drained.recall(to: routingShared, recall: toChorus, ledger: ledger)
+        #expect(drained.deferredVariations == [Fixture.patchA: Fixture.chorus])
+        var released = ledger
+        try Fixture.play(Fixture.off(48), on: &released, routing: routingShared)
+        #expect(try drained.observe(released).isRetired)
+        #expect(drained.deferredVariations.isEmpty)
+        let afterDrain = try drained.recall(to: routingShared, recall: elsewhere, ledger: released)
+        #expect(afterDrain.parameterChanges.map(\.isDeferred) == [false])
+        #expect(drained.deferredVariations.isEmpty)
+
+        var current = try Fixture.tracker(routingA)
+        try current.recall(to: routingShared, recall: toChorus, ledger: ledger)
+        try current.recall(to: routingA, recall: nil, ledger: ledger)
+        #expect(current.retainedRoutes.isEmpty && current.deferredVariations.isEmpty)
+        #expect(try current.prepare(to: routingA, recall: elsewhere, ledger: ledger).decision == .publish)
+    }
+
     @Test(arguments: [
         (PatchTransitionFixture.recall(PatchTransitionFixture.patchA, from: nil, to: nil,
                                        PatchTransitionFixture.change(PatchTransitionFixture.gain, -6, 0)),

@@ -100,22 +100,24 @@ enum PatchTransitionPlanner {
     }
 
     /// The deferred changes followed by `recall`'s, merged per (patch, parameter), sorted by patch, then parameter.
-    /// - The recalled patch's deferred changes must lead to `recall.from` (else `.discontinuousVariation`), so a stale
-    ///   recall is refused even when it touches none of their parameters. Afterwards they all lead to `recall.to`.
+    /// - When `variations` records the recalled patch (the tracker's `deferredVariations`: it has retained routes),
+    ///   `recall.from` must be that variation (else `.discontinuousVariation`), so a stale recall is refused even when
+    ///   it touches none of the deferred parameters or every deferred change has cancelled. The patch's deferred
+    ///   changes lead to the recorded variation, and afterwards they all lead to `recall.to`.
     /// - A change continuing a deferred one must start at its `to` (else `.discontinuous`). The merge keeps the
     ///   deferred `from` and takes the new `to`, and a merge back to the starting value drops out.
     /// - The recalled patch's merged changes are bounded by `maximumParameterChanges` (`.tooManyMergedChanges`).
     ///   Every other patch's deferred changes were bounded when their recall merged.
     static func merge(
-        deferred: [MergedChange], recall: PatchRecallPlan?
+        deferred: [MergedChange], variations: [PatchID: PatchVariationID?], recall: PatchRecallPlan?
     ) throws(PatchTransitionRefusal) -> [MergedChange] {
         var merged = deferred
         if let recall {
+            if let expected = variations[recall.patch], expected != recall.from {
+                throw .invalidRecallPlan(.discontinuousVariation(recall.patch, expected: expected))
+            }
             var indices: [ParameterID: Int] = [:]
             for index in merged.indices where merged[index].patch == recall.patch {
-                guard merged[index].variation == recall.from else {
-                    throw .invalidRecallPlan(.discontinuousVariation(recall.patch, expected: merged[index].variation))
-                }
                 merged[index].variation = recall.to
                 indices[merged[index].change.parameter] = index
             }

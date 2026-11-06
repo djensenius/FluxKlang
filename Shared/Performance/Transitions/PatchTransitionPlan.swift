@@ -53,7 +53,9 @@ struct PatchTailReservation: Hashable, Sendable {
 struct PatchPlannedChange: Hashable, Sendable {
     var patch: PatchID { storedPatch }
     /// The recalled variation this change leads `patch` to (nil: the baseline). Every deferred change of one patch
-    /// leads to the same variation, which the next recall of that patch must start from.
+    /// leads to the same variation, the one the tracker records for the patch (`deferredVariations`) and the next
+    /// recall of that patch must start from. The record outlives the changes: it holds while the patch has retained
+    /// routes, even after every deferred change has cancelled.
     var variation: PatchVariationID? { storedVariation }
     var change: PatchParameterChange { storedChange }
     /// Retained routes playing `patch`, ascending. Empty: apply now to the patch.
@@ -124,15 +126,16 @@ struct PatchTransitionPlan: Equatable, Sendable {
     }
 
     /// Plans `previous` → `routing` with `recall`'s changes (nil: routing only) and no tracker: every route the
-    /// ledger sounds on outside `routing` is retained, and any retention counts as added. Reads `ledger` only.
-    /// Refusals are checked before pressure (see `PatchTransitionRefusal`), so a refused input is never deferred.
+    /// ledger sounds on outside `routing` is retained, any retention counts as added, and no variation is recorded.
+    /// Reads `ledger` only. Refusals are checked before pressure (see `PatchTransitionRefusal`), so a refused input is
+    /// never deferred.
     static func prepare(
         ledger: MIDINoteLedger, from previous: MIDIRouting, to routing: MIDIRouting, recall: PatchRecallPlan?,
         policy: PatchTransitionPolicy
     ) throws(PatchTransitionRefusal) -> Self {
         try assemble(PatchTransitionInputs(
             ledger: ledger, previous: previous, routing: routing, recall: recall, policy: policy, deferred: [],
-            tracked: nil, wasRetained: []
+            variations: [:], tracked: nil, wasRetained: []
         ))
     }
 
@@ -144,8 +147,8 @@ struct PatchTransitionPlan: Equatable, Sendable {
     ) throws(PatchTransitionRefusal) -> Self {
         try assemble(PatchTransitionInputs(
             ledger: ledger, previous: tracker.routing, routing: routing, recall: recall, policy: tracker.policy,
-            deferred: tracker.deferredChanges, tracked: tracker.trackedRoutes,
-            wasRetained: Set(tracker.retainedRoutes)
+            deferred: tracker.deferredChanges, variations: tracker.deferredVariations,
+            tracked: tracker.trackedRoutes, wasRetained: Set(tracker.retainedRoutes)
         ))
     }
 
@@ -156,7 +159,7 @@ struct PatchTransitionPlan: Equatable, Sendable {
             deferred: inputs.deferred.map {
                 PatchTransitionPlanner.MergedChange(patch: $0.patch, variation: $0.variation, change: $0.change)
             },
-            recall: inputs.recall
+            variations: inputs.variations, recall: inputs.recall
         )
         let occupancy = PatchLedgerOccupancy(inputs.ledger).entries
         let current = PatchTransitionPlanner.routes(of: inputs.routing)
@@ -204,6 +207,8 @@ private struct PatchTransitionInputs {
     let recall: PatchRecallPlan?
     let policy: PatchTransitionPolicy
     let deferred: [PatchPlannedChange]
+    /// The tracker's `deferredVariations`.
+    let variations: [PatchID: PatchVariationID?]
     let tracked: Set<MIDIRouteID>?
     /// Routes the tracker retains before this transition.
     let wasRetained: Set<MIDIRouteID>

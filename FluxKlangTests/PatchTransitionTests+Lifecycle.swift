@@ -124,6 +124,31 @@ struct PatchTransitionLifecycleTests {
         } == .unboundRoute(Fixture.unbound))
     }
 
+    /// The seeded init checks the routing and the ledger together, as the stateless prepare does, so the lowest
+    /// unbound route is refused whichever of them holds it.
+    @Test
+    func seedingRefusesTheLowestUnboundRouteOfTheRoutingAndTheLedgerTogether() throws {
+        let policy = try Fixture.policy()
+        let lower = MIDIRouteID(998)
+        let routingLower = try Fixture.routing(lower)
+        let routingHigher = try Fixture.routing(Fixture.unbound)
+        var soundingLower = MIDINoteLedger()
+        try Fixture.play(Fixture.on(60), on: &soundingLower, routing: routingLower)
+        var soundingHigher = MIDINoteLedger()
+        try Fixture.play(Fixture.on(60), on: &soundingHigher, routing: routingHigher)
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
+            try PatchTransitionPlan.prepare(
+                ledger: soundingLower, from: routingHigher, to: routingHigher, recall: nil, policy: policy
+            )
+        } == .unboundRoute(lower))
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
+            try PatchTransitionTracker(routing: routingHigher, policy: policy, ledger: soundingLower)
+        } == .unboundRoute(lower))
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
+            try PatchTransitionTracker(routing: routingLower, policy: policy, ledger: soundingHigher)
+        } == .unboundRoute(lower))
+    }
+
     /// The tail budget gates added retention only: a sustain pedal pressed after adoption may grow the retained
     /// tails over the budget without blocking a recall that adds no retention.
     @Test

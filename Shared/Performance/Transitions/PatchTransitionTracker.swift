@@ -37,9 +37,13 @@ struct PatchTransitionTracker: Equatable, Sendable {
     /// Ascending by route.
     private(set) var tailReservations: [PatchTailReservation] = []
     /// Changes waiting on retained routes, sorted by patch, then parameter. All of one patch's deferred changes lead to
-    /// the same recorded variation (`PatchPlannedChange.variation`), which the next recall of that patch must start
-    /// from.
+    /// the variation `deferredVariations` records for that patch.
     private(set) var deferredChanges: [PatchPlannedChange] = []
+    /// The variation each patch with retained routes was last recalled to (nil value: the baseline). The next recall
+    /// of that patch must start from it, even once all of its deferred changes have cancelled (A→B→C). Set by every
+    /// published recall of a patch that still has retained routes; a patch's entry clears when its last retained route
+    /// drains or becomes current, so it holds only patches retained routes play and is empty once retired.
+    private(set) var deferredVariations: [PatchID: PatchVariationID?] = [:]
 
     var retainedRoutes: [MIDIRouteID] { tailReservations.map(\.route) }
     var isRetired: Bool { tailReservations.isEmpty && deferredChanges.isEmpty }
@@ -56,14 +60,16 @@ struct PatchTransitionTracker: Equatable, Sendable {
     /// A tracker for `routing` created while `ledger` may still sound on other routes: each of those routes is
     /// retained as if a recall had just left it, so later recalls and observes accept them. Seeded retention is
     /// existing state that cannot be cut, so it is adopted even over the budget (see `PatchTransitionBudget`). Refuses
-    /// the lowest unbound route of `routing` or of the ledger.
+    /// the lowest unbound route of `routing` and the ledger together, as the stateless `prepare` does. No variation is
+    /// recorded for the seeded routes' patches, so their next recall may start from any variation.
     init(
         routing: MIDIRouting, policy: PatchTransitionPolicy, ledger: MIDINoteLedger
     ) throws(PatchTransitionRefusal) {
-        try self.init(routing: routing, policy: policy)
-        tailReservations = try PatchTransitionPlan.prepare(
+        let seeded = try PatchTransitionPlan.prepare(
             ledger: ledger, from: routing, to: routing, recall: nil, policy: policy
-        ).tailReservations
+        )
+        try self.init(routing: routing, policy: policy)
+        tailReservations = seeded.tailReservations
     }
 
     /// Every route the ledger may sound on: the routing's and the retained ones.
@@ -79,8 +85,9 @@ struct PatchTransitionTracker: Equatable, Sendable {
     }
 
     /// Prepares and, when the decision is `.publish`, adopts the plan: its routing, its reservations and its deferred
-    /// changes. Every route the tracker stops tracking is in the plan's `droppedRoutes`. A deferred plan is returned
-    /// without being adopted; a refusal throws. Both leave the tracker unchanged.
+    /// changes, and records `recall.to` for the recalled patch while retained routes play it. Every route the tracker
+    /// stops tracking is in the plan's `droppedRoutes`. A deferred plan is returned without being adopted; a refusal
+    /// throws. Both leave the tracker unchanged.
     @discardableResult
     mutating func recall(
         to next: MIDIRouting, recall: PatchRecallPlan?, ledger: MIDINoteLedger
@@ -90,11 +97,17 @@ struct PatchTransitionTracker: Equatable, Sendable {
         routing = plan.routing
         tailReservations = plan.tailReservations
         deferredChanges = plan.parameterChanges.filter(\.isDeferred)
+        let retainedPatches = Set(plan.tailReservations.map(\.target))
+        deferredVariations = deferredVariations.filter { retainedPatches.contains($0.key) }
+        if let recall, retainedPatches.contains(recall.patch) {
+            deferredVariations.updateValue(recall.to, forKey: recall.patch)
+        }
         return plan
     }
 
-    /// Folds a ledger snapshot taken after an event: releases retained routes the ledger no longer sounds on and
-    /// readies deferred changes nothing waits on any more. Reads the ledger once into a route-indexed snapshot and
+    /// Folds a ledger snapshot taken after an event: releases retained routes the ledger no longer sounds on,
+    /// readies deferred changes nothing waits on any more and clears the variation record of patches left with no
+    /// retained route. Reads the ledger once into a route-indexed snapshot and
     /// updates every reservation from it. Refuses a ledger sounding on an untracked route. A retired tracker returns
     /// at once without reading the ledger (the next prepare still refuses untracked routes).
     ///
@@ -120,6 +133,8 @@ struct PatchTransitionTracker: Equatable, Sendable {
         let changes = deferredChanges.map { $0.waiting(onlyOn: keptRoutes) }
         tailReservations = kept
         deferredChanges = changes.filter(\.isDeferred)
+        let keptPatches = Set(kept.map(\.target))
+        deferredVariations = deferredVariations.filter { keptPatches.contains($0.key) }
         return PatchTransitionDrain(
             releasedRoutes: released, readyChanges: changes.filter { !$0.isDeferred }, isRetired: isRetired
         )
