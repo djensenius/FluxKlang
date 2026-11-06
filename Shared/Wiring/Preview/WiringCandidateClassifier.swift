@@ -66,7 +66,11 @@ enum WiringCandidateClassifier {
 
     /// Validation errors, refusing the graph when the contract stops before checking wires.
     private static func checkedErrors(_ graph: GraphDocument) throws(WiringPreviewRefusal) -> [GraphValidationError] {
-        let errors = graph.validationErrors()
+        try checked(graph.validationErrors())
+    }
+
+    /// `errors` (a graph's validation errors), refused when the contract stopped before checking wires.
+    static func checked(_ errors: [GraphValidationError]) throws(WiringPreviewRefusal) -> [GraphValidationError] {
         for error in errors {
             switch error {
             case .bounds(let limit): throw .bounds(limit)
@@ -83,14 +87,18 @@ enum WiringCandidateClassifier {
         _ endpoints: [NodeID], baseline: [GraphValidationError]
     ) throws(WiringPreviewRefusal) {
         for error in baseline {
-            switch error {
-            case .invalidChannelCount(let node, _) where endpoints.contains(node),
-                 .invalidGainShape(let node) where endpoints.contains(node),
-                 .invalidMuteShape(let node) where endpoints.contains(node),
-                 .duplicatePort(let node, _) where endpoints.contains(node):
-                throw .endpointUncheckable(node: node)
-            default: continue
-            }
+            if let node = uncheckableNode(error), endpoints.contains(node) { throw .endpointUncheckable(node: node) }
+        }
+    }
+
+    /// The node whose ports `error` reports as broken, making it an uncheckable endpoint; `nil` for other errors.
+    static func uncheckableNode(_ error: GraphValidationError) -> NodeID? {
+        switch error {
+        case .invalidChannelCount(let node, _), .invalidGainShape(let node), .invalidMuteShape(let node),
+             .duplicatePort(let node, _):
+            node
+        default:
+            nil
         }
     }
 
