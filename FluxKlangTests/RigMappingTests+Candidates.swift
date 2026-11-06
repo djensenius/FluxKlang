@@ -90,13 +90,28 @@ struct RigMappingCandidateTests {
         )
         #expect(crossed.proposedRoutes.map(\.id.rawValue)
             == ["route.proposed.role.mains.2", "route.proposed.role.mains.2.2"])
+        // Existing `.m`, `.m.2` and `.m.3`: role.m resumes at `.4`, which role.m.4's stem then avoids.
+        let taken = try ["route.proposed.role.m", "route.proposed.role.m.2", "route.proposed.role.m.3"].map {
+            try Fixture.route($0, role: "role.m", device: "dev.a", binding: .stale)
+        }
+        let pinned = try Fixture.proposal(["role.x", "role.m.4", "role.m.3", "role.m"].map { try Fixture.role($0) },
+                                          devices, routes: taken)
+        let pinnedIDs = ["route.proposed.role.m.4", "route.proposed.role.m.3.2", "route.proposed.role.m.4.2",
+                         "route.proposed.role.x"]
+        #expect(pinned.proposedRoutes.map(\.id.rawValue) == pinnedIDs)
+        let pinnedRun = try RigMappingProposal.routeIDsForTesting(
+            for: ["role.m", "role.m.3", "role.m.4", "role.x"].map { try RoleID($0) }, avoiding: Set(taken.map(\.id))
+        )
+        #expect(pinnedRun.ids.map(\.rawValue) == pinnedIDs)
+        // m: 4 tries (.m, .2, .3, .4); m.3: 2; m.4: 2; x: 1. Bound: r + 2(r + d) = 4 + 2 * 7.
+        #expect(pinnedRun.attempts == 9 && pinnedRun.attempts <= 4 + 2 * (4 + 3))
 
         let long = String(repeating: "r", count: RoleID.maximumLength)
         let longProposal = try Fixture.proposal([Fixture.role(long)], devices)
         let id = try #require(longProposal.proposedRoutes.first?.id.rawValue)
         #expect(id == String(("route.proposed." + long).prefix(RouteID.maximumLength - 8)))
         let used = try Set([RouteID(id)])
-        let next = try RigMappingProposal.routeID(for: RoleID(long), avoiding: used)
+        let next = try #require(RigMappingProposal.routeIDsForTesting(for: [RoleID(long)], avoiding: used).ids.first)
         #expect(next.rawValue == id + ".2" && next.rawValue.utf8.count <= RouteID.maximumLength)
 
         // Two long roles that differ only past the shortened stem still get distinct IDs.
@@ -105,19 +120,27 @@ struct RigMappingCandidateTests {
         #expect(twinIDs == [id, id + ".2"])
     }
 
-    @Test func manyRolesSharingALongStemGetDistinctIDsQuickly() throws {
+    @Test func manyRolesSharingALongStemGetDistinctIDsInLinearAttempts() throws {
         // 110 shared characters: every role's 120-byte stem is the same.
         let shared = String(repeating: "s", count: 110)
         let roles = try (0..<2_000).map { try Fixture.role(shared + ".\($0)", channels: 1) }
-        let devices = try [Fixture.device("dev.a", outputs: 1)]
-        var proposal: RigMappingProposal?
-        let elapsed = try ContinuousClock().measure { proposal = try Fixture.proposal(roles, devices) }
-        let ids = try #require(proposal).proposedRoutes.map(\.id.rawValue)
+        let ids = try Fixture.proposal(roles, [Fixture.device("dev.a", outputs: 1)]).proposedRoutes.map(\.id.rawValue)
         let stem = String(("route.proposed." + shared).prefix(RouteID.maximumLength - 8))
         #expect(ids == [stem] + (2...2_000).map { "\(stem).\($0)" })
         #expect(ids.last == stem + ".2000")
-        // Rescanning each stem from `.2` took about 17 s here in debug; resuming takes well under 0.1 s.
-        #expect(elapsed < .seconds(5))
+        // The allocator's cost, counted: one attempt per role (r = 2000, d = 0). Rescanning each stem
+        // from `.2` instead would take 2000 * 2001 / 2 attempts.
+        let run = RigMappingProposal.routeIDsForTesting(for: roles.map(\.id).sorted(), avoiding: [])
+        #expect(run.ids.map(\.rawValue) == ids)
+        #expect(run.attempts == 2_000 && run.attempts <= 2_000 + 2 * (2_000 + 0))
+
+        // The document already holds `stem`, `stem.2` … `stem.50` (d = 50): the first role walks past
+        // them once (51 attempts), the other 99 resume at once.
+        let held = try Set([RouteID(stem)] + (2...50).map { try RouteID("\(stem).\($0)") })
+        let crowded = RigMappingProposal.routeIDsForTesting(for: Array(roles.map(\.id).sorted().prefix(100)),
+                                                            avoiding: held)
+        #expect(crowded.ids.map(\.rawValue) == (51...150).map { "\(stem).\($0)" })
+        #expect(crowded.attempts == 150 && crowded.attempts <= 100 + 2 * (100 + 50))
     }
 
     @Test func proposalsStopAtTheRouteCapacityInRoleOrder() throws {
@@ -135,10 +158,24 @@ struct RigMappingCandidateTests {
 
         let roomy = try Fixture.proposal(roles, devices, routes: Array(filler.dropLast()))
         #expect(roomy.proposedRoutes.map(\.role.rawValue) == ["role.a", "role.b"])
-        let full = try Fixture.proposal(roles, devices, routes: filler + [
+        // A full document: single- and multi-candidate roles alike have no route left to take.
+        let full = try Fixture.proposal(roles + [Fixture.role("role.c", channels: 1)], devices, routes: filler + [
             Fixture.route("route.fill.0", role: "role.fill", device: "dev.a", binding: .stale)
         ])
-        #expect(full.proposedRoutes.isEmpty && full.unmapped.map(\.rawValue) == ["role.a", "role.b"])
+        #expect(full.proposedRoutes.isEmpty && full.unmapped.map(\.rawValue) == ["role.a", "role.b", "role.c"])
+        #expect(Fixture.outcome(full, "role.c") == .unmapped(.routeCapacityExhausted(limit: 4_096)))
+        #expect(full.awaitingChoice.isEmpty)
+
+        // 4094 routes, two of them a mismatched and an already-routed role's: both new roles still fit.
+        let kept = try [
+            Fixture.route("route.mis", role: "role.mis", device: "dev.a", channels: [0], binding: .proposed),
+            Fixture.route("route.ok", role: "role.ok", device: "dev.a", binding: .proposed)
+        ]
+        let mixedRoles = try roles + [Fixture.role("role.mis"), Fixture.role("role.ok")]
+        let mixed = try Fixture.proposal(mixedRoles, devices, routes: Array(filler.prefix(4_092)) + kept)
+        #expect(mixed.proposedRoutes.map(\.role.rawValue) == ["role.a", "role.b"])
+        #expect(mixed.mismatched.map(\.rawValue) == ["role.mis"])
+        #expect(try Fixture.outcome(mixed, "role.ok") == .alreadyRouted([RouteID("route.ok")]))
     }
 
     @Test func choicesStopAtTheRouteCapacity() throws {

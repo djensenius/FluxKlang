@@ -24,9 +24,14 @@
 //
 //  Route budget: the existing routes plus all proposed routes never exceed
 //  `DeviceCapabilityLimits.routes`. `make` hands the remaining budget to
-//  single-candidate roles in `RoleID` order; a later single-candidate role is
-//  unmapped with `.routeCapacityExhausted`, the rest of the proposal stands.
-//  `choosing` refuses a choice that would exceed the budget.
+//  single-candidate roles in `RoleID` order; once it is spent, every later role
+//  with candidates (one or several) is unmapped with `.routeCapacityExhausted`,
+//  and the rest of the proposal stands. No budget is reserved for roles awaiting
+//  a choice, so `choosing` refuses a choice that would exceed the limit.
+//
+//  Validity claim (tested): the device document with `proposedRoutes` added and
+//  the routes in `routesWithoutRequirement`, `mismatchedRoutes` and
+//  `existingRoutes` removed passes `validate(roles: requirements)`.
 //
 //  Existing `stale` and `deviceMissing` routes are reported, never reused:
 //  their IDs, bindings and evidence are not carried into any proposal. Routes
@@ -83,13 +88,21 @@ struct RigMappingProposal: Hashable, Sendable {
 
     /// One entry per input role, sorted by `RoleID`.
     private(set) var mappings: [RigRoleMapping]
-    /// The route requirement of every audio role with a valid channel count, for `validate(roles:)`.
+    /// The route requirement of every audio role with a valid channel count. The device document with
+    /// `proposedRoutes` added and the routes in `routesWithoutRequirement`, `mismatchedRoutes` and
+    /// `existingRoutes` removed passes `validate(roles: requirements)`.
     let requirements: [RoleID: RouteRoleRequirement]
-    /// Existing `stale`/`deviceMissing` routes, sorted by `RouteID`.
+    /// Existing `stale`/`deviceMissing` routes, sorted by `RouteID`. Removed for the validity claim
+    /// on `requirements`: they are reported, never checked against their role.
     let existingRoutes: [RigExistingRouteReport]
-    /// Existing routes (any binding) whose role is not in the input, sorted. They fail
-    /// `validate(roles:)` until the caller removes them or supplies their roles.
+    /// Existing routes (any binding) whose role is not in the input, sorted. A subset of
+    /// `routesWithoutRequirement`.
     let orphanRoutes: [RouteID]
+    /// Existing routes (any binding) whose role has no entry in `requirements`, sorted: routes of
+    /// orphan roles, non-audio roles, roles with an invalid channel count and legacy (`nil` count)
+    /// roles. `validate(roles: requirements)` would report each as an unknown role, so they are
+    /// removed for the validity claim on `requirements`.
+    let routesWithoutRequirement: [RouteID]
     /// Devices that are missing or stale and therefore offer no candidates, sorted by `DeviceID`.
     let absentDevices: [DeviceID]
     /// The device document's route IDs, which no proposed route may reuse.
@@ -120,13 +133,22 @@ struct RigMappingProposal: Hashable, Sendable {
         mappings.compactMap { if case .mismatchedRoute = $0.outcome { $0.role } else { nil } }
     }
 
+    /// The existing routes that no longer fit their role (every `.mismatchedRoute` entry), sorted.
+    /// Removed for the validity claim on `requirements`; the caller removes or replaces them.
+    var mismatchedRoutes: [RouteID] {
+        mappings.flatMap { mapping -> [RouteID] in
+            if case .mismatchedRoute(let routes) = mapping.outcome { routes } else { [] }
+        }.sorted()
+    }
+
     private init(mappings: [RigRoleMapping], requirements: [RoleID: RouteRoleRequirement],
-                 existingRoutes: [RigExistingRouteReport], orphanRoutes: [RouteID], absentDevices: [DeviceID],
-                 documentRouteIDs: Set<RouteID>) {
+                 existingRoutes: [RigExistingRouteReport], orphanRoutes: [RouteID],
+                 routesWithoutRequirement: [RouteID], absentDevices: [DeviceID], documentRouteIDs: Set<RouteID>) {
         self.mappings = mappings
         self.requirements = requirements
         self.existingRoutes = existingRoutes
         self.orphanRoutes = orphanRoutes
+        self.routesWithoutRequirement = routesWithoutRequirement
         self.absentDevices = absentDevices
         self.documentRouteIDs = documentRouteIDs
     }
@@ -180,6 +202,7 @@ struct RigMappingProposal: Hashable, Sendable {
             mappings: mappings, requirements: requirements,
             existingRoutes: Self.reports(document.routes),
             orphanRoutes: document.routes.filter { !seen.contains($0.role) }.map(\.id).sorted(),
+            routesWithoutRequirement: document.routes.filter { requirements[$0.role] == nil }.map(\.id).sorted(),
             absentDevices: document.devices.filter { $0.presence != .present }.map(\.id).sorted(),
             documentRouteIDs: Set(document.routes.map(\.id))
         )
@@ -237,6 +260,8 @@ struct RigMappingProposal: Hashable, Sendable {
             let candidate = found.candidates[0]
             return .proposed(route(for: candidate, id: ids.next(for: candidate.role)), from: candidate)
         default:
+            // Nothing is reserved for a choice; with no budget left at all, no choice could succeed.
+            guard budget > 0 else { return .unmapped(.routeCapacityExhausted(limit: DeviceCapabilityLimits.routes)) }
             return .awaitingChoice(found)
         }
     }
@@ -246,12 +271,14 @@ struct RigMappingProposal: Hashable, Sendable {
                    channels: candidate.channels, binding: .proposed)
     }
 
-    /// `route.proposed.<role>`, shortened to leave room for a `.<n>` suffix; the first unused
-    /// of the stem, `stem.2`, `stem.3`, … is chosen. One call tries at most `used.count + 1`
-    /// suffixes; `make` derives all its IDs through one `RigRouteIDAllocator`.
-    static func routeID(for role: RoleID, avoiding used: Set<RouteID>) -> RouteID {
+    /// Test-only: the IDs `make` would derive for `roles` (in the given order) over the document IDs
+    /// `used`, and how many candidate IDs the allocator built to find them.
+    static func routeIDsForTesting(
+        for roles: [RoleID], avoiding used: Set<RouteID>
+    ) -> (ids: [RouteID], attempts: Int) {
         var allocator = RigRouteIDAllocator(used: used)
-        return allocator.next(for: role)
+        let ids = roles.map { allocator.next(for: $0) }
+        return (ids, allocator.attempts)
     }
 
     private static func reports(_ routes: [AudioRoute]) -> [RigExistingRouteReport] {
@@ -274,6 +301,8 @@ struct RigMappingProposal: Hashable, Sendable {
 private struct RigRouteIDAllocator {
     private var used: Set<RouteID>
     private var nextSuffix: [String: Int] = [:]
+    /// Candidate IDs built so far, for the test-only cost check.
+    private(set) var attempts = 0
 
     init(used: Set<RouteID>) {
         self.used = used
@@ -284,6 +313,7 @@ private struct RigRouteIDAllocator {
         let start = nextSuffix[stem, default: 1]
         // The `used` check stays as a backstop: suffixes taken by document IDs are skipped.
         for suffix in start...(start + used.count) {
+            attempts += 1
             if let id = RouteID(rawValue: suffix == 1 ? stem : "\(stem).\(suffix)"), used.insert(id).inserted {
                 nextSuffix[stem] = suffix + 1
                 return id

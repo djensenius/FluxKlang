@@ -17,8 +17,8 @@ enum RigUnmappedReason: Hashable, Sendable {
     case invalidChannelCount(Int)
     /// No present device offers a contiguous block of the role's direction and channel count.
     case noCompatibleBlock
-    /// Exactly one block fits, but the existing routes plus the proposals for roles that sort
-    /// earlier already fill `DeviceCapabilityLimits.routes` (`limit`).
+    /// Blocks fit (one or several), but the existing routes plus the proposals for roles that sort
+    /// earlier already fill `DeviceCapabilityLimits.routes` (`limit`), so no route could be added.
     case routeCapacityExhausted(limit: Int)
 }
 

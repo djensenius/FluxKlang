@@ -67,6 +67,7 @@ enum RigMappingFixture {
             routes: document.routes + proposal.proposedRoutes
         )
         try combined.validate(roles: proposal.requirements)
+        try documented(proposal, over: document).validate(roles: proposal.requirements)
         let layouts = Dictionary(uniqueKeysWithValues: document.devices.map { ($0.id, $0.layout) })
         for route in proposal.proposedRoutes {
             let requirement = try #require(proposal.requirements[route.role])
@@ -75,6 +76,18 @@ enum RigMappingFixture {
             #expect(route.evidence == nil && route.confirmedHost == nil)
             #expect(route.confirmedEpoch == nil && route.confirmedDeviceUID == nil)
         }
+    }
+
+    /// The documented combination: the document plus `proposedRoutes`, without the routes in
+    /// `routesWithoutRequirement`, `mismatchedRoutes` and `existingRoutes`.
+    static func documented(_ proposal: RigMappingProposal,
+                           over document: DeviceCapabilityDocument) throws -> DeviceCapabilityDocument {
+        let removed = Set(proposal.routesWithoutRequirement + proposal.mismatchedRoutes
+                          + proposal.existingRoutes.map(\.route))
+        return try DeviceCapabilityDocument(
+            revision: .initial, host: host, hostEpoch: .initial, devices: document.devices,
+            routes: document.routes.filter { !removed.contains($0.id) } + proposal.proposedRoutes
+        )
     }
 }
 
@@ -282,6 +295,8 @@ struct RigMappingTests {
         #expect(try Fixture.outcome(proposal, "role.mixed")
             == .mismatchedRoute([RouteID("route.b.bad"), RouteID("route.z.bad")]))
         #expect(proposal.mismatched.map(\.rawValue) == ["role.flip", "role.mixed", "role.stereo"])
+        // Flattened over all roles and sorted, not in role order.
+        #expect(proposal.mismatchedRoutes.map(\.rawValue) == ["route.b.bad", "route.flip", "route.mono", "route.z.bad"])
         // Each role had exactly one free block, yet no second route is proposed beside the stale one.
         #expect(proposal.proposedRoutes.isEmpty && proposal.awaitingChoice.isEmpty && proposal.unmapped.isEmpty)
         #expect(proposal.requirements.count == 3)
@@ -319,5 +334,41 @@ struct RigMappingTests {
         #expect(proposal.orphanRoutes.map(\.rawValue) == ["route.a", "route.z"])
         #expect(try Fixture.outcome(proposal, "role.mains") == .alreadyRouted([RouteID("route.mains")]))
         #expect(try Fixture.proposal(mains, devices, routes: [routes[1]]).orphanRoutes.isEmpty)
+    }
+
+    @Test func documentedRemovalsMakeTheCombinedDocumentValid() throws {
+        let devices = try [Fixture.device("dev.a", inputs: 2, outputs: 2)]
+        let routes = try [
+            Fixture.route("route.legacy", role: "role.legacy", device: "dev.a", binding: .confirmed),
+            Fixture.route("route.midi", role: "role.midi", device: "dev.a", binding: .proposed),
+            Fixture.route("route.huge", role: "role.huge", device: "dev.a", binding: .confirmed),
+            Fixture.route("route.gone", role: "role.gone", device: "dev.a", binding: .proposed),
+            Fixture.route("route.mis", role: "role.mis", device: "dev.a", channels: [1], binding: .proposed),
+            Fixture.route("route.stale", role: "role.mains", device: "dev.a", channels: [0], binding: .stale),
+            Fixture.route("route.ok", role: "role.ok", device: "dev.a", binding: .confirmed)
+        ]
+        let roles = try [
+            Fixture.role("role.legacy", channels: nil), Fixture.role("role.midi", signal: .midi),
+            Fixture.role("role.huge", channels: 65), Fixture.role("role.mis"), Fixture.role("role.mains"),
+            Fixture.role("role.ok")
+        ]
+        let document = try Fixture.document(devices, routes: routes)
+        let proposal = try RigMappingProposal.make(roles: roles, devices: document)
+        #expect(proposal.routesWithoutRequirement.map(\.rawValue)
+            == ["route.gone", "route.huge", "route.legacy", "route.midi"])
+        #expect(proposal.orphanRoutes.map(\.rawValue) == ["route.gone"])
+        #expect(proposal.mismatchedRoutes.map(\.rawValue) == ["route.mis"])
+        #expect(proposal.existingRoutes.map(\.route.rawValue) == ["route.stale"])
+        #expect(proposal.proposedRoutes.map(\.role.rawValue) == ["role.mains"])
+        #expect(try Fixture.outcome(proposal, "role.ok") == .alreadyRouted([RouteID("route.ok")]))
+        let combined = try Fixture.documented(proposal, over: document)
+        #expect(combined.routes.map(\.id.rawValue) == ["route.ok", "route.proposed.role.mains"])
+        try combined.validate(roles: proposal.requirements)
+        // Each removal is needed: without it, the combination fails `validate(roles:)`.
+        for kept in ["route.legacy", "route.midi", "route.huge", "route.gone", "route.mis", "route.stale"] {
+            let restored = routes.filter { $0.id.rawValue == kept }
+            let partial = try Fixture.document(devices, routes: combined.routes + restored)
+            #expect(throws: (any Error).self) { try partial.validate(roles: proposal.requirements) }
+        }
     }
 }
