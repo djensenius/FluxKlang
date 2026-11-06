@@ -230,4 +230,186 @@ extension NeutralSnapshotUnicodeScanTests {
         // Without a withheld term nothing is matched, so the label is shown.
         #expect(UntrustedLabel("\u{105C9} ok").text == "\u{105C9} ok")
     }
+
+    @Test func separatorProvenanceSurvivesSettleRedactionAndStablePasses() throws {
+        let marks = String(repeating: "\u{0316}", count: 7)
+        let term = "ABq" + marks + "CDEF"
+        let capped = "ABq" + String(repeating: "\u{0316}", count: 8) + "CD\nEF"
+        #expect(UntrustedLabel(capped, withholding: [term]).text == UntrustedLabel.withheldMarker)
+
+        for raw in [
+            "ABq\n" + String(repeating: "\u{0316}", count: 8) + "CDEF",
+            capped,
+            "ABq" + String(repeating: "\u{0316}", count: 8) + "\nCDEF"
+        ] {
+            #expect(UntrustedLabel(raw, withholding: [term]).text == UntrustedLabel.withheldMarker)
+        }
+
+        let scan = UntrustedTextSanitizer.filterScalars(
+            "ABC\nDEF X\nY".unicodeScalars, keeping: 100
+        )
+        let first = try #require(UntrustedTextSanitizer.withheldTerm("ABCDEF"))
+        let redacted = UntrustedTextSanitizer.redactMatchFormWithSeparators(
+            of: scan.text, withheld: [first], marker: UntrustedLabel.withheldMarker,
+            scanIsComplete: true, separators: scan.separators
+        )
+        #expect(redacted.result.text == UntrustedLabel.withheldMarker + " X Y")
+        #expect(redacted.separators == [1])
+    }
+
+    @Test func separatorsAndTermsKeepTheirOwnControlProvenance() {
+        let controls = ["\u{2028}", "\u{2029}", "\u{0085}", "\u{0000}"]
+        for control in controls {
+            #expect(UntrustedLabel("AB" + control + "CDEF", withholding: ["ABCDEF"]).text
+                == UntrustedLabel.withheldMarker)
+            #expect(UntrustedLabel("ABCDEF", withholding: ["AB" + control + "CDEF"]).text
+                == UntrustedLabel.withheldMarker)
+        }
+    }
+
+    @Test func separatorProvenanceSurvivesMultipleCapSweeps() throws {
+        let run = String(repeating: "\u{0D4E}", count: 8)
+            + "\u{1F1E8}\u{200D}\u{1F1E8}\u{1F1E8}" + " ABC\nDEF"
+        let scan = UntrustedTextSanitizer.filterScalars(run.unicodeScalars, keeping: 100)
+        var work = UntrustedTextSanitizer.CapWork()
+        let capped = UntrustedTextSanitizer.capGraphemes(
+            scan.text, separators: scan.separators, work: &work
+        )
+        #expect(work.sweeps > 1)
+        let term = try #require(UntrustedTextSanitizer.withheldTerm("ABCDEF"))
+        let redacted = UntrustedTextSanitizer.redactMatchFormWithSeparators(
+            of: capped.result.text, withheld: [term], marker: UntrustedLabel.withheldMarker,
+            scanIsComplete: true, separators: capped.separators
+        )
+        #expect(redacted.result.text.hasSuffix(UntrustedLabel.withheldMarker))
+    }
+
+    @Test func seededSeparatorSentinelOracleFindsPostCapSecrets() {
+        var random = NeutralSnapshotUnicodeRandom(seed: 0x358A_1F00_007B)
+        let controls = ["\u{0000}", "\u{0085}", "\u{2028}", "\u{2029}"]
+        let sentinels: [Unicode.Scalar] = ["■", "□", "▪", "▫"]
+        let decorations = [" ", "\u{0301}", "\u{0316}", "\u{0D4E}", "A", "B", "C", "D"]
+        let marks = String(repeating: "\u{0316}", count: 7)
+        let term = "ABq" + marks + "CDEF"
+        var oracleCases = 0
+        var randomOracleCases = 0
+        for iteration in 0..<96 {
+            // Iteration zero is fixed. Iterations 1–16 randomize the control, but keep
+            // eight marks and no decorations: capping and sentinel removal guarantee N=16 hits.
+            let controlIndex = iteration == 0 ? 0 : Int(random.next() % UInt64(controls.count))
+            let guaranteedHit = iteration == 0 || (1...16).contains(iteration)
+            let extraMarks = guaranteedHit ? 8 : 8 + Int(random.next() % 3)
+            let lead = guaranteedHit ? 0 : Int(random.next() % 4)
+            let tail = guaranteedHit ? 0 : Int(random.next() % 4)
+            let prefix = (0..<lead).map { _ in decorations[Int(random.next() % UInt64(decorations.count))] }
+                .joined()
+            let suffix = (0..<tail).map { _ in decorations[Int(random.next() % UInt64(decorations.count))] }
+                .joined()
+            let raw = prefix + "ABq" + String(repeating: "\u{0316}", count: extraMarks)
+                + "CD" + controls[controlIndex] + "EF" + suffix
+            let sentinelRaw = raw.replacingOccurrences(
+                of: controls[controlIndex], with: String(sentinels[controlIndex])
+            )
+            let parallel = UntrustedLabel(sentinelRaw, maximumBytes: 4_096, withholding: [term]).text
+            let compactParallel = String(parallel.unicodeScalars.filter { !sentinels.contains($0) })
+            if compactParallel.contains(term) {
+                oracleCases += 1
+                if iteration > 0 { randomOracleCases += 1 }
+                let actual = UntrustedLabel(raw, maximumBytes: 4_096, withholding: [term]).text
+                #expect(!actual.replacingOccurrences(of: " ", with: "").contains(term))
+            }
+        }
+        #expect(oracleCases >= 17)
+        #expect(randomOracleCases >= 16)
+    }
+
+    @Test func trimmedTermsAndLabelsAgreeAcrossAdversarialScalars() throws {
+        let values: [UInt32] = [
+            0x1F600, 0xFE0E, 0xFE0F, 0x200D, 0x200C, 0x13441, 0x13442, 0x1BC9D,
+            0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x1D159,
+            0x0000, 0x000A, 0x0085, 0x2028, 0x2029, 0x0020, 0x0316, 0x0301, 0x0D4E,
+            0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0053, 0x004E, 0x002D
+        ]
+        let alphabet = try values.map { try #require(Unicode.Scalar($0)) }
+        let seeds: [UInt64] = [0x358A_3790_0001, 0x358A_3790_0002, 0x358A_3790_0003]
+        var compared = 0
+        for seed in seeds {
+            var random = NeutralSnapshotUnicodeRandom(seed: seed)
+            for _ in 0..<96 {
+                let count = 1 + Int(random.next() % 12)
+                let raw = String(String.UnicodeScalarView((0..<count).map { _ in
+                    alphabet[Int(random.next() % UInt64(alphabet.count))]
+                }))
+                guard UntrustedTextSanitizer.withheldTerm(raw) != nil else { continue }
+                let selfLabel = UntrustedLabel(raw, withholding: [raw]).text
+                #expect(selfLabel.contains(UntrustedLabel.withheldMarker),
+                        "seed=\(seed), raw=\(Self.hex(raw.unicodeScalars))")
+                let prefix = String(String.UnicodeScalarView((0..<3).map { _ in
+                    alphabet[Int(random.next() % UInt64(alphabet.count))]
+                }))
+                let suffix = String(String.UnicodeScalarView((0..<3).map { _ in
+                    alphabet[Int(random.next() % UInt64(alphabet.count))]
+                }))
+                let embeddedLabel = UntrustedLabel(prefix + raw + suffix, withholding: [raw]).text
+                #expect(embeddedLabel.contains(UntrustedLabel.withheldMarker),
+                        "seed=\(seed), raw=\(Self.hex(raw.unicodeScalars))")
+                compared += 2
+            }
+        }
+        #expect(compared > 100)
+
+        // Context-only differences for kept joiners/selectors are removed by sourceForm
+        // before eligibility or matching, so these public outputs stay identical.
+        for raw in ["😀\u{13441}\u{FE0F}", " \u{13441}\u{200D}A", "A\u{1BC9D}\u{200C}B"] {
+            guard UntrustedTextSanitizer.withheldTerm(raw) != nil else { continue }
+            #expect(UntrustedLabel(raw, withholding: [raw]).text == UntrustedLabel.withheldMarker)
+        }
+    }
+
+    @Test func redactionDropsEdgePaddingExposedByNewBlankRemoval() {
+        let leading = "  \u{1BC9D}D😀\u{115F}\u{FE0F}D"
+        #expect(UntrustedLabel(leading, withholding: [leading]).text == UntrustedLabel.withheldMarker)
+
+        let trailing = "\u{1D159}\u{FE0F}\n   D\u{115F} \u{0316}\u{200C}\n   \u{3164}\u{1160}\u{1BC9D}S"
+        #expect(UntrustedLabel(trailing, withholding: [trailing]).text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func newBlankShadowTermsDoNotMatchLabelsWithoutNewBlanks() {
+        let hostile = "a\u{13441}\u{13441}"
+        let term = UntrustedTextSanitizer.withheldTerm(hostile)
+        #expect(term?.text == "a" && term?.requiresNewBlank == true)
+        #expect(UntrustedLabel("Rig Table", withholding: [hostile]).text == "Rig Table")
+
+        let blankOnly = String(repeating: "\u{13441}", count: 2)
+        #expect(UntrustedTextSanitizer.withheldTerm(blankOnly)?.isFailClosed == true)
+        #expect(UntrustedLabel("Rig Table", withholding: [blankOnly]).text == "Rig Table")
+        #expect(UntrustedLabel(blankOnly, withholding: [blankOnly]).text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func leadingTrimRemapsTermSeparatorsAfterNewBlankRemoval() {
+        let term = "\u{13441} AB\nCDEF"
+        let label = "\u{13441}ABCDEF"
+        #expect(UntrustedLabel(label, withholding: [term]).text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func trimmingNewBlankEdgePaddingPreservesInteriorSeparatorProvenance() {
+        let trimmed = UntrustedLabel.trimRedactedEdges(" [withheld] X Y ", separators: [2])
+        #expect(trimmed.text == "[withheld] X Y")
+        #expect(trimmed.separators == [1])
+    }
+
+    @Test func cutNewBlankTermsRemainApplicableToTailWindow() {
+        let marks = String(repeating: "\u{0316}", count: 4_089)
+        let term = "SECRET\u{13441}"
+        let label = "x" + marks + "SECRET\u{13441}Y"
+        let expected = "x" + String(repeating: "\u{0316}", count: 7) + UntrustedLabel.withheldMarker
+        #expect(UntrustedLabel(label, withholding: [term]).text == expected)
+    }
+
+    @Test func newBlankShadowTermsDoNotRefuseA1Aliases() throws {
+        let term = try #require(UntrustedTextSanitizer.withheldTerm("confirmed\u{13441}"))
+        #expect(term.requiresNewBlank)
+        let refused = RefusedIdentities([], terms: [term])
+        #expect(!refused.refuses("dev.confirmed-a"))
+    }
 }

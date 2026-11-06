@@ -30,7 +30,13 @@ import Foundation
 ///    When terms are active and the text holds a scalar Foundation does not normalize
 ///    reliably (`UntrustedTextSanitizer.hasUnreliableNormalization`), the whole label
 ///    is withheld instead, since its match form cannot be trusted.
-/// 3. Each grapheme of the redacted text, as Swift segments the result, is limited
+///    If an eligible fail-closed term consists only of a newly removed blank and the
+///    filtered label is empty for the same reason, it still emits the withheld marker.
+/// 3. Separator provenance is carried through redaction, every cap sweep, settle,
+///    truncation and stable passes; only original control replacements may be dropped
+///    from compact matching. If removing a newly pinned blank exposes whitespace at
+///    a redacted label's edge, that padding is trimmed with provenance remapped. Each
+///    grapheme of the redacted text is limited
 ///    to `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
 ///    anything, step 2 runs again, since dropping scalars can complete a withheld
 ///    string, and so on until stable (`settle`, bounded, failing closed).
@@ -96,16 +102,18 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         var text = first.text
         var isTruncated = first.isTruncated
         var wasSanitized = first.wasSanitized
+        var separators = first.separators
         var isStable = false
         for _ in 0..<Self.maximumStablePasses {
-            let again = Self.sanitizeOnce(text, limit: limit, terms: terms)
+            let again = Self.sanitizeOnce(text, limit: limit, terms: terms, inheritedSeparators: separators)
             // Scalar-exact: `String ==` is canonical equivalence and would accept a text
             // that a second labelling still renormalizes.
-            if again.text.unicodeScalars.elementsEqual(text.unicodeScalars) {
+            if again.text.unicodeScalars.elementsEqual(text.unicodeScalars), again.separators == separators {
                 isStable = true
                 break
             }
             text = again.text
+            separators = again.separators
             isTruncated = isTruncated || again.isTruncated
             wasSanitized = true
         }
@@ -131,34 +139,75 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let text: String
         let isTruncated: Bool
         let wasSanitized: Bool
+        let separators: [Int]
     }
 
     /// One pass of steps 1–4.
     private static func sanitizeOnce(
-        _ raw: String, limit: Int, terms: [UntrustedTextSanitizer.WithheldTerm]
+        _ raw: String, limit: Int, terms: [UntrustedTextSanitizer.WithheldTerm],
+        inheritedSeparators: [Int]? = nil
     ) -> Pass {
         let scan = UntrustedTextSanitizer.scanLimit(maximumBytes: limit, withheld: terms.map(\.text))
         let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: scan)
+        let activeTerms = UntrustedTextSanitizer.applicableTerms(terms, for: filtered)
         let display = filtered.text.precomposedStringWithCanonicalMapping
-        let unreliable = !terms.isEmpty
+        let unreliable = !activeTerms.isEmpty
             && UntrustedTextSanitizer.hasUnreliableNormalization(filtered.text.unicodeScalars)
-        let redacted = unreliable
-            ? (text: withheldMarker, changed: true)
-            : UntrustedTextSanitizer.redactMatchForm(
-                of: display, withheld: terms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
-                separators: filtered.separators
+        let emptyFailClosed = filtered.text.isEmpty && filtered.removedNewBlankBytes > 0
+            && activeTerms.contains(where: { $0.isFailClosed })
+        let redacted = unreliable || emptyFailClosed
+            ? (result: (text: withheldMarker, changed: true), separators: [])
+            : UntrustedTextSanitizer.redactMatchFormWithSeparators(
+                of: display, withheld: activeTerms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
+                separators: inheritedSeparators ?? filtered.separators
             )
-        let settled = settle(redacted.text, terms: terms)
-        var cut = UntrustedTextSanitizer.truncate(settled.text, maximumBytes: limit, marker: withheldMarker)
-        if cut.text.isEmpty, !settled.text.isEmpty {
+        let settled = settle(redacted.result.text, separators: redacted.separators, terms: activeTerms)
+        let edgeTrimmed = filtered.removedNewBlankBytes > 0 && settled.result.text.contains(withheldMarker)
+            ? Self.trimRedactedEdges(settled.result.text, separators: settled.separators)
+            : (text: settled.result.text, separators: settled.separators)
+        var cut = UntrustedTextSanitizer.truncate(
+            edgeTrimmed.text, maximumBytes: limit, marker: withheldMarker,
+            separators: edgeTrimmed.separators
+        )
+        if cut.result.text.isEmpty, !edgeTrimmed.text.isEmpty {
             // The first grapheme alone does not fit: the label is withheld, not silently emptied.
-            cut = (withheldMarker.utf8.count <= limit ? withheldMarker : "", true)
+            cut.result = (withheldMarker.utf8.count <= limit ? withheldMarker : "", true)
+            cut.separators = []
         }
         return Pass(
-            text: cut.text,
-            isTruncated: cut.changed || !filtered.isComplete,
-            wasSanitized: filtered.changed || redacted.changed || settled.changed
+            text: cut.result.text,
+            isTruncated: cut.result.changed || !filtered.isComplete,
+            wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed,
+            separators: cut.separators
         )
+    }
+
+    /// A1 can absorb edge spaces into a grapheme containing a newly removed blank
+    /// lookalike. When redaction leaves such spaces outside the replacement range,
+    /// discard them so the newer output never exposes extra edge padding.
+    static func trimRedactedEdges(_ text: String, separators: [Int]) -> (text: String, separators: [Int]) {
+        let scalars = Array(text.unicodeScalars)
+        var lower = 0
+        var upper = scalars.count
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        while lower < upper, whitespace.contains(scalars[lower]) { lower += 1 }
+        while upper > lower, whitespace.contains(scalars[upper - 1]) { upper -= 1 }
+        guard lower > 0 || upper < scalars.count else { return (text, separators) }
+
+        var markedOffsets: Set<Int> = []
+        let markedSpaces = Set(separators)
+        var ordinal = 0
+        for (offset, scalar) in scalars.enumerated() where scalar == " " {
+            if markedSpaces.contains(ordinal) { markedOffsets.insert(offset) }
+            ordinal += 1
+        }
+        var remapped: [Int] = []
+        ordinal = 0
+        for (offset, scalar) in scalars[lower..<upper].enumerated() where scalar == " " {
+            if markedOffsets.contains(offset + lower) { remapped.append(ordinal) }
+            ordinal += 1
+        }
+        return (String(String.UnicodeScalarView(scalars[lower..<upper])), remapped)
     }
 
     /// At most this many cap-and-rematch passes run before a label is withheld.
@@ -171,20 +220,30 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
     /// A pass that caps nothing, or rematches nothing, ends with every grapheme within
     /// the cap. If `maximumSettlePasses` pass without that, the label fails closed to
     /// `withheldMarker`.
+    /// Test-only convenience; production uses the provenance-aware overload below.
     static func settle(
         _ text: String, terms: [UntrustedTextSanitizer.WithheldTerm]
     ) -> UntrustedTextSanitizer.Result {
-        var capped = UntrustedTextSanitizer.capGraphemes(text)
-        var changed = capped.changed
+        settle(text, separators: [], terms: terms).result
+    }
+
+    private static func settle(
+        _ text: String, separators: [Int], terms: [UntrustedTextSanitizer.WithheldTerm]
+    ) -> (result: UntrustedTextSanitizer.Result, separators: [Int]) {
+        var capped = UntrustedTextSanitizer.capGraphemes(text, separators: separators)
+        var changed = capped.result.changed
         for _ in 0..<maximumSettlePasses {
-            guard capped.changed else { return (capped.text, changed) }
-            let again = UntrustedTextSanitizer.redactMatchForm(
-                of: capped.text, withheld: terms, marker: withheldMarker, scanIsComplete: true
+            guard capped.result.changed else { return ((capped.result.text, changed), capped.separators) }
+            let again = UntrustedTextSanitizer.redactMatchFormWithSeparators(
+                of: capped.result.text, withheld: terms, marker: withheldMarker, scanIsComplete: true,
+                separators: capped.separators
             )
-            guard again.changed else { return (capped.text, changed) }
-            capped = UntrustedTextSanitizer.capGraphemes(again.text)
+            guard again.result.changed else { return ((capped.result.text, changed), capped.separators) }
+            capped = UntrustedTextSanitizer.capGraphemes(again.result.text, separators: again.separators)
             changed = true
         }
-        return capped.changed ? (withheldMarker, true) : (capped.text, changed)
+        return capped.result.changed
+            ? ((withheldMarker, true), [])
+            : ((capped.result.text, changed), capped.separators)
     }
 }

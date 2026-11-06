@@ -24,11 +24,15 @@ enum UntrustedTextSanitizer {
         /// among the U+0020 scalars of `text` (ascending). Matching also tries the text
         /// without them, so `SN-1\u{2028}2345` is withheld for `SN-12345`.
         let separators: [Int]
+        /// UTF-8 bytes of A1h-added blank lookalikes removed from this scan.
+        let removedNewBlankBytes: Int
+        /// A1-equivalent filtered text for trimmed term/identity eligibility and bounds.
+        let a1Text: String?
     }
 
     /// Work done by `filterScalars`, counted so tests can pin the ASCII-space precheck.
     struct ScanWork {
-        /// Scalars classified by `disposition`; an ASCII space is kept without it.
+        /// `disposition` calls; trimmed scans also classify the A1 shadow context.
         var dispositions = 0
     }
 
@@ -68,7 +72,9 @@ enum UntrustedTextSanitizer {
     /// whitespace and joiners/selectors are not kept before the first content scalar (kept,
     /// not whitespace, not match-ignorable) or once `limit` are kept, and the scan stops only
     /// at a content scalar. So surrounding whitespace never cuts the text, and kept text is
-    /// still bounded. A long whitespace run is read to its end, linear as above.
+    /// still bounded. A long whitespace run is read to its end, linear as above. The A1h
+    /// filtering decision always uses `kept` context; the parallel `a1Text` is an A1 shadow
+    /// used only for legacy term eligibility and identity byte bounds.
     static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int, trimmed: Bool = false) -> Scan {
         var work = ScanWork()
         return filterScalars(scalars, keeping: limit, trimmed: trimmed, work: &work)
@@ -80,9 +86,12 @@ enum UntrustedTextSanitizer {
         _ scalars: String.UnicodeScalarView, keeping limit: Int, trimmed: Bool, work: inout ScanWork
     ) -> Scan {
         var kept = String.UnicodeScalarView()
+        var a1Kept = String.UnicodeScalarView()
         var keptCount = 0
+        var a1KeptCount = 0
         var changed = false
         var spaces = 0
+        var removedNewBlankBytes = 0
         var separators: [Int] = []
         var index = scalars.startIndex
         while index != scalars.endIndex {
@@ -96,13 +105,30 @@ enum UntrustedTextSanitizer {
                 work.dispositions += 1
                 action = disposition(of: scalar, after: kept, before: next)
             }
-            if trimmed, kept.isEmpty || keptCount >= limit, action != .remove, !isContent(scalar, action) {
+            // The A1 shadow determines legacy eligibility/bounds only. Filtering and
+            // matching actions always use the current A1h context.
+            let a1RawAction: Disposition
+            if trimmed, scalar != " " {
+                work.dispositions += 1
+                a1RawAction = disposition(of: scalar, after: a1Kept, before: next)
+            } else {
+                a1RawAction = action
+            }
+            let (a1Action, removedBlankWidth) = a1Disposition(a1RawAction, for: scalar)
+            if trimmed, a1Kept.isEmpty || a1KeptCount >= limit, a1Action != .remove, !isContent(scalar, a1Action) {
                 changed = true
                 index = nextIndex
                 continue
             }
-            if keptCount >= limit, action != .remove {
-                return Scan(text: String(kept), changed: changed, isComplete: false, separators: separators)
+            if (trimmed ? a1KeptCount : keptCount) >= limit, a1Action != .remove {
+                return Scan(
+                    text: String(kept), changed: changed, isComplete: false, separators: separators,
+                    removedNewBlankBytes: removedNewBlankBytes,
+                    a1Text: trimmed ? String(a1Kept) : nil
+                )
+            }
+            if trimmed {
+                appendA1Shadow(scalar, action: a1Action, kept: &a1Kept, count: &a1KeptCount)
             }
             switch action {
             case .keep:
@@ -111,6 +137,7 @@ enum UntrustedTextSanitizer {
                 spaces += scalar == " " ? 1 : 0
             case .remove:
                 changed = true
+                removedNewBlankBytes += removedBlankWidth
             case .replaceWithSpace:
                 kept.append(" ")
                 keptCount += 1
@@ -120,7 +147,25 @@ enum UntrustedTextSanitizer {
             }
             index = nextIndex
         }
-        return Scan(text: String(kept), changed: changed, isComplete: true, separators: separators)
+        return Scan(
+            text: String(kept), changed: changed, isComplete: true, separators: separators,
+            removedNewBlankBytes: removedNewBlankBytes, a1Text: trimmed ? String(a1Kept) : nil
+        )
+    }
+
+    private static func appendA1Shadow(
+        _ scalar: Unicode.Scalar, action: Disposition, kept: inout String.UnicodeScalarView, count: inout Int
+    ) {
+        switch action {
+        case .keep:
+            kept.append(scalar)
+            count += isMatchIgnorable(scalar) ? 0 : 1
+        case .remove:
+            break
+        case .replaceWithSpace:
+            kept.append(" ")
+            count += 1
+        }
     }
 
     private static func disposition(
@@ -132,6 +177,7 @@ enum UntrustedTextSanitizer {
             let presentation = scalar.value == 0xFE0E || scalar.value == 0xFE0F
             return presentation && kept.last?.properties.isEmoji == true ? .keep : .remove
         }
+
         if isJoiner(scalar) {
             return joinsBefore(kept) && next.map(joinsAfter) == true ? .keep : .remove
         }
@@ -146,6 +192,13 @@ enum UntrustedTextSanitizer {
         default:
             return .keep
         }
+    }
+
+    private static func a1Disposition(
+        _ action: Disposition, for scalar: Unicode.Scalar
+    ) -> (Disposition, Int) {
+        guard action == .remove, newlyRemovedBlankLookalikes.contains(scalar.value) else { return (action, 0) }
+        return (.keep, scalar.utf8.count)
     }
 
     /// Whether a scalar that is not removed survives `sourceForm` and the trim of
@@ -207,7 +260,7 @@ enum UntrustedTextSanitizer {
     /// after it and can enlarge an EARLIER grapheme (`8×U+0D4E + 🇨 ZWJ 🇨🇨` once gave
     /// `[9, 1]`). So the text is capped by whole-string sweeps: each sweep scans the
     /// whole text once and, if any grapheme is oversized, rebuilds it with every
-    /// oversized grapheme replaced by `cappedScalars`; a changing sweep removes at least
+    /// oversized grapheme capped; a changing sweep removes at least
     /// one scalar. At most `maximumCapSweeps` rebuilds run, so the work is linear in the
     /// text. (An earlier per-append check of the trailing grapheme was quadratic on a
     /// regional-indicator run, because `String.last` scans back to the start of the run.)
@@ -232,7 +285,23 @@ enum UntrustedTextSanitizer {
     static let maximumCapSweeps = 4
 
     static func capGraphemes(_ text: String, work: inout CapWork) -> Result {
+        capGraphemes(text, separators: [], work: &work).result
+    }
+
+    static func capGraphemes(
+        _ text: String, separators: [Int]
+    ) -> (result: Result, separators: [Int]) {
+        var work = CapWork()
+        return capGraphemes(text, separators: separators, work: &work)
+    }
+
+    /// Caps while carrying the exact separator provenance through every whole-string
+    /// sweep. Ordinals are among U+0020 scalars, not scalar offsets.
+    static func capGraphemes(
+        _ text: String, separators: [Int], work: inout CapWork
+    ) -> (result: Result, separators: [Int]) {
         var text = text
+        var marked = scalarOffsets(ofSpaces: separators, in: text)
         var changed = false
         for _ in 0..<maximumCapSweeps {
             guard text.contains(where: { character in
@@ -240,17 +309,48 @@ enum UntrustedTextSanitizer {
                 return character.unicodeScalars.count > maximumScalarsPerGrapheme
             }) else { break }
             var rebuilt = String.UnicodeScalarView()
+            var nextMarked: Set<Int> = []
+            var sourceOffset = 0
+            var outputOffset = 0
             for character in text {
                 work.graphemesVisited += 1
                 let scalars = Array(character.unicodeScalars)
                 let oversized = scalars.count > maximumScalarsPerGrapheme
-                rebuilt.append(contentsOf: oversized ? cappedScalars(scalars) : scalars)
+                let indices = oversized ? cappedScalarIndices(scalars) : Array(scalars.indices)
+                for index in indices {
+                    if marked.contains(sourceOffset + index) { nextMarked.insert(outputOffset) }
+                    rebuilt.append(scalars[index])
+                    outputOffset += 1
+                }
+                sourceOffset += scalars.count
             }
             text = String(rebuilt)
+            marked = nextMarked
             work.sweeps += 1
             changed = true
         }
-        return (text, changed)
+        return (result: (text, changed), separators: spaceOrdinals(in: text, at: marked))
+    }
+
+    private static func scalarOffsets(ofSpaces ordinals: [Int], in text: String) -> Set<Int> {
+        let wanted = Set(ordinals)
+        var offsets: Set<Int> = []
+        var space = 0
+        for (offset, scalar) in text.unicodeScalars.enumerated() where scalar == " " {
+            if wanted.contains(space) { offsets.insert(offset) }
+            space += 1
+        }
+        return offsets
+    }
+
+    private static func spaceOrdinals(in text: String, at offsets: Set<Int>) -> [Int] {
+        var result: [Int] = []
+        var space = 0
+        for (offset, scalar) in text.unicodeScalars.enumerated() where scalar == " " {
+            if offsets.contains(offset) { result.append(space) }
+            space += 1
+        }
+        return result
     }
 
     /// Whether every grapheme of `text`, as Swift segments the whole string, fits the cap.
@@ -262,15 +362,14 @@ enum UntrustedTextSanitizer {
     /// leading `Prepend` scalars loses only its excess (the scalars farthest from the
     /// base), so the base and the text after it survive. A run with no base keeps its
     /// first scalars.
-    private static func cappedScalars(_ scalars: [Unicode.Scalar]) -> [Unicode.Scalar] {
+    private static func cappedScalarIndices(_ scalars: [Unicode.Scalar]) -> [Int] {
         let limit = maximumScalarsPerGrapheme
         let leading = scalars.prefix(while: isPrepend).count
-        guard leading < scalars.count else { return Array(scalars.prefix(limit)) }
-        var body = Array(scalars[leading...].prefix(limit))
-        while let scalar = body.last, isJoiner(scalar) {
-            body.removeLast()
-        }
-        return Array(scalars[..<leading].suffix(limit - body.count)) + body
+        guard leading < scalars.count else { return Array(0..<min(limit, scalars.count)) }
+        var end = min(scalars.count, leading + limit)
+        while end > leading, isJoiner(scalars[end - 1]) { end -= 1 }
+        let prefixCount = min(leading, limit - (end - leading))
+        return Array((leading - prefixCount)..<leading) + Array(leading..<end)
     }
 
     /// Whether `scalar` joins the letter after it into one grapheme (Unicode's
@@ -303,12 +402,20 @@ enum UntrustedTextSanitizer {
     /// splits an occurrence moves back to the last grapheme boundary at or before the
     /// occurrence, so the text keeps the whole marker or ends before it (`Rig [withheld]
     /// tail` cut to 8 bytes is `Rig `, not `Rig [wit`). Literal marker text is cut alike.
-    static func truncate(_ text: String, maximumBytes: Int, marker: String) -> Result {
+    static func truncate(
+        _ text: String, maximumBytes: Int, marker: String, separators: [Int]
+    ) -> (result: Result, separators: [Int]) {
         var cut = graphemePrefix(text, fittingBytes: maximumBytes)
         if cut.changed, let start = splitOccurrence(of: marker, in: text, at: cut.text.unicodeScalars.count) {
             cut.text = prefix(of: text, atOrBefore: start)
         }
-        return cut.changed ? (capGraphemes(cut.text).text, true) : cut
+        guard cut.changed else { return (cut, separators) }
+        let keptScalarCount = cut.text.unicodeScalars.count
+        let oldOffsets = scalarOffsets(ofSpaces: separators, in: text)
+        let keptOffsets = Set(oldOffsets.filter { $0 < keptScalarCount })
+        let prefixSeparators = spaceOrdinals(in: cut.text, at: keptOffsets)
+        let capped = capGraphemes(cut.text, separators: prefixSeparators)
+        return ((capped.result.text, true), capped.separators)
     }
 
     /// The scalar offset of the first occurrence of `marker` in `text` that starts before

@@ -41,15 +41,16 @@ extension UntrustedTextSanitizer {
     /// With the default 128-byte labels the scan limit stays at its 4,096 floor.
     static let maximumWithheldBytes = 1_024
 
-    /// A withheld string in source form. When `isPrefix` is true the source was
-    /// longer than `maximumWithheldBytes` and this is a safe prefix of it. An empty
-    /// prefix term (`failClosed`) stands for a long string with no safe prefix and
-    /// withholds every label it is applied to.
+    /// A withheld string in source form; longer source strings use a safe prefix. Empty fail-closed terms
+    /// withhold every applicable label; scoped terms are dropped only after a complete scan with no new blanks.
     struct WithheldTerm: Hashable, Sendable {
         static let failClosed = WithheldTerm(text: "", isPrefix: true)
+        static let newBlankFailClosed = WithheldTerm(text: "", isPrefix: true, requiresNewBlank: true)
 
         let text: String
         let isPrefix: Bool
+        /// Apply only to labels whose scan removed a new blank lookalike.
+        let requiresNewBlank: Bool
         /// The spaces of `text` that replaced a control or separator (`Scan.separators`):
         /// ordinals among its U+0020 scalars, ascending and in range.
         let separators: [Int]
@@ -64,10 +65,12 @@ extension UntrustedTextSanitizer {
         var folded: [Unicode.Scalar] { form.folded }
         /// See `MatchForm.core`.
         var core: Range<Int> { form.core }
+        var isFailClosed: Bool { isPrefix && text.isEmpty }
 
-        init(text: String, isPrefix: Bool, separators: [Int] = []) {
+        init(text: String, isPrefix: Bool, separators: [Int] = [], requiresNewBlank: Bool = false) {
             self.text = text
             self.isPrefix = isPrefix
+            self.requiresNewBlank = requiresNewBlank
             let spaces = text.unicodeScalars.count { $0 == " " }
             self.separators = Set(separators).filter { (0..<spaces).contains($0) }.sorted()
             form = MatchForm(text.unicodeScalars)
@@ -76,8 +79,7 @@ extension UntrustedTextSanitizer {
                 : compact.utf8.count < minimumRedactedBytes ? nil : MatchForm(compact.unicodeScalars)
         }
 
-        /// Terms are equal when their prepared text and `isPrefix` are, so preparing a
-        /// prepared string returns an equal term; `separators` only add a form to match.
+        /// Equality uses text and `isPrefix`; separators add a match form and preparing a prepared term is idempotent.
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.text == rhs.text && lhs.isPrefix == rhs.isPrefix
         }
@@ -121,7 +123,12 @@ extension UntrustedTextSanitizer {
     /// limit may have split. If fewer than
     /// `minimumRedactedBytes` remain (one giant grapheme), the term is
     /// `WithheldTerm.failClosed`: it is never dropped.
-    /// Returns nil only for a complete string shorter than `minimumRedactedBytes`.
+    /// Eligibility is measured on the trimmed A1 shadow (`a1Text`): the three A1h-added
+    /// blank lookalikes count at their original UTF-8 width even though the matched form
+    /// omits them. Leading/trailing new blanks are not whitespace and count as A1 content;
+    /// ordinary surrounding whitespace is trimmed. Existing compact separator forms keep
+    /// their independent `minimumRedactedBytes` minimum. A cut A1 prefix whose source
+    /// included a newly removed blank fails closed rather than using a shortened prefix.
     static func withheldTerm(_ raw: String) -> WithheldTerm? {
         let filtered = filterScalars(raw.unicodeScalars, keeping: maximumWithheldBytes, trimmed: true)
         return withheldTerm(filtered)
@@ -130,7 +137,14 @@ extension UntrustedTextSanitizer {
     /// Builds a term from the shared trimmed scan also used by `RefusedIdentities`.
     static func withheldTerm(_ filtered: Scan) -> WithheldTerm? {
         var text = sourceForm(filtered.text)
-        var isPrefix = !filtered.isComplete
+        var a1Text = sourceForm(filtered.a1Text ?? filtered.text)
+        if filtered.isComplete { a1Text = a1Text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let termSeparators = shiftedSeparatorsAfterLeadingTrim(filtered.separators, from: text)
+        var isPrefix = !filtered.isComplete || a1Text.utf8.count > maximumWithheldBytes
+        let requiresNewBlank = filtered.removedNewBlankBytes > 0
+        // A removed blank can move an A1 byte cut. A short filtered prefix no longer
+        // identifies a safe matching prefix, so preserve A1's fail-closed outcome.
+        if isPrefix, requiresNewBlank { return .newBlankFailClosed }
         // Trailing whitespace kept within the limit must not push a complete string over the
         // byte limit; a cut string keeps it so its split last character is still dropped.
         if !isPrefix { text = text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -140,8 +154,23 @@ extension UntrustedTextSanitizer {
         }
         if isPrefix, !text.isEmpty { text.removeLast() }
         text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.utf8.count >= minimumRedactedBytes else { return isPrefix ? .failClosed : nil }
-        return WithheldTerm(text: text, isPrefix: isPrefix, separators: filtered.separators)
+        let eligibilityBytes = isPrefix ? text.utf8.count : a1Text.utf8.count
+        guard eligibilityBytes >= minimumRedactedBytes else {
+            return isPrefix ? .failClosed : nil
+        }
+        guard !text.isEmpty else { return requiresNewBlank ? .newBlankFailClosed : .failClosed }
+        return WithheldTerm(
+            text: text, isPrefix: isPrefix, separators: termSeparators, requiresNewBlank: requiresNewBlank
+        )
+    }
+
+    private static func shiftedSeparatorsAfterLeadingTrim(_ separators: [Int], from text: String) -> [Int] {
+        let leadingWhitespace = text.unicodeScalars.prefix {
+            CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+        let leadingSpaces = leadingWhitespace.count { $0 == " " }
+        guard leadingSpaces > 0 else { return separators }
+        return separators.compactMap { $0 >= leadingSpaces ? $0 - leadingSpaces : nil }
     }
 
     /// The distinct terms for `raw` strings, sorted for determinism. Equal terms with
@@ -158,13 +187,20 @@ extension UntrustedTextSanitizer {
         let sorted = scans.compactMap(withheldTerm).sorted { lhs, rhs in
             if lhs.text != rhs.text { return lhs.text < rhs.text }
             if lhs.isPrefix != rhs.isPrefix { return !lhs.isPrefix }
+            if lhs.requiresNewBlank != rhs.requiresNewBlank { return !lhs.requiresNewBlank }
             return lhs.separators.lexicographicallyPrecedes(rhs.separators)
         }
         var terms: [WithheldTerm] = []
-        for term in sorted where terms.last != term || terms.last?.separators != term.separators {
+        for term in sorted where terms.last != term || terms.last?.separators != term.separators
+            || terms.last?.requiresNewBlank != term.requiresNewBlank {
             terms.append(term)
         }
         return terms
+    }
+
+    static func applicableTerms(_ terms: [WithheldTerm], for scan: Scan) -> [WithheldTerm] {
+        guard scan.removedNewBlankBytes == 0, scan.isComplete else { return terms }
+        return terms.filter { !$0.requiresNewBlank }
     }
 
     /// Redacts withheld terms found in the source form of `display`. When anything
@@ -178,11 +214,54 @@ extension UntrustedTextSanitizer {
     static func redactMatchForm(
         of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int] = []
     ) -> Result {
-        let redacted = redact(
-            sourceForm(display), withheld: withheld, marker: marker, scanIsComplete: scanIsComplete,
-            separators: separators
+        redactMatchFormWithSeparators(
+            of: display, withheld: withheld, marker: marker, scanIsComplete: scanIsComplete, separators: separators
+        ).result
+    }
+
+    /// The matching pipeline with separator provenance remapped through range replacement.
+    static func redactMatchFormWithSeparators(
+        of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int]
+    ) -> (result: Result, separators: [Int]) {
+        let source = sourceForm(display)
+        let redacted = redactWithRanges(
+            source, withheld: withheld, marker: marker, scanIsComplete: scanIsComplete, separators: separators
         )
-        return redacted.changed ? redacted : (display, false)
+        guard redacted.result.changed else { return ((display, false), separators) }
+        return (
+            redacted.result,
+            remapSeparators(separators, in: source, ranges: redacted.ranges, marker: marker)
+        )
+    }
+
+    private static func remapSeparators(
+        _ separators: [Int], in text: String, ranges: [Range<Int>], marker: String
+    ) -> [Int] {
+        var marked: Set<Int> = []
+        var wanted = Set(separators)
+        var ordinal = 0
+        for (offset, scalar) in text.unicodeScalars.enumerated() where scalar == " " {
+            if wanted.remove(ordinal) != nil { marked.insert(offset) }
+            ordinal += 1
+        }
+        let scalars = Array(text.unicodeScalars)
+        let markerSpaces = marker.unicodeScalars.filter { $0 == " " }.count
+        var outputSpaces = 0
+        var cursor = 0
+        var result: [Int] = []
+        for range in ranges {
+            for offset in cursor..<range.lowerBound where scalars[offset] == " " {
+                if marked.contains(offset) { result.append(outputSpaces) }
+                outputSpaces += 1
+            }
+            outputSpaces += markerSpaces
+            cursor = range.upperBound
+        }
+        for offset in cursor..<scalars.count where scalars[offset] == " " {
+            if marked.contains(offset) { result.append(outputSpaces) }
+            outputSpaces += 1
+        }
+        return result
     }
 
     /// Replaces every withheld range of `text` (a source form) in one pass: all
@@ -205,6 +284,15 @@ extension UntrustedTextSanitizer {
         _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool = true,
         separators: [Int] = []
     ) -> Result {
+        redactWithRanges(
+            text, withheld: withheld, marker: marker, scanIsComplete: scanIsComplete, separators: separators
+        ).result
+    }
+
+    /// One range calculation feeds both display replacement and separator remapping.
+    private static func redactWithRanges(
+        _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int]
+    ) -> (result: Result, ranges: [Range<Int>]) {
         let scalars = Array(text.unicodeScalars)
         let map = CaselessMap(text)
         var found = withheldRanges(in: map, terms: withheld, scanIsComplete: scanIsComplete)
@@ -216,7 +304,7 @@ extension UntrustedTextSanitizer {
             found += withheldRanges(in: compact, terms: withheld, scanIsComplete: scanIsComplete, compact: true)
         }
         let ranges = merge(found)
-        guard !ranges.isEmpty else { return (text, false) }
+        guard !ranges.isEmpty else { return ((text, false), []) }
         var result = String.UnicodeScalarView()
         var cursor = 0
         for range in ranges {
@@ -225,7 +313,7 @@ extension UntrustedTextSanitizer {
             cursor = range.upperBound
         }
         result.append(contentsOf: scalars[cursor...])
-        return (String(result), true)
+        return ((String(result), true), ranges)
     }
 
     /// Source scalar ranges to withhold, always whole source graphemes:
@@ -270,7 +358,7 @@ extension UntrustedTextSanitizer {
         in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool, compact: Bool = false
     ) -> [Range<Int>] {
         guard map.sourceCount > 0 else { return [] }
-        if terms.contains(.failClosed) { return [0..<map.sourceCount] }
+        if terms.contains(where: { $0.isFailClosed }) { return [0..<map.sourceCount] }
         var ranges: [Range<Int>] = []
         let forms = terms.map { compact ? $0.compactForm : $0.form }
         for (term, form) in zip(terms, forms) {

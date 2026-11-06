@@ -214,6 +214,9 @@ extension NeutralSnapshotUnicodeTests {
             UntrustedTextSanitizer.redact(text, withheld: terms, marker: Self.marker, separators: separators).text
         }
         #expect(redact("SN-1 2345", [0]) == Self.marker)
+        #expect(UntrustedTextSanitizer.redactMatchForm(
+            of: "SN-1 2345", withheld: terms, marker: Self.marker, scanIsComplete: true, separators: [0]
+        ).text == Self.marker)
         #expect(redact("SN-1 2345", []) == "SN-1 2345")
         #expect(redact("x SN-1 2345 y", [1]) == "x \(Self.marker) y")
         #expect(redact("SN-12345 y", [0]) == "\(Self.marker) y")
@@ -341,14 +344,15 @@ extension NeutralSnapshotUnicodeTests {
         }
     }
 
-    /// An ASCII space is kept without classifying it; `disposition` would keep it too.
+    /// ASCII spaces need no classification; other scalars are classified once for
+    /// display and once for the trimmed A1 eligibility shadow.
     @Test func anASCIISpaceIsKeptWithoutClassifyingIt() {
         var work = UntrustedTextSanitizer.ScanWork()
         let padded = String(repeating: " ", count: 5_000) + "SN-12345" + String(repeating: " ", count: 5_000)
         let scan = UntrustedTextSanitizer.filterScalars(
             padded.unicodeScalars, keeping: 4_096, trimmed: true, work: &work
         )
-        #expect(work.dispositions == 8)
+        #expect(work.dispositions == 16)
         #expect(scan.text == "SN-12345" + String(repeating: " ", count: 4_088) && scan.isComplete && scan.changed)
         let blank: Unicode.Scalar = " "
         let space = blank.properties
@@ -356,10 +360,51 @@ extension NeutralSnapshotUnicodeTests {
         #expect(space.generalCategory == .spaceSeparator)
         #expect(!UntrustedTextSanitizer.blankLookalikes.contains(0x20) && !UntrustedTextSanitizer.isJoiner(" "))
     }
+
+    @Test func newlyRemovedBlanksPreserveA1TermEligibilityAtTheByteThreshold() {
+        let added = [0x13441, 0x13442, 0x1BC9D].compactMap(Unicode.Scalar.init)
+        for blank in added {
+            let glyph = String(blank)
+            #expect(glyph.utf8.count == 4)
+            for raw in ["AB" + glyph, glyph + "AB", "A" + glyph + "B"] {
+                let term = UntrustedTextSanitizer.withheldTerm(raw)
+                #expect(term?.text == "AB")
+                #expect(UntrustedLabel(raw, withholding: [raw]).text == Self.marker)
+            }
+            #expect(UntrustedTextSanitizer.withheldTerm("A" + glyph) == nil)
+            #expect(UntrustedTextSanitizer.withheldTerm("ABCDE") == nil)
+        }
+        #expect(UntrustedLabel("AB\u{13441}CD", withholding: ["AB\u{13441}CD"]).text == Self.marker)
+        #expect(UntrustedLabel("ABCDE", withholding: ["ABCDE"]).text == "ABCDE")
+
+        // These seven blanks were already removed by A1 and must not count toward
+        // eligibility; only the three A1h additions restore their source byte width.
+        let old: [UInt32] = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x1D159]
+        for value in old {
+            let blank = String(Unicode.Scalar(value)!)
+            #expect(UntrustedTextSanitizer.withheldTerm("AB" + blank) == nil)
+            #expect(UntrustedTextSanitizer.withheldTerm("ABC" + blank) == nil)
+        }
+        let blankOnlyLong = UntrustedTextSanitizer.withheldTerm(String(repeating: "\u{13441}", count: 300))
+        #expect(blankOnlyLong?.isFailClosed == true && blankOnlyLong?.requiresNewBlank == true)
+        let cutAfterNewBlank = UntrustedTextSanitizer.withheldTerm(
+            String(repeating: "A", count: 1_023) + "\u{13441}A"
+        )
+        #expect(cutAfterNewBlank?.isFailClosed == true && cutAfterNewBlank?.requiresNewBlank == true)
+        let blankOnlyTerm = String(repeating: "\u{13441}", count: 2)
+        #expect(UntrustedLabel(blankOnlyTerm, withholding: [blankOnlyTerm]).text == Self.marker)
+    }
+
+    @Test func removedBlankBytesAreCountedForIdentityBounds() {
+        let exact = String(repeating: "A", count: 124) + "\u{13441}"
+        let over = String(repeating: "A", count: 125) + "\u{13441}"
+        #expect(RefusedIdentities.identityForm(exact).scalars?.count == 124)
+        #expect(RefusedIdentities.identityForm(over) == .tooLong)
+    }
 }
 
 /// SplitMix64, so the differential is reproducible.
-private struct NeutralSnapshotUnicodeRandom: RandomNumberGenerator {
+struct NeutralSnapshotUnicodeRandom: RandomNumberGenerator {
     var state: UInt64
 
     init(seed: UInt64) {

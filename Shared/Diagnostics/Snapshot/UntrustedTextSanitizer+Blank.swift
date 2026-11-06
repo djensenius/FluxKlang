@@ -20,6 +20,10 @@ extension UntrustedTextSanitizer {
         0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x13441, 0x13442, 0x1BC9D, 0x1D159
     ]
 
+    /// Added after A1. Keep their source byte width for withheld-term eligibility:
+    /// removing them from both label and term must not make an old eligible term vanish.
+    static let newlyRemovedBlankLookalikes: Set<UInt32> = [0x13441, 0x13442, 0x1BC9D]
+
     /// Scalars where Foundation's normalization breaks canonical equivalence on Swift
     /// 6.4.2 with the macOS 27.2 SDK (#358): its NFC composes a preceding scalar (U+2000,
     /// U+2001 and about 1,981 others) with U+113C2 or U+1611E into U+113C5 or U+16121, it
