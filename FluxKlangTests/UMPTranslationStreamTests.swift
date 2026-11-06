@@ -86,6 +86,7 @@ struct UMPTranslationStreamTests {
         #expect(try stream.poll(at: deadline - 1).isEmpty)
         #expect(try stream.poll(at: deadline) == [try Self.mpe(15, channel: 3, group: 2)])
         #expect(stream.translator.heldDataEntry == nil)
+        #expect(stream.deadline == nil)
         #expect(stream.idleFlushes == 1)
     }
 
@@ -102,7 +103,7 @@ struct UMPTranslationStreamTests {
         #expect(stream.translator.heldDataEntry == nil)
         #expect(stream.endOfStream().isEmpty)
         #expect(stream.endOfStreamFlushes == 1)
-        // The selection is kept, so the next stream's CC 6 is held again.
+        // The selection is kept, so the next segment's CC 6 is held again.
         #expect(stream.translator.state(group: try UMPGroup(0), channel: try UMPChannel(0)).parameter != nil)
         #expect(try stream.receive(Self.cc(0, 6, 3), at: 101 * Self.msec) == Self.empty)
         #expect(stream.deadline == 106 * Self.msec)
@@ -120,7 +121,7 @@ struct UMPTranslationStreamTests {
         }
         #expect(stream.endOfStream().isEmpty)
         #expect(stream.lastAcceptedTime == nil)
-        // The next track starts at 0; its own times then run forward from there.
+        // The next segment starts at 0; its own times then run forward from there.
         #expect(try stream.receive(Self.cc(0, 6, 3), at: 0) == Self.empty)
         #expect(stream.lastAcceptedTime == 0)
         #expect(stream.deadline == 5 * Self.msec)

@@ -60,8 +60,9 @@ struct UMPTranslationStream: Equatable, Sendable {
     }
 
     /// Translates one message received at `time`. If a held CC 6 has reached its deadline, it is sent first.
-    /// A live caller whose times may step back (CoreMIDI timestamp 0 meaning "now", or jitter) may pass
-    /// `max(time, lastAcceptedTime ?? time)` rather than drop the message on `timeWentBackward`.
+    /// A live caller should replace CoreMIDI timestamp 0 ("now") with the current host time in nanoseconds, and
+    /// may clamp small backward jitter to `max(time, lastAcceptedTime ?? time)` rather than drop the message on
+    /// `timeWentBackward`. Clamping timestamp 0 instead would make the deadline stale and flush a held CC 6 early.
     mutating func receive(
         _ voice: UMPMIDI1ChannelVoice, at time: UInt64
     ) throws(UMPTranslationStreamRefusal) -> UMPTranslationOutput<UMPMIDI2ChannelVoice> {
