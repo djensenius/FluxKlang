@@ -184,11 +184,15 @@ struct ActionSetSubmissionCancelTests {
         try harness.observe()
         let resolved = try harness.resolved()
         let first = try harness.fire(resolved)
+        let token = harness.scheduler.currentToken
+        // The registry is checked first: with the member still pending in the scheduler (not quiescent)...
+        try Self.expectNotSettled(&harness, expected: token)
         let horizon = SampleStamp(clock: ActionSetFixture.primary, generation: .initial, frame: 480)
         try harness.scheduler.commit(first.handles[0], at: horizon, nominalRate: 48_000,
                                      ledger: harness.fixture.ledger, readiness: harness.fixture.readiness)
+        // ...and before the drain with a token that is not current (another scheduler's), it is not settled.
+        try Self.expectNotSettled(&harness, expected: Harness(members: 1).scheduler.currentToken)
         let outcomes = harness.scheduler.drain()
-        let token = harness.scheduler.currentToken
         // (a) The scheduler is quiescent but the registry is not: refused, nothing changes.
         let before = try harness.snapshot()
         let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
@@ -234,5 +238,22 @@ struct ActionSetSubmissionCancelTests {
         let refired = try harness.fire(resolved)
         #expect(refired.handles.map(\.trigger) == first.handles.map(\.trigger) && refired.handles != first.handles)
         #expect(harness.pending.pending(in: ActionSetFixture.scene) == refired.handles.map(\.trigger))
+    }
+
+    /// Rotating through the submitter with one unsettled entry is `.pendingNotSettled(count: 1)` and changes
+    /// nothing, whatever the scheduler's own token and quiescence checks would say.
+    private static func expectNotSettled(_ harness: inout Harness, expected: TriggerSessionToken,
+                                         sourceLocation: SourceLocation = #_sourceLocation) throws {
+        let before = try harness.snapshot()
+        let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
+            try ActionSetSubmitter.rotateSession(expected: expected, scheduler: &harness.scheduler,
+                                                 pending: harness.pending)
+        }
+        guard case .pendingNotSettled(count: 1) = refusal else {
+            Issue.record("Expected pendingNotSettled(1), got \(String(describing: refusal))",
+                         sourceLocation: sourceLocation)
+            return
+        }
+        #expect(try harness.snapshot() == before, sourceLocation: sourceLocation)
     }
 }

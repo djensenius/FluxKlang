@@ -146,4 +146,55 @@ struct ActionSetSubmissionAdmissionTests {
         }
         #expect(try harness.snapshot() == mixedBefore)
     }
+
+    /// Precedence in both directions: the first failing requirement in member order wins whatever its kind,
+    /// and within one member the first failing requirement in requirement order wins.
+    @Test
+    func requirementRefusalFollowsMemberOrderThenRequirementOrder() throws {
+        var harness = try Harness()
+        let resolved = try harness.resolved()
+        let decided = try harness.stamps(resolved)
+        try harness.fixture.ledger.bump(ActionSetFixture.context, reason: .contextChange)
+        let fresh = try harness.stamps(resolved)
+        let undeclared = GenerationKey(kind: .source, subject: GenerationSubject(validated: "source.undeclared"))
+        let missing = [GenerationRequirement(key: undeclared, generation: .initial)]
+        let before = try harness.snapshot()
+        // An undeclared member 0 wins over a stale member 1.
+        let mirror = ActionSetFireDecision.fire([Harness.replacing(fresh[0], requires: fresh[0].requires + missing),
+                                                 decided[1], fresh[2]])
+        let first = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(mirror, of: resolved) }
+        guard case .undeclaredRequirement(index: 0, undeclared) = first else {
+            Issue.record("Expected undeclaredRequirement(0), got \(String(describing: first))")
+            return
+        }
+        #expect(try harness.snapshot() == before)
+        // One member listing a stale requirement before an undeclared one reports the stale one.
+        #expect(decided[1].requires.contains { $0.key == ActionSetFixture.context })
+        let within = ActionSetFireDecision.fire([fresh[0], Harness.replacing(decided[1],
+                                                                              requires: decided[1].requires + missing),
+                                                 fresh[2]])
+        let inner = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(within, of: resolved) }
+        guard case .staleRequirement(index: 1, ActionSetFixture.context) = inner else {
+            Issue.record("Expected staleRequirement(1, context), got \(String(describing: inner))")
+            return
+        }
+        #expect(try harness.snapshot() == before)
+        // Reversing the requirements within that member reports the undeclared requirement first.
+        let reversedRequirements = missing + decided[1].requires
+        let reversedWithin = ActionSetFireDecision.fire([
+            fresh[0],
+            Harness.replacing(decided[1], requires: reversedRequirements),
+            fresh[2]
+        ])
+        let reversed = Harness.refusal { () throws(ActionSetSubmitRefusal) in
+            try harness.submit(reversedWithin, of: resolved)
+        }
+        guard case .undeclaredRequirement(index: 1, let key) = reversed, key == undeclared else {
+            Issue.record(
+                "Expected undeclaredRequirement(1, \(undeclared)), got \(String(describing: reversed))"
+            )
+            return
+        }
+        #expect(try harness.snapshot() == before)
+    }
 }

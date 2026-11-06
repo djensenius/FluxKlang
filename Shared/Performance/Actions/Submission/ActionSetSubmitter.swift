@@ -142,6 +142,12 @@ enum ActionSetSubmitter {
     /// Rotates the scheduler's session (`TriggerScheduler.rotateSession`) only once every registry entry
     /// is settled; otherwise refuses with `.pendingNotSettled`, since `settle` skips an old session's
     /// outcomes. Drain, settle, then rotate. A refusal leaves the scheduler and registry unchanged.
+    ///
+    /// The registry is checked first, then the scheduler's own session-token, pin and quiescence checks
+    /// (`.rotation`), so an unsettled entry is `.pendingNotSettled` even with a stale token or pending work.
+    /// Pass the registry paired with this scheduler; the gate trusts the registry it is given.
+    /// Recovery: if drained outcomes are lost before settling, rotation stays refused until each affected
+    /// live scope is cancelled with `userCancel(scope:ledger:scheduler:pending:)`, which forgets its entries.
     @discardableResult
     static func rotateSession(expected: TriggerSessionToken, scheduler: inout TriggerScheduler,
                               pending: ActionSetPendingTriggers) throws(ActionSetSubmitRefusal)
