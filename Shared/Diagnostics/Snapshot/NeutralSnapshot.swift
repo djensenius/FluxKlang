@@ -127,8 +127,9 @@ extension NeutralSnapshot {
         let sanitizedLabels: Int
         /// Distinct withheld strings past `NeutralSnapshotAssembly.maximumWithheldCount`,
         /// which are not redacted, plus withheld strings too long for bounded identity
-        /// filtering, which are redacted as terms but not compared as whole IDs. When this
-        /// is positive, redaction or whole-ID refusal may be incomplete.
+        /// filtering whose kept text could still give a device-ID-sized form; those are
+        /// redacted as terms but not compared as whole IDs. When this is positive,
+        /// redaction or whole-ID refusal may be incomplete.
         let withheldOverflow: Int
 
         /// True when any category or label was cut short, or withheld strings overflowed.

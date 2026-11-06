@@ -48,10 +48,11 @@ import Foundation
 /// matched by a match-form prefix, and a match redacts the rest of the label. One
 /// with no safe prefix (a single giant grapheme) withholds the whole label.
 ///
-/// Scanning stops once `UntrustedTextSanitizer.scanLimit(maximumBytes:withheld:)`
-/// match-form scalars have been kept (saturating at `Int.max`, so no byte limit traps).
-/// Removed scalars and joiners are read but not
-/// counted, so the work is linear in the input and the kept text is bounded.
+/// Scanning stops at the first scalar it would keep once
+/// `UntrustedTextSanitizer.scanLimit(maximumBytes:withheld:)` match-form scalars have
+/// been kept (saturating at `Int.max`, so no byte limit traps). Removed scalars and
+/// joiners are read but not counted, so the work is linear in the input and the kept
+/// text is bounded.
 ///
 /// Not handled (accepted for A1): visible combining marks placed on the characters
 /// of a withheld string, between its first and last starter or in front of its own

@@ -58,7 +58,7 @@ extension NeutralSnapshotTests {
     @Test(arguments: [
         ("a\u{E000}b\u{F8FF}c\u{F0000}", "abc"),
         ("a\u{0378}b\u{E01F0}c", "abc"),
-        ("a\u{3164}b\u{115F}c\u{1160}d\u{FFA0}e\u{2800}f", "abcdef"),
+        ("a\u{3164}b\u{115F}c\u{1160}d\u{FFA0}e\u{2800}f\u{16FE4}g", "abcdefg"),
         ("a\u{FE00}b\u{E0100}c\u{180B}", "abc"),
         ("\u{FE0F}a \u{FE0F}b\u{0301}\u{FE0E}", "a b\u{0301}"),
         ("✈\u{FE0F}x\u{FE0E}", "✈\u{FE0F}x"),
@@ -301,7 +301,9 @@ extension NeutralSnapshotTests {
 
     /// Identities of five bytes are too short to be withheld terms, so only the
     /// equality path can refuse `dev.a`; each needs the scalar filter and the trim.
-    @Test(arguments: ["\u{0001}dev.a", "\u{E000} DEV.A\u{0007}", "dev.\u{2060}a", "\u{FEFF}DEV.A\u{00AD}"])
+    @Test(arguments: [
+        "\u{0001}dev.a", "\u{E000} DEV.A\u{0007}", "dev.\u{2060}a", "\u{FEFF}DEV.A\u{00AD}", "dev.a\u{16FE4}"
+    ])
     func theEqualityPathFiltersAndTrimsIdentities(identity: String) throws {
         #expect(UntrustedTextSanitizer.withheldTerm(identity) == nil)
         var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
@@ -362,7 +364,7 @@ extension NeutralSnapshotTests {
         let limit = RefusedIdentities.maximumIdentityScalars
         let fits = String(repeating: " ", count: limit - 5) + "DEV.A"
         let over = String(repeating: " ", count: limit - 4) + "DEV.A"
-        #expect(RefusedIdentities.identityForm(fits) != nil && RefusedIdentities.identityForm(over) == nil)
+        #expect(RefusedIdentities.identityForm(fits).scalars != nil && RefusedIdentities.identityForm(over) == .unknown)
         #expect(RefusedIdentities.none.refuses(over) && !RefusedIdentities.none.refuses("dev.a"))
         var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
         input.route.device = DeviceID(validated: "dev.a")
@@ -377,5 +379,68 @@ extension NeutralSnapshotTests {
             let route = try #require(snapshot.route(RouteID(validated: "rte.x")))
             #expect(route.device == nil && route.isDeviceWithheld)
         }
+    }
+}
+
+// MARK: - Round 12b: early-out, prefix terms, trailing padding
+
+extension NeutralSnapshotTests {
+    /// A trimmed source of more than `maximumIdentityFormBytes` scalars is too long without
+    /// building its form, complete or not, and is not counted. One that is cut by the filter
+    /// but whose kept core still fits is unknown and counted.
+    @Test func identityFormsTooLongToFitAreNotCounted() throws {
+        let limit = RefusedIdentities.maximumIdentityFormBytes
+        let dees = { (count: Int) in String(repeating: "d", count: count) }
+        let spaces = { (count: Int) in String(repeating: " ", count: count) }
+        let cases: [(String, RefusedIdentities.IdentityForm)] = [
+            (dees(limit), .form(Array(dees(limit).unicodeScalars))), (dees(limit + 1), .tooLong),
+            (spaces(800) + dees(limit), .form(Array(dees(limit).unicodeScalars))),
+            (String(repeating: "\u{00E9}", count: 65), .tooLong), (String(repeating: "Q7", count: 570), .tooLong),
+            (spaces(896) + dees(limit + 1), .unknown), (spaces(895) + dees(limit + 2), .tooLong)
+        ]
+        for (identity, expected) in cases {
+            #expect(RefusedIdentities.identityForm(identity) == expected, "\(identity.unicodeScalars.count)")
+        }
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.evidence = String(repeating: "Q7", count: 570)
+        let snapshot = Snapshot.build(from: Snapshot.Inputs(graph: Self.emptyGraph, routes: [input]))
+        #expect(snapshot.truncation.withheldOverflow == 0 && !snapshot.truncation.isTruncated)
+    }
+
+    /// An identity cut by the filter whose kept core still fits is refused through its prefix
+    /// term, not the equality path: only routes that term matches are withheld.
+    @Test(arguments: [(1_014, 0, "DEV.IFACE"), (0, 1_014, "DEV.IFACE-B")])
+    func aLongIdentityRefusesThroughItsPrefixTerm(lead: Int, trail: Int, term: String) throws {
+        let identity = String(repeating: " ", count: lead) + "DEV.IFACE-B" + String(repeating: " ", count: trail)
+        #expect(RefusedIdentities.identityForm(identity) == .unknown)
+        #expect(UntrustedTextSanitizer.withheldTerm(identity) == .init(text: term, isPrefix: true))
+        var first = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        first.route.device = DeviceID(validated: "dev.iface-b")
+        var second = try Self.routeInput("rte.y", binding: .confirmed, presence: .present)
+        second.route.device = DeviceID(validated: "dev.phone-audio")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [first, second])
+        inputs.hardwareIdentifiers = [identity]
+        let snapshot = Snapshot.build(from: inputs)
+        let withheld = try #require(snapshot.route(RouteID(validated: "rte.x")))
+        #expect(withheld.device == nil && withheld.isDeviceWithheld)
+        #expect(snapshot.route(RouteID(validated: "rte.y"))?.device?.rawValue == "dev.phone-audio")
+        #expect(snapshot.truncation.withheldOverflow == 1 && snapshot.truncation.isTruncated)
+    }
+
+    /// Filtering stops only at a scalar it would keep, so removable padding after the last
+    /// counted scalar never makes the form unknown.
+    @Test func trailingRemovablePaddingKeepsTheFormKnown() throws {
+        let identity = String(repeating: " ", count: 1_019) + "DEV.A" + "\u{200B}"
+        #expect(RefusedIdentities.identityForm(identity) == .form(Array("dev.a".unicodeScalars)))
+        #expect(UntrustedTextSanitizer.filterScalars("abc\u{200B}\u{2060}".unicodeScalars, keeping: 3).isComplete)
+        #expect(!UntrustedTextSanitizer.filterScalars("abc\u{200B}d".unicodeScalars, keeping: 3).isComplete)
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.a")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.hardwareIdentifiers = [identity]
+        let snapshot = Snapshot.build(from: inputs)
+        let route = try #require(snapshot.route(RouteID(validated: "rte.x")))
+        #expect(route.device == nil && route.isDeviceWithheld)
+        #expect(snapshot.truncation.withheldOverflow == 0 && !snapshot.truncation.isTruncated)
     }
 }

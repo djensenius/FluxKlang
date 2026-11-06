@@ -24,22 +24,28 @@ struct NeutralSnapshotAssembly {
     /// identity, and short ones stay even when too short to be withheld terms. A longer
     /// form can never equal a device ID; such strings still refuse and redact as terms.
     let withheld: [String]
+    /// The identity forms of `withheld`, built once and passed to `RefusedIdentities`.
+    let withheldForms: Set<[Unicode.Scalar]>
     /// The withheld strings in label match form, prepared once for every label.
     let redacted: [UntrustedTextSanitizer.WithheldTerm]
     /// Distinct withheld strings dropped by `maximumWithheldCount`, plus collected
-    /// strings whose bounded filtering could not complete (more than
-    /// `RefusedIdentities.maximumIdentityScalars` kept scalars), so their identity form
-    /// is unknown. Such a string is still a (prefix or fail-closed) withheld term, but
-    /// whole-ID refusal cannot be shown to cover it, so it is counted, never silent.
+    /// strings whose identity form is unknown (`IdentityForm.unknown`): bounded
+    /// filtering stopped at `RefusedIdentities.maximumIdentityScalars` kept scalars and
+    /// the kept text could still give a form that fits. Such a string is still a
+    /// (prefix or fail-closed) withheld term, but whole-ID refusal cannot be shown to
+    /// cover it, so it is counted, never silent. A string whose kept text already proves
+    /// its form too long (`IdentityForm.tooLong`) is not counted, as for a complete one.
     let withheldOverflow: Int
 
     init(inputs: NeutralSnapshot.Inputs, limits: NeutralSnapshot.Limits) {
         self.limits = limits
         let (collected, overflow) = Self.collectWithheld(inputs)
         let identities = collected.map { (raw: $0, form: RefusedIdentities.identityForm($0)) }
-        withheldOverflow = overflow + identities.count { $0.form == nil }
-        withheld = identities.filter { $0.form.map { !$0.isEmpty && RefusedIdentities.fits($0) } ?? false }
-            .map(\.raw).sorted()
+        withheldOverflow = overflow + identities.count { $0.form == .unknown }
+        let known = identities.compactMap { identity in identity.form.scalars.map { (raw: identity.raw, form: $0) } }
+            .filter { !$0.form.isEmpty }
+        withheld = known.map(\.raw).sorted()
+        withheldForms = Set(known.map(\.form))
         redacted = UntrustedTextSanitizer.withheldTerms(collected)
     }
 

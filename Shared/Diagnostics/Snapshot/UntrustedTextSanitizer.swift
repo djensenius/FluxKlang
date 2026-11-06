@@ -12,8 +12,9 @@ enum UntrustedTextSanitizer {
     typealias Result = (text: String, changed: Bool)
 
     static let maximumScalarsPerGrapheme = 8
-    /// Hangul fillers, halfwidth Hangul filler and the blank Braille pattern render as nothing.
-    static let blankLookalikes: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800]
+    /// Hangul fillers, halfwidth Hangul filler, the blank Braille pattern and the Khitan
+    /// small script filler (a combining mark, not default-ignorable) render as nothing.
+    static let blankLookalikes: Set<UInt32> = [0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4]
     static let zeroWidthJoiner: Unicode.Scalar = "\u{200D}"
     static let zeroWidthNonJoiner: Unicode.Scalar = "\u{200C}"
 
@@ -51,18 +52,24 @@ enum UntrustedTextSanitizer {
     /// so the limit applies to the match form and invisible padding cannot push
     /// later text past it. A kept selector follows an emoji and a kept joiner
     /// follows a counted scalar or such a selector, so the kept text is at most
-    /// `3 * limit` scalars.
+    /// `3 * limit` scalars. The scan stops (incomplete) only at a scalar it would
+    /// keep once `limit` are kept; removable scalars past the limit are still
+    /// scanned and removed, so trailing padding never makes the scan incomplete
+    /// (still linear in the input).
     static func filterScalars(_ scalars: String.UnicodeScalarView, keeping limit: Int) -> Scan {
         var kept = String.UnicodeScalarView()
         var keptCount = 0
         var changed = false
         var index = scalars.startIndex
         while index != scalars.endIndex {
-            guard keptCount < limit else { return Scan(text: String(kept), changed: changed, isComplete: false) }
             let scalar = scalars[index]
             let nextIndex = scalars.index(after: index)
             let next = nextIndex == scalars.endIndex ? nil : scalars[nextIndex]
-            switch disposition(of: scalar, after: kept, before: next) {
+            let action = disposition(of: scalar, after: kept, before: next)
+            if keptCount >= limit, action != .remove {
+                return Scan(text: String(kept), changed: changed, isComplete: false)
+            }
+            switch action {
             case .keep:
                 kept.append(scalar)
                 keptCount += isMatchIgnorable(scalar) ? 0 : 1

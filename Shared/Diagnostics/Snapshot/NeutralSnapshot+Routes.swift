@@ -13,7 +13,7 @@ extension NeutralSnapshotAssembly {
         let selection = Self.select(routes, limit: limits.routes, id: \.route.id, priority: { input in
             Self.availability(of: input) == .available ? 1 : 0
         })
-        let refused = RefusedIdentities(withheld, terms: redacted)
+        let refused = RefusedIdentities(forms: withheldForms, terms: redacted)
         let kept = selection.kept.map { input in
             let route = input.route
             let exposed = Self.isNeutralDeviceAlias(route.device.rawValue, refused: refused)
@@ -87,14 +87,19 @@ extension NeutralSnapshotAssembly {
 ///
 /// An exposable device ID is ASCII and at most `DeviceID.maximumLength` bytes
 /// (`ContractID.validate`), so its form is that long at most. An identity whose form
-/// is longer can never equal one, and is skipped on the equality path; the term path
-/// still refuses and redacts by it. An identity whose bounded filtering cannot
-/// complete has no known form: as a device ID it is refused, and as a withheld
-/// identity it is counted in `Truncation.withheldOverflow` (`NeutralSnapshotAssembly`).
+/// is longer (`IdentityForm.tooLong`) can never equal one, and is skipped on the
+/// equality path; the term path still refuses and redacts by it. An identity whose
+/// bounded filtering cannot complete and whose kept text could still give a fitting
+/// form has no known form (`IdentityForm.unknown`): as a device ID it is refused, and
+/// as a withheld identity it is counted in `Truncation.withheldOverflow`
+/// (`NeutralSnapshotAssembly`).
 ///
-/// Cost: filtering is linear in the raw input, as for withheld terms; the caseless
-/// form is built from at most `maximumIdentityScalars` counted scalars (3× that with
-/// kept joiners and selectors), the same order as preparing a withheld term.
+/// Cost: filtering is linear in the raw input, as for withheld terms. The caseless
+/// form is built only when the trimmed source has at most `maximumIdentityFormBytes`
+/// scalars, so from at most 128 scalars; longer sources stop at the source form, which
+/// is built from at most `maximumIdentityScalars` counted scalars (3× that with kept
+/// joiners and selectors). `NeutralSnapshotAssembly` builds each withheld form once and
+/// passes the fitting ones in (`init(forms:terms:)`).
 ///
 /// Over-withholding is by design: a term inside an alias refuses it (evidence
 /// `confirmed` refuses `dev.confirmed-a`).
@@ -106,11 +111,31 @@ struct RefusedIdentities {
     /// terms are prepared with (`maximumWithheldBytes`).
     static let maximumIdentityScalars = UntrustedTextSanitizer.maximumWithheldBytes
 
+    /// The result of the bounded identity pipeline (`identityForm`).
+    enum IdentityForm: Hashable {
+        /// The complete caseless form, which fits `maximumIdentityFormBytes`.
+        case form([Unicode.Scalar])
+        /// Longer than `maximumIdentityFormBytes`, so it can never equal a device ID.
+        case tooLong
+        /// Filtering stopped at `maximumIdentityScalars` and the kept text could still
+        /// give a fitting form, so the form is unknown.
+        case unknown
+
+        var scalars: [Unicode.Scalar]? {
+            if case .form(let scalars) = self { scalars } else { nil }
+        }
+    }
+
     private let forms: Set<[Unicode.Scalar]>
     private let terms: [UntrustedTextSanitizer.WithheldTerm]
 
     init(_ identities: [String], terms: [UntrustedTextSanitizer.WithheldTerm]) {
-        forms = Set(identities.compactMap(Self.form))
+        self.init(forms: Set(identities.compactMap(Self.form)), terms: terms)
+    }
+
+    /// Identity forms already built by `identityForm` (`IdentityForm.form`), so each is built once.
+    init(forms: Set<[Unicode.Scalar]>, terms: [UntrustedTextSanitizer.WithheldTerm]) {
+        self.forms = forms
         self.terms = terms
     }
 
@@ -125,8 +150,7 @@ struct RefusedIdentities {
     /// The identity form when it fits `maximumIdentityFormBytes`, else nil (it cannot
     /// equal a device ID, or bounded filtering could not complete).
     static func form(_ raw: String) -> [Unicode.Scalar]? {
-        guard let form = identityForm(raw), fits(form) else { return nil }
-        return form
+        identityForm(raw).scalars
     }
 
     /// Whether a form is short enough to equal an exposable device ID.
@@ -134,12 +158,29 @@ struct RefusedIdentities {
         form.reduce(0) { $0 + UTF8.width($1) } <= maximumIdentityFormBytes
     }
 
-    /// The bounded identity pipeline, with no bound on the raw bytes. Nil only when
-    /// filtering stops at `maximumIdentityScalars` kept scalars, so the form is unknown.
-    static func identityForm(_ raw: String) -> [Unicode.Scalar]? {
+    /// The bounded identity pipeline, with no bound on the raw bytes: `filterScalars`
+    /// (keeping `maximumIdentityScalars`), `sourceForm`, trim, `caselessForm`.
+    ///
+    /// Early out: a trimmed source of more than `maximumIdentityFormBytes` scalars is
+    /// `.tooLong` without building its caseless form, complete or not. Let w(x) be the
+    /// scalar count of `caselessForm(x)` = NFD(fold(NFD(x))). NFD is a per-scalar
+    /// decomposition (never empty) plus a reordering, and `fold` maps each scalar to at
+    /// least one, so w is additive over concatenation, depends only on NFD(x) (so NFC
+    /// keeps it), and w(x) ≥ |x|. Whitespace scalars are starters that NFC never
+    /// composes, decomposes into or produces from other scalars, and the trim is per
+    /// scalar, so the trimmed source is NFC of the kept text's core (first to last
+    /// non-whitespace scalar, joiners and selectors removed). Filtering keeps a prefix of
+    /// what unbounded filtering keeps, so the full core is the kept core plus more:
+    /// w(full) ≥ w(kept core) ≥ |trimmed source|. Every scalar is at least one UTF-8
+    /// byte, so the full form has more than `maximumIdentityFormBytes` bytes.
+    /// (Checked over every scalar on this toolchain: no empty fold or NFD; whitespace
+    /// has ccc 0 and is in no multi-scalar decomposition.)
+    static func identityForm(_ raw: String) -> IdentityForm {
         let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: maximumIdentityScalars)
-        guard filtered.isComplete else { return nil }
         let source = UntrustedTextSanitizer.sourceForm(filtered.text).trimmingCharacters(in: .whitespacesAndNewlines)
-        return UntrustedTextSanitizer.caselessForm(source.unicodeScalars)
+        if source.unicodeScalars.count > maximumIdentityFormBytes { return .tooLong }
+        guard filtered.isComplete else { return .unknown }
+        let form = UntrustedTextSanitizer.caselessForm(source.unicodeScalars)
+        return fits(form) ? .form(form) : .tooLong
     }
 }
