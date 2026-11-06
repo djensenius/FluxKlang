@@ -14,7 +14,13 @@ import Synchronization
 /// It also owns the scopes' `ReleaseTombstones` (allocated in `init`, same scopes and key space), so every
 /// `KernelCycle` sharing this ownership shares its release history too, exactly when it shares the notes, and the
 /// two can never be passed apart (round 2g). Its cycle claim is the only cross-thread state: `KernelCycle.init`
-/// (control) claims it and `KernelCycle.retire()` (render) hands it back; see `claimForCycle(_:fresh:)`.
+/// (control) claims it and `KernelCycle.retire()` (render) hands it back; see `claimForCycle(fresh:from:)`.
+///
+/// Teardown (round 2h). Render must `retire()` the last cycle over this ownership before that cycle is released;
+/// a cycle dropped without it keeps the claim forever, so no cycle can be prepared over this ownership again
+/// (fail-closed: nothing sounds twice, but nothing new sounds through it either). If retiring is impossible, the
+/// recovery is a full panic (all notes off) and a new `NoteOwnership`, accepting the loss of the old tombstones.
+/// A control-side forced release is a follow-up, not modelled.
 final class NoteOwnership: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
         /// `scopes` is outside `1...maximumScopes`.
@@ -37,14 +43,25 @@ final class NoteOwnership: @unchecked Sendable {
         case predecessorNotRetired
     }
 
+    /// The claim word's state when `claimForCycle(fresh:from:)` began: what it compare-exchanges from, so the
+    /// freshness check and the claim are one atomic step. Only `cycleClaimState()` makes one.
+    struct CycleClaimState: Equatable, Sendable {
+        fileprivate let word: UInt64
+    }
+
+    /// A held claim; `releaseCycleClaim` hands it back. Only `claimForCycle(fresh:from:)` makes one.
+    struct CycleClaim: Equatable, Sendable {
+        fileprivate let held: UInt64
+    }
+
     let scopeCount: Int
     /// The latest release frame per note key, shared by every cycle over this ownership; render only after init.
     let tombstones: ReleaseTombstones
     private let words: UnsafeMutablePointer<UInt64>
-    /// The `KernelAckRequests.identity` of the cycle that holds the claim; 0 when none does.
+    /// The cycle claim, one word (round 2h, Copilot round 4): 0 never claimed; odd held; even and nonzero free
+    /// after a retire. Each claim adds 1 and each release adds 1, so "ever claimed" lives in the same word as the
+    /// claim and a `.freshFanIn` claim can compare-exchange only from 0.
     private let liveCycle = Atomic<UInt64>(0)
-    /// A cycle was ever built over this ownership.
-    private let everClaimed = Atomic<Bool>(false)
 
     init(scopes: Int) throws(PreparationError) {
         guard scopes >= 1, scopes <= Self.maximumScopes else { throw .scopeCountOutOfRange(scopes) }
@@ -55,30 +72,42 @@ final class NoteOwnership: @unchecked Sendable {
         words.initialize(repeating: 0, count: count)
     }
 
-    /// Control only, from `KernelCycle.init`, before it makes anything: why a cycle could not claim this ownership
-    /// now (`fresh`: a `.freshFanIn` start), or `nil`. Acquire pairs with `releaseCycleClaim`'s release, so a claim
-    /// seen handed back follows the retiring cycle's tombstone writes.
-    func cycleClaimRefusal(fresh: Bool) -> CycleClaimRefusal? {
-        if fresh, everClaimed.load(ordering: .relaxed) { return .alreadyUsed }
-        return liveCycle.load(ordering: .acquiring) == 0 ? nil : .predecessorNotRetired
+    /// Control only, from `KernelCycle.init`, before it makes anything: the claim word now. Acquire pairs with
+    /// `releaseCycleClaim`'s release, so a claim seen handed back follows the retiring cycle's tombstone writes.
+    func cycleClaimState() -> CycleClaimState {
+        CycleClaimState(word: liveCycle.load(ordering: .acquiring))
     }
 
-    /// Control only, last in `KernelCycle.init`: claims this ownership for `identity` (never 0), or refuses as
-    /// `cycleClaimRefusal` would (another preparation raced this one), changing nothing. One compare-exchange.
-    func claimForCycle(_ identity: UInt64, fresh: Bool) -> CycleClaimRefusal? {
-        if let refusal = cycleClaimRefusal(fresh: fresh) { return refusal }
-        let (claimed, _) = liveCycle.compareExchange(expected: 0, desired: identity, successOrdering: .acquiring,
-                                                     failureOrdering: .relaxed)
-        guard claimed else { return .predecessorNotRetired }
-        everClaimed.store(true, ordering: .relaxed)
-        return nil
+    /// Why a cycle could not claim from `state` (`fresh`: a `.freshFanIn` start), or `nil`.
+    static func cycleClaimRefusal(_ state: CycleClaimState, fresh: Bool) -> CycleClaimRefusal? {
+        refusal(state.word, fresh: fresh)
     }
 
-    /// Render only, from `KernelCycle.retire()`, after its tombstone writes: hands the claim back when `identity`
-    /// holds it (a stale or repeated retire is a no-op). Release publishes those writes to the next claim.
-    func releaseCycleClaim(_ identity: UInt64) {
-        _ = liveCycle.compareExchange(expected: identity, desired: 0, successOrdering: .releasing,
+    /// Control only, last in `KernelCycle.init`: claims this ownership from exactly `state` with one
+    /// compare-exchange, or refuses (changing nothing) when `state` refuses or the word moved since: another
+    /// preparation raced this one. A `.freshFanIn` claim succeeds only from the never-claimed word, so a cycle that
+    /// claimed, ran and retired after `state` was read makes it `.alreadyUsed`, never a fresh start over used
+    /// ownership. A word worn out by 2^63 claims refuses every claim (`.alreadyUsed`) rather than wrap.
+    func claimForCycle(fresh: Bool, from state: CycleClaimState) throws(CycleClaimRefusal) -> CycleClaim {
+        if let refusal = Self.refusal(state.word, fresh: fresh) { throw refusal }
+        let (claimed, current) = liveCycle.compareExchange(expected: state.word, desired: state.word &+ 1,
+                                                           successOrdering: .acquiring, failureOrdering: .acquiring)
+        guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .predecessorNotRetired }
+        return CycleClaim(held: state.word &+ 1)
+    }
+
+    /// Render only, from `KernelCycle.retire()`, after its tombstone writes: hands `claim` back when it is still
+    /// held (a stale or repeated release is a no-op). Release publishes those writes to the next claim.
+    func releaseCycleClaim(_ claim: CycleClaim) {
+        _ = liveCycle.compareExchange(expected: claim.held, desired: claim.held &+ 1, successOrdering: .releasing,
                                       failureOrdering: .relaxed)
+    }
+
+    private static func refusal(_ word: UInt64, fresh: Bool) -> CycleClaimRefusal? {
+        if word == 0 { return nil }
+        if fresh { return .alreadyUsed }
+        if word & 1 != 0 { return .predecessorNotRetired }
+        return word >= UInt64.max &- 1 ? .alreadyUsed : nil
     }
 
     /// Control-side teardown only.

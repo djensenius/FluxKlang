@@ -388,5 +388,58 @@ extension RealtimeHandoffTests {
                 }
             }
         }
+
+        /// Round 2h (delta review): render runs the old cycle (its `noteOff(60)` at 1100 pending) then retires it while
+        /// control retries the replacement's preparation until the claim is free (bounded: 15 s, yielding). The
+        /// replacement then runs, and a late `noteOn(60)` at 1050 is superseded by the retired cycle's tombstone.
+        /// A `run` after `retire()` on render reports `retired`. Kills: a race TSan can see across the hand-back.
+        @Test func controlRetriesReplacementWhileRenderRetires() throws {
+            let rig = try CycleRig()
+            let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(1_100, .noteOff(channel: 0, note: 60)), second) == .ok)
+            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                         safety: rig.safety, ramps: rig.ramps,
+                                         admissionRefusals: rig.cycle.admissionRefusals)
+            let run = CycleStressRun()
+            let replaced = CycleSlots<KernelCycle>(1)
+            let notes = CycleSlots<[String]>(2)
+            let workers: [@Sendable (CycleStressRun) -> Void] = [
+                { run in
+                    guard run.arriveAndWait() else { return }
+                    let pending = rig.cycle.run(blockStart: 1_000, frames: 64) { _, _ in }.pending
+                    rig.cycle.retire()
+                    let stray = rig.cycle.run(blockStart: 1_064, frames: 64) { _, _ in }
+                    notes.set(0, pending == 1 && stray.retired ? [] : ["render: pending \(pending), \(stray)"])
+                },
+                { run in
+                    guard run.arriveAndWait() else { return }
+                    let deadline = ContinuousClock.now + CycleStressRun.waitLimit
+                    var refused = 0
+                    while !run.shouldStop, ContinuousClock.now < deadline {
+                        do {
+                            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
+                            replaced.set(0, try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64))
+                            break
+                        } catch KernelCycle.PreparationError.ownershipClaim(.predecessorNotRetired) {
+                            refused += 1
+                            Thread.sleep(forTimeInterval: 0)
+                        } catch {
+                            notes.set(1, ["control: \(error)"])
+                            return
+                        }
+                    }
+                    notes.set(1, replaced.get(0) == nil ? ["control: no claim after \(refused) refusals"] : [])
+                }
+            ]
+            try #require(runCycleWorkers(run, workers))
+            #expect(notes.get(0) == [] && notes.get(1) == [])
+            let replacement = try #require(replaced.get(0))
+            #expect(replacement.run(blockStart: 1_064, frames: 64) { _, _ in }.status == .ok)
+            #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
+            var emitted = 0
+            let late = replacement.run(blockStart: 1_128, frames: 64) { _, _ in emitted += 1 }
+            #expect(emitted == 0 && late.discardedSuperseded == 1)
+            #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 60))
+        }
     }
 }

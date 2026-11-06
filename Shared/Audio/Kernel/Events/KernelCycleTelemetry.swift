@@ -1,5 +1,7 @@
 // #64 E5b kernel-cycle telemetry: render publishes cumulative cycle, deadline and clock-gate counters after every
-// `KernelCycle.run`, latest-only, through M8 `TelemetrySlots`. Reference model; not RT-certified.
+// `KernelCycle.run`, latest-only, through M8 `TelemetrySlots`. Also the cycle's preparation inputs (`KernelCycleStart`,
+// `KernelCycleParts`), moved here in round 2h to keep `KernelCycle.swift` within its length. Reference model; not
+// RT-certified.
 
 /// Cumulative counters after one `KernelCycle.run`. Counters saturate at `UInt64.max`.
 ///
@@ -41,6 +43,8 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     var discardedWhileSilenced: UInt64 = 0
     /// Sum of every cycle's `KernelCycleResult.discardedSuperseded`.
     var discardedSuperseded: UInt64 = 0
+    /// Sum of every cycle's `KernelCycleResult.discardedDuringTakeover` (Copilot round 4).
+    var discardedDuringTakeover: UInt64 = 0
     /// `KernelAdmissionRefusals.total(.nonMonotonic)` at publication: every lane's `.nonMonotonic` refusals.
     var refusedNonMonotonic: UInt64 = 0
     /// `KernelAdmissionRefusals.total(.beyondLookahead)` at publication.
@@ -87,4 +91,49 @@ struct KernelCycleTelemetryOutput: Sendable {
     /// Must be in `0..<slots.slotCount`; `KernelCycle.init` checks it.
     let slot: Int
     let clockGeneration: UInt64
+}
+
+/// How a `KernelCycle` takes over its fan-in and its `NoteOwnership`. Reference model; not RT-certified.
+enum KernelCycleStart: Sendable, Equatable {
+    /// No earlier cycle consumed `events` or was built over `ownership`: the flush watermark starts clear and
+    /// nothing is taken over. `KernelCycle.init` refuses it (`.ownershipClaim(.alreadyUsed)`) once any cycle was
+    /// built over the ownership, so a cycle sharing ownership (and so tombstones) always takes over.
+    case freshFanIn
+    /// The fail-safe default: an earlier cycle may have consumed `events` and may have been acknowledged while a
+    /// lane was still flushing, so a pre-fault `noteOn` may still be queued. The cycle starts with every lane's
+    /// flush bit set, as if its first cycle were latched: events drained before a lane is proved empty are marked
+    /// and their `noteOn`s discarded. Liveness is as after any latch: each bit clears once its lane's drain
+    /// delivers fewer than its limit, so a queued `noteOn` is lost but never sounds and sticks. It also takes over
+    /// the shared `NoteOwnership`: every note still marked sounding is released (see `KernelCycle`'s Takeover).
+    /// Contract: the cycle last built over the ownership must have `retire()`d (render, after its last `run`)
+    /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
+    case replacingCycle
+}
+
+/// The render-owned parts one `KernelCycle` composes. Reference model; not RT-certified.
+struct KernelCycleParts {
+    /// Render-consumed events; its policy supplies the deadline horizon.
+    let events: FanInHandoff<KernelEvent>
+    /// The latch `events` raises on; its `criticalScope` must be prepared in it.
+    let faults: FaultLatch
+    /// Notes sounding and, in `ownership.tombstones`, the release history: shared by every cycle over it, one at a
+    /// time (`KernelCycle.init` claims it, `retire()` hands it back).
+    let ownership: NoteOwnership
+    /// Must have as many scopes as `ownership`.
+    let safety: SafetyFlags
+    let ramps: RampSlots
+    /// Where every cycle publishes its `KernelCycleTelemetry`; `nil` publishes nothing (the cycle still keeps it).
+    /// Fail-closed: with `nil`, `acknowledgeCritical` has no sample to read, so it never approves and a critical
+    /// fault can never be acknowledged through the contract. The slot's single consumer is the control thread that
+    /// acknowledges: read it only through `KernelCycle.latestTelemetry()` and `acknowledgeCritical` on that thread
+    /// (a UI meter gets samples from control, never reads the slot itself from another thread).
+    var telemetry: KernelCycleTelemetryOutput?
+    /// The producers' admission refusal table for `events`, which lives as long as the fan-in (Copilot round 4):
+    /// a replacement over the same fan-in passes the retired cycle's `admissionRefusals`, so a producer admitted
+    /// before it (whose `ProducerAdmission` keeps its table) still counts where telemetry reads. `nil` makes a new
+    /// table: only for a fan-in no producer has counted on yet. It must be `events`' (same identity and lanes).
+    var admissionRefusals: KernelAdmissionRefusals?
+    /// `.freshFanIn` only when no earlier cycle consumed `events` or used `ownership` (refused otherwise); anything
+    /// else starts flushing and takes over (fail-safe).
+    var start = KernelCycleStart.replacingCycle
 }

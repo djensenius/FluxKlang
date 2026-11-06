@@ -16,11 +16,12 @@ private func takeover(of rig: CycleRig, retiring predecessor: KernelCycle? = nil
     return try replacement(of: rig, blockCapacity: blockCapacity)
 }
 
-/// A `.replacingCycle` cycle on `rig`'s parts, with no retire first.
-private func replacement(of rig: CycleRig, blockCapacity: Int = 64) throws(KernelCycle.PreparationError)
+/// A `.replacingCycle` cycle on `rig`'s parts (sharing its fan-in's refusal table and `telemetry`), no retire first.
+private func replacement(of rig: CycleRig, blockCapacity: Int = 64,
+                         telemetry: KernelCycleTelemetryOutput? = nil) throws(KernelCycle.PreparationError)
     -> KernelCycle {
     let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership, safety: rig.safety,
-                                 ramps: rig.ramps)
+                                 ramps: rig.ramps, telemetry: telemetry, admissionRefusals: rig.cycle.admissionRefusals)
     // A valid gate; `try!` keeps the typed throw to `PreparationError`.
     // swiftlint:disable:next force_try
     let gate = try! ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
@@ -274,6 +275,35 @@ extension RealtimeHandoffTests {
             let (after, emitted) = takeoverRun(replacement, 64)
             #expect(emitted.map(\.event.payload) == [noteOn(100)] && after.releasedNotes == 0)
         }
+
+        /// Copilot round 4 (4487174433): with one release per cycle over scope 0's two notes and scope 1's three,
+        /// the `noteOn`s held in scope 1 in blocks 1–3 are discarded and accumulate in the published telemetry,
+        /// which keeps the sum once the takeover ends and scope 1 sounds again. Kills: the discards not accumulated.
+        @Test func takeoverDiscardsAccumulateInTelemetry() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
+            let rig = try CycleRig(telemetry: output)
+            let token = try #require(rig.events.claimProducer())
+            for key in [TakeoverKey(0, 0, 1), TakeoverKey(0, 0, 2), TakeoverKey(1, 0, 5), TakeoverKey(1, 0, 6),
+                        TakeoverKey(1, 0, 7)] {
+                #expect(rig.ownership.noteOn(scope: key.scope, channel: key.channel, note: key.note) == .ok)
+            }
+            rig.cycle.retire()
+            let successor = try replacement(of: rig, blockCapacity: 1, telemetry: output)
+            var discarded: [Int] = []
+            for block in Int64(0)...5 {
+                if (1...3).contains(block) || block == 5 {
+                    #expect(rig.push(cycleEvent(block * 64, noteOn(100), scope: 1), token) == .ok)
+                }
+                let (result, emitted) = takeoverRun(successor, block * 64)
+                discarded.append(result.discardedDuringTakeover)
+                #expect(emitted.contains { $0.event.payload == noteOn(100) } == (block == 5))
+            }
+            #expect(discarded == [0, 1, 1, 1, 0, 0])
+            #expect(successor.telemetry.discardedDuringTakeover == 3)
+            #expect(try #require(successor.latestTelemetry()).value.discardedDuringTakeover == 3)
+            #expect(KernelCycleTelemetry.saturatingAdd(.max - 1, 3) == .max)
+        }
     }
 
     /// Round 2g (delta review 304c1cec, Copilot 🔵): release history survives replacement. The tombstones live in
@@ -395,6 +425,69 @@ extension RealtimeHandoffTests {
             let (late, lateEmitted) = takeoverRun(replacement, 192)
             #expect(lateEmitted.isEmpty && late.discardedWhileSilenced == 1 && late.dispatched == 0)
             #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
+        }
+
+        /// Round 2h (delta review): a `run` after `retire()` does nothing and says so, even with a replacement live:
+        /// it drains nothing (the replacement drains `noteOn(10)`), emits nothing, keeps the panic for the
+        /// replacement, leaves the shared ownership (note 9 for the takeover) and its own telemetry alone; a second
+        /// `retire()` releases nothing. Kills: the retired flag ignored.
+        @Test func runAfterRetireDoesNothingAndLeavesTheReplacementAlone() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(0, noteOn(9)), token) == .ok)
+            #expect(rig.run(0, 64).1.map(\.event.payload) == [noteOn(9)])
+            let successor = try takeover(of: rig)
+            rig.cycle.retire()
+            #expect(refusal { () throws(KernelCycle.PreparationError) in try replacement(of: rig) }
+                    == .ownershipClaim(.predecessorNotRetired))
+            #expect(rig.push(cycleEvent(64, noteOn(10)), token) == .ok)
+            #expect(rig.safety.request(.panic, scope: 1) == .ok)
+            let telemetry = rig.cycle.telemetry
+            let (stray, strayEmitted) = rig.run(64, 64)
+            #expect(stray.retired && stray.status == .refused(.notOwner) && strayEmitted.isEmpty)
+            #expect(stray.drained == 0 && stray.releasedNotes == 0 && stray.pending == 0)
+            #expect(rig.cycle.telemetry == telemetry)
+            #expect(rig.ownership.isOwned(scope: 0, channel: 0, note: 9))
+            let (live, liveEmitted) = takeoverRun(successor, 64)
+            #expect(!live.retired && live.status == .silenced(.safetyMute) && live.drained == 1)
+            #expect(liveEmitted == [takeoverRelease(TakeoverKey(0, 0, 9), at: 64)] && live.discardedWhileSilenced == 1)
+        }
+
+        /// Copilot round 4 (4487174356): a `.freshFanIn` preparation reads the never-claimed claim word, then another
+        /// cycle claims, sounds note 9 and retires before it claims. Its claim from that stale state is
+        /// `.alreadyUsed` and changes nothing, as is a `.replacingCycle` claim from a free word another cycle has
+        /// since claimed (`.predecessorNotRetired`); a replacement still takes note 9 over; a stale release of a
+        /// handed-back claim releases nothing. Kills: the claim compare-exchanging from a re-read word
+        /// (check-then-claim); a stale release releasing any claim.
+        @Test func freshClaimRacingAClaimRunRetireIsRefused() throws {
+            let rig = try CycleRig()
+            let ownership = try NoteOwnership(scopes: 2)
+            let stale = ownership.cycleClaimState()
+            #expect(NoteOwnership.cycleClaimRefusal(stale, fresh: true) == nil)
+            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: ownership,
+                                         safety: rig.safety, ramps: rig.ramps,
+                                         admissionRefusals: rig.cycle.admissionRefusals)
+            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
+            let racer = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            #expect(ownership.noteOn(scope: 0, channel: 0, note: 9) == .ok)
+            racer.retire()
+            let retired = ownership.cycleClaimState()
+            #expect(throws: NoteOwnership.CycleClaimRefusal.alreadyUsed) {
+                try ownership.claimForCycle(fresh: true, from: stale)
+            }
+            let next = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
+                try ownership.claimForCycle(fresh: false, from: retired)
+            }
+            #expect(takeoverRun(next, 0).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 0)])
+            let direct = try NoteOwnership(scopes: 1)
+            let held = try direct.claimForCycle(fresh: true, from: direct.cycleClaimState())
+            direct.releaseCycleClaim(held)
+            _ = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
+            direct.releaseCycleClaim(held)
+            #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
+                try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
+            }
         }
     }
 }

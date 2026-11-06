@@ -304,5 +304,38 @@ extension RealtimeHandoffTests {
                 #expect(result.status == .ok && later && replacement.bufferedCount == 0)
             }
         }
+
+        /// Copilot round 4 (4487174397): a producer admitted before a replacement keeps its `ProducerAdmission` (and
+        /// so its refusal table); the replacement shares the fan-in's table, so the producer's refusals after the
+        /// retirement still reach the published totals. A table of another fan-in is refused at preparation. Kills:
+        /// the replacement allocating its own table; a foreign table accepted.
+        @Test func continuingProducersRefusalsReachTheReplacementsTelemetry() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let output = KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0)
+            let rig = try CycleRig(telemetry: output)
+            let token = try #require(rig.events.claimProducer())
+            var admission = ProducerAdmission(deadline: rig.cycle.deadline, refusals: rig.cycle.admissionRefusals)
+            #expect(admission.push(cycleEvent(100, noteOn(60)), now: 0, into: rig.events, token: token) == .ok)
+            #expect(admission.push(cycleEvent(99, noteOn(61)), now: 0, into: rig.events, token: token)
+                    == .refused(.nonMonotonic))
+            #expect(rig.run(0, 64).0.status == .ok && rig.cycle.telemetry.refusedNonMonotonic == 1)
+            rig.cycle.retire()
+            let gate = try ClockPulseGate(maximumPulsesPerBlock: 4, staleTolerance: 48)
+            let foreign = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                           safety: rig.safety, ramps: rig.ramps,
+                                           admissionRefusals: try CycleRig().cycle.admissionRefusals)
+            #expect(throws: KernelCycle.PreparationError.admissionRefusalsMismatch) {
+                try KernelCycle(foreign, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            }
+            let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
+                                         safety: rig.safety, ramps: rig.ramps, telemetry: output,
+                                         admissionRefusals: rig.cycle.admissionRefusals)
+            let replacement = try KernelCycle(parts, pulses: gate, blockCapacity: 64, perLaneQuota: 64)
+            #expect(replacement.admissionRefusals === rig.cycle.admissionRefusals)
+            #expect(admission.push(cycleEvent(98, noteOn(62)), now: 64, into: rig.events, token: token)
+                    == .refused(.nonMonotonic))
+            #expect(replacement.run(blockStart: 64, frames: 64) { _, _ in }.status == .ok)
+            #expect(try #require(replacement.latestTelemetry()).value.refusedNonMonotonic == 2)
+        }
     }
 }
