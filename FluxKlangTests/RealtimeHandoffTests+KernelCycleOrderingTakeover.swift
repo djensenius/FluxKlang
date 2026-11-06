@@ -482,9 +482,9 @@ extension RealtimeHandoffTests {
             #expect(takeoverRun(next, 0).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 0)])
             let direct = try NoteOwnership(scopes: 1)
             let held = try direct.claimForCycle(fresh: true, from: direct.cycleClaimState())
-            direct.releaseCycleClaim(held)
+            direct.releaseCycleClaim(held, loss: KernelRetirementLoss())
             _ = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
-            direct.releaseCycleClaim(held)
+            direct.releaseCycleClaim(held, loss: KernelRetirementLoss())
             #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
                 try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
             }

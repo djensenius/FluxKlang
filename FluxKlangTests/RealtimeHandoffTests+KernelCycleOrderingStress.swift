@@ -393,10 +393,13 @@ extension RealtimeHandoffTests {
         /// control retries the replacement's preparation until the claim is free (bounded: 15 s, yielding). The
         /// replacement then runs, and a late `noteOn(60)` at 1050 is superseded by the retired cycle's tombstone.
         /// A `run` after `retire()` on render reports `retired`. Kills: a race TSan can see across the hand-back.
+        /// Round 2i: the `program` pending at 1110 is dropped, counted by render's `retire()` and inherited by
+        /// control's replacement across the hand-back.
         @Test func controlRetriesReplacementWhileRenderRetires() throws {
             let rig = try CycleRig()
             let first = try #require(rig.events.claimProducer()), second = try #require(rig.events.claimProducer())
             #expect(rig.push(cycleEvent(1_100, .noteOff(channel: 0, note: 60)), second) == .ok)
+            #expect(rig.push(cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)), second) == .ok)
             let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
                                          safety: rig.safety, ramps: rig.ramps,
                                          admissionRefusals: rig.cycle.admissionRefusals)
@@ -407,9 +410,10 @@ extension RealtimeHandoffTests {
                 { run in
                     guard run.arriveAndWait() else { return }
                     let pending = rig.cycle.run(blockStart: 1_000, frames: 64) { _, _ in }.pending
-                    rig.cycle.retire()
+                    let loss = rig.cycle.retire()
                     let stray = rig.cycle.run(blockStart: 1_064, frames: 64) { _, _ in }
-                    notes.set(0, pending == 1 && stray.retired ? [] : ["render: pending \(pending), \(stray)"])
+                    let held = pending == 2 && stray.retired && loss.programs == 1 && loss.stateful == 1
+                    notes.set(0, held ? [] : ["render: pending \(pending), \(stray), \(loss)"])
                 },
                 { run in
                     guard run.arriveAndWait() else { return }
@@ -434,6 +438,8 @@ extension RealtimeHandoffTests {
             try #require(runCycleWorkers(run, workers))
             #expect(notes.get(0) == [] && notes.get(1) == [])
             let replacement = try #require(replaced.get(0))
+            let inherited = replacement.inheritedRetirementLoss
+            #expect(inherited.programs == 1 && inherited.stateful == 1 && inherited.receiverStateMayBeStale)
             #expect(replacement.run(blockStart: 1_064, frames: 64) { _, _ in }.status == .ok)
             #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
             var emitted = 0

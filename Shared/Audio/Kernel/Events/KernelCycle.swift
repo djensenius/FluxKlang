@@ -125,7 +125,7 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// of the retired cycle's buffers. It cuts those notes short by design: no stuck note beats exact durations. Each
 /// cycle releases at most `blockCapacity` of them, in (scope, channel, note) order, and carries the rest to the next
 /// cycle, so with `n` notes sounding the takeover ends after `ceil(n / blockCapacity)` cycles
-/// (`n <= scopes × 2,048`); nothing is dropped. Until it ends, a decided `noteOn` in a scope at or after its scope
+/// (`n <= scopes × 2,048`); no release is dropped. Until it ends, a decided `noteOn` in a scope at or after its scope
 /// cursor (not yet fully released) is discarded and counted in `discardedDuringTakeover`, so it only cuts the
 /// retired cycle's notes; scopes before the cursor sound again. The first unowned `noteOff` this cycle sees for a
 /// key its takeover released (the retired cycle's event re-delivered, say; decided or consumed while silenced) is
@@ -133,19 +133,23 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// key's `noteOff` is emitted as usual and keeps the record. So within one cycle a takeover release is never
 /// followed by a second `noteOff` for it; across replacements the record is not shared (a second replacement may
 /// emit one redundant, harmless `noteOff` for a key its predecessor's takeover released). `.freshFanIn` takes nothing
-/// over.
+/// over. No other event still pending in the retired cycle's buffer reaches the replacement (see Retirement).
 ///
 /// Retirement. Render calls `retire()` on the old cycle after its last `run` and before the replacement's first:
 /// every `noteOff` still pending in the old block buffer records its tombstone (its own frame, unclamped, as a
 /// silenced cycle does), so a same-key `noteOn` stamped before it, arriving later at the replacement, is superseded
-/// instead of sounding with its release lost; then it hands the ownership's cycle claim back. Its pending
-/// `noteOn`s are dropped with it: never emitted or owned, so they cannot stick (lost notes, never stuck ones). A
-/// `.replacingCycle` cycle cannot be prepared over an ownership whose last cycle has not retired
-/// (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one any cycle has used
-/// (`.ownershipClaim(.alreadyUsed)`); the check and the claim are one compare-exchange on the ownership's claim
-/// word, so a racing preparation cannot pass the check, wait out another cycle's claim and retire, then claim fresh.
-/// So a replacement is prepared after the retire, and render runs no cycle in between (at least one block without
-/// event work). A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a second `retire()` too.
+/// instead of sounding with its release lost. Every other pending event is dropped and counted by kind in a
+/// `KernelRetirementLoss` that the ownership holds from the claim's release to the replacement's acquire (its
+/// `inheritedRetirementLoss`). Dropped `noteOn`s are lost, never stuck (never emitted or owned); dropped stateful
+/// events (`control`, `program`, `rampTo`) set `receiverStateMayBeStale`, and control must then reconcile receiver
+/// state (re-send the current program, controllers and ramp targets) before relying on it. Nothing is carried over:
+/// a bounded carry-over is a later slice (E5c). A `.replacingCycle` cycle cannot be prepared over an ownership whose
+/// last cycle has not retired (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one
+/// any cycle has used (`.ownershipClaim(.alreadyUsed)`); the check and the claim are one compare-exchange on the
+/// ownership's claim word, so a racing preparation cannot pass the check, wait out another cycle's claim and retire,
+/// then claim fresh. So a replacement is prepared after the retire, and render runs no cycle in between (at least one
+/// block without event work). A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a second
+/// `retire()` too (it returns no loss).
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
@@ -257,6 +261,8 @@ final class KernelCycle: @unchecked Sendable {
     /// Control's acknowledgement requests (see the type's Acknowledgement contract). Its API only requests and
     /// loads; its epoch is private.
     let ackRequests: KernelAckRequests
+    /// Any thread, immutable: the predecessor's retirement loss, read after this cycle's claim (see Retirement).
+    var inheritedRetirementLoss: KernelRetirementLoss { ownershipClaim.inherited }
 
     // Render-owned components and parts; private, so only this file can reach them.
     private let events: FanInHandoff<KernelEvent>
@@ -400,16 +406,20 @@ final class KernelCycle: @unchecked Sendable {
 
     /// Render only, once, after this cycle's last `run` and before its replacement is prepared (see the type's
     /// Retirement): records the tombstone of every `noteOff` still pending in the block buffer at its own frame,
-    /// unclamped, in the shared `ownership.tombstones`, then hands the ownership's cycle claim back (release).
-    /// O(`blockCapacity`); no allocation, lock or emission. Pending `noteOn`s are dropped with the cycle. A repeated
-    /// call does nothing; every later `run` does nothing and reports `retired`.
-    func retire() {
-        guard !retired else { return }
+    /// unclamped, in the shared `ownership.tombstones`, drops and counts every other pending event, stores that loss
+    /// in the ownership, then hands the cycle claim back (release). O(`blockCapacity`); no allocation, lock, emission
+    /// or telemetry. A repeated call does nothing and returns no loss; a later `run` does nothing, reporting `retired`.
+    @discardableResult
+    func retire() -> KernelRetirementLoss {
+        guard !retired else { return KernelRetirementLoss() }
         retired = true
+        var loss = KernelRetirementLoss()
         for index in 0..<block.count {
             ownership.tombstones.release(block[index].event)
+            loss.drop(block[index].event.payload)
         }
-        ownership.releaseCycleClaim(ownershipClaim)
+        ownership.releaseCycleClaim(ownershipClaim, loss: loss)
+        return loss
     }
 
     /// Control only: this cycle's latest published sample, or `nil` with no telemetry output or before the first

@@ -107,6 +107,8 @@ enum KernelCycleStart: Sendable, Equatable {
     /// the shared `NoteOwnership`: every note still marked sounding is released (see `KernelCycle`'s Takeover).
     /// Contract: the cycle last built over the ownership must have `retire()`d (render, after its last `run`)
     /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
+    /// Nothing else pending in the retired cycle is carried over: its `inheritedRetirementLoss` counts what was
+    /// dropped, and control reconciles receiver state first whenever it `receiverStateMayBeStale`.
     case replacingCycle
 }
 
