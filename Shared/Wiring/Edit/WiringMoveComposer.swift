@@ -100,11 +100,14 @@ struct WiringMoveAnchor: Hashable, Sendable {
 /// Moves nodes in drafts. Pure and deterministic; the result is a new `DraftEdits` value.
 enum WiringMoveComposer {
     /// The fixed decimal resolution every move target lands on: 1e-12 layout unit. Each coordinate is rounded to
-    /// the nearest multiple; a value exactly halfway rounds away from zero, and -0 becomes +0. From 2^42 up every
-    /// finite value is already a multiple, so it is kept as is. A coordinate whose grid point is the grid point of
-    /// the node's base position (its position in the active graph) is the base value exactly, even when that is off
-    /// the grid, so a return to base by any path drops the move. The finer decimal grid keeps successive 0.1 nudges
-    /// equivalent to a numeric 0.3 entry.
+    /// the nearest multiple; halfway rounds away from zero, and -0 becomes +0. From 2^42 up every finite value is
+    /// kept as is. A target on the base position's grid point snaps to that exact base value. For k repeated nudges,
+    /// the anchor is its exact binary value; each step is its shortest-round-trip decimal when it has at most 15
+    /// significant digits, otherwise its exact binary value (exact through 38 significant digits). If the exact sum
+    /// fits 38 significant digits, it is rounded once to Double (ties to even), then normalized here. This matches
+    /// numeric entry of that exact sum, not a sum the caller already computed in Double. Caller-side arithmetic can
+    /// differ only when a non-binary step's accumulated representation error puts the exact sum within that error
+    /// of a rounding boundary. Exact ties beyond 38 digits can differ by 1 ulp.
     static let resolution: Double = 1e-12
 
     /// `draft` with `node` moved to (`x`, `y`), normalized to `resolution` (snapped to the base position when it
@@ -137,7 +140,11 @@ enum WiringMoveComposer {
     }
 
     /// `state` with `node` moved one grid step (one `fineStep` for a fine nudge, the Shift path) in the nudge's
-    /// direction, normalized as `move` normalizes. The retained anchor makes repeated sub-ULP steps accumulate.
+    /// direction, normalized as `move` normalizes. Repeated steps add their decimal reading when the shortest
+    /// round-trip spelling has at most 15 significant digits, else their exact-binary conversion (exact through 38
+    /// digits), to the exact-binary anchor. Through 38 significant digits the sum rounds once to Double, ties to
+    /// even, then to the 1e-12 grid; this matches numeric entry of the exact anchor-plus-steps sum, not caller-
+    /// computed Double arithmetic.
     /// Refused like `move`, with `unplacedNode` when the node has no position, or `nonFinitePosition` on overflow.
     static func nudge(
         _ node: NodeID, _ nudge: WiringNudge, grid: WiringMoveGrid, in state: WiringMoveState, active: GraphDocument
@@ -205,7 +212,8 @@ enum WiringMoveComposer {
         return target
     }
 
-    /// The nearest multiple of `resolution` (halfway away from zero; -0 becomes +0). Finite in, finite out.
+    /// The nearest multiple of `resolution` (halfway away from zero; -0 becomes +0). At magnitudes >= 2^14 the
+    /// shortest Double spelling already lies on this grid, so quantization is idempotent there. Finite in, finite out.
     static func quantized(_ value: Double) -> Double {
         guard value.isFinite else { return value }
         // Below the half-grid threshold, the result is +0; this also keeps Decimal parsing in range.
@@ -221,11 +229,15 @@ enum WiringMoveComposer {
         return result
     }
 
-    /// Converts the signed step from its exact binary value and adds it to the retained offset. Decimal sums are
-    /// exact through 38 significant digits; beyond that `.plain` rounds half-up to 38. Nil selects Double fallback.
+    /// Adds the direction-signed step to the retained offset. Steps with at most 15 significant digits in their
+    /// shortest round-trip spelling use that decimal reading; longer steps use exact binary conversion through 38
+    /// significant digits. The exact-binary anchor plus k steps matches numeric entry of the exact sum (through 38
+    /// significant digits), rounded once to Double ties-to-even and then to the grid. Caller-computed Double sums
+    /// are not equivalent in general. Beyond 38 digits Decimal rounds half-up; nil selects Double fallback.
     private static func accumulated(_ offset: Decimal, distance: Double, direction: Double) -> Decimal? {
         guard direction != 0 else { return offset }
-        guard let step = decimalValue(of: direction * distance) else { return nil }
+        guard let magnitude = stepValue(of: distance) else { return nil }
+        let step = direction < 0 ? -magnitude : magnitude
         var result = Decimal()
         var previous = offset
         var delta = step
@@ -234,8 +246,9 @@ enum WiringMoveComposer {
         return result
     }
 
-    /// Adds the offset to the anchor's exact binary Decimal value. Anchor plus offset is exact through 38
-    /// significant digits; otherwise it is rounded half-up to 38 digits before the final conversion to Double.
+    /// Adds the offset to the anchor's exact binary Decimal value. The sum is exact through 38 significant digits;
+    /// longer values are rounded half-up to 38 digits. The full Decimal string is parsed once by `Double(String)`,
+    /// whose binary64 conversion rounds to nearest, ties-to-even, before the common 1e-12 grid normalization.
     private static func translated(_ coordinate: Double, by offset: Decimal) -> Double? {
         guard let origin = decimalValue(of: coordinate) else { return nil }
         var result = Decimal()
@@ -245,6 +258,36 @@ enum WiringMoveComposer {
         guard status == .noError || status == .lossOfPrecision else { return nil }
         guard let translated = Double(result.description), translated.isFinite else { return nil }
         return translated
+    }
+
+    /// Reads the shortest round-trip decimal spelling when it has at most 15 significant digits after trimming
+    /// leading and trailing zeroes; otherwise converts the exact binary value (exact through 38 digits). The result
+    /// is nonnegative; direction supplies its sign. Non-finite or out-of-Decimal-range values return nil for the
+    /// ordinary Double fallback.
+    static func stepValue(of distance: Double) -> Decimal? {
+        guard distance.isFinite else { return nil }
+        let parts = String(distance.magnitude).lowercased()
+            .split(separator: "e", omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return nil }
+        let exponent: Int
+        if parts.count == 2 {
+            guard let parsedExponent = Int(parts[1]) else { return nil }
+            exponent = parsedExponent
+        } else {
+            exponent = 0
+        }
+        let mantissa = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...2).contains(mantissa.count) else { return nil }
+        let fraction = mantissa.count == 2 ? String(mantissa[1]) : ""
+        let digits = Array((String(mantissa[0]) + fraction).utf8).map { $0 - 48 }
+        guard let first = digits.firstIndex(where: { $0 != 0 }) else { return .zero }
+        guard let last = digits.lastIndex(where: { $0 != 0 }) else { return .zero }
+        let significantDigits = last - first + 1
+        let decimalExponent = exponent - fraction.utf8.count
+        if significantDigits <= 15 {
+            return decimal(from: digits, exponent: decimalExponent, negative: false)
+        }
+        return decimalValue(of: distance.magnitude)
     }
 
     /// Converts the exact binary significand and exponent to base-10 digits. The conversion is exact through 38
