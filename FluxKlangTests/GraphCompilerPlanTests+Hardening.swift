@@ -173,6 +173,39 @@ extension GraphCompilerPlanTests {
     }
 
     @Test
+    func feedbackCutEdgesMustBeUnique() throws {
+        let valid = try Self.twoLineFeedbackPlan()
+        let request = try Self.request(frames: 2)
+        var draft = Self.scheduleDraft(valid)
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+
+        let first = try #require(valid.delayLines.first)
+        let second = try #require(valid.delayLines.dropFirst().first)
+        let feedback = EdgeFeedback(
+            delayBlocks: second.cut.delayBlocks, gainCeilingDb: second.cut.gainCeilingDb
+        )
+        let duplicateCut = try FeedbackCut.make(
+            edge: first.cut.edge, feedback: feedback, channels: second.cut.channels,
+            blockFrames: valid.blockFrames
+        )
+        draft.delayLines[1] = RoutingDelayLine(
+            cut: duplicateCut, source: second.source, delayed: second.delayed, storage: second.storage
+        )
+        #expect(throws: RoutingScheduleRefusal.inconsistentSchedule(.delayLine)) {
+            try RoutingSchedule.make(draft: draft, request: request)
+        }
+
+        let restoredCut = try FeedbackCut.make(
+            edge: second.cut.edge, feedback: feedback, channels: second.cut.channels,
+            blockFrames: valid.blockFrames
+        )
+        draft.delayLines[1] = RoutingDelayLine(
+            cut: restoredCut, source: second.source, delayed: second.delayed, storage: second.storage
+        )
+        #expect(try RoutingSchedule.make(draft: draft, request: request) == valid)
+    }
+
+    @Test
     func silentConversionRowsBuildAndPreserveOtherFanInTerms() throws {
         let (silentGraph, _) = Self.conversionGraph(map: [[0], []])
         let silentPlan = try RoutingScheduleBuilder.build(silentGraph, request: Self.request(frames: 1))

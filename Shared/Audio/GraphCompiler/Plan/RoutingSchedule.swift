@@ -125,10 +125,15 @@ struct RoutingSchedule: Equatable, Sendable {
         return try RoutingMath.add(slot.offset, channelOffset, resource: .slotSamples)
     }
 
+    /// Verified schedules have unique feedback-cut edge IDs.
     private static func verifyDelayLines(
         _ draft: RoutingScheduleDraft, sources: [Int: RoutingSlot], blockFrames: Int, cursor: inout Int
     ) throws(RoutingScheduleRefusal) {
+        var seenCutEdges: Set<EdgeID> = []
         for line in draft.delayLines {
+            guard seenCutEdges.insert(line.cut.edge).inserted else {
+                throw .inconsistentSchedule(.delayLine)
+            }
             let (expectedDelayFrames, delayOverflow) =
                 line.cut.delayBlocks.multipliedReportingOverflow(by: blockFrames)
             guard line.cut.channels == line.source.channels,
