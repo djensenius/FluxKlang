@@ -161,4 +161,121 @@ struct AutomationRenderHandbackTests {
             #expect(others.allSatisfy { $0.rampFrames == 0 })
         }
     }
+
+    /// A glide released at frame 1000 (tick 640) toward `lane`, lasting 1000 ticks, so it crosses the step at tick
+    /// 1000 (frame 1563). Returns the arbiter just after the release and the events of `[1000, 4000)` rendered in
+    /// one block and split on the step's frame − 1, the frame itself and + 1, in that order.
+    private static func glideOverStep(_ lane: AutomationLane, from moved: Double, clock: MusicalClockMap,
+                                      step: Int64) throws -> (oracle: ParameterArbiter, runs: [[AutomationRampEvent]]) {
+        var renderer = try Fixture.renderer(lane, resume: .glide(ticks: 1_000))
+        _ = try renderer.render(from: 0, to: 1_000, clock: clock, current: Fixture.live)
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        _ = try renderer.perform(.move(Fixture.fader, to: moved))
+        _ = try renderer.perform(.release(Fixture.fader))
+        let splits = [[3_000]] + [step - 1, step, step + 1].map { [$0 - 1_000, 4_000 - $0] }
+        let runs = try splits.map { blocks in
+            var split = renderer
+            return try Fixture.render(&split, from: 1_000, blocks: blocks, clock: clock)
+        }
+        return (renderer.arbiter, runs)
+    }
+
+    @Test func aGlideAcrossAStepHoldsTheArbitersValueThenJumpsOnTheStep() throws {
+        // The step at tick 1000, then a flat ramp into tick 1999 (frame 3123, position 1998.72) after the glide
+        // ends at tick 1640: automation takes the value back just short of that knot, on its frame.
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.2, interpolation: .step), .init(ticks: 1_000, value: 0.8),
+                                     .init(ticks: 1_999, value: 0.8), .init(ticks: 3_000, value: 0.4)])
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(1_000, on: clock)
+        let flat = try AutomationRenderMath.frame(1_999, on: clock)
+        let next = try AutomationRenderMath.frame(3_000, on: clock)
+        let (oracle, runs) = try Self.glideOverStep(lane, from: 0.6, clock: clock, step: step)
+        var probe = oracle
+        let before = try #require(try probe.advance(to: Fixture.position(clock, step - 2)).value)
+        let last = try #require(try probe.advance(to: Fixture.position(clock, step - 1)).value)
+        let reached = try #require(try probe.advance(to: Double(1_000).nextDown).value)
+        let jumped = try #require(try probe.advance(to: 1_000).value)
+        #expect(jumped > 0.6 && last < 0.6)
+        // Exact events: the glide ramps to its value just before the step, jumps on the step's frame, then ramps to
+        // the value it hands back; the flat knot only departs (its value is already held).
+        let held = { (frame: Int64, value: Double, ramp: Int64) in
+            AutomationRampEvent(frame: frame, offset: Int(frame - 1_000), value: value, rampFrames: ramp, reason: .hold)
+        }
+        let departure = AutomationRampEvent(frame: flat, offset: Int(flat - 1_000), value: 0.4,
+                                            rampFrames: next - flat, reason: .curve)
+        #expect(runs[0] == [held(1_000, 0.6, 0), held(1_000, reached, step - 1_000), held(step, jumped, 0),
+                            held(step, 0.8, flat - step), departure])
+        // Offsets depend on the split, so the per-split checks compare the other fields.
+        let shape = { (event: AutomationRampEvent) in
+            "\(event.frame) \(event.value) \(event.rampFrames) \(event.reason)"
+        }
+        for events in runs {
+            let values = Fixture.trajectory(events, from: 1_000, to: 4_000, initial: 0.2)
+            // The ramp ending on the step's frame reaches the value at tick 1000, not at the frame's own position
+            // (1000.32): a chord within one frame's change of the arbiter.
+            #expect(abs(values[Int(step - 1_001)] - last) <= abs(last - before))
+            #expect(values[Int(step - 1_000)] == jumped)
+            #expect(events.filter { $0.frame >= flat }.map(shape) == [shape(departure)])
+            #expect(events.first { $0.frame == step }.map(shape) == shape(held(step, jumped, 0)))
+        }
+        // With a block ending on step − 1, the host holds the arbiter's value there exactly.
+        #expect(Fixture.trajectory(runs[1], from: 1_000, to: step, initial: 0.2).last == last)
+    }
+
+    @Test func aSteppedGlideAcrossAStepJumpsOnTheStepWhateverTheSplit() throws {
+        let descriptor = try ParameterDescriptor(.init(
+            id: Fixture.level, unit: .index, lower: 1, upper: 12, defaultValue: 1, ceiling: nil, curve: .stepped,
+            ramp: .step, controlClass: .live, verification: .unverified
+        ))
+        let lane = try AutomationLane(descriptor: descriptor,
+                                      breakpoints: [.init(ticks: 0, value: 2, interpolation: .step),
+                                                    .init(ticks: 1_000, value: 9, interpolation: .step)])
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(1_000, on: clock)
+        let (oracle, runs) = try Self.glideOverStep(lane, from: 12, clock: clock, step: step)
+        var probe = oracle
+        var expected: [(Int64, Double)] = []
+        var previous = 2.0
+        for frame in Int64(1_000)..<4_000 {
+            let value = try #require(try probe.advance(to: Fixture.position(clock, frame)).value)
+            if value != previous { expected.append((frame, value)) }
+            previous = value
+        }
+        var onStep = oracle
+        let jumped = try #require(try onStep.advance(to: 1_000).value)
+        let last = try #require(expected.last { $0.0 < step }?.1)
+        // The glide steps down toward 2, jumps up on the step's frame, then steps down to 9.
+        #expect(expected.contains { $0 == (step, jumped) } && jumped > last && jumped > 9)
+        #expect(expected.last?.1 == 9)
+        for events in runs {
+            #expect(events.map(\.frame) == expected.map(\.0))
+            #expect(events.map(\.value) == expected.map(\.1))
+            #expect(events.allSatisfy { $0.rampFrames == 0 && $0.reason == .hold })
+            let values = Fixture.trajectory(events, from: 1_000, to: 4_000, initial: 2)
+            #expect(values[Int(step - 1_001)] == last)
+            #expect(values[Int(step - 1_000)] == jumped)
+        }
+        #expect(runs.dropFirst().allSatisfy { $0.map(\.rampFrames) == runs[0].map(\.rampFrames) })
+    }
+
+    @Test func aWrapCarriedIntoARenderCountsTowardTheWrapLimit() throws {
+        // Loop [0, 40) at 120 BPM and 48 kHz wraps every 63 frames; the first block ends on the first wrap.
+        let loop = try LoopRange(startTicks: 0, endTicks: 40)
+        let clock = try Fixture.clock()
+        let limit = Int64(AutomationBlockRenderer.maximumWraps)
+        var renderer = try Fixture.renderer(Fixture.lane([.init(ticks: 0, value: 0.5)]), loop: loop)
+        _ = try renderer.render(from: 0, to: 1, clock: clock, current: Fixture.live)
+        // A gesture holds the value, so no wrap emits an event.
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        #expect(try renderer.render(from: 1, to: 63, clock: clock, current: Fixture.live).isEmpty)
+        // The wrap carried to frame 63 is the first of the limit.
+        var full = renderer
+        #expect(try full.render(from: 63, to: 63 * limit + 1, clock: clock, current: Fixture.live).isEmpty)
+        #expect(full.cursor == 63 * limit + 1)
+        let before = renderer
+        #expect(throws: AutomationRenderRefusal.tooManyWraps(limit: AutomationBlockRenderer.maximumWraps)) {
+            try renderer.render(from: 63, to: 63 * (limit + 1) + 1, clock: clock, current: Fixture.live)
+        }
+        #expect(renderer == before)
+    }
 }

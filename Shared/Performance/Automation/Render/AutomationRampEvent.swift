@@ -61,7 +61,7 @@ struct AutomationHostRamp: Hashable, Sendable {
     let target: Double
     let end: Int64
 
-    /// The value the host holds at `frame`, before any event on that frame.
+    /// The value the host holds at `frame`, after this ramp's event, before any later event on that frame.
     func value(at frame: Int64) -> Double {
         guard frame < end else { return target }
         guard frame > startFrame else { return start }
