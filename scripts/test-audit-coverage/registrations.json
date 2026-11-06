@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "8c88ab13efd9f207723e6249798575c4c7513659b80bb4e79fd9f411779c5d92",
+    "sha256": "b423c6bc570838f91ae859a4f47790fe021392ab00b9b761cdce77b1b231d1c4",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -209,6 +209,10 @@
         "FluxKlangTests/PluginCatalogTests+Capacity.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingStress.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingAcknowledge.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingTakeover.swift",
         "FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift",
         "FluxKlangTests/WorkspaceNavigationTests.swift",
         "FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift",
