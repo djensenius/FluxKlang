@@ -176,4 +176,63 @@ struct ActionSetSubmissionCancelTests {
         #expect(try harness.cancel(ActionSetFixture.scene) == refired.handles)
         #expect(harness.pending.count == 0)
     }
+
+    /// Drain, settle, then rotate through the submitter; rotating with an unsettled entry is refused.
+    @Test
+    func rotationWaitsForSettleThenTheSameSetRefires() throws {
+        var harness = try Harness(members: 1)
+        try harness.observe()
+        let resolved = try harness.resolved()
+        let first = try harness.fire(resolved)
+        let horizon = SampleStamp(clock: ActionSetFixture.primary, generation: .initial, frame: 480)
+        try harness.scheduler.commit(first.handles[0], at: horizon, nominalRate: 48_000,
+                                     ledger: harness.fixture.ledger, readiness: harness.fixture.readiness)
+        let outcomes = harness.scheduler.drain()
+        let token = harness.scheduler.currentToken
+        // (a) The scheduler is quiescent but the registry is not: refused, nothing changes.
+        let before = try harness.snapshot()
+        let refusal = Harness.refusal { () throws(ActionSetSubmitRefusal) in
+            try ActionSetSubmitter.rotateSession(expected: token, scheduler: &harness.scheduler,
+                                                 pending: harness.pending)
+        }
+        guard case .pendingNotSettled(count: 1) = refusal else {
+            Issue.record("Expected pendingNotSettled(1), got \(String(describing: refusal))")
+            return
+        }
+        #expect(refusal?.memberIndex == nil && refusal?.underlyingError == nil)
+        #expect(try harness.snapshot() == before)
+        // (c) A raw scheduler rotation skips the old session's outcomes and leaves the entry behind.
+        var raw = harness
+        _ = try raw.scheduler.rotateSession(expected: token)
+        #expect(raw.settle(outcomes).isEmpty && raw.pending.count == 1)
+        let request = try ActionSetFixture.request()
+        let blocked = Harness.refusal { () throws(ActionSetSubmitRefusal) in
+            try ActionSetSubmitter.fire(resolved, request: request, context: raw.submitContext,
+                                        scheduler: &raw.scheduler, pending: &raw.pending)
+        }
+        guard case .registry(index: 0, .duplicatePending(first.handles[0].trigger)) = blocked else {
+            Issue.record("Expected registry(0, duplicatePending), got \(String(describing: blocked))")
+            return
+        }
+        // (b) Settle, then rotate: the same set refires under the same trigger IDs.
+        #expect(harness.settle(outcomes) == first.handles.map(\.trigger))
+        let next = try ActionSetSubmitter.rotateSession(expected: token, scheduler: &harness.scheduler,
+                                                        pending: harness.pending)
+        #expect(next != token && harness.scheduler.currentToken == next)
+        // The scheduler's own refusal (here a stale token) is kept as thrown.
+        let stale = Harness.refusal { () throws(ActionSetSubmitRefusal) in
+            try ActionSetSubmitter.rotateSession(expected: token, scheduler: &harness.scheduler,
+                                                 pending: harness.pending)
+        }
+        guard case .rotation(let error) = stale else {
+            Issue.record("Expected rotation(staleSession), got \(String(describing: stale))")
+            return
+        }
+        #expect(error as? TriggerSessionError == .staleSession && stale?.memberIndex == nil)
+        #expect(stale?.underlyingError as? TriggerSessionError == .staleSession)
+        #expect(harness.scheduler.currentToken == next)
+        let refired = try harness.fire(resolved)
+        #expect(refired.handles.map(\.trigger) == first.handles.map(\.trigger) && refired.handles != first.handles)
+        #expect(harness.pending.pending(in: ActionSetFixture.scene) == refired.handles.map(\.trigger))
+    }
 }

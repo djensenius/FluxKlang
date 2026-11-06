@@ -2,13 +2,14 @@
 //  ActionSetSubmitRefusal.swift
 //  FluxKlang
 //
-//  Typed refusals of an atomic action-set submission or scope sweep (#107 A2).
+//  Typed refusals of an atomic action-set submission, scope sweep or session
+//  rotation (#107 A2).
 //  A refused call leaves the scheduler, the pending registry and the ledger
 //  exactly as they were: every step runs on staged copies, published only on
 //  full success.
 //
 
-/// Why a fire or a scope sweep was refused. `index` is the member index, in member order.
+/// Why a fire, a scope sweep or a session rotation was refused. `index` is the member index, in member order.
 enum ActionSetSubmitRefusal: Error, Sendable {
     /// `ActionSetTriggerBuilder.decide` refused the fire (`fire(...)` only).
     case decision(ActionSetRefusal)
@@ -35,6 +36,10 @@ enum ActionSetSubmitRefusal: Error, Sendable {
     case cancel(ActionSetRefusal)
     /// The scheduler's stale sweep failed (unreachable in practice: it is all or nothing).
     case sweep(any Error)
+    /// A session rotation was refused because `count` registry entries are not yet `settle`d.
+    case pendingNotSettled(count: Int)
+    /// The scheduler refused the session rotation; its error is kept as thrown.
+    case rotation(any Error)
 
     /// The member index the refusal names, if any.
     var memberIndex: Int? {
@@ -42,15 +47,15 @@ enum ActionSetSubmitRefusal: Error, Sendable {
         case .memberMismatch(let index), .staleRequirement(let index, _), .undeclaredRequirement(let index, _),
              .registry(let index, _), .scheduler(let index, _):
             index
-        case .decision, .setMismatch, .memberCount, .pendingCapacity, .cancel, .sweep:
+        case .decision, .setMismatch, .memberCount, .pendingCapacity, .cancel, .sweep, .pendingNotSettled, .rotation:
             nil
         }
     }
 
-    /// The scheduler's or sweep's original error, unchanged.
+    /// The scheduler's, sweep's or rotation's original error, unchanged.
     var underlyingError: (any Error)? {
         switch self {
-        case .scheduler(_, let error), .sweep(let error): error
+        case .scheduler(_, let error), .sweep(let error), .rotation(let error): error
         default: nil
         }
     }

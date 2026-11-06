@@ -130,5 +130,20 @@ struct ActionSetSubmissionAdmissionTests {
             Issue.record("Expected staleRequirement(1), got \(String(describing: stale))")
             return
         }
+        // Member order, then requirement order: a stale member 0 wins over an undeclared member 1.
+        let decided = try harness.stamps(resolved)
+        try harness.fixture.ledger.bump(ActionSetFixture.context, reason: .contextChange)
+        let fresh = try harness.stamps(resolved)
+        let later = GenerationKey(kind: .source, subject: GenerationSubject(validated: "source.undeclared.later"))
+        let mixed = ActionSetFireDecision.fire([decided[0], Harness.replacing(fresh[1], requires: fresh[1].requires + [
+            GenerationRequirement(key: later, generation: .initial)
+        ]), fresh[2]])
+        let mixedBefore = try harness.snapshot()
+        let first = Harness.refusal { () throws(ActionSetSubmitRefusal) in try harness.submit(mixed, of: resolved) }
+        guard case .staleRequirement(index: 0, ActionSetFixture.context) = first else {
+            Issue.record("Expected staleRequirement(0, context), got \(String(describing: first))")
+            return
+        }
+        #expect(try harness.snapshot() == mixedBefore)
     }
 }

@@ -55,7 +55,8 @@ enum ActionSetSubmitter {
 
     /// Submits a decision for `resolved` all or nothing. Check order, all before any publication:
     /// 1. shape (one stamp per member, in member order, one shared cancel-scope generation);
-    /// 2. registry capacity for every member, before any scheduler submit;
+    /// 2. registry capacity for every member, before any scheduler submit (so an unready set with a
+    ///    nearly full registry throws `.pendingCapacity` rather than returning `.dropped`; both are atomic);
     /// 3. every requirement declared (`undeclaredRequirement`) and current (`staleRequirement`) in
     ///    `context.ledger`; an old epoch is refused, never admitted stale;
     /// 4. every member's readiness current (`ActionReadiness.isCurrent`) in `context.scheduler.readiness`;
@@ -85,6 +86,8 @@ enum ActionSetSubmitter {
     /// scope that was already stale against the ledger, with the same `.cancelled` outcome its commit
     /// would have produced. Those handles are not returned here; their outcomes reach `drain` like
     /// every cancellation, and their registry entries remain until `settle`d. A refusal changes nothing.
+    /// Swept handles are matched to the registry by `TriggerID` only, not by session; rotating through
+    /// `rotateSession(expected:scheduler:pending:)`, which requires an empty registry, keeps that sound.
     /// Rebuild any `ActionSetSubmitContext` afterwards: the bump goes to `ledger`, not to a context.
     static func userCancel(scope: GenerationSubject, ledger: inout GenerationLedger,
                            scheduler: inout TriggerScheduler,
@@ -117,8 +120,10 @@ enum ActionSetSubmitter {
     /// Matches the full handle: an outcome counts only when its handle's session is `scheduler`'s
     /// current session (pass the live scheduler the outcomes were drained from). Trigger IDs are unique
     /// only within a session, so a late outcome from before a `rotateSession` is skipped and can never
-    /// remove a refired trigger's live entry. Settle before rotating: after a rotation, an old session's
-    /// unsettled entries are cleared only by a `userCancel` of their scope.
+    /// remove a refired trigger's live entry. Settle before rotating, and rotate through
+    /// `rotateSession(expected:scheduler:pending:)`, which refuses while any entry is unsettled. After a
+    /// raw `TriggerScheduler.rotateSession`, an old session's unsettled entries are skipped here, keep
+    /// their trigger IDs `duplicatePending`, and are cleared only by a `userCancel` of their scope.
     ///
     /// The registry holds at most `ActionSetPendingTriggers.maximumPending` (256) triggers, and only
     /// `settle` and a scope's `userCancel` forget them: a caller that drains but never settles fills it,
@@ -132,6 +137,25 @@ enum ActionSetSubmitter {
             settled.append(outcome.handle.trigger)
         }
         return settled
+    }
+
+    /// Rotates the scheduler's session (`TriggerScheduler.rotateSession`) only once every registry entry
+    /// is settled; otherwise refuses with `.pendingNotSettled`, since `settle` skips an old session's
+    /// outcomes. Drain, settle, then rotate. A refusal leaves the scheduler and registry unchanged.
+    @discardableResult
+    static func rotateSession(expected: TriggerSessionToken, scheduler: inout TriggerScheduler,
+                              pending: ActionSetPendingTriggers) throws(ActionSetSubmitRefusal)
+        -> TriggerSessionToken {
+        guard pending.count == 0 else { throw .pendingNotSettled(count: pending.count) }
+        var stagedScheduler = scheduler
+        let token: TriggerSessionToken
+        do {
+            token = try stagedScheduler.rotateSession(expected: expected)
+        } catch {
+            throw .rotation(error)
+        }
+        scheduler = stagedScheduler
+        return token
     }
 
     private static func admit(_ stamps: [TriggerStamp], of resolved: ResolvedActionSet,
