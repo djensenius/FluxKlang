@@ -293,6 +293,10 @@ targets:
       - path: FluxKlangTests/ParameterAutomationTests+Arbitration.swift
       - path: FluxKlangTests/ParameterAutomationTests+Resume.swift
       - path: FluxKlangTests/ParameterAutomationTests+Transport.swift
+      - path: FluxKlangTests/AutomationRenderTests.swift
+      - path: FluxKlangTests/AutomationRenderTests+Tempo.swift
+      - path: FluxKlangTests/AutomationRenderTests+Loop.swift
+      - path: FluxKlangTests/AutomationRenderTests+Handback.swift
       - path: FluxKlangTests/PatchTransitionTests.swift
       - path: FluxKlangTests/PatchTransitionTests+Bounds.swift
       - path: FluxKlangTests/PatchTransitionTests+Lifecycle.swift
