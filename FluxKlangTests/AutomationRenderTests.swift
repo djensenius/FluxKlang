@@ -337,4 +337,22 @@ struct AutomationRenderTests {
         }
         #expect(try renderer.render(from: 400, to: 500, clock: clock, current: Self.live).isEmpty)
     }
+
+    @Test func aTouchAfterAnAtOnceHandBackHoldsTheValueAutomationResumedWithNotTheHostsStaleOne() throws {
+        let clock = try Self.clock()
+        var renderer = try Self.renderer(Self.lane([]))
+        #expect(try renderer.render(from: 0, to: 100, clock: clock, current: Self.live).isEmpty)
+        _ = try renderer.perform(.touch(Self.fader, priority: 1))
+        _ = try renderer.perform(.move(Self.fader, to: 0.25))
+        _ = try renderer.perform(.release(Self.fader))
+        _ = try renderer.render(from: 100, to: 200, clock: clock, current: Self.live)
+        // The host shows 0.25. Within one block the user moves to 0.75, automation resumes with it at once and the
+        // user touches again: the touch holds 0.75, which the next block shows, not the 0.25 the host still shows.
+        _ = try renderer.perform(.touch(Self.fader, priority: 1))
+        _ = try renderer.perform(.move(Self.fader, to: 0.75))
+        #expect(try renderer.perform(.release(Self.fader)).owner == .automation)
+        #expect(try renderer.perform(.touch(Self.fader, priority: 1)).value == 0.75)
+        let events = try renderer.render(from: 200, to: 300, clock: clock, current: Self.live)
+        #expect(events == [AutomationRampEvent(frame: 200, offset: 0, value: 0.75, rampFrames: 0, reason: .hold)])
+    }
 }
