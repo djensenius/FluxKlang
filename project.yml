@@ -362,6 +362,10 @@ targets:
       - path: FluxKlangTests/ControlTriggerTests.swift
       - path: FluxKlangTests/ControlTriggerTests+Detector.swift
       - path: FluxKlangTests/ControlTriggerTests+Clear.swift
+      - path: FluxKlangTests/DeviceLifecycleTests.swift
+      - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
+      - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
+      - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
       - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift
