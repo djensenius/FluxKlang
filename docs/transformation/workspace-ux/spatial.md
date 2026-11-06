@@ -45,8 +45,30 @@ speaker list. `x` marks a masked speaker; the text label carries the same state.
 | Remap route | — | "Change route..." on the row | Opens the rig picker (#100), review required |
 | Authorize calibration | Sheet buttons | Tab through outputs, max level, duration; Escape cancels; Command-Return authorizes (no default button) | Sheet is a modal container; summary is read first; "Authorize test signal" is the last element |
 
-Source element: *"Soft Synth, slightly right of centre, in front, width 0.5."* Rotors: **Sources**,
-**Speakers**. Positions are always spoken as words plus numbers, never only as coordinates.
+Source element: *"Soft Synth, slightly right of centre, in front; x 0.10, y 0.60, width 0.50"*. Rotors:
+**Sources**, **Speakers**. Positions are always spoken as words plus numbers, never only as coordinates.
+
+### Spoken positions and edits
+
+Each axis is read as words, then the exact numbers (`SpatialPositionDescription`, #116 PL1). Right is +x and
+front is +y.
+
+| Printed value (absolute) | x words | y words |
+|---|---|---|
+| below 0.05 | centre | centre |
+| 0.05 to 0.34 | slightly left/right of centre | slightly behind/in front |
+| 0.35 to 0.74 | left/right of centre | behind/in front |
+| 0.75 and above | far left/far right | far behind/far in front |
+
+- The band comes from the printed hundredths (rounded half away from zero), so the words always agree with the
+  numbers: 0.0499 prints 0.05 and is "slightly". Each edge belongs to the outer band.
+- The plain x band says "right of centre", not "right", to match "slightly right of centre".
+- Format: `<x words>, <y words>; x <x>, y <y>`, two decimals, never "-0.00". If both axes are centre, the words
+  collapse to "centre": "centre; x 0.00, y 0.00". A stereo source adds ", width 0.50"; a mono source has none.
+- Arrows, drags and the VoiceOver adjustable actions share one edit path. Nudges and drags clamp at ±1. Exact
+  entry refuses out-of-range or non-finite values instead of clamping, and stores −0.0 as 0.
+- Width follows the same rules on stereo sources only. Width edits on a mono source are refused, the UI hides
+  the Width control for mono sources, and a mono source has no spoken Width value.
 
 ## Masks and survivors
 
@@ -106,15 +128,58 @@ renormalization, then the trim.
 stateDiagram-v2
   [*] --> Unavailable: device missing (now)
   Unavailable --> Planned: device present + route confirmed
+  Planned --> Unavailable: route lost
   Planned --> AwaitingAuthorization: user reviews outputs, max level, duration
   AwaitingAuthorization --> Running: host authorizes (hazardous)
-  AwaitingAuthorization --> Planned: cancel
+  AwaitingAuthorization --> Planned: cancel / Panic / Safe Mute
+  AwaitingAuthorization --> Unavailable: device or route lost
   Running --> Results: completed
-  Running --> Stopped: Panic / Safe Mute / device lost
+  Running --> Stopped: Panic / Safe Mute / device or route lost
   Results --> Draft: apply delays and trims as a draft
+  Results --> Planned: discard
+  Results --> Unavailable: discard after a recorded loss
+  Stopped --> Planned: acknowledge
+  Stopped --> Unavailable: acknowledge after a recorded loss
+  Draft --> Planned: commit / discard
+  Draft --> Unavailable: commit / discard after a recorded loss
 ```
 
+The diagram shows phase changes only. Revising a plan, reporting progress, and recording a route loss or
+confirmation while Results, Stopped or Draft are shown keep the phase. "Device lost" is a device-loss stop or
+`routeLost`; "route lost" is `routeLost` alone. A recorded loss is one that stopped the run, or a `routeLost`
+received in Results, Stopped or Draft, with no route confirmation after it.
+
 - No test signal plays without the authorization sheet. There are no automatic tones on launch or reconnect.
+- The model (`SpatialCalibrationFlow`, #116 PL1) has no clock and plays nothing. Route status, elapsed time and
+  measured results are injected.
+- Each flow has a caller-supplied ID, which must be unique to that flow instance (a flow rebuilt after relaunch
+  gets a new one). A flow must not be snapshotted and restored while it awaits authorization, because the
+  restored copy would accept the same authorization again. Single-use consumption of authorizations comes with
+  the #62 hazardous-action tokens.
+- An authorization binds the flow ID, the whole reviewed plan and the review generation. The flow checks the
+  flow ID, the plan ID, the rest of the plan, then the generation; the first mismatch is refused and nothing
+  changes. The plan includes the outputs in order, each output's route, the maximum level and the duration, so
+  re-routing a speaker needs a new review. The plan's digest is a 64-bit FNV-1a summary for display and logs.
+  It is not cryptographic and does not resist an adversary; the binding compares the whole plan, not the digest.
+- Running completes only when the injected elapsed time equals the plan's total; earlier results are refused.
+- Panic, Safe Mute and device loss stop a running calibration. While a review awaits authorization they cancel
+  it to Planned (Unavailable after a device loss); the next review gets a new generation, so the old
+  authorization is refused. Outside Running and AwaitingAuthorization they are idempotent no-ops: they never
+  fail and report that nothing was playing, so Panic can be broadcast without error handling. A device-loss
+  stop there records nothing, so hosts must also send `routeLost` for the loss to move Planned to Unavailable
+  or to be recorded in Results, Stopped or Draft.
+- A route loss while results, a stop or a draft are shown keeps them on screen (a draft can still be committed
+  or discarded) and records the loss, as does the device loss that stopped a run. Leaving then lands in
+  Unavailable with the loss reason instead of Planned. A route confirmation after the loss clears it, and
+  leaving lands in Planned with the newly confirmed plan. Only one confirmation follows a loss: a second
+  confirmation, or one without a loss, is refused as an illegal transition until another `routeLost` arrives.
+- Results are staged as a pending calibration set at the applied generation + 1. Only an explicit commit
+  applies them. The set changes only the speakers the plan measured: each gets its result as given (the flow does
+  not normalise results to a reference), and every other applied trim and delay is carried through exactly, so
+  calibrating some speakers never resets the others to 0 dB and no delay. If the measured and carried entries
+  would exceed 64, staging is refused (`calibration(.tooManyCalibrationEntries)`) rather than dropping any.
+- Provisional policy: the maximum test level is −60…−6 dBFS and each output plays for 0.25…10 s, both
+  inclusive, with at most 64 outputs. The longest run is 64 × 10 s ≈ 10.7 minutes.
 - Results are labelled **relative, uncalibrated**. There are no SPL or "room corrected" claims without a measured reference.
 - Today `dev.iface-b` is missing, so the Calibrate button is disabled with the reason "Interface B missing".
 

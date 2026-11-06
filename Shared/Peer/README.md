@@ -90,3 +90,49 @@ from peer bytes:
 
 The Bonjour service type is deferred. `_fluxklang._tcp` is a working name only
 and is not advertised or browsed by anything in this lane.
+
+## Reconnect (`Reliability/`, #97 R1)
+
+Pure values only; no sockets, timers or Bonjour.
+- `PeerConnectionEpochIssuer` (host) issues each peer's connection epoch from one
+  host-wide `Generation.next()` counter, so an epoch is never reused. Currency is
+  equality with the live epoch only. Live peers are bounded (64 by default) and a
+  full issuer refuses instead of evicting.
+- `PeerOutboundQueue` (remote) holds up to 256 intents of the current session,
+  queued and sent-but-unanswered together, in strict order with no coalescing. An
+  intent of any other epoch is refused, and a full queue refuses instead of evicting.
+- `PeerReconnectState` moves connected → synced → resyncing → synced, with
+  disconnected from any phase. It reads the session from the receiver it observes.
+  Input and sending are enabled only when synced and resumed. After an in-session
+  resync, held intents wait for an explicit `resume(_:)` from the sync layer; nothing
+  flushes on its own. A reconnect is allowed only after `connectionLost(_:)` and only
+  to the same host, whose (host generation, connection generation) pair must
+  strictly increase over the current session; another host is adopted only through
+  the explicit `changeHost(to:)`, which restarts that order. Adoption drops the
+  whole queue, never replays it, and returns one `PeerDiscardReport`: never-sent intents are
+  *discarded*, and sent intents without a result are *outcome unknown*. Events of
+  an old session are ignored and reported.
+- Sends are `PeerCommandEnvelope`s numbered from 1 per session. A
+  `PeerCommandResult` is accepted only when its session, command ID and envelope
+  sequence all match an awaiting send; a delayed duplicate for an earlier send of a
+  reused ID is `sequenceMismatch` and changes nothing. An ID is a `duplicate` only
+  while queued or awaiting; once answered (e.g. a transient refusal) it may be
+  enqueued again and is sent under a new sequence. `PeerCommandResult` names no
+  session and sequences restart at 1 per session, so the transport must bind each
+  result to the connection it arrived on and pass that session to `acknowledge`.
+  When a session's sequences run out, enqueue and send refuse with
+  `sequenceExhausted` and input is disabled until a reconnect.
+- Every adoption and every current-session resync request (even while already
+  resyncing) starts a new `PeerResyncLatch` (equality only), so earlier stamps go
+  stale. Sync events and receiver phases are stamped with `stamp(_:)` when
+  produced; only the snapshot answering the current latch, while the receiver is
+  still synced, clears it. Every observed current `.resyncRequired` phase (a poll
+  included) starts a new latch, so an `.applied` stamped before it is ignored;
+  recovery completes on the next `.synced` read or `.applied` stamped after the
+  last observed request. Exhausted generations fail closed (`latchExhausted`,
+  input off, every signal ignored) until a reconnect. A late signal of an earlier latch or session (event,
+  receiver phase, `resume(_:)`, `connectionLost(_:)`, backoff tick) is a typed
+  ignore or refusal and changes nothing.
+- `PeerReconnectBackoff` is pure math: 250 ms × 2^attempt, capped at 30 s, with
+  equal jitter from a caller-supplied unit in [0, 1). `PeerReconnectAttempts`
+  counts attempts (saturating at 32) and is reset by a successful sync.
