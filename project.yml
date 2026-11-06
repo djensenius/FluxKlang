@@ -257,6 +257,9 @@ targets:
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
+      - path: FluxKlangTests/WiringEditPathTests.swift
+      - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
+      - path: FluxKlangTests/WiringMatrixTests.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
       - path: FluxKlangTests/RigMappingTests.swift
