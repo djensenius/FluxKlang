@@ -12,7 +12,7 @@ enum ControlTriggerAction: String, Hashable, Sendable, CaseIterable {
     case release
     /// A toggle or latch output turned on.
     case switchedOn
-    /// A toggle output turned off by a press, or a latch cleared.
+    /// A toggle output turned off by a press, or a toggle or latch cleared.
     case switchedOff
 }
 
@@ -20,7 +20,7 @@ enum ControlTriggerAction: String, Hashable, Sendable, CaseIterable {
 enum ControlTriggerCause: String, Hashable, Sendable, CaseIterable {
     /// A control input crossed a threshold (`handle`).
     case input
-    /// A latch was cleared (`clear`).
+    /// A toggle or latch was cleared (`clear`).
     case clear
     /// A held control's source was forgotten (`forgetHeld`), for example on disconnect; always a `release`.
     case disconnect
@@ -83,6 +83,9 @@ struct ControlTriggerDetector: Hashable, Sendable {
     }
 
     private var entries: [BindingID: Entry]
+    /// How many entries owe a release (`owesRelease`), kept in step wherever a held flag changes so a command
+    /// checks its headroom in O(1) rather than recounting every binding.
+    private(set) var owedCount: Int
     /// The last sequence issued; `0` before the first command of a fresh detector.
     private(set) var lastSequence: UInt64
 
@@ -99,6 +102,8 @@ struct ControlTriggerDetector: Hashable, Sendable {
             }
         }
         self.entries = entries
+        // Every binding starts released, so nothing is owed yet.
+        owedCount = 0
         self.lastSequence = lastSequence
     }
 
@@ -134,21 +139,21 @@ struct ControlTriggerDetector: Hashable, Sendable {
             action = Self.pressed(binding.mode, &entry.state)
         }
         let command = try issue(action, for: entry, cause: .input)
-        entries[id] = entry
+        store(entry)
         return command
     }
 
-    /// Clears a latch: a `switchedOff` command when it is on, `nil` when it is already off. Clearing is a host
-    /// action that only ends an action, so neither a current control source nor a present, `.live` target is
-    /// required; only sequence headroom is. The held flag is kept, so a control still held must be released before
-    /// it can latch again.
+    /// Clears a toggle or latch: a `switchedOff` command when it is on, `nil` when it is already off. Clearing is a
+    /// host action that only ends an action, so neither a current control source nor a present, `.live` target is
+    /// required; only sequence headroom is, including the releases still owed. A momentary binding is refused with
+    /// `notLatch`. The held flag is kept, so a control still held must be released before its next press is an edge.
     mutating func clear(_ id: BindingID) throws(ControlTriggerRefusal) -> ControlTriggerCommand? {
         guard var entry = entries[id] else { throw .unknownBinding(id) }
-        guard entry.binding.mode == .latch else { throw .notLatch(entry.binding.mode) }
+        guard entry.binding.mode != .momentary else { throw .notLatch(entry.binding.mode) }
         guard entry.state.isOn else { return nil }
         entry.state.isOn = false
         let command = try issue(.switchedOff, for: entry, cause: .clear)
-        entries[id] = entry
+        store(entry)
         return command
     }
 
@@ -163,6 +168,7 @@ struct ControlTriggerDetector: Hashable, Sendable {
         let releasing = held.values.filter(\.owesRelease).map(\.binding).sorted { $0.id < $1.id }
         guard UInt64.max - lastSequence >= UInt64(releasing.count) else { throw .sequenceExhausted }
         for id in held.keys { entries[id]?.state.held = false }
+        owedCount -= releasing.count
         var commands: [ControlTriggerCommand] = []
         for binding in releasing { commands.append(next(.release, for: binding, cause: .disconnect)) }
         return commands
@@ -194,9 +200,19 @@ struct ControlTriggerDetector: Hashable, Sendable {
 
     /// Releases owed if `entry` replaced its stored state.
     private func owedReleases(with entry: Entry) -> UInt64 {
-        let others = entries.values.filter { $0.binding.id != entry.binding.id && $0.owesRelease }.count
-        return UInt64(others) + (entry.owesRelease ? 1 : 0)
+        let stored = entries[entry.binding.id]?.owesRelease == true ? 1 : 0
+        return UInt64(owedCount - stored) + (entry.owesRelease ? 1 : 0)
     }
+
+    /// Stores `entry`, moving `owedCount` by the change in its `owesRelease`.
+    private mutating func store(_ entry: Entry) {
+        if entries[entry.binding.id]?.owesRelease == true { owedCount -= 1 }
+        if entry.owesRelease { owedCount += 1 }
+        entries[entry.binding.id] = entry
+    }
+
+    /// The owed releases counted over every binding (O(bindings)). Only for tests that cross-check `owedCount`.
+    func recountOwedReleases() -> Int { entries.values.filter(\.owesRelease).count }
 
     private mutating func next(_ action: ControlTriggerAction, for binding: ControlTriggerBinding,
                                cause: ControlTriggerCause) -> ControlTriggerCommand {

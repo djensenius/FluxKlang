@@ -16,16 +16,16 @@ enum ControlTriggerRefusal: Error, Hashable, Sendable {
     /// The binding's control source is not among the host's current sources (disconnected or replaced).
     case controllerStale(ControlSourceID)
     /// The host does not classify the target now (for example it was removed); a class is never assumed. Release
-    /// edges and latch clears are exempt: they only end an action.
+    /// edges and toggle or latch clears are exempt: they only end an action.
     case targetMissing(ControlTriggerTargetID)
     /// Only `.live` targets fire; hazardous, safety, structural and proposal targets are refused. Release edges and
-    /// latch clears are exempt: they only end an action.
+    /// toggle or latch clears are exempt: they only end an action.
     case targetClass(ControlTriggerTargetID, ControlClass)
     /// A relative input reached an absolute trigger.
     case inputMismatch
     case nonFinite
     case inputOutOfRange(Double)
-    /// Only a latch can be cleared; a toggle turns off on its own press.
+    /// Only latches and toggles can be cleared; a momentary binding has nothing to clear.
     case notLatch(ControlTriggerMode)
     /// Sequences saturate at `UInt64.max` rather than wrap. A press, switch-on, switch-off or clear is refused
     /// unless the sequences left also cover every release still owed (each held momentary binding with
