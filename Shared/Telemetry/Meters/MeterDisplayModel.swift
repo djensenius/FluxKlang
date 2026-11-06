@@ -85,6 +85,8 @@ struct MeterDisplayModel: Equatable, Sendable {
 
     /// Reads each channel has ignored since this model was created or last rebound, in channel order; empty for a
     /// source that is not measured.
+    /// The counts take part in `Equatable`, so after an ignored read the model compares unequal to an otherwise
+    /// identical one.
     var ignoredReads: [MeterIgnoredReadCounts] {
         channels.map(\.ignoredReads)
     }

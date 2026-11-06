@@ -20,7 +20,7 @@ enum MeterIgnoredRead: Equatable, Sendable, CaseIterable {
 }
 
 /// How many reads a channel has ignored since it was created (a new model or `rebind`), per reason. Only
-/// `MeterChannelState` counts; a count cannot overflow in practice (2^64 reads).
+/// `MeterChannelState` counts; a count and `total` wrap (unreachable in practice: 2^64 reads), never trap.
 struct MeterIgnoredReadCounts: Equatable, Sendable {
     private(set) var classifiedBeforeLatest: UInt64 = 0
     private(set) var frameRegressed: UInt64 = 0
@@ -36,14 +36,14 @@ struct MeterIgnoredReadCounts: Equatable, Sendable {
         }
     }
 
-    /// All ignored reads.
-    var total: UInt64 { classifiedBeforeLatest + frameRegressed + sequenceRegressed }
+    /// All ignored reads; wraps (unreachable in practice).
+    var total: UInt64 { classifiedBeforeLatest &+ frameRegressed &+ sequenceRegressed }
 
     fileprivate mutating func record(_ reason: MeterIgnoredRead) {
         switch reason {
-        case .classifiedBeforeLatest: classifiedBeforeLatest += 1
-        case .frameRegressed: frameRegressed += 1
-        case .sequenceRegressed: sequenceRegressed += 1
+        case .classifiedBeforeLatest: classifiedBeforeLatest &+= 1
+        case .frameRegressed: frameRegressed &+= 1
+        case .sequenceRegressed: sequenceRegressed &+= 1
         }
     }
 }
@@ -53,8 +53,11 @@ struct MeterIgnoredReadCounts: Equatable, Sendable {
 /// A published sample is identified by its slot `sequence` and `stamp`. While it stays the channel's latest
 /// observation, its age is measured from the earliest classification time among the reads of it the channel has
 /// consumed, never from when the channel consumed them, so a read consumed late is as old as its classification. A
-/// sample is applied to the level, peak hold and clip latch once, when it becomes the latest observation, and only
-/// if it is fresh then; a sample stale at that point stays stale and changes nothing.
+/// sample is applied to the level, peak hold and clip latch each time it becomes the latest observation, and only
+/// if it is fresh then; a sample stale at that point stays stale and changes nothing. Rereads while it stays latest
+/// are not applied again. Across generations a sample can become latest more than once: displaced by another
+/// generation's read, then reread at the same or a later classification time, it is applied again (and can restart
+/// the peak hold).
 ///
 /// Ordering contract: reads may be consumed in any order. Each read's sample is compared with the latest one, and a
 /// read of an older sample is ignored and counted in `ignoredReads` with its `MeterIgnoredRead` reason; the latest

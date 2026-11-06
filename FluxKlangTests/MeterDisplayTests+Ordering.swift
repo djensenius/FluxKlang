@@ -115,18 +115,20 @@ extension MeterDisplayTests {
 
     @Test
     func otherGenerationClassifiedAtTheSameInstantIsAppliedAndTheLaterConsumedReadWins() throws {
-        var model = try Self.tap()
-        let latest = try Self.read(-20, sequence: 1, generation: 2, at: Self.ms(10))
-        _ = try model.update([latest], at: Self.ms(11))
-        // A NaN from the other generation at the same instant is applied as the new latest sample...
-        let sameInstant = try Self.read(.nan, sequence: 1, generation: 1, at: Self.ms(10))
-        #expect(try Self.signal(&model, sameInstant, at: Self.ms(11)) == .unavailable(.invalidReading(.notANumber)))
-        // ...and the first read, consumed after it at the same classification time, wins back.
-        #expect(try Self.signal(&model, latest, at: Self.ms(11)) == .measured(levelDBFS: -20, peakHoldDBFS: -20))
+        var model = try Self.longTap()
+        let latest = try Self.read(-6, sequence: 1, generation: 2, at: Self.ms(10))
+        _ = try model.update([latest], at: Self.ms(10))
+        // A lower reading from the other generation at the same instant is applied as the new latest sample...
+        let sameInstant = try Self.read(-20, sequence: 1, generation: 1, at: Self.ms(10))
+        #expect(try Self.signal(&model, sameInstant, at: Self.ms(510)) == .measured(levelDBFS: -16, peakHoldDBFS: -6))
+        // ...and the first read, consumed after it at the same classification time, wins back: it is latest again,
+        // so it is applied again and restarts the hold at the held peak.
+        #expect(try Self.signal(&model, latest, at: Self.ms(1_010)) == .measured(levelDBFS: -6, peakHoldDBFS: -6))
+        #expect(try Self.signal(&model, latest, at: Self.ms(2_010)) == .measured(levelDBFS: -26, peakHoldDBFS: -6))
         #expect(Self.ignored(model) == [[0, 0, 0]])
         // The tie is at the first classification only: 1 ns earlier is ignored.
         let justBefore = try Self.read(-1, sequence: 1, generation: 1, at: Self.ms(9, plus: 999_999))
-        #expect(try Self.signal(&model, justBefore, at: Self.ms(11)) == .measured(levelDBFS: -20, peakHoldDBFS: -20))
+        #expect(try Self.signal(&model, justBefore, at: Self.ms(2_010)) == .measured(levelDBFS: -26, peakHoldDBFS: -6))
         #expect(Self.ignored(model) == [[1, 0, 0]])
     }
 
@@ -139,6 +141,19 @@ extension MeterDisplayTests {
         _ = try model.update([Self.read(-20, sequence: 1, generation: 2, at: Self.ms(20))], at: Self.ms(20))
         let between = try Self.read(-6, sequence: 1, generation: 1, at: Self.ms(15))
         #expect(try Self.signal(&model, between, at: Self.ms(20)) == .measured(levelDBFS: -6, peakHoldDBFS: -6))
+        #expect(Self.ignored(model) == [[0, 0, 0]])
+    }
+
+    @Test
+    func earlierRereadOfTheLatestSampleMovesTheOrderSoAnOtherGenerationReadBetweenIsApplied() throws {
+        // B is latest, first read at 20; a reread of B classified at 12 makes B known latest since 12, so a
+        // generation-A read classified at 15 is later than B and applied.
+        var model = try Self.tap()
+        let latestB = try Self.read(-20, sequence: 1, generation: 2, at: Self.ms(20))
+        _ = try model.update([latestB], at: Self.ms(20))
+        _ = try model.update([Self.read(-20, sequence: 1, generation: 2, at: Self.ms(12))], at: Self.ms(20))
+        let readA = try Self.read(-6, sequence: 1, generation: 1, at: Self.ms(15))
+        #expect(try Self.signal(&model, readA, at: Self.ms(20)) == .measured(levelDBFS: -6, peakHoldDBFS: -6))
         #expect(Self.ignored(model) == [[0, 0, 0]])
     }
 
