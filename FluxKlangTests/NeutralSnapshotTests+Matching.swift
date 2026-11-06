@@ -113,10 +113,11 @@ extension NeutralSnapshotTests {
         #expect(few.strings == ["serial-0", "first evidence", "late evidence"] && few.overflow == 0)
         #expect(Snapshot.build(from: inputs).truncation.withheldOverflow == 0)
         inputs.routes = [route]
-        let long = String(repeating: "d", count: NeutralSnapshotAssembly.maximumRefusedBytes + 1)
-        inputs.hardwareIdentifiers = [long, "dev.iface-z"]
+        let long = String(repeating: "d", count: RefusedIdentities.maximumIdentityFormBytes + 1)
+        inputs.hardwareIdentifiers = [long, "dev.iface-z", "\u{2060} "]
         let assembly = NeutralSnapshotAssembly(inputs: inputs, limits: Snapshot.Limits())
         #expect(assembly.withheld == ["dev.iface-z", "late evidence"] && assembly.redacted.count == 3)
+        #expect(assembly.withheldOverflow == 0)
     }
 
     @Test func theWithheldCapIsIndependentOfHardwareInputOrder() {

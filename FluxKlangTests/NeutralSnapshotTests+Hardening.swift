@@ -312,3 +312,70 @@ extension NeutralSnapshotTests {
         #expect(route.device == nil && route.isDeviceWithheld)
     }
 }
+
+// MARK: - Round 12: bounded identity forms
+
+extension NeutralSnapshotTests {
+    /// Removed padding (ZWSP, a variation selector after a letter, a word joiner, a soft
+    /// hyphen) never counts toward a bound, so a padded five-byte identity still refuses
+    /// `dev.a` on the equality path, although it is too short to be a withheld term.
+    /// The first case is Copilot's; Foundation trims a trailing ZWSP as whitespace, so the
+    /// interior ZWSP case is the one the old raw-byte filter exposed.
+    @Test(arguments: [
+        ("dev.a", "\u{200B}", ""), ("dev.", "\u{200B}", "a"), ("dev.a", "\u{FE0F}", ""),
+        ("", "\u{2060}", "DEV.A"), ("d", "\u{00AD}", "ev.a")
+    ])
+    func aPaddedShortIdentityStillRefusesItsAlias(head: String, padding: String, tail: String) throws {
+        let identity = head + String(repeating: padding, count: 64) + tail
+        #expect(identity.utf8.count > 128 && UntrustedTextSanitizer.withheldTerm(identity) == nil)
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.a")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        inputs.hardwareIdentifiers = [identity]
+        let snapshot = Snapshot.build(from: inputs)
+        let route = try #require(snapshot.route(RouteID(validated: "rte.x")))
+        #expect(route.device == nil && route.isDeviceWithheld)
+        #expect(snapshot.truncation.withheldOverflow == 0 && !snapshot.truncation.isTruncated)
+        let json = try #require(String(data: Self.encode(snapshot), encoding: .utf8))
+        #expect(!json.contains("dev.a"))
+    }
+
+    /// Both sides use the same bounded pipeline: a padded compared value matches a plain
+    /// identity, a padded identity matches a plain value, and a padded value that matches
+    /// nothing is no longer refused by its raw length.
+    @Test func paddedValuesAndIdentitiesShareOneBoundedForm() {
+        let padded = "dev.a" + String(repeating: "\u{200B}", count: 64)
+        let joined = "dev." + String(repeating: "\u{FE0F}\u{2060}\u{00AD}", count: 30) + "A"
+        #expect(RefusedIdentities.form(padded) == RefusedIdentities.form("dev.a"))
+        #expect(RefusedIdentities(["dev.a"], terms: []).refuses(padded))
+        #expect(RefusedIdentities(["dev.a"], terms: []).refuses(joined))
+        #expect(RefusedIdentities([joined], terms: []).refuses("dev.a"))
+        #expect(!RefusedIdentities(["dev.b"], terms: []).refuses(padded))
+        #expect(!RefusedIdentities(["dev.b"], terms: []).refuses(joined))
+    }
+
+    /// Bounded filtering completes at exactly `maximumIdentityScalars` kept scalars, so a
+    /// long but finite identity still refuses `dev.a`. One more kept scalar and its form is
+    /// unknown: as a compared value it is refused, and as a withheld identity it is counted
+    /// in `withheldOverflow` instead of being dropped (its fail-closed term still refuses).
+    @Test func anIdentityTooLongToFilterIsCountedNotDropped() throws {
+        let limit = RefusedIdentities.maximumIdentityScalars
+        let fits = String(repeating: " ", count: limit - 5) + "DEV.A"
+        let over = String(repeating: " ", count: limit - 4) + "DEV.A"
+        #expect(RefusedIdentities.identityForm(fits) != nil && RefusedIdentities.identityForm(over) == nil)
+        #expect(RefusedIdentities.none.refuses(over) && !RefusedIdentities.none.refuses("dev.a"))
+        var input = try Self.routeInput("rte.x", binding: .confirmed, presence: .present)
+        input.route.device = DeviceID(validated: "dev.a")
+        var inputs = Snapshot.Inputs(graph: Self.emptyGraph, routes: [input])
+        for (identity, overflow) in [(fits, 0), (over, 1)] {
+            inputs.hardwareIdentifiers = [identity]
+            let assembly = NeutralSnapshotAssembly(inputs: inputs, limits: Snapshot.Limits())
+            #expect(assembly.withheld == (overflow == 0 ? [fits] : []) && assembly.withheldOverflow == overflow)
+            let snapshot = Snapshot.build(from: inputs)
+            #expect(snapshot.truncation.withheldOverflow == overflow)
+            #expect(snapshot.truncation.isTruncated == (overflow > 0))
+            let route = try #require(snapshot.route(RouteID(validated: "rte.x")))
+            #expect(route.device == nil && route.isDeviceWithheld)
+        }
+    }
+}

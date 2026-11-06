@@ -125,8 +125,10 @@ extension NeutralSnapshot {
         let truncatedLabels: Int
         /// Labels whose characters were replaced, removed, capped or withheld.
         let sanitizedLabels: Int
-        /// Distinct withheld strings past `NeutralSnapshotAssembly.maximumWithheldCount`.
-        /// They are not redacted, so when this is positive redaction may be incomplete.
+        /// Distinct withheld strings past `NeutralSnapshotAssembly.maximumWithheldCount`,
+        /// which are not redacted, plus withheld strings too long for bounded identity
+        /// filtering, which are redacted as terms but not compared as whole IDs. When this
+        /// is positive, redaction or whole-ID refusal may be incomplete.
         let withheldOverflow: Int
 
         /// True when any category or label was cut short, or withheld strings overflowed.

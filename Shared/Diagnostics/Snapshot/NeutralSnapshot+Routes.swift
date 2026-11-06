@@ -71,23 +71,30 @@ extension NeutralSnapshotAssembly {
 /// matching (`UntrustedTextSanitizer.caselessForm`, Unicode D145), never lowercasing,
 /// so `ſ`, `K`, `ß`/`ss`, the three `Å` spellings and decomposed Hangul all compare
 /// equal. A device ID is refused when either:
-/// - its identity form equals that of a withheld identity of at most
-///   `maximumRefusedBytes` (the existing bound on the original, trimmed string), or
+/// - its identity form equals that of a withheld identity whose form fits
+///   `maximumIdentityFormBytes`, or
 /// - a label made of the device ID would be redacted by the prepared withheld terms.
 ///   This covers longer identities through the label limits (prefix and fail-closed
 ///   terms included), and makes refusal and label redaction agree by construction.
 ///
-/// The identity form is the label preparation (`filterScalars`, `sourceForm`,
-/// trimmed) in caseless form, built only after the original-byte bound passes.
-/// Worst case: an input of at most 128 bytes has a form of at most 384 bytes, since
-/// no scalar grows by more than 3× in UTF-8 bytes under NFD and full folding (`ΐ`, 2
-/// bytes, becomes 6; checked over every scalar on this toolchain).
+/// The identity form (`identityForm`) is one bounded pipeline for both sides: the
+/// label preparation (`filterScalars` keeping at most `maximumIdentityScalars`,
+/// `sourceForm`, trimmed) in caseless form. The bound applies to the NORMALIZED
+/// form, never to the raw bytes: removed padding (ZWSP, U+2060, U+00AD, a variation
+/// selector after a letter) does not count, so `dev.a` padded to 197 bytes is still
+/// the identity `dev.a`, on either side. Short identities stay here even though they
+/// are too short to be withheld terms (`minimumRedactedBytes`).
 ///
 /// An exposable device ID is ASCII and at most `DeviceID.maximumLength` bytes
 /// (`ContractID.validate`), so its form is that long at most. An identity whose form
 /// is longer can never equal one, and is skipped on the equality path; the term path
-/// still refuses and redacts by it. A device ID whose own form cannot be built is
-/// refused.
+/// still refuses and redacts by it. An identity whose bounded filtering cannot
+/// complete has no known form: as a device ID it is refused, and as a withheld
+/// identity it is counted in `Truncation.withheldOverflow` (`NeutralSnapshotAssembly`).
+///
+/// Cost: filtering is linear in the raw input, as for withheld terms; the caseless
+/// form is built from at most `maximumIdentityScalars` counted scalars (3× that with
+/// kept joiners and selectors), the same order as preparing a withheld term.
 ///
 /// Over-withholding is by design: a term inside an alias refuses it (evidence
 /// `confirmed` refuses `dev.confirmed-a`).
@@ -95,6 +102,9 @@ struct RefusedIdentities {
     static let none = RefusedIdentities([], terms: [])
     /// The longest form that can equal an exposable device ID.
     static let maximumIdentityFormBytes = DeviceID.maximumLength
+    /// Counted scalars bounded filtering keeps before it gives up, the bound withheld
+    /// terms are prepared with (`maximumWithheldBytes`).
+    static let maximumIdentityScalars = UntrustedTextSanitizer.maximumWithheldBytes
 
     private let forms: Set<[Unicode.Scalar]>
     private let terms: [UntrustedTextSanitizer.WithheldTerm]
@@ -112,16 +122,24 @@ struct RefusedIdentities {
             .changed
     }
 
-    /// The identity form, or nil when the input exceeds the original bound or the
-    /// form exceeds `maximumIdentityFormBytes`.
+    /// The identity form when it fits `maximumIdentityFormBytes`, else nil (it cannot
+    /// equal a device ID, or bounded filtering could not complete).
     static func form(_ raw: String) -> [Unicode.Scalar]? {
-        let limit = NeutralSnapshotAssembly.maximumRefusedBytes
-        guard raw.utf8.count <= limit else { return nil }
-        let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: limit)
+        guard let form = identityForm(raw), fits(form) else { return nil }
+        return form
+    }
+
+    /// Whether a form is short enough to equal an exposable device ID.
+    static func fits(_ form: [Unicode.Scalar]) -> Bool {
+        form.reduce(0) { $0 + UTF8.width($1) } <= maximumIdentityFormBytes
+    }
+
+    /// The bounded identity pipeline, with no bound on the raw bytes. Nil only when
+    /// filtering stops at `maximumIdentityScalars` kept scalars, so the form is unknown.
+    static func identityForm(_ raw: String) -> [Unicode.Scalar]? {
+        let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: maximumIdentityScalars)
         guard filtered.isComplete else { return nil }
         let source = UntrustedTextSanitizer.sourceForm(filtered.text).trimmingCharacters(in: .whitespacesAndNewlines)
-        let form = UntrustedTextSanitizer.caselessForm(source.unicodeScalars)
-        guard form.reduce(0, { $0 + UTF8.width($1) }) <= maximumIdentityFormBytes else { return nil }
-        return form
+        return UntrustedTextSanitizer.caselessForm(source.unicodeScalars)
     }
 }

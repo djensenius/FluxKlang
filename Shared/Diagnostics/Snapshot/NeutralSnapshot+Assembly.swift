@@ -15,25 +15,31 @@ struct NeutralSnapshotAssembly {
     /// At most this many distinct withheld strings are collected, enough for four
     /// per route at the default route cap of 256. Past it, `withheldOverflow` is reported.
     static let maximumWithheldCount = 1_024
-    /// Device IDs are `ContractID`s of at most 128 bytes, so longer strings can never equal one.
-    static let maximumRefusedBytes = 128
 
     /// Hardware UIDs, host IDs, evidence strings and device IDs refused by the alias
-    /// form, known from the inputs and never exposed as a device ID.
+    /// form, known from the inputs and never exposed as a device ID: the collected
+    /// strings, as given, whose bounded identity form (`RefusedIdentities.identityForm`)
+    /// is non-empty and fits `RefusedIdentities.maximumIdentityFormBytes`. The bound is
+    /// on the normalized form, not the raw bytes, so removed padding never drops an
+    /// identity, and short ones stay even when too short to be withheld terms. A longer
+    /// form can never equal a device ID; such strings still refuse and redact as terms.
     let withheld: [String]
     /// The withheld strings in label match form, prepared once for every label.
     let redacted: [UntrustedTextSanitizer.WithheldTerm]
-    /// Distinct withheld strings dropped by `maximumWithheldCount`.
+    /// Distinct withheld strings dropped by `maximumWithheldCount`, plus collected
+    /// strings whose bounded filtering could not complete (more than
+    /// `RefusedIdentities.maximumIdentityScalars` kept scalars), so their identity form
+    /// is unknown. Such a string is still a (prefix or fail-closed) withheld term, but
+    /// whole-ID refusal cannot be shown to cover it, so it is counted, never silent.
     let withheldOverflow: Int
 
     init(inputs: NeutralSnapshot.Inputs, limits: NeutralSnapshot.Limits) {
         self.limits = limits
         let (collected, overflow) = Self.collectWithheld(inputs)
-        withheldOverflow = overflow
-        let trimmed = collected
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && $0.utf8.count <= Self.maximumRefusedBytes }
-        withheld = Set(trimmed).sorted()
+        let identities = collected.map { (raw: $0, form: RefusedIdentities.identityForm($0)) }
+        withheldOverflow = overflow + identities.count { $0.form == nil }
+        withheld = identities.filter { $0.form.map { !$0.isEmpty && RefusedIdentities.fits($0) } ?? false }
+            .map(\.raw).sorted()
         redacted = UntrustedTextSanitizer.withheldTerms(collected)
     }
 
@@ -42,7 +48,8 @@ struct NeutralSnapshotAssembly {
     /// order, with routes sharing an ID ordered by those fields in UTF-8 byte order,
     /// until `maximumWithheldCount` distinct strings are held.
     /// Strings past the cap are neither refused nor redacted; their count is
-    /// returned as `overflow` and reported in `Truncation.withheldOverflow`.
+    /// returned as `overflow` and reported in `Truncation.withheldOverflow`, together
+    /// with the kept strings whose identity form is unknown (see `withheldOverflow`).
     static func collectWithheld(_ inputs: NeutralSnapshot.Inputs) -> (strings: [String], overflow: Int) {
         let hardware = inputs.hardwareIdentifiers
             .map { (key: UntrustedTextSanitizer.withheldTerm($0)?.text ?? "", raw: $0) }
