@@ -22,21 +22,29 @@ struct ShowStopReference: Hashable, Sendable {
 
 /// Why one item of a transition cannot be planned.
 enum ShowTransitionBlock: Equatable, Sendable {
-    /// The target links a different patch than the source (or there is no source stop). Activating another patch
-    /// may restructure audio, which needs the structural activation review path (#62); it is not attempted here.
+    /// The target links a different patch than the one actually loaded (`from`), or nothing is loaded
+    /// (`from == nil`). Activating another patch may restructure audio, which needs the structural activation
+    /// review path (#62); it is not attempted here.
     case requiresStructuralActivationReview(from: PatchID?, to: PatchID)
     /// A target link that does not resolve, in the show's own vocabulary. Kept, reported and fixed by relinking.
     case unresolvedLink(ShowLinkProblem)
-    /// `PatchRecallPlanner` refused the same-patch recall.
+    /// `PatchRecallPlanner` refused the same-patch recall, including an active variation the patch no longer has.
     case patchRecallRefused(PatchID, PatchVariationError)
     /// The linked action set did not resolve against the project's actions.
     case actionSetRefused(ActionSetID, ActionSetRefusal)
+    /// The caller passed no recall source for this resolved patch: a caller error, not a project-data problem.
+    case recallSourceUnavailable(PatchID)
+    /// The caller passed no action-set source for this resolved set: a caller error, not a project-data problem.
+    case actionSetSourceUnavailable(ActionSetID)
 
-    /// `true` when the show can recover by relinking or editing project data. A structural activation review is
-    /// not recoverable that way: it waits for the #62 activation path.
+    /// `true` when the show can recover by relinking or editing project data. A structural activation review
+    /// waits for the #62 activation path, and a missing recall or action-set source is a caller error that no
+    /// project edit fixes, so those are not recoverable.
     var isRecoverable: Bool {
-        if case .requiresStructuralActivationReview = self { return false }
-        return true
+        switch self {
+        case .requiresStructuralActivationReview, .recallSourceUnavailable, .actionSetSourceUnavailable: false
+        case .unresolvedLink, .patchRecallRefused, .actionSetRefused: true
+        }
     }
 }
 
@@ -60,10 +68,11 @@ enum ShowTransitionStep<Planned: Equatable & Sendable>: Equatable, Sendable {
 
 /// A reviewable transition between two stops. Values only: holding or comparing a plan has no effect.
 struct ShowTransitionPlan: Equatable, Sendable {
-    /// `nil` when the cursor had no stop before this move.
+    /// `nil` when the cursor had no stop before this move. Names the stop only: the patch recalled from is the
+    /// planner's `active` input, not this stop's link.
     let from: ShowStopReference?
     let to: ShowStopReference
-    /// The variation recall within the target's patch.
+    /// The variation recall within the loaded patch, when the target links that same patch.
     let patch: ShowTransitionStep<PatchRecallPlan>
     /// The target's action set to arm, with its readiness at planning time. Arming never fires it, and a set that
     /// is not ready is still planned: its report says which members are not ready and why.

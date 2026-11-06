@@ -9,7 +9,8 @@ import Testing
 /// Patches `pat.keys` (verse, chorus) and `pat.pad`; action sets `as.ready` (act.0), `as.cold` (act.1 ready,
 /// act.2 preparing) and `as.orphan` (a member the project lacks). Song A: a1 keys/verse + as.ready + its own
 /// available chart, a2 keys/chorus + as.cold, a3 pad; A's song chart is stale. Song B: b1 keys/base + as.orphan,
-/// b2 an unknown patch and action set, b3 keys with an unknown variation, b4 nothing. Song C has no parts and an
+/// b2 an unknown patch and action set, b3 keys with an unknown variation, b4 nothing, b5 keys/verse + the unknown
+/// `as.gone`. Song C has no parts and an
 /// available song chart. Setlist `set.main` plays e1 A, e2 B, e3 C.
 enum ShowTransitionTestFixture {
     static let keys = PatchID(validated: "pat.keys")
@@ -125,7 +126,8 @@ enum ShowTransitionTestFixture {
             part("b1", .make(patch: keys, actionSet: orphanSet)),
             part("b2", .make(patch: gonePatch, actionSet: goneSet)),
             part("b3", .make(patch: keys, variation: goneVariation)),
-            part("b4")
+            part("b4"),
+            part("b5", .make(patch: keys, variation: verse, actionSet: goneSet))
         ])
         let third = try ShowSong.make(id: songC, title: "C", chart: chart)
         let songsByEntry = ["e1": songA, "e2": songB, "e3": songC]
@@ -147,9 +149,14 @@ enum ShowTransitionTestFixture {
         return stop
     }
 
-    static func plan(_ from: ShowStop?, _ to: ShowStop,
+    /// The patch actually loaded before a move.
+    static func loaded(_ patch: PatchID, _ variation: PatchVariationID? = nil) -> ShowActivePatch {
+        ShowActivePatch(patch: patch, variation: variation)
+    }
+
+    static func plan(_ from: ShowStop?, _ to: ShowStop, active: ShowActivePatch?,
                      context: ShowTransitionContext? = nil) throws -> ShowTransitionPlan {
-        try ShowTransitionPlanner.plan(from: from, to: to, in: context ?? Self.context())
+        try ShowTransitionPlanner.plan(from: from, to: to, active: active, in: context ?? Self.context())
     }
 }
 
@@ -158,71 +165,114 @@ struct ShowTransitionTests {
 
     @Test
     func samePatchPlansAVariationRecallOfOnlyChangedParameters() throws {
-        let plan = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"))
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let plan = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse)
         #expect(plan.patch == .planned(PatchRecallPlan(patch: Fix.keys, from: Fix.verse, to: Fix.chorus, changes: [
             PatchParameterChange(parameter: Fix.gain, from: Fix.value(-6, .decibels), to: Fix.value(0, .decibels)),
             PatchParameterChange(parameter: Fix.mix, from: Fix.value(0.5, .normalized), to: Fix.value(0, .normalized)),
             PatchParameterChange(parameter: Fix.mode, from: Fix.value(1, .index), to: Fix.value(3, .index))
         ])))
-        let toBase = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b1"))
+        let toBase = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b1"), active: verse)
         #expect(toBase.patch.planned?.from == Fix.verse && toBase.patch.planned?.to == nil)
         #expect(toBase.patch.planned?.changes.map(\.parameter) == [Fix.gain, Fix.mix])
-        let again = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a2"))
+        let again = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a2"), active: Fix.loaded(Fix.keys, Fix.chorus))
         #expect(again.patch == .planned(PatchRecallPlan(patch: Fix.keys, from: Fix.chorus, to: Fix.chorus,
                                                         changes: [])))
     }
 
     @Test
+    func theLoadedPatchNotTheSourceStopDecidesRecallOrStructuralReview() throws {
+        // A blocked keys → pad move leaves keys loaded while the cursor sits on a3; a3 → a3 is still structural.
+        let stuck = try Fix.plan(Fix.stop("e1", "a3"), Fix.stop("e1", "a3"), active: Fix.loaded(Fix.keys, Fix.chorus))
+        #expect(stuck.patch == .blocked(.requiresStructuralActivationReview(from: Fix.keys, to: Fix.pad)))
+        #expect(!stuck.isClear)
+        // keys stays loaded across b4 (no patch), so b4 → a2 is a same-patch recall, not a structural review.
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let viaNoPatch = try Fix.plan(Fix.stop("e2", "b4"), Fix.stop("e1", "a2"), active: verse)
+        let direct = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse)
+        #expect(viaNoPatch.patch == direct.patch && viaNoPatch.patch.planned != nil)
+        // Nothing loaded and a target with no patch: no patch change, nothing blocked.
+        let idle = try Fix.plan(nil, Fix.stop("e2", "b4"), active: nil)
+        #expect(idle.patch == .unlinked && idle.actionSet == .unlinked && idle.chart == .unlinked && idle.isClear)
+        // An active variation the patch no longer has is refused by the recall planner.
+        let goneSource = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"),
+                                      active: Fix.loaded(Fix.keys, Fix.goneVariation))
+        #expect(goneSource.patch == .blocked(.patchRecallRefused(Fix.keys, .unknownVariation(Fix.goneVariation))))
+    }
+
+    @Test
     func anotherPatchIsBlockedForStructuralActivationReview() throws {
-        let toPad = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a3"))
+        let toPad = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a3"), active: Fix.loaded(Fix.keys, Fix.chorus))
         #expect(toPad.patch == .blocked(.requiresStructuralActivationReview(from: Fix.keys, to: Fix.pad)))
         #expect(toPad.blocks.first?.isRecoverable == false)
-        let backToKeys = try Fix.plan(Fix.stop("e1", "a3"), Fix.stop("e2", "b1"))
+        let pad = Fix.loaded(Fix.pad)
+        let backToKeys = try Fix.plan(Fix.stop("e1", "a3"), Fix.stop("e2", "b1"), active: pad)
         #expect(backToKeys.patch == .blocked(.requiresStructuralActivationReview(from: Fix.pad, to: Fix.keys)))
-        let fromNothing = try Fix.plan(Fix.stop("e2", "b4"), Fix.stop("e1", "a1"))
+        // The structural review precedes the target's unknown variation (b3 links keys / var.gone).
+        let toBrokenVariation = try Fix.plan(Fix.stop("e1", "a3"), Fix.stop("e2", "b3"), active: pad)
+        #expect(toBrokenVariation.patch == .blocked(.requiresStructuralActivationReview(from: Fix.pad, to: Fix.keys)))
+        let fromNothing = try Fix.plan(Fix.stop("e2", "b4"), Fix.stop("e1", "a1"), active: nil)
         #expect(fromNothing.patch == .blocked(.requiresStructuralActivationReview(from: nil, to: Fix.keys)))
-        let firstStop = try Fix.plan(nil, Fix.stop("e1", "a1"))
+        let firstStop = try Fix.plan(nil, Fix.stop("e1", "a1"), active: nil)
         #expect(firstStop.from == nil)
         #expect(firstStop.patch == .blocked(.requiresStructuralActivationReview(from: nil, to: Fix.keys)))
-        let toNoPatch = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b4"))
+        let toNoPatch = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b4"), active: Fix.loaded(Fix.keys))
         #expect(toNoPatch.patch == .unlinked && toNoPatch.actionSet == .unlinked && toNoPatch.chart == .unlinked)
         #expect(toNoPatch.isClear)
     }
 
     @Test
     func unresolvedLinksAreRecoverableBlocks() throws {
-        let gone = try Fix.plan(Fix.stop("e2", "b1"), Fix.stop("e2", "b2"))
+        let keys = Fix.loaded(Fix.keys)
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let gone = try Fix.plan(Fix.stop("e2", "b1"), Fix.stop("e2", "b2"), active: keys)
         #expect(gone.blocks == [.unresolvedLink(.unknownPatch(Fix.gonePatch)),
                                 .unresolvedLink(.unknownActionSet(Fix.goneSet))])
         #expect(gone.blocks.allSatisfy(\.isRecoverable) && !gone.isClear)
-        let variation = try Fix.plan(Fix.stop("e2", "b1"), Fix.stop("e2", "b3"))
+        let variation = try Fix.plan(Fix.stop("e2", "b1"), Fix.stop("e2", "b3"), active: keys)
         #expect(variation.patch == .blocked(.unresolvedLink(.unknownVariation(Fix.keys, Fix.goneVariation))))
-        let noSource = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"),
-                                    context: Fix.context(patches: [Fix.pad]))
-        #expect(noSource.patch == .blocked(.unresolvedLink(.unknownPatch(Fix.keys))))
-        let refused = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"),
+        let refused = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse,
                                    context: Fix.context(keysWithChorus: false))
         #expect(refused.patch == .blocked(.patchRecallRefused(Fix.keys, .unknownVariation(Fix.chorus))))
         #expect(refused.patch.block?.isRecoverable == true)
-        let orphan = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b1"))
+        let orphan = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b1"), active: verse)
         #expect(orphan.actionSet == .blocked(.actionSetRefused(Fix.orphanSet, .unknownMember(Fix.missingAct))))
-        let noSets = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"),
+        #expect(orphan.actionSet.block?.isRecoverable == true)
+        // An unknown action set blocks only the action set step: the same-patch recall is still planned.
+        let goneSet = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b5"), active: verse)
+        #expect(goneSet.patch == .planned(PatchRecallPlan(patch: Fix.keys, from: Fix.verse, to: Fix.verse,
+                                                          changes: [])))
+        #expect(goneSet.actionSet == .blocked(.unresolvedLink(.unknownActionSet(Fix.goneSet))))
+    }
+
+    @Test
+    func missingCallerSourcesAreUnavailableNotUnresolvedLinks() throws {
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let noSource = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse,
+                                    context: Fix.context(patches: [Fix.pad]))
+        #expect(noSource.patch == .blocked(.recallSourceUnavailable(Fix.keys)))
+        #expect(noSource.patch.block?.isRecoverable == false)
+        let noSets = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse,
                                   context: Fix.context(actions: .some(nil)))
-        #expect(noSets.actionSet == .blocked(.actionSetRefused(Fix.coldSet, .unknownSet(Fix.coldSet))))
+        #expect(noSets.actionSet == .blocked(.actionSetSourceUnavailable(Fix.coldSet)))
+        #expect(noSets.actionSet.block?.isRecoverable == false)
         #expect(noSets.patch.planned != nil)
     }
 
     @Test
     func theActionSetIsArmedWithItsReadinessAndNeverRequiredToBeReady() throws {
-        let ready = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a1"))
+        let chorus = Fix.loaded(Fix.keys, Fix.chorus)
+        let ready = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a1"), active: chorus)
         let report = try #require(ready.actionSet.planned)
         #expect(report.set == Fix.readySet && report.isReady && report.notReady.isEmpty)
         #expect(report.members == [ActionSetMemberStatus(action: Fix.acts[0], state: .ready, reason: nil)])
-        let cold = try #require(try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2")).actionSet.planned)
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let toCold = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse)
+        let cold = try #require(toCold.actionSet.planned)
         #expect(cold.set == Fix.coldSet && cold.state == .preparing && !cold.isReady)
         #expect(cold.notReady == [ActionSetMemberStatus(action: Fix.acts[2], state: .preparing, reason: nil)])
         let staleSource = try Fix.actionSource(stale: [Fix.acts[0]: [Fix.source]])
-        let stale = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a1"),
+        let stale = try Fix.plan(Fix.stop("e1", "a2"), Fix.stop("e1", "a1"), active: chorus,
                                  context: Fix.context(actions: .some(staleSource)))
         #expect(stale.actionSet.planned?.notReady == [
             ActionSetMemberStatus(action: Fix.acts[0], state: .invalidated, reason: .sourceChanged,
@@ -234,14 +284,15 @@ struct ShowTransitionTests {
     func theTargetChartIsPlannedWhenAvailableAndBlockedWhenMissing() throws {
         let chart = try ChartReference.make(asset: Fix.chartAsset)
         let stale = try ChartReference.make(asset: Fix.staleAsset, page: 2)
-        #expect(try Fix.plan(nil, Fix.stop("e1", "a1")).chart == .planned(chart))
-        let fallback = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"))
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        #expect(try Fix.plan(nil, Fix.stop("e1", "a1"), active: nil).chart == .planned(chart))
+        let fallback = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse)
         #expect(fallback.chart == .blocked(.unresolvedLink(.chart(stale, .contentUnavailable))))
         #expect(fallback.blocks == [.unresolvedLink(.chart(stale, .contentUnavailable))] && !fallback.isClear)
         #expect(fallback.chart.block?.isRecoverable == true)
-        let songChart = try Fix.plan(Fix.stop("e2", "b4"), Fix.stop("e3"))
+        let songChart = try Fix.plan(Fix.stop("e2", "b4"), Fix.stop("e3"), active: nil)
         #expect(songChart.to.position.part == nil && songChart.chart == .planned(chart))
-        let order = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a3"))
+        let order = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a3"), active: verse)
         #expect(order.blocks == [.requiresStructuralActivationReview(from: Fix.keys, to: Fix.pad),
                                  .unresolvedLink(.chart(stale, .contentUnavailable))])
     }
@@ -252,15 +303,17 @@ struct ShowTransitionTests {
         let from = try Fix.stop("e1", "a1", in: library)
         let to = try Fix.stop("e1", "a2", in: library)
         let context = try Fix.context()
-        let plan = ShowTransitionPlanner.plan(from: from, to: to, in: context)
-        #expect(ShowTransitionPlanner.plan(from: from, to: to, in: context) == plan)
-        #expect(try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2")) == plan)
+        let verse = Fix.loaded(Fix.keys, Fix.verse)
+        let plan = ShowTransitionPlanner.plan(from: from, to: to, active: verse, in: context)
+        #expect(ShowTransitionPlanner.plan(from: from, to: to, active: verse, in: context) == plan)
+        #expect(try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e1", "a2"), active: verse) == plan)
         #expect(plan.from == ShowStopReference(from) && plan.to == ShowStopReference(to))
         #expect(plan.from?.position == ShowPosition(setlist: Fix.main, entry: SetlistEntryID(rawValue: "e1")!,
                                                     part: SongPartID(rawValue: "a1")!))
         #expect(plan.to.song == Fix.songA)
         let reordered = try Fix.library(entries: ["e3", "e2", "e1"])
-        #expect(try Fix.plan(Fix.stop("e1", "a1", in: reordered), Fix.stop("e1", "a2", in: reordered)) == plan)
+        #expect(try Fix.plan(Fix.stop("e1", "a1", in: reordered), Fix.stop("e1", "a2", in: reordered),
+                              active: verse) == plan)
 
         var cursor = try ShowCursor.make(setlist: Fix.main, bounceTicks: 0, sources: [Fix.foot], in: library)
         let catalog = try Fix.catalog()
@@ -270,7 +323,7 @@ struct ShowTransitionTests {
             Issue.record("not moved")
             return
         }
-        #expect(ShowTransitionPlanner.plan(from: first, to: moved, in: context) == plan)
+        #expect(ShowTransitionPlanner.plan(from: first, to: moved, active: verse, in: context) == plan)
         #expect(try cursor.navigate(next, in: library, catalog: catalog) == .ignored(.duplicateSequence(1)))
         let jump = ShowNavigationInput(.jump(SetlistEntryID(rawValue: "e1")!, SongPartID(rawValue: "a2")!),
                                        source: Fix.foot, sequence: 2, tick: 1)
@@ -278,7 +331,7 @@ struct ShowTransitionTests {
             Issue.record("not moved")
             return
         }
-        #expect(ShowTransitionPlanner.plan(from: first, to: repeated, in: context) == plan)
+        #expect(ShowTransitionPlanner.plan(from: first, to: repeated, active: verse, in: context) == plan)
     }
 
     @Test
@@ -288,7 +341,7 @@ struct ShowTransitionTests {
         let from = try Fix.stop("e1", "a1")
         let to = try Fix.stop("e1", "a2")
         let keys = try #require(context.patchSource(Fix.keys))
-        let plan = ShowTransitionPlanner.plan(from: from, to: to, in: context)
+        let plan = ShowTransitionPlanner.plan(from: from, to: to, active: Fix.loaded(Fix.keys, Fix.verse), in: context)
         #expect(plan.patch.planned?.changes.isEmpty == false && plan.actionSet.planned != nil)
         #expect(try from == Fix.stop("e1", "a1") && to == Fix.stop("e1", "a2"))
         let after = try #require(context.actionSets)
