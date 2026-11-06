@@ -265,8 +265,12 @@ targets:
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
       - path: FluxKlangTests/ShowTransitionTests.swift
+      - path: FluxKlangTests/ShowFootInputTests.swift
+      - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
@@ -275,6 +279,8 @@ targets:
       - path: FluxKlangTests/UMPTranslationTests.swift
       - path: FluxKlangTests/UMPTranslationTests+State.swift
       - path: FluxKlangTests/UMPTranslationTests+DataEntry.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+Property.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
