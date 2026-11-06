@@ -234,6 +234,10 @@ struct StandardMIDIFileReaderTests {
         let stray = try read([0x00, 0x80, 0x3C, 0x40, 0x00, 0x90, 0x3C, 0x64, 0x10, 0x80, 0x3C, 0x40])
         #expect(stray.clip.items == [Clip.note(0, 256)])
         #expect((stray.report.ignoredZeroLengthNotes, stray.report.ignoredNoteOffs) == (0, 1))
+        // The Note On's cursor passes that Note Off: one pairing step.
+        let strayFile = SMF.file(chunks: [SMF.track([0x00, 0x80, 0x3C, 0x40, 0x00, 0x90, 0x3C, 0x64, 0x10, 0x80,
+                                                     0x3C, 0x40])])
+        #expect(try StandardMIDIFile.readCountingPairingSteps(strayFile).pairingSteps == 1)
         // Two Note Ons and one later Note Off at one tick: the first On pairs, the second sounds until tick 16.
         let twice = try read([0x00, 0x90, 0x3C, 0x64, 0x00, 0x90, 0x3C, 0x50, 0x00, 0x80, 0x3C, 0x40,
                               0x01, 0x80, 0x3C, 0x40])
@@ -248,18 +252,22 @@ struct StandardMIDIFileReaderTests {
     }
 
     @Test
-    func theLargestTickOfZeroLengthNotesReadsInLinearTime() throws {
-        // 32,767 zero-length notes of one key at tick 0, then End of Track at tick 1: 65,535 events, the most the
-        // standard limits allow with End of Track. Pairing is linear, so this completes; it was quadratic.
+    func theLargestTickOfZeroLengthNotesPairsInLinearSteps() throws {
+        // The largest single tick the standard limits allow: 32,767 zero-length notes of one key at tick 0 and End
+        // of Track at tick 1 (65,535 events; one more pair exceeds the event limit). Pins the exact counts, and that
+        // pairing takes one step per Note Off (each On takes the next pending Off), not a scan from the start.
         let pair: [UInt8] = [0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40]
         func file(pairs: Int) -> [UInt8] {
             SMF.file(chunks: [SMF.track(Array([[UInt8]](repeating: pair, count: pairs).joined()), endDelta: [0x01])])
         }
         let bytes = file(pairs: 32_767)
         #expect(bytes.count == 262_162)
-        let read = try StandardMIDIFile.read(bytes)
+        let (read, steps) = try StandardMIDIFile.readCountingPairingSteps(bytes)
         #expect(read.clip == (try MIDIClip.make(lengthTicks: 16, items: [])))
         #expect((read.report.ignoredZeroLengthNotes, read.report.ignoredNoteOffs) == (32_767, 0))
+        #expect(steps == 32_767)
+        #expect(steps <= 2 * 32_767)
+        #expect(try StandardMIDIFile.read(bytes) == read)
         #expect(SMF.refusal(file(pairs: 32_768)) == .tooManyEvents(limit: 65_536))
     }
 

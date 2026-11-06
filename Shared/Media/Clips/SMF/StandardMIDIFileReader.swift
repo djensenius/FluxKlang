@@ -39,6 +39,13 @@ extension StandardMIDIFile {
     /// chunks than declared), the track count found, each track's events in order, then note pairing in merged
     /// order, then `MIDIClip.make`.
     static func read(_ bytes: [UInt8], limits: SMFReadLimits = .standard) throws(SMFRefusal) -> SMFReadResult {
+        try readCountingPairingSteps(bytes, limits: limits).result
+    }
+
+    /// `read(_:limits:)`, with the zero-length pairing work it did: one step per pending Note Off a Note On's
+    /// cursor passes or takes. Tests use it to pin linear pairing; it is built only from this read's own state.
+    static func readCountingPairingSteps(_ bytes: [UInt8], limits: SMFReadLimits = .standard)
+        throws(SMFRefusal) -> (result: SMFReadResult, pairingSteps: Int) {
         guard bytes.count <= limits.maximumFileBytes else {
             throw .fileTooLarge(bytes: bytes.count, limit: limits.maximumFileBytes)
         }
@@ -88,7 +95,7 @@ extension StandardMIDIFile {
                                    ignoredNoteOffs: builder.ignoredNoteOffs,
                                    ignoredZeroLengthNotes: builder.ignoredZeroLengthNotes,
                                    ignoredEventsAtEnd: builder.ignoredEventsAtEnd)
-        return SMFReadResult(clip: clip, report: report)
+        return (SMFReadResult(clip: clip, report: report), builder.pairingSteps)
     }
 
     /// One channel message of the merged tracks, in clip ticks.
@@ -168,7 +175,7 @@ extension StandardMIDIFile {
     ///   note at the same tick that comes earlier in the file, by track index and then position (so across tracks
     ///   the On's track must be lower). Note Offs sort first within a tick, so such an Off waits, pending, until
     ///   the tick ends; each On takes the earliest pending Off after it in the file. Neither becomes a note.
-///   Ons reach a tick in file order, so a cursor per channel and note passes or takes each Off once: linear time.
+    ///   Ons reach a tick in file order, so a cursor per channel and note passes or takes each Off once; linear.
     /// - a Note Off still pending when the tick ends: nothing was sounding (`ignoredNoteOffs`);
     /// - a non-note event at or after the clip length, which a clip cannot hold (`ignoredEventsAtEnd`).
     /// A Note Off never extends a note: it closes only a note sounding from an earlier tick.
@@ -178,6 +185,8 @@ extension StandardMIDIFile {
         private(set) var ignoredNoteOffs = 0
         private(set) var ignoredZeroLengthNotes = 0
         private(set) var ignoredEventsAtEnd = 0
+        /// Pending Note Offs passed or taken by a Note On's cursor: at most one step per Note Off.
+        private(set) var pairingSteps = 0
         /// The item index of each sounding note, by channel and note.
         private var sounding: [UInt16: Int] = [:]
         /// Note Offs at `pendingTicks` that found nothing sounding, by channel and note.
@@ -249,9 +258,11 @@ extension StandardMIDIFile {
             while offs.next < offs.places.count,
                   !((offs.places[offs.next].track, offs.places[offs.next].position) > (event.track, event.position)) {
                 offs.next += 1
+                pairingSteps += 1
             }
             guard offs.next < offs.places.count else { return false }
             offs.next += 1
+            pairingSteps += 1
             unpaired -= 1
             return true
         }
