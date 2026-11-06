@@ -257,6 +257,17 @@ struct ShowTransitionTests {
         #expect(noSets.actionSet == .blocked(.actionSetSourceUnavailable(Fix.coldSet)))
         #expect(noSets.actionSet.block?.isRecoverable == false)
         #expect(noSets.patch.planned != nil)
+        // A missing source is reported only after the link and structural checks that precede it.
+        let padOnly = try Fix.context(patches: [Fix.pad])
+        let brokenVariation = try Fix.plan(Fix.stop("e2", "b1"), Fix.stop("e2", "b3"), active: Fix.loaded(Fix.keys),
+                                           context: padOnly)
+        #expect(brokenVariation.patch == .blocked(.unresolvedLink(.unknownVariation(Fix.keys, Fix.goneVariation))))
+        let structural = try Fix.plan(Fix.stop("e1", "a3"), Fix.stop("e1", "a1"), active: Fix.loaded(Fix.pad),
+                                      context: padOnly)
+        #expect(structural.patch == .blocked(.requiresStructuralActivationReview(from: Fix.pad, to: Fix.keys)))
+        let goneSet = try Fix.plan(Fix.stop("e1", "a1"), Fix.stop("e2", "b5"), active: verse,
+                                   context: Fix.context(actions: .some(nil)))
+        #expect(goneSet.actionSet == .blocked(.unresolvedLink(.unknownActionSet(Fix.goneSet))))
     }
 
     @Test

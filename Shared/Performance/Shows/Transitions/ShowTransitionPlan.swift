@@ -29,6 +29,8 @@ enum ShowTransitionBlock: Equatable, Sendable {
     /// A target link that does not resolve, in the show's own vocabulary. Kept, reported and fixed by relinking.
     case unresolvedLink(ShowLinkProblem)
     /// `PatchRecallPlanner` refused the same-patch recall, including an active variation the patch no longer has.
+    /// Such a stale active variation (the caller's loaded state drifted from the project) is told apart from a
+    /// refused target variation only by the ID it carries; relinking the show does not fix it, the caller must reload.
     case patchRecallRefused(PatchID, PatchVariationError)
     /// The linked action set did not resolve against the project's actions.
     case actionSetRefused(ActionSetID, ActionSetRefusal)
