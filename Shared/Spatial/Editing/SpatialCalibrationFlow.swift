@@ -6,7 +6,8 @@
 //  "Calibration"). It produces no tone and has no clock: route status,
 //  elapsed time and measured results are injected events, so UI frames never
 //  clock anything. Results are staged as a pending calibration set, labelled
-//  relative and uncalibrated, and are only applied by an explicit commit.
+//  relative and uncalibrated, and are only applied by an explicit commit. The
+//  set changes only the measured speakers; untested ones keep their entries.
 //
 
 /// The flow's phase, without payloads.
@@ -56,6 +57,7 @@ enum SpatialCalibrationEvent: Hashable, Sendable {
     /// Injected measured trims and delays, one per planned output, once the
     /// injected elapsed time has reached the plan's total.
     case complete([SpeakerCalibration])
+    /// Stages the results as a draft that changes only the measured speakers.
     case stageResults
     case discardResults
     case acknowledgeStop
@@ -153,7 +155,11 @@ struct SpatialCalibrationResults: Hashable, Sendable {
 }
 
 /// Results staged as the pending calibration set, exactly one generation after
-/// the applied set. It changes nothing until committed.
+/// the applied set. It changes nothing until committed. Measured speakers get
+/// their results as given (no normalisation to a reference); every other
+/// applied entry is carried through unchanged, so calibrating some speakers
+/// never resets or drops another's trim and delay. Staging is refused, not
+/// trimmed, if the merged set would exceed `SpatialCalibrationSet.maximumEntries`.
 struct SpatialCalibrationDraft: Hashable, Sendable {
     let plan: SpatialCalibrationPlan
     let set: SpatialCalibrationSet
@@ -428,9 +434,13 @@ struct SpatialCalibrationFlow: Hashable, Sendable {
             let current = stage.applied.generation
             let (generation, overflow) = current.addingReportingOverflow(1)
             guard !overflow else { throw .calibration(.invalidGeneration(current)) }
+            // Only the measured speakers change: every other applied entry is
+            // carried through as is, so a partial plan never resets a speaker.
+            let measured = Set(results.entries.map(\.speaker))
+            let untested = stage.applied.entries.filter { !measured.contains($0.speaker) }
             let set: SpatialCalibrationSet
             do {
-                set = try SpatialCalibrationSet(generation: generation, entries: results.entries)
+                set = try SpatialCalibrationSet(generation: generation, entries: results.entries + untested)
                 try stage.stage(set)
             } catch {
                 throw .calibration(error)

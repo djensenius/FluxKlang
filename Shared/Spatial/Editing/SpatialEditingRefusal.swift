@@ -66,7 +66,8 @@ enum SpatialCalibrationRefusal: Error, Equatable, Sendable {
     case unplannedResult(SpeakerID)
     /// A planned output has no result.
     case missingResult(SpeakerID)
-    /// Building or staging the calibration set was refused.
+    /// Building or staging the calibration set was refused, for example when
+    /// the measured and carried entries would exceed `SpatialCalibrationSet.maximumEntries`.
     case calibration(SpatialRenderError)
     /// The draft to commit is not the one this flow staged.
     case draftMismatch

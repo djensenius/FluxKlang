@@ -209,6 +209,35 @@ struct SpatialCalibrationFlowTests {
         #expect(below.pending?.generation == Int.max)
     }
 
+    /// Calibrating some speakers changes only those (Copilot r2): every other
+    /// applied entry, including one for a speaker no plan can test, is staged
+    /// and committed exactly, never reset to 0 dB and no delay or dropped.
+    @Test func stagingKeepsEveryUntestedSpeakersTrimAndDelay() throws {
+        func entry(_ raw: String, _ trim: Double, _ delay: Double) throws -> SpeakerCalibration {
+            try SpeakerCalibration(speaker: Fixture.speaker(raw), trimDecibels: trim, delaySeconds: delay)
+        }
+        let untested = try [entry("spk.rr", -3.5, 0.0125), entry("spk.c", -6, 0.002)]
+        let applied = try SpatialCalibrationSet(generation: 2, entries: [entry("spk.fl", -9, 0.004)] + untested)
+        var flow = try Fixture.flow(in: .results, applied: applied, plan: Fixture.plan(outputs: ["spk.fr", "spk.fl"]))
+        let measured = try #require(Fixture.results(of: flow)).entries
+        try flow.handle(.stageResults)
+        let draft = try #require(Fixture.draft(of: flow))
+        #expect(draft.set == (try SpatialCalibrationSet(generation: 3, entries: measured + untested)))
+        try flow.handle(.commitDraft(expected: draft))
+        #expect(flow.applied == draft.set)
+        for kept in untested { #expect(flow.applied.entry(for: kept.speaker) == kept, "\(kept.speaker)") }
+        // A full plan replaces every planned entry; only the speaker no plan can test is carried.
+        let full = try Fixture.flow(in: .draft, applied: flow.applied)
+        #expect(full.pending == (try SpatialCalibrationSet(generation: 4, entries: Fixture.entries() + [untested[1]])))
+        // Nothing is dropped to fit: a merged set over 64 entries is refused and changes nothing.
+        let others = try (0..<61).map { try entry("spk.n" + String($0), -1, 0) }
+        var crowded = try Fixture.flow(in: .results, applied: SpatialCalibrationSet(entries: others))
+        Fixture.expectRefusal(&crowded, .stageResults, .calibration(.tooManyCalibrationEntries(65)))
+        var fits = try Fixture.flow(in: .results, applied: SpatialCalibrationSet(entries: Array(others.dropLast())))
+        try fits.handle(.stageResults)
+        #expect(fits.pending?.entries.count == 64)
+    }
+
     @Test func resultsMustCoverExactlyThePlannedOutputs() throws {
         let plan = try Fixture.plan(outputs: ["spk.rr", "spk.fl", "spk.rl", "spk.fr"])
         var flow = try Fixture.flow(in: .running, plan: plan)

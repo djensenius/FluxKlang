@@ -174,7 +174,10 @@ received in Results, Stopped or Draft, with no route confirmation after it.
   leaving lands in Planned with the newly confirmed plan. Only one confirmation follows a loss: a second
   confirmation, or one without a loss, is refused as an illegal transition until another `routeLost` arrives.
 - Results are staged as a pending calibration set at the applied generation + 1. Only an explicit commit
-  applies them.
+  applies them. The set changes only the speakers the plan measured: each gets its result as given (the flow does
+  not normalise results to a reference), and every other applied trim and delay is carried through exactly, so
+  calibrating some speakers never resets the others to 0 dB and no delay. If the measured and carried entries
+  would exceed 64, staging is refused (`calibration(.tooManyCalibrationEntries)`) rather than dropping any.
 - Provisional policy: the maximum test level is −60…−6 dBFS and each output plays for 0.25…10 s, both
   inclusive, with at most 64 outputs. The longest run is 64 × 10 s ≈ 10.7 minutes.
 - Results are labelled **relative, uncalibrated**. There are no SPL or "room corrected" claims without a measured reference.
