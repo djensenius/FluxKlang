@@ -301,6 +301,9 @@ targets:
       - path: FluxKlangTests/MIDIClockTempoTests.swift
       - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
       - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
