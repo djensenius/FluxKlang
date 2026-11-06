@@ -113,7 +113,10 @@ struct WiringDestinationList: Hashable, Sendable {
     ///   `unknownPort(nod.keys/nope)`, `classify` to `nod.legacy/in` throws
     ///   `endpointUncheckable(nod.legacy)` and to any other port `unknownPort(nod.keys/nope)`.
     /// - At the edge bound the list refuses `.bounds($.edges)`, while `classify` still classifies a pair
-    ///   that is already wired (normally `existing`; `notOffered` or `notRoutable` when they outrank it).
+    ///   that is already wired (normally `existing`; `notOffered` or `notRoutable` when they outrank it),
+    ///   and refuses a destination port the contract cannot resolve on a routable node (for example one
+    ///   declared only on a later node that reuses an existing node ID) with `unknownPort(destination)`,
+    ///   wired or not.
     static func make(
         from source: PortAddress, in graph: GraphDocument
     ) throws(WiringPreviewRefusal) -> WiringDestinationList {

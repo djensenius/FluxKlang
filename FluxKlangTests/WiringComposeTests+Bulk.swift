@@ -184,9 +184,9 @@ extension WiringDestinationListTests {
 
     /// When the list is refused with `refusal`, `classify` throws exactly the expected refusal for every
     /// destination. That is `refusal` itself, except for the destination-side deviation documented on
-    /// `WiringDestinationList.make`: on a graph the baseline does not refuse, `classify` names the first
-    /// node of the pair that the baseline reports uncheckable. (The edge-bound deviation is covered by
-    /// `atTheEdgeBoundTheListIsRefusedAsAWhole`.)
+    /// `WiringDestinationList.make`: on a graph the baseline does not refuse, `classify` names the node of
+    /// the pair that comes first, in baseline error order, among those the baseline reports uncheckable.
+    /// (The edge-bound deviation is covered by `atTheEdgeBoundTheListIsRefusedAsAWhole`.)
     static func expectRefusedAsClassifyDoes(
         _ refusal: WiringPreviewRefusal, source: PortAddress, destinations: Set<PortAddress>, in graph: GraphDocument,
         sourceLocation: SourceLocation
