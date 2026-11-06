@@ -70,7 +70,8 @@ struct StandardMIDIFileTests {
         let read = try StandardMIDIFile.read(result.bytes)
         #expect(read.clip == clip)
         #expect(read.report == SMFReadReport(format: 0, division: 15_360, tracks: 1, ignoredMeta: [:],
-                                             unknownChunks: 0, ignoredHeaderBytes: 0))
+                                             unknownChunks: 0, ignoredHeaderBytes: 0, ignoredSysEx: [:],
+                                             ignoredControllers: [:], ignoredNoteOffs: 0))
     }
 
     @Test

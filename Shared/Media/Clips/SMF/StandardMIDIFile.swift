@@ -10,7 +10,10 @@
 //  - Tempo is never written: clip ticks are musical. The reader skips tempo,
 //    time and key signature and every other meta event, counting each by kind in
 //    `SMFReadReport`; none is converted. A caller-supplied tempo map is a follow-up.
-//  - SysEx is refused on read: a clip holds channel-voice messages only.
+//  - SysEx is skipped on read and counted by kind in `SMFReadReport`: a clip
+//    holds channel-voice messages only.
+//  - Sustain, sostenuto, hold 2 and channel mode controllers, which a clip
+//    refuses, are skipped on read and counted by controller number.
 //  - UMP capture export (media-contract.md §9.2), MIDI Clip File and playback
 //    scheduling are out of scope.
 //
@@ -72,7 +75,7 @@ struct SMFReadLimits: Equatable, Sendable {
     var maximumFileBytes = 4 << 20
     /// The most MTrk chunks a header may declare.
     var maximumTracks = 64
-    /// The most events, meta and End of Track included, across all tracks.
+    /// The most events, meta, SysEx and End of Track included, across all tracks.
     var maximumEvents = 65_536
 
     /// 4 MiB, 64 tracks and 65,536 events: room for a full clip (`MIDIClip.maximumItems` notes are 32,768 events).

@@ -86,6 +86,15 @@ enum SMFMetaKind: Hashable, Sendable {
     }
 }
 
+/// A SysEx event the reader skips: a clip holds channel-voice messages only. Read report only; not a §9.3 export
+/// loss category.
+enum SMFSysExKind: Hashable, Sendable {
+    /// F0: a complete SysEx message, or the first packet of a divided one.
+    case message
+    /// F7: an escape (arbitrary bytes) or a continuation packet of a divided SysEx message.
+    case escape
+}
+
 /// Everything a read kept out of the clip, counted by type. Nothing is skipped without a count here.
 struct SMFReadReport: Equatable, Sendable {
     /// The header format, 0 or 1.
@@ -100,6 +109,14 @@ struct SMFReadReport: Equatable, Sendable {
     let unknownChunks: Int
     /// Header bytes past the six this version reads, skipped.
     let ignoredHeaderBytes: Int
+    /// SysEx events skipped, by kind. Each still counts toward `SMFReadLimits.maximumEvents` and its delta time
+    /// still moves the track's time.
+    let ignoredSysEx: [SMFSysExKind: Int]
+    /// Control Changes skipped, keyed by controller number: the ones `MIDIClip.make` refuses, sustain (64),
+    /// sostenuto (66), hold 2 (69) and the channel mode messages (120...127). Sustain is dropped on import.
+    let ignoredControllers: [UInt8: Int]
+    /// Note Offs (or Note Ons with velocity 0) skipped because their channel and note were not sounding.
+    let ignoredNoteOffs: Int
 }
 
 /// A clip read from Standard MIDI File bytes, with what the read skipped.

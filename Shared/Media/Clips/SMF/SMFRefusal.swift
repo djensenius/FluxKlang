@@ -4,14 +4,17 @@
 //
 //  Typed refusals of the Standard MIDI File reader (#112 CL2). A refused read
 //  returns no clip and no report. `offset` is a byte offset into the file and
-//  `track` a zero-based index among the file's MTrk chunks.
+//  `track` a zero-based index among the file's MTrk chunks. SysEx events,
+//  refused controllers and stray Note Offs are not refusals: the reader skips
+//  and counts them in `SMFReadReport`.
 //
 
 /// Why Standard MIDI File bytes are not read into a `MIDIClip`.
 enum SMFRefusal: Error, Equatable, Sendable {
     /// The file holds more than `limit` bytes (`SMFReadLimits.maximumFileBytes`).
     case fileTooLarge(bytes: Int, limit: Int)
-    /// The data ends inside a chunk header, a variable-length quantity or an event that starts at `offset`.
+    /// The data ends inside a chunk header, a variable-length quantity or an event (a SysEx event included) that
+    /// starts at `offset`. Fewer than 8 bytes after the last chunk are refused this way, never ignored.
     case truncated(offset: Int)
     /// The file does not start with an `MThd` chunk of at least 6 bytes.
     case missingHeader
@@ -25,11 +28,12 @@ enum SMFRefusal: Error, Equatable, Sendable {
     case unsupportedDivision(UInt16)
     /// The header declares no tracks, more than `limit` tracks, or more than one track in format 0.
     case trackCountOutOfRange(declared: UInt16, limit: Int)
-    /// The header declares `declared` tracks but the file holds `found` MTrk chunks.
+    /// The header declares `declared` tracks but the file holds `found` MTrk chunks. More chunks than declared are
+    /// refused at the first extra one, before the rest of the file is scanned.
     case trackCountMismatch(declared: UInt16, found: Int)
     /// A variable-length quantity at `offset` runs past four bytes (values above 0x0FFFFFFF).
     case overlongQuantity(offset: Int)
-    /// The file holds more than `limit` events (`SMFReadLimits.maximumEvents`), meta events included.
+    /// The file holds more than `limit` events (`SMFReadLimits.maximumEvents`), meta and SysEx events included.
     case tooManyEvents(limit: Int)
     /// An event's time, in clip ticks, is past `MIDIClip.maximumLengthTicks`.
     case timeBeyondLimit(track: Int, ticks: Int64)
@@ -40,8 +44,6 @@ enum SMFRefusal: Error, Equatable, Sendable {
     case invalidStatus(track: Int, offset: Int, status: UInt8)
     /// The channel message whose data starts at `offset` has a data byte of 0x80 or above.
     case invalidDataByte(track: Int, offset: Int)
-    /// A SysEx event (F0 or F7): `MIDIClip` holds channel-voice messages only.
-    case sysExNotRepresentable(track: Int, ticks: Int64)
     /// The End of Track meta event at `offset` has a nonzero length.
     case malformedEndOfTrack(track: Int, offset: Int)
     /// Bytes follow the End of Track meta event of `track`, starting at `offset`.
@@ -51,11 +53,10 @@ enum SMFRefusal: Error, Equatable, Sendable {
     /// A Note On for a channel and note that is already sounding, in merged order; a clip note cannot overlap
     /// another of the same channel and note.
     case noteOnWhileSounding(track: Int, ticks: Int64, channel: UInt8, note: UInt8)
-    /// A Note Off (or Note On with velocity 0) for a channel and note that is not sounding.
-    case noteOffWithoutNoteOn(track: Int, ticks: Int64, channel: UInt8, note: UInt8)
     /// A note is still sounding at the end of the file; `startTicks` is its Note On time in clip ticks. The note
     /// reported is the earliest such in read order.
     case noteNotReleased(channel: UInt8, note: UInt8, startTicks: Int64)
-    /// `MIDIClip.make` refused the clip the file describes; item indexes are in read order.
+    /// `MIDIClip.make` refused the clip the file describes; item indexes are in read order, skipped events
+    /// excluded.
     case clip(MIDIClipRefusal)
 }

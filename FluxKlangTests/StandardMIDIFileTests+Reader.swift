@@ -65,7 +65,8 @@ struct StandardMIDIFileReaderTests {
         let read = try StandardMIDIFile.read(bytes)
         #expect(read.clip == (try MIDIClip.make(lengthTicks: 16, items: [Clip.note(0, 16)])))
         #expect(read.report == SMFReadReport(format: 0, division: 960, tracks: 1, ignoredMeta: [:],
-                                             unknownChunks: 2, ignoredHeaderBytes: 2))
+                                             unknownChunks: 2, ignoredHeaderBytes: 2, ignoredSysEx: [:],
+                                             ignoredControllers: [:], ignoredNoteOffs: 0))
     }
 
     @Test
@@ -125,8 +126,6 @@ struct StandardMIDIFileReaderTests {
         func refusal(_ events: [UInt8], endDelta: [UInt8] = [0x00]) -> SMFRefusal? {
             SMF.refusal(SMF.file(chunks: [SMF.track(events, endDelta: endDelta)]))
         }
-        #expect(refusal([0x00, 0xF0, 0x02, 0x7E, 0xF7]) == .sysExNotRepresentable(track: 0, ticks: 0))
-        #expect(refusal([0x01, 0xF7, 0x01, 0xF8]) == .sysExNotRepresentable(track: 0, ticks: 16))
         #expect(refusal([0x00, 0xF1, 0x00]) == .invalidStatus(track: 0, offset: 23, status: 0xF1))
         #expect(refusal([0x00, 0xFE]) == .invalidStatus(track: 0, offset: 23, status: 0xFE))
         #expect(refusal([0x00, 0x90, 0x3C, 0x80]) == .invalidDataByte(track: 0, offset: 24))
@@ -151,7 +150,6 @@ struct StandardMIDIFileReaderTests {
         }
         #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x01, 0x90, 0x3C, 0x64]) ==
             .noteOnWhileSounding(track: 0, ticks: 16, channel: 1, note: 60))
-        #expect(refusal([0x02, 0x83, 0x3C, 0x40]) == .noteOffWithoutNoteOn(track: 0, ticks: 32, channel: 4, note: 60))
         #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0x90, 0x3D, 0x64, 0x01, 0x80, 0x3C, 0x40, 0x00, 0x91, 0x3D,
                          0x64, 0x01, 0x81, 0x3D, 0x40]) == .noteNotReleased(channel: 1, note: 61, startTicks: 0))
         #expect(refusal([0x05, 0x9F, 0x7F, 0x01]) == .noteNotReleased(channel: 16, note: 127, startTicks: 80))
@@ -165,10 +163,6 @@ struct StandardMIDIFileReaderTests {
             SMF.refusal(SMF.file(chunks: [SMF.track(events, endDelta: endDelta)]))
         }
         #expect(refusal([], endDelta: [0x00]) == .clip(.lengthOutOfRange(0)))
-        #expect(refusal([0x00, 0xB0, 0x40, 0x7F]) == .clip(.unsupportedMessage(item: 0)))
-        #expect(refusal([0x00, 0xB0, 0x07, 0x7F, 0x00, 0xB0, 0x7B, 0x00]) == .clip(.unsupportedMessage(item: 1)))
-        #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40]) ==
-            .clip(.invalidNoteSpan(item: 0, startTicks: 0, endTicks: 0)))
         #expect(refusal([0x01, 0xC0, 0x05], endDelta: [0x00]) == .clip(.eventOutsideClip(item: 0, ticks: 16)))
         let many = [UInt8]((0...MIDIClip.maximumItems).map { _ in [UInt8(0x00), 0xC0, 0x05] }.joined())
         #expect(refusal(many) == .clip(.tooManyItems(count: MIDIClip.maximumItems + 1, limit: MIDIClip.maximumItems)))
@@ -188,16 +182,115 @@ struct StandardMIDIFileReaderTests {
         #expect(read.clip == expected)
         #expect(read.report == SMFReadReport(format: 1, division: 960, tracks: 3,
                                              ignoredMeta: [.tempo: 1, .text: 1], unknownChunks: 0,
-                                             ignoredHeaderBytes: 0))
+                                             ignoredHeaderBytes: 0, ignoredSysEx: [:], ignoredControllers: [:],
+                                             ignoredNoteOffs: 0))
         let swapped = try StandardMIDIFile.read(SMF.file(format: 1, tracks: 3, chunks: [tempo, second, first]))
         #expect(swapped.clip.items.map { if case .event(_, let message) = $0 { "\(message)" } else { "note" } } ==
             ["note", "\(MIDI1Semantic.controlChange(channel: 1, controller: 7, value: 2))",
              "\(MIDI1Semantic.controlChange(channel: 1, controller: 7, value: 1))"])
-        // A later track's Note On cannot start a note that an earlier track releases at the same tick.
+        // An earlier track's Note On at the tick a later track releases the same note: the Note Off comes first,
+        // in either track order, so the note retriggers.
         let retrigger = SMF.track([0x01, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40])
         let release = SMF.track([0x00, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40])
-        #expect(SMF.refusal(SMF.file(format: 1, tracks: 2, chunks: [retrigger, release])) ==
-            .noteOnWhileSounding(track: 0, ticks: 16, channel: 1, note: 60))
-        #expect(SMF.refusal(SMF.file(format: 1, tracks: 2, chunks: [release, retrigger])) == nil)
+        for chunks in [[retrigger, release], [release, retrigger]] {
+            let notes = try StandardMIDIFile.read(SMF.file(format: 1, tracks: 2, chunks: chunks))
+            #expect(notes.clip.items == [Clip.note(0, 16), Clip.note(16, 32)])
+            #expect(notes.report.ignoredNoteOffs == 0)
+        }
+    }
+
+    @Test
+    func atOneTickNoteOffsComeBeforeOtherMessages() throws {
+        // A retrigger written Note On first: at tick 16 the new note's On precedes the old note's Off.
+        let events: [UInt8] = [0x00, 0x90, 0x3C, 0x64, 0x01, 0x90, 0x3C, 0x50, 0x00, 0x80, 0x3C, 0x20,
+                               0x01, 0x80, 0x3C, 0x40]
+        let read = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
+        #expect(read.clip.items == [Clip.note(0, 16, release: 0x20), Clip.note(16, 32, velocity: 0x50)])
+        #expect(read.report.ignoredNoteOffs == 0)
+        // A zero-length note: its Note Off sorts first with nothing sounding, so its Note On is never released.
+        #expect(SMF.refusal(SMF.file(chunks: [SMF.track([0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40])])) ==
+            .noteNotReleased(channel: 1, note: 60, startTicks: 0))
+    }
+
+    @Test
+    func strayNoteOffsAreSkippedAndCounted() throws {
+        // A Note Off with nothing sounding, one repeated after its note ends, and a velocity-0 Note On.
+        let events: [UInt8] = [0x02, 0x83, 0x3C, 0x40, 0x00, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40,
+                               0x00, 0x3C, 0x40, 0x00, 0x90, 0x3E, 0x00]
+        let read = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
+        #expect(read.clip == (try MIDIClip.make(lengthTicks: 48, items: [Clip.note(32, 48)])))
+        #expect(read.report.ignoredNoteOffs == 3)
+    }
+
+    @Test
+    func sysExIsSkippedAndCountedByKind() throws {
+        let gmReset: [UInt8] = [0x00, 0xF0, 0x05, 0x7E, 0x7F, 0x09, 0x01, 0xF7]
+        let gsReset: [UInt8] = [0x00, 0xF0, 0x0A, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7]
+        let note: [UInt8] = [0x00, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40]
+        let resets = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(gmReset + gsReset + note)]))
+        #expect(resets.clip == (try MIDIClip.make(lengthTicks: 16, items: [Clip.note(0, 16)])))
+        #expect(resets.report == SMFReadReport(format: 0, division: 960, tracks: 1, ignoredMeta: [:],
+                                               unknownChunks: 0, ignoredHeaderBytes: 0,
+                                               ignoredSysEx: [.message: 2], ignoredControllers: [:],
+                                               ignoredNoteOffs: 0))
+        // An escape's delta time still moves the track: the note starts one file tick (16 clip ticks) later.
+        let escape = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track([0x01, 0xF7, 0x01, 0xF8] + note)]))
+        #expect(escape.clip == (try MIDIClip.make(lengthTicks: 32, items: [Clip.note(16, 32)])))
+        #expect(escape.report.ignoredSysEx == [.escape: 1])
+        // A divided message (F0 without a final F7, then F7 continuation packets), then empty F0 and F7 events.
+        let divided: [UInt8] = [0x00, 0xF0, 0x03, 0x43, 0x12, 0x00, 0x01, 0xF7, 0x02, 0x34, 0x56,
+                                0x01, 0xF7, 0x02, 0x78, 0xF7]
+        let empty: [UInt8] = [0x00, 0xF0, 0x00, 0x00, 0xF7, 0x00]
+        let packets = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(divided + empty + note)]))
+        #expect(packets.clip == (try MIDIClip.make(lengthTicks: 48, items: [Clip.note(32, 48)])))
+        #expect(packets.report.ignoredSysEx == [.message: 2, .escape: 3])
+    }
+
+    @Test
+    func sysExCancelsRunningStatusAndIsBounded() {
+        func refusal(_ events: [UInt8], limits: SMFReadLimits = .standard) -> SMFRefusal? {
+            SMF.refusal(SMF.file(chunks: [SMF.track(events)]), limits: limits)
+        }
+        #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0xF0, 0x01, 0xF7, 0x10, 0x3C, 0x00]) ==
+            .missingRunningStatus(track: 0, offset: 31))
+        // Lengths past the chunk end (the event starts at offset 23), one of them by a single byte.
+        #expect(SMF.refusal(SMF.file(chunks: [SMF.chunk("MTrk", [0x00, 0xF0, 0x05, 0x7E, 0x7F])])) ==
+            .truncated(offset: 23))
+        #expect(SMF.refusal(SMF.file(chunks: [SMF.chunk("MTrk", [0x00, 0xF7, 0x03, 0x7E, 0x7F])])) ==
+            .truncated(offset: 23))
+        #expect(SMF.refusal(SMF.file(chunks: [SMF.chunk("MTrk", [0x00, 0xF0])])) == .truncated(offset: 24))
+        #expect(refusal([0x00, 0xF0, 0x80, 0x80, 0x80, 0x80, 0x00]) == .overlongQuantity(offset: 24))
+        // SysEx counts toward the event bound: SysEx, Note On, Note Off and End of Track are 4 events.
+        let counted: [UInt8] = [0x00, 0xF0, 0x00, 0x00, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40]
+        #expect(refusal(counted, limits: SMFReadLimits(maximumEvents: 3)) == .tooManyEvents(limit: 3))
+        #expect(refusal(counted, limits: SMFReadLimits(maximumEvents: 4)) == nil)
+    }
+
+    @Test
+    func refusedControllersAreSkippedAndCountedByNumber() throws {
+        // A typical General MIDI start: Reset All Controllers (CC 121) at tick 0, then a note held by sustain.
+        let events: [UInt8] = [0x00, 0xB0, 0x79, 0x00, 0x00, 0x90, 0x3C, 0x64, 0x00, 0xB0, 0x40, 0x7F,
+                               0x01, 0x80, 0x3C, 0x40, 0x01, 0xB0, 0x40, 0x00]
+        let read = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
+        #expect(read.clip == (try MIDIClip.make(lengthTicks: 32, items: [Clip.note(0, 16)])))
+        #expect(read.report.ignoredControllers == [121: 1, 64: 2])
+        // Every refused controller is counted under its number, through running status; its neighbours stay events.
+        let controllers: [UInt8] = [63, 64, 65, 66, 67, 68, 69, 70, 119, 120, 121, 123, 127]
+        let running: [UInt8] = controllers.dropFirst().flatMap { [0x00, $0, 0x00] }
+        let bytes: [UInt8] = [0x00, 0xB5, controllers[0], 0x00] + running
+        let mixed = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(bytes, endDelta: [0x01])]))
+        #expect(mixed.clip.items == [63, 65, 67, 68, 70, 119].map { controller in
+            MIDIClipItem.event(ticks: 0, message: .controlChange(channel: 6, controller: controller, value: 0))
+        })
+        #expect(mixed.report.ignoredControllers == [64: 1, 66: 1, 69: 1, 120: 1, 121: 1, 123: 1, 127: 1])
+    }
+
+    @Test
+    func extraTrackChunksAreRefusedAtTheFirstExtraOne() {
+        let note = SMF.track([0x00, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40])
+        #expect(SMF.refusal(SMF.file(chunks: [note, note, note])) == .trackCountMismatch(declared: 1, found: 2))
+        // The third chunk overruns the file, but the refusal comes first, before that chunk is scanned.
+        let cut = Array(SMF.file(chunks: [note, note, note]).dropLast())
+        #expect(SMF.refusal(cut) == .trackCountMismatch(declared: 1, found: 2))
     }
 }

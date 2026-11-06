@@ -4,22 +4,32 @@
 //
 //  Reads Standard MIDI File bytes into a `MIDIClip` (#112 CL2), bounded by
 //  `SMFReadLimits`. Formats 0 and 1 at a division that divides 15,360 are read;
-//  each file tick scales exactly to clip ticks. Unknown chunks are skipped and
-//  counted. Running status is honoured for channel messages and cancelled by
-//  meta and SysEx events.
+//  each file tick scales exactly to clip ticks. Running status is honoured for
+//  channel messages and cancelled by meta and SysEx events.
+//
+//  Skipped and counted in `SMFReadReport`, never refused and never silent:
+//  unknown chunks, header bytes past six, meta events, SysEx events (F0, and F7
+//  escapes and continuation packets, each with its delta time kept), the
+//  controllers `MIDIClip.make` refuses (sustain 64, sostenuto 66, hold 2 69 and
+//  channel mode 120...127), and Note Offs with nothing sounding.
+//
+//  Trailing bytes are strict: fewer than 8 bytes after the last chunk are
+//  refused as `truncated`, and bytes after End of Track as
+//  `eventAfterEndOfTrack`, since either marks a damaged file.
 //
 //  Format 1 tracks are merged into one clip in a fixed order: by tick, then
-//  track index, then position in the track. Notes pair Note On to Note Off per
-//  channel and note in that merged order, across tracks. Whatever the merged
-//  events cannot form (a Note On while its note sounds, a Note Off with nothing
-//  sounding, a note never released) is refused, as is anything `MIDIClip.make`
-//  refuses. The clip length is the latest End of Track time.
+//  Note Offs before other messages (as the writer orders them), then track
+//  index, then position in the track. Notes pair Note On to Note Off per
+//  channel and note in that merged order, across tracks. A Note On while its
+//  note sounds and a note never released are refused, as is anything
+//  `MIDIClip.make` refuses. The clip length is the latest End of Track time.
 //
 
 extension StandardMIDIFile {
     /// The clip `bytes` describe, with a report of everything skipped, or the first refusal found. Checks run in
-    /// file order: size, header (format, division, track count), chunks, the track count found, each track's
-    /// events in order, then note pairing in merged order, then `MIDIClip.make`.
+    /// file order: size, header (format, division, track count), chunks (refused as soon as there are more MTrk
+    /// chunks than declared), the track count found, each track's events in order, then note pairing in merged
+    /// order, then `MIDIClip.make`.
     static func read(_ bytes: [UInt8], limits: SMFReadLimits = .standard) throws(SMFRefusal) -> SMFReadResult {
         guard bytes.count <= limits.maximumFileBytes else {
             throw .fileTooLarge(bytes: bytes.count, limit: limits.maximumFileBytes)
@@ -30,7 +40,14 @@ extension StandardMIDIFile {
         var unknownChunks = 0
         while offset < bytes.count {
             guard let next = try chunk(bytes, at: &offset) else { throw .truncated(offset: offset) }
-            if next.type.elementsEqual("MTrk".utf8) { tracks.append(next.body) } else { unknownChunks += 1 }
+            if next.type.elementsEqual("MTrk".utf8) {
+                tracks.append(next.body)
+                guard tracks.count <= Int(header.tracks) else {
+                    throw .trackCountMismatch(declared: header.tracks, found: tracks.count)
+                }
+            } else {
+                unknownChunks += 1
+            }
         }
         guard tracks.count == Int(header.tracks) else {
             throw .trackCountMismatch(declared: header.tracks, found: tracks.count)
@@ -42,8 +59,10 @@ extension StandardMIDIFile {
         for (track, body) in tracks.enumerated() {
             lengthTicks = max(lengthTicks, try parser.parse(track: track, body: body, into: &timed))
         }
-        timed.sort { ($0.ticks, $0.track, $0.position) < ($1.ticks, $1.track, $1.position) }
-        let clipItems = try items(of: timed)
+        timed.sort {
+            ($0.ticks, $0.offFirst, $0.track, $0.position) < ($1.ticks, $1.offFirst, $1.track, $1.position)
+        }
+        let (clipItems, ignoredNoteOffs) = try items(of: timed)
         let clip: MIDIClip
         do {
             clip = try MIDIClip.make(lengthTicks: lengthTicks, items: clipItems)
@@ -52,7 +71,8 @@ extension StandardMIDIFile {
         }
         let report = SMFReadReport(format: header.format, division: header.division, tracks: tracks.count,
                                    ignoredMeta: parser.ignoredMeta, unknownChunks: unknownChunks,
-                                   ignoredHeaderBytes: header.extraBytes)
+                                   ignoredHeaderBytes: header.extraBytes, ignoredSysEx: parser.ignoredSysEx,
+                                   ignoredControllers: parser.ignoredControllers, ignoredNoteOffs: ignoredNoteOffs)
         return SMFReadResult(clip: clip, report: report)
     }
 
@@ -62,7 +82,16 @@ extension StandardMIDIFile {
         let track: Int
         let position: Int
         let message: MIDI1Semantic
+
+        /// 0 for a Note Off (or Note On with velocity 0), 1 otherwise: at one tick, Note Offs come first.
+        var offFirst: Int {
+            if case .noteOff = message { 0 } else { 1 }
+        }
     }
+
+    /// Controllers `MIDIClip.make` refuses, which the reader skips and counts instead: sustain (64), sostenuto
+    /// (66), hold 2 (69) and the channel mode messages (120...127).
+    private static let skippedControllers = Set<UInt8>([64, 66, 69] + Array(120...127))
 
     /// The fields of an `MThd` chunk this version reads.
     private struct Header {
@@ -112,9 +141,10 @@ extension StandardMIDIFile {
     }
 
     /// Clip items from merged messages: a note item at its Note On, completed at the matching Note Off; any other
-    /// message as an event item at its tick.
-    private static func items(of timed: [Timed]) throws(SMFRefusal) -> [MIDIClipItem] {
+    /// message as an event item at its tick. Note Offs with nothing sounding are skipped and counted.
+    private static func items(of timed: [Timed]) throws(SMFRefusal) -> (items: [MIDIClipItem], ignoredNoteOffs: Int) {
         var items: [MIDIClipItem] = []
+        var ignoredNoteOffs = 0
         var sounding: [UInt16: Int] = [:]
         for event in timed {
             switch event.message {
@@ -129,7 +159,8 @@ extension StandardMIDIFile {
             case let .noteOff(channel, note, velocity):
                 guard let index = sounding.removeValue(forKey: UInt16(channel) << 8 | UInt16(note)),
                       case .note(var span) = items[index] else {
-                    throw .noteOffWithoutNoteOn(track: event.track, ticks: event.ticks, channel: channel, note: note)
+                    ignoredNoteOffs += 1
+                    continue
                 }
                 span.endTicks = event.ticks
                 span.releaseVelocity = velocity
@@ -141,17 +172,19 @@ extension StandardMIDIFile {
         if let index = sounding.values.min(), case .note(let span) = items[index] {
             throw .noteNotReleased(channel: span.channel, note: span.note, startTicks: span.startTicks)
         }
-        return items
+        return (items, ignoredNoteOffs)
     }
 
     /// Parses track chunks into timed channel messages, counting events against the file-wide bound and skipped
-    /// meta events by kind.
+    /// meta events, SysEx events and controllers by kind.
     private struct TrackParser {
         let bytes: [UInt8]
         let scale: Int64
         let limits: SMFReadLimits
         private(set) var events = 0
         private(set) var ignoredMeta: [SMFMetaKind: Int] = [:]
+        private(set) var ignoredSysEx: [SMFSysExKind: Int] = [:]
+        private(set) var ignoredControllers: [UInt8: Int] = [:]
 
         init(bytes: [UInt8], scale: Int64, limits: SMFReadLimits) {
             self.bytes = bytes
@@ -178,11 +211,13 @@ extension StandardMIDIFile {
                     running = nil
                     if try meta(track: track, at: &offset, end: end) { return ticks }
                 case 0xF0, 0xF7:
-                    throw .sysExNotRepresentable(track: track, ticks: ticks)
+                    running = nil
+                    try sysEx(at: &offset, end: end)
                 case 0xF1...0xFE:
                     throw .invalidStatus(track: track, offset: start, status: bytes[start])
                 default:
                     let message = try channelMessage(track: track, at: &offset, end: end, running: &running)
+                    guard !skipped(message) else { continue }
                     timed.append(Timed(ticks: ticks, track: track, position: position, message: message))
                     position += 1
                 }
@@ -207,6 +242,25 @@ extension StandardMIDIFile {
             }
             guard length == 0 else { throw .malformedEndOfTrack(track: track, offset: start) }
             guard offset == end else { throw .eventAfterEndOfTrack(track: track, offset: offset) }
+            return true
+        }
+
+        /// Skips and counts the SysEx event at `offset`: F0 (a message, or the first packet of a divided one) or F7
+        /// (an escape or a continuation packet), then its length and that many bytes.
+        private mutating func sysEx(at offset: inout Int, end: Int) throws(SMFRefusal) {
+            let start = offset
+            offset += 1
+            let length = Int(try StandardMIDIFile.readQuantity(bytes, at: &offset, end: end))
+            guard length <= end - offset else { throw .truncated(offset: start) }
+            offset += length
+            ignoredSysEx[bytes[start] == 0xF0 ? .message : .escape, default: 0] += 1
+        }
+
+        /// Whether `message` is a controller in `skippedControllers`, counting it if so.
+        private mutating func skipped(_ message: MIDI1Semantic) -> Bool {
+            guard case let .controlChange(_, controller, _) = message,
+                  StandardMIDIFile.skippedControllers.contains(controller) else { return false }
+            ignoredControllers[controller, default: 0] += 1
             return true
         }
 
