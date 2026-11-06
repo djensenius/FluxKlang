@@ -112,8 +112,8 @@ struct WiringDestinationList: Hashable, Sendable {
     ///   (unknown port) with an unconfirmed-channel input `nod.legacy/in`: the list throws
     ///   `unknownPort(nod.keys/nope)`, `classify` to `nod.legacy/in` throws
     ///   `endpointUncheckable(nod.legacy)` and to any other port `unknownPort(nod.keys/nope)`.
-    /// - At the edge bound the list refuses `.bounds($.edges)`, while `classify` still reports a wire
-    ///   that already exists as `existing`.
+    /// - At the edge bound the list refuses `.bounds($.edges)`, while `classify` still classifies a pair
+    ///   that is already wired (normally `existing`; `notOffered` or `notRoutable` when they outrank it).
     static func make(
         from source: PortAddress, in graph: GraphDocument
     ) throws(WiringPreviewRefusal) -> WiringDestinationList {

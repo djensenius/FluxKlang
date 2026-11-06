@@ -182,23 +182,26 @@ extension WiringDestinationListTests {
         }
     }
 
-    /// When the list is refused with `refusal`, `classify` throws exactly `refusal` for every destination,
-    /// except the documented deviation (`WiringDestinationList.make`): for a destination on a node the
-    /// baseline reports uncheckable it may name that node instead (`endpointUncheckable`).
+    /// When the list is refused with `refusal`, `classify` throws exactly the expected refusal for every
+    /// destination. That is `refusal` itself, except for the destination-side deviation documented on
+    /// `WiringDestinationList.make`: on a graph the baseline does not refuse, `classify` names the first
+    /// node of the pair that the baseline reports uncheckable. (The edge-bound deviation is covered by
+    /// `atTheEdgeBoundTheListIsRefusedAsAWhole`.)
     static func expectRefusedAsClassifyDoes(
         _ refusal: WiringPreviewRefusal, source: PortAddress, destinations: Set<PortAddress>, in graph: GraphDocument,
         sourceLocation: SourceLocation
     ) {
         #expect(refusesTheList(refusal, source: source), "\(source): \(refusal)", sourceLocation: sourceLocation)
-        let uncheckable = Set(graph.validationErrors().compactMap(WiringCandidateClassifier.uncheckableNode))
+        let baseline = graph.validationErrors()
+        let graphRefused = (try? WiringCandidateClassifier.checked(baseline)) == nil
         for destination in destinations {
             let actual = Result { () throws(WiringPreviewRefusal) in
                 try WiringCandidate.classify(from: source, to: destination, in: graph)
             }
-            let deviation = WiringPreviewRefusal.endpointUncheckable(node: destination.node)
-            let allowed = actual == .failure(refusal)
-                || (uncheckable.contains(destination.node) && actual == .failure(deviation))
-            #expect(allowed, "\(source) → \(destination): list \(refusal), classify \(actual)",
+            let named = graphRefused ? nil : baseline.lazy.compactMap(WiringCandidateClassifier.uncheckableNode)
+                .first { $0 == source.node || $0 == destination.node }
+            let expected = named.map { WiringPreviewRefusal.endpointUncheckable(node: $0) } ?? refusal
+            #expect(actual == .failure(expected), "\(source) → \(destination): list \(refusal), classify \(actual)",
                     sourceLocation: sourceLocation)
         }
     }
@@ -291,20 +294,29 @@ extension WiringDestinationListTests {
     }
 
     @Test func atTheEdgeBoundTheListIsRefusedAsAWhole() throws {
-        let padding = (Fixture.graph.edges.count..<ProjectGraphLimits.edges).map { index in
+        // One input → input wire, then padding up to the edge bound.
+        let inputs = Fixture.edge(
+            "edg.verb-mains", Fixture.address("nod.verb", "in"), Fixture.address("nod.mains", "in")
+        )
+        let padding = (Fixture.graph.edges.count + 1..<ProjectGraphLimits.edges).map { index in
             Fixture.edge("edg.pad.\(index)", Fixture.address("nod.gone", "out"), Fixture.address("nod.gone", "in"))
         }
-        let full = Fixture.with(padding)
+        let full = Fixture.with([inputs] + padding)
         let limit = WiringPreviewRefusal.bounds(.exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges))
-        // Every new wire is refused with bounds; only a wire that already exists still classifies.
+        // Every new wire is refused with bounds; only a pair that is already wired still classifies.
         #expect(throws: limit) { try Fixture.classify(("nod.keys", "out"), ("nod.mains", "in"), in: full) }
         let existing = try Fixture.classify(("nod.keys", "out"), ("nod.verb", "in"), in: full)
         #expect(existing == .existing(Fixture.id("edg.keys-verb")))
+        // An already-wired pair whose `notOffered` outranks `existing`.
+        #expect(try Fixture.classify(("nod.verb", "in"), ("nod.mains", "in"), in: full) == .notOffered)
         #expect(throws: limit) { try Self.list("nod.keys", "out", in: full) }
+        #expect(throws: limit) { try Self.list("nod.verb", "in", in: full) }
     }
 
-    @Test func largeListValidatesTheGraphOnce() throws {
-        // 2,000 stereo nodes (4,000 ports) wired in pairs n(2k) → n(2k+1).
+    @Test func largeListObservesOneValidation() throws {
+        // 2,000 stereo nodes (4,000 ports) wired in pairs n(2k) → n(2k+1). The count is of `onValidate`
+        // calls, not of `validationErrors()`: one validation is guaranteed by construction (the context
+        // does not keep the graph); this weaker check is the price of a hook that cannot forge errors.
         let nodes = (0..<2_000).map { Fixture.stereo("nod.s\($0)", at: Double($0)) }
         let edges = stride(from: 0, to: 2_000, by: 2).map { index in
             Fixture.edge("edg.s\(index)", Fixture.address("nod.s\(index)", "out"),

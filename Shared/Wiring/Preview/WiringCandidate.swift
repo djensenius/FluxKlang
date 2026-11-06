@@ -88,7 +88,8 @@ struct WiringCandidate: Hashable, Sendable {
 /// Bare candidates of one source port in one graph, classified against one shared
 /// `WiringCandidateContext`: the graph is validated once per batch instead of once per pair.
 /// Every candidate (or refusal) equals what `WiringCandidate.classify(from:to:in:)` gives for the
-/// same pair; source- and graph-level refusals are thrown once, by `init`.
+/// same pair, except the deviations documented on `WiringDestinationList.make`; source- and
+/// graph-level refusals are thrown once, by `init`.
 struct WiringCandidateBatch {
     private var context: WiringCandidateContext
 
