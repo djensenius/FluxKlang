@@ -154,6 +154,9 @@ struct StandardMIDIFileReaderTests {
         #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0x90, 0x3D, 0x64, 0x01, 0x80, 0x3C, 0x40, 0x00, 0x91, 0x3D,
                          0x64, 0x01, 0x81, 0x3D, 0x40]) == .noteNotReleased(channel: 1, note: 61, startTicks: 0))
         #expect(refusal([0x05, 0x9F, 0x7F, 0x01]) == .noteNotReleased(channel: 16, note: 127, startTicks: 80))
+        // A retrigger written Note On first: the tick's Note Off closes the earlier note, leaving the new one open.
+        #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x10, 0x90, 0x3C, 0x50, 0x00, 0x80, 0x3C, 0x40]) ==
+            .noteNotReleased(channel: 1, note: 60, startTicks: 256))
         #expect(refusal([0x00, 0x90, 0x3E, 0x64, 0x01, 0x90, 0x3C, 0x64, 0x00, 0x90, 0x3D, 0x64]) ==
             .noteNotReleased(channel: 1, note: 62, startTicks: 0))
     }
@@ -236,6 +239,28 @@ struct StandardMIDIFileReaderTests {
                               0x01, 0x80, 0x3C, 0x40])
         #expect(twice.clip.items == [Clip.note(0, 16, velocity: 0x50)])
         #expect(twice.report.ignoredZeroLengthNotes == 1)
+        // Each Note On takes the earliest pending Note Off after it in the file: both notes pair, none is stray.
+        let interleaved = try read([0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40, 0x00, 0x90, 0x3C, 0x65,
+                                    0x00, 0x80, 0x3C, 0x41, 0x10, 0xC0, 0x01])
+        #expect(interleaved.clip.items.isEmpty)
+        #expect((interleaved.report.ignoredZeroLengthNotes, interleaved.report.ignoredNoteOffs) == (2, 0))
+        #expect(interleaved.report.ignoredEventsAtEnd == 1)
+    }
+
+    @Test
+    func theLargestTickOfZeroLengthNotesReadsInLinearTime() throws {
+        // 32,767 zero-length notes of one key at tick 0, then End of Track at tick 1: 65,535 events, the most the
+        // standard limits allow with End of Track. Pairing is linear, so this completes; it was quadratic.
+        let pair: [UInt8] = [0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40]
+        func file(pairs: Int) -> [UInt8] {
+            SMF.file(chunks: [SMF.track(Array([[UInt8]](repeating: pair, count: pairs).joined()), endDelta: [0x01])])
+        }
+        let bytes = file(pairs: 32_767)
+        #expect(bytes.count == 262_162)
+        let read = try StandardMIDIFile.read(bytes)
+        #expect(read.clip == (try MIDIClip.make(lengthTicks: 16, items: [])))
+        #expect((read.report.ignoredZeroLengthNotes, read.report.ignoredNoteOffs) == (32_767, 0))
+        #expect(SMF.refusal(file(pairs: 32_768)) == .tooManyEvents(limit: 65_536))
     }
 
     @Test

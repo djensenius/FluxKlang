@@ -55,10 +55,9 @@ enum SMFRefusal: Error, Equatable, Sendable {
     /// A Note On for a channel and note that is already sounding, in merged order; a clip note cannot overlap
     /// another of the same channel and note.
     case noteOnWhileSounding(track: Int, ticks: Int64, channel: UInt8, note: UInt8)
-    /// A Note On has no Note Off of its channel and note after it in merged order (a later tick, or the same tick
-    /// later in the file as a zero-length note), so it would sound past the end of the file. A released note never
-    /// gives this refusal. `startTicks` is its Note On time in clip ticks; the note reported is the earliest such
-    /// in read order.
+    /// A Note On is left with no Note Off to close it, after each tick's Note Offs first close notes sounding from
+    /// earlier ticks (a retrigger written Note On first gives the tick's Note Off to the earlier note). `startTicks`
+    /// is its Note On time in clip ticks; the note reported is the earliest such in read order.
     case noteNotReleased(channel: UInt8, note: UInt8, startTicks: Int64)
     /// `MIDIClip.make` refused the clip the file describes; item indexes are in read order, skipped events
     /// excluded.

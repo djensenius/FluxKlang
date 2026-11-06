@@ -155,12 +155,20 @@ extension StandardMIDIFile {
         UInt16(bytes[offset]) << 8 | UInt16(bytes[offset + 1])
     }
 
+    /// One channel and note's pending Note Offs in `ItemBuilder`: each one's place in the file, in merged order, and
+    /// a cursor at the first that no Note On has taken or passed.
+    private struct PendingOffs {
+        var places: [(track: Int, position: Int)] = []
+        var next = 0
+    }
+
     /// Builds clip items from merged messages: a note item at its Note On, completed at the matching Note Off; any
     /// other message as an event item at its tick. Skips and counts what a clip cannot hold:
     /// - a zero-length note: a Note Off that finds nothing sounding pairs with a Note On of the same channel and
     ///   note at the same tick that comes earlier in the file, by track index and then position (so across tracks
     ///   the On's track must be lower). Note Offs sort first within a tick, so such an Off waits, pending, until
     ///   the tick ends; each On takes the earliest pending Off after it in the file. Neither becomes a note.
+///   Ons reach a tick in file order, so a cursor per channel and note passes or takes each Off once: linear time.
     /// - a Note Off still pending when the tick ends: nothing was sounding (`ignoredNoteOffs`);
     /// - a non-note event at or after the clip length, which a clip cannot hold (`ignoredEventsAtEnd`).
     /// A Note Off never extends a note: it closes only a note sounding from an earlier tick.
@@ -172,8 +180,10 @@ extension StandardMIDIFile {
         private(set) var ignoredEventsAtEnd = 0
         /// The item index of each sounding note, by channel and note.
         private var sounding: [UInt16: Int] = [:]
-        /// Note Offs at `pendingTicks` that found nothing sounding, by channel and note, in merged order.
-        private var pending: [UInt16: [Timed]] = [:]
+        /// Note Offs at `pendingTicks` that found nothing sounding, by channel and note.
+        private var pending: [UInt16: PendingOffs] = [:]
+        /// How many of `pending`'s Note Offs no Note On has taken.
+        private var unpaired = 0
         private var pendingTicks: Int64 = 0
 
         init(lengthTicks: Int64) {
@@ -193,9 +203,7 @@ extension StandardMIDIFile {
             switch event.message {
             case let .noteOn(channel, note, velocity):
                 let key = Self.key(channel, note)
-                let after = pending[key]?.firstIndex { ($0.track, $0.position) > (event.track, event.position) }
-                if let after {
-                    pending[key]?.remove(at: after)
+                if takePendingOff(key, after: event) {
                     ignoredZeroLengthNotes += 1
                     return
                 }
@@ -208,7 +216,8 @@ extension StandardMIDIFile {
             case let .noteOff(channel, note, velocity):
                 let key = Self.key(channel, note)
                 guard let index = sounding.removeValue(forKey: key), case .note(var span) = items[index] else {
-                    pending[key, default: []].append(event)
+                    pending[key, default: PendingOffs()].places.append((event.track, event.position))
+                    unpaired += 1
                     return
                 }
                 span.endTicks = event.ticks
@@ -223,7 +232,7 @@ extension StandardMIDIFile {
             }
         }
 
-        /// Ends the last tick and refuses a note still sounding: a Note On with no Note Off after it in merged order.
+        /// Ends the last tick and refuses a note still sounding: a Note On left with no Note Off to close it.
         mutating func finish() throws(SMFRefusal) {
             endPendingTick()
             if let index = sounding.values.min(), case .note(let span) = items[index] {
@@ -231,9 +240,26 @@ extension StandardMIDIFile {
             }
         }
 
+        /// Takes the earliest pending Note Off of `key` after `event` in the file, if there is one. Within a tick,
+        /// Note Ons arrive in file order, so an Off before this On is before every later On too: the cursor passes
+        /// it for good, and each Off is passed or taken once.
+        private mutating func takePendingOff(_ key: UInt16, after event: Timed) -> Bool {
+            guard var offs = pending[key] else { return false }
+            defer { pending[key] = offs }
+            while offs.next < offs.places.count,
+                  !((offs.places[offs.next].track, offs.places[offs.next].position) > (event.track, event.position)) {
+                offs.next += 1
+            }
+            guard offs.next < offs.places.count else { return false }
+            offs.next += 1
+            unpaired -= 1
+            return true
+        }
+
         /// Counts the Note Offs of the tick that ends that found nothing sounding and paired with no Note On.
         private mutating func endPendingTick() {
-            ignoredNoteOffs += pending.values.reduce(0) { $0 + $1.count }
+            ignoredNoteOffs += unpaired
+            unpaired = 0
             pending = [:]
         }
     }
