@@ -218,7 +218,12 @@ struct ControlTriggerTests {
         #expect(actions == [.switchedOn, nil, nil, .switchedOff, nil, nil, .switchedOn, nil])
         #expect(detector.state(of: id)?.isOn == true)
         #expect(detector.lastSequence == 3)
-        #expect(throws: ControlTriggerRefusal.notLatch(.toggle)) { try detector.clear(id) }
+        let cleared = try detector.clear(id)
+        #expect(cleared?.action == .switchedOff)
+        #expect(cleared?.cause == .clear)
+        #expect(cleared?.sequence == 4)
+        #expect(detector.state(of: id)?.isOn == false)
+        #expect(detector.state(of: id)?.held == false)
     }
 
     @Test
