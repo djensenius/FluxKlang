@@ -31,13 +31,21 @@ extension GraphDocument {
             capabilities.count, maximum: ProjectGraphLimits.capabilities, path: "$.capabilities"
         )
         for node in nodes {
-            try ProjectGraphLimits.check(
-                node.ports.count, maximum: ProjectGraphLimits.portsPerNode, path: "$.nodes[\(node.id)].ports"
-            )
-            try ProjectGraphLimits.check(
-                node.requiredCapabilities.count + node.advisoryCapabilities.count,
-                maximum: ProjectGraphLimits.capabilities, path: "$.nodes[\(node.id)].capabilities"
-            )
+            try node.checkCollectionBounds()
         }
+    }
+}
+
+extension GraphNode {
+    /// The per-node limits of `GraphDocument.checkCollectionBounds()`: ports first, then required and
+    /// advisory capabilities together. The draft edit fold checks an added node with this too.
+    func checkCollectionBounds() throws(ProjectGraphLimitError) {
+        try ProjectGraphLimits.check(
+            ports.count, maximum: ProjectGraphLimits.portsPerNode, path: "$.nodes[\(id)].ports"
+        )
+        try ProjectGraphLimits.check(
+            requiredCapabilities.count + advisoryCapabilities.count,
+            maximum: ProjectGraphLimits.capabilities, path: "$.nodes[\(id)].capabilities"
+        )
     }
 }
