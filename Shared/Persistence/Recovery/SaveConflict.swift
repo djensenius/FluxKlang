@@ -18,9 +18,42 @@ enum SaveConflictChoice: Equatable, Sendable {
     case keepBoth
 }
 
+struct SaveCopyLabel: Hashable, Sendable, ExpressibleByStringLiteral, Comparable {
+    private let value: String
+
+    var stringValue: String { value }
+
+    init(_ value: String) {
+        self.value = value
+    }
+
+    init(stringLiteral value: String) {
+        self.init(value)
+    }
+
+    static func == (lhs: SaveCopyLabel, rhs: SaveCopyLabel) -> Bool {
+        lhs.value.utf8.elementsEqual(rhs.value.utf8)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(value.utf8.count)
+        for byte in value.utf8 {
+            hasher.combine(byte)
+        }
+    }
+
+    static func < (lhs: SaveCopyLabel, rhs: SaveCopyLabel) -> Bool {
+        lhs.value.utf8.lexicographicallyPrecedes(rhs.value.utf8)
+    }
+}
+
 /// Produces bounded, stable labels for caller-owned copies.
 enum SaveConflictLabels {
-    static func make(_ purpose: String, role: SaveCopyRole, version: SaveContentVersion) -> String {
-        "\(purpose)-\(role.name)-\(version.digest)"
+    static func make(
+        _ purpose: String,
+        role: SaveCopyRole,
+        version: SaveContentVersion
+    ) -> SaveCopyLabel {
+        SaveCopyLabel("\(purpose)-\(role.name)-\(version.digest)")
     }
 }

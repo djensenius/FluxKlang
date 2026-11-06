@@ -16,7 +16,7 @@ extension ProjectRecoveryTests {
     private struct CopySnapshot: Equatable {
         let role: SaveCopyRole
         let version: SaveContentVersion
-        let label: String
+        let label: SaveCopyLabel
         let releaseAfter: SaveContentVersion?
         let pinned: Bool
     }
@@ -427,10 +427,7 @@ extension ProjectRecoveryTests {
             observedKinds.insert(session.state.seededKind)
             #expect(session.retainedCopies.count <= SaveSession.maximumRetainedCopies)
             #expect(session.unresolvedAttempts.count <= SaveSession.maximumUnresolvedAttempts)
-            let uniqueKeys = Set(session.retainedCopies.map {
-                "\($0.role.rawValue):\($0.version.digest):\($0.label)"
-            })
-            #expect(uniqueKeys.count == session.retainedCopies.count)
+            #expect(Self.retainedCopiesHaveUniqueKeys(session.retainedCopies))
             if case .conflicted(_, let activeLocal, let activeRemote) = session.state {
                 conflictedStateSteps += 1
                 #expect(session.retainedCopies.contains {
@@ -446,6 +443,16 @@ extension ProjectRecoveryTests {
         }
         #expect(observedKinds == Set(["clean", "dirty", "conflicted", "saving", "failed"]))
         #expect(conflictedStateSteps > 0)
+    }
+
+    private static func retainedCopiesHaveUniqueKeys(_ copies: [SaveRetainedCopy]) -> Bool {
+        for (index, copy) in copies.enumerated() {
+            for other in copies.dropFirst(index + 1)
+            where copy.hasIdentity(role: other.role, version: other.version, label: other.label) {
+                return false
+            }
+        }
+        return true
     }
 }
 

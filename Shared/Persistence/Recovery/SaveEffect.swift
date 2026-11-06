@@ -1,8 +1,8 @@
 /// A value describing work for the caller; the reducer never performs it.
 enum SaveEffect: Equatable, Sendable {
     case beginWrite(version: SaveContentVersion, attempt: SaveAttemptID)
-    case retainCopy(role: SaveCopyRole, version: SaveContentVersion, label: String)
-    case releaseCopy(role: SaveCopyRole, version: SaveContentVersion, label: String)
+    case retainCopy(role: SaveCopyRole, version: SaveContentVersion, label: SaveCopyLabel)
+    case releaseCopy(role: SaveCopyRole, version: SaveContentVersion, label: SaveCopyLabel)
     case presentConflict(base: SaveContentVersion, local: SaveContentVersion, remote: SaveContentVersion)
     case reportFault(SaveFault)
     case conflictResolutionApplied(choice: SaveConflictChoice, requiresReview: Bool)
@@ -57,8 +57,8 @@ enum SaveEffect: Equatable, Sendable {
         if left.version != right.version {
             return left.version.digest.utf8.lexicographicallyPrecedes(right.version.digest.utf8)
         }
-        if !left.label.utf8.elementsEqual(right.label.utf8) {
-            return left.label.utf8.lexicographicallyPrecedes(right.label.utf8)
+        if left.label != right.label {
+            return left.label < right.label
         }
         return false
     }
@@ -90,5 +90,17 @@ enum SaveEffect: Equatable, Sendable {
 private struct CopyEffectKey: Equatable, Hashable {
     let role: SaveCopyRole
     let version: SaveContentVersion
-    let label: String
+    let label: SaveCopyLabel
+
+    static func == (lhs: CopyEffectKey, rhs: CopyEffectKey) -> Bool {
+        lhs.role == rhs.role &&
+            lhs.version == rhs.version &&
+            lhs.label == rhs.label
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(role)
+        hasher.combine(version)
+        hasher.combine(label)
+    }
 }

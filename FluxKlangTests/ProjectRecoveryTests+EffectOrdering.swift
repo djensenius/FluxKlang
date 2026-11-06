@@ -44,4 +44,49 @@ extension ProjectRecoveryTests {
         ]
         #expect(SaveEffect.ordered(effects) == effects)
     }
+
+    @Test func normalizationVariantLabelsRemainByteExact() throws {
+        let version = try SaveContentVersion.make(digest: "label-version")
+        let composed = SaveCopyLabel("\u{00E9}")
+        let decomposed = SaveCopyLabel("e\u{0301}")
+        #expect(decomposed < composed)
+        let composedRetain = SaveEffect.retainCopy(
+            role: .local, version: version, label: composed
+        )
+        let decomposedRetain = SaveEffect.retainCopy(
+            role: .local, version: version, label: decomposed
+        )
+        #expect(composedRetain != decomposedRetain)
+        #expect(SaveEffect.ordered([composedRetain, decomposedRetain]) == [
+            decomposedRetain, composedRetain
+        ])
+        #expect(SaveEffect.ordered([composedRetain, decomposedRetain]).count == 2)
+
+        let composedRelease = SaveEffect.releaseCopy(
+            role: .local, version: version, label: composed
+        )
+        let decomposedRelease = SaveEffect.releaseCopy(
+            role: .local, version: version, label: decomposed
+        )
+        #expect(composedRelease != decomposedRelease)
+        #expect(SaveEffect.ordered([composedRelease, decomposedRelease]) == [
+            decomposedRelease, composedRelease
+        ])
+        #expect(SaveEffect.ordered([composedRelease, decomposedRelease]).count == 2)
+
+        let base = try SaveContentVersion.make(digest: "label-base")
+        let composedVersion = try SaveContentVersion.make(digest: composed.stringValue)
+        let changedVersion = try SaveContentVersion.make(digest: "label-final")
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: composedVersion))
+        _ = try session.reduce(.edit(local: changedVersion))
+        let copy = try #require(session.retainedCopies.first)
+        let expected = SaveConflictLabels.make("edited", role: .local, version: composedVersion)
+        let normalizedVariant = SaveCopyLabel("edited-local-e\u{0301}")
+        #expect(copy.label == expected)
+        #expect(copy.hasIdentity(role: .local, version: composedVersion, label: expected))
+        #expect(!copy.hasIdentity(
+            role: .local, version: composedVersion, label: normalizedVariant
+        ))
+    }
 }

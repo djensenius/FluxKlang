@@ -3,6 +3,7 @@ struct SaveFault: Equatable, Sendable {
     static let maximumDetailUTF8Bytes = 256
 
     let category: SaveFaultCategory
+    /// Diagnostic display text, not an identity key; equality uses Swift `String` semantics.
     let detail: String?
 
     private init(category: SaveFaultCategory, detail: String?) {
@@ -40,6 +41,9 @@ enum SaveSessionRefusal: Error, Equatable, Sendable {
     case noConflictToResolve
     case noPendingSave
     case staleCompletion
+    /// A confirmation names an older attempt while a newer write is in flight;
+    /// resend it after the newer attempt completes or fails.
+    case newerAttemptInFlight
     case reloadWouldDiscardLocal
     case retainedCopyLimitExceeded
     case attemptLimitExceeded

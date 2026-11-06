@@ -9,7 +9,7 @@ extension ProjectRecoveryTests {
     private struct RetentionCopy: Equatable {
         let role: SaveCopyRole
         let version: SaveContentVersion
-        let label: String
+        let label: SaveCopyLabel
         let releaseAfter: SaveContentVersion?
         let pinned: Bool
     }

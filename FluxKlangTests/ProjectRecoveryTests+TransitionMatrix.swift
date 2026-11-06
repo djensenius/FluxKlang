@@ -47,7 +47,7 @@ extension ProjectRecoveryTests {
     private struct MatrixRetainedCopy: Equatable {
         let role: SaveCopyRole
         let version: SaveContentVersion
-        let label: String
+        let label: SaveCopyLabel
         let releaseAfter: SaveContentVersion?
         let pinned: Bool
     }

@@ -2,18 +2,18 @@
 struct SaveRetainedCopy: Equatable, Sendable {
     let role: SaveCopyRole
     let version: SaveContentVersion
-    private var storedLabel: String
+    private var storedLabel: SaveCopyLabel
     private var storedReleaseAfter: SaveContentVersion?
     private var storedPinned: Bool
 
-    var label: String { storedLabel }
+    var label: SaveCopyLabel { storedLabel }
     var releaseAfter: SaveContentVersion? { storedReleaseAfter }
     var pinned: Bool { storedPinned }
 
     fileprivate init(
         role: SaveCopyRole,
         version: SaveContentVersion,
-        label: String,
+        label: SaveCopyLabel,
         releaseAfter: SaveContentVersion?,
         pinned: Bool
     ) {
@@ -38,7 +38,7 @@ struct SaveRetainedCopy: Equatable, Sendable {
     }
 
     fileprivate mutating func rename(
-        to label: String,
+        to label: SaveCopyLabel,
         releaseAfter: SaveContentVersion?,
         pinned: Bool
     ) {
@@ -46,13 +46,17 @@ struct SaveRetainedCopy: Equatable, Sendable {
         storedReleaseAfter = releaseAfter
         storedPinned = pinned
     }
+
+    func hasIdentity(role: SaveCopyRole, version: SaveContentVersion, label: SaveCopyLabel) -> Bool {
+        self.role == role && self.version == version && storedLabel == label
+    }
 }
 
 private struct SaveCopyRename {
     let role: SaveCopyRole
     let version: SaveContentVersion
-    let oldLabel: String
-    let newLabel: String
+    let oldLabel: SaveCopyLabel
+    let newLabel: SaveCopyLabel
     let releaseAfter: SaveContentVersion?
     let pinned: Bool
 }
@@ -87,6 +91,11 @@ enum SaveSessionState: Equatable, Sendable {
 }
 
 /// A bounded pure reducer over injected content versions; it performs no file I/O.
+///
+/// The caller must serialize writes and may report `saveFailed` or start a retry only
+/// after that attempt can no longer land. Dropping older unresolved attempts after a
+/// current completion relies on that obligation; later landing of an older write is
+/// outside the reducer's knowledge.
 struct SaveSession: Equatable, Sendable {
     static let maximumRetainedCopies = 8
     static let maximumUnresolvedAttempts = 8
@@ -241,6 +250,11 @@ struct SaveSession: Equatable, Sendable {
               interruptionConfirmation || attempt == current else {
             throw .staleCompletion
         }
+        if interruptionConfirmation,
+           case .saving = state,
+           attempt != current {
+            throw .newerAttemptInFlight
+        }
         state = .clean(version: version)
         unresolvedAttempts.removeAll()
         return releaseConfirmedCopies(by: version)
@@ -326,12 +340,12 @@ struct SaveSession: Equatable, Sendable {
     private mutating func retain(
         role: SaveCopyRole,
         version: SaveContentVersion,
-        label: String,
+        label: SaveCopyLabel,
         releaseAfter: SaveContentVersion?,
         pinned: Bool
     ) throws(SaveSessionRefusal) -> SaveEffect? {
         if let index = retainedCopies.firstIndex(where: {
-            $0.role == role && $0.version == version && $0.label == label
+            $0.hasIdentity(role: role, version: version, label: label)
         }) {
             retainedCopies[index].update(releaseAfter: releaseAfter, pinned: pinned)
             return nil
@@ -351,7 +365,7 @@ struct SaveSession: Equatable, Sendable {
 
     private mutating func renameOrRetain(_ rename: SaveCopyRename) -> SaveCopyEffects {
         guard let index = retainedCopies.firstIndex(where: {
-            $0.role == rename.role && $0.version == rename.version && $0.label == rename.oldLabel
+            $0.hasIdentity(role: rename.role, version: rename.version, label: rename.oldLabel)
         }) else {
             preconditionFailure("Active conflict remote must have a retained record")
         }
@@ -359,7 +373,7 @@ struct SaveSession: Equatable, Sendable {
             role: rename.role, version: rename.version, label: rename.oldLabel
         )
         if let existingIndex = retainedCopies.firstIndex(where: {
-            $0.role == rename.role && $0.version == rename.version && $0.label == rename.newLabel
+            $0.hasIdentity(role: rename.role, version: rename.version, label: rename.newLabel)
         }) {
             retainedCopies[existingIndex].rename(
                 to: rename.newLabel, releaseAfter: rename.releaseAfter, pinned: rename.pinned

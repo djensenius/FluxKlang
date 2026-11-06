@@ -152,6 +152,157 @@ extension ProjectRecoveryTests {
             .saveConfirmedAfterInterruption(attempt: firstAttempt, version: local)
         ).isEmpty)
         #expect(session.state == .clean(version: local))
+        let beforeDuplicateConfirmation = session
+        #expect(throws: SaveSessionRefusal.noPendingSave) {
+            try session.reduce(.saveConfirmedAfterInterruption(
+                attempt: firstAttempt, version: local
+            ))
+        }
+        #expect(session == beforeDuplicateConfirmation)
+    }
+
+    @Test func interruptedConfirmationStalenessPrecedesInFlightClassification() throws {
+        let base = try Self.recoveryFaultVersion("stale-order-base")
+        let local = try Self.recoveryFaultVersion("stale-order-local")
+        let wrongVersion = try Self.recoveryFaultVersion("stale-order-wrong")
+        let fault = try SaveFault.make(category: .unknown)
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: local))
+        let first = try session.reduce(.saveRequested)
+        guard case .beginWrite(_, let firstAttempt) = first.first else {
+            Issue.record("Expected first write")
+            return
+        }
+        _ = try session.reduce(.saveFailed(attempt: firstAttempt, fault: fault))
+        let retry = try session.reduce(.saveRequested)
+        guard case .beginWrite = retry.first else {
+            Issue.record("Expected in-flight retry")
+            return
+        }
+        let unknownAttempt = try Self.thirdAttemptID()
+
+        let beforeUnknown = session
+        #expect(throws: SaveSessionRefusal.staleCompletion) {
+            try session.reduce(.saveConfirmedAfterInterruption(
+                attempt: unknownAttempt, version: local
+            ))
+        }
+        #expect(session == beforeUnknown)
+
+        let beforeWrongVersion = session
+        #expect(throws: SaveSessionRefusal.staleCompletion) {
+            try session.reduce(.saveConfirmedAfterInterruption(
+                attempt: firstAttempt, version: wrongVersion
+            ))
+        }
+        #expect(session == beforeWrongVersion)
+
+        var resolvedSession = SaveSession.make(initialVersion: base)
+        _ = try resolvedSession.reduce(.edit(local: local))
+        let resolvedWrite = try resolvedSession.reduce(.saveRequested)
+        guard case .beginWrite(_, let resolvedAttempt) = resolvedWrite.first else {
+            Issue.record("Expected resolved attempt")
+            return
+        }
+        _ = try resolvedSession.reduce(.saveCompleted(attempt: resolvedAttempt, version: local))
+        _ = try resolvedSession.reduce(.edit(local: wrongVersion))
+        _ = try resolvedSession.reduce(.edit(local: local))
+        _ = try resolvedSession.reduce(.saveRequested)
+        let beforeResolvedAttempt = resolvedSession
+        #expect(throws: SaveSessionRefusal.staleCompletion) {
+            try resolvedSession.reduce(.saveConfirmedAfterInterruption(
+                attempt: resolvedAttempt, version: local
+            ))
+        }
+        #expect(resolvedSession == beforeResolvedAttempt)
+    }
+
+    @Test func olderInterruptionConfirmationCannotSupersedeInFlightRetry() throws {
+        let base = try Self.recoveryFaultVersion("older-confirm-base")
+        let replacedLocal = try Self.recoveryFaultVersion("older-confirm-replaced")
+        let local = try Self.recoveryFaultVersion("older-confirm-local")
+        let laterLocal = try Self.recoveryFaultVersion("older-confirm-later")
+        let fault = try SaveFault.make(category: .unknown)
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: replacedLocal))
+        _ = try session.reduce(.edit(local: local))
+        #expect(session.retainedCopies.count == 1)
+
+        let first = try session.reduce(.saveRequested)
+        guard case .beginWrite(_, let firstAttempt) = first.first else {
+            Issue.record("Expected initial write")
+            return
+        }
+        _ = try session.reduce(.saveFailed(attempt: firstAttempt, fault: fault))
+        let retry = try session.reduce(.saveRequested)
+        guard case .beginWrite(_, let retryAttempt) = retry.first else {
+            Issue.record("Expected retry write")
+            return
+        }
+
+        let beforeConfirmation = session
+        #expect(throws: SaveSessionRefusal.newerAttemptInFlight) {
+            try session.reduce(.saveConfirmedAfterInterruption(
+                attempt: firstAttempt, version: local
+            ))
+        }
+        #expect(session.state == beforeConfirmation.state)
+        #expect(session.unresolvedAttempts == beforeConfirmation.unresolvedAttempts)
+        #expect(session.retainedCopies == beforeConfirmation.retainedCopies)
+        #expect(session == beforeConfirmation)
+
+        let beforeEdit = session
+        #expect(throws: SaveSessionRefusal.savePending) {
+            try session.reduce(.edit(local: laterLocal))
+        }
+        #expect(session == beforeEdit)
+        _ = try session.reduce(.saveCompleted(attempt: retryAttempt, version: local))
+        #expect(session.state == .clean(version: local))
+
+        var failedSession = SaveSession.make(initialVersion: base)
+        _ = try failedSession.reduce(.edit(local: local))
+        let earlier = try failedSession.reduce(.saveRequested)
+        guard case .beginWrite(_, let earlierAttempt) = earlier.first else {
+            Issue.record("Expected first failed-state attempt")
+            return
+        }
+        _ = try failedSession.reduce(.saveFailed(attempt: earlierAttempt, fault: fault))
+        let newer = try failedSession.reduce(.saveRequested)
+        guard case .beginWrite(_, let newerAttempt) = newer.first else {
+            Issue.record("Expected second failed-state attempt")
+            return
+        }
+        _ = try failedSession.reduce(.saveFailed(attempt: newerAttempt, fault: fault))
+        var confirmationEffects: [SaveEffect] = []
+        #expect(throws: Never.self) {
+            confirmationEffects = try failedSession.reduce(.saveConfirmedAfterInterruption(
+                attempt: earlierAttempt, version: local
+            ))
+        }
+        #expect(confirmationEffects.isEmpty)
+        #expect(failedSession.state == .clean(version: local))
+    }
+
+    @Test func currentInterruptionConfirmationWhileSavingConfirms() throws {
+        let base = try Self.recoveryFaultVersion("current-confirm-base")
+        let local = try Self.recoveryFaultVersion("current-confirm-local")
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: local))
+        let effects = try session.reduce(.saveRequested)
+        guard case .beginWrite(_, let attempt) = effects.first else {
+            Issue.record("Expected current write")
+            return
+        }
+
+        var confirmationEffects: [SaveEffect] = []
+        #expect(throws: Never.self) {
+            confirmationEffects = try session.reduce(.saveConfirmedAfterInterruption(
+                attempt: attempt, version: local
+            ))
+        }
+        #expect(confirmationEffects.isEmpty)
+        #expect(session.state == .clean(version: local))
+        #expect(session.unresolvedAttempts.isEmpty)
     }
 
     @Test func aFaultedSaveStaysPendingUntilConfirmed() throws {

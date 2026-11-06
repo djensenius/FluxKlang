@@ -84,6 +84,14 @@ struct ProjectRecoveryTests {
         }
         #expect(session == beforeStale)
 
+        #expect(throws: SaveSessionRefusal.newerAttemptInFlight) {
+            try session.reduce(
+                .saveConfirmedAfterInterruption(attempt: firstAttempt, version: local)
+            )
+        }
+        #expect(session == beforeStale)
+
+        #expect(try session.reduce(.saveFailed(attempt: secondAttempt, fault: fault)) == [.reportFault(fault)])
         #expect(try session.reduce(
             .saveConfirmedAfterInterruption(attempt: firstAttempt, version: local)
         ).isEmpty)
