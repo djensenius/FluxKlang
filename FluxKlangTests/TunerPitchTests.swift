@@ -10,9 +10,15 @@ import Testing
 struct TunerPitchTests {
     /// The accuracy bound for pure sines from 30.9 Hz to 1318.5 Hz (acceptance 1).
     static let sineBoundCents = 1.0
+    /// The accuracy bound for sines at the default band's edges (1999, 2000, 30 and 30.05 Hz): at 2000 Hz the
+    /// parabola reads a short period sharp (measured worst 1.78 cents at 44.1 kHz and 1.49 at 48 kHz).
+    static let edgeSineBoundCents = 2.0
     /// The accuracy bound for the harmonic fixtures: a sawtooth's dip is V-shaped, which the parabola fits less
     /// well at short periods (here the worst, a weak-fundamental E6 sawtooth at 48 kHz, is about 2.6 cents).
     static let harmonicBoundCents = 3.0
+    /// The accuracy bound for weak-odd tones from 41 to 650 Hz, whose octave check refines the doubled dip at its
+    /// own local minimum (measured worst 0.26 cents in 0.5 Hz steps, at both rates and with four seeds).
+    static let weakOddBoundCents = 0.4
 
     @Test
     func sinesFromLowBToE6AreWithinOneCentAtBothRates() throws {
@@ -83,7 +89,8 @@ struct TunerPitchTests {
                     }
                     #expect(pitch.note.name == note.name, "\(kind) \(note.name) at \(rate): \(pitch.note.name)")
                     let error = Self.cents(pitch.frequency, from: note.frequency)
-                    #expect(abs(error) <= Self.harmonicBoundCents, "\(kind) \(note.name) at \(rate): \(error)")
+                    let bound = kind == "weak odd" ? Self.weakOddBoundCents : Self.harmonicBoundCents
+                    #expect(abs(error) <= bound, "\(kind) \(note.name) at \(rate): \(error)")
                 }
             }
         }
@@ -104,6 +111,20 @@ struct TunerPitchTests {
             let frame = Self.weakOddTone(1318.51, rate: rate, count: 4096)
             #expect(try estimator.analyze(frame) == .noPitch(.outOfBand))
         }
+        // The check runs whenever 2τ ≤ L − 1: with a 110 Hz floor (L = 438), 110.1 Hz doubles τ = 218 to 436.
+        var floor110 = try PitchEstimator(configuration: TunerConfiguration.make(sampleRate: 48_000,
+                                                                                 minimumFrequency: 110))
+        #expect(floor110.configuration.maximumLag == 438 && floor110.configuration.windowSize == 2048)
+        let near = try #require(try floor110.analyze(Self.weakOddTone(110.1, rate: 48_000, count: 2048)).pitch)
+        #expect(abs(Self.cents(near.frequency, from: 110.1)) <= Self.weakOddBoundCents, "\(near.frequency)")
+        // At 30 Hz the doubled dip is at the last lag the descent reaches (1600) and is a minimum, so the tone is
+        // read there. At 29.985 Hz (period 1600.8) d′ still falls at 1601, past that edge: the first dip stands.
+        let floorTone = Self.weakOddTone(30, rate: 48_000, count: 4096, seed: 2)
+        let atFloor = try #require(try estimator.analyze(floorTone).pitch)
+        #expect(abs(Self.cents(atFloor.frequency, from: 30)) <= Self.weakOddBoundCents, "\(atFloor.frequency)")
+        let pastTone = Self.weakOddTone(29.985, rate: 48_000, count: 4096, seed: 2)
+        let firstDip = try #require(try estimator.analyze(pastTone).pitch)
+        #expect(abs(Self.cents(firstDip.frequency, from: 2 * 29.985)) < 10, "\(firstDip.frequency)")
     }
 
     @Test
@@ -147,8 +168,13 @@ struct TunerPitchTests {
         #expect(try estimator.analyze(Self.sine(1900, rate: 48_000, count: 4096)).pitch != nil)
         // 25 Hz is below the 30 Hz floor: its period is longer than the longest lag.
         #expect(try estimator.analyze(Self.sine(25, rate: 48_000, count: 4096)).pitch == nil)
-        // 29.99 Hz dips at the longest lag searched (1601); refined, its period is just below the floor.
+        // 29.99 Hz (period 1600.53) descends to lag 1600, the last a parabola can be fitted at, but d′ still falls
+        // at 1601: that is a slope, not a minimum, so the dip lies outside the search.
         #expect(try estimator.analyze(Self.sine(29.99, rate: 48_000, count: 4096)) == .noPitch(.outOfBand))
+        // A square wave alternating ±0.5 every 828 samples (28.99 Hz) crosses the threshold inside the search and
+        // descends to its edge: a parabola fitted there on the slope used to read 30 Hz.
+        let square = (0..<4096).map { ($0 / 828) % 2 == 0 ? Float(0.5) : -0.5 }
+        #expect(try estimator.analyze(square) == .noPitch(.outOfBand))
         // At 5 Hz d′ only rises (its best, at lag 2, is above 1), so the confidence is limited to 0.
         let slow = try estimator.analyze(Self.sine(5, rate: 48_000, count: 4096))
         #expect(slow == .noPitch(.unvoiced(confidence: 0)))
@@ -174,7 +200,7 @@ struct TunerPitchTests {
                 #expect(pitch.confidence < 0.98, "\(frequency) Hz, seed \(seed): \(pitch.confidence)")
             }
         }
-        // With a 112 Hz floor the longest lag is 430, and 220 Hz dips at τ = 215 or 216: 2τ + 3 > 430, so the
+        // With a 112 Hz floor the longest lag is 430, and 220 Hz dips at τ = 215 or 216: 2τ > L − 1 = 429, so the
         // octave check must not run (its descent from 2τ would read past the scratch).
         var short = try PitchEstimator(configuration: TunerConfiguration.make(sampleRate: 48_000,
                                                                               minimumFrequency: 112))

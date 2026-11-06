@@ -115,3 +115,54 @@ extension TunerPitchTests {
         try TunerPitch.make(frequency: base * exp2(cents / 1200), confidence: 0.9, reference: reference)
     }
 }
+
+/// Edge and sweep tests built on the fixtures above: the band tolerance, and a sparse sweep of weak-odd tones.
+extension TunerPitchTests {
+    @Test
+    func aReadingMayExceedABandEdgeByTheToleranceOnly() throws {
+        // Brackets the tolerance by behaviour: above the worst measured bias (1.78 cents), below 10 cents.
+        func read(_ frequency: Double, _ estimator: inout PitchEstimator, seed: UInt64 = 1) throws -> TunerReading {
+            try estimator.analyze(Self.sine(frequency, rate: estimator.configuration.sampleRate,
+                                            count: estimator.configuration.windowSize, seed: seed))
+        }
+        for rate in [44_100, 48_000] {
+            // The parabola reads a 2000 Hz sine up to 1.78 cents sharp, past the band's top: it is still reported.
+            var estimator = try PitchEstimator(configuration: Self.configuration(rate: rate))
+            for (index, frequency) in [2000.0, 1999, 30, 30.05].enumerated() {
+                let pitch = try #require(try read(frequency, &estimator, seed: UInt64(index + 100)).pitch)
+                let error = Self.cents(pitch.frequency, from: frequency)
+                #expect(abs(error) <= Self.edgeSineBoundCents, "\(frequency) Hz at \(rate): \(error) cents")
+            }
+            // 10 or 25 cents beyond an edge is out of band (below 30 Hz the dip lies past the longest lag).
+            for cents in [10.0, 25] {
+                #expect(try read(2000 * exp2(cents / 1200), &estimator) == .noPitch(.outOfBand), "\(cents)")
+                #expect(try read(30 * exp2(-cents / 1200), &estimator) == .noPitch(.outOfBand), "\(cents)")
+            }
+            // With a 2500 Hz floor the search reaches 80 cents or more below it, so the band check itself refuses a
+            // tone 10 cents under the floor.
+            var high = try PitchEstimator(configuration: TunerConfiguration.make(
+                sampleRate: rate, minimumFrequency: 2500, maximumFrequency: 5000))
+            #expect(try read(2500, &high).pitch != nil)
+            #expect(try read(2500 * exp2(-10.0 / 1200), &high) == .noPitch(.outOfBand))
+        }
+    }
+
+    @Test
+    func weakOddTonesFrom41To650HzAreWithinTheirBound() throws {
+        // A sparse sweep. Near 500 to 650 Hz the doubled dip is narrow, and a parabola fitted one sample off its
+        // minimum would miss by 0.45 to 1.0 cents.
+        let frequencies = [41.5, 58, 77.5, 104, 139, 186, 249, 333, 445, 506.5, 587.5, 622.5, 638.5, 650]
+        for rate in [44_100, 48_000] {
+            var estimator = try PitchEstimator(configuration: Self.configuration(rate: rate))
+            for frequency in frequencies {
+                for seed in UInt64(1)...2 {
+                    let frame = Self.weakOddTone(frequency, rate: rate, count: 4096, seed: seed)
+                    let label = "\(frequency) Hz at \(rate), seed \(seed)"
+                    let pitch = try #require(try estimator.analyze(frame).pitch, "\(label)")
+                    let error = Self.cents(pitch.frequency, from: frequency)
+                    #expect(abs(error) <= Self.weakOddBoundCents, "\(label): \(error) cents")
+                }
+            }
+        }
+    }
+}

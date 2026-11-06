@@ -74,16 +74,20 @@ struct TunerConfiguration: Hashable, Sendable {
     }
 
     /// The longest lag the band needs at `sampleRate`.
+    /// - Precondition: `minimumFrequency` is finite and > 0, and `sampleRate` is valid (`make` validates both
+    ///   before calling); otherwise the result is meaningless or the conversion to `Int` traps.
     static func maximumLag(sampleRate: Int, minimumFrequency: Double) -> Int {
         Int((Double(sampleRate) / minimumFrequency).rounded(.up)) + 1
     }
 
     /// The shortest window that holds two of the longest lags: one to integrate over, one to shift by.
+    /// - Precondition: as for `maximumLag(sampleRate:minimumFrequency:)`; `make` validates before calling.
     static func requiredWindowSize(sampleRate: Int, minimumFrequency: Double) -> Int {
         2 * maximumLag(sampleRate: sampleRate, minimumFrequency: minimumFrequency)
     }
 
     /// The default window: the smallest power of two that is at least 2048 and the required window.
+    /// - Precondition: as for `maximumLag(sampleRate:minimumFrequency:)`; `make` validates before calling.
     static func defaultWindowSize(sampleRate: Int, minimumFrequency: Double) -> Int {
         let required = max(windowSizeRange.lowerBound,
                            requiredWindowSize(sampleRate: sampleRate, minimumFrequency: minimumFrequency))

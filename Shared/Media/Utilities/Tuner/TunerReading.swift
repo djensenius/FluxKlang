@@ -4,8 +4,10 @@
 //
 //  The typed advisory tuner stream (#111 TU1): a pitch (Hz, nearest equal-
 //  tempered note, cents from it against the A4 reference, confidence) or a
-//  typed "no pitch". A reading never carries NaN or infinity, and it is never
-//  used for control.
+//  typed "no pitch". A reading produced by `PitchEstimator` never carries NaN
+//  or infinity, and its confidence is in 0…1 (`TunerPitch` enforces this
+//  through `make`; the `.unvoiced(confidence:)` payload is a plain value a
+//  caller could build itself). A reading is never used for control.
 //
 
 import Foundation
@@ -62,7 +64,8 @@ struct TunerPitch: Hashable, Sendable {
 /// Why a frame has no pitch.
 enum TunerNoPitch: Hashable, Sendable {
     /// The frame is loud enough but not periodic enough: its best normalized difference is not below the
-    /// threshold, so `confidence` is at most `TunerConfiguration.minimumConfidence`.
+    /// threshold. When `PitchEstimator` produces it, `confidence` is finite, in `0...1` and at most
+    /// `TunerConfiguration.minimumConfidence`; the payload itself is not validated.
     case unvoiced(confidence: Double)
     /// The frame's RMS level is at or below the level floor (silence).
     case insufficientSignal
