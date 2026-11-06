@@ -118,13 +118,24 @@ struct TunerPitchTests {
         let near = try #require(try floor110.analyze(Self.weakOddTone(110.1, rate: 48_000, count: 2048)).pitch)
         #expect(abs(Self.cents(near.frequency, from: 110.1)) <= Self.weakOddBoundCents, "\(near.frequency)")
         // At 30 Hz the doubled dip is at the last lag the descent reaches (1600) and is a minimum, so the tone is
-        // read there. At 29.985 Hz (period 1600.8) d′ still falls at 1601, past that edge: the first dip stands.
+        // read there. At 29.985 Hz (period 1600.8) d′ still falls at 1601, past that edge, and d′(1601) is already
+        // below half the first dip's bound: the true period lies beyond the search, so it is out of band.
         let floorTone = Self.weakOddTone(30, rate: 48_000, count: 4096, seed: 2)
         let atFloor = try #require(try estimator.analyze(floorTone).pitch)
         #expect(abs(Self.cents(atFloor.frequency, from: 30)) <= Self.weakOddBoundCents, "\(atFloor.frequency)")
         let pastTone = Self.weakOddTone(29.985, rate: 48_000, count: 4096, seed: 2)
-        let firstDip = try #require(try estimator.analyze(pastTone).pitch)
-        #expect(abs(Self.cents(firstDip.frequency, from: 2 * 29.985)) < 10, "\(firstDip.frequency)")
+        #expect(try estimator.analyze(pastTone) == .noPitch(.outOfBand))
+        // When d′(L) does not establish that the doubled dip would win, keep the first in-band dip as ruled:
+        // 29.97 Hz, seed 1 reads about 59.85 Hz rather than guessing that the fundamental is out of band.
+        let ambiguousPastTone = Self.weakOddTone(29.97, rate: 48_000, count: 4096, seed: 1)
+        let keptFirst = try #require(try estimator.analyze(ambiguousPastTone).pitch)
+        #expect(abs(Self.cents(keptFirst.frequency, from: 2 * 29.97)) <= 10, "\(keptFirst.frequency)")
+        // Genuine tones near 60 Hz, whose doubled dip lies inside the search, still read at their fundamental.
+        for frequency in [59.8, 60, 60.4] {
+            let pitch = try #require(try estimator.analyze(Self.weakOddTone(frequency, rate: 48_000, count: 4096,
+                                                                            seed: 2)).pitch)
+            #expect(abs(Self.cents(pitch.frequency, from: frequency)) <= Self.weakOddBoundCents, "\(frequency)")
+        }
     }
 
     @Test

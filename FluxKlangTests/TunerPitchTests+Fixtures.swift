@@ -116,7 +116,8 @@ extension TunerPitchTests {
     }
 }
 
-/// Edge and sweep tests built on the fixtures above: the band tolerance, and a sparse sweep of weak-odd tones.
+/// Edge and sweep tests built on the fixtures above: the band tolerance, sparse sweeps of weak-odd tones and of
+/// high sines, and a dip between two lags.
 extension TunerPitchTests {
     @Test
     func aReadingMayExceedABandEdgeByTheToleranceOnly() throws {
@@ -161,6 +162,47 @@ extension TunerPitchTests {
                     let pitch = try #require(try estimator.analyze(frame).pitch, "\(label)")
                     let error = Self.cents(pitch.frequency, from: frequency)
                     #expect(abs(error) <= Self.weakOddBoundCents, "\(label): \(error) cents")
+                }
+            }
+        }
+    }
+
+    @Test
+    func aDipBetweenTwoLagsAboveTheThresholdIsNotReadAnOctaveLow() throws {
+        // Copilot's fixture: period 9.5 at 44.1 kHz. d′ at lags 9 and 10 both stay above a 0.05 threshold, but the
+        // refined dip between them is below it; without the off-grid rule the search ran on to lag 19 and read
+        // 2323.95 Hz at confidence 1.
+        let frequency = 44_100.0 / 9.5
+        var estimator = try PitchEstimator(configuration: TunerConfiguration.make(
+            sampleRate: 44_100, maximumFrequency: 5000, threshold: 0.05))
+        for seed in UInt64(1)...4 {
+            let frame = Self.sine(frequency, rate: 44_100, count: estimator.configuration.windowSize, seed: seed)
+            let pitch = try #require(try estimator.analyze(frame).pitch, "seed \(seed)")
+            let error = Self.cents(pitch.frequency, from: frequency)
+            #expect(abs(error) <= 5, "seed \(seed): \(error) cents")
+            #expect(pitch.confidence > estimator.configuration.minimumConfidence, "seed \(seed): \(pitch.confidence)")
+        }
+        // A sawtooth at 1664.3 Hz (period 26.5) in the default band read 832 Hz the same way.
+        var saw = try PitchEstimator(configuration: TunerConfiguration.make(sampleRate: 44_100, threshold: 0.05))
+        let pitch = try #require(try saw.analyze(Self.saw(1664.3, rate: 44_100, count: 4096)).pitch)
+        #expect(abs(Self.cents(pitch.frequency, from: 1664.3)) <= Self.harmonicBoundCents, "\(pitch.frequency)")
+    }
+
+    @Test
+    func sinesFrom1To5kHzAreNeverReadAnOctaveLow() throws {
+        // A sparse sweep in 100 Hz steps, plus every half-integer period in the band (where a dip falls midway
+        // between two lags), at low thresholds and both rates. Near the top some sines read out of band (the
+        // parabola's bias; see the header), but no reading may be an octave low.
+        for rate in [44_100, 48_000] {
+            let halfPeriods = (8...48).map { Double(rate) / (Double($0) + 0.5) }.filter { (1000...5000).contains($0) }
+            let frequencies = Array(stride(from: 1000.0, through: 5000, by: 100)) + halfPeriods
+            let frames = frequencies.map { Self.sine($0, rate: rate, count: 4096) }
+            for threshold in [0.05, 0.08, 0.1] {
+                var estimator = try PitchEstimator(configuration: TunerConfiguration.make(
+                    sampleRate: rate, maximumFrequency: 5000, threshold: threshold))
+                for (frequency, frame) in zip(frequencies, frames) {
+                    guard let pitch = try estimator.analyze(frame).pitch else { continue }
+                    #expect(pitch.frequency >= 0.75 * frequency, "\(frequency) Hz at \(rate), \(threshold)")
                 }
             }
         }

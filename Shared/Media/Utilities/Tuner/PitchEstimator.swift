@@ -13,7 +13,12 @@
 //  The period is the first lag τ ≥ 2 with d′(τ) < threshold, descended to its
 //  local minimum within the search domain 2…L − 1, then refined by a parabola
 //  through d′(τ−1), d′(τ), d′(τ+1). Confidence is 1 − the parabola's minimum,
-//  limited to 0…1 (ruling). A descent that stops at an edge of the domain
+//  limited to 0…1 (ruling). A dip that falls between two lags can stay above
+//  the threshold at both, so the search also stops at an earlier integer
+//  local minimum (d′(τ−1) > d′(τ) ≤ d′(τ+1)) whose refined minimum is below
+//  the threshold; otherwise it would run on to the doubled period and read an
+//  octave low. Either way a reported pitch has confidence > 1 − threshold.
+//  A descent that stops at an edge of the domain
 //  while d′ still falls beyond it (d′(L) < d′(L − 1), or d′(1) < d′(2)) has
 //  found a slope, not a minimum: the true dip lies outside the searched lags,
 //  so the frame is `.outOfBand`. The parabola is therefore only fitted at a
@@ -28,10 +33,16 @@
 //  This catches a weak fundamental with weak odd harmonics, whose half-period
 //  dip already crosses the threshold. It runs once (no quadrupled period) and
 //  only when 2τ ≤ L − 1, so its descent (which reads d′ through 2τ + 1) starts
-//  inside the domain; if that descent runs off the right edge, the first dip
-//  is kept. Limit: when that half-period dip spans fewer than
-//  about 35 samples (above about 650 Hz at 44.1 or 48 kHz), the bound cannot
-//  separate it from an off-grid dip, and such a tone can read an octave high.
+//  inside the domain. If that descent runs off the right edge, the doubled
+//  minimum is at most d′(L): when even d′(L) is below the ratio times the
+//  bound, the true period lies beyond the search and the frame is
+//  `.outOfBand`; otherwise the first dip is kept.
+//  Limits: when that half-period dip spans fewer than about 35 samples (above
+//  about 650 Hz at 44.1 or 48 kHz), the bound cannot separate it from an
+//  off-grid dip, and such a tone can read an octave high. Below the floor, a
+//  weak-odd tone whose doubled period is past L − 1 (2τ > L − 1, about 20 to
+//  29.9 Hz at the default floor), or whose d′(L) does not pass the ratio, is
+//  read at its half-period dip, an octave high.
 //
 //  Band: a reading may exceed a band edge by at most `bandToleranceCents`
 //  (t = 5 cents): it is accepted when min·2^(−t/1200) ≤ f ≤ max·2^(t/1200),
@@ -41,8 +52,13 @@
 //  the 30 Hz edge under 0.001 cent (measured over 48 phases each), so t is
 //  2.8 times the worst. The bias grows unevenly with frequency: a configured
 //  maximum above about 3.4 kHz at 44.1 kHz (3.7 kHz at 48 kHz) can bias a tone
-//  just inside it by more than t (up to 10.4 cents near 4.8 kHz), and such a
-//  tone reads `.outOfBand`.
+//  just inside it by more than t (up to 10.4 cents near 4.8 kHz, for sines),
+//  and such a tone reads `.outOfBand`. At a low floor the search edge
+//  (L − 1) is the stricter limit, about 0.6 cents at 30 Hz.
+//  Sawtooth limits with a 5 kHz maximum (measured at 44.1 and 48 kHz): saws
+//  near the top read up to about 18.5 cents off, and at threshold 0.05 some
+//  saws from about 3040 to 4710 Hz still read an octave low: their V-shaped
+//  first dip refines to a minimum at or above the threshold.
 //
 //  No pitch is ever guessed: silence (RMS at or below the level floor) is
 //  `.insufficientSignal`; no dip below the threshold is `.unvoiced` with the
@@ -189,6 +205,12 @@ private struct YINAnalysis {
                 guard let minimum = descend(from: lag) else { return .beyondSearch }
                 return octaveChecked(minimum)
             }
+            // A dip that falls between two lags can stay above the threshold at both: an integer local minimum
+            // whose refined value is below it is the period (lag ≤ L − 1, so d′(lag + 1) is in the scratch).
+            extend(through: lag + 1)
+            if normalized(lag - 1) > value, value <= normalized(lag + 1), vertex(lag).value < threshold {
+                return octaveChecked(lag)
+            }
             best = min(best, value)
             lag += 1
         }
@@ -229,8 +251,9 @@ private struct YINAnalysis {
         let lowerBound: Double
     }
 
-    /// The dip through d′ at `lag − 1`, `lag`, `lag + 1`. It is fitted only at a local minimum from `descend`
-    /// (both neighbours at least d′(lag)), so the curvature is at least |left − right| and |shift| ≤ ½.
+    /// The dip through d′ at `lag − 1`, `lag`, `lag + 1`. It is fitted only at a local minimum, from `descend` or
+    /// the search's off-grid rule (both neighbours at least d′(lag)), so the curvature is at least |left − right|
+    /// and |shift| ≤ ½.
     private func vertex(_ lag: Int) -> Dip {
         let left = normalized(lag - 1)
         let centre = normalized(lag)
@@ -245,11 +268,15 @@ private struct YINAnalysis {
     private mutating func octaveChecked(_ lag: Int) -> Estimate {
         let first = vertex(lag)
         let doubled = 2 * lag
-        // The descent from 2τ reads d′ through 2τ + 1, so 2τ must lie in its domain (2τ ≤ L − 1). A doubled dip
-        // that descends off the right edge is not a minimum within the searched lags: the first dip stands.
-        guard first.lowerBound >= PitchEstimator.octaveCheckFloor, doubled <= maximumLag - 1,
-              let candidate = descend(from: doubled) else {
+        // The descent from 2τ reads d′ through 2τ + 1, so 2τ must lie in its domain (2τ ≤ L − 1).
+        guard first.lowerBound >= PitchEstimator.octaveCheckFloor, doubled <= maximumLag - 1 else {
             return .period(Double(lag) + first.shift, dip: first.value)
+        }
+        guard let candidate = descend(from: doubled) else {
+            // d′ still falls at L, so the doubled minimum is at most d′(L). If even d′(L) would win, the true
+            // period lies beyond the search; otherwise the first dip stands.
+            return normalized(maximumLag) < first.lowerBound * PitchEstimator.octaveCheckRatio
+                ? .beyondSearch : .period(Double(lag) + first.shift, dip: first.value)
         }
         let second = vertex(candidate)
         guard second.value < first.lowerBound * PitchEstimator.octaveCheckRatio else {
