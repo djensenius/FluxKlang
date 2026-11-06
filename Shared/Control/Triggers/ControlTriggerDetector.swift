@@ -111,8 +111,9 @@ struct ControlTriggerDetector: Hashable, Sendable {
     /// binding, source mismatch, stale control source, input kind, non-finite, out of range, then target missing and
     /// target class, then sequence headroom. A release edge (held, and at or below `releaseAt`) skips the target
     /// checks, because it only ends an action. A refusal changes nothing. Returns the command for a press edge (or
-    /// an opted-in release edge), or `nil` when the input crosses no threshold or the edge emits nothing (a latch
-    /// already on, a release without `emitsRelease`).
+    /// an opted-in release edge), or `nil` when the edge emits nothing (a latch already on, a release without
+    /// `emitsRelease`) or when the input crosses no threshold and the target is fireable. An input that crosses no
+    /// threshold on a missing or non-`.live` target is refused with the target refusal.
     mutating func handle(_ input: ControlInput, from source: ControlSourceID, binding id: BindingID,
                          truth: ControlTriggerHostTruth) throws(ControlTriggerRefusal) -> ControlTriggerCommand? {
         guard var entry = entries[id] else { throw .unknownBinding(id) }

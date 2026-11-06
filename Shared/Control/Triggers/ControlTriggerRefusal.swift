@@ -27,9 +27,9 @@ enum ControlTriggerRefusal: Error, Hashable, Sendable {
     case inputOutOfRange(Double)
     /// Only a latch can be cleared; a toggle turns off on its own press.
     case notLatch(ControlTriggerMode)
-    /// Sequences saturate at `UInt64.max` rather than wrap. A press, switch-on or clear is refused unless the
-    /// sequences left also cover every release still owed (each held momentary binding with `emitsRelease`), so
-    /// releases are never refused for exhaustion.
+    /// Sequences saturate at `UInt64.max` rather than wrap. A press, switch-on, switch-off or clear is refused
+    /// unless the sequences left also cover every release still owed (each held momentary binding with
+    /// `emitsRelease`), so releases are never refused for exhaustion.
     case sequenceExhausted
 }
 

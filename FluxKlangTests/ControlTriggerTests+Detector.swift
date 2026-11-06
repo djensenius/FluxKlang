@@ -216,6 +216,31 @@ struct ControlTriggerDetectorTests {
     }
 
     @Test
+    func clearAndToggleSwitchOffReserveOwedReleases() throws {
+        let held = try Fixture.binding("bnd.m", emitsRelease: true)
+        for mode in [ControlTriggerMode.latch, .toggle] {
+            let output = try Fixture.binding("bnd.o", source: Fixture.button, target: Fixture.fire, mode: mode)
+            var detector = try ControlTriggerDetector(bindings: [held, output], after: .max - 3)
+            #expect(try Fixture.feed(&detector, 1, "bnd.o", source: Fixture.button)?.sequence == .max - 2)
+            #expect(try Fixture.feed(&detector, 0, "bnd.o", source: Fixture.button) == nil)
+            #expect(try Fixture.feed(&detector, 1, "bnd.m")?.sequence == .max - 1)
+            let before = detector
+            #expect(throws: ControlTriggerRefusal.sequenceExhausted) {
+                if mode == .latch {
+                    _ = try detector.clear(output.id)
+                } else {
+                    _ = try Fixture.feed(&detector, 1, "bnd.o", source: Fixture.button)
+                }
+            }
+            #expect(detector == before)
+            #expect(detector.state(of: output.id)?.isOn == true)
+            let release = try Fixture.feed(&detector, 0, "bnd.m")
+            #expect(release?.action == .release)
+            #expect(release?.sequence == .max)
+        }
+    }
+
+    @Test
     func refusalsComeInDocumentedOrderAndChangeNothing() throws {
         var detector = try ControlTriggerDetector(bindings: [Fixture.binding()])
         let before = detector

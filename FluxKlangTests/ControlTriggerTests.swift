@@ -161,6 +161,8 @@ struct ControlTriggerTests {
             + #""target":"trg.show.next"}"#
         let decoded = try ContractCoding.decode(ControlTriggerBinding.self, from: Data(wire.utf8))
         #expect(decoded.fields == (try Self.fields()))
+        // Deliberate: the decoded record keeps the `false` spelling for byte round-tripping, so records differ.
+        #expect(decoded != (try Self.binding()))
         #expect(try ContractCoding.makeEncoder().encode(decoded) == Data(wire.utf8))
         let opted = wire.replacingOccurrences(of: #""emitsRelease":false"#, with: #""emitsRelease":true"#)
         let optedIn = try ContractCoding.decode(ControlTriggerBinding.self, from: Data(opted.utf8))

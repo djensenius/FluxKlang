@@ -9,7 +9,9 @@ typealias ControlTriggerTargetID = ContractID<ControlTriggerTargetTag>
 enum ControlTriggerMode: String, Codable, Hashable, Sendable, CaseIterable {
     /// Every press edge is a `press` command; release edges are commands only when the binding asks.
     case momentary
-    /// Each press edge flips the output and emits `switchedOn` or `switchedOff`.
+    /// Each press edge flips the output and emits `switchedOn` or `switchedOff`. The switch-off press goes through
+    /// the target checks like any press, so a toggle can stay on while its target is not `.live`; a host clear for
+    /// toggles is tracked in #363.
     case toggle
     /// The first press edge emits `switchedOn`; the output stays on, ignoring presses, until an explicit clear
     /// emits `switchedOff`.
@@ -20,7 +22,9 @@ enum ControlTriggerMode: String, Codable, Hashable, Sendable, CaseIterable {
 /// position is read with hysteresis: it presses when it rises to at least `pressAt` and releases only when it falls
 /// to at most `releaseAt`, so values inside the band never chatter. Both thresholds are explicit; nothing assumes
 /// a centre. `emitsRelease` (momentary only) makes release edges commands too; `false` is normalised to `nil` when
-/// built or decoded, so bindings that behave identically compare equal (a decoded `false` still round-trips).
+/// built or decoded, so fields that behave identically compare equal. A decoded record still keeps the original
+/// `"emitsRelease":false` spelling to round-trip byte-for-byte, so it (and a detector built from it) may not be `==`
+/// to a record built from equal fields.
 struct ControlTriggerBindingFields: ControlFields {
     static let knownKeys: Set<String> = [
         "id", "source", "target", "profile", "mode", "pressAt", "releaseAt", "emitsRelease"
