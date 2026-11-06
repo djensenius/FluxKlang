@@ -113,6 +113,8 @@ struct MIDIClipContinuityTempoTests {
 
     @Test
     func aSampleReAnchorWithAnIdenticalMapAddsAndLosesNothing() throws {
+        // Plan acceptance test 3. The media contract rules this state out: a sample-clock bump always bumps the
+        // transport too (refused with `transportChangedRequiresStop`). It exercises the defensive same-transport path.
         let items = [Base.note(0, Self.quarter), Base.note(100, 30_000, pitch: 62), Base.controlChange(20_000),
                      Base.note(20_000, 20_001, pitch: 64), Base.note(40_000, 4 * Self.quarter, pitch: 65)]
         let placement = try Base.placement(items)
@@ -165,15 +167,63 @@ struct MIDIClipContinuityTempoTests {
     }
 
     @Test
-    func eventTicksFollowPassesLoopsCutsAndThePlacementStart() throws {
-        // At 120 BPM a tick is 1.5625 frames, so each frame holds at most one tick and fixes the event's tick.
+    func aFloorLeavesOutExactlyTheTicksBelowItAcrossPassesLoopsAndCuts() throws {
+        // At 120 BPM a tick is 1.5625 frames, so each frame holds at most one tick: an event's tick is at or above
+        // the floor exactly when its frame is at or after the floor tick's frame.
         let items = [Base.note(110, 150), Base.controlChange(119), Base.note(5, 30, pitch: 62), Base.controlChange(0)]
         let placement = try Base.placement(items, length: 200, start: 1001, loop: (20, 120))
         let clock = try Base.clock()
         let events = try Base.events(placement, 0, 4000, clock: clock)
         #expect(events.count == 6 + 3 * 14)
-        for event in events {
-            #expect(try clock.frame(atTicks: ExactMath.int64(placement.timelineTicks(of: event))) == event.frame)
+        for floor in Int64(990)...2610 {
+            let floorFrame = try clock.frame(atTicks: floor)
+            #expect(try placement.events(from: 0, to: 4000, clock: clock, current: Self.live, floor: floor)
+                == events.filter { $0.frame >= floorFrame }, "floor \(floor)")
+        }
+    }
+
+    @Test
+    func alreadyPlayedEventsDoNotCountTowardTheEventLimit() throws {
+        let limit = MIDIClipPlacement.maximumEvents
+        let placement = try Base.placement([Base.note(0, 4)] + Array(repeating: Base.controlChange(3), count: limit))
+        var scheduler = MIDIClipScheduler(placement: placement)
+        #expect(try scheduler.render(from: 0, to: 1, clock: Base.clock(), current: Self.live).count == 1)
+        #expect(try scheduler.render(from: 1, to: 6, clock: Base.clock(), current: Self.live).count == limit)
+        #expect(scheduler.cursorTicks == 4 && scheduler.soundingCount == 1)
+        // At 1,000 BPM ticks 3...7 all round to frame 1: the CCs at tick 3 were played, the Note Off at tick 4 was
+        // not. Collecting all 4,097 before the floor would refuse the window and strand the Note Off.
+        let revised = try Continuity.generations(map: 2)
+        let fast = try Continuity.clock(revised, segments: [(0, 60_000)])
+        try scheduler.rebind(clock: fast, current: revised, atFrame: 6)
+        #expect(scheduler.cursor == 1)
+        #expect(try scheduler.render(from: 1, to: 2, clock: fast, current: revised)
+            == [MIDIClipEvent(frame: 1, pass: 0, item: 0, message: Continuity.off(60))])
+        #expect(scheduler.soundingCount == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func theEventLimitCountsOnlyEventsAtOrAboveTheFloor(over: Bool) throws {
+        // As above, plus CCs at tick 5, unplayed and on frame 1 at 1,000 BPM: with the Note Off, `limit` events at
+        // or above the floor are allowed and one more is refused, whatever lies below it.
+        let limit = MIDIClipPlacement.maximumEvents
+        let above = limit - 1 + (over ? 1 : 0)
+        let placement = try Base.placement([Base.note(0, 4)] + Array(repeating: Base.controlChange(3), count: limit)
+                                           + Array(repeating: Base.controlChange(5), count: above))
+        var scheduler = MIDIClipScheduler(placement: placement)
+        _ = try scheduler.render(from: 0, to: 1, clock: Base.clock(), current: Self.live)
+        _ = try scheduler.render(from: 1, to: 6, clock: Base.clock(), current: Self.live)
+        let revised = try Continuity.generations(map: 2)
+        let fast = try Continuity.clock(revised, segments: [(0, 60_000)])
+        try scheduler.rebind(clock: fast, current: revised, atFrame: 6)
+        let before = scheduler
+        if over {
+            #expect(Base.refusal { try scheduler.render(from: 1, to: 2, clock: fast, current: revised) }
+                == .tooManyEvents(limit: limit))
+            #expect(scheduler == before)
+        } else {
+            let played = try scheduler.render(from: 1, to: 2, clock: fast, current: revised)
+            #expect(played.count == limit && played.first?.message == Continuity.off(60))
+            #expect(scheduler.soundingCount == 0)
         }
     }
 

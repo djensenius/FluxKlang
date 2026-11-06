@@ -54,6 +54,9 @@ enum MIDIClipRefusal: Error, Equatable, Sendable {
     case rebindWithoutRender
     /// `rebind` must happen at the cursor, where the last render ended.
     case rebindCursorMismatch(expected: Int64, frame: Int64)
-    /// The transport generation changed (a locate or loop wrap), so playback is not continuous: `stop()` first.
+    /// The transport generation changed (a locate), so playback is not continuous: `stop()` first.
     case transportChangedRequiresStop(expected: Generation, got: Generation)
+    /// The clock's transport loop iteration differs from the bound one (a loop wrap, which bumps no generation),
+    /// so playback is not continuous: `stop()` first.
+    case loopWrapRequiresStop(expected: UInt32, got: UInt32)
 }

@@ -19,12 +19,13 @@ struct MIDIClipContinuityTests {
 
     /// A clock for `current` whose anchor puts `ticks` on `frame`; 120 BPM at 48 kHz by default.
     static func clock(_ current: MIDIClipGenerations, frame: Int64 = 0, ticks: Int64 = 0, rate: Int = 48_000,
-                      segments: [(Int64, Int64)] = [(0, 500_000)]) throws -> MusicalClockMap {
+                      segments: [(Int64, Int64)] = [(0, 500_000)],
+                      loopIteration: UInt32 = 0) throws -> MusicalClockMap {
         let anchor = ClockAnchor(
             sample: SampleStamp(clock: Base.primary, generation: current.sample, frame: frame),
             host: HostStamp(ticks: 0),
             musical: MusicalStamp(transport: current.transport, musicalMap: current.musicalMap, ticks: ticks,
-                                  loopIteration: 0)
+                                  loopIteration: loopIteration)
         )
         let map = try MusicalMap(clock: Base.musical, revision: current.musicalMap,
                                  segments: segments.map { try TempoSegment(atTicks: $0.0, microsPerQuarter: $0.1) })
@@ -153,6 +154,45 @@ struct MIDIClipContinuityTests {
         #expect(try scheduler.render(from: 20_000, to: 20_001, clock: located, current: moved).map(\.message)
             == [Self.on(60)])
         #expect(scheduler.binding == moved)
+    }
+
+    @Test
+    func aLoopWrapIsRefusedUntilStop() throws {
+        let placement = try Base.placement([Base.note(0, Self.quarter), Base.note(100, 200, pitch: 62)])
+        var scheduler = MIDIClipScheduler(placement: placement)
+        _ = try scheduler.render(from: 0, to: 20_000, clock: Base.clock(), current: Self.live)
+        #expect(scheduler.soundingCount == 1 && scheduler.loopIteration == 0)
+        let before = scheduler
+        // A transport loop wrap re-anchors the loop start (tick 0) at the wrap frame and bumps only the loop
+        // iteration, no generation (media contract §5.1, §5.5).
+        let wrapped = try Self.clock(Self.live, frame: 20_000, ticks: 0, loopIteration: 1)
+        #expect(Base.refusal { try scheduler.rebind(clock: wrapped, current: Self.live, atFrame: 20_000) }
+            == .loopWrapRequiresStop(expected: 0, got: 1))
+        #expect(Base.refusal { try scheduler.render(from: 20_000, to: 20_001, clock: wrapped, current: Self.live) }
+            == .loopWrapRequiresStop(expected: 0, got: 1))
+        // A tempo revision on the wrapped clock is still a wrap.
+        let revised = try Self.generations(map: 2)
+        let wrappedRevision = try Self.clock(revised, frame: 20_000, ticks: 0, loopIteration: 1)
+        #expect(Base.refusal { try scheduler.rebind(clock: wrappedRevision, current: revised, atFrame: 20_000) }
+            == .loopWrapRequiresStop(expected: 0, got: 1))
+        #expect(scheduler == before)
+        // The caller stops, then playback restarts on the wrapped clock and a later revision rebinds as usual.
+        #expect(scheduler.stop() == [MIDIClipEvent(frame: 20_000, pass: 0, item: 0, message: Self.off(60))])
+        #expect(scheduler.loopIteration == nil)
+        #expect(try scheduler.render(from: 20_000, to: 20_001, clock: wrapped, current: Self.live).map(\.message)
+            == [Self.on(60)])
+        #expect(scheduler.loopIteration == 1)
+        let slower = try Self.clock(revised, frame: 20_000, ticks: 0, segments: [(0, 1_000_000)], loopIteration: 1)
+        try scheduler.rebind(clock: slower, current: revised, atFrame: 20_001)
+        let resume = try #require(scheduler.cursor)
+        // At 60 BPM a tick is 3.125 frames after the wrap: ticks 100 and 200 round up to 313 and 625 frames, and the
+        // Note Off at tick 15,360 lands at 48,000.
+        #expect(try scheduler.render(from: resume, to: 70_000, clock: slower, current: revised) == [
+            MIDIClipEvent(frame: 20_313, pass: 0, item: 1, message: Self.on(62)),
+            MIDIClipEvent(frame: 20_625, pass: 0, item: 1, message: Self.off(62)),
+            MIDIClipEvent(frame: 68_000, pass: 0, item: 0, message: Self.off(60))
+        ])
+        #expect(scheduler.soundingCount == 0)
     }
 
     @Test
