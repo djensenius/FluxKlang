@@ -265,6 +265,8 @@ targets:
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
       - path: FluxKlangTests/ShowTransitionTests.swift
+      - path: FluxKlangTests/ShowFootInputTests.swift
+      - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
