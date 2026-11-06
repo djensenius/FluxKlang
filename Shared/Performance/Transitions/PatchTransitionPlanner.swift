@@ -15,7 +15,44 @@ struct PatchRouteOccupancy: Hashable, Sendable {
     let pedalHolds: Int
 }
 
+/// One ledger snapshot's sounding ownership, read once and indexed by route, so updating every reservation from a
+/// snapshot never rescans the ledger per route. Only `init(_:)` builds one, from a ledger.
+struct PatchLedgerOccupancy: Sendable {
+    /// One entry per route owning a sounding note or a pedal hold, ascending by route, so a route with many notes
+    /// appears once.
+    let entries: [PatchRouteOccupancy]
+    private let index: [MIDIRouteID: PatchRouteOccupancy]
+
+    init(_ ledger: MIDINoteLedger) {
+        var notes: [MIDIRouteID: Int] = [:]
+        var holds: [MIDIRouteID: Int] = [:]
+        for instance in ledger.notes {
+            notes[instance.route, default: 0] += 1
+        }
+        for hold in ledger.pedalHolds {
+            holds[hold.route, default: 0] += 1
+        }
+        entries = Set(notes.keys).union(holds.keys).sorted().map { route in
+            PatchRouteOccupancy(route: route, notes: notes[route] ?? 0, pedalHolds: holds[route] ?? 0)
+        }
+        index = Dictionary(uniqueKeysWithValues: entries.map { ($0.route, $0) })
+    }
+
+    /// The route's entry, or nil when it owns nothing in the snapshot.
+    subscript(route: MIDIRouteID) -> PatchRouteOccupancy? {
+        index[route]
+    }
+}
+
 enum PatchTransitionPlanner {
+    /// A deferred or recalled change while merging: its patch, the recalled variation it leads to (nil: the
+    /// baseline) and the change.
+    struct MergedChange {
+        let patch: PatchID
+        var variation: PatchVariationID?
+        var change: PatchParameterChange
+    }
+
     /// Plans moving from `previous` to `routing` with `recall`'s parameter changes; see `PatchTransitionPlan.prepare`.
     static func plan(
         ledger: MIDINoteLedger, from previous: MIDIRouting, to routing: MIDIRouting, recall: PatchRecallPlan?,
@@ -27,22 +64,6 @@ enum PatchTransitionPlanner {
     /// The distinct routes of `routing`'s rules.
     static func routes(of routing: MIDIRouting) -> Set<MIDIRouteID> {
         Set(routing.rules.map(\.route))
-    }
-
-    /// One entry per route owning a sounding note or a pedal hold, ascending by route, so a route with many notes
-    /// appears once.
-    static func occupancy(of ledger: MIDINoteLedger) -> [PatchRouteOccupancy] {
-        var notes: [MIDIRouteID: Int] = [:]
-        var holds: [MIDIRouteID: Int] = [:]
-        for instance in ledger.notes {
-            notes[instance.route, default: 0] += 1
-        }
-        for hold in ledger.pedalHolds {
-            holds[hold.route, default: 0] += 1
-        }
-        return Set(notes.keys).union(holds.keys).sorted().map { route in
-            PatchRouteOccupancy(route: route, notes: notes[route] ?? 0, pedalHolds: holds[route] ?? 0)
-        }
     }
 
     /// Refuses a plan `PatchRecallPlanner` could not have produced: changes with no variation change, more than
@@ -78,21 +99,29 @@ enum PatchTransitionPlanner {
         }
     }
 
-    /// The deferred changes followed by `recall`'s, merged per (patch, parameter): a change continuing a deferred one
-    /// keeps the deferred `from` and takes the new `to`, and a merge back to the starting value drops out. Sorted by
-    /// patch, then parameter.
+    /// The deferred changes followed by `recall`'s, merged per (patch, parameter), sorted by patch, then parameter.
+    /// - The recalled patch's deferred changes must lead to `recall.from` (else `.discontinuousVariation`), so a stale
+    ///   recall is refused even when it touches none of their parameters. Afterwards they all lead to `recall.to`.
+    /// - A change continuing a deferred one must start at its `to` (else `.discontinuous`). The merge keeps the
+    ///   deferred `from` and takes the new `to`, and a merge back to the starting value drops out.
+    /// - The recalled patch's merged changes are bounded by `maximumParameterChanges` (`.tooManyMergedChanges`).
+    ///   Every other patch's deferred changes were bounded when their recall merged.
     static func merge(
-        deferred: [(patch: PatchID, change: PatchParameterChange)], recall: PatchRecallPlan?
-    ) throws(PatchTransitionRefusal) -> [(patch: PatchID, change: PatchParameterChange)] {
+        deferred: [MergedChange], recall: PatchRecallPlan?
+    ) throws(PatchTransitionRefusal) -> [MergedChange] {
         var merged = deferred
         if let recall {
-            let indices = Dictionary(
-                merged.indices.filter { merged[$0].patch == recall.patch }.map { (merged[$0].change.parameter, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
+            var indices: [ParameterID: Int] = [:]
+            for index in merged.indices where merged[index].patch == recall.patch {
+                guard merged[index].variation == recall.from else {
+                    throw .invalidRecallPlan(.discontinuousVariation(recall.patch, expected: merged[index].variation))
+                }
+                merged[index].variation = recall.to
+                indices[merged[index].change.parameter] = index
+            }
             for change in recall.changes {
                 guard let index = indices[change.parameter] else {
-                    merged.append((recall.patch, change))
+                    merged.append(MergedChange(patch: recall.patch, variation: recall.to, change: change))
                     continue
                 }
                 let earlier = merged[index].change
@@ -101,10 +130,13 @@ enum PatchTransitionPlanner {
                     parameter: change.parameter, from: earlier.from, to: change.to
                 )
             }
+            merged.removeAll { $0.change.from == $0.change.to }
+            let count = merged.count(where: { $0.patch == recall.patch })
+            let maximum = PatchTransitionPlan.maximumParameterChanges
+            guard count <= maximum else {
+                throw .tooManyMergedChanges(recall.patch, count: count, maximum: maximum)
+            }
         }
-        merged.removeAll { $0.change.from == $0.change.to }
-        let maximum = PatchTransitionPlan.maximumParameterChanges
-        guard merged.count <= maximum else { throw .tooManyParameterChanges(count: merged.count, maximum: maximum) }
         return merged.sorted { lhs, rhs in
             lhs.patch == rhs.patch ? lhs.change.parameter < rhs.change.parameter : lhs.patch < rhs.patch
         }

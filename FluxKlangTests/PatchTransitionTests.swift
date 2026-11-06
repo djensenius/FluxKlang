@@ -19,8 +19,35 @@ enum PatchTransitionFixture {
     static let patchC = PatchID(validated: "patch.c")
     static let verse = PatchVariationID(validated: "var.verse")
     static let chorus = PatchVariationID(validated: "var.chorus")
+    static let bridge = PatchVariationID(validated: "var.bridge")
     static let gain = ParameterID(validated: "par.gain")
     static let mix = ParameterID(validated: "par.mix")
+
+    /// `PatchRecallPlanner`'s plan for `patch` stored with baseline gain -12 dB, mix 0 dB and the variations verse
+    /// (gain -6, mix 1), chorus (gain 0, mix 2) and bridge (gain -6, mix 2), all in dB.
+    static func planned(
+        _ patch: PatchID, from: PatchVariationID?, to: PatchVariationID?
+    ) throws -> PatchRecallPlan {
+        let table = try PatchParameterTable(ParameterCatalog([gain, mix].map { id in
+            try ParameterDescriptor(.init(
+                id: id, unit: .decibels, lower: -90, upper: 10, defaultValue: 0, ceiling: nil, curve: .linear,
+                ramp: .step, controlClass: .live, verification: .unverified
+            ))
+        }))
+        let decibels = { (value: Double) in ParameterValue(value: value, unit: .decibels) }
+        let baseline = try PatchBaseline([gain: decibels(-12), mix: decibels(0)], table: table)
+        let variations = [(verse, -6.0, 1.0), (chorus, 0, 2), (bridge, -6, 2)].map { id, gainValue, mixValue in
+            PatchVariation(id: id, label: id.rawValue, deltas: [
+                PatchParameterDelta(parameter: gain, value: decibels(gainValue)),
+                PatchParameterDelta(parameter: mix, value: decibels(mixValue))
+            ])
+        }
+        let stored = try PatchVariationExtension.write(
+            PatchVariationSet(variations: variations),
+            to: ProjectPatch(id: patch, label: "Patch", graph: GraphID(validated: "graph.main"))
+        )
+        return try PatchRecallPlanner.plan(for: stored, table: table, baseline: baseline, from: from, to: to)
+    }
 
     static func targets() throws -> PatchRouteTargets {
         try PatchRouteTargets.make([
@@ -292,9 +319,20 @@ struct PatchTransitionTests {
         #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in
             try tracker.recall(to: routingA, recall: nil, ledger: ledger)
         } == .untrackedRoute(Fixture.routeC))
-        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in try tracker.observe(ledger) }
-            == .untrackedRoute(Fixture.routeC))
+        // A retired tracker has nothing to release, so observing returns at once without reading the ledger.
+        let idle = try tracker.observe(ledger)
+        #expect(idle.releasedRoutes.isEmpty && idle.readyChanges.isEmpty && idle.isRetired)
         #expect(tracker == before)
+
+        var retaining = try Fixture.tracker(routingA)
+        var held = MIDINoteLedger()
+        try Fixture.play(Fixture.on(48), on: &held, routing: routingA)
+        try retaining.recall(to: Fixture.routing(Fixture.routeB), recall: nil, ledger: held)
+        try Fixture.play(Fixture.on(60), on: &held, routing: try Fixture.routing(Fixture.routeC))
+        let retained = retaining
+        #expect(Fixture.refusal { () throws(PatchTransitionRefusal) in try retaining.observe(held) }
+            == .untrackedRoute(Fixture.routeC))
+        #expect(retaining == retained)
         // The static planner has no tracking; the route is simply retained.
         let plan = try PatchTransitionPlanner.plan(
             ledger: ledger, from: routingA, to: routingA, recall: nil, policy: Fixture.policy()

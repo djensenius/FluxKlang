@@ -6,8 +6,12 @@
 //
 
 /// Why a transition, budget or target table is refused. Refusals take precedence over pressure: an input that is
-/// both invalid and over budget is refused, never deferred. Checks stop at the first refusal in this order: the recall
-/// plan, the parameter change count, unbound routes (ascending), the recalled patch's routing, then untracked routes.
+/// both invalid and over budget is refused, never deferred. A prepare stops at the first refusal in this order:
+/// 1. the recall plan itself: `.changesWithoutVariationChange`, `.tooManyParameterChanges`, then per change in order
+///    `.unsorted`, `.nonFinite`, `.unitMismatch`, `.unchanged`;
+/// 2. merging with the deferred changes: `.discontinuousVariation`, then `.discontinuous` per change in order, then
+///    the merged capacity `.tooManyMergedChanges`;
+/// 3. `.unboundRoute` (lowest first), `.recallPatchNotRouted`, then (tracker only) `.untrackedRoute`.
 enum PatchTransitionRefusal: Error, Hashable, Sendable {
     /// A budget outside `PatchTransitionBudget.retainedRouteBounds` or `tailSlotBounds`.
     case invalidBudget(retainedRoutes: Int, tailSlots: Int)
@@ -19,9 +23,12 @@ enum PatchTransitionRefusal: Error, Hashable, Sendable {
     case unboundRoute(MIDIRouteID)
     /// The recall plan is not one `PatchRecallPlanner` could have produced, or does not continue a deferred change.
     case invalidRecallPlan(PatchRecallDefect)
-    /// The recall plan's changes, merged with the changes still deferred, exceed
-    /// `PatchTransitionPlan.maximumParameterChanges`.
+    /// The recall plan has more changes than `PatchTransitionPlan.maximumParameterChanges`, which no plan
+    /// `PatchRecallPlanner` produces can have.
     case tooManyParameterChanges(count: Int, maximum: Int)
+    /// A capacity refusal, not a defect of the recall plan: the patch's changes merged with those still deferred
+    /// would exceed `PatchTransitionPlan.maximumParameterChanges`.
+    case tooManyMergedChanges(PatchID, count: Int, maximum: Int)
     /// No route of the new routing plays the recalled patch, so its changes would apply nowhere.
     case recallPatchNotRouted(PatchID)
     /// The ledger sounds on a route the tracker neither routes to nor retains: the ledger was not routed with the
@@ -43,4 +50,7 @@ enum PatchRecallDefect: Hashable, Sendable {
     case changesWithoutVariationChange
     /// A change whose `from` is not the `to` of the change still deferred for the same patch and parameter.
     case discontinuous(ParameterID)
+    /// The recall's `from` is not `expected`, the variation the patch's deferred changes lead to (nil: the
+    /// baseline). Refused even when the recall changes none of the deferred parameters.
+    case discontinuousVariation(PatchID, expected: PatchVariationID?)
 }

@@ -3,14 +3,19 @@
 //  FluxKlang
 //
 //  Budgets, pressure and route-to-patch targets for patch transitions. There is no duration, timer or deadline
-//  anywhere in a transition: a retained route is held until the ledger shows its last release, however long.
+//  anywhere in a transition: a retained route is held until the ledger shows its last release, however long. A
+//  "tail" here is MIDI ownership only (sounding note instances and pedal holds); synth release envelopes are the
+//  engine's responsibility.
 //
 
-/// How a transition treats the recall plan's parameter changes (owner ruling Q-NT1a).
+/// How a transition treats the recall plan's parameter changes (owner ruling Q-NT1a, as confirmed by coordinator
+/// ruling M3).
 enum PatchParameterPolicy: Hashable, Sendable {
-    /// Changes apply to the new routing's routes for the recalled patch only. Notes and tails held on a retained route
-    /// keep their old values, so a sounding tail never changes. While any retained route plays the same patch (shares
-    /// the parameter target), that patch's changes are deferred until every such route drains.
+    /// Deferral protects only retained routes, so a retained tail never changes: while any retained route plays the
+    /// recalled patch (shares its parameter target), that patch's changes are deferred until every such route drains.
+    /// A route that stays in, or becomes part of, the new routing is current, and its patch takes the changes at once,
+    /// including on notes the route already holds: the patch instance is shared, as on any synth. Per-note protection
+    /// is out of scope.
     case newRoutesOnlyDeferWhileTargetRetained
 }
 
@@ -23,6 +28,11 @@ enum PatchTransitionPressure: Hashable, Sendable {
 }
 
 /// The caller's capacity for retained old routes and their tails. Only the throwing factory builds one.
+///
+/// The budget gates only a transition that adds retention, that is, one that retains a route not already retained.
+/// Retention already adopted can grow past the budget afterwards (a pedal pressed later adds a hold to a retained
+/// route, and a seeded tracker adopts whatever the ledger already sounds on). That growth is never cut, and it does
+/// not block a transition that adds no retention. It only defers a later transition that adds some.
 struct PatchTransitionBudget: Hashable, Sendable {
     /// At most one retained route per ledger entry.
     static let retainedRouteBounds = 0...(
