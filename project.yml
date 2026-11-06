@@ -278,6 +278,11 @@ targets:
       - path: FluxKlangTests/ShowTransitionTests.swift
       - path: FluxKlangTests/ShowFootInputTests.swift
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
+      - path: FluxKlangTests/ShowRecoveryTests.swift
+      - path: FluxKlangTests/ShowRecoveryTests+Batch.swift
+      - path: FluxKlangTests/ShowRecoveryTests+Decisions.swift
+      - path: FluxKlangTests/ShowRecoveryTests+Navigation.swift
+      - path: FluxKlangTests/ShowRecoveryTests+Randomized.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
