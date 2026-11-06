@@ -1,0 +1,62 @@
+/// Pedals whose release the ledger tracks, by controller number. Declaration order is carry order.
+enum MIDIPedal: UInt8, CaseIterable, Hashable, Sendable {
+    case sustain = 64
+    case sostenuto = 66
+}
+
+/// One input holding one pedal down on one route and channel. Ordered by route, channel, pedal, then input.
+struct MIDIPedalHold: Hashable, Comparable, Sendable {
+    let route: MIDIRouteID
+    let channel: UInt8
+    let pedal: MIDIPedal
+    let input: MIDIInputID
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.route.rawValue, lhs.channel, lhs.pedal.rawValue, lhs.input.rawValue)
+            < (rhs.route.rawValue, rhs.channel, rhs.pedal.rawValue, rhs.input.rawValue)
+    }
+}
+
+/// One note-on sent to one route. `note` is the transformed note actually sent; every release reuses it.
+struct MIDINoteInstance: Equatable, Sendable {
+    /// Shared by the instances (one per layer) that one Note On created. A Note Off releases a whole press.
+    let press: UInt64
+    let input: MIDIInputID
+    let channel: UInt8
+    let inputNote: UInt8
+    let route: MIDIRouteID
+    let note: UInt8
+    /// The key that started it has not been released.
+    var keyDown = true
+    /// Released while the route's sustain pedal (CC 64) was down on this channel.
+    var sustained = false
+    /// Key-down when the route's sostenuto pedal (CC 66) went down on this channel.
+    var sostenuto = false
+}
+
+/// A key-down press whose every layer went with a lost route or a route-scoped panic. It sounds nothing and owns no
+/// destination; it keeps the press's place in its key's release FIFO, so the press's own Note Off is consumed here
+/// and sends nothing instead of releasing a newer press of the same key. It exists only while it orders such a
+/// newer key-down press (`orders`); with none left it would only swallow the Note Off of the key's next press.
+struct MIDIReleaseMarker: Equatable, Sendable {
+    let press: UInt64
+    let input: MIDIInputID
+    let channel: UInt8
+    let inputNote: UInt8
+}
+
+extension MIDIReleaseMarker {
+    /// The marker of `instance`'s press.
+    init(of instance: MIDINoteInstance) {
+        self.init(
+            press: instance.press, input: instance.input, channel: instance.channel, inputNote: instance.inputNote
+        )
+    }
+
+    /// `instance` belongs to a newer key-down press of the same input, channel and input note, whose Note Off must
+    /// come after this marker's.
+    func orders(_ instance: MIDINoteInstance) -> Bool {
+        instance.keyDown && instance.press > press && instance.input == input && instance.channel == channel
+            && instance.inputNote == inputNote
+    }
+}
