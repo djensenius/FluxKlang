@@ -13,9 +13,13 @@
 /// observation, its age is measured from the earliest classification time among the reads of it the channel has
 /// consumed, never from when the channel consumed them, so a read consumed late is as old as its classification. A
 /// sample is applied to the level, peak hold and clip latch once, when it becomes the latest observation, and only
-/// if it is fresh then; a sample stale at that point stays stale and changes nothing. A level therefore never rises
-/// without a new, fresh reading. Unavailability does not reset the ballistics: they keep falling with time, so a
-/// later reading meets the level a continuous meter would have shown.
+/// if it is fresh then; a sample stale at that point stays stale and changes nothing. A read of a sample older than
+/// the latest one (see `Observation.isNewer`), consumed out of order, is ignored: the latest sample stays shown and
+/// keeps its age, so a stale read can never displace it and let a fresh reread of it start over. A level therefore
+/// never rises without a new, fresh reading, unless reads of different samples from different clock generations
+/// (or exactly 2^63 sequences apart at one frame) are consumed out of order; those are not ordered. Unavailability
+/// does not reset the ballistics: they keep falling with time, so a later reading meets the level a continuous
+/// meter would have shown.
 struct MeterChannelState: Equatable, Sendable {
     /// A published sample and the earliest host time it is known to have been latest: the earliest classification
     /// time of the reads of it this channel has consumed.
@@ -23,7 +27,29 @@ struct MeterChannelState: Equatable, Sendable {
         let sequence: UInt64
         let stamp: TelemetryStamp
         let firstClassified: MeterInstant
+        /// Why the sample's reading cannot be shown (NaN or +∞), or nil.
+        let invalid: MeterInvalidReading?
+
+        /// The same sample, dated `firstClassified`.
+        func dated(_ firstClassified: MeterInstant) -> Observation {
+            Observation(sequence: sequence, stamp: stamp, firstClassified: firstClassified, invalid: invalid)
+        }
+
+        /// Whether a sample stamped `other` with slot sequence `otherSequence` is older than this one. Samples are
+        /// ordered only within one clock generation; a new generation resets the order. An earlier render frame is
+        /// older. At the same frame (a stalled render clock) the sequence decides by serial-number arithmetic across
+        /// the wrap: older when this sequence is ahead by `serialWindow`. A sequence that falls back while the frame
+        /// advances is a restarted publisher (a new `TelemetrySlots` starts again at 1), so it is newer.
+        func isNewer(than other: TelemetryStamp, sequence otherSequence: UInt64) -> Bool {
+            guard other.clockGeneration == stamp.clockGeneration else { return false }
+            guard other.frame == stamp.frame else { return other.frame < stamp.frame }
+            return MeterChannelState.serialWindow.contains(sequence &- otherSequence)
+        }
     }
+
+    /// How far ahead, modulo 2^64, a slot sequence must be to count as newer: 1 through 2^63 − 1 publications
+    /// (RFC 1982 serial-number arithmetic). A distance of exactly 2^63 is not ordered.
+    static let serialWindow: ClosedRange<UInt64> = 1...(1 << 63) - 1
 
     /// A displayed value at the host time it was set; it falls from there.
     private struct Anchor: Equatable, Sendable {
@@ -53,28 +79,34 @@ struct MeterChannelState: Equatable, Sendable {
         case .unavailable(let reason): return .unavailable(MeterUnavailableReason(reason))
         case .measured(let measured): sample = measured
         }
-        let firstClassified: MeterInstant
+        let observed: Observation
         let isNew: Bool
         if let latest, latest.sequence == sample.sequence, latest.stamp == sample.stamp {
             // An older read of the same sample, consumed late, makes it older; a newer one never makes it younger.
-            firstClassified = min(latest.firstClassified, read.classifiedAt)
+            observed = latest.dated(min(latest.firstClassified, read.classifiedAt))
+            isNew = false
+        } else if let latest, latest.isNewer(than: sample.stamp, sequence: sample.sequence) {
+            // A read of an older sample, consumed out of order, is ignored: the latest sample stays shown, aged from
+            // its own classification, and nothing is applied again.
+            observed = latest
             isNew = false
         } else {
-            firstClassified = read.classifiedAt
+            observed = Observation(sequence: sample.sequence, stamp: sample.stamp, firstClassified: read.classifiedAt,
+                                   invalid: MeterInvalidReading(peakDBFS: sample.value.peakDBFS))
             isNew = true
         }
-        latest = Observation(sequence: sample.sequence, stamp: sample.stamp, firstClassified: firstClassified)
-        let age = Self.elapsed(from: firstClassified, to: now)
+        latest = observed
+        let age = Self.elapsed(from: observed.firstClassified, to: now)
         guard age <= window.nanoseconds else { return .unavailable(.stale(ageNanoseconds: age)) }
         if isNew {
             apply(sample.value, at: now, ballistics: ballistics)
         }
-        if let invalid = MeterInvalidReading(peakDBFS: sample.value.peakDBFS) {
+        if let invalid = observed.invalid {
             return .unavailable(.invalidReading(invalid))
         }
         // Unreachable: a valid sample that is fresh now was fresh when this channel began observing it (its age only
-        // grows while it stays the latest observation), so it was applied then. Unavailable rather than a made-up
-        // level.
+        // grows while it stays the latest observation, and an ignored older read leaves it alone), so it was applied
+        // then. Unavailable rather than a made-up level.
         guard let level, let peak else { return .unavailable(.neverPublished) }
         return .measured(levelDBFS: Self.fallen(level, at: now, ballistics: ballistics),
                          peakHoldDBFS: Self.held(peak, at: now, ballistics: ballistics))

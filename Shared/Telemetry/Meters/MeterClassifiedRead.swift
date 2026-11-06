@@ -38,7 +38,9 @@ struct MeterClassifiedRead: Equatable, Sendable {
     /// Classifies `read` (normally `TelemetrySlots.latest(slot:)`) with the kernel's staleness rule. `generation`
     /// and `frame` are the render clock generation and frame the caller reads from the kernel, and `classifiedAt`
     /// is the host time of that reading, on the same clock as `MeterDisplayModel.update(_:at:)`; `.unavailable`
-    /// reads pass through unchanged. The frame-age rule is checked first, so a refusal classifies nothing.
+    /// reads pass through unchanged. A time from another clock that happens to be at or before the update's `now`
+    /// cannot be detected; only one after it is refused. The frame-age rule is checked first, so a refusal
+    /// classifies nothing.
     static func classify(_ read: TelemetryRead<MeterTapValue>, generation: UInt64, frame: Int64,
                          maximumAgeFrames: Int64,
                          at classifiedAt: MeterInstant) throws(MeterDisplayRefusal) -> MeterClassifiedRead {
