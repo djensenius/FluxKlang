@@ -179,6 +179,34 @@ extension RealtimeHandoffTests {
             #expect(try successor(of: rig).inheritedRetirementLoss == loss)
         }
 
+        /// Round 2l (Copilot, thread PRRT_kwDOS3CuTM60f7vt): the last known parameter values live in the shared
+        /// `RampSlots`, so a `.replacingCycle` replacement keeps what its predecessor completed. Parameter 1 jumps to
+        /// 1, parameter 2 ramps to 1 within the block and parameter 3 is halfway to 1; the cycle retires with an empty
+        /// buffer (no loss, nothing to reconcile). The replacement reports 1, 1 and 0.5 before any run, its new ramp
+        /// on parameter 1 (to 0 over 128 frames) starts from 1, not 0, and parameter 3 completes. A `.freshFanIn`
+        /// cycle on new slots still starts at 0. Kills: the replacement resetting the shared values; values written
+        /// only to a per-cycle cache; a completed ramp's target not kept.
+        @Test func completedRampValueSurvivesReplacementAndSeedsTheNextRamp() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            for (frame, parameter, duration) in [(Int64(0), UInt32(3), Int64(128)), (10, 1, 0), (20, 2, 20)] {
+                let ramp = KernelEventPayload.rampTo(parameter: parameter, value: 1, durationFrames: duration)
+                #expect(rig.push(cycleEvent(frame, ramp), token) == .ok)
+            }
+            let (first, _) = runBlock(rig.cycle, 0)
+            #expect(first.dispatched == 3 && first.pending == 0 && rig.ramps.activeCount == 1)
+            #expect([1, 2, 3].map { rig.cycle.parameterValue($0) } == [1, 1, 0.5])
+            #expect(rig.cycle.retire() == KernelRetirementLoss())
+            let replacement = try successor(of: rig)
+            #expect([0, 1, 2, 3].map { replacement.parameterValue($0) } == [0, 1, 1, 0.5])
+            #expect(rig.push(cycleEvent(64, .rampTo(parameter: 1, value: 0, durationFrames: 128)), token) == .ok)
+            let (next, _) = runBlock(replacement, 64)
+            #expect(next.dispatched == 1 && next.refused == 0)
+            #expect([1, 2, 3].map { replacement.parameterValue($0) } == [0.5, 1, 1])
+            #expect(runBlock(replacement, 128).0.status == .ok && replacement.parameterValue(1) == 0)
+            #expect(try CycleRig().cycle.parameterValue(1) == 0)
+        }
+
         /// A `.freshFanIn` cycle takes nothing over, so it inherits no loss.
         @Test func freshFanInCycleInheritsNoLoss() throws {
             let rig = try CycleRig()

@@ -20,15 +20,18 @@ struct KernelCycleTally: Sendable, BitwiseCopyable, Equatable {
 final class KernelBlockDecider {
     let deadline: DeadlinePolicy
     private let ownership: NoteOwnership
+    /// The ramps and each parameter's last known value (`RampSlots.lastValue`): shared state, not this cycle's, so
+    /// a `.replacingCycle` replacement given the same slots starts every ramp from the value the retired cycle left
+    /// (round 2l). This decider never caches a value itself.
     private let ramps: RampSlots
     /// Latest release frame per note key: `ownership.tombstones`, shared by every cycle over that ownership (see
     /// `ReleaseTombstones`).
     private let tombstones: ReleaseTombstones
     /// The gate's cumulative counters and resync state.
     private let gate: UnsafeMutablePointer<ClockPulseGate>
-    /// Each parameter's last known value: where a replacing ramp starts when none is active.
-    private let values: UnsafeMutablePointer<Float>
-    /// Each parameter's frame offset already advanced in the current block.
+    /// Each parameter's frame offset already advanced in the current block. Per cycle: `advanceRamps` resets every
+    /// offset to 0 at the end of each block, so between runs (and so at any retirement) all are 0 and a replacement's
+    /// zeroed offsets continue exactly.
     private let advanced: UnsafeMutablePointer<Int64>
     /// The next scope a `.replacingCycle` takeover releases; `ownership.scopeCount` once none is pending.
     private let takeoverScope: UnsafeMutablePointer<Int>
@@ -52,15 +55,12 @@ final class KernelBlockDecider {
         takenOver.initialize(repeating: 0, count: ownership.scopeCount &* NoteOwnership.wordsPerScope)
         gate = .allocate(capacity: 1)
         gate.initialize(to: pulses)
-        values = .allocate(capacity: ramps.parameterCount)
-        values.initialize(repeating: 0, count: ramps.parameterCount)
         advanced = .allocate(capacity: ramps.parameterCount)
         advanced.initialize(repeating: 0, count: ramps.parameterCount)
     }
 
     deinit {
         gate.deallocate()
-        values.deallocate()
         advanced.deallocate()
         takeoverScope.deallocate()
         takenOver.deallocate()
@@ -120,10 +120,10 @@ final class KernelBlockDecider {
     /// The gate's cumulative counters and resync state.
     var pulses: ClockPulseGate { gate.pointee }
 
-    /// `parameter`'s value at the end of the last block, or `nil` when out of range.
+    /// `parameter`'s last known value in the shared `RampSlots` (at the end of the last block run over them, by this
+    /// cycle or its retired predecessor), or `nil` when out of range.
     func parameterValue(_ parameter: UInt32) -> Float? {
-        guard parameter < UInt32(truncatingIfNeeded: ramps.parameterCount) else { return nil }
-        return values[Int(parameter)]
+        ramps.lastValue(parameter: parameter)
     }
 
     /// Step 4: decides and applies `block`'s entries in order; keeps the first `notYet` and everything after it.
@@ -224,26 +224,21 @@ final class KernelBlockDecider {
     }
 
     /// Advances `parameter`'s active ramp to `offset`, then replaces it from that value (or the last known value
-    /// when idle). `false` when `RampSlots` refuses; the old ramp then keeps running from `offset`.
+    /// when idle, which `RampSlots` keeps). `false` when `RampSlots` refuses; the old ramp then keeps running from
+    /// `offset`.
     private func startRamp(_ parameter: UInt32, _ target: Float, _ duration: Int64, at offset: Int64) -> Bool {
-        guard parameter < UInt32(truncatingIfNeeded: ramps.parameterCount) else { return false }
+        guard let current = ramps.lastValue(parameter: parameter) else { return false }
         let index = Int(parameter)
         // Due events are decided in frame order, so `offset >= advanced[index]` within a block.
-        if let value = ramps.advance(parameter: parameter, frames: offset &- advanced[index]) {
-            values[index] = value
-        }
+        let value = ramps.advance(parameter: parameter, frames: offset &- advanced[index]) ?? current
         advanced[index] = offset
-        return ramps.set(parameter: parameter, target: target, durationFrames: duration,
-                         current: values[index]) == .ok
+        return ramps.set(parameter: parameter, target: target, durationFrames: duration, current: value) == .ok
     }
 
     /// Step 6: advances every parameter to the block's end and resets the per-block offsets.
     func advanceRamps(to frames: Int64) {
         for index in 0..<ramps.parameterCount {
-            if let value = ramps.advance(parameter: UInt32(truncatingIfNeeded: index),
-                                         frames: frames &- advanced[index]) {
-                values[index] = value
-            }
+            _ = ramps.advance(parameter: UInt32(truncatingIfNeeded: index), frames: frames &- advanced[index])
             advanced[index] = 0
         }
     }
