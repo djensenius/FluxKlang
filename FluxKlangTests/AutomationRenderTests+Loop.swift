@@ -92,6 +92,77 @@ struct AutomationRenderLoopTests {
         #expect(renderer.arbiter.value == 0.4)
     }
 
+    enum Handback: CaseIterable { case catchUp, glide, latch }
+
+    struct HandbackRun {
+        let whole: [AutomationRampEvent]
+        let split: [AutomationRampEvent]
+        let owner: ParameterOwnership
+    }
+
+    /// Renders `[1000, total)` after a gesture released at frame 1000, in one block and split at every wrap.
+    static func handback(_ kind: Handback, total: Int64) throws -> HandbackRun {
+        let loop = try LoopRange(startTicks: 0, endTicks: 2_000)
+        let clock = try Fixture.clock()
+        let points: [AutomationBreakpoint] = kind == .latch
+            ? [.init(ticks: 0, value: 0), .init(ticks: 1_500, value: 0.6), .init(ticks: 4_000, value: 1)]
+            : [.init(ticks: 0, value: 0), .init(ticks: 4_000, value: 1)]
+        // The glide outlasts the first pass; the latch ends at 1500 and its short glide ends before the wrap.
+        let resume: AutomationResume = switch kind {
+        case .catchUp: .catch
+        case .glide: .glide(ticks: 1_500)
+        case .latch: .glide(ticks: 100)
+        }
+        var renderer = try Fixture.renderer(Fixture.lane(points), mode: kind == .latch ? .latch : .touch,
+                                            resume: resume, loop: loop)
+        _ = try renderer.render(from: 0, to: 1_000, clock: clock, current: Fixture.live)
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        _ = try renderer.perform(.move(Fixture.fader, to: kind == .catchUp ? 0.3 : 0.9))
+        _ = try renderer.perform(.release(Fixture.fader))
+        var whole = renderer
+        let events = try whole.render(from: 1_000, to: total, clock: clock, current: Fixture.live)
+        var split = renderer
+        // Wraps fall at frames 3125 and 6250.
+        let wrap = try clock.frame(atTicks: loop.endTicks)
+        let blocks = [wrap - 1_000, wrap, total - 2 * wrap]
+        let others = try Fixture.render(&split, from: 1_000, blocks: blocks, clock: clock)
+        #expect(split.arbiter == whole.arbiter)
+        return HandbackRun(whole: events, split: others, owner: whole.arbiter.owner)
+    }
+
+    @Test(arguments: Handback.allCases)
+    func aHandBackAcrossAWrapInsideABlockMatchesASplitAtTheWrap(kind: Handback) throws {
+        let run = try Self.handback(kind, total: 8_000)
+        #expect(run.split.map(\.frame) == run.whole.map(\.frame))
+        #expect(run.split.map(\.value) == run.whole.map(\.value))
+        #expect(run.split.map(\.rampFrames) == run.whole.map(\.rampFrames))
+        #expect(run.split.map(\.reason) == run.whole.map(\.reason))
+        // The arbiter's own change is rendered up to the first wrap, as a wrap on a block boundary renders it.
+        let held = try #require(run.whole.last { $0.frame < 3_125 })
+        #expect(held.reason == .hold && held.frame + held.rampFrames == 3_125)
+        #expect(run.whole.contains { $0.frame == 6_250 && $0.reason == .loopWrap })
+        #expect(run.owner == .automation)
+    }
+
+    @Test func wrapsUpToTheLimitRenderAndOneMoreIsRefused() throws {
+        // Loop [0, 40) at 120 BPM and 48 kHz: a 62.5-frame pass, so wraps fall every 63 frames.
+        let loop = try LoopRange(startTicks: 0, endTicks: 40)
+        let clock = try Fixture.clock()
+        let limit = Int64(AutomationBlockRenderer.maximumWraps)
+        var renderer = try Fixture.renderer(Fixture.lane([.init(ticks: 0, value: 0.5)]), loop: loop)
+        _ = try renderer.render(from: 0, to: 1, clock: clock, current: Fixture.live)
+        // A gesture holds the value, so no wrap emits an event.
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        var full = renderer
+        #expect(try full.render(from: 1, to: 63 * limit + 1, clock: clock, current: Fixture.live).isEmpty)
+        #expect(full.cursor == 63 * limit + 1)
+        let before = renderer
+        #expect(throws: AutomationRenderRefusal.tooManyWraps(limit: AutomationBlockRenderer.maximumWraps)) {
+            try renderer.render(from: 1, to: 63 * (limit + 1) + 1, clock: clock, current: Fixture.live)
+        }
+        #expect(renderer == before)
+    }
+
     @Test func aLoopShorterThanAFrameIsRefused() throws {
         let loop = try LoopRange(startTicks: 0, endTicks: 1)
         let clock = try Fixture.clock(rate: 44_100, segments: [(0, 60_000)])

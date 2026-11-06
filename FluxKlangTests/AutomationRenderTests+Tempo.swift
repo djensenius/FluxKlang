@@ -28,8 +28,8 @@ struct AutomationRenderTempoTests {
     struct PowerError {
         /// The largest difference between the rendered trajectory and the curve over the segment's frames.
         let error: Double
-        /// The curve's largest one-frame change over the segment.
-        let step: Double
+        /// The largest difference less the curve's largest one-frame change within the sub-ramp it falls in.
+        let excess: Double
         /// The number of ramps rendered.
         let ramps: Int
     }
@@ -42,14 +42,15 @@ struct AutomationRenderTempoTests {
         var renderer = try Fixture.renderer(lane)
         let events = try Fixture.render(&renderer, from: 0, blocks: Fixture.splits(end, seed: seed), clock: clock)
         let values = Fixture.trajectory(events, from: 0, to: end)
-        var error = 0.0, step = 0.0, previous: Double?
-        for frame in 0..<end {
-            let curve = try #require(try lane.value(at: Fixture.position(clock, frame)))
-            error = max(error, abs(values[Int(frame)] - curve))
-            if let previous { step = max(step, abs(curve - previous)) }
-            previous = curve
+        let curve = try (0..<end).map { try #require(try lane.value(at: Fixture.position(clock, $0))) }
+        let error = zip(values, curve).map { abs($0 - $1) }.max() ?? 0
+        var excess = 0.0
+        for ramp in events where ramp.rampFrames > 0 {
+            let frames = Int(ramp.frame)...Int(ramp.frame + ramp.rampFrames)
+            let step = zip(curve[frames].dropFirst(), curve[frames]).map { abs($0 - $1) }.max() ?? 0
+            for frame in frames { excess = max(excess, abs(values[frame] - curve[frame]) - step) }
         }
-        return PowerError(error: error / 0.8, step: step / 0.8, ramps: events.count { $0.rampFrames > 0 })
+        return PowerError(error: error / 0.8, excess: excess / 0.8, ramps: events.count { $0.rampFrames > 0 })
     }
 
     @Test(arguments: [0.125, 0.25, 0.5, 0.8, 1, 1.5, 3, 8])
@@ -60,12 +61,62 @@ struct AutomationRenderTempoTests {
             // Owner ruling Q-T2: at most eight linear sub-ramps per power segment.
             #expect(long.ramps <= 8)
             for ticks in [Int64(5), 40, 300] {
+                // Knots snap to whole frames: each sub-ramp may also be off by its own largest one-frame change.
                 let short = try Self.powerError(exponent: exponent, ticks: ticks, rate: rate, seed: 4)
-                #expect(short.error <= AutomationPowerApproximation.errorBound + short.step,
+                #expect(short.excess <= AutomationPowerApproximation.errorBound,
                         "p \(exponent), \(ticks) ticks at \(rate) Hz")
                 #expect(short.ramps <= 8)
             }
         }
+    }
+
+    @Test func aPowerSegmentAcrossTempoChangesAddsOneExactPointPerChange() throws {
+        // Coordinator ruling: each crossing gets the exact mapped frame; the cap of 8 bounds the sub-ramps.
+        let ticks = 4 * Fixture.quarter
+        let changes: [Int64] = [20_000, 41_000]
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.1, interpolation: .power(3)),
+                                     .init(ticks: ticks, value: 0.9)])
+        let clock = try Fixture.clock(segments: [(0, 500_000), (changes[0], 380_000), (changes[1], 610_000)])
+        var renderer = try Fixture.renderer(lane)
+        let end = try clock.frame(atTicks: ticks)
+        let events = try Fixture.render(&renderer, from: 0, blocks: Fixture.splits(end + 1, seed: 21), clock: clock)
+        let ramps = events.filter { $0.rampFrames > 0 }
+        let ends = ramps.map { $0.frame + $0.rampFrames }
+        for change in changes {
+            let frame = try clock.frame(atTicks: change)
+            let ramp = try #require(ramps.first { $0.frame + $0.rampFrames == frame })
+            #expect(ramp.value == (try lane.value(at: Double(change))))
+        }
+        #expect(ends.last == end)
+        let mapped = try changes.map { try clock.frame(atTicks: $0) } + [end]
+        #expect(ends.count { !mapped.contains($0) } <= AutomationPowerApproximation.maximumSubRamps - 1)
+        #expect(ramps.count <= AutomationPowerApproximation.maximumSubRamps + changes.count)
+    }
+
+    @Test func powerKnotsAgreeAcrossRatesToWithinOneFramesChange() throws {
+        let ticks = 4 * Fixture.quarter
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.1, interpolation: .power(3)),
+                                     .init(ticks: ticks, value: 0.9)])
+        var rendered: [[AutomationRampEvent]] = []
+        for rate in [44_100, 96_000] {
+            let clock = try Fixture.clock(rate: rate)
+            var renderer = try Fixture.renderer(lane)
+            let end = try clock.frame(atTicks: ticks) + 1
+            rendered.append(try Fixture.render(&renderer, from: 0, blocks: Fixture.splits(end, seed: 22), clock: clock))
+        }
+        let (low, high) = (rendered[0], rendered[1])
+        #expect(low.count == high.count)
+        #expect(low.map(\.reason) == high.map(\.reason))
+        // Breakpoint values are identical; interior knots, on whole frames, within the curve's largest change over
+        // one 44.1 kHz frame.
+        #expect(low.first?.value == high.first?.value && low.last?.value == high.last?.value)
+        let clock = try Fixture.clock(rate: 44_100)
+        let curve = try (0...clock.frame(atTicks: ticks)).map {
+            try #require(try lane.value(at: Fixture.position(clock, $0)))
+        }
+        let step = zip(curve.dropFirst(), curve).map { $0 - $1 }.max() ?? 0
+        #expect(zip(low, high).allSatisfy { abs($0.value - $1.value) <= step })
+        #expect(zip(low, high).contains { $0.value != $1.value })
     }
 
     @Test(arguments: [0.3, 0.7, 2.5, 6])
@@ -181,6 +232,31 @@ struct AutomationRenderTempoTests {
         let events = try renderer.render(from: step, to: step + 1_000, clock: clock, current: Fixture.live)
         #expect(events == [AutomationRampEvent(frame: step, offset: 0, value: 0.8, rampFrames: 0, reason: .resume)])
         #expect(renderer.isRenderingLane)
+    }
+
+    @Test func aCatchInsideABlockHoldsItsValueUntilTheStepItCaught() throws {
+        // The step at 20000 (frame 31250) crosses the held 0.5 inside one long block.
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.2, interpolation: .step),
+                                     .init(ticks: 20_000, value: 0.8, interpolation: .step)])
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(20_000, on: clock)
+        var renderer = try Fixture.renderer(lane, resume: .catch)
+        _ = try renderer.render(from: 0, to: 2_000, clock: clock, current: Fixture.live)
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        _ = try renderer.perform(.move(Fixture.fader, to: 0.5))
+        _ = try renderer.perform(.release(Fixture.fader))
+        var whole = renderer
+        let events = try whole.render(from: 2_000, to: 40_000, clock: clock, current: Fixture.live)
+        #expect(events == [
+            AutomationRampEvent(frame: 2_000, offset: 0, value: 0.5, rampFrames: 0, reason: .hold),
+            AutomationRampEvent(frame: step, offset: Int(step - 2_000), value: 0.8, rampFrames: 0, reason: .resume)
+        ])
+        var split = renderer
+        let others = try Fixture.render(&split, from: 2_000, blocks: [step - 2_000, 40_000 - step], clock: clock)
+        #expect(others.map(\.frame) == events.map(\.frame))
+        #expect(others.map(\.value) == events.map(\.value))
+        #expect(others.map(\.rampFrames) == events.map(\.rampFrames))
+        #expect(others.map(\.reason) == events.map(\.reason))
     }
 
     @Test func gesturesNeedARenderAndRefusedGesturesChangeNothing() throws {

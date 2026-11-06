@@ -29,6 +29,8 @@ enum AutomationRenderRefusal: Error, Equatable, Sendable {
     case positionMismatch(frame: Int64)
     /// The loop is shorter than one frame at this tempo and rate, so the transport would never advance.
     case nonAdvancingLoop
+    /// The block would wrap the loop more than `limit` times (a loop of a few frames held by a gesture).
+    case tooManyWraps(limit: Int)
     /// A gesture arrived before the first render, so it has no position.
     case notStarted
     /// The arbiter or lane refused (for example a gesture from a source that is not touching).

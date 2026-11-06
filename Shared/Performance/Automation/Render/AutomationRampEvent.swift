@@ -53,3 +53,18 @@ enum AutomationRenderGesture: Hashable, Sendable {
     case release(ControlSourceID)
     case setMode(AutomationMode)
 }
+
+/// The ramp a host following the events is on: from `start` at `startFrame` to `target` at `end`.
+struct AutomationHostRamp: Hashable, Sendable {
+    let start: Double
+    let startFrame: Int64
+    let target: Double
+    let end: Int64
+
+    /// The value the host holds at `frame`, before any event on that frame.
+    func value(at frame: Int64) -> Double {
+        guard frame < end else { return target }
+        guard frame > startFrame else { return start }
+        return AutomationLane.blend(start, target, at: Double(frame - startFrame) / Double(end - startFrame))
+    }
+}
