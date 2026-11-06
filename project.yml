@@ -245,6 +245,7 @@ targets:
       - path: FluxKlangTests/MeterDisplayTests+Ballistics.swift
       - path: FluxKlangTests/MeterDisplayTests+Staleness.swift
       - path: FluxKlangTests/MeterDisplayTests+LateConsumption.swift
+      - path: FluxKlangTests/MeterDisplayTests+Ordering.swift
       - path: FluxKlangTests/OSCSchedulingTests.swift
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
@@ -266,6 +267,8 @@ targets:
       - path: FluxKlangTests/ShowTransitionTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
@@ -325,6 +328,7 @@ targets:
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
       - path: FluxKlangTests/ControlTriggerTests+Detector.swift
+      - path: FluxKlangTests/ControlTriggerTests+Clear.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
       - path: FluxKlangTests/SpatialAdapterTests+DBAP.swift

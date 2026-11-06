@@ -18,7 +18,10 @@
 /// since long before the meter first looked is therefore never shown as live. The classification only holds at the
 /// host time it was made, so `MeterDisplayModel` measures host-time staleness from `classifiedAt`, not from when it
 /// consumes the read: a read held back past the staleness window is stale in any model, including a new or rebound
-/// one.
+/// one. Reads need not be consumed in classification order: a read from another clock generation classified before
+/// a channel's latest sample was first classified, or a read of an earlier frame or older sequence in the same
+/// generation, is ignored and counted (see the ordering contract on `MeterChannelState`). Across generations,
+/// `classifiedAt` is the only order, so every read must be classified with one monotonic host clock.
 struct MeterClassifiedRead: Equatable, Sendable {
     /// 1 frame through 2^24 frames inclusive (about 5.8 min at 48 kHz, 43.7 s at 384 kHz). Zero, negative and
     /// longer frame-age rules are refused: they would show nothing or let a long-dead sample through.

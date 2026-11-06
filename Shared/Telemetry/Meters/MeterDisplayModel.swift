@@ -28,6 +28,13 @@ struct MeterChannelDisplay: Equatable, Sendable {
 /// consumes it, and it never feeds the level, peak hold or clip latch. Fader or gain positions are control values
 /// with no entry point: a `faderTravelOnly` or gated source shows "Unavailable" with that reason and refuses any
 /// reads. Refused calls leave the model unchanged.
+///
+/// Reads may be consumed in any order: each channel ignores, and counts in `ignoredReads`, a read of a sample older
+/// than its latest one. Across clock generations that means only classified before the latest sample was first
+/// classified (equal times are ambiguous and the read consumed later wins); within one generation, an earlier frame
+/// or an older sequence at the same frame. Such a read never restarts a peak hold or raises a level. Classification
+/// order assumes every read is classified with the same monotonic host clock as `update(_:at:)`; see the ordering
+/// contract on `MeterChannelState`.
 struct MeterDisplayModel: Equatable, Sendable {
     let staleness: MeterStalenessWindow
     let ballistics: MeterBallistics
@@ -76,6 +83,14 @@ struct MeterDisplayModel: Equatable, Sendable {
         return .channels(displays)
     }
 
+    /// Reads each channel has ignored since this model was created or last rebound, in channel order; empty for a
+    /// source that is not measured.
+    /// The counts take part in `Equatable`, so after an ignored read the model compares unequal to an otherwise
+    /// identical one.
+    var ignoredReads: [MeterIgnoredReadCounts] {
+        channels.map(\.ignoredReads)
+    }
+
     /// Clears every channel's clip latch; levels, peak holds and observations are unchanged.
     mutating func resetClip() {
         for index in channels.indices {
@@ -84,9 +99,9 @@ struct MeterDisplayModel: Equatable, Sendable {
     }
 
     /// Binds the meter to `source`, which counts as a source change even when equal to the current one: every
-    /// channel's observation, level, peak hold and clip latch starts afresh. The last update time is kept, so
-    /// host time stays monotonic across the change, and reads are still aged from their classification time, so a
-    /// rebind never makes a late read fresh.
+    /// channel's observation, level, peak hold, clip latch, sample order and ignored-read counts start afresh. The
+    /// last update time is kept, so host time stays monotonic across the change, and reads are still aged from their
+    /// classification time, so a rebind never makes a late read fresh.
     mutating func rebind(to source: MeterSource) {
         self.source = source
         channels = Array(repeating: MeterChannelState(), count: source.channelCount)
