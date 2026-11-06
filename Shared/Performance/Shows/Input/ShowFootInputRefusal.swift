@@ -23,7 +23,7 @@ enum ShowFootInputRefusal: Error, Hashable, Sendable {
     /// A control source on a navigation target has no show source.
     case unmappedSource(ControlSourceID)
     /// A command on a navigation target does not come from a binding the adapter validated for it: its binding ID
-    /// is unknown, its target or source differs from that binding's, or its action is one a momentary binding never
-    /// emits (`switchedOn`, `switchedOff`).
+    /// is unknown, its target or source differs from that binding's, or it is a `switchedOn` / `switchedOff` with
+    /// cause `.input`; host-caused commands that pass the binding check are never refused.
     case bindingTargetUnknown(BindingID)
 }

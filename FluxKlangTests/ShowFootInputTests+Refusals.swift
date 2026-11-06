@@ -150,6 +150,16 @@ struct ShowFootInputRefusalTests {
         let cleared = try #require(try detector.clear(BindingID("bnd.foot-6")))
         #expect(cleared.cause == .clear)
         #expect(try adapter.input(for: cleared, tick: 1) == .notNavigation(.hostCause))
+        // The binding check comes before the cause check: a host-caused release from an unknown binding is refused.
+        let unknownRelease = try Fix.binding("bnd.unknown-r", foot: 2, target: Fix.nextSong, emitsRelease: true)
+        var second = try ControlTriggerDetector(bindings: [unknownRelease])
+        _ = try #require(try Fix.feed(&second, "bnd.unknown-r", 1))
+        let forgotten = try #require(try second.forgetHeld(on: [Fix.control(2)]).first)
+        #expect(forgotten.cause == .disconnect)
+        let unknownID = try BindingID("bnd.unknown-r")
+        #expect(throws: ShowFootInputRefusal.bindingTargetUnknown(unknownID)) {
+            try adapter.input(for: forgotten, tick: 1)
+        }
     }
 
     @Test

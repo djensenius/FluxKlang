@@ -18,7 +18,10 @@ struct ShowFootswitchMap: Hashable, Sendable {
     var commands: [ControlTriggerTargetID: ShowNavigationCommand] { storedCommands }
     /// One to one: no two control sources share a show source.
     var sources: [ControlSourceID: ShowInputSourceID] { storedSources }
-    /// The show sources in control source ID order, for `ShowCursor.make(sources:)`.
+    /// The show sources in control source ID order, for `ShowCursor.make(setlist:bounceTicks:sources:in:)`.
+    /// The caller merges in any other (for example onscreen) sources, which must not overlap these: an empty map
+    /// gives `[]`, which the cursor refuses, and 8 footswitch sources use every slot of
+    /// `ShowLimits.maximumInputSources`.
     var showSources: [ShowInputSourceID] { storedSources.sorted { $0.key < $1.key }.map(\.value) }
 
     private init(commands: [ControlTriggerTargetID: ShowNavigationCommand],

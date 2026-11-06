@@ -9,6 +9,16 @@
 //  by the cursor, and the detector's sequence passes through unchanged, so a
 //  re-delivered command gives an identical input that the cursor ignores.
 //
+//  Caller requirements:
+//  - Footswitch show sources must not overlap any other input source (for
+//    example onscreen) feeding the same cursor. One to one is enforced only
+//    among footswitch sources; an overlap makes two sequence counters feed one
+//    source, so presses are refused as `staleSequence` or ignored as duplicates.
+//  - A rebuilt detector must resume its counter with
+//    `ControlTriggerDetector(bindings:after:)`, passing the old `lastSequence`;
+//    otherwise reissued sequences make `ShowCursor` ignore real presses as
+//    `.duplicateSequence` or refuse them as `staleSequence`.
+//
 
 /// Why a trigger command is not navigation. Not a refusal: the caller simply has nothing to send to the cursor.
 enum ShowFootIgnoral: Hashable, Sendable {
