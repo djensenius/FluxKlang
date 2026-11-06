@@ -120,9 +120,11 @@ struct MIDIClipPlacement: Equatable, Sendable {
     /// Every scheduled event whose frame lies in `[start, end)` through `clock`, ordered by frame, then Note Offs
     /// before Note Ons and other events, then pass, onset tick and authoring order. A note whose On and Off round
     /// to one frame has its Off right after its own On, before any later-starting note in that frame. Adjacent
-    /// windows on one map split the events exactly. Nothing is cached.
-    func events(from start: Int64, to end: Int64, clock: MusicalClockMap,
-                current: MIDIClipGenerations) throws(MIDIClipRefusal) -> [MIDIClipEvent] {
+    /// windows on one map split the events exactly. Nothing is cached. With a `floor`, events of timeline ticks
+    /// below it are left out before the event limit is checked (a rebound scheduler's already-played ticks, #112
+    /// CL3); the default `nil` leaves out nothing.
+    func events(from start: Int64, to end: Int64, clock: MusicalClockMap, current: MIDIClipGenerations,
+                floor: Int64? = nil) throws(MIDIClipRefusal) -> [MIDIClipEvent] {
         guard start <= end else { throw .invalidWindow(start: start, end: end) }
         let (span, overflow) = end.subtractingReportingOverflow(start)
         guard !overflow, span <= Self.maximumWindowFrames else {
@@ -130,13 +132,15 @@ struct MIDIClipPlacement: Equatable, Sendable {
         }
         try Self.validate(clock, current: current)
         guard start < end else { return [] }
-        return try mapped { () throws(ClockMapError) in try collect(from: start, to: end, clock: clock) }
+        return try mapped { () throws(ClockMapError) in try collect(from: start, to: end, floor: floor, clock: clock) }
     }
 
-    private func collect(from start: Int64, to end: Int64,
+    private func collect(from start: Int64, to end: Int64, floor: Int64?,
                          clock: MusicalClockMap) throws(ClockMapError) -> [MIDIClipEvent]? {
-        // By monotonicity, a tick's frame lies in [start, end) exactly when the tick lies in [low, high).
-        let low = Int128(try Self.firstTick(atOrAfterFrame: start, clock: clock))
+        // By monotonicity, a tick's frame lies in [start, end) exactly when the tick lies in [low, high). The floor
+        // raises `low`, so ticks below it are never collected and never count toward the event limit.
+        var low = Int128(try Self.firstTick(atOrAfterFrame: start, clock: clock))
+        if let floor { low = max(low, Int128(floor)) }
         let high = Int128(try Self.firstTick(atOrAfterFrame: end, clock: clock))
         guard let passes = passes(from: low - Int128(startTicks), to: high - Int128(startTicks)) else { return [] }
         var ranked: [Ranked] = []
