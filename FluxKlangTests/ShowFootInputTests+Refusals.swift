@@ -160,6 +160,20 @@ struct ShowFootInputRefusalTests {
         #expect(throws: ShowFootInputRefusal.bindingTargetUnknown(unknownID)) {
             try adapter.input(for: forgotten, tick: 1)
         }
+        // The same order for a clear: a host-caused switch-off from an unknown latch is refused.
+        let unknownLatch = try Fix.binding("bnd.unknown-l", foot: 2, target: Fix.nextSong, mode: .latch)
+        var third = try ControlTriggerDetector(bindings: [unknownLatch])
+        let latched = try #require(try Fix.feed(&third, "bnd.unknown-l", 1))
+        #expect(latched.action == .switchedOn)
+        let unknownLatchID = try BindingID("bnd.unknown-l")
+        #expect(throws: ShowFootInputRefusal.bindingTargetUnknown(unknownLatchID)) {
+            try adapter.input(for: latched, tick: 1)
+        }
+        let unknownClear = try #require(try third.clear(unknownLatchID))
+        #expect(unknownClear.cause == .clear)
+        #expect(throws: ShowFootInputRefusal.bindingTargetUnknown(unknownLatchID)) {
+            try adapter.input(for: unknownClear, tick: 1)
+        }
     }
 
     @Test
