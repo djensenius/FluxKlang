@@ -172,10 +172,31 @@ struct RigMappingCandidateTests {
             Fixture.route("route.ok", role: "role.ok", device: "dev.a", binding: .proposed)
         ]
         let mixedRoles = try roles + [Fixture.role("role.mis"), Fixture.role("role.ok")]
-        let mixed = try Fixture.proposal(mixedRoles, devices, routes: Array(filler.prefix(4_092)) + kept)
+        let mixedDocument = try Fixture.document(devices, routes: Array(filler.prefix(4_092)) + kept)
+        let mixed = try RigMappingProposal.make(roles: mixedRoles, devices: mixedDocument)
         #expect(mixed.proposedRoutes.map(\.role.rawValue) == ["role.a", "role.b"])
         #expect(mixed.mismatched.map(\.rawValue) == ["role.mis"])
         #expect(try Fixture.outcome(mixed, "role.ok") == .alreadyRouted([RouteID("route.ok")]))
+        try Fixture.documented(mixed, over: mixedDocument).validate(roles: mixed.requirements)
+    }
+
+    @Test func theBudgetRunsOutPartwayThroughTheRoles() throws {
+        // One slot left. Mono roles have two blocks on the stereo device; the stereo role has one.
+        let devices = try [Fixture.device("dev.a", outputs: 2)]
+        let filler = try (1..<DeviceCapabilityLimits.routes).map {
+            try Fixture.route("route.fill.\($0)", role: "role.fill", device: "dev.a", binding: .stale)
+        }
+        let roles = try [Fixture.role("role.c", channels: 1), Fixture.role("role.b"),
+                         Fixture.role("role.a", channels: 1)]
+        let proposal = try Fixture.proposal(roles, devices, routes: filler)
+        // Nothing is reserved for `role.a`'s choice, so `role.b` takes the last slot.
+        #expect(Fixture.candidates(proposal, "role.a")?.candidates.count == 2)
+        #expect(proposal.proposedRoutes.map(\.role.rawValue) == ["role.b"])
+        #expect(Fixture.outcome(proposal, "role.c") == .unmapped(.routeCapacityExhausted(limit: 4_096)))
+        let choice = try #require(Fixture.candidates(proposal, "role.a")?.candidates.first)
+        #expect(throws: RigMappingRefusal.routeCapacityExhausted(limit: 4_096)) {
+            try proposal.choosing(choice, id: RouteID("route.user.a"))
+        }
     }
 
     @Test func choicesStopAtTheRouteCapacity() throws {

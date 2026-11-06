@@ -300,6 +300,10 @@ struct RigMappingTests {
         // Each role had exactly one free block, yet no second route is proposed beside the stale one.
         #expect(proposal.proposedRoutes.isEmpty && proposal.awaitingChoice.isEmpty && proposal.unmapped.isEmpty)
         #expect(proposal.requirements.count == 3)
+        let document = try Fixture.document(devices, routes: routes)
+        let combined = try Fixture.documented(proposal, over: document)
+        #expect(combined.routes.map(\.id.rawValue) == ["route.ok"])
+        try combined.validate(roles: proposal.requirements)
     }
 
     @Test func legacyRolesWithoutAChannelCountKeepTheirExistingRoutes() throws {
@@ -345,27 +349,39 @@ struct RigMappingTests {
             Fixture.route("route.gone", role: "role.gone", device: "dev.a", binding: .proposed),
             Fixture.route("route.mis", role: "role.mis", device: "dev.a", channels: [1], binding: .proposed),
             Fixture.route("route.stale", role: "role.mains", device: "dev.a", channels: [0], binding: .stale),
-            Fixture.route("route.ok", role: "role.ok", device: "dev.a", binding: .confirmed)
+            Fixture.route("route.ok", role: "role.ok", device: "dev.a", binding: .confirmed),
+            // Overlaps: a stale orphan route and a mismatched route of a `nil`-count role.
+            Fixture.route("route.old.stale", role: "role.old", device: "dev.a", binding: .stale),
+            Fixture.route("route.legacy.flip", role: "role.legacy.flip", device: "dev.a", direction: .input,
+                          binding: .confirmed)
         ]
         let roles = try [
             Fixture.role("role.legacy", channels: nil), Fixture.role("role.midi", signal: .midi),
             Fixture.role("role.huge", channels: 65), Fixture.role("role.mis"), Fixture.role("role.mains"),
-            Fixture.role("role.ok")
+            Fixture.role("role.ok"), Fixture.role("role.legacy.flip", channels: nil)
         ]
         let document = try Fixture.document(devices, routes: routes)
         let proposal = try RigMappingProposal.make(roles: roles, devices: document)
         #expect(proposal.routesWithoutRequirement.map(\.rawValue)
-            == ["route.gone", "route.huge", "route.legacy", "route.midi"])
-        #expect(proposal.orphanRoutes.map(\.rawValue) == ["route.gone"])
-        #expect(proposal.mismatchedRoutes.map(\.rawValue) == ["route.mis"])
-        #expect(proposal.existingRoutes.map(\.route.rawValue) == ["route.stale"])
+            == ["route.gone", "route.huge", "route.legacy", "route.legacy.flip", "route.midi", "route.old.stale"])
+        #expect(proposal.orphanRoutes.map(\.rawValue) == ["route.gone", "route.old.stale"])
+        #expect(proposal.mismatchedRoutes.map(\.rawValue) == ["route.legacy.flip", "route.mis"])
+        #expect(proposal.existingRoutes.map(\.route.rawValue) == ["route.old.stale", "route.stale"])
+        // The lists overlap, so the documented removal is their union.
+        let withoutRequirement = Set(proposal.routesWithoutRequirement)
+        #expect(proposal.existingRoutes.map(\.route).filter(withoutRequirement.contains).map(\.rawValue)
+            == ["route.old.stale"])
+        #expect(proposal.mismatchedRoutes.filter(withoutRequirement.contains).map(\.rawValue)
+            == ["route.legacy.flip"])
         #expect(proposal.proposedRoutes.map(\.role.rawValue) == ["role.mains"])
         #expect(try Fixture.outcome(proposal, "role.ok") == .alreadyRouted([RouteID("route.ok")]))
         let combined = try Fixture.documented(proposal, over: document)
         #expect(combined.routes.map(\.id.rawValue) == ["route.ok", "route.proposed.role.mains"])
         try combined.validate(roles: proposal.requirements)
-        // Each removal is needed: without it, the combination fails `validate(roles:)`.
-        for kept in ["route.legacy", "route.midi", "route.huge", "route.gone", "route.mis", "route.stale"] {
+        // In this fixture each removed route, restored on its own, makes `validate(roles:)` fail. That is
+        // a property of these routes, not of the lists: the claim is only a sufficient condition.
+        for kept in ["route.legacy", "route.midi", "route.huge", "route.gone", "route.mis", "route.stale",
+                     "route.old.stale", "route.legacy.flip"] {
             let restored = routes.filter { $0.id.rawValue == kept }
             let partial = try Fixture.document(devices, routes: combined.routes + restored)
             #expect(throws: (any Error).self) { try partial.validate(roles: proposal.requirements) }

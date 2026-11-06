@@ -31,7 +31,14 @@
 //
 //  Validity claim (tested): the device document with `proposedRoutes` added and
 //  the routes in `routesWithoutRequirement`, `mismatchedRoutes` and
-//  `existingRoutes` removed passes `validate(roles: requirements)`.
+//  `existingRoutes` removed passes `validate(roles: requirements)`. The claim is
+//  a sufficient condition, not a deletion list: the three lists name what
+//  `validate(roles: requirements)` cannot accept, and `routesWithoutRequirement`
+//  includes valid, confirmed routes of legacy (`nil` count) already-routed roles,
+//  non-audio roles and orphans, which a caller may well keep. The lists may
+//  overlap (a stale orphan route is in `existingRoutes` and
+//  `routesWithoutRequirement`; a mismatched route of a `nil`-count role is in
+//  `mismatchedRoutes` and `routesWithoutRequirement`), so take their union.
 //
 //  Existing `stale` and `deviceMissing` routes are reported, never reused:
 //  their IDs, bindings and evidence are not carried into any proposal. Routes
@@ -90,10 +97,13 @@ struct RigMappingProposal: Hashable, Sendable {
     private(set) var mappings: [RigRoleMapping]
     /// The route requirement of every audio role with a valid channel count. The device document with
     /// `proposedRoutes` added and the routes in `routesWithoutRequirement`, `mismatchedRoutes` and
-    /// `existingRoutes` removed passes `validate(roles: requirements)`.
+    /// `existingRoutes` removed passes `validate(roles: requirements)`. This is a sufficient condition:
+    /// the lists name what that validation cannot accept, not routes the caller must delete. They may
+    /// overlap, so remove their union.
     let requirements: [RoleID: RouteRoleRequirement]
     /// Existing `stale`/`deviceMissing` routes, sorted by `RouteID`. Removed for the validity claim
-    /// on `requirements`: they are reported, never checked against their role.
+    /// on `requirements`: they are reported, never checked against their role. A stale route of an
+    /// orphan role is also in `routesWithoutRequirement`.
     let existingRoutes: [RigExistingRouteReport]
     /// Existing routes (any binding) whose role is not in the input, sorted. A subset of
     /// `routesWithoutRequirement`.
@@ -101,7 +111,9 @@ struct RigMappingProposal: Hashable, Sendable {
     /// Existing routes (any binding) whose role has no entry in `requirements`, sorted: routes of
     /// orphan roles, non-audio roles, roles with an invalid channel count and legacy (`nil` count)
     /// roles. `validate(roles: requirements)` would report each as an unknown role, so they are
-    /// removed for the validity claim on `requirements`.
+    /// removed for the validity claim on `requirements`. Many are valid, confirmed routes (legacy
+    /// already-routed, non-audio and orphan roles) that the caller may keep; the list may overlap
+    /// `existingRoutes` and `mismatchedRoutes`.
     let routesWithoutRequirement: [RouteID]
     /// Devices that are missing or stale and therefore offer no candidates, sorted by `DeviceID`.
     let absentDevices: [DeviceID]
@@ -134,7 +146,8 @@ struct RigMappingProposal: Hashable, Sendable {
     }
 
     /// The existing routes that no longer fit their role (every `.mismatchedRoute` entry), sorted.
-    /// Removed for the validity claim on `requirements`; the caller removes or replaces them.
+    /// Removed for the validity claim on `requirements`; the caller removes or replaces them. A
+    /// mismatched route of a `nil`-count role is also in `routesWithoutRequirement`.
     var mismatchedRoutes: [RouteID] {
         mappings.flatMap { mapping -> [RouteID] in
             if case .mismatchedRoute(let routes) = mapping.outcome { routes } else { [] }
