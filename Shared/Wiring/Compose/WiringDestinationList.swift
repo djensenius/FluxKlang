@@ -98,20 +98,35 @@ struct WiringDestinationList: Hashable, Sendable {
     }
 
     /// Classifies `source` → every other port of `graph` (each address once). Refused as a whole only
-    /// for the source or the graph: bounds, an unknown source node or (on a routable node) port, a graph
-    /// the contract cannot check, an uncheckable source node, or a graph already at the edge bound.
+    /// for the graph or the source, in the order `classify` checks them: bounds, a graph the contract
+    /// cannot check, an uncheckable source node, no probe ID, an unknown source node or (on a routable
+    /// node) port, or a graph already at the edge bound.
+    ///
+    /// A whole-list refusal never names a destination, so it can differ from `classify` for one pair
+    /// in exactly these documented ways:
+    /// - `classify` checks both endpoints for `endpointUncheckable` (in baseline error order) before
+    ///   the probe ID, the endpoints' existence and the edge bound. For a destination on an uncheckable
+    ///   node it therefore throws `endpointUncheckable(destination node)` where the list refuses with
+    ///   an unknown source node or port, `probeUnavailable`, the edge bound, or (when the baseline names
+    ///   the destination node first) `endpointUncheckable(source node)`. Example: source `nod.keys/nope`
+    ///   (unknown port) with an unconfirmed-channel input `nod.legacy/in`: the list throws
+    ///   `unknownPort(nod.keys/nope)`, `classify` to `nod.legacy/in` throws
+    ///   `endpointUncheckable(nod.legacy)` and to any other port `unknownPort(nod.keys/nope)`.
+    /// - At the edge bound the list refuses `.bounds($.edges)`, while `classify` still reports a wire
+    ///   that already exists as `existing`.
     static func make(
         from source: PortAddress, in graph: GraphDocument
     ) throws(WiringPreviewRefusal) -> WiringDestinationList {
-        try make(from: source, in: graph) { $0.validationErrors() }
+        try make(from: source, in: graph) {}
     }
 
-    /// `make(from:in:)` with the baseline validation supplied; it is called exactly once (a test seam).
+    /// `make(from:in:)`, calling `onValidate` just before its one internal baseline validation. A test
+    /// seam that only observes: the graph's `validationErrors()` are always computed here.
     static func make(
-        from source: PortAddress, in graph: GraphDocument, validate: (GraphDocument) -> [GraphValidationError]
+        from source: PortAddress, in graph: GraphDocument, onValidate: () -> Void
     ) throws(WiringPreviewRefusal) -> WiringDestinationList {
         // The batch checks the graph's bounds before any port is collected.
-        var batch = try WiringCandidateBatch(from: source, in: graph, validate: validate)
+        var batch = try WiringCandidateBatch(from: source, in: graph, onValidate: onValidate)
         let addresses = Set(graph.nodes.flatMap { node in
             node.ports.map { PortAddress(node: node.id, port: $0.id) }
         }).subtracting([PortAddress(node: source.node, port: source.port)])

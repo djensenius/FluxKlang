@@ -21,8 +21,9 @@
 //  from d restricted to Q ∪ A, run only for destinations that reach this rule.
 //
 
-/// The precomputed state for classifying bare wires from one source port. Built
-/// only by `WiringCandidateBatch`.
+/// The precomputed state for classifying bare wires from one source port. Internal: it only
+/// answers `WiringConnection` values (or refusals) and cannot mint a `WiringCandidate`; the
+/// candidates of a batch are built by `WiringCandidateBatch` from its answers.
 struct WiringCandidateContext {
     private struct PortKey: Hashable {
         let node: NodeID
@@ -46,13 +47,19 @@ struct WiringCandidateContext {
     private let loops: WiringLoopIndex
     private var cycles: [NodeID: WiringConnection] = [:]
 
-    /// Graph- and source-level refusals, in `classify` order: bounds, unknown source node or port,
-    /// a graph the contract cannot check, an uncheckable source node, no probe ID, and a graph
-    /// already at the edge bound (where every new wire is refused with `bounds`).
+    /// Graph- and source-level refusals, in the order `classify` checks them: the baseline
+    /// validation (bounds, then a graph the contract cannot check), an uncheckable source node, no
+    /// probe ID, an unknown source node or (on a routable node) port, and a graph already at the edge
+    /// bound (`classify` names an unknown source there too, from its wire-exists retry). `onValidate`
+    /// only observes the one baseline `validationErrors()` call (a test seam); it cannot supply errors.
     init(
-        source: PortAddress, in graph: GraphDocument, validate: (GraphDocument) -> [GraphValidationError]
+        source: PortAddress, in graph: GraphDocument, onValidate: () -> Void
     ) throws(WiringPreviewRefusal) {
-        do { try graph.checkCollectionBounds() } catch { throw .bounds(error) }
+        onValidate()
+        let baseline = try WiringCandidateClassifier.checked(graph.validationErrors())
+        uncheckable = Set(baseline.compactMap(WiringCandidateClassifier.uncheckableNode))
+        if uncheckable.contains(source.node) { throw .endpointUncheckable(node: source.node) }
+        let probe = try WiringCandidateClassifier.probeID(avoiding: graph.edges)
         var nodes: [NodeID: GraphNode] = [:]
         for node in graph.nodes where nodes[node.id] == nil { nodes[node.id] = node }
         let ports = nodes.mapValues { node in
@@ -62,11 +69,7 @@ struct WiringCandidateContext {
         self.nodes = nodes
         self.ports = ports
         sourceEndpoint = try Self.resolve(source, nodes: nodes, ports: ports)
-        let baseline = try WiringCandidateClassifier.checked(validate(graph))
-        uncheckable = Set(baseline.compactMap(WiringCandidateClassifier.uncheckableNode))
-        if uncheckable.contains(source.node) { throw .endpointUncheckable(node: source.node) }
         var widened = graph
-        let probe = try WiringCandidateClassifier.probeID(avoiding: graph.edges)
         widened.edges.append(GraphEdge(id: probe, from: source, to: source))
         do { try widened.checkCollectionBounds() } catch { throw .bounds(error) }
         var existing: [PortKey: EdgeID] = [:]

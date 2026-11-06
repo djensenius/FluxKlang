@@ -21,8 +21,10 @@ import Testing
 private typealias Fixture = WiringPreviewFixture
 private typealias Compose = WiringComposeFixture
 
-/// SplitMix64: a deterministic generator, so every run sees the same graphs.
-private struct SeededGenerator: RandomNumberGenerator {
+/// SplitMix64. Every draw comes straight from `next()`, with no stdlib `random(in:using:)`, `shuffled` or
+/// `randomElement` (whose use of a generator may change between toolchains), so every run on every
+/// toolchain sees the same graphs and the coverage checks below stay meaningful.
+private struct SeededGenerator {
     var state: UInt64
 
     mutating func next() -> UInt64 {
@@ -33,7 +35,21 @@ private struct SeededGenerator: RandomNumberGenerator {
         return value ^ (value >> 31)
     }
 
-    mutating func chance(_ percent: Int) -> Bool { Int.random(in: 0..<100, using: &self) < percent }
+    /// A draw in `0..<count` (`count > 0`); the modulo bias does not matter here.
+    mutating func below(_ count: Int) -> Int { Int(next() % UInt64(count)) }
+
+    mutating func draw(_ range: ClosedRange<Int>) -> Int { range.lowerBound + below(range.count) }
+
+    mutating func chance(_ percent: Int) -> Bool { below(100) < percent }
+
+    mutating func element<Element>(of items: [Element]) -> Element? { items.isEmpty ? nil : items[below(items.count)] }
+
+    /// Fisher–Yates.
+    mutating func shuffled<Element>(_ items: [Element]) -> [Element] {
+        var items = items
+        for index in items.indices.reversed() where index > 0 { items.swapAt(index, below(index + 1)) }
+        return items
+    }
 }
 
 private enum SeededGraph {
@@ -41,7 +57,7 @@ private enum SeededGraph {
 
     static func port(_ name: String, using random: inout SeededGenerator) -> GraphPort {
         let direction: PortDirection = random.chance(50) ? .output : .input
-        let roll = Int.random(in: 0..<100, using: &random)
+        let roll = random.below(100)
         guard roll < 70 else {
             let signal: PortSignal = [.midi, .control, .clock][roll % 3]
             return GraphPort(id: Fixture.id(name), direction: direction, signal: signal)
@@ -53,11 +69,11 @@ private enum SeededGraph {
 
     static func node(_ index: Int, using random: inout SeededGenerator) -> GraphNode {
         // Now and then a node repeats an earlier node's ID.
-        let id = index > 2 && random.chance(5) ? "nod.n\(Int.random(in: 0..<index, using: &random))" : "nod.n\(index)"
-        var names = portNames.shuffled(using: &random).prefix(Int.random(in: 0...3, using: &random)).map { $0 }
+        let id = index > 2 && random.chance(5) ? "nod.n\(random.below(index))" : "nod.n\(index)"
+        var names = Array(random.shuffled(portNames).prefix(random.draw(0...3)))
         if let first = names.first, random.chance(4) { names.append(first) }
         let ports = names.map { port($0, using: &random) }
-        let roll = Int.random(in: 0..<100, using: &random)
+        let roll = random.below(100)
         if roll < 8 {
             var node = Fixture.node(id, .observedShortcut, ports: random.chance(50) ? [] : ports)
             node.position = nil
@@ -79,11 +95,11 @@ private enum SeededGraph {
     ) -> GraphEdge {
         let outputs = ports.filter { $0.1.direction == .output }, inputs = ports.filter { $0.1.direction == .input }
         let id = !earlier.isEmpty && random.chance(4) ? earlier[0].id : Fixture.id("edg.e\(index)")
-        var from = (outputs.randomElement(using: &random) ?? ports.randomElement(using: &random))?.0
-        var to = (inputs.randomElement(using: &random) ?? ports.randomElement(using: &random))?.0
-        if random.chance(15) { from = ports.randomElement(using: &random)?.0 }
+        var from = (random.element(of: outputs) ?? random.element(of: ports))?.0
+        var to = (random.element(of: inputs) ?? random.element(of: ports))?.0
+        if random.chance(15) { from = random.element(of: ports)?.0 }
         if random.chance(5) { to = Fixture.address("nod.ghost", "in") }
-        if let repeated = earlier.randomElement(using: &random), random.chance(8) {
+        if let repeated = random.element(of: earlier), random.chance(8) {
             (from, to) = (repeated.from, repeated.to)
         }
         let ghost = Fixture.address("nod.ghost", "out")
@@ -96,11 +112,11 @@ private enum SeededGraph {
 
     static func make(seed: UInt64) -> GraphDocument {
         var random = SeededGenerator(state: seed)
-        let nodes = (0..<Int.random(in: 4...9, using: &random)).map { node($0, using: &random) }
+        let nodes = (0..<random.draw(4...9)).map { node($0, using: &random) }
         let ports = nodes.flatMap { node in node.ports.map { (PortAddress(node: node.id, port: $0.id), $0) } }
         var edges: [GraphEdge] = []
         if !ports.isEmpty {
-            for index in 0..<Int.random(in: 0...14, using: &random) {
+            for index in 0..<random.draw(0...14) {
                 edges.append(edge(index, among: ports, earlier: edges, using: &random))
             }
         }
@@ -121,18 +137,18 @@ private enum SeededGraph {
 private enum SeededLoopGraph {
     static func make(seed: UInt64) -> GraphDocument {
         var random = SeededGenerator(state: seed)
-        let nodes = (0..<Int.random(in: 4...8, using: &random)).map { index in
+        let nodes = (0..<random.draw(4...8)).map { index in
             let width = random.chance(20) ? 1 : 2
             return Fixture.node("nod.l\(index)", ports: [
                 Fixture.audio("in", .input, width), Fixture.audio("out", .output, width)
             ])
         }
         let ports = nodes.flatMap { node in node.ports.map { PortAddress(node: node.id, port: $0.id) } }
-        let edges = (0..<Int.random(in: 4...12, using: &random)).map { index in
-            var from = Fixture.address(nodes.randomElement(using: &random)?.id.rawValue ?? "nod.l0", "out")
-            var to = Fixture.address(nodes.randomElement(using: &random)?.id.rawValue ?? "nod.l0", "in")
+        let edges = (0..<random.draw(4...12)).map { index in
+            var from = Fixture.address(random.element(of: nodes)?.id.rawValue ?? "nod.l0", "out")
+            var to = Fixture.address(random.element(of: nodes)?.id.rawValue ?? "nod.l0", "in")
             if random.chance(10) {
-                (from, to) = (ports.randomElement(using: &random) ?? from, ports.randomElement(using: &random) ?? to)
+                (from, to) = (random.element(of: ports) ?? from, random.element(of: ports) ?? to)
             }
             var edge = Fixture.edge("edg.l\(index)", from, to)
             if random.chance(10) { edge.feedback = Fixture.feedback }
@@ -166,6 +182,27 @@ extension WiringDestinationListTests {
         }
     }
 
+    /// When the list is refused with `refusal`, `classify` throws exactly `refusal` for every destination,
+    /// except the documented deviation (`WiringDestinationList.make`): for a destination on a node the
+    /// baseline reports uncheckable it may name that node instead (`endpointUncheckable`).
+    static func expectRefusedAsClassifyDoes(
+        _ refusal: WiringPreviewRefusal, source: PortAddress, destinations: Set<PortAddress>, in graph: GraphDocument,
+        sourceLocation: SourceLocation
+    ) {
+        #expect(refusesTheList(refusal, source: source), "\(source): \(refusal)", sourceLocation: sourceLocation)
+        let uncheckable = Set(graph.validationErrors().compactMap(WiringCandidateClassifier.uncheckableNode))
+        for destination in destinations {
+            let actual = Result { () throws(WiringPreviewRefusal) in
+                try WiringCandidate.classify(from: source, to: destination, in: graph)
+            }
+            let deviation = WiringPreviewRefusal.endpointUncheckable(node: destination.node)
+            let allowed = actual == .failure(refusal)
+                || (uncheckable.contains(destination.node) && actual == .failure(deviation))
+            #expect(allowed, "\(source) → \(destination): list \(refusal), classify \(actual)",
+                    sourceLocation: sourceLocation)
+        }
+    }
+
     /// The list of every source equals `classify` on every pair; returns the headings seen.
     static func expectEquivalent(
         _ graph: GraphDocument, sourceLocation: SourceLocation = #_sourceLocation
@@ -178,13 +215,9 @@ extension WiringDestinationListTests {
             do {
                 list = try WiringDestinationList.make(from: source, in: graph)
             } catch {
-                #expect(refusesTheList(error, source: source), "\(source): \(error)", sourceLocation: sourceLocation)
-                for destination in destinations {
-                    #expect(throws: WiringPreviewRefusal.self, "\(source) → \(destination)",
-                            sourceLocation: sourceLocation) {
-                        try WiringCandidate.classify(from: source, to: destination, in: graph)
-                    }
-                }
+                expectRefusedAsClassifyDoes(
+                    error, source: source, destinations: destinations, in: graph, sourceLocation: sourceLocation
+                )
                 continue
             }
             seen.formUnion(list.groups.map(\.connectionClass))
@@ -210,9 +243,17 @@ extension WiringDestinationListTests {
 
     @Test func bulkListMatchesClassifyOnTheFixtures() {
         let legacy = Fixture.with([], nodes: [Fixture.node("nod.legacy", ports: [Fixture.audio("in", .input, nil)])])
+        // A shortcut that (invalidly) carries a port: shortcut → shortcut names the source first.
+        let tap = Fixture.node("nod.tap", .observedShortcut, ports: [Fixture.audio("in", .input, 2)])
+        let shortcuts = Fixture.with([], nodes: [tap])
         var seen: Set<WiringDestinationClass> = []
-        for graph in [Fixture.graph, Compose.monoLoop, legacy] { seen.formUnion(Self.expectEquivalent(graph)) }
+        for graph in [Fixture.graph, Compose.monoLoop, legacy, shortcuts] {
+            seen.formUnion(Self.expectEquivalent(graph))
+        }
         #expect(seen == Set(WiringDestinationClass.allCases))
+        let fromShortcut = try? Self.list("nod.ch7", "out", in: shortcuts)
+        let toTap = fromShortcut?.candidates.first { $0.to == Fixture.address("nod.tap", "in") }
+        #expect(toTap?.connection == .notRoutable(Fixture.id("nod.ch7")))
     }
 
     @Test func bulkListMatchesClassifyOnSeededGraphs() {
@@ -272,10 +313,7 @@ extension WiringDestinationListTests {
         let graph = GraphDocument(id: Fixture.graphID, nodes: nodes, edges: edges)
         let source = Fixture.address("nod.s0", "out")
         var validations = 0
-        let list = try WiringDestinationList.make(from: source, in: graph) { graph in
-            validations += 1
-            return graph.validationErrors()
-        }
+        let list = try WiringDestinationList.make(from: source, in: graph) { validations += 1 }
         #expect(validations == 1)
         #expect(list.group(.valid)?.candidates.count == 1_998)
         #expect(list.group(.feedbackOnly)?.candidates.map(\.to) == [Fixture.address("nod.s0", "in")])
@@ -284,6 +322,73 @@ extension WiringDestinationListTests {
         let sampled: Set<String> = ["nod.s0", "nod.s1", "nod.s2", "nod.s1999"]
         for candidate in list.candidates where sampled.contains(candidate.to.node.rawValue) {
             #expect(candidate == (try WiringCandidate.classify(from: source, to: candidate.to, in: graph)))
+        }
+    }
+
+    @Test func validationObserverCannotChangeTheList() throws {
+        // A legacy input with no confirmed channel count: classify refuses the pair as uncheckable.
+        let legacy = Fixture.node("nod.legacy", ports: [Fixture.audio("in", .input, nil)], at: 8)
+        let graph = Fixture.with([], nodes: [legacy])
+        let source = Fixture.address("nod.keys", "out")
+        var validations = 0
+        let observed = try WiringDestinationList.make(from: source, in: graph) { validations += 1 }
+        #expect(validations == 1)
+        #expect(observed == (try WiringDestinationList.make(from: source, in: graph)))
+        let row = try #require(observed.group(.uncheckable)?.uncheckable.first)
+        #expect(row.to == Fixture.address("nod.legacy", "in"))
+        #expect(row.refusal == .endpointUncheckable(node: Fixture.id("nod.legacy")))
+        #expect(!observed.candidates.map(\.to).contains(Fixture.address("nod.legacy", "in")))
+        // Each source- or graph-level refusal is still computed internally, whatever the observer does.
+        #expect(throws: WiringPreviewRefusal.endpointUncheckable(node: Fixture.id("nod.legacy"))) {
+            try WiringDestinationList.make(from: Fixture.address("nod.legacy", "in"), in: graph) {}
+        }
+    }
+
+    @Test func wholeListRefusalsFollowClassifyOrder() {
+        let gain = [GraphDocument.constantGainFeature]
+        var uncheckableGraph = Fixture.graph
+        uncheckableGraph.requiredFeatures = gain
+        let legacy = Fixture.node("nod.legacy", ports: [Fixture.audio("in", .input, nil)], at: 8)
+        let withLegacy = Fixture.with([], nodes: [legacy])
+        let padding = (Fixture.graph.edges.count..<ProjectGraphLimits.edges).map { index in
+            Fixture.edge("edg.pad.\(index)", Fixture.address("nod.gone", "out"), Fixture.address("nod.gone", "in"))
+        }
+        let full = Fixture.with(padding)
+        let graphRefusal = WiringPreviewRefusal.uncheckableGraph(.invalidRequiredFeatures(gain))
+        let nope = Fixture.address("nod.keys", "nope")
+        /// Both the list and classify(source → nod.mains/in) give exactly `refusal`.
+        func expectBoth(
+            _ refusal: WiringPreviewRefusal, _ source: PortAddress, in graph: GraphDocument,
+            sourceLocation: SourceLocation = #_sourceLocation
+        ) {
+            let mains = Fixture.address("nod.mains", "in")
+            #expect(throws: refusal, "\(source)", sourceLocation: sourceLocation) {
+                try WiringDestinationList.make(from: source, in: graph)
+            }
+            #expect(throws: refusal, "\(source)", sourceLocation: sourceLocation) {
+                try WiringCandidate.classify(from: source, to: mains, in: graph)
+            }
+        }
+        // The graph is checked before the source is resolved.
+        expectBoth(graphRefusal, Fixture.address("nod.nope", "out"), in: uncheckableGraph)
+        expectBoth(graphRefusal, nope, in: uncheckableGraph)
+        // An uncheckable source node is named before its unknown port.
+        expectBoth(.endpointUncheckable(node: Fixture.id("nod.legacy")), Fixture.address("nod.legacy", "nope"),
+                   in: withLegacy)
+        // At the edge bound an unknown source is still named (classify's wire-exists retry names it).
+        expectBoth(.unknownNode(Fixture.id("nod.nope")), Fixture.address("nod.nope", "out"), in: full)
+        expectBoth(.unknownPort(nope), nope, in: full)
+        // The documented deviation: an unknown source with a destination on an uncheckable node. The list
+        // refuses about the source; classify names the uncheckable destination node, and the source elsewhere.
+        for source in [nope, Fixture.address("nod.nope", "out")] {
+            let aboutSource: WiringPreviewRefusal = source == nope ? .unknownPort(nope) : .unknownNode(source.node)
+            #expect(throws: aboutSource) { try WiringDestinationList.make(from: source, in: withLegacy) }
+            #expect(throws: WiringPreviewRefusal.endpointUncheckable(node: Fixture.id("nod.legacy"))) {
+                try WiringCandidate.classify(from: source, to: Fixture.address("nod.legacy", "in"), in: withLegacy)
+            }
+            #expect(throws: aboutSource) {
+                try WiringCandidate.classify(from: source, to: Fixture.address("nod.mains", "in"), in: withLegacy)
+            }
         }
     }
 }

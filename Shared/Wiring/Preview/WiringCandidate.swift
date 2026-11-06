@@ -92,12 +92,12 @@ struct WiringCandidate: Hashable, Sendable {
 struct WiringCandidateBatch {
     private var context: WiringCandidateContext
 
-    /// `validate` computes the graph's validation errors; it is called exactly once (a test seam).
+    /// The graph is validated exactly once, internally; `onValidate` is called just before and only
+    /// observes it (a test seam that cannot change any class or refusal).
     init(
-        from source: PortAddress, in graph: GraphDocument,
-        validate: (GraphDocument) -> [GraphValidationError] = { $0.validationErrors() }
+        from source: PortAddress, in graph: GraphDocument, onValidate: () -> Void = {}
     ) throws(WiringPreviewRefusal) {
-        context = try WiringCandidateContext(source: source, in: graph, validate: validate)
+        context = try WiringCandidateContext(source: source, in: graph, onValidate: onValidate)
     }
 
     /// The bare candidate source → `destination`, or the refusal of that pair alone.
