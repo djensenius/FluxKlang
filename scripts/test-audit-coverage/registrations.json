@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "79223bffa99cc3cfb0fe8bbddaaa4bfa8a9f5c7b984b21149ae89d824c6bd873",
+    "sha256": "f56f30e33fc0e0b5c79788a5d0b708469a49b1fadec318f9c76ee2e2e53b825b",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -143,6 +143,7 @@
         "FluxKlangTests/MeterDisplayTests+Ballistics.swift",
         "FluxKlangTests/MeterDisplayTests+Staleness.swift",
         "FluxKlangTests/MeterDisplayTests+LateConsumption.swift",
+        "FluxKlangTests/MeterDisplayTests+Ordering.swift",
         "FluxKlangTests/OSCSchedulingTests.swift",
         "FluxKlangTests/OSCSchedulingTests+Era.swift",
         "FluxKlangTests/OSCSchedulingTests+Clock.swift",

@@ -245,6 +245,7 @@ targets:
       - path: FluxKlangTests/MeterDisplayTests+Ballistics.swift
       - path: FluxKlangTests/MeterDisplayTests+Staleness.swift
       - path: FluxKlangTests/MeterDisplayTests+LateConsumption.swift
+      - path: FluxKlangTests/MeterDisplayTests+Ordering.swift
       - path: FluxKlangTests/OSCSchedulingTests.swift
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
