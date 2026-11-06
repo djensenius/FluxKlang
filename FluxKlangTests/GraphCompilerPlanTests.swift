@@ -130,6 +130,24 @@ struct GraphCompilerPlanTests {
         #expect(try RoutingScheduleBuilder.build(
             graph, request: Self.request(limits: Self.limits(inputs: 1, outputs: 1, terms: 1))
         ).accounting.termCount == 1)
+        let verifierRequest = try Self.request(
+            frames: 1, limits: Self.limits(frames: 4, inputs: 1, outputs: 4, terms: 2, bytes: 64, work: 64)
+        )
+        let seed = try RoutingScheduleBuilder.build(graph, request: verifierRequest)
+        var exactDraft = Self.scheduleDraft(seed)
+        exactDraft.steps[0] = Self.withRows(
+            exactDraft.steps[0], [RoutingRow(terms: [0, 0], isBitCopy: false)]
+        )
+        #expect(try RoutingSchedule.make(draft: exactDraft, request: verifierRequest)
+            .accounting.termCount == 2)
+
+        var overDraft = exactDraft
+        overDraft.steps[0] = Self.withRows(
+            overDraft.steps[0], [RoutingRow(terms: [0, 0, 0], isBitCopy: false)]
+        )
+        #expect(throws: RoutingScheduleRefusal.resourceLimit(.terms, required: 3, maximum: 2)) {
+            try RoutingSchedule.make(draft: overDraft, request: verifierRequest)
+        }
         #expect(throws: RoutingScheduleRefusal.resourceLimit(.inputChannels, required: 1, maximum: 0)) {
             try RoutingScheduleBuilder.build(
                 graph, request: Self.request(limits: Self.limits(inputs: 0, outputs: 1, terms: 1))

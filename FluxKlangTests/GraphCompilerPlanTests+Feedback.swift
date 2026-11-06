@@ -51,11 +51,24 @@ extension GraphCompilerPlanTests {
     }
 
     static func twoLineFeedbackPlan() throws -> RoutingSchedule {
+        try RoutingScheduleBuilder.build(twoLineFeedbackGraph(), request: Self.request(frames: 2))
+    }
+
+    static func twoLineFeedbackGraph() throws -> GraphDocument {
         let nodeA = Self.gain(id: Self.nodeAID, input: Self.nodeAInput, output: Self.nodeAOutput)
         let nodeB = Self.gain(id: Self.nodeBID, input: Self.nodeBInput, output: Self.nodeBOutput)
+        let edgeA = GraphEdge(
+            id: EdgeID(validated: "plan.feed.a"),
+            from: PortAddress(node: Self.inputID, port: Self.inputPort),
+            to: PortAddress(node: Self.nodeAID, port: Self.nodeAInput)
+        )
+        let edgeB = GraphEdge(
+            id: EdgeID(validated: "plan.feed.b"),
+            from: PortAddress(node: Self.inputID, port: Self.inputPort),
+            to: PortAddress(node: Self.nodeBID, port: Self.nodeBInput)
+        )
         let edges = [
-            try Self.edge("plan.feed.a", from: Self.inputID, Self.inputPort, to: Self.nodeAID, Self.nodeAInput),
-            try Self.edge("plan.feed.b", from: Self.inputID, Self.inputPort, to: Self.nodeBID, Self.nodeBInput),
+            edgeA, edgeB,
             GraphEdge(
                 id: Self.feedbackB, from: PortAddress(node: Self.nodeBID, port: Self.nodeBOutput),
                 to: PortAddress(node: Self.nodeBID, port: Self.nodeBInput),
@@ -74,7 +87,7 @@ extension GraphCompilerPlanTests {
             id: Self.graphID, nodes: [Self.roleInput(), Self.roleOutput(), nodeA, nodeB],
             edges: edges, requiredFeatures: [GraphDocument.constantGainFeature]
         )
-        return try RoutingScheduleBuilder.build(graph, request: Self.request(frames: 2))
+        return graph
     }
 
     static func evaluateFeedback(
@@ -178,6 +191,12 @@ extension GraphCompilerPlanTests {
             edge: edge, feedback: EdgeFeedback(delayBlocks: 3, gainCeilingDb: -9),
             channels: 1, blockFrames: 3
         ).delayFrames == 9)
+        #expect(throws: RoutingScheduleRefusal.inconsistentSchedule(.delayLine)) {
+            try FeedbackCut.make(
+                edge: edge, feedback: EdgeFeedback(delayBlocks: 1, gainCeilingDb: 0),
+                channels: 0, blockFrames: 1
+            )
+        }
         #expect(throws: RoutingScheduleRefusal.feedbackDelayTooShort(edge, 0)) {
             try FeedbackCut.make(
                 edge: edge, feedback: EdgeFeedback(delayBlocks: 0, gainCeilingDb: 0),

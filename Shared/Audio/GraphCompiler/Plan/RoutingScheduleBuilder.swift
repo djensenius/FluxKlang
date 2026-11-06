@@ -30,6 +30,7 @@ enum RoutingScheduleBuilder {
         let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
         try validateNodes(nodes)
         let plans = try resolve(graph.edges, nodes: nodeByID)
+        try enforceTermBudget(plans, maximum: request.limits.maxTerms)
         let levels = try levelize(nodes.map(\.id), links: plans.filter { $0.edge.feedback == nil }
             .map { ($0.edge.from.node, $0.edge.to.node) })
         let ordered = nodes.filter { $0.kind != .roleInput }.sorted {
@@ -114,7 +115,8 @@ enum RoutingScheduleBuilder {
         var delayLines: [RoutingDelayLine] = []
         var delayedByEdge: [EdgeID: RoutingSlot] = [:]
         for plan in plans where plan.edge.feedback != nil {
-            guard let feedback = plan.edge.feedback, let source = outputSlots[plan.source.id],
+            guard let feedback = plan.edge.feedback,
+                  let source = inputSlots[plan.source.id] ?? outputSlots[plan.source.id],
                   let channels = plan.sourcePort.channels else { throw .inconsistentSchedule(.delayLine) }
             let cut = try FeedbackCut.make(
                 edge: plan.edge.id, feedback: feedback, channels: channels, blockFrames: frames
@@ -282,10 +284,10 @@ enum RoutingScheduleBuilder {
                 }
             }
             if let conversion = edge.conversion {
-                let rowsAreValid = conversion.map.allSatisfy {
-                    !$0.isEmpty && $0.allSatisfy { (0..<sourceWidth).contains($0) }
-                }
-                guard conversion.map.count == destinationWidth, !conversion.map.isEmpty, rowsAreValid else {
+                let conversionIsValid = conversion.map.count == destinationWidth
+                    && conversion.map.contains { !$0.isEmpty }
+                    && conversion.map.allSatisfy { $0.allSatisfy { (0..<sourceWidth).contains($0) } }
+                guard conversionIsValid else {
                     throw .inconsistentSchedule(.unresolvedReference)
                 }
             } else if sourceWidth != destinationWidth {
@@ -297,6 +299,27 @@ enum RoutingScheduleBuilder {
             ))
         }
         return result
+    }
+
+    private static func enforceTermBudget(
+        _ plans: [EdgePlan], maximum: Int
+    ) throws(RoutingScheduleRefusal) {
+        var terms = 0
+        for plan in plans {
+            if let conversion = plan.edge.conversion {
+                for row in conversion.map {
+                    terms = try RoutingMath.add(terms, row.count, resource: .terms)
+                }
+            } else {
+                guard let channels = plan.destinationPort.channels else {
+                    throw .inconsistentSchedule(.unresolvedReference)
+                }
+                terms = try RoutingMath.add(terms, channels, resource: .terms)
+            }
+        }
+        guard terms <= maximum else {
+            throw .resourceLimit(.terms, required: terms, maximum: maximum)
+        }
     }
 
     private static func makeRows(

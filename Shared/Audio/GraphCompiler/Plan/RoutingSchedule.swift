@@ -7,6 +7,11 @@ struct RoutingSchedule: Equatable, Sendable {
         let maximum: Int
     }
 
+    private struct AccountResult {
+        let accounting: RoutingAccounting
+        let overflow: RoutingResource?
+    }
+
     let graph: GraphID
     let revision: ContractRevision
     let sampleRate: Int
@@ -32,54 +37,67 @@ struct RoutingSchedule: Equatable, Sendable {
     static func make(
         draft: RoutingScheduleDraft, request: RoutingScheduleRequest
     ) throws(RoutingScheduleRefusal) -> RoutingSchedule {
-        try verify(draft, blockFrames: request.blockFrames)
-        let accounting = try account(draft, blockFrames: request.blockFrames)
-        try enforce(accounting, request: request)
+        let accounting = try verify(draft, request: request)
         return RoutingSchedule(draft: draft, request: request, accounting: accounting)
     }
 
     private static func verify(
-        _ draft: RoutingScheduleDraft, blockFrames: Int
-    ) throws(RoutingScheduleRefusal) {
-        let inputIDs = draft.inputs.map(\.endpoint.node)
-        let stepIDs = draft.steps.map(\.node)
-        guard Set(inputIDs + stepIDs).count == inputIDs.count + stepIDs.count else {
-            throw .inconsistentSchedule(.duplicateNode)
-        }
-        var cursor = try verifySlotLayout(draft, blockFrames: blockFrames)
-        let readers = readableSlots(draft)
-        try verifyCausality(draft, readers: readers)
+        _ draft: RoutingScheduleDraft, request: RoutingScheduleRequest
+    ) throws(RoutingScheduleRefusal) -> RoutingAccounting {
+        try verifyUniqueNodes(draft)
+        let cursor = try verifySlotGeometry(draft, blockFrames: request.blockFrames)
+        let result = try account(draft, blockFrames: request.blockFrames, scratchFloats: cursor)
+        try enforce(result, request: request)
+        try verifyStepShapes(draft)
+        try verifyCausality(draft, readers: readableSlots(draft))
         let inputByNode = Dictionary(uniqueKeysWithValues: draft.inputs.map { ($0.endpoint.node, $0.slot) })
         let outputByNode = Dictionary(uniqueKeysWithValues: draft.steps.map { ($0.node, $0.output) })
         try verifyEndpoints(draft.inputs, expected: inputByNode, resource: .inputChannels)
         try verifyEndpoints(draft.outputs, expected: outputByNode, resource: .outputChannels)
-        try verifyDelayLines(
-            draft, sources: writableSources(draft), blockFrames: blockFrames, cursor: &cursor
-        )
-        guard cursor >= 0 else { throw .inconsistentSchedule(.endpoint) }
+        return result.accounting
     }
 
-    private static func verifySlotLayout(
+    private static func verifyUniqueNodes(_ draft: RoutingScheduleDraft) throws(RoutingScheduleRefusal) {
+        var seen: Set<NodeID> = []
+        for endpoint in draft.inputs {
+            guard seen.insert(endpoint.endpoint.node).inserted else {
+                throw .inconsistentSchedule(.duplicateNode)
+            }
+        }
+        for step in draft.steps {
+            guard seen.insert(step.node).inserted else {
+                throw .inconsistentSchedule(.duplicateNode)
+            }
+        }
+    }
+
+    private static func verifySlotGeometry(
         _ draft: RoutingScheduleDraft, blockFrames: Int
     ) throws(RoutingScheduleRefusal) -> Int {
         var cursor = 0
         for endpoint in draft.inputs {
             try verifySlot(endpoint.slot, channels: endpoint.endpoint.channels, frames: blockFrames, cursor: &cursor)
         }
+        for step in draft.steps {
+            try verifySlot(step.output, channels: step.output.channels, frames: blockFrames, cursor: &cursor)
+        }
+        try verifyDelayLines(draft, sources: writableSources(draft), blockFrames: blockFrames, cursor: &cursor)
+        return cursor
+    }
+
+    private static func verifyStepShapes(_ draft: RoutingScheduleDraft) throws(RoutingScheduleRefusal) {
         var previous: (Int, NodeID)?
         for step in draft.steps {
             guard step.level >= 0 else { throw .inconsistentSchedule(.stepOrder) }
             if let previous, (step.level, step.node) <= previous {
                 throw .inconsistentSchedule(.stepOrder)
             }
-            previous = (step.level, step.node)
-            guard step.rows.count == step.output.channels,
-                  step.rows.allSatisfy({ !$0.isBitCopy || $0.terms.count == 1 }) else {
+            guard step.rows.count == step.output.channels else { throw .inconsistentSchedule(.rowShape) }
+            guard step.rows.allSatisfy({ !$0.isBitCopy || $0.terms.count == 1 }) else {
                 throw .inconsistentSchedule(.rowShape)
             }
-            try verifySlot(step.output, channels: step.rows.count, frames: blockFrames, cursor: &cursor)
+            previous = (step.level, step.node)
         }
-        return cursor
     }
 
     private static func verifyCausality(
@@ -88,7 +106,8 @@ struct RoutingSchedule: Equatable, Sendable {
         var channelProducers: [Int: Producer] = [:]
         for producer in readers.values {
             for channel in 0..<producer.slot.channels {
-                channelProducers[producer.slot.offset + channel * producer.slot.frames] = producer
+                let offset = try channelStart(producer.slot, channel: channel)
+                channelProducers[offset] = producer
             }
         }
         for step in draft.steps {
@@ -97,6 +116,13 @@ struct RoutingSchedule: Equatable, Sendable {
                 guard producer.level < step.level else { throw .inconsistentSchedule(.causality) }
             }
         }
+    }
+
+    static func channelStart(
+        _ slot: RoutingSlot, channel: Int
+    ) throws(RoutingScheduleRefusal) -> Int {
+        let channelOffset = try RoutingMath.multiply(channel, slot.frames, resource: .slotSamples)
+        return try RoutingMath.add(slot.offset, channelOffset, resource: .slotSamples)
     }
 
     private static func verifyDelayLines(
@@ -108,6 +134,7 @@ struct RoutingSchedule: Equatable, Sendable {
             guard line.cut.channels == line.source.channels,
                   line.cut.channels == line.delayed.channels,
                   line.cut.channels == line.storage.channels,
+                  line.cut.channels > 0,
                   !delayOverflow, line.cut.delayFrames == expectedDelayFrames,
                   line.cut.delayFrames == line.storage.frames,
                   line.cut.delayBlocks >= 1,
@@ -180,38 +207,67 @@ struct RoutingSchedule: Equatable, Sendable {
     }
 
     private static func account(
-        _ draft: RoutingScheduleDraft, blockFrames: Int
-    ) throws(RoutingScheduleRefusal) -> RoutingAccounting {
-        let inputChannels = try sum(draft.inputs.map(\.endpoint.channels), resource: .inputChannels)
-        let outputChannels = try sum(draft.outputs.map(\.endpoint.channels), resource: .outputChannels)
+        _ draft: RoutingScheduleDraft, blockFrames: Int, scratchFloats: Int
+    ) throws(RoutingScheduleRefusal) -> AccountResult {
+        let inputChannels = try sum(draft.inputs.map(\.slot.channels), resource: .inputChannels)
+        let stepSlots = Dictionary(uniqueKeysWithValues: draft.steps.map { ($0.node, $0.output) })
+        var seenOutputs: Set<NodeID> = []
+        var outputChannels = 0
+        for endpoint in draft.outputs where seenOutputs.insert(endpoint.endpoint.node).inserted {
+            if let slot = stepSlots[endpoint.endpoint.node] {
+                outputChannels = try RoutingMath.add(
+                    outputChannels, slot.channels, resource: .outputChannels
+                )
+            }
+        }
         var terms = 0
         var outputs = 0
+        var outputSumOverflow = false
         for step in draft.steps {
             for row in step.rows {
                 terms = try RoutingMath.add(terms, row.terms.count, resource: .terms)
             }
-            outputs = try RoutingMath.add(outputs, step.output.channels, resource: .sampleWork)
+            if !outputSumOverflow {
+                let (total, overflow) = outputs.addingReportingOverflow(step.output.channels)
+                outputs = overflow ? Int.max : total
+                outputSumOverflow = overflow
+            }
         }
-        var floats = 0
-        for slot in draft.inputs.map(\.slot) + draft.steps.map(\.output)
-            + draft.delayLines.flatMap({ [$0.delayed, $0.storage] }) {
-            floats = try RoutingMath.add(
-                floats, RoutingMath.multiply(slot.channels, slot.frames, resource: .slotSamples),
-                resource: .scratchFloats
+        let (bytes, bytesOverflow) = scratchFloats.multipliedReportingOverflow(by: MemoryLayout<Float>.stride)
+        if bytesOverflow {
+            return AccountResult(
+                accounting: RoutingAccounting(
+                    inputChannels: inputChannels, outputChannels: outputChannels, termCount: terms,
+                    scratchFloats: scratchFloats, scratchBytes: Int.max, sampleWork: 0
+                ),
+                overflow: .scratchBytes
             )
         }
-        let bytes = try RoutingMath.multiply(floats, MemoryLayout<Float>.stride, resource: .scratchBytes)
-        let delays = try sum(draft.delayLines.map(\.cut.channels), resource: .sampleWork)
-        let perFrame = try sum(
-            [try RoutingMath.multiply(2, inputChannels, resource: .sampleWork), terms,
-             outputs, outputChannels, try RoutingMath.multiply(2, delays, resource: .sampleWork)],
-            resource: .sampleWork
-        )
-        let work = try RoutingMath.multiply(blockFrames, perFrame, resource: .sampleWork)
-        return RoutingAccounting(
+        var delays = 0
+        var delaySumOverflow = false
+        for line in draft.delayLines {
+            let (total, overflow) = delays.addingReportingOverflow(line.cut.channels)
+            if overflow {
+                delays = Int.max
+                delaySumOverflow = true
+                break
+            }
+            delays = total
+        }
+        let (inputWork, inputOverflow) = inputChannels.multipliedReportingOverflow(by: 2)
+        let (delayWork, delayOverflow) = delays.multipliedReportingOverflow(by: 2)
+        let (firstWork, firstOverflow) = inputWork.addingReportingOverflow(terms)
+        let (secondWork, secondOverflow) = firstWork.addingReportingOverflow(outputs)
+        let (thirdWork, thirdOverflow) = secondWork.addingReportingOverflow(outputChannels)
+        let (perFrame, fourthOverflow) = thirdWork.addingReportingOverflow(delayWork)
+        let (work, workOverflow) = blockFrames.multipliedReportingOverflow(by: perFrame)
+        let accounting = RoutingAccounting(
             inputChannels: inputChannels, outputChannels: outputChannels, termCount: terms,
-            scratchFloats: floats, scratchBytes: bytes, sampleWork: work
+            scratchFloats: scratchFloats, scratchBytes: bytes, sampleWork: work
         )
+        let overflow = outputSumOverflow || delaySumOverflow || inputOverflow || delayOverflow || firstOverflow
+            || secondOverflow || thirdOverflow || fourthOverflow || workOverflow
+        return AccountResult(accounting: accounting, overflow: overflow ? .sampleWork : nil)
     }
 
     private static func sum(_ values: [Int], resource: RoutingResource) throws(RoutingScheduleRefusal) -> Int {
@@ -223,18 +279,27 @@ struct RoutingSchedule: Equatable, Sendable {
     }
 
     private static func enforce(
-        _ accounting: RoutingAccounting, request: RoutingScheduleRequest
+        _ result: AccountResult, request: RoutingScheduleRequest
     ) throws(RoutingScheduleRefusal) {
         let limits = request.limits
-        let checks = [
+        let accounting = result.accounting
+        let primaryChecks = [
             BudgetCheck(resource: .inputChannels, required: accounting.inputChannels, maximum: limits.maxInputChannels),
             BudgetCheck(
                 resource: .outputChannels, required: accounting.outputChannels, maximum: limits.maxOutputChannels
             ),
-            BudgetCheck(resource: .terms, required: accounting.termCount, maximum: limits.maxTerms),
+            BudgetCheck(resource: .terms, required: accounting.termCount, maximum: limits.maxTerms)
+        ]
+        try enforce(primaryChecks)
+        if let overflow = result.overflow { throw .arithmeticOverflow(overflow) }
+        let finalChecks = [
             BudgetCheck(resource: .scratchBytes, required: accounting.scratchBytes, maximum: limits.maxScratchBytes),
             BudgetCheck(resource: .sampleWork, required: accounting.sampleWork, maximum: limits.maxSampleWork)
         ]
+        try enforce(finalChecks)
+    }
+
+    private static func enforce(_ checks: [BudgetCheck]) throws(RoutingScheduleRefusal) {
         for check in checks where check.required > check.maximum {
             throw .resourceLimit(check.resource, required: check.required, maximum: check.maximum)
         }
