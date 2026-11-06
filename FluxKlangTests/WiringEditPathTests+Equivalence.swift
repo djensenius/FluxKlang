@@ -15,6 +15,7 @@
 //  state), plus the toggle-versus-picker comparison.
 //
 
+import Foundation
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -332,5 +333,144 @@ struct WiringEditPathEquivalenceTests {
             "compose.conversionRequired", "compose.feedbackRequired", "compose.conversionNotNeeded",
             "compose.feedbackNotNeeded", "compose.disabled", "compose.preview", "compose.connectDoesNotApply"
         ]))
+    }
+
+    @Test func fractionalLargeCoordinateNudgesMatchNumericEntry() throws {
+        let coordinate = 1_000_000_000_000.0001
+        let graph = try WiringEditPathTests.keys(at: coordinate, coordinate)
+        let draft = Edit.draft(on: graph)
+        let cases: [(step: Double, expected: Double)] = [
+            (0.000062, 1_000_000_000_000.000244140625),
+            (0.1, 1_000_000_000_000.10009765625)
+        ]
+        for (step, expected) in cases {
+            let grid = Edit.grid(step: step, fineStep: step)
+            let nudged = try Edit.nudged(
+                WiringEditPathTests.keys, [WiringNudge(.rightward, fine: true)], grid: grid,
+                from: draft, active: graph
+            )
+            let numeric = try WiringMoveComposer.move(
+                WiringEditPathTests.keys, x: coordinate + step, y: coordinate, in: draft, active: graph
+            )
+            #expect(nudged == numeric, "step \(step)")
+            #expect(WiringEditPathTests.movedX(nudged) == expected, "step \(step)")
+        }
+    }
+
+    @Test func binaryRepresentableNudgesMatchNumericEntryAcrossMagnitudes() throws {
+        var random = EditPathGenerator(state: 0x7d36_5a91_42c8_b10f)
+        let steps: [Double] = [0.5, 0.25, 0x1p-14, 1, 2, 8]
+        for index in 0..<64 {
+            let exponent = -3 + 16 * Double(index) / 63
+            let magnitude = pow(10, exponent)
+            let coordinate = random.next() & 1 == 0 ? magnitude : -magnitude
+            let step = steps[random.below(steps.count)]
+            let graph = try WiringEditPathTests.keys(at: coordinate, coordinate)
+            let draft = Edit.draft(on: graph)
+            let grid = Edit.grid(step: 8, fineStep: step)
+            let nudged = try Edit.nudged(
+                WiringEditPathTests.keys, [WiringNudge(.rightward, fine: true)], grid: grid,
+                from: draft, active: graph
+            )
+            let numeric = try WiringMoveComposer.move(
+                WiringEditPathTests.keys, x: coordinate + step, y: coordinate, in: draft, active: graph
+            )
+            #expect(nudged == numeric, "coordinate \(coordinate), step \(step)")
+        }
+    }
+
+    @Test func offGridBaseFoldsFromNumericAndMovedDraftPositions() throws {
+        let base = (x: 0.1234567891234, y: 0.2345678912345)
+        let graph = try WiringEditPathTests.keys(at: base.x, base.y)
+        let draft = Edit.draft(on: graph)
+        #expect(try WiringMoveComposer.move(WiringEditPathTests.keys, x: base.x, y: base.y,
+                                             in: draft, active: graph) == draft)
+        let moved = try WiringMoveComposer.move(WiringEditPathTests.keys, x: 4, y: 5, in: draft, active: graph)
+        #expect(try WiringMoveComposer.move(WiringEditPathTests.keys, x: base.x, y: base.y,
+                                             in: moved, active: graph) == draft)
+    }
+
+    @Test func doubleAccumulationCannotLoseAHalfULPNudge() throws {
+        let tenthGraph = try WiringEditPathTests.keys(at: 0), tenthDraft = Edit.draft(on: tenthGraph)
+        let tenths = try Edit.nudged(
+            WiringEditPathTests.keys, Array(repeating: WiringNudge(.rightward, fine: true), count: 10),
+            grid: Edit.grid(step: 0.1, fineStep: 0.1), from: tenthDraft, active: tenthGraph
+        )
+        #expect(WiringEditPathTests.movedX(tenths) == 1)
+
+        let midpointGraph = try WiringEditPathTests.keys(at: 0)
+        let midpointDraft = Edit.draft(on: midpointGraph)
+        let midpointGrid = Edit.grid(step: 0.1, fineStep: 0.000000000000023809523809523804)
+        var midpointState = WiringMoveState(draft: midpointDraft)
+        for _ in 0..<21 {
+            midpointState = try WiringMoveComposer.nudge(
+                WiringEditPathTests.keys, WiringNudge(.rightward, fine: true),
+                grid: midpointGrid, in: midpointState, active: midpointGraph
+            )
+        }
+        #expect(midpointState.draft == midpointDraft)
+
+        let base = 1e12 + 0.0001220703125
+        let graph = try WiringEditPathTests.keys(at: base, base)
+        let draft = Edit.draft(on: graph)
+        let step = 0.000006103515625
+        let grid = Edit.grid(step: 0.1, fineStep: step)
+        var state = WiringMoveState(draft: draft)
+        for _ in 0..<10 {
+            state = try WiringMoveComposer.nudge(
+                WiringEditPathTests.keys, WiringNudge(.rightward, fine: true), grid: grid, in: state, active: graph
+            )
+        }
+        let numeric = try WiringMoveComposer.move(
+            WiringEditPathTests.keys, x: base + 0.00006103515625, y: base, in: draft, active: graph
+        )
+        #expect(state.draft == numeric)
+        for _ in 0..<10 {
+            state = try WiringMoveComposer.nudge(
+                WiringEditPathTests.keys, WiringNudge(.leftward, fine: true), grid: grid, in: state, active: graph
+            )
+        }
+        #expect(state.draft == draft)
+    }
+
+    @Test func halfULPNudgesMatchNumericTiesToEven() throws {
+        let halfULP = 0x1p-31
+        let cases: [(Double, WiringNudgeDirection)] = [
+            (0x1p22, .rightward), (0x1p22 + 0x1p-29, .leftward),
+            (0x1p22 + 0x1p-30, .rightward), (0x1p22 + 0x1p-30, .leftward)
+        ]
+        for (coordinate, direction) in cases {
+            let graph = try WiringEditPathTests.keys(at: coordinate)
+            let draft = Edit.draft(on: graph), grid = Edit.grid(step: halfULP, fineStep: halfULP)
+            let nudge = try WiringMoveComposer.nudge(
+                WiringEditPathTests.keys, WiringNudge(direction), grid: grid,
+                in: WiringMoveState(draft: draft), active: graph
+            )
+            let sign = direction == .rightward ? 1.0 : -1.0
+            let numeric = try WiringMoveComposer.move(
+                WiringEditPathTests.keys, x: coordinate + sign * halfULP, y: 0, in: draft, active: graph
+            )
+            #expect(nudge.draft == numeric)
+        }
+    }
+
+    @Test func underflowingCoordinatesQuantizeToSignedZeroOrTheNearestGridPoint() throws {
+        let threshold = 5e-13
+        let values = [1e-129, -1e-300, Double.leastNonzeroMagnitude, threshold.nextDown,
+                      -threshold.nextUp, threshold, threshold.nextUp, -threshold, (-threshold).nextDown,
+                      (-threshold).nextUp]
+        for base in [0.0, 1e-13] {
+            let graph = try WiringEditPathTests.keys(at: base)
+            let draft = Edit.draft(on: graph)
+            for value in values {
+                let expected = abs(value) < threshold ? base : (value < 0 ? -1e-12 : 1e-12)
+                let moved = try WiringMoveComposer.move(
+                    WiringEditPathTests.keys, x: value, y: 0, in: draft, active: graph
+                )
+                #expect(moved == (expected == base ? draft : try WiringMoveComposer.move(
+                    WiringEditPathTests.keys, x: expected, y: 0, in: draft, active: graph
+                )), "\(base), \(value)")
+            }
+        }
     }
 }

@@ -44,6 +44,8 @@ struct WiringCandidateContext {
     private let uncheckable: Set<NodeID>
     /// The first edge (in graph order) from the source to each destination address.
     private let existing: [PortKey: EdgeID]
+    /// At the edge bound, the matrix may still classify existing pairs without a probe edge.
+    private let atEdgeBound: Bool
     private let loops: WiringLoopIndex
     private var cycles: [NodeID: WiringConnection] = [:]
 
@@ -53,10 +55,11 @@ struct WiringCandidateContext {
     /// bound (`classify` names an unknown source there too, from its wire-exists retry). `onValidate`
     /// only observes the one baseline `validationErrors()` call (a test seam); it cannot supply errors.
     init(
-        source: PortAddress, in graph: GraphDocument, onValidate: () -> Void
+        source: PortAddress, in graph: GraphDocument, onValidate: () -> Void,
+        allowsExistingAtEdgeBound: Bool = false
     ) throws(WiringPreviewRefusal) {
         onValidate()
-        let baseline = try WiringCandidateClassifier.checked(graph.validationErrors())
+        let baseline = try WiringCandidateClassifier.checked(WiringCandidateClassifier.validationErrors(of: graph))
         uncheckable = Set(baseline.compactMap(WiringCandidateClassifier.uncheckableNode))
         if uncheckable.contains(source.node) { throw .endpointUncheckable(node: source.node) }
         let probe = try WiringCandidateClassifier.probeID(avoiding: graph.edges)
@@ -69,9 +72,12 @@ struct WiringCandidateContext {
         self.nodes = nodes
         self.ports = ports
         sourceEndpoint = try Self.resolve(source, nodes: nodes, ports: ports)
-        var widened = graph
-        widened.edges.append(GraphEdge(id: probe, from: source, to: source))
-        do { try widened.checkCollectionBounds() } catch { throw .bounds(error) }
+        atEdgeBound = allowsExistingAtEdgeBound && graph.edges.count == ProjectGraphLimits.edges
+        if !atEdgeBound {
+            var widened = graph
+            widened.edges.append(GraphEdge(id: probe, from: source, to: source))
+            do { try widened.checkCollectionBounds() } catch { throw .bounds(error) }
+        }
         var existing: [PortKey: EdgeID] = [:]
         var links: [(NodeID, NodeID)] = []
         for edge in graph.edges {
@@ -87,28 +93,55 @@ struct WiringCandidateContext {
         loops = WiringLoopIndex(links: links, source: source.node)
     }
 
-    /// The class `classify` gives the bare wire source → `destination`, or its refusal of that pair.
+    /// The bare wire source → `destination`, or its refusal. At exactly 16,384 edges wired pairs keep their
+    /// classification; every non-wired cell is `.uncheckable(.bounds)`. `classify` differs only for non-wired
+    /// pairs with uncheckable or unknown endpoints.
     mutating func connection(to destination: PortAddress) throws(WiringPreviewRefusal) -> WiringConnection {
-        if uncheckable.contains(destination.node) { throw .endpointUncheckable(node: destination.node) }
-        let target = try Self.resolve(destination, nodes: nodes, ports: ports)
+        let key = PortKey(node: destination.node, port: destination.port)
+        if uncheckable.contains(destination.node) {
+            try refuseNonWiredAtEdgeBound(key)
+            throw .endpointUncheckable(node: destination.node)
+        }
+        let target: Endpoint
+        do {
+            target = try Self.resolve(destination, nodes: nodes, ports: ports)
+        } catch {
+            try refuseNonWiredAtEdgeBound(key)
+            throw error
+        }
         let output: GraphPort, input: GraphPort
         switch (sourceEndpoint, target) {
-        case (.unroutable(let node), _), (_, .unroutable(let node)): return .notRoutable(node)
+        case (.unroutable(let node), _), (_, .unroutable(let node)):
+            try refuseNonWiredAtEdgeBound(key)
+            return .notRoutable(node)
         case (.port(let from), .port(let to)): (output, input) = (from, to)
         }
-        guard output.direction == .output, input.direction == .input else { return .notOffered }
-        if let edge = existing[PortKey(node: destination.node, port: destination.port)] { return .existing(edge) }
+        guard output.direction == .output, input.direction == .input else {
+            try refuseNonWiredAtEdgeBound(key)
+            return .notOffered
+        }
+        if let edge = existing[key] { return .existing(edge) }
         guard output.signal == input.signal else {
+            try refuseNonWiredAtEdgeBound(key)
             return .disabled(.signalMismatch(from: output.signal, to: input.signal))
         }
         if output.signal == .audio, output.hasValidChannels, input.hasValidChannels,
            let width = output.channels, let rows = input.channels, width != rows {
+            try refuseNonWiredAtEdgeBound(key)
             return .needsConversion(sourceChannels: width, destinationChannels: rows)
         }
-        if let known = cycles[destination.node] { return known }
-        let connection = loops.connection(to: destination.node)
+        let connection = cycles[destination.node] ?? loops.connection(to: destination.node)
         cycles[destination.node] = connection
+        try refuseNonWiredAtEdgeBound(key)
         return connection
+    }
+
+    private func refuseNonWiredAtEdgeBound(_ key: PortKey) throws(WiringPreviewRefusal) {
+        if atEdgeBound, existing[key] == nil { throw edgeBoundRefusal }
+    }
+
+    private var edgeBoundRefusal: WiringPreviewRefusal {
+        .bounds(.exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges))
     }
 
     /// The contract's endpoint lookup: a missing node is unknown; a port that is missing on a

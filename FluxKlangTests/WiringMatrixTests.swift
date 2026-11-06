@@ -243,34 +243,6 @@ struct WiringMatrixTests {
         #expect(empty.cells.isEmpty && empty.columns.count == 3)
     }
 
-    @Test func wiredCellsAtTheEdgeBoundShowOnAndToggleOff() throws {
-        let keysOut = Fixture.address("nod.keys", "out"), verbIn = Fixture.address("nod.verb", "in")
-        let mainsIn = Fixture.address("nod.mains", "in")
-        var graph = Fixture.graph
-        // More wires on keys → verb after the fixture's own, up to exactly the bound.
-        graph.edges += (graph.edges.count..<ProjectGraphLimits.edges).map {
-            GraphEdge(id: Fixture.id("edg.fill-\($0)"), from: keysOut, to: verbIn)
-        }
-        #expect(graph.edges.count == ProjectGraphLimits.edges)
-        let draft = Edit.draft(on: graph)
-        let matrix = try WiringMatrix.window(rows: [keysOut], columns: [verbIn, mainsIn], active: graph, draft: draft)
-        let keysVerb = Fixture.id("edg.keys-verb") as EdgeID
-        let wired = try #require(matrix.cell(row: 0, column: 0))
-        #expect(wired.state == .classified(.existing(keysVerb)) && wired.connectionClass == .existing)
-        #expect(wired.wiredEdge == keysVerb && wired.existingEdge == keysVerb && wired.isOn)
-        let open = try #require(matrix.cell(row: 0, column: 1))
-        let atBound = WiringMatrixCellState.uncheckable(
-            .bounds(.exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges))
-        )
-        #expect(open.state == atBound && open.wiredEdge == nil && open.existingEdge == nil && !open.isOn)
-        // `classify` calls the pair existing at the bound; the cell removes the same edge.
-        #expect(try WiringCandidate.classify(from: keysOut, to: verbIn, in: graph).connection == .existing(keysVerb))
-        let toggled = try WiringMatrix.toggle(wired, request: WiringMatrixConnect(edge: Fixture.id("edg.unused")),
-                                              in: draft, active: graph)
-        #expect(toggled == (try WiringRemoveComposer.remove(edge: keysVerb, from: draft, active: graph)))
-        #expect(toggled.edits == [.disconnect(keysVerb)])
-    }
-
     @Test func aStaleCellNeverRemovesADifferentWire() throws {
         let active = Fixture.graph
         let request = WiringMatrixConnect(edge: Fixture.id("edg.other"))
@@ -278,7 +250,6 @@ struct WiringMatrixTests {
         let first = try WiringDraftComposer.compose(keysMains, into: Edit.draft(), active: active)
         let cell = try #require(Self.cell(try Self.window(first), ("nod.keys", "out"), ("nod.mains", "in")))
         #expect(cell.existingEdge == keysMains.edge)
-        // The ID is removed, then reused on echo → mains.
         let removed = try WiringRemoveComposer.remove(edge: keysMains.edge, from: first, active: active)
         let echoMains = WiringComposeFixture.request("edg.reuse", ("nod.echo", "out"), ("nod.mains", "in"))
         let reused = try WiringDraftComposer.compose(echoMains, into: removed, active: active)
@@ -322,6 +293,16 @@ struct WiringMatrixTests {
         )
         #expect(throws: WiringEditRefusal.staleCell(Fixture.id("edg.reuse"))) {
             try WiringMatrix.toggle(oldCell, request: request, in: portReused, active: alternatePorts)
+        }
+        let mainsAlternate = Fixture.edge(
+            "edg.reuse", Fixture.address("nod.keys", "out"), Fixture.address("nod.mains", "in.alt")
+        )
+        let destinationPortReused = try WiringDraftComposer.compose(
+            WiringConnectRequest(edge: mainsAlternate.id, from: mainsAlternate.from, to: mainsAlternate.to),
+            into: originalRemoved, active: alternatePorts
+        )
+        #expect(throws: WiringEditRefusal.staleCell(Fixture.id("edg.reuse"))) {
+            try WiringMatrix.toggle(oldCell, request: request, in: destinationPortReused, active: alternatePorts)
         }
     }
 

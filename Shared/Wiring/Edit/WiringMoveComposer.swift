@@ -206,7 +206,10 @@ enum WiringMoveComposer {
     }
 
     /// The nearest multiple of `resolution` (halfway away from zero; -0 becomes +0). Finite in, finite out.
-    private static func quantized(_ value: Double) -> Double {
+    static func quantized(_ value: Double) -> Double {
+        guard value.isFinite else { return value }
+        // Below the half-grid threshold, the result is +0; this also keeps Decimal parsing in range.
+        guard value.magnitude >= 5e-13 else { return 0 }
         // From 2^42 up the spacing of doubles already exceeds `resolution`; preserve the exact value there.
         guard value.magnitude < 0x1p42 else { return value }
         guard var decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else {
@@ -215,33 +218,109 @@ enum WiringMoveComposer {
         var rounded = Decimal()
         NSDecimalRound(&rounded, &decimal, 12, .plain)
         let result = Double(rounded.description) ?? value
-        return result == 0 ? 0 : result
-    }
-
-    /// Accumulates one signed nudge without converting the intermediate result to Double.
-    private static func accumulated(_ offset: Decimal, distance: Double, direction: Double) -> Decimal? {
-        guard direction != 0 else { return offset }
-        guard let step = Decimal(string: String(direction * distance), locale: Locale(identifier: "en_US_POSIX")) else {
-            return nil
-        }
-        var result = Decimal()
-        var previous = offset
-        var delta = step
-        guard NSDecimalAdd(&result, &previous, &delta, .plain) == .noError else { return nil }
         return result
     }
 
-    /// Adds a retained decimal offset to its anchor, converting only the final target to Double.
+    /// Converts the signed step from its exact binary value and adds it to the retained offset. Decimal sums are
+    /// exact through 38 significant digits; beyond that `.plain` rounds half-up to 38. Nil selects Double fallback.
+    private static func accumulated(_ offset: Decimal, distance: Double, direction: Double) -> Decimal? {
+        guard direction != 0 else { return offset }
+        guard let step = decimalValue(of: direction * distance) else { return nil }
+        var result = Decimal()
+        var previous = offset
+        var delta = step
+        let status = NSDecimalAdd(&result, &previous, &delta, .plain)
+        guard status == .noError || status == .lossOfPrecision else { return nil }
+        return result
+    }
+
+    /// Adds the offset to the anchor's exact binary Decimal value. Anchor plus offset is exact through 38
+    /// significant digits; otherwise it is rounded half-up to 38 digits before the final conversion to Double.
     private static func translated(_ coordinate: Double, by offset: Decimal) -> Double? {
-        guard let origin = Decimal(string: String(coordinate), locale: Locale(identifier: "en_US_POSIX")) else {
-            return nil
-        }
+        guard let origin = decimalValue(of: coordinate) else { return nil }
         var result = Decimal()
         var base = origin
         var delta = offset
-        guard NSDecimalAdd(&result, &base, &delta, .plain) == .noError else { return nil }
+        let status = NSDecimalAdd(&result, &base, &delta, .plain)
+        guard status == .noError || status == .lossOfPrecision else { return nil }
         guard let translated = Double(result.description), translated.isFinite else { return nil }
         return translated
+    }
+
+    /// Converts the exact binary significand and exponent to base-10 digits. The conversion is exact through 38
+    /// significant digits; otherwise it is rounded half-up to 38 digits. A Decimal-range failure selects the
+    /// caller's ordinary-Double fallback.
+    private static func decimalValue(of value: Double) -> Decimal? {
+        let bits = value.bitPattern
+        let exponentBits = Int((bits >> 52) & 0x7ff)
+        var significand = bits & 0x000f_ffff_ffff_ffff
+        guard exponentBits != 0x7ff else { return nil }
+        if exponentBits == 0 {
+            guard significand != 0 else { return .zero }
+        } else {
+            significand |= 1 << 52
+        }
+        var binaryExponent = (exponentBits == 0 ? 1 - 1023 : exponentBits - 1023) - 52
+        while binaryExponent < 0, significand & 1 == 0 {
+            significand >>= 1
+            binaryExponent += 1
+        }
+
+        var digits = String(significand).utf8.map { $0 - 48 }
+        let isInteger = binaryExponent >= 0
+        let decimalExponent = isInteger ? 0 : binaryExponent
+        let multiplier: UInt8 = isInteger ? 2 : 5
+        for _ in 0..<abs(binaryExponent) {
+            multiplyDecimalDigits(&digits, by: multiplier)
+        }
+        return decimal(from: digits, exponent: decimalExponent, negative: bits >> 63 != 0)
+    }
+
+    /// Builds a Decimal from exact integer digits times a power of ten. It is exact only through 38 significant
+    /// digits; longer values are rounded half-up to 38 digits.
+    private static func decimal(from exactDigits: [UInt8], exponent: Int, negative: Bool) -> Decimal? {
+        var digits = exactDigits
+        var decimalExponent = exponent
+        while digits.last == 0 {
+            digits.removeLast()
+            decimalExponent += 1
+        }
+        let exactExponent = decimalExponent
+        let discarded = max(0, digits.count - 38)
+        var coefficient = Array(digits.prefix(38))
+        var roundedUp = false
+        if discarded > 0, digits[38] >= 5 {
+            for index in coefficient.indices.reversed() {
+                if coefficient[index] < 9 {
+                    coefficient[index] += 1
+                    break
+                }
+                coefficient[index] = 0
+            }
+            if coefficient.allSatisfy({ $0 == 0 }) {
+                coefficient = [1]
+                roundedUp = true
+            }
+        }
+        decimalExponent = exactExponent + (roundedUp ? digits.count : discarded)
+        let magnitude = Decimal(string: "\(coefficient.map { String($0) }.joined())e\(decimalExponent)",
+                                 locale: Locale(identifier: "en_US_POSIX"))
+        guard let magnitude else { return nil }
+        return negative ? -magnitude : magnitude
+    }
+
+    /// Multiplies the unsigned base-10 integer digits by a small integer in place.
+    private static func multiplyDecimalDigits(_ digits: inout [UInt8], by multiplier: UInt8) {
+        var carry: UInt16 = 0
+        for index in digits.indices.reversed() {
+            let product = UInt16(digits[index]) * UInt16(multiplier) + carry
+            digits[index] = UInt8(product % 10)
+            carry = product / 10
+        }
+        while carry > 0 {
+            digits.insert(UInt8(carry % 10), at: 0)
+            carry /= 10
+        }
     }
 
     /// Folds the one move into the draft's edits.

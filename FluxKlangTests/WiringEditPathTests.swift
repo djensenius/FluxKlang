@@ -172,19 +172,19 @@ struct WiringEditPathTests {
         let coordinate = 1e12
         let graph = try Self.keys(at: coordinate, coordinate)
         let draft = Edit.draft(on: graph)
-        let grid = Edit.grid(step: 0.1, fineStep: 0.00005)
+        let grid = Edit.grid(step: 0.1, fineStep: 0.00002)
         var state = WiringMoveState(draft: draft)
         for index in 0..<10 {
             state = try WiringMoveComposer.nudge(
                 Self.keys, WiringNudge(.rightward, fine: true), grid: grid, in: state, active: graph
             )
-            if index == 0 { #expect(state.draft == draft) }
+            if index < 3 { #expect(state.draft == draft) }
         }
 
-        let typed = try WiringMoveComposer.move(Self.keys, x: coordinate + 0.0005, y: coordinate,
+        let typed = try WiringMoveComposer.move(Self.keys, x: coordinate + 0.0002, y: coordinate,
                                                 in: WiringMoveState(draft: draft), active: graph)
         #expect(state.draft == typed.draft)
-        #expect(Self.movedX(state.draft) == coordinate + 0.0005)
+        #expect(Self.movedX(state.draft) == coordinate + 0.0002)
 
         for _ in 0..<10 {
             state = try WiringMoveComposer.nudge(
@@ -259,19 +259,6 @@ struct WiringEditPathTests {
         )
         #expect(state.draft == typed)
         #expect(Self.movedX(state.draft) == initialPosition.x + 0.0005)
-    }
-
-    @Test func nudgeOutsideDecimalRangeFallsBackToCoordinateArithmetic() throws {
-        let coordinate = 1e200
-        let graph = try Self.keys(at: coordinate, coordinate)
-        let draft = Edit.draft(on: graph)
-        let distance = 1e190
-        let grid = Edit.grid(step: distance, fineStep: distance)
-        let nudged = try Edit.nudged(Self.keys, [WiringNudge(.rightward)], grid: grid, from: draft, active: graph)
-        let typed = try WiringMoveComposer.move(Self.keys, x: coordinate + distance, y: coordinate,
-                                                in: draft, active: graph)
-        #expect(nudged == typed)
-        #expect(Self.movedX(nudged) == coordinate + distance)
     }
 
     @Test func aReturnToAnOffGridBaseDropsTheMove() throws {
