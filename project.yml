@@ -305,6 +305,9 @@ targets:
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests+Admission.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests+Cancel.swift
       - path: FluxKlangTests/SpatialRenderTests.swift
       - path: FluxKlangTests/SpatialRenderTests+Masks.swift
       - path: FluxKlangTests/SpatialRenderTests+Calibration.swift
