@@ -11,18 +11,26 @@
 //  unknown chunks, header bytes past six, meta events, SysEx events (F0, and F7
 //  escapes and continuation packets, each with its delta time kept), the
 //  controllers `MIDIClip.make` refuses (sustain 64, sostenuto 66, hold 2 69 and
-//  channel mode 120...127), and Note Offs with nothing sounding.
+//  channel mode 120...127), Note Offs with nothing sounding, zero-length notes
+//  (a Note On and its Note Off at one tick), and non-note events at or after
+//  the clip length (End of Track), such as a final pitch-bend reset.
 //
 //  Trailing bytes are strict: fewer than 8 bytes after the last chunk are
 //  refused as `truncated`, and bytes after End of Track as
-//  `eventAfterEndOfTrack`, since either marks a damaged file.
+//  `eventAfterEndOfTrack`, since either marks a damaged file. Running status is
+//  not carried across meta or SysEx events (RP-001): a data byte after one is
+//  refused as `missingRunningStatus`.
 //
 //  Format 1 tracks are merged into one clip in a fixed order: by tick, then
 //  Note Offs before other messages (as the writer orders them), then track
 //  index, then position in the track. Notes pair Note On to Note Off per
-//  channel and note in that merged order, across tracks. A Note On while its
-//  note sounds and a note never released are refused, as is anything
-//  `MIDIClip.make` refuses. The clip length is the latest End of Track time.
+//  channel and note in that merged order, across tracks; a Note Off closes only
+//  a note sounding from an earlier tick, so no note is ever stretched. A Note
+//  Off with nothing sounding pairs with a later-in-file Note On of the same
+//  channel and note at its tick as a skipped zero-length note (see
+//  `ItemBuilder`). A Note On while its note sounds and a Note On with no Note
+//  Off after it are refused, as is anything `MIDIClip.make` refuses. The clip
+//  length is the latest End of Track time.
 //
 
 extension StandardMIDIFile {
@@ -62,17 +70,24 @@ extension StandardMIDIFile {
         timed.sort {
             ($0.ticks, $0.offFirst, $0.track, $0.position) < ($1.ticks, $1.offFirst, $1.track, $1.position)
         }
-        let (clipItems, ignoredNoteOffs) = try items(of: timed)
+        var builder = ItemBuilder(lengthTicks: lengthTicks)
+        for event in timed {
+            try builder.add(event)
+        }
+        try builder.finish()
         let clip: MIDIClip
         do {
-            clip = try MIDIClip.make(lengthTicks: lengthTicks, items: clipItems)
+            clip = try MIDIClip.make(lengthTicks: lengthTicks, items: builder.items)
         } catch {
             throw .clip(error)
         }
         let report = SMFReadReport(format: header.format, division: header.division, tracks: tracks.count,
                                    ignoredMeta: parser.ignoredMeta, unknownChunks: unknownChunks,
                                    ignoredHeaderBytes: header.extraBytes, ignoredSysEx: parser.ignoredSysEx,
-                                   ignoredControllers: parser.ignoredControllers, ignoredNoteOffs: ignoredNoteOffs)
+                                   ignoredControllers: parser.ignoredControllers,
+                                   ignoredNoteOffs: builder.ignoredNoteOffs,
+                                   ignoredZeroLengthNotes: builder.ignoredZeroLengthNotes,
+                                   ignoredEventsAtEnd: builder.ignoredEventsAtEnd)
         return SMFReadResult(clip: clip, report: report)
     }
 
@@ -140,16 +155,50 @@ extension StandardMIDIFile {
         UInt16(bytes[offset]) << 8 | UInt16(bytes[offset + 1])
     }
 
-    /// Clip items from merged messages: a note item at its Note On, completed at the matching Note Off; any other
-    /// message as an event item at its tick. Note Offs with nothing sounding are skipped and counted.
-    private static func items(of timed: [Timed]) throws(SMFRefusal) -> (items: [MIDIClipItem], ignoredNoteOffs: Int) {
-        var items: [MIDIClipItem] = []
-        var ignoredNoteOffs = 0
-        var sounding: [UInt16: Int] = [:]
-        for event in timed {
+    /// Builds clip items from merged messages: a note item at its Note On, completed at the matching Note Off; any
+    /// other message as an event item at its tick. Skips and counts what a clip cannot hold:
+    /// - a zero-length note: a Note Off that finds nothing sounding pairs with a Note On of the same channel and
+    ///   note at the same tick that comes earlier in the file, by track index and then position (so across tracks
+    ///   the On's track must be lower). Note Offs sort first within a tick, so such an Off waits, pending, until
+    ///   the tick ends; each On takes the earliest pending Off after it in the file. Neither becomes a note.
+    /// - a Note Off still pending when the tick ends: nothing was sounding (`ignoredNoteOffs`);
+    /// - a non-note event at or after the clip length, which a clip cannot hold (`ignoredEventsAtEnd`).
+    /// A Note Off never extends a note: it closes only a note sounding from an earlier tick.
+    private struct ItemBuilder {
+        let lengthTicks: Int64
+        private(set) var items: [MIDIClipItem] = []
+        private(set) var ignoredNoteOffs = 0
+        private(set) var ignoredZeroLengthNotes = 0
+        private(set) var ignoredEventsAtEnd = 0
+        /// The item index of each sounding note, by channel and note.
+        private var sounding: [UInt16: Int] = [:]
+        /// Note Offs at `pendingTicks` that found nothing sounding, by channel and note, in merged order.
+        private var pending: [UInt16: [Timed]] = [:]
+        private var pendingTicks: Int64 = 0
+
+        init(lengthTicks: Int64) {
+            self.lengthTicks = lengthTicks
+        }
+
+        private static func key(_ channel: UInt8, _ note: UInt8) -> UInt16 {
+            UInt16(channel) << 8 | UInt16(note)
+        }
+
+        /// Adds the next message in merged order.
+        mutating func add(_ event: Timed) throws(SMFRefusal) {
+            if event.ticks != pendingTicks {
+                endPendingTick()
+                pendingTicks = event.ticks
+            }
             switch event.message {
             case let .noteOn(channel, note, velocity):
-                let key = UInt16(channel) << 8 | UInt16(note)
+                let key = Self.key(channel, note)
+                let after = pending[key]?.firstIndex { ($0.track, $0.position) > (event.track, event.position) }
+                if let after {
+                    pending[key]?.remove(at: after)
+                    ignoredZeroLengthNotes += 1
+                    return
+                }
                 guard sounding[key] == nil else {
                     throw .noteOnWhileSounding(track: event.track, ticks: event.ticks, channel: channel, note: note)
                 }
@@ -157,22 +206,36 @@ extension StandardMIDIFile {
                 items.append(.note(MIDIClipNote(channel: channel, note: note, velocity: velocity,
                                                 startTicks: event.ticks, endTicks: event.ticks)))
             case let .noteOff(channel, note, velocity):
-                guard let index = sounding.removeValue(forKey: UInt16(channel) << 8 | UInt16(note)),
-                      case .note(var span) = items[index] else {
-                    ignoredNoteOffs += 1
-                    continue
+                let key = Self.key(channel, note)
+                guard let index = sounding.removeValue(forKey: key), case .note(var span) = items[index] else {
+                    pending[key, default: []].append(event)
+                    return
                 }
                 span.endTicks = event.ticks
                 span.releaseVelocity = velocity
                 items[index] = .note(span)
             default:
+                guard event.ticks < lengthTicks else {
+                    ignoredEventsAtEnd += 1
+                    return
+                }
                 items.append(.event(ticks: event.ticks, message: event.message))
             }
         }
-        if let index = sounding.values.min(), case .note(let span) = items[index] {
-            throw .noteNotReleased(channel: span.channel, note: span.note, startTicks: span.startTicks)
+
+        /// Ends the last tick and refuses a note still sounding: a Note On with no Note Off after it in merged order.
+        mutating func finish() throws(SMFRefusal) {
+            endPendingTick()
+            if let index = sounding.values.min(), case .note(let span) = items[index] {
+                throw .noteNotReleased(channel: span.channel, note: span.note, startTicks: span.startTicks)
+            }
         }
-        return (items, ignoredNoteOffs)
+
+        /// Counts the Note Offs of the tick that ends that found nothing sounding and paired with no Note On.
+        private mutating func endPendingTick() {
+            ignoredNoteOffs += pending.values.reduce(0) { $0 + $1.count }
+            pending = [:]
+        }
     }
 
     /// Parses track chunks into timed channel messages, counting events against the file-wide bound and skipped

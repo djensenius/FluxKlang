@@ -66,7 +66,8 @@ struct StandardMIDIFileReaderTests {
         #expect(read.clip == (try MIDIClip.make(lengthTicks: 16, items: [Clip.note(0, 16)])))
         #expect(read.report == SMFReadReport(format: 0, division: 960, tracks: 1, ignoredMeta: [:],
                                              unknownChunks: 2, ignoredHeaderBytes: 2, ignoredSysEx: [:],
-                                             ignoredControllers: [:], ignoredNoteOffs: 0))
+                                             ignoredControllers: [:], ignoredNoteOffs: 0, ignoredZeroLengthNotes: 0,
+                                             ignoredEventsAtEnd: 0))
     }
 
     @Test
@@ -163,7 +164,6 @@ struct StandardMIDIFileReaderTests {
             SMF.refusal(SMF.file(chunks: [SMF.track(events, endDelta: endDelta)]))
         }
         #expect(refusal([], endDelta: [0x00]) == .clip(.lengthOutOfRange(0)))
-        #expect(refusal([0x01, 0xC0, 0x05], endDelta: [0x00]) == .clip(.eventOutsideClip(item: 0, ticks: 16)))
         let many = [UInt8]((0...MIDIClip.maximumItems).map { _ in [UInt8(0x00), 0xC0, 0x05] }.joined())
         #expect(refusal(many) == .clip(.tooManyItems(count: MIDIClip.maximumItems + 1, limit: MIDIClip.maximumItems)))
     }
@@ -183,7 +183,7 @@ struct StandardMIDIFileReaderTests {
         #expect(read.report == SMFReadReport(format: 1, division: 960, tracks: 3,
                                              ignoredMeta: [.tempo: 1, .text: 1], unknownChunks: 0,
                                              ignoredHeaderBytes: 0, ignoredSysEx: [:], ignoredControllers: [:],
-                                             ignoredNoteOffs: 0))
+                                             ignoredNoteOffs: 0, ignoredZeroLengthNotes: 0, ignoredEventsAtEnd: 0))
         let swapped = try StandardMIDIFile.read(SMF.file(format: 1, tracks: 3, chunks: [tempo, second, first]))
         #expect(swapped.clip.items.map { if case .event(_, let message) = $0 { "\(message)" } else { "note" } } ==
             ["note", "\(MIDI1Semantic.controlChange(channel: 1, controller: 7, value: 2))",
@@ -207,9 +207,76 @@ struct StandardMIDIFileReaderTests {
         let read = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
         #expect(read.clip.items == [Clip.note(0, 16, release: 0x20), Clip.note(16, 32, velocity: 0x50)])
         #expect(read.report.ignoredNoteOffs == 0)
-        // A zero-length note: its Note Off sorts first with nothing sounding, so its Note On is never released.
-        #expect(SMF.refusal(SMF.file(chunks: [SMF.track([0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40])])) ==
-            .noteNotReleased(channel: 1, note: 60, startTicks: 0))
+    }
+
+    @Test
+    func zeroLengthNotesAreSkippedAndCountedAndNeverStretch() throws {
+        func read(_ events: [UInt8]) throws -> SMFReadResult {
+            try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
+        }
+        // A zero-length note, then a redundant Note Off: no note at all, never one stretched to tick 256.
+        let redundant = try read([0x00, 0x90, 0x3C, 0x64, 0x00, 0x80, 0x3C, 0x40, 0x10, 0x80, 0x3C, 0x40])
+        #expect(redundant.clip == (try MIDIClip.make(lengthTicks: 256, items: [])))
+        #expect((redundant.report.ignoredZeroLengthNotes, redundant.report.ignoredNoteOffs) == (1, 1))
+        // A zero-length drum hit, then a normal hit of the same note: one note.
+        let drums = try read([0x00, 0x99, 0x24, 0x64, 0x00, 0x89, 0x24, 0x40, 0x10, 0x99, 0x24, 0x64,
+                              0x10, 0x89, 0x24, 0x40])
+        #expect(drums.clip.items == [Clip.note(256, 512, pitch: 36, channel: 10)])
+        #expect((drums.report.ignoredZeroLengthNotes, drums.report.ignoredNoteOffs) == (1, 0))
+        // The same with velocity-0 Note Ons under running status.
+        let running = try read([0x00, 0x99, 0x24, 0x64, 0x00, 0x24, 0x00, 0x10, 0x24, 0x64, 0x10, 0x24, 0x00])
+        #expect(running.clip == drums.clip)
+        #expect((running.report.ignoredZeroLengthNotes, running.report.ignoredNoteOffs) == (1, 0))
+        // A Note Off earlier in the file than the Note On at its tick does not pair: it is a stray Note Off.
+        let stray = try read([0x00, 0x80, 0x3C, 0x40, 0x00, 0x90, 0x3C, 0x64, 0x10, 0x80, 0x3C, 0x40])
+        #expect(stray.clip.items == [Clip.note(0, 256)])
+        #expect((stray.report.ignoredZeroLengthNotes, stray.report.ignoredNoteOffs) == (0, 1))
+        // Two Note Ons and one later Note Off at one tick: the first On pairs, the second sounds until tick 16.
+        let twice = try read([0x00, 0x90, 0x3C, 0x64, 0x00, 0x90, 0x3C, 0x50, 0x00, 0x80, 0x3C, 0x40,
+                              0x01, 0x80, 0x3C, 0x40])
+        #expect(twice.clip.items == [Clip.note(0, 16, velocity: 0x50)])
+        #expect(twice.report.ignoredZeroLengthNotes == 1)
+    }
+
+    @Test
+    func zeroLengthNotesPairAcrossTracksInFileOrder() throws {
+        func read(_ tracks: [[UInt8]]) throws -> SMFReadResult {
+            try StandardMIDIFile.read(SMF.file(format: 1, tracks: UInt16(tracks.count), chunks: tracks.map {
+                SMF.track($0)
+            }))
+        }
+        // The Note On in track 0 comes before the Note Off in track 1 in the file: a zero-length note.
+        let paired = try read([[0x01, 0x90, 0x3C, 0x64], [0x01, 0x80, 0x3C, 0x40]])
+        #expect(paired.clip == (try MIDIClip.make(lengthTicks: 16, items: [])))
+        #expect((paired.report.ignoredZeroLengthNotes, paired.report.ignoredNoteOffs) == (1, 0))
+        // The Note Off in track 0 comes first in the file: a stray Note Off, and track 1's note sounds on.
+        let stray = try read([[0x01, 0x80, 0x3C, 0x40], [0x01, 0x90, 0x3C, 0x64, 0x01, 0x80, 0x3C, 0x40]])
+        #expect(stray.clip.items == [Clip.note(16, 32)])
+        #expect((stray.report.ignoredZeroLengthNotes, stray.report.ignoredNoteOffs) == (0, 1))
+        // A stray Note Off pends only for its own tick: it cannot pair with a Note On at a later tick.
+        let later = try read([[0x10, 0x90, 0x3C, 0x64, 0x10, 0x80, 0x3C, 0x40], [0x00, 0x80, 0x3C, 0x40]])
+        #expect(later.clip.items == [Clip.note(256, 512)])
+        #expect((later.report.ignoredZeroLengthNotes, later.report.ignoredNoteOffs) == (0, 1))
+    }
+
+    @Test
+    func nonNoteEventsAtTheClipEndAreSkippedAndCounted() throws {
+        // CC 7 and a pitch-bend reset at the End of Track tick; the Note Off there still closes its note, and a CC
+        // one file tick earlier stays.
+        let events: [UInt8] = [0x00, 0x90, 0x3C, 0x64, 0x0F, 0xB0, 0x07, 0x50, 0x01, 0x80, 0x3C, 0x40,
+                               0x00, 0xB0, 0x07, 0x64, 0x00, 0xE0, 0x00, 0x40]
+        let read = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track(events)]))
+        #expect(read.clip.items == [Clip.note(0, 256),
+                                    .event(ticks: 240, message: .controlChange(channel: 1, controller: 7, value: 80))])
+        #expect(read.report.ignoredEventsAtEnd == 2)
+        // A format 1 track ending early: its event at the clip end is skipped, its earlier event kept.
+        let tracks = [SMF.track([0x00, 0xC0, 0x05], endDelta: [0x10]), SMF.track([0x10, 0xC0, 0x06])]
+        let merged = try StandardMIDIFile.read(SMF.file(format: 1, tracks: 2, chunks: tracks))
+        #expect(merged.clip.items == [.event(ticks: 0, message: .programChange(channel: 1, program: 5))])
+        #expect(merged.report.ignoredEventsAtEnd == 1)
+        // A Note On at the clip end is not skipped: it is never released.
+        #expect(SMF.refusal(SMF.file(chunks: [SMF.track([0x10, 0x90, 0x3C, 0x64])])) ==
+            .noteNotReleased(channel: 1, note: 60, startTicks: 256))
     }
 
     @Test
@@ -232,7 +299,7 @@ struct StandardMIDIFileReaderTests {
         #expect(resets.report == SMFReadReport(format: 0, division: 960, tracks: 1, ignoredMeta: [:],
                                                unknownChunks: 0, ignoredHeaderBytes: 0,
                                                ignoredSysEx: [.message: 2], ignoredControllers: [:],
-                                               ignoredNoteOffs: 0))
+                                               ignoredNoteOffs: 0, ignoredZeroLengthNotes: 0, ignoredEventsAtEnd: 0))
         // An escape's delta time still moves the track: the note starts one file tick (16 clip ticks) later.
         let escape = try StandardMIDIFile.read(SMF.file(chunks: [SMF.track([0x01, 0xF7, 0x01, 0xF8] + note)]))
         #expect(escape.clip == (try MIDIClip.make(lengthTicks: 32, items: [Clip.note(16, 32)])))
@@ -252,6 +319,8 @@ struct StandardMIDIFileReaderTests {
             SMF.refusal(SMF.file(chunks: [SMF.track(events)]), limits: limits)
         }
         #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0xF0, 0x01, 0xF7, 0x10, 0x3C, 0x00]) ==
+            .missingRunningStatus(track: 0, offset: 31))
+        #expect(refusal([0x00, 0x90, 0x3C, 0x64, 0x00, 0xF7, 0x01, 0xF8, 0x10, 0x3C, 0x00]) ==
             .missingRunningStatus(track: 0, offset: 31))
         // Lengths past the chunk end (the event starts at offset 23), one of them by a single byte.
         #expect(SMF.refusal(SMF.file(chunks: [SMF.chunk("MTrk", [0x00, 0xF0, 0x05, 0x7E, 0x7F])])) ==

@@ -5,8 +5,9 @@
 //  Typed refusals of the Standard MIDI File reader (#112 CL2). A refused read
 //  returns no clip and no report. `offset` is a byte offset into the file and
 //  `track` a zero-based index among the file's MTrk chunks. SysEx events,
-//  refused controllers and stray Note Offs are not refusals: the reader skips
-//  and counts them in `SMFReadReport`.
+//  refused controllers, stray Note Offs, zero-length notes and non-note events
+//  at the clip end are not refusals: the reader skips and counts them in
+//  `SMFReadReport`.
 //
 
 /// Why Standard MIDI File bytes are not read into a `MIDIClip`.
@@ -37,7 +38,8 @@ enum SMFRefusal: Error, Equatable, Sendable {
     case tooManyEvents(limit: Int)
     /// An event's time, in clip ticks, is past `MIDIClip.maximumLengthTicks`.
     case timeBeyondLimit(track: Int, ticks: Int64)
-    /// A data byte at `offset` starts an event, but no channel status precedes it for running status.
+    /// A data byte at `offset` starts an event, but no channel status precedes it for running status. Meta and
+    /// SysEx events cancel running status (RP-001), so a data byte right after one is refused this way.
     case missingRunningStatus(track: Int, offset: Int)
     /// The status byte at `offset` is a system common or real-time status (0xF1...0xFE other than 0xF7), which an
     /// SMF track cannot hold.
@@ -53,8 +55,10 @@ enum SMFRefusal: Error, Equatable, Sendable {
     /// A Note On for a channel and note that is already sounding, in merged order; a clip note cannot overlap
     /// another of the same channel and note.
     case noteOnWhileSounding(track: Int, ticks: Int64, channel: UInt8, note: UInt8)
-    /// A note is still sounding at the end of the file; `startTicks` is its Note On time in clip ticks. The note
-    /// reported is the earliest such in read order.
+    /// A Note On has no Note Off of its channel and note after it in merged order (a later tick, or the same tick
+    /// later in the file as a zero-length note), so it would sound past the end of the file. A released note never
+    /// gives this refusal. `startTicks` is its Note On time in clip ticks; the note reported is the earliest such
+    /// in read order.
     case noteNotReleased(channel: UInt8, note: UInt8, startTicks: Int64)
     /// `MIDIClip.make` refused the clip the file describes; item indexes are in read order, skipped events
     /// excluded.

@@ -71,7 +71,8 @@ struct StandardMIDIFileTests {
         #expect(read.clip == clip)
         #expect(read.report == SMFReadReport(format: 0, division: 15_360, tracks: 1, ignoredMeta: [:],
                                              unknownChunks: 0, ignoredHeaderBytes: 0, ignoredSysEx: [:],
-                                             ignoredControllers: [:], ignoredNoteOffs: 0))
+                                             ignoredControllers: [:], ignoredNoteOffs: 0, ignoredZeroLengthNotes: 0,
+                                             ignoredEventsAtEnd: 0))
     }
 
     @Test

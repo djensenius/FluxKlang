@@ -115,8 +115,15 @@ struct SMFReadReport: Equatable, Sendable {
     /// Control Changes skipped, keyed by controller number: the ones `MIDIClip.make` refuses, sustain (64),
     /// sostenuto (66), hold 2 (69) and the channel mode messages (120...127). Sustain is dropped on import.
     let ignoredControllers: [UInt8: Int]
-    /// Note Offs (or Note Ons with velocity 0) skipped because their channel and note were not sounding.
+    /// Note Offs (or Note Ons with velocity 0) skipped because their channel and note were not sounding and no
+    /// Note On paired with them as a zero-length note.
     let ignoredNoteOffs: Int
+    /// Zero-length notes skipped: a Note On and a Note Off of one channel and note at one tick, the On earlier in
+    /// the file (lower track index, or the same track and an earlier position).
+    let ignoredZeroLengthNotes: Int
+    /// Non-note channel events at or after the clip length (the latest End of Track) skipped: a clip event must
+    /// come before the clip end. A typical case is a pitch-bend or volume reset at the final tick.
+    let ignoredEventsAtEnd: Int
 }
 
 /// A clip read from Standard MIDI File bytes, with what the read skipped.
