@@ -16,11 +16,11 @@
 ///   persists after the Program Change, as in JUCE and q (ALSA and AM_MIDI2.0Lib clear it).
 /// - RPN (CC 101/100) and NRPN (CC 99/98) selections are absorbed. CC 6 is held, not sent: CC 38 completes it into
 ///   one Registered/Assignable Controller with the 14-bit value `msb << 7 | lsb`. A held CC 6 is sent with LSB 0
-///   (a Data Entry MSB resets the LSB, the MIDI 1.0 convention) before a second CC 6, before any selection byte,
-///   before any other message on the same group and channel, or by `flush(group:channel:)` / `flushAll()`. The
-///   translator has no clock: an I/O layer that wants a held value sent after a timeout calls `flush`. A further
-///   CC 38 re-sends the controller with the last MSB and the new LSB. The null RPN (127/127) deselects; Data Entry
-///   then declares a loss.
+///   (a Data Entry MSB resets the LSB, the MIDI 1.0 convention) before any message that is not the CC 38 on its
+///   own group and channel (a second CC 6, a selection byte, or any message on any group or channel), or by
+///   `flush(group:channel:)` / `flushAll()`. The translator has no clock: the I/O layer must call `flushAll()` on
+///   timeout, at end of stream and at teardown (see #362). A further CC 38 re-sends the controller with the last
+///   MSB and the new LSB. The null RPN (127/127) deselects; Data Entry then declares a loss.
 /// - Data Increment/Decrement (CC 96/97) send nothing and declare `dataIncrementUnmapped`, with or without a
 ///   selected parameter, and forget the Data Entry MSB (the receiver's value is no longer known, so a following
 ///   CC 38 declares `dataEntryLSBWithoutMSB`). Project decision: the references pass CC 96/97 through as MIDI 2.0
@@ -30,14 +30,19 @@
 ///   the Data Entry MSB of that group and channel; the bank is kept (as `MIDI1ChannelState` does).
 /// - Every other Control Change is sent as a MIDI 2.0 Control Change with its value scaled 7 → 32 bits.
 ///
-/// Per group and channel, messages keep their order. Across channels, a write held on one channel is sent after
-/// messages that arrived on other channels in the meantime.
+/// The output is one stream, so order holds across every group and channel: a held CC 6 is sent before the next
+/// message on any group or channel, unless that message is the CC 38 completing it. So at most one CC 6 is ever
+/// held; a single slot (`heldDataEntry`) enforces that.
+///
+/// Not real-time safe: `translate` copies its state and allocates its output, so call the translator on the
+/// control or I/O thread, never on the audio render thread.
 ///
 /// State is bounded (16 groups × 16 channels) and value-typed. A refused call returns nothing and changes nothing;
 /// refusals cannot happen for a checked `UMPMIDI1ChannelVoice` and exist only because the codec calls are throwing.
 struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
     private var channels = UMPTranslationTable(repeating: UMPUpChannelState())
     private var storedLosses = UMPTranslationLossCounts()
+    private var held: UMPMIDI2ChannelVoice?
 
     init() {}
 
@@ -46,6 +51,9 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
 
     /// The state of one group and channel.
     func state(group: UMPGroup, channel: UMPChannel) -> UMPUpChannelState { channels[group, channel] }
+
+    /// The controller a CC 6 produced, waiting for its CC 38 (at most one across all groups and channels).
+    var heldDataEntry: UMPMIDI2ChannelVoice? { held }
 
     /// Translates one message, updating state and loss counts.
     mutating func translate(
@@ -58,22 +66,24 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
         return output
     }
 
-    /// Sends the Data Entry held on one group and channel (its CC 6 with LSB 0), if any.
+    /// Sends the Data Entry held on one group and channel (its CC 6 with LSB 0), if any. See #362.
     mutating func flush(group: UMPGroup, channel: UMPChannel) -> [UMPMIDI2ChannelVoice] {
-        guard let held = channels[group, channel].heldDataEntry else { return [] }
-        channels[group, channel].heldDataEntry = nil
-        return [held]
+        guard let voice = held, voice.group == group, voice.channel == channel else { return [] }
+        held = nil
+        return [voice]
     }
 
-    /// Sends every held Data Entry, group by group and channel by channel.
+    /// Sends the held Data Entry (its CC 6 with LSB 0), wherever it is. The I/O layer calls this on timeout, at end
+    /// of stream and at teardown (see #362).
     mutating func flushAll() -> [UMPMIDI2ChannelVoice] {
-        let held = channels.elements.compactMap(\.heldDataEntry)
-        for voice in held { channels[voice.group, voice.channel].heldDataEntry = nil }
-        return held
+        guard let voice = held else { return [] }
+        held = nil
+        return [voice]
     }
 
-    /// Forgets the state of one group and channel (for example after its sender reconnects). A held Data Entry is
-    /// a value the sender set, so it is returned (sent) rather than discarded.
+    /// Forgets the state of one group and channel (for example after its sender reconnects). A held Data Entry on
+    /// it is a value the sender set, so it is returned rather than discarded: the caller must forward the returned
+    /// messages before anything else on that group and channel.
     mutating func reset(group: UMPGroup, channel: UMPChannel) -> [UMPMIDI2ChannelVoice] {
         let held = flush(group: group, channel: channel)
         channels[group, channel] = UMPUpChannelState()
@@ -84,9 +94,12 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
         _ voice: UMPMIDI1ChannelVoice
     ) throws(UMPRefusal) -> UMPTranslationOutput<UMPMIDI2ChannelVoice> {
         guard case let .channel(status, data1, _) = voice.event else { throw .notChannelVoice }
-        // CC 38 completes a held CC 6; anything else on this group and channel sends it first.
+        // The CC 38 on the held CC 6's own group and channel completes it; any other message, on any group and
+        // channel, sends it first, so the single output stream keeps arrival order.
+        let channel = try UMPChannel(status & 0x0F)
         let completesHeldDataEntry = status & 0xF0 == 0xB0 && data1 == 38
-        let flushed = completesHeldDataEntry ? [] : flush(group: voice.group, channel: try UMPChannel(status & 0x0F))
+            && held?.group == voice.group && held?.channel == channel
+        let flushed = completesHeldDataEntry ? [] : flushAll()
         let output = try message(voice)
         return UMPTranslationOutput(messages: flushed + output.messages, losses: output.losses)
     }
@@ -172,12 +185,12 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
         }
         if isMSB {
             channels[group, channel].dataEntryMSB = value
-            channels[group, channel].heldDataEntry = UMPMIDI2ChannelVoice(
+            held = UMPMIDI2ChannelVoice(
                 group: group, channel: channel, message: try Self.parameter(address, UInt32(value.value) << 7))
             return UMPTranslationOutput(messages: [], losses: [])
         }
         guard let msb = channels[group, channel].dataEntryMSB else { return loss(.dataEntryLSBWithoutMSB) }
-        channels[group, channel].heldDataEntry = nil
+        held = nil
         let message = try Self.parameter(address, UInt32(msb.value) << 7 | UInt32(value.value))
         return UMPTranslationOutput(
             messages: [UMPMIDI2ChannelVoice(group: group, channel: channel, message: message)], losses: [])

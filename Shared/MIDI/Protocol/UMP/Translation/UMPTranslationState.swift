@@ -24,9 +24,8 @@ struct UMPParameterAddress: Equatable, Sendable {
 /// - RPN/NRPN selection bytes persist until replaced. Selecting the other family clears both bytes first, so a
 ///   mixed RPN MSB + NRPN LSB pair never forms an address. Any selection byte clears the Data Entry MSB.
 /// - The Data Entry MSB is the last CC 6 value for the current selection; CC 38 combines with it. Data Increment or
-///   Decrement (CC 96/97) forgets it, because the receiver's value is then unknown.
-/// - The held Data Entry is the controller a CC 6 produced, waiting for its CC 38; it is sent with LSB 0 when
-///   anything else arrives on this group and channel, or on `flush`.
+///   Decrement (CC 96/97) forgets it, because the receiver's value is then unknown. The controller a CC 6 produced,
+///   waiting for its CC 38, is held by `UMPMIDI1ToMIDI2Translator` (one slot for all groups and channels).
 struct UMPUpChannelState: Equatable, Sendable {
     var bankMSB: UMPSevenBit?
     var bankLSB: UMPSevenBit?
@@ -34,7 +33,6 @@ struct UMPUpChannelState: Equatable, Sendable {
     var parameterMSB: UMPSevenBit?
     var parameterLSB: UMPSevenBit?
     var dataEntryMSB: UMPSevenBit?
-    var heldDataEntry: UMPMIDI2ChannelVoice?
 
     init() {}
 
@@ -98,9 +96,6 @@ struct UMPTranslationTable<Element: Equatable & Sendable>: Equatable, Sendable {
     init(repeating element: Element) {
         storedElements = Array(repeating: element, count: Self.capacity)
     }
-
-    /// Every element, group 0 channel 0 first, then by channel within each group.
-    var elements: [Element] { storedElements }
 
     subscript(group: UMPGroup, channel: UMPChannel) -> Element {
         get { storedElements[Int(group.value) * 16 + Int(channel.value)] }

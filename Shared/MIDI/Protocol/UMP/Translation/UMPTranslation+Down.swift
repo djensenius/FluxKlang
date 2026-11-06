@@ -17,6 +17,9 @@
 /// - Messages MIDI 1.0 cannot carry send nothing and declare a typed loss; precision and attribute losses are
 ///   declared alongside the sent message. Nothing is dropped silently.
 ///
+/// Not real-time safe: `translate` copies its state and allocates its output, so call the translator on the
+/// control or I/O thread, never on the audio render thread.
+///
 /// State is bounded (16 groups × 16 channels) and value-typed. A refused call returns nothing and changes nothing;
 /// refusals cannot happen for a checked `UMPMIDI2ChannelVoice` and exist only because the codec calls are throwing.
 struct UMPMIDI2ToMIDI1Translator: Equatable, Sendable {

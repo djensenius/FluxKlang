@@ -53,11 +53,6 @@ struct UMPTranslationDataEntryTests {
         #expect(try messages(Self.cc(0, 6, 10)).isEmpty)
         // A second CC 6 sends the held one with LSB 0 first.
         #expect(try messages(Self.cc(0, 6, 11)) == [try Self.mt4(0, 0, Self.rpn(0, 1, 10 << 7))])
-        // Another channel, or the same channel in another group, does not send it.
-        let otherChannel = try UMPMIDI1ChannelVoice(group: UMPGroup(0), event: .channel(status: 0x91, data1: 60,
-                                                                                          data2: 100))
-        #expect(try messages(otherChannel).map(\.channel) == [try UMPChannel(1)])
-        #expect(try messages(Self.cc(0, 7, 1, group: 1)).count == 1)
         // Any other message on the channel sends it first, in order.
         let note = try UMPMIDI1ChannelVoice(group: UMPGroup(0), event: .channel(status: 0x90, data1: 60, data2: 100))
         #expect(try messages(note) == [try Self.mt4(0, 0, Self.rpn(0, 1, 11 << 7)),
@@ -74,23 +69,65 @@ struct UMPTranslationDataEntryTests {
         #expect(upward.losses.total == 0)
     }
 
-    @Test func flushSendsEachHeldDataEntryExactlyOnce() throws {
+    @Test func aHeldDataEntryIsSentBeforeTheNextMessageOnAnyGroupOrChannel() throws {
+        let note = try UMPMIDI2Message.noteOn(note: Self.seven(60), velocity: 0xC924, attributeType: 0, attribute: 0)
+        // MPE Configuration Message on channel 1, then a Note On on channel 2, in the same group or another one.
+        for group: UInt8 in [0, 1] {
+            var upward = UMPMIDI1ToMIDI2Translator()
+            for (controller, value) in [(UInt8(101), UInt8(0)), (100, 6), (6, 15)] {
+                #expect(try upward.translate(Self.cc(0, controller, value)).messages.isEmpty)
+            }
+            let noteOn = try UMPMIDI1ChannelVoice(group: UMPGroup(group), event: .channel(status: 0x91, data1: 60,
+                                                                                        data2: 100))
+            #expect(try upward.translate(noteOn).messages == [try Self.mt4(0, 0, Self.rpn(0, 6, 15 << 7)),
+                                                              try Self.mt4(group, 1, note)], "group \(group)")
+            #expect(upward.heldDataEntry == nil)
+        }
+        // A CC 38 on another channel sends the held CC 6 first, then is handled on its own channel.
         var upward = UMPMIDI1ToMIDI2Translator()
+        for (channel, controller, value) in [(UInt8(1), UInt8(99), UInt8(2)), (1, 98, 3), (1, 6, 4),
+                                             (0, 101, 0), (0, 100, 1), (0, 6, 9)] {
+            _ = try upward.translate(Self.cc(channel, controller, value))
+        }
+        #expect(upward.heldDataEntry == (try Self.mt4(0, 0, Self.rpn(0, 1, 9 << 7))))
+        #expect(try upward.translate(Self.cc(1, 38, 5)).messages == [try Self.mt4(0, 0, Self.rpn(0, 1, 9 << 7)),
+                                                                     try Self.mt4(0, 1, Self.nrpn(2, 3, 4 << 7 | 5))])
+        // A Program Change, or an NRPN -> RPN switch, sends the held CC 6 before it.
+        _ = try upward.translate(Self.cc(0, 6, 10))
+        let program = try upward.translate(UMPMIDI1ChannelVoice(group: UMPGroup(0),
+                                                                event: .channel(status: 0xC0, data1: 7, data2: nil)))
+        #expect(program.messages == [try Self.mt4(0, 0, Self.rpn(0, 1, 10 << 7)),
+                                     try Self.mt4(0, 0, .programChange(program: Self.seven(7), bank: nil))])
+        _ = try upward.translate(Self.cc(1, 6, 11))
+        #expect(try upward.translate(Self.cc(1, 101, 0)).messages == [try Self.mt4(0, 1, Self.nrpn(2, 3, 11 << 7))])
+        #expect(upward.state(group: try UMPGroup(0), channel: try UMPChannel(1)).parameterKind == .registered)
+        #expect(upward.heldDataEntry == nil)
+        #expect(upward.losses.total == 0)
+    }
+
+    @Test func flushSendsTheOneHeldDataEntryExactlyOnce() throws {
+        var upward = UMPMIDI1ToMIDI2Translator()
+        var sent: [UMPMIDI2ChannelVoice] = []
         for (group, channel, value) in [(UInt8(3), UInt8(2), UInt8(30)), (0, 5, 5), (0, 0, 1)] {
             for (controller, byte) in [(UInt8(99), UInt8(4)), (98, 8), (6, value)] {
-                #expect(try upward.translate(Self.cc(channel, controller, byte, group: group)).messages.isEmpty)
+                sent += try upward.translate(Self.cc(channel, controller, byte, group: group)).messages
+                // At most one CC 6 is ever held, across all groups and channels.
+                #expect(upward.heldDataEntry == nil || controller == 6)
             }
         }
-        let five = try upward.flush(group: UMPGroup(0), channel: UMPChannel(5))
-        #expect(five == [try Self.mt4(0, 5, Self.nrpn(4, 8, 5 << 7))])
+        #expect(sent == [try Self.mt4(3, 2, Self.nrpn(4, 8, 30 << 7)), try Self.mt4(0, 5, Self.nrpn(4, 8, 5 << 7))])
         #expect(try upward.flush(group: UMPGroup(0), channel: UMPChannel(5)).isEmpty)
-        // Group by group, channel by channel.
-        #expect(upward.flushAll() == [try Self.mt4(0, 0, Self.nrpn(4, 8, 1 << 7)),
-                                      try Self.mt4(3, 2, Self.nrpn(4, 8, 30 << 7))])
+        #expect(try upward.flush(group: UMPGroup(1), channel: UMPChannel(0)).isEmpty)
+        #expect(try upward.flush(group: UMPGroup(0), channel: UMPChannel(0))
+            == [try Self.mt4(0, 0, Self.nrpn(4, 8, 1 << 7))])
+        #expect(upward.flushAll().isEmpty)
+        _ = try upward.translate(Self.cc(0, 6, 2))
+        #expect(upward.flushAll() == [try Self.mt4(0, 0, Self.nrpn(4, 8, 2 << 7))])
         #expect(upward.flushAll().isEmpty)
         // Flushing keeps the Data Entry MSB, so a late CC 38 still completes the value.
         #expect(try upward.translate(Self.cc(2, 38, 7, group: 3)).messages
             == [try Self.mt4(3, 2, Self.nrpn(4, 8, 30 << 7 | 7))])
+        #expect(try upward.translate(Self.cc(0, 38, 7)).messages == [try Self.mt4(0, 0, Self.nrpn(4, 8, 2 << 7 | 7))])
         #expect(upward.losses.total == 0)
     }
 
@@ -228,7 +265,7 @@ struct UMPTranslationDataEntryTests {
         #expect(try downward.translate(Self.mt4(0, 1, Self.rpn(0, 1, 300))).messages.count == 1)
 
         var upward = UMPMIDI1ToMIDI2Translator()
-        for channel: UInt8 in [3, 4] {
+        for channel: UInt8 in [4, 3] {
             for (controller, value) in [(UInt8(0), UInt8(5)), (32, 9), (99, 0), (98, 1), (6, 5)] {
                 _ = try upward.translate(Self.cc(channel, controller, value, group: 2))
             }
@@ -241,6 +278,8 @@ struct UMPTranslationDataEntryTests {
         #expect(upward.state(group: try UMPGroup(2), channel: try UMPChannel(4)) == other)
         #expect(try upward.translate(Self.cc(3, 38, 1, group: 2)).losses
             == [try Self.loss(.dataEntryWithoutParameter, 2, 3)])
-        #expect(upward.flushAll() == [try Self.mt4(2, 4, Self.nrpn(0, 1, 5 << 7))])
+        #expect(upward.flushAll().isEmpty)
+        #expect(try upward.translate(Self.cc(4, 38, 1, group: 2)).messages
+            == [try Self.mt4(2, 4, Self.nrpn(0, 1, 5 << 7 | 1))])
     }
 }
