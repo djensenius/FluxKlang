@@ -74,6 +74,12 @@ enum RigMappingReviewFixture {
         return try #require(offered.candidates.first { $0.firstChannel == first })
     }
 
+    /// The replacement offered for `role` that starts at `first`.
+    static func replacement(_ review: RigMappingReview, _ role: String, first: Int) throws -> RigRouteCandidate {
+        let offers = try #require(review.replacementOffers[RoleID(role)])
+        return try #require(offers.first { $0.firstChannel == first })
+    }
+
     static func ids(_ raw: [String]) throws -> [RouteID] { try raw.map { try RouteID($0) } }
     static func roles(_ raw: [String]) throws -> [RoleID] { try raw.map { try RoleID($0) } }
 
@@ -105,6 +111,9 @@ struct RigMappingReviewTests {
         #expect(review.removalCandidates.map(\.route) == (try Fixture.ids(["rte.space"])))
         #expect(review.removalCandidates.map(\.role.rawValue) == ["rol.space"])
         #expect(review.removalCandidates.map(\.reason) == [.deviceMissing])
+        // Three candidates fit rol.space, so it awaits a choice and nothing is held.
+        #expect(review.replacementOffers.keys.map(\.rawValue) == ["rol.space"] && review.heldRoles.isEmpty)
+        #expect(review.replacementOffers.values.first?.map(\.firstChannel) == [0, 1, 2])
     }
 
     @Test func keepMutedKeepsTheLostRouteAndChangesNothing() throws {
@@ -273,33 +282,29 @@ struct RigMappingReviewTests {
         #expect(change.added.map(\.rawValue) == ["rte.cue"] && change.stillUnmapped.map(\.rawValue) == ["rol.space"])
     }
 
-    @Test func aDocumentChangedWithoutARevisionFailsValidation() throws {
+    @Test func aSameRevisionDocumentThatChangedIsRefused() throws {
         let review = try Fixture.lostRigReview()
+        let revision = try ContractRevision(7)
+        // Interface B came back and rte.space works again: removing it is not the reviewed change.
+        var revived = try Fixture.lostRig()
+        revived.devices[1] = try Fixture.device("dev.iface-b", outputs: 4)
+        revived.routes[3].binding = .proposed
+        try revived.validate()
+        let remove = try RigMappingDecisions.make(routes: [.remove(RouteID("rte.space"))])
+        #expect(try review.apply(remove, to: Fixture.lostRig()).removed.map(\.rawValue) == ["rte.space"])
+        #expect(Fixture.refusal { _ = try review.apply(remove, to: revived) } == .documentChanged(revision: revision))
+        // Any other change at the same revision is refused the same way, before any decision is checked.
         let shrunk = try Fixture.lostRig(ifaceAOutputs: 4)
-        let cue = try Fixture.candidate(review, "rol.cue", first: 4)
-        let decisions = try RigMappingDecisions.make(roles: [.choose(cue, id: RouteID("rte.cue"))])
-        guard case .invalidResult(let detail) = Fixture.refusal({ _ = try review.apply(decisions, to: shrunk) }) else {
-            Issue.record("expected invalidResult")
-            return
-        }
-        #expect(detail.contains("channelOutOfBounds"))
-        // A route the review never saw is still checked against the roles.
         var extra = try Fixture.lostRig()
         extra.routes.append(try Fixture.route("rte.extra", role: "rol.extra", device: "dev.iface-a", channels: [4, 5],
                                               binding: .proposed))
-        guard case .invalidResult(let unknown) = Fixture.refusal({ _ = try review.apply(.empty, to: extra) }) else {
-            Issue.record("expected invalidResult for an unknown role")
-            return
+        var moved = try Fixture.lostRig()
+        moved.routes[3].channels = [1, 2, 3, 0]
+        for document in [shrunk, extra, moved] {
+            #expect(Fixture.refusal { _ = try review.apply(remove, to: document) }
+                    == .documentChanged(revision: revision))
         }
-        #expect(unknown.contains("unknownRole"))
-        // A kept removal candidate is exempt from the role check, not from the intrinsic one.
-        var broken = try Fixture.lostRig()
-        broken.routes[3].channels = [9]
-        guard case .invalidResult(let bounds) = Fixture.refusal({ _ = try review.apply(.empty, to: broken) }) else {
-            Issue.record("expected invalidResult for a kept route out of bounds")
-            return
-        }
-        #expect(bounds.contains("channelOutOfBounds"))
+        #expect(review.baseDocument == (try Fixture.lostRig()))
     }
 
     @Test func leaveUnmappedDeclinesAProposalOrAChoice() throws {

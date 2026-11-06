@@ -49,8 +49,52 @@ struct RigMappingReviewOverlapTests {
         #expect(review.overlaps.map(\.channel) == [2, 3, 2, 3])
         let (onA, onB) = try (Fixture.ids(["rte.a1", "rte.a2"]), Fixture.ids(["rte.b1", "rte.b2"]))
         #expect(review.overlaps.map(\.routes) == [onA, onA, onB, onB])
-        #expect(Fixture.refusal { _ = try review.apply(.empty, to: base) }
+        // Every route fits its role, so the conflicts were already there: reported, in the same order.
+        let change = try review.apply(.empty, to: base)
+        #expect(change.document == base && change.preexistingOutputConflicts == review.overlaps)
+        // Without the roles every route is a kept (orphan) removal candidate, so the first conflict is refused.
+        let orphans = try RigMappingReview.make(roles: [], document: base)
+        #expect(Fixture.refusal { _ = try orphans.apply(.empty, to: base) }
                 == .outputChannelConflict(device: try DeviceID("dev.a"), channel: 2, routes: onA))
+    }
+
+    @Test func aPreexistingConflictIsReportedButAnAddedOneIsRefused() throws {
+        let base = try Fixture.document([Fixture.device("dev.a", outputs: 4)], routes: [
+            Fixture.route("rte.mains", role: "role.mains", device: "dev.a", binding: .confirmed),
+            Fixture.route("rte.fx", role: "role.fx", device: "dev.a", channels: [1, 2], binding: .confirmed)
+        ])
+        let roles = try [Fixture.role("role.mains"), Fixture.role("role.fx"), Fixture.role("role.wide", channels: 8),
+                         Fixture.role("role.mono", channels: 1)]
+        let review = try RigMappingReview.make(roles: roles, document: base)
+        #expect(review.removalCandidates.isEmpty && review.unmapped.map(\.role.rawValue) == ["role.wide"])
+        let shared = try Fixture.ids(["rte.fx", "rte.mains"])
+        let change = try review.apply(.empty, to: base)
+        #expect(change.document == base && change.added.isEmpty && change.sharedInputs.isEmpty)
+        #expect(change.preexistingOutputConflicts.map(\.channel) == [1])
+        #expect(change.preexistingOutputConflicts.map(\.routes) == [shared])
+        #expect(change.stillUnmapped.map(\.rawValue) == ["role.mono", "role.wide"])
+        // An added route on a free channel still applies, with the old conflict reported.
+        let free = try RigMappingDecisions.make(roles: [.choose(Fixture.candidate(review, "role.mono", first: 3),
+                                                                id: RouteID("rte.mono"))])
+        let added = try review.apply(free, to: base)
+        #expect(added.added.map(\.rawValue) == ["rte.mono"] && added.preexistingOutputConflicts.map(\.channel) == [1])
+        // An added route that joins the conflict, or makes a new one, is refused.
+        for (first, routes) in [(1, ["rte.fx", "rte.mains", "rte.mono"]), (0, ["rte.mains", "rte.mono"])] {
+            let mono = try Fixture.candidate(review, "role.mono", first: first)
+            let pick = try RigMappingDecisions.make(roles: [.choose(mono, id: RouteID("rte.mono"))])
+            #expect(Fixture.refusal { _ = try review.apply(pick, to: base) }
+                    == .outputChannelConflict(device: try DeviceID("dev.a"), channel: first,
+                                              routes: try Fixture.ids(routes)))
+        }
+    }
+
+    @Test func aRepeatedChannelPastTheFirstBitsetWordIsFound() throws {
+        let routes = try [("rte.hi1", 70), ("rte.lo", 3), ("rte.hi2", 70)].map { id, channel in
+            try Fixture.route(id, role: "role.\(id)", device: "dev.a", channels: [channel], binding: .proposed)
+        }
+        let overlaps = RigChannelOverlapScan.overlaps(in: routes)
+        #expect(overlaps.map(\.channel) == [70])
+        #expect(overlaps.map(\.routes) == [try Fixture.ids(["rte.hi1", "rte.hi2"])])
     }
 
     @Test func sharedInputIsAllowedAndReported() throws {

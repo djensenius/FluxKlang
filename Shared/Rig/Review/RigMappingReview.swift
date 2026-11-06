@@ -8,6 +8,9 @@
 //  - `pendingChoices`: roles awaiting the user's choice of candidate;
 //  - `removalCandidates`: routes the user may remove (orphan, mismatched,
 //    `deviceMissing`, `stale` or without a role requirement), with a reason;
+//  - `replacementOffers`: the candidates a `replace` may bind for the role of a
+//    mismatched, `deviceMissing` or `stale` candidate. A single RG1 candidate
+//    for such a role is held here as an offer, never added on its own;
 //  - `unmapped`: roles that stay unmapped, with their reasons;
 //  - `overlaps`: channel overlaps among the live document routes plus the
 //    additions, under the policy in `RigChannelOverlap.swift`.
@@ -29,6 +32,9 @@ enum RigRemovalReason: Hashable, Sendable {
     /// The route's binding is stale.
     case stale
     /// The route's role has no route requirement (non-audio, invalid or unconfirmed channel count).
+    /// This includes valid, `.confirmed` routes of legacy (`nil` channel count) and non-audio roles:
+    /// they are removal candidates, so review can remove them, as the spec's candidate list (RG1's
+    /// `routesWithoutRequirement`) says. They are kept unless a decision removes them.
     case noRequirement
 }
 
@@ -60,6 +66,8 @@ struct RigUnmappedRole: Hashable, Sendable {
 struct RigMappingReview: Hashable, Sendable {
     /// The revision of the device document the review was made from; `apply` refuses any other.
     let baseRevision: ContractRevision
+    /// The device document the review was made from; `apply` refuses any other at `baseRevision`.
+    let baseDocument: DeviceCapabilityDocument
     /// The RG1 proposal, updated by `choosing`.
     private(set) var proposal: RigMappingProposal
     /// Routes the user may remove or replace, sorted by route. Routes are kept unless a decision
@@ -67,11 +75,27 @@ struct RigMappingReview: Hashable, Sendable {
     let removalCandidates: [RigRemovalCandidate]
     /// Channel overlaps among the live document routes plus `additions`, sorted.
     private(set) var overlaps: [RigChannelOverlap]
-    /// The base document's routes, for recomputing overlaps after a choice.
-    private let baseRoutes: [AudioRoute]
+    /// The candidates a `replace` of a mismatched, `deviceMissing` or `stale` removal candidate may
+    /// bind, by the candidate's role, in RG1's (device, first channel) order. A role is listed when
+    /// RG1 offers it a candidate: in the review's proposal (a single `.proposed` candidate, which is
+    /// held here instead of being added, or the candidates of a role awaiting a choice), or else in
+    /// RG1's proposal over the document without those removal candidates, at the same revision (a
+    /// mismatched role, or a role the route budget left unmapped). `choosing` a role drops its entry.
+    ///
+    /// Capacity: a `replace` swaps one route for one, so it is not counted against
+    /// `DeviceCapabilityLimits.routes` and is accepted at 4,096 routes; it does not go through RG1's
+    /// `choosing`, which counts the route being replaced. RG1 still hands its route budget to
+    /// single-candidate roles in `RoleID` order, so near the limit a role can get no offer (its
+    /// `replace` is refused with `candidateNotOffered`); remove another eligible route to free capacity,
+    /// then make a new review.
+    private(set) var replacementOffers: [RoleID: [RigRouteCandidate]]
 
-    /// The proposed routes, in role order.
-    var additions: [AudioRoute] { proposal.proposedRoutes }
+    /// The proposed routes, in role order, without the single candidates held in `replacementOffers`.
+    var additions: [AudioRoute] { Self.additions(of: proposal, offers: replacementOffers) }
+
+    /// Roles whose single RG1 candidate is held as a replacement offer instead of being added: with
+    /// no decision or `.keep` they stay unmapped, and only a `replace` binds the candidate.
+    var heldRoles: Set<RoleID> { Self.heldRoles(of: proposal, offers: replacementOffers) }
 
     /// Roles awaiting a choice, sorted.
     var pendingChoices: [RoleID] { proposal.awaitingChoice }
@@ -84,13 +108,15 @@ struct RigMappingReview: Hashable, Sendable {
         }
     }
 
-    private init(baseRevision: ContractRevision, proposal: RigMappingProposal,
-                 removalCandidates: [RigRemovalCandidate], baseRoutes: [AudioRoute]) {
-        self.baseRevision = baseRevision
+    private init(base: DeviceCapabilityDocument, proposal: RigMappingProposal,
+                 removalCandidates: [RigRemovalCandidate], replacementOffers: [RoleID: [RigRouteCandidate]]) {
+        baseRevision = base.revision
+        baseDocument = base
         self.proposal = proposal
         self.removalCandidates = removalCandidates
-        self.baseRoutes = baseRoutes
-        overlaps = RigChannelOverlapScan.overlaps(in: baseRoutes + proposal.proposedRoutes)
+        self.replacementOffers = replacementOffers
+        let additions = Self.additions(of: proposal, offers: replacementOffers)
+        overlaps = RigChannelOverlapScan.overlaps(in: base.routes + additions)
     }
 
     /// Builds the review: the RG1 proposal for `roles` over `document`, bound to its revision.
@@ -100,9 +126,11 @@ struct RigMappingReview: Hashable, Sendable {
         let proposal = try RigReviewRefusal.lifting { () throws(RigMappingRefusal) in
             try RigMappingProposal.make(roles: roles, devices: document)
         }
+        let candidates = removalCandidates(of: proposal, routes: document.routes)
         return RigMappingReview(
-            baseRevision: document.revision, proposal: proposal,
-            removalCandidates: removalCandidates(of: proposal, routes: document.routes), baseRoutes: document.routes
+            base: document, proposal: proposal, removalCandidates: candidates,
+            replacementOffers: try replacementOffers(for: candidates, roles: roles, proposal: proposal,
+                                                     document: document)
         )
     }
 
@@ -114,8 +142,63 @@ struct RigMappingReview: Hashable, Sendable {
         }
         var updated = self
         updated.proposal = chosen
-        updated.overlaps = RigChannelOverlapScan.overlaps(in: baseRoutes + chosen.proposedRoutes)
+        updated.replacementOffers[candidate.role] = nil
+        updated.overlaps = RigChannelOverlapScan.overlaps(in: baseDocument.routes + updated.additions)
         return updated
+    }
+
+    /// The proposed routes of `proposal`, in role order, without the held roles' routes.
+    private static func additions(
+        of proposal: RigMappingProposal, offers: [RoleID: [RigRouteCandidate]]
+    ) -> [AudioRoute] {
+        let held = heldRoles(of: proposal, offers: offers)
+        return proposal.proposedRoutes.filter { !held.contains($0.role) }
+    }
+
+    /// The roles with a replacement offer whose RG1 outcome is the auto-proposal of their single
+    /// candidate. A role chosen through `choosing` has no offer left, so its route is never held.
+    private static func heldRoles(
+        of proposal: RigMappingProposal, offers: [RoleID: [RigRouteCandidate]]
+    ) -> Set<RoleID> {
+        Set(proposal.mappings.compactMap { mapping in
+            guard case .proposed = mapping.outcome, offers[mapping.role] != nil else { return nil }
+            return mapping.role
+        })
+    }
+
+    /// The replacement offers for the roles of the mismatched, `deviceMissing` and `stale` removal
+    /// candidates: RG1's candidates in `proposal`, or else in RG1's proposal over `document` without
+    /// those routes (made only when a role still has no offer).
+    private static func replacementOffers(
+        for candidates: [RigRemovalCandidate], roles: [ProjectRole], proposal: RigMappingProposal,
+        document: DeviceCapabilityDocument
+    ) throws(RigReviewRefusal) -> [RoleID: [RigRouteCandidate]] {
+        let replaceable = candidates.filter { [.mismatched, .deviceMissing, .stale].contains($0.reason) }
+        let wanted = Set(replaceable.map(\.role))
+        var offers: [RoleID: [RigRouteCandidate]] = [:]
+        for mapping in proposal.mappings where wanted.contains(mapping.role) {
+            offers[mapping.role] = offered(by: mapping.outcome)
+        }
+        guard offers.count < wanted.count else { return offers }
+        let removed = Set(replaceable.map(\.route))
+        var without = document
+        without.routes.removeAll { removed.contains($0.id) }
+        let fallback = try RigReviewRefusal.lifting { () throws(RigMappingRefusal) in
+            try RigMappingProposal.make(roles: roles, devices: without)
+        }
+        for mapping in fallback.mappings where wanted.contains(mapping.role) && offers[mapping.role] == nil {
+            offers[mapping.role] = offered(by: mapping.outcome)
+        }
+        return offers
+    }
+
+    /// The candidates an RG1 outcome offers, or `nil` when it offers none.
+    private static func offered(by outcome: RigRoleOutcome) -> [RigRouteCandidate]? {
+        switch outcome {
+        case .proposed(_, let candidate): [candidate]
+        case .awaitingChoice(let offered): offered.candidates
+        default: nil
+        }
     }
 
     /// One candidate per route of RG1's reported lists, with the highest-precedence reason.

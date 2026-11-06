@@ -8,8 +8,11 @@
 //
 //  Workspace UX actions on a Lost/Muted (`deviceMissing`) route:
 //  - "Keep muted" is `.keep(route)` (or no decision at all);
-//  - "Choose another device" is `.replace(route, with: candidate, id:)`: the
-//    removal and the choice for the same role succeed or fail together.
+//  - "Choose another device" is `.replace(route, with: candidate, id:)` with a
+//    candidate from the review's `replacementOffers`: the removal and the
+//    choice for the same role succeed or fail together. This works for a role
+//    with one candidate too: the review holds that candidate as an offer
+//    instead of adding it, so "Keep muted" leaves the role unmapped.
 //
 
 /// A decision about one existing route of the device document.
@@ -18,7 +21,8 @@ enum RigRouteDecision: Hashable, Sendable {
     case keep(RouteID)
     /// Remove the route. Only a removal candidate of the review can be removed.
     case remove(RouteID)
-    /// Remove the route and bind `candidate`, offered for the same role, as a `.proposed` route `id`.
+    /// Remove the route and bind `candidate`, offered for the same role in the review's
+    /// `replacementOffers`, as a `.proposed` route `id`.
     case replace(RouteID, with: RigRouteCandidate, id: RouteID)
 
     /// The existing route this decision is about.
@@ -53,7 +57,7 @@ enum RigRoleDecision: Hashable, Sendable {
 /// A validated decision set: at most one decision per route and per role. The result of `apply`
 /// does not depend on the order the decisions were given in.
 struct RigMappingDecisions: Hashable, Sendable {
-    /// No decisions: every route is kept, every proposed route is added, no choice is made.
+    /// No decisions: every route is kept, every review addition is added, no choice is made.
     static let empty = RigMappingDecisions(routes: [:], roles: [:])
 
     /// Route decisions by route.

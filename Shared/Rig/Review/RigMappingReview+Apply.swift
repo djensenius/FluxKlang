@@ -6,15 +6,20 @@
 //  candidate device document:
 //  - the document's routes in document order, without the routes a decision
 //    removes (a `remove` or the removed half of a `replace`);
-//  - then the proposed routes in role order: RG1's proposals, minus declined
-//    roles, plus the chosen candidates (`choose` and the added half of `replace`).
+//  - then the added routes in role order: RG1's proposals, minus declined roles
+//    and the single candidates held as replacement offers, plus the chosen
+//    candidates (`choose`) and the replacements (the added half of `replace`).
 //
 //  The candidate keeps the base revision and every device descriptor; no route
-//  becomes `.confirmed`. Refusals, in check order: `staleDocument`; per route
-//  decision (by route) `unknownRoute`, `removeNotCandidate`,
-//  `replaceRoleMismatch`; per choice (by role) the lifted RG1 refusals; per
-//  decline (by role) `.mapping(.unknownRole)`, `declineNotOffered`; then
-//  `invalidResult` and `outputChannelConflict` on the candidate.
+//  becomes `.confirmed`. Refusals, in check order: `staleDocument`,
+//  `documentChanged`; per route decision (by route) `unknownRoute`,
+//  `removeNotCandidate`, `replaceRoleMismatch`; per choice (by role) the lifted
+//  RG1 refusals; per decline (by role) `.mapping(.unknownRole)`,
+//  `declineNotOffered`; per replacement (by role) `.mapping(.candidateNotOffered)`,
+//  `.mapping(.routeIDInUse)`; then `invalidResult` and `outputChannelConflict`
+//  on the candidate. Only an output conflict that involves an added route or a
+//  kept removal candidate is refused; one among the reviewed document's other
+//  routes was already there and is reported in `preexistingOutputConflicts`.
 //
 
 /// The result of applying decisions to a review: a candidate document for the commit owner, who
@@ -31,15 +36,19 @@ struct RigMappingChange: Hashable, Sendable {
     /// The removal candidates kept (explicitly or by default), in document order.
     let kept: [RouteID]
     /// Audio roles with no live (`.proposed` or `.confirmed`) route in the candidate, sorted: RG1's
-    /// unmapped roles, unchosen pending roles (including "Keep muted"), declined roles, and roles whose
-    /// last live route was removed.
+    /// unmapped roles, unchosen pending roles and held roles with no `replace` (including "Keep muted"),
+    /// declined roles, and roles whose last live route was removed.
     let stillUnmapped: [RoleID]
     /// Input channels shared by several live routes of the candidate (allowed and reported).
     let sharedInputs: [RigChannelOverlap]
+    /// Output channels written by several live routes of the candidate, none of them added by this
+    /// apply or a kept removal candidate: conflicts already in the reviewed document, reported and not
+    /// refused. Sorted like `RigChannelOverlapScan.overlaps(in:)`.
+    let preexistingOutputConflicts: [RigChannelOverlap]
 
     fileprivate init(baseRevision: ContractRevision, document: DeviceCapabilityDocument, added: [RouteID],
                      removed: [RouteID], kept: [RouteID], stillUnmapped: [RoleID],
-                     sharedInputs: [RigChannelOverlap]) {
+                     sharedInputs: [RigChannelOverlap], preexistingOutputConflicts: [RigChannelOverlap]) {
         self.baseRevision = baseRevision
         self.document = document
         self.added = added
@@ -47,12 +56,13 @@ struct RigMappingChange: Hashable, Sendable {
         self.kept = kept
         self.stillUnmapped = stillUnmapped
         self.sharedInputs = sharedInputs
+        self.preexistingOutputConflicts = preexistingOutputConflicts
     }
 }
 
 extension RigMappingReview {
-    /// Applies `decisions` to `document`, which must be at `baseRevision`. The candidate passes
-    /// `validate()`, and its routes that are not removal candidates pass
+    /// Applies `decisions` to `document`, which must equal `baseDocument` (same revision and same
+    /// contents). The candidate passes `validate()`, and its routes that are not removal candidates pass
     /// `validate(roles: proposal.requirements)`; kept removal candidates are exempt from the role check.
     func apply(
         _ decisions: RigMappingDecisions, to document: DeviceCapabilityDocument
@@ -60,15 +70,13 @@ extension RigMappingReview {
         guard document.revision == baseRevision else {
             throw .staleDocument(base: baseRevision, found: document.revision)
         }
+        guard document == baseDocument else { throw .documentChanged(revision: baseRevision) }
         let removable = Set(removalCandidates.map(\.route))
         let removed = try removedRoutes(decisions, in: document, removable: removable)
 
         var chosen = proposal
-        var choices: [(RigRouteCandidate, RouteID)] = decisions.roles.values.compactMap { decision in
+        let choices: [(RigRouteCandidate, RouteID)] = decisions.roles.values.compactMap { decision in
             if case .choose(let candidate, let id) = decision { (candidate, id) } else { nil }
-        }
-        for decision in decisions.routes.values {
-            if case .replace(_, let candidate, let id) = decision { choices.append((candidate, id)) }
         }
         for (candidate, id) in choices.sorted(by: { $0.0.role < $1.0.role }) {
             let current = chosen
@@ -78,21 +86,49 @@ extension RigMappingReview {
         }
         let declined = try declinedRoles(decisions, in: chosen)
 
-        let additions = chosen.proposedRoutes.filter { !declined.contains($0.role) }
+        let held = heldRoles
+        let proposed = chosen.proposedRoutes.filter { !declined.contains($0.role) && !held.contains($0.role) }
+        // At most one added route per role, so sorting by role alone is deterministic.
+        let additions = try (proposed + replacements(decisions, besides: proposed, in: document))
+            .sorted { $0.role < $1.role }
         var candidate = document
         candidate.routes = document.routes.filter { !removed.contains($0.id) } + additions
         try validate(candidate, exempt: removable, requirements: chosen.requirements)
+        let kept = document.routes.map(\.id).filter { removable.contains($0) && !removed.contains($0) }
         let overlaps = RigChannelOverlapScan.overlaps(in: candidate.routes)
-        if let conflict = overlaps.first(where: { $0.kind == .outputConflict }) {
+        let conflicts = overlaps.filter { $0.kind == .outputConflict }
+        let involved = Set(additions.map(\.id) + kept)
+        if let conflict = conflicts.first(where: { $0.routes.contains(where: involved.contains) }) {
             throw .outputChannelConflict(device: conflict.device, channel: conflict.channel, routes: conflict.routes)
         }
         return RigMappingChange(
             baseRevision: baseRevision, document: candidate, added: additions.map(\.id),
-            removed: document.routes.map(\.id).filter { removed.contains($0) },
-            kept: document.routes.map(\.id).filter { removable.contains($0) && !removed.contains($0) },
+            removed: document.routes.map(\.id).filter { removed.contains($0) }, kept: kept,
             stillUnmapped: Self.unrouted(chosen, in: candidate.routes),
-            sharedInputs: overlaps.filter { $0.kind == .sharedInput }
+            sharedInputs: overlaps.filter { $0.kind == .sharedInput }, preexistingOutputConflicts: conflicts
         )
+    }
+
+    /// The `.proposed` routes the `replace` decisions bind, by role. Each candidate must be in
+    /// `replacementOffers` for its role, and each ID must be new to the document and to the other
+    /// added routes.
+    private func replacements(
+        _ decisions: RigMappingDecisions, besides proposed: [AudioRoute], in document: DeviceCapabilityDocument
+    ) throws(RigReviewRefusal) -> [AudioRoute] {
+        let picks: [(RigRouteCandidate, RouteID)] = decisions.routes.values.compactMap { decision in
+            if case .replace(_, let candidate, let id) = decision { (candidate, id) } else { nil }
+        }
+        var used = Set(document.routes.map(\.id)).union(proposed.map(\.id))
+        var routes: [AudioRoute] = []
+        for (candidate, id) in picks.sorted(by: { $0.0.role < $1.0.role }) {
+            guard replacementOffers[candidate.role]?.contains(candidate) == true else {
+                throw .mapping(.candidateNotOffered(candidate))
+            }
+            guard used.insert(id).inserted else { throw .mapping(.routeIDInUse(id)) }
+            routes.append(AudioRoute(id: id, role: candidate.role, device: candidate.device,
+                                     direction: candidate.direction, channels: candidate.channels, binding: .proposed))
+        }
+        return routes
     }
 
     /// The routes removed by `remove` and `replace` decisions, checked in route order.

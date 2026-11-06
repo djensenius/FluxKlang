@@ -21,6 +21,9 @@ enum RigReviewRefusal: Error, Hashable, Sendable {
     case mapping(RigMappingRefusal)
     /// `apply` got a device document whose revision is not the one the review was made from.
     case staleDocument(base: ContractRevision, found: ContractRevision)
+    /// `apply` got a device document at the review's revision whose contents differ from the reviewed
+    /// document (any device, route or other field). Make the review again from the current document.
+    case documentChanged(revision: ContractRevision)
     /// A route decision names a route that is not in the device document.
     case unknownRoute(RouteID)
     /// More than one decision for one route or one role; the smallest such subject is reported.
@@ -35,7 +38,8 @@ enum RigReviewRefusal: Error, Hashable, Sendable {
     case replaceRoleMismatch(route: RouteID, role: RoleID, candidateRole: RoleID)
     /// A `leaveUnmapped` names a role with no proposed route and no pending choice to decline.
     case declineNotOffered(RoleID)
-    /// Two live routes of the candidate document write one output channel of one device.
+    /// Two live routes of the candidate document write one output channel of one device, and at least
+    /// one of them is added by this apply or is a kept removal candidate.
     case outputChannelConflict(device: DeviceID, channel: Int, routes: [RouteID])
     /// The candidate document failed validation; the payload describes the first error.
     case invalidResult(String)
