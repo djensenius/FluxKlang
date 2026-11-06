@@ -111,8 +111,8 @@ struct PatchTransitionTracker: Equatable, Sendable {
     /// updates every reservation from it. Refuses a ledger sounding on an untracked route. A retired tracker returns
     /// at once without reading the ledger (the next prepare still refuses untracked routes).
     ///
-    /// Control side only, never on the render thread: it allocates and is linear in the ledger, the retained routes
-    /// and the deferred changes.
+    /// Control side only, never on the render thread: it allocates and is linear in the ledger and retained routes.
+    /// If no route drains, it updates occupancy counts and returns without rescanning deferred waiting lists.
     mutating func observe(_ ledger: MIDINoteLedger) throws(PatchTransitionRefusal) -> PatchTransitionDrain {
         guard !isRetired else { return PatchTransitionDrain(releasedRoutes: [], readyChanges: [], isRetired: true) }
         let occupancy = PatchLedgerOccupancy(ledger)
@@ -129,9 +129,13 @@ struct PatchTransitionTracker: Equatable, Sendable {
                 released.append(reservation.route)
             }
         }
+        tailReservations = kept
+        guard !released.isEmpty else {
+            return PatchTransitionDrain(releasedRoutes: [], readyChanges: [], isRetired: isRetired)
+        }
+
         let keptRoutes = Set(kept.map(\.route))
         let changes = deferredChanges.map { $0.waiting(onlyOn: keptRoutes) }
-        tailReservations = kept
         deferredChanges = changes.filter(\.isDeferred)
         let keptPatches = Set(kept.map(\.target))
         deferredVariations = deferredVariations.filter { keptPatches.contains($0.key) }

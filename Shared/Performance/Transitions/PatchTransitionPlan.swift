@@ -178,10 +178,16 @@ struct PatchTransitionPlan: Equatable, Sendable {
             return PatchTailReservation(entry, target: target)
         }
         let retained = Set(reservations.map(\.route))
+        // Reservations inherit ascending route order from the ledger occupancy. Build each patch's wait list once,
+        // rather than scanning every reservation again for every merged parameter change.
+        var waitingRoutesByPatch: [PatchID: [MIDIRouteID]] = [:]
+        for reservation in reservations {
+            waitingRoutesByPatch[reservation.target, default: []].append(reservation.route)
+        }
         let changes = merged.map { entry in
             PatchPlannedChange(
                 patch: entry.patch, variation: entry.variation, change: entry.change,
-                waitingOn: reservations.filter { $0.target == entry.patch }.map(\.route)
+                waitingOn: waitingRoutesByPatch[entry.patch] ?? []
             )
         }
         // Only added retention (a route retained that was not retained before) can defer; see PatchTransitionBudget.

@@ -101,6 +101,56 @@ struct PatchTransitionRepeatedTests {
         #expect(drained.isRetired)
     }
 
+    /// A large multi-patch wait set stays patch-specific, and an unchanged observation updates no tracker state or
+    /// readies changes when no retained route drains.
+    @Test
+    func indexedWaitsAndUnchangedObservationPreservePatchSpecificResultsAtScale() throws {
+        let routesPerPatch = 32
+        let changesPerPatch = 512
+        let routesA = (0..<routesPerPatch).map { MIDIRouteID(UInt32(1_000 + $0)) }
+        let routesB = (0..<routesPerPatch).map { MIDIRouteID(UInt32(2_000 + $0)) }
+        let currentRouting = try Fixture.routing(Fixture.routeShared, Fixture.routeB)
+        let previousRoutes = routesA + routesB
+        let previousRules = try previousRoutes.map { route in
+            try #require(MIDIRoutingRule(input: Fixture.keys, route: route))
+        }
+        let previousRouting = try #require(MIDIRouting(rules: previousRules))
+        let bindings = routesA.map { ($0, Fixture.patchA) } + routesB.map { ($0, Fixture.patchB) } + [
+            (Fixture.routeShared, Fixture.patchA), (Fixture.routeB, Fixture.patchB)
+        ]
+        let targets = try PatchRouteTargets.make(bindings)
+        let budget = try Fixture.budget(routes: previousRoutes.count, tails: previousRoutes.count)
+        let policy = PatchTransitionPolicy(targets: targets, budget: budget)
+        var tracker = try PatchTransitionTracker(routing: previousRouting, policy: policy)
+        var ledger = MIDINoteLedger()
+        try Fixture.play(Fixture.on(48), on: &ledger, routing: previousRouting)
+
+        func changes() throws -> [PatchParameterChange] {
+            try (0..<changesPerPatch).map { index in
+                Fixture.change(try ParameterID("par.\(100_000 + index)"), -12, -6)
+            }
+        }
+        let recallA = PatchRecallPlan(
+            patch: Fixture.patchA, from: nil, to: Fixture.verse, changes: try changes()
+        )
+        let recallB = PatchRecallPlan(
+            patch: Fixture.patchB, from: nil, to: Fixture.verse, changes: try changes()
+        )
+
+        let first = try tracker.recall(to: currentRouting, recall: recallA, ledger: ledger)
+        #expect(first.parameterChanges.count == changesPerPatch)
+        #expect(first.parameterChanges.allSatisfy { $0.waitingOn == routesA })
+        let second = try tracker.recall(to: currentRouting, recall: recallB, ledger: ledger)
+        #expect(second.parameterChanges.count == 2 * changesPerPatch)
+        #expect(second.parameterChanges.prefix(changesPerPatch).allSatisfy { $0.waitingOn == routesA })
+        #expect(second.parameterChanges.suffix(changesPerPatch).allSatisfy { $0.waitingOn == routesB })
+
+        let before = tracker
+        let unchanged = try tracker.observe(ledger)
+        #expect(unchanged.releasedRoutes.isEmpty && unchanged.readyChanges.isEmpty && !unchanged.isRetired)
+        #expect(tracker == before)
+    }
+
     @Test
     func recallingBackCancelsAStillDeferredChange() throws {
         let routingA = try Fixture.routing(Fixture.routeA)
