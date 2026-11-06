@@ -195,16 +195,19 @@ struct AutomationRenderHandbackTests {
         let last = try #require(try probe.advance(to: Fixture.position(clock, step - 1)).value)
         let reached = try #require(try probe.advance(to: Double(1_000).nextDown).value)
         let jumped = try #require(try probe.advance(to: 1_000).value)
-        #expect(jumped > 0.6 && last < 0.6)
-        // Exact events: the glide ramps to its value just before the step, jumps on the step's frame, then ramps to
-        // the value it hands back; the flat knot only departs (its value is already held).
+        // The frame lies 0.32 ticks past the step, over which the glide has moved on toward 0.8.
+        let framed = try #require(try probe.advance(to: Fixture.position(clock, step)).value)
+        #expect(jumped > 0.6 && last < 0.6 && framed > jumped)
+        // Exact events: the glide ramps to its value just before the step, jumps on the step's frame, moves on to
+        // its value at the frame's own position, then ramps to the value it hands back; the flat knot only departs
+        // (its value is already held).
         let held = { (frame: Int64, value: Double, ramp: Int64) in
             AutomationRampEvent(frame: frame, offset: Int(frame - 1_000), value: value, rampFrames: ramp, reason: .hold)
         }
         let departure = AutomationRampEvent(frame: flat, offset: Int(flat - 1_000), value: 0.4,
                                             rampFrames: next - flat, reason: .curve)
         #expect(runs[0] == [held(1_000, 0.6, 0), held(1_000, reached, step - 1_000), held(step, jumped, 0),
-                            held(step, 0.8, flat - step), departure])
+                            held(step, framed, 0), held(step, 0.8, flat - step), departure])
         // Offsets depend on the split, so the per-split checks compare the other fields.
         let shape = { (event: AutomationRampEvent) in
             "\(event.frame) \(event.value) \(event.rampFrames) \(event.reason)"
@@ -214,7 +217,7 @@ struct AutomationRenderHandbackTests {
             // The ramp ending on the step's frame reaches the value at tick 1000, not at the frame's own position
             // (1000.32): a chord within one frame's change of the arbiter.
             #expect(abs(values[Int(step - 1_001)] - last) <= abs(last - before))
-            #expect(values[Int(step - 1_000)] == jumped)
+            #expect(values[Int(step - 1_000)] == framed)
             #expect(events.filter { $0.frame >= flat }.map(shape) == [shape(departure)])
             #expect(events.first { $0.frame == step }.map(shape) == shape(held(step, jumped, 0)))
         }
@@ -256,6 +259,167 @@ struct AutomationRenderHandbackTests {
             #expect(values[Int(step - 1_000)] == jumped)
         }
         #expect(runs.dropFirst().allSatisfy { $0.map(\.rampFrames) == runs[0].map(\.rampFrames) })
+    }
+
+    /// An index lane (1…12) that steps to each value at its tick.
+    static func indexLane(_ points: [(ticks: Int64, value: Double)]) throws -> AutomationLane {
+        let descriptor = try ParameterDescriptor(.init(
+            id: Fixture.level, unit: .index, lower: 1, upper: 12, defaultValue: 1, ceiling: nil, curve: .stepped,
+            ramp: .step, controlClass: .live, verification: .unverified
+        ))
+        let steps = points.map { AutomationBreakpoint(ticks: $0.ticks, value: $0.value, interpolation: .step) }
+        return try AutomationLane(descriptor: descriptor, breakpoints: steps)
+    }
+
+    /// A fader moved to `moved` and released at `frame`, after which the lane resumes by `resume`.
+    struct Release {
+        var mode = AutomationMode.touch
+        let resume: AutomationResume
+        let moved: Double
+        let frame: Int64
+    }
+
+    /// A renderer on `lane` whose fader moved as `release` says and was released at its frame, the end of the block
+    /// `[0, frame)`: the release is stamped at that frame's position, or just before a breakpoint not yet visited.
+    static func released(_ lane: AutomationLane, _ release: Release, clock: MusicalClockMap,
+                         loop: LoopRange? = nil) throws -> AutomationBlockRenderer {
+        var renderer = try Fixture.renderer(lane, mode: release.mode, resume: release.resume, loop: loop)
+        _ = try renderer.render(from: 0, to: release.frame, clock: clock, current: Fixture.live)
+        _ = try renderer.perform(.touch(Fixture.fader, priority: 1))
+        _ = try renderer.perform(.move(Fixture.fader, to: release.moved))
+        _ = try renderer.perform(.release(Fixture.fader))
+        return renderer
+    }
+
+    /// What the arbiter shows at each frame of `[start, end)`, advanced frame by frame: to the frame's own position,
+    /// or to the tick of a breakpoint rounded onto the frame when that is later (a change on a breakpoint shows on
+    /// its frame).
+    static func shown(_ arbiter: ParameterArbiter, from start: Int64, to end: Int64, clock: MusicalClockMap,
+                      loop: LoopRange? = nil) throws -> [Double] {
+        var probe = arbiter
+        return try (start..<end).map { frame in
+            let pass = try AutomationRenderPass.containing(frame, clock: clock, loop: loop)
+            let ticks = try arbiter.lane.breakpoints.filter { $0.ticks < (loop?.endTicks ?? .max) }
+                .filter { try pass.clock.frame(atTicks: $0.ticks) == frame }.map { Double($0.ticks) }
+                .reduce(pass.exactTicks(atFrame: frame).position, max)
+            return try #require(try probe.advance(to: max(ticks, probe.position ?? ticks)).value)
+        }
+    }
+
+    /// One message for each run in which the host's value differs from the arbiter's (to rounding) on a frame of
+    /// `[release.frame, end)` (just those of `frames`, if `justThere`) after the fader is released: the block is
+    /// rendered whole, then cut on the frame before each of `frames`, on it and after it. A stepped lane never ramps,
+    /// so the host must show the arbiter's value on every frame; a ramp between advance points only on the frames
+    /// it ends on.
+    static func disagreements(_ lane: AutomationLane, _ release: Release, to end: Int64, around frames: [Int64],
+                              clock: MusicalClockMap, loop: LoopRange? = nil,
+                              justThere: Bool = false) throws -> [String] {
+        let start = release.frame
+        let released = try Self.released(lane, release, clock: clock, loop: loop)
+        let expected = try Self.shown(released.arbiter, from: start, to: end, clock: clock, loop: loop)
+        let before = try Self.shown(Fixture.renderer(lane).arbiter, from: start - 1, to: start, clock: clock,
+                                    loop: loop)[0]
+        let cuts = frames.flatMap { [$0 - 1, $0, $0 + 1] }.filter { $0 > start && $0 < end }
+        let splits = [[end - start]] + cuts.map { [$0 - start, end - $0] }
+        return try splits.compactMap { blocks in
+            var renderer = released
+            let events = try Fixture.render(&renderer, from: start, blocks: blocks, clock: clock)
+            let values = Fixture.trajectory(events, from: start, to: end, initial: before)
+            let bad = zip(values, expected).enumerated().first { index, pair in
+                (!justThere || frames.contains(start + Int64(index))) && abs(pair.0 - pair.1) > 1e-12
+            }
+            return bad.map {
+                "\(release) blocks \(blocks): frame \(start + Int64($0.offset))"
+                    + " host \($0.element.0), arbiter \($0.element.1)"
+            }
+        }
+    }
+
+    @Test func aShortGlideReleasedJustBeforeASteppedBreakpointShowsTheArbitersValueOnItsRoundedFrame() throws {
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(1_000, on: clock)
+        let released = try Self.released(Self.indexLane([(0, 2), (1_000, 9)]),
+                                         Release(resume: .glide(ticks: 1), moved: 12, frame: step - 1), clock: clock)
+        // Tick 1000 rounds up to frame 1563 (1562.5), whose own position is 1000.32 ticks. The glide, one tick long
+        // from 999.68, has moved on there from its value on the tick (11) to 10.
+        var probe = released.arbiter
+        #expect(try probe.advance(to: 1_000).value == 11)
+        #expect(try probe.advance(to: Fixture.position(clock, step)).value == 10)
+        var renderer = released
+        let events = try renderer.render(from: step - 1, to: step + 37, clock: clock, current: Fixture.live)
+        let hold = { (frame: Int64, value: Double) in
+            AutomationRampEvent(frame: frame, offset: Int(frame - step + 1), value: value, rampFrames: 0, reason: .hold)
+        }
+        #expect(events == [hold(step - 1, 12), hold(step, 9), hold(step, 11), hold(step, 10), hold(step + 1, 9)])
+        let values = Fixture.trajectory(events, from: step - 1, to: step + 37, initial: 2)
+        let expected = try Self.shown(released.arbiter, from: step - 1, to: step + 37, clock: clock)
+        #expect(values == expected)
+        // The host leaves the glide's 12, shows 10 on the breakpoint's frame (not the 11 on its tick), then the lane.
+        #expect(values.prefix(3) == [12, 10, 9])
+    }
+
+    @Test func aSteppedGlideShowsTheArbitersValueOnEveryFrameWhateverItsLengthReleaseAndSplit() throws {
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(1_000, on: clock)
+        let lane = try Self.indexLane([(0, 2), (1_000, 9)])
+        var failures: [String] = []
+        // A hand-back or a latch's end at the breakpoint, from three frames before its frame to two after it, in one
+        // block and cut on the frame before it, on it and after it.
+        for mode in [AutomationMode.touch, .latch] {
+            for glide: Int64 in [1, 2, 7, 1_000] {
+                for moved in [12.0, 1] {
+                    for frame in (step - 3)...(step + 2) {
+                        let release = Release(mode: mode, resume: .glide(ticks: glide), moved: moved, frame: frame)
+                        failures += try Self.disagreements(lane, release, to: step + 80, around: [step], clock: clock)
+                    }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(3))")
+    }
+
+    @Test func severalBreakpointsRoundingOntoOneFrameAreResolvedBeforeTheFramesPosition() throws {
+        // At 1000 BPM a frame is 5.33 ticks: ticks 1000 to 1005 all round onto frame 188, whose position is 1002.67.
+        // Ticks 1000 to 1002 lie before it, so the frame shows what the arbiter shows after the last of them and
+        // 0.67 ticks on; tick 1004 lies past it, so the frame shows the arbiter on that tick.
+        let clock = try Fixture.clock(segments: [(0, 60_000)])
+        let frame = try AutomationRenderMath.frame(1_000, on: clock)
+        let onFrame = try [1_001, 1_002, 1_004].map { try AutomationRenderMath.frame($0, on: clock) }
+        #expect(onFrame == [frame, frame, frame])
+        #expect(Fixture.position(clock, frame) > 1_002 && Fixture.position(clock, frame) < 1_004)
+        let lanes = try [Self.indexLane([(0, 2), (1_000, 9), (1_001, 4), (1_002, 11)]),
+                         Self.indexLane([(0, 2), (1_000, 9), (1_004, 3)])]
+        var failures: [String] = []
+        for lane in lanes {
+            for mode in [AutomationMode.touch, .latch] {
+                for glide: Int64 in [1, 3, 5, 9] {
+                    for moved in [12.0, 1, 6] {
+                        for when in (frame - 3)...(frame + 2) {
+                            let release = Release(mode: mode, resume: .glide(ticks: glide), moved: moved, frame: when)
+                            failures += try Self.disagreements(lane, release, to: frame + 40, around: [frame],
+                                                               clock: clock)
+                        }
+                    }
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(3))")
+        // A glide of 5 ticks from 1, released a frame before, is at 10 after the last breakpoint's tick and at 11 at
+        // the frame's position: the frame ends on 11.
+        let released = try Self.released(lanes[0], Release(resume: .glide(ticks: 5), moved: 1, frame: frame - 1),
+                                         clock: clock)
+        var probe = released.arbiter
+        #expect(try probe.advance(to: 1_002).value == 10)
+        #expect(try probe.advance(to: Fixture.position(clock, frame)).value == 11)
+        var renderer = released
+        let events = try renderer.render(from: frame - 1, to: frame + 40, clock: clock, current: Fixture.live)
+        #expect(events.last { $0.frame == frame }?.value == 11)
+        // The frame's position is reached once, after the last knot on the frame, not after each: a glide of 8 ticks
+        // from 1 shows 4 on tick 1000, 8 just before tick 1004 and 3 on it, and no 6 for the position between them.
+        var later = try Self.released(lanes[1], Release(resume: .glide(ticks: 8), moved: 1, frame: frame - 1),
+                                      clock: clock)
+        let mixed = try later.render(from: frame - 1, to: frame + 40, clock: clock, current: Fixture.live)
+        #expect(mixed.filter { $0.frame == frame }.map(\.value) == [4, 8, 3])
     }
 
     @Test func aWrapCarriedIntoARenderCountsTowardTheWrapLimit() throws {

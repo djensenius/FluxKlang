@@ -8,6 +8,7 @@ import Testing
 @Suite("Automation block rendering: loops")
 struct AutomationRenderLoopTests {
     typealias Fixture = AutomationRenderTests
+    typealias Hand = AutomationRenderHandbackTests
 
     @Test(arguments: [44_100, 48_000, 96_000])
     func aWrapInsideABlockRestartsTheLaneAtTheLoopStart(rate: Int) throws {
@@ -142,6 +143,26 @@ struct AutomationRenderLoopTests {
         #expect(held.reason == .hold && held.frame + held.rampFrames == 3_125)
         #expect(run.whole.contains { $0.frame == 6_250 && $0.reason == .loopWrap })
         #expect(run.owner == .automation)
+    }
+
+    @Test func aShortGlideReleasedBeforeABreakpointInALaterPassShowsTheArbitersValueOnItsFrame() throws {
+        // After the wrap at frame 3125 tick 1000 falls on frame 4688 (3125 + 1562.5), whose position is 1000.32.
+        let loop = try LoopRange(startTicks: 0, endTicks: 2_000)
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(loop.endTicks, on: clock)
+            + AutomationRenderMath.frame(1_000, on: clock)
+        let lane = try Hand.indexLane([(0, 2), (1_000, 9)])
+        var failures: [String] = []
+        for glide: Int64 in [1, 2, 7] {
+            for moved in [12.0, 1] {
+                for when in (step - 2)...(step + 1) {
+                    let release = Hand.Release(resume: .glide(ticks: glide), moved: moved, frame: when)
+                    failures += try Hand.disagreements(lane, release, to: step + 60, around: [step], clock: clock,
+                                                       loop: loop)
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(3))")
     }
 
     @Test func wrapsUpToTheLimitRenderAndOneMoreIsRefused() throws {

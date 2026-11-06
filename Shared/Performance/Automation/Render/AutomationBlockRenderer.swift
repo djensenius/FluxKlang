@@ -8,14 +8,16 @@
 //  Timing: every event comes from a knot (`AutomationRenderKnots.swift`) at a
 //  frame from `MusicalClockMap.frame(atTicks:)`, rounded half-up, or from an
 //  integer frame whose position is `exactTicks(atFrame:)`. A knot's events
-//  belong to the block holding its frame, so rendering a window in one block or
-//  any split of it gives the same events. Values come from ticks: breakpoint,
-//  tempo and loop knots carry the same values at any sample rate, and a power
-//  segment's interior knots, which sit on whole frames, agree across rates to
-//  within the curve's change over one frame. A linear segment is exact at its
-//  knots; a power segment renders as at most eight linear sub-ramps from the
-//  approximation (`AutomationPowerApproximation`), plus one exact point per
-//  tempo-change or loop-end crossing inside the segment (coordinator ruling).
+//  belong to the block holding its frame, so with automation in charge a
+//  window rendered in one block or in any split of it gives the same events (a
+//  gesture's ramps are chords between advance points: see Ownership). Values
+//  come from ticks: breakpoint, tempo and loop knots carry the same values at
+//  any sample rate, and a power segment's interior knots, which sit on whole
+//  frames, agree across rates to within the curve's change over one frame. A
+//  linear segment is exact at its knots; a power segment renders as at most
+//  eight linear sub-ramps from the approximation
+//  (`AutomationPowerApproximation`), plus one exact point per tempo-change or
+//  loop-end crossing inside the segment (coordinator ruling).
 //
 //  Ownership: the renderer advances the arbiter to each knot's position and to
 //  the end of each block, and emits lane events only while automation owns the
@@ -26,8 +28,13 @@
 //  arbiter first advances to just before the knot, and its changes ramp to that
 //  value ending on the knot's frame; then it advances onto the knot, and any
 //  change there (a step, a catch, a latch ending) is immediate, so a held value
-//  never moves before the curve reaches it. A stepped lane never ramps: each
-//  whole step of a glide is set at the first frame whose position shows it.
+//  never moves before the curve reaches it. Once every knot on that frame is
+//  resolved, it advances to the frame's own position, which lies past the tick
+//  of a knot rounded up onto its frame, and any change up to there (a stepped glide's next
+//  whole step, a glide or catch handing back) is immediate too, so the frame
+//  shows what the arbiter shows at its position (at the last knot's tick, when
+//  that is later). A stepped lane never ramps: each whole step of a glide is
+//  set at the first frame whose position shows it.
 //  Automation resumes from the arbiter's value where it takes back control,
 //  including a knot on that frame the arbiter has not yet passed. A touch that
 //  takes the value holds what the host shows on that frame (a sub-ramp only
@@ -220,21 +227,36 @@ struct AutomationBlockRenderer: Hashable, Sendable {
                     try emit(&block, at: knot.frame, next.value, ramp: next.frame - knot.frame, .curve)
                 }
             }
+            // With every knot on the frame resolved, the frame shows what the arbiter shows at its own position,
+            // which a frame rounded past its last knot reaches only here: the arbiter's changes since the knot's
+            // tick (a stepped glide's next step, a glide or catch handing back) are immediate on the frame as well.
+            if next?.frame != knot.frame {
+                let reached = try advance(toFrame: knot.frame, in: block.pass, before: next?.ticks)
+                try reconcile(&block, at: knot.frame, ticks: reached, reason: .resume)
+            }
             previous = knot
             current = next
         }
         return current?.ticks
     }
 
-    /// Advances the arbiter to the position of `frame` (a block end or a wrap) without passing an unvisited knot
-    /// or the loop end, and renders any arbiter-owned change up to `frame`.
-    private mutating func settle(_ block: inout Block, at frame: Int64,
-                                 boundary: Double?) throws(AutomationRenderRefusal) {
-        let pass = block.pass
+    /// Advances the arbiter to the position of `frame` (a block end, a wrap or a knot's frame) without passing the
+    /// unvisited knot at `boundary` or the loop end; returns the position reached.
+    @discardableResult
+    private mutating func advance(toFrame frame: Int64, in pass: AutomationRenderPass,
+                                  before boundary: Double?) throws(AutomationRenderRefusal) -> Double {
         var target = pass.exactTicks(atFrame: frame).position
         if let boundary { target = min(target, boundary.nextDown) }
         if let loopEnd = pass.loopEnd { target = min(target, Double(loopEnd).nextDown) }
         try advance(to: target)
+        return target
+    }
+
+    /// Advances the arbiter to the position of `frame` (a block end or a wrap) without passing an unvisited knot
+    /// or the loop end, and renders any arbiter-owned change up to `frame`.
+    private mutating func settle(_ block: inout Block, at frame: Int64,
+                                 boundary: Double?) throws(AutomationRenderRefusal) {
+        try advance(toFrame: frame, in: block.pass, before: boundary)
         // The arbiter owned the value since `holdFrom` (a glide or catch may have handed it back to the lane
         // during the advance; the lane resumes from the reached value at `frame`).
         if !isRenderingLane, let value = arbiter.value, hostValue != value {

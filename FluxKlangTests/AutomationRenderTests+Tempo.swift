@@ -8,6 +8,7 @@ import Testing
 @Suite("Automation block rendering: tempo, curves and gestures")
 struct AutomationRenderTempoTests {
     typealias Fixture = AutomationRenderTests
+    typealias Hand = AutomationRenderHandbackTests
 
     @Test func aTempoChangeInsideARampSplitsItAtTheMappedFrame() throws {
         let lane = try Fixture.lane([.init(ticks: 0, value: 0), .init(ticks: 1_000, value: 1)])
@@ -257,6 +258,88 @@ struct AutomationRenderTempoTests {
         #expect(others.map(\.value) == events.map(\.value))
         #expect(others.map(\.rampFrames) == events.map(\.rampFrames))
         #expect(others.map(\.reason) == events.map(\.reason))
+    }
+
+    @Test func aGlideOverStepsOnAContinuousLaneShowsTheArbitersValueOnEachStepsFrame() throws {
+        // Steps to 0.8 at tick 1000 (frame 1563, position 1000.32) and to 0.1 at tick 1003 (frame 1567, 1002.88).
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.2, interpolation: .step),
+                                     .init(ticks: 1_000, value: 0.8, interpolation: .step),
+                                     .init(ticks: 1_003, value: 0.1, interpolation: .step)])
+        let clock = try Fixture.clock()
+        let frames = try [Int64(1_000), 1_003].map { try clock.frame(atTicks: $0) }
+        var failures: [String] = []
+        // Between advance points the host ramps straight, so only the steps' frames are compared.
+        for glide: Int64 in [1, 5, 50] {
+            for moved in [0.6, 0.95] {
+                for when in (frames[0] - 3)...(frames[0] + 2) {
+                    let release = Hand.Release(resume: .glide(ticks: glide), moved: moved, frame: when)
+                    failures += try Hand.disagreements(lane, release, to: frames[1] + 40, around: frames, clock: clock,
+                                                       justThere: true)
+                }
+            }
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(3))")
+    }
+
+    @Test func aCatchEndingBetweenABreakpointAndItsFramesPositionHandsBackOnTheFrame() throws {
+        // The ramp from 0.4 at tick 1000 (frame 1563, position 1000.32) to 0.9 at tick 2000 reaches a held 0.4001 at
+        // tick 1000.2: after the breakpoint and before its frame.
+        let lane = try Fixture.lane([.init(ticks: 0, value: 0.2, interpolation: .step), .init(ticks: 1_000, value: 0.4),
+                                     .init(ticks: 2_000, value: 0.9)])
+        let clock = try Fixture.clock()
+        let step = try AutomationRenderMath.frame(1_000, on: clock)
+        let last = try AutomationRenderMath.frame(2_000, on: clock)
+        var failures: [String] = []
+        for when in (step - 3)...step {
+            let release = Hand.Release(resume: .catch, moved: 0.4001, frame: when)
+            failures += try Hand.disagreements(lane, release, to: last + 40, around: [step], clock: clock)
+        }
+        #expect(failures.isEmpty, "\(failures.prefix(3))")
+        var renderer = try Hand.released(lane, Hand.Release(resume: .catch, moved: 0.4001, frame: step - 1),
+                                         clock: clock)
+        let events = try renderer.render(from: step - 1, to: last + 40, clock: clock, current: Fixture.live)
+        let reached = try #require(try lane.value(at: Fixture.position(clock, step)))
+        let event = { (frame: Int64, value: Double, ramp: Int64, reason: AutomationRampEvent.Reason) in
+            AutomationRampEvent(frame: frame, offset: Int(frame - step + 1), value: value, rampFrames: ramp,
+                                reason: reason)
+        }
+        // Held until the frame, which resumes the ramp from the curve's value at its own position.
+        #expect(events == [event(step - 1, 0.4001, 0, .hold), event(step, reached, 0, .resume),
+                           event(step, 0.9, last - step, .resume)])
+    }
+
+    @Test func aSteppedGlideShowsTheArbitersValueOnABreakpointsFrameAtEveryRateAndTempo() throws {
+        let clocks = [try Fixture.clock(rate: 44_100),
+                      try Fixture.clock(rate: 44_100, segments: [(0, 500_000), (500, 420_000), (900, 380_000)]),
+                      try Fixture.clock(rate: 96_000, segments: [(0, 500_000), (900, 380_000)]),
+                      try Fixture.clock(rate: 192_000, segments: [(0, 500_000), (900, 380_000)])]
+        for clock in clocks {
+            // The breakpoint tick among 1000…1030 that rounds up onto its frame by the most ticks.
+            let window = { (tick: Int64) throws -> Double in
+                try Fixture.position(clock, clock.frame(atTicks: tick)) - Double(tick)
+            }
+            let tick = try #require(try (Int64(1_000)...1_030).max { try window($0) < window($1) })
+            let frame = try clock.frame(atTicks: tick)
+            #expect(try window(tick) > 0.1)
+            let lane = try Hand.indexLane([(0, 2), (tick, 9)])
+            var failures: [String] = []
+            var sensitive = 0
+            for glide: Int64 in 1...4 {
+                for moved in [12.0, 1, 5] {
+                    for when in (frame - 4)...(frame + 1) {
+                        let release = Hand.Release(resume: .glide(ticks: glide), moved: moved, frame: when)
+                        failures += try Hand.disagreements(lane, release, to: frame + 60, around: [frame], clock: clock)
+                        // Whether the glide's value on the breakpoint's tick is not the one at its frame's position.
+                        var probe = try Hand.released(lane, release, clock: clock).arbiter
+                        let onTick = try probe.advance(to: max(Double(tick), probe.position ?? 0)).value
+                        let onFrame = try probe.advance(to: max(Fixture.position(clock, frame), probe.position ?? 0))
+                        sensitive += onFrame.value == onTick ? 0 : 1
+                    }
+                }
+            }
+            #expect(failures.isEmpty, "\(failures.prefix(3))")
+            #expect(sensitive > 0)
+        }
     }
 
     @Test func gesturesNeedARenderAndRefusedGesturesChangeNothing() throws {
