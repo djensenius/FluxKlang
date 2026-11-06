@@ -261,7 +261,7 @@ final class KernelCycle: @unchecked Sendable {
     /// Control's acknowledgement requests (see the type's Acknowledgement contract). Its API only requests and
     /// loads; its epoch is private.
     let ackRequests: KernelAckRequests
-    /// Any thread, immutable: the predecessor's retirement loss, read after this cycle's claim (see Retirement).
+    /// Any thread, immutable: only the immediate predecessor's retirement loss (not cumulative; see Retirement).
     var inheritedRetirementLoss: KernelRetirementLoss { ownershipClaim.inherited }
 
     // Render-owned components and parts; private, so only this file can reach them.

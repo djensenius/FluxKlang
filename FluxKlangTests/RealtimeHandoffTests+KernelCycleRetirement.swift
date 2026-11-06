@@ -131,6 +131,53 @@ extension RealtimeHandoffTests {
             #expect(runBlock(replacement, 64).1.isEmpty && runBlock(replacement, 128).1.isEmpty)
         }
 
+        /// Round 2j: a silenced cycle, latched (`.scopeFaulted`) or muted by a panic (`.safetyMute`), consumes its
+        /// due note events undecided (the `noteOn` discarded, the unowned `noteOff` consumed) but keeps `control`,
+        /// `program`, `rampTo` and clock events buffered; retired, it drops and counts exactly those, with stale
+        /// receiver state, and the replacement inherits them. Kills: stateful drops not counted; the stale flag
+        /// never set; the loss not handed to the replacement.
+        @Test func silencedCycleRetiringDropsTheStateEventsItKept() throws {
+            let due: [KernelEventPayload] = [noteOn(61), .control(channel: 0, controller: 7, value: 9), programFive,
+                                             .rampTo(parameter: 1, value: 1, durationFrames: 0), .clockPulse,
+                                             noteOff(60)]
+            for faulted in [true, false] {
+                let rig = try CycleRig(laneCapacity: 32)
+                let token = try #require(rig.events.claimProducer())
+                for (index, payload) in due.enumerated() {
+                    #expect(rig.push(cycleEvent(Int64(10 * index + 5), payload), token) == .ok)
+                }
+                if faulted {
+                    #expect(rig.faults.raise(CycleRig.criticalScope, .criticalExhausted, frame: 0) == .ok)
+                } else {
+                    #expect(rig.safety.request(.panic, scope: 0) == .ok)
+                }
+                let (silenced, emitted) = rig.run(0, 64)
+                #expect(silenced.status == (faulted ? .silenced(.scopeFaulted) : .silenced(.safetyMute)))
+                #expect(emitted.isEmpty && silenced.pending == 4 && silenced.discardedWhileSilenced == 2)
+                let loss = rig.cycle.retire()
+                #expect(counts(loss) == [0, 1, 1, 1, 1] && loss.stateful == 3 && loss.receiverStateMayBeStale)
+                #expect(try successor(of: rig).inheritedRetirementLoss == loss)
+                #expect(rig.cycle.parameterValue(1) == 0)
+            }
+        }
+
+        /// Round 2j: a replacement starts with every lane flushing, so `noteOn`s it drains before their lane is
+        /// proved empty are marked flushed: the one decided is discarded, never sounded; the one still pending at
+        /// retirement is counted under `noteOns`, not stateful.
+        @Test func flushedNoteOnPendingAtRetirementCountsAsANoteOn() throws {
+            let rig = try CycleRig()
+            rig.cycle.retire()
+            let replacement = try successor(of: rig)
+            let token = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(100, noteOn(70)), token) == .ok)
+            #expect(rig.push(cycleEvent(140, noteOn(71)), token) == .ok)
+            #expect(runBlock(replacement, 0).0.pending == 2)
+            let (decided, emitted) = runBlock(replacement, 64)
+            #expect(emitted.isEmpty && decided.discardedWhileSilenced == 1 && decided.pending == 1)
+            let loss = replacement.retire()
+            #expect(counts(loss) == [1, 0, 0, 0, 0] && !loss.receiverStateMayBeStale)
+        }
+
         /// A `.freshFanIn` cycle takes nothing over, so it inherits no loss.
         @Test func freshFanInCycleInheritsNoLoss() throws {
             let rig = try CycleRig()

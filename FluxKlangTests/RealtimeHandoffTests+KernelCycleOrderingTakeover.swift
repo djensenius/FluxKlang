@@ -457,8 +457,9 @@ extension RealtimeHandoffTests {
         /// cycle claims, sounds note 9 and retires before it claims. Its claim from that stale state is
         /// `.alreadyUsed` and changes nothing, as is a `.replacingCycle` claim from a free word another cycle has
         /// since claimed (`.predecessorNotRetired`); a replacement still takes note 9 over; a stale release of a
-        /// handed-back claim releases nothing. Kills: the claim compare-exchanging from a re-read word
-        /// (check-then-claim); a stale release releasing any claim.
+        /// handed-back claim releases nothing, and its non-empty loss never replaces the one the holder left (round
+        /// 2j). Kills: the claim compare-exchanging from a re-read word (check-then-claim); a stale release releasing
+        /// any claim; the loss stored without the `== claim.held` guard.
         @Test func freshClaimRacingAClaimRunRetireIsRefused() throws {
             let rig = try CycleRig()
             let ownership = try NoteOwnership(scopes: 2)
@@ -481,13 +482,18 @@ extension RealtimeHandoffTests {
             }
             #expect(takeoverRun(next, 0).1 == [takeoverRelease(TakeoverKey(0, 0, 9), at: 0)])
             let direct = try NoteOwnership(scopes: 1)
+            let stray = KernelRetirementLoss(noteOns: 0, controls: 0, programs: 1, ramps: 0, clockPulses: 0)
+            let left = KernelRetirementLoss(noteOns: 0, controls: 0, programs: 0, ramps: 0, clockPulses: 1)
             let held = try direct.claimForCycle(fresh: true, from: direct.cycleClaimState())
             direct.releaseCycleClaim(held, loss: KernelRetirementLoss())
-            _ = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
-            direct.releaseCycleClaim(held, loss: KernelRetirementLoss())
+            let holder = try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
+            direct.releaseCycleClaim(held, loss: stray)
             #expect(throws: NoteOwnership.CycleClaimRefusal.predecessorNotRetired) {
                 try direct.claimForCycle(fresh: false, from: direct.cycleClaimState())
             }
+            direct.releaseCycleClaim(holder, loss: left)
+            direct.releaseCycleClaim(held, loss: stray)
+            #expect(try direct.claimForCycle(fresh: false, from: direct.cycleClaimState()).inherited == left)
         }
     }
 }

@@ -7,10 +7,11 @@ import Synchronization
 /// What `KernelCycle.retire()` dropped (round 2i, Copilot round 5): the events still pending in the retired cycle's
 /// block buffer, never emitted, which no replacement sees (it starts with an empty buffer; a bounded carry-over is
 /// E5c). A pending `noteOff` is not a drop: it records its tombstone instead. Each count is at most the retired
-/// cycle's `blockCapacity`. A plain value, handed to the next cycle claim through `NoteOwnership`'s claim word (see
-/// `releaseCycleClaim(_:loss:)`). Reference model; not RT-certified.
+/// cycle's `blockCapacity`. A plain value; `NoteOwnership` keeps its counts as plain memory ordered by its claim
+/// word, for the next claim only (see `releaseCycleClaim(_:loss:)`). Reference model; not RT-certified.
 struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
-    /// `noteOn`s: lost notes, never stuck ones (never emitted or owned).
+    /// `noteOn`s: lost notes, never stuck ones (never emitted or owned). Includes one drained from a lane still
+    /// flushing (`KernelBlockEntry.flushed`), which a decide would have discarded anyway.
     private(set) var noteOns = 0
     /// `control` changes (stateful).
     private(set) var controls = 0
@@ -51,18 +52,23 @@ struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
 ///
 /// It also owns the scopes' `ReleaseTombstones` (allocated in `init`, same scopes and key space), so every
 /// `KernelCycle` sharing this ownership shares its release history too, exactly when it shares the notes, and the
-/// two can never be passed apart (round 2g). Its cycle claim, and the `KernelRetirementLoss` each claim hands back,
-/// are the only cross-thread state: `KernelCycle.init` (control) claims it and `KernelCycle.retire()` (render)
-/// hands it back; see `claimForCycle(fresh:from:)` and `releaseCycleClaim(_:loss:)`.
+/// two can never be passed apart (round 2g). Its cycle claim, and the retirement loss each release leaves for the
+/// next claim, are the only cross-thread state: `KernelCycle.init` (control) claims it and `KernelCycle.retire()`
+/// (render) hands it back; see `claimForCycle(fresh:from:)` and `releaseCycleClaim(_:loss:)`.
 ///
-/// Retirement loss (round 2i). The loss is plain memory ordered by the claim word, never read or written outside a
-/// claim. `releaseCycleClaim` writes it only while its claim is still held (an odd word only its holder can move),
-/// then hands the claim back with a releasing compare-exchange. `claimForCycle` reads it only after its acquiring
-/// compare-exchange has succeeded, reading the even word that release wrote (only a release writes an even nonzero
-/// word). So the write happens-before the read. The next write needs the next claim, whose holder's read
-/// happens-before its own retire (the host hands the prepared cycle to render through its own release/acquire,
-/// which any render use of the cycle needs), so writes and reads alternate with no data race. A never-claimed word
-/// (0) reads the initial, empty loss.
+/// Retirement loss (rounds 2i and 2j). The loss is five plain `Int` fields, one per count (so an optimized TSan build
+/// sees a race on any of them; TSan does not race-check a `__tsan_memcpy` copy, such as a whole struct's), ordered by
+/// the claim word and never read or written outside a claim. `releaseCycleClaim` writes them only while its claim is
+/// still held (an odd word only its holder can move), then hands the claim back with a releasing compare-exchange.
+/// `claimForCycle` reads them only after its acquiring compare-exchange has succeeded, reading the even word that
+/// release wrote (only a release writes an even nonzero word). So the writes happen-before the reads. The next write
+/// needs the next claim, whose holder's read happens-before its own retire (the host hands the prepared cycle to render
+/// through its own release/acquire, which any render use of the cycle needs), so writes and reads alternate with no
+/// data race. A never-claimed word (0) reads the initial, empty loss. A claim inherits only its immediate predecessor's
+/// loss, never a sum over earlier retirements, so control checks `KernelCycle.inheritedRetirementLoss` on every
+/// replacement. The `== claim.held` guard is defense in depth behind `KernelCycle.retire()`'s `retired` flag (which
+/// already releases each claim once): a stale direct release neither frees a later claim nor overwrites the loss its
+/// holder left.
 ///
 /// Teardown (round 2h). Render must `retire()` the last cycle over this ownership before that cycle is released;
 /// a cycle dropped without it keeps the claim forever, so no cycle can be prepared over this ownership again
@@ -100,8 +106,8 @@ final class NoteOwnership: @unchecked Sendable {
     /// A held claim; `releaseCycleClaim` hands it back. Only `claimForCycle(fresh:from:)` makes one.
     struct CycleClaim: Equatable, Sendable {
         fileprivate let held: UInt64
-        /// What the claim's predecessor dropped at retirement (its `releaseCycleClaim` loss), read after this
-        /// claim's acquire; empty when no cycle retired over the ownership before.
+        /// What the claim's immediate predecessor dropped at retirement (its `releaseCycleClaim` loss; not
+        /// cumulative), read after this claim's acquire; empty when no cycle retired over the ownership before.
         let inherited: KernelRetirementLoss
     }
 
@@ -113,9 +119,13 @@ final class NoteOwnership: @unchecked Sendable {
     /// after a retire. Each claim adds 1 and each release adds 1, so "ever claimed" lives in the same word as the
     /// claim and a `.freshFanIn` claim can compare-exchange only from 0.
     private let liveCycle = Atomic<UInt64>(0)
-    /// The latest retirement's loss: written by the claim's holder before its release, read by the next claim after
-    /// its acquire (see the type's Retirement loss).
-    private var retirementLoss = KernelRetirementLoss()
+    /// The latest retirement's loss, one plain field per count (round 2j): written by the claim's holder before its
+    /// release, read by the next claim after its acquire (see the type's Retirement loss).
+    private var lostNoteOns = 0
+    private var lostControls = 0
+    private var lostPrograms = 0
+    private var lostRamps = 0
+    private var lostClockPulses = 0
 
     init(scopes: Int) throws(PreparationError) {
         guard scopes >= 1, scopes <= Self.maximumScopes else { throw .scopeCountOutOfRange(scopes) }
@@ -148,15 +158,23 @@ final class NoteOwnership: @unchecked Sendable {
         let (claimed, current) = liveCycle.compareExchange(expected: state.word, desired: state.word &+ 1,
                                                            successOrdering: .acquiring, failureOrdering: .acquiring)
         guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .predecessorNotRetired }
-        return CycleClaim(held: state.word &+ 1, inherited: retirementLoss)
+        let inherited = KernelRetirementLoss(noteOns: lostNoteOns, controls: lostControls, programs: lostPrograms,
+                                             ramps: lostRamps, clockPulses: lostClockPulses)
+        return CycleClaim(held: state.word &+ 1, inherited: inherited)
     }
 
     /// Render only, from `KernelCycle.retire()`, after its tombstone writes: while `claim` is still held, records
-    /// `loss` for the next claim, then hands `claim` back (a stale or repeated release changes nothing). Release
-    /// publishes those writes and `loss` to the next claim.
+    /// `loss` for the next claim, then hands `claim` back (a stale or repeated release changes neither the claim
+    /// nor the recorded loss). Release publishes those writes and `loss` to the next claim.
     func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss) {
         // Only the holder can move an odd word, so a held claim stays held until the compare-exchange below.
-        if liveCycle.load(ordering: .relaxed) == claim.held { retirementLoss = loss }
+        if liveCycle.load(ordering: .relaxed) == claim.held {
+            lostNoteOns = loss.noteOns
+            lostControls = loss.controls
+            lostPrograms = loss.programs
+            lostRamps = loss.ramps
+            lostClockPulses = loss.clockPulses
+        }
         _ = liveCycle.compareExchange(expected: claim.held, desired: claim.held &+ 1, successOrdering: .releasing,
                                       failureOrdering: .relaxed)
     }
