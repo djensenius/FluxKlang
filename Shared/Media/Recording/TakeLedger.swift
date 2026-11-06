@@ -178,8 +178,9 @@ struct TakeLedger: Sendable {
     /// unowned, it is refused `.recordNotOwned` (a take the ledger ended owns no further record).
     /// Ownership is decided before the frames are checked: an overflow without a length is routed
     /// like a 1-frame one, then its owner refuses it (`.missingOverflowFrames`, or `.takeSealed`).
-    /// An unowned overflow that crosses the jump target of an open take the ledger ended is refused
-    /// `.recordNotOwned` at that target (`postJumpTarget`); one that ends at or before it is pre-roll.
+    /// An unowned overflow whose start is not itself refused but that crosses the jump target of an
+    /// open take the ledger ended is refused `.recordNotOwned` at the earliest such target
+    /// (`postJumpTarget`); one that ends at or before every target is pre-roll.
     mutating func ingest(_ record: RuntimeDiscontinuity) throws(TakeLedgerError) -> [TakeIngestEffect] {
         switch record.kind {
         case .clockRestart(let previousFrame):
@@ -190,7 +191,9 @@ struct TakeLedger: Sendable {
             guard let stream = record.stream else { throw .missingStream }
             // Its part [target, end) could have no other owner: a take overlapping it also overlaps
             // the whole overflow, so it would own the record. Refusing directly is routing that part.
-            if owner(of: record) == nil, let target = postJumpTarget(of: record, stream: stream) {
+            // A start already refused is the first unowned post-jump frame: `route` reports it.
+            if owner(of: record) == nil, !mustBeOwned(record, stream: stream),
+               let target = postJumpTarget(of: record, stream: stream) {
                 throw .recordNotOwned(stream: stream, frame: target)
             }
             return try route(record, stream: stream)
@@ -213,11 +216,13 @@ struct TakeLedger: Sendable {
 
     /// The jump target of an open take the ledger ended on an overflow's stream, clock and
     /// generation, when the overflow [start, end) crosses it (start < target < end): its part from
-    /// the target on is post-jump audio, never dropped. An unowned one is refused like an overflow
-    /// that starts at the target, so the refusal reports the target, the first post-jump frame no
-    /// take owns, not the record's own start. The end saturates, and a lengthless overflow spans
-    /// one frame, so it never crosses. With several such targets the earliest is used. Nil for any
-    /// other record.
+    /// the target on is post-jump audio, never dropped. Several ended takes can share a stream and
+    /// generation, so the earliest crossing target is returned. `ingest` uses it only for an
+    /// unowned overflow whose start is not refused (`mustBeOwned` is false, so no ended take's
+    /// target lies at or before the start): then no frame before that target is post-jump, and the
+    /// refusal reports the target, the first post-jump frame no take owns. An overflow whose
+    /// start is refused reports its start instead. The end saturates, and a lengthless overflow
+    /// spans one frame, so it never crosses. Nil for any other record.
     private func postJumpTarget(of record: RuntimeDiscontinuity, stream: UInt32) -> Int64? {
         guard case .overflow = record.kind else { return nil }
         let start = record.sample.frame

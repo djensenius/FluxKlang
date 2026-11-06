@@ -315,4 +315,25 @@ struct RecordingTakeBackwardJumpTests {
             _ = try ledger.ingest(Fixture.overflow(1, Int64.max - 10, frames: 20))
         }
     }
+
+    /// Round 8e (delta review): two ledger-ended takes share a stream and generation. Take 1 records
+    /// [1000, 2000) and a jump to 500 ends it; take 2 records [600, 1500) and a jump to 300 ends it.
+    /// [200, 800) crosses both targets and is refused at the earliest, 300. [400, 800) starts after
+    /// take 2's target, so its start, the first post-jump frame no take owns, is refused, not 500.
+    @Test
+    func crossingRefusalReportsTheFirstUnownedPostJumpFrame() throws {
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+        #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+        try ledger.open(Fixture.opening(Fixture.take2, 1, 600))
+        try ledger.advance(Fixture.take2, to: Fixture.stamp(1, 1500))
+        #expect(try ledger.ingest(Fixture.jump(1, 300)) == [.ended(Fixture.take2, ended)])
+        for (start, refused) in [(Int64(200), Int64(300)), (400, 400)] {
+            let refusal = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: refused)
+            Fixture.refusal(refusal) { () throws(TakeLedgerError) in
+                _ = try ledger.ingest(Fixture.overflow(1, start, frames: 400))
+            }
+        }
+    }
 }
