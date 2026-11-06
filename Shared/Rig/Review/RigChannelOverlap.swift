@@ -4,7 +4,9 @@
 //
 //  The channel-overlap policy between routes, per device and direction:
 //  - an output channel written by two live routes is a conflict (two roles
-//    would sum silently into one output), which `apply` refuses;
+//    would sum silently into one output). `apply` refuses a conflict that
+//    involves an added route or a kept removal candidate; one among the
+//    document's other routes was already there and is only reported;
 //  - an input channel read by two live routes is shared input (one input may
 //    feed more than one role), which is allowed and reported.
 //
@@ -17,7 +19,8 @@
 enum RigChannelOverlapKind: Hashable, Sendable {
     /// Two or more input routes read the channel: allowed and reported.
     case sharedInput
-    /// Two or more output routes write the channel: refused by `apply`.
+    /// Two or more output routes write the channel: refused by `apply` when it involves an added route or a
+    /// kept removal candidate, and only reported when the document's other routes already shared it.
     case outputConflict
 }
 
