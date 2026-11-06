@@ -33,9 +33,9 @@ struct FaultRecord: Sendable, BitwiseCopyable, Equatable {
     let firstFrame: Int64
 }
 
-/// One control-side observation of a latched scope, bound to the latch that made it. Only `FaultLatch.observe`
-/// creates one, and `FaultLatch.acknowledge(_:)` accepts it only while nothing has been raised or acknowledged on
-/// its scope since. Holds its latch strongly. Reference model; not RT-certified.
+/// One control-side observation of a latched scope, bound to the latch that made it (`isObservation(of:)`). Only
+/// `FaultLatch.observe` makes one; `acknowledge(_:)` takes it only while its scope is unchanged since. Holds its latch
+/// strongly; `tally`/`epoch` are readable, never settable (#64 E5b). Reference model; not RT-certified.
 struct FaultObservation: Sendable {
     /// The latched record; `kind` is only the first kind raised, so recovery must cover the whole scope.
     let record: FaultRecord
@@ -44,9 +44,10 @@ struct FaultObservation: Sendable {
     let isAcknowledgeable: Bool
     fileprivate let owner: FaultLatch
     fileprivate let index: Int
-    fileprivate let tally: UInt64
+    let tally: UInt64
     fileprivate let claim: WordPair
-    fileprivate let epoch: UInt64
+    let epoch: UInt64
+    func isObservation(of latch: FaultLatch) -> Bool { owner === latch }
 }
 
 /// A fixed table of fault scopes, prepared up front, each latching until acknowledged.
