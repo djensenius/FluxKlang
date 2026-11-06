@@ -13,8 +13,10 @@
 //  The candidate keeps the base revision and every device descriptor; no route
 //  becomes `.confirmed`. Refusals, in check order: `staleDocument`,
 //  `documentChanged`; per route decision (by route) `unknownRoute`,
-//  `removeNotCandidate`, `replaceRoleMismatch`; per choice (by role) the lifted
-//  RG1 refusals; per decline (by role) `.mapping(.unknownRole)`,
+//  `removeNotCandidate`, `replaceRoleMismatch`; per choice (by role)
+//  `.mapping(.unknownRole)`, `.mapping(.candidateNotOffered)`,
+//  `.mapping(.routeCapacityExhausted)`, `.mapping(.routeIDInUse)`; per decline
+//  (by role) `.mapping(.unknownRole)`,
 //  `declineNotOffered`; per replacement (by role) `.mapping(.candidateNotOffered)`,
 //  `.mapping(.routeIDInUse)`; then `invalidResult` and `outputChannelConflict`
 //  on the candidate. Only an output conflict that involves an added route or a
@@ -74,26 +76,32 @@ extension RigMappingReview {
         let removable = Set(removalCandidates.map(\.route))
         let removed = try removedRoutes(decisions, in: document, removable: removable)
 
-        var chosen = proposal
+        var selected = chosenRoutes
         let choices: [(RigRouteCandidate, RouteID)] = decisions.roles.values.compactMap { decision in
             if case .choose(let candidate, let id) = decision { (candidate, id) } else { nil }
         }
-        for (candidate, id) in choices.sorted(by: { $0.0.role < $1.0.role }) {
-            let current = chosen
-            chosen = try RigReviewRefusal.lifting { () throws(RigMappingRefusal) in
-                try current.choosing(candidate, id: id)
-            }
+        let capacityDeclined = Set(decisions.roles.values.compactMap { decision -> RoleID? in
+            if case .leaveUnmapped(let role) = decision { role } else { nil }
+        })
+        let replacementCount = decisions.routes.values.reduce(into: 0) { count, decision in
+            if case .replace = decision { count += 1 }
         }
-        let declined = try declinedRoles(decisions, in: chosen)
+        for (candidate, id) in choices.sorted(by: { $0.0.role < $1.0.role }) {
+            selected[candidate.role] = try choiceRoute(
+                candidate, id: id, selected: selected, removed: removed,
+                replacementCount: replacementCount, declined: capacityDeclined
+            )
+        }
+        let declined = try declinedRoles(decisions, in: proposal)
 
-        let held = heldRoles
-        let proposed = chosen.proposedRoutes.filter { !declined.contains($0.role) && !held.contains($0.role) }
+        let proposed = self.additions.filter { !declined.contains($0.role) && chosenRoutes[$0.role] == nil }
+            + selected.values.filter { !declined.contains($0.role) }
         // At most one added route per role, so sorting by role alone is deterministic.
         let additions = try (proposed + replacements(decisions, besides: proposed, in: document))
             .sorted { $0.role < $1.role }
         var candidate = document
         candidate.routes = document.routes.filter { !removed.contains($0.id) } + additions
-        try validate(candidate, exempt: removable, requirements: chosen.requirements)
+        try validate(candidate, exempt: removable, requirements: proposal.requirements)
         let kept = document.routes.map(\.id).filter { removable.contains($0) && !removed.contains($0) }
         let overlaps = RigChannelOverlapScan.overlaps(in: candidate.routes)
         let conflicts = overlaps.filter { $0.kind == .outputConflict }
@@ -104,7 +112,7 @@ extension RigMappingReview {
         return RigMappingChange(
             baseRevision: baseRevision, document: candidate, added: additions.map(\.id),
             removed: document.routes.map(\.id).filter { removed.contains($0) }, kept: kept,
-            stillUnmapped: Self.unrouted(chosen, in: candidate.routes),
+            stillUnmapped: Self.unrouted(proposal, in: candidate.routes),
             sharedInputs: overlaps.filter { $0.kind == .sharedInput }, preexistingOutputConflicts: conflicts
         )
     }

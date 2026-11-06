@@ -19,6 +19,51 @@ struct RigMappingReviewReplaceTests {
 
     private static func spaceRoles() throws -> [ProjectRole] { try [Fixture.role("rol.space", channels: 4)] }
 
+    fileprivate struct HeldOfferChoiceFixture {
+        let document: DeviceCapabilityDocument
+        let review: RigMappingReview
+        let inputRoles: [RoleID]
+        let choices: [RoleID: RigRouteCandidate]
+        let choiceIDs: [RoleID: RouteID]
+        let outputRole: RoleID
+        let outputRoute: RouteID
+    }
+
+    fileprivate static func heldOfferChoiceFixture(
+        _ inputNames: [String], withCapacityProposal: Bool = false
+    ) throws -> HeldOfferChoiceFixture {
+        let limit = DeviceCapabilityLimits.routes
+        let fillers = try (1..<(limit - 1)).map { index in
+            try Fixture.route("rte.fill.\(index)", role: "role.fill.\(index)", device: "dev.fill",
+                              direction: .input, channels: [0], binding: .stale)
+        }
+        let outputRole = try RoleID("role.z-output")
+        let outputRoute = try RouteID("rte.output-lost")
+        let document = try Fixture.document([Fixture.device("dev.in-a", inputs: 1),
+                                             Fixture.device("dev.in-b", inputs: 4),
+                                             Fixture.device("dev.fill", inputs: 1),
+                                             Fixture.device("dev.lost", outputs: 1, presence: .missing),
+                                             Fixture.device("dev.out", outputs: 1)],
+                                            routes: [Fixture.route(outputRoute.rawValue, role: outputRole.rawValue,
+                                                                   device: "dev.lost", channels: [0],
+                                                                   binding: .deviceMissing)] + fillers)
+        let inputRoles = try inputNames.map { try RoleID($0) }
+        let inputRolesForFixture = try inputNames.map { try Fixture.role($0, .input, channels: 1) }
+        let roles = try inputRolesForFixture
+            + (withCapacityProposal ? [Fixture.role("role.b-auto", .input, channels: 4)] : [])
+            + [Fixture.role(outputRole.rawValue, channels: 1)]
+        let review = try RigMappingReview.make(roles: roles, document: document)
+        let choices = try Dictionary(uniqueKeysWithValues: inputRoles.map {
+            ($0, try Fixture.candidate(review, $0.rawValue, first: 0))
+        })
+        let choiceIDs = try Dictionary(uniqueKeysWithValues: inputRoles.map {
+            ($0, try RouteID("rte.choice.\($0.rawValue)"))
+        })
+        return HeldOfferChoiceFixture(document: document, review: review, inputRoles: inputRoles,
+                                      choices: choices, choiceIDs: choiceIDs, outputRole: outputRole,
+                                      outputRoute: outputRoute)
+    }
+
     @Test(arguments: [RouteBinding.deviceMissing, .stale])
     func aSingleCandidateIsHeldAsAnOfferNotAdded(_ binding: RouteBinding) throws {
         let base = try Self.singleCandidateRig(binding)
@@ -128,6 +173,129 @@ struct RigMappingReviewReplaceTests {
         #expect(change.stillUnmapped.isEmpty && change.kept.count == limit - 1)
     }
 
+    @Test func aChoiceFitsWhenTheOnlyProposalIsHeldForReplacement() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try Self.heldOfferChoiceFixture(["role.a-input"])
+        let inputRole = try #require(fixture.inputRoles.first)
+        let choice = try #require(fixture.choices[inputRole])
+        let choiceID = try #require(fixture.choiceIDs[inputRole])
+        #expect(fixture.document.routes.count == limit - 1)
+        #expect(fixture.review.pendingChoices == [inputRole])
+        #expect(fixture.review.heldRoles == [fixture.outputRole])
+        #expect(fixture.review.replacementOffers[fixture.outputRole]?.count == 1)
+        #expect(Fixture.refusal { _ = try fixture.review.choosing(choice, id: fixture.outputRoute) }
+                == .mapping(.routeIDInUse(fixture.outputRoute)))
+        let reusedID = try RigMappingDecisions.make(roles: [.choose(choice, id: fixture.outputRoute)])
+        #expect(Fixture.refusal { _ = try fixture.review.apply(reusedID, to: fixture.document) }
+                == .mapping(.routeIDInUse(fixture.outputRoute)))
+
+        let chosen = try fixture.review.choosing(choice, id: choiceID)
+        #expect(chosen.additions.map(\.id) == [choiceID])
+        #expect(chosen.heldRoles == [fixture.outputRole] && chosen.pendingChoices.isEmpty)
+        #expect(fixture.review.additions.isEmpty && fixture.review.pendingChoices == [inputRole])
+
+        let decisions = try RigMappingDecisions.make(roles: [.choose(choice, id: choiceID)])
+        let change = try fixture.review.apply(decisions, to: fixture.document)
+        #expect(change.document.routes.count == limit && change.added == [choiceID])
+        #expect(change.kept.contains(fixture.outputRoute) && change.removed.isEmpty)
+        #expect(change.stillUnmapped.contains(fixture.outputRole))
+        #expect(change.document.routes.first { $0.id == fixture.outputRoute }?.binding == .deviceMissing)
+    }
+
+    @Test func choicesRespectThe4096And4097FinalRouteBoundaries() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try Self.heldOfferChoiceFixture(["role.a-input", "role.b-input"])
+        let firstRole = try #require(fixture.inputRoles.first)
+        let secondRole = try #require(fixture.inputRoles.last)
+        let firstChoice = try #require(fixture.choices[firstRole])
+        let secondChoice = try #require(fixture.choices[secondRole])
+        let firstID = try #require(fixture.choiceIDs[firstRole])
+        let secondID = try #require(fixture.choiceIDs[secondRole])
+        let originalReview = fixture.review
+
+        let first = try fixture.review.choosing(firstChoice, id: firstID)
+        #expect(first.additions.map(\.id) == [firstID] && fixture.document.routes.count + 1 == limit)
+        #expect(Fixture.refusal { _ = try first.choosing(secondChoice, id: secondID) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
+        #expect(first.pendingChoices == [secondRole] && fixture.review == originalReview)
+
+        let choices = try RigMappingDecisions.make(roles: [
+            .choose(firstChoice, id: firstID), .choose(secondChoice, id: secondID)
+        ])
+        #expect(Fixture.refusal { _ = try fixture.review.apply(choices, to: fixture.document) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
+        #expect(fixture.review == originalReview && fixture.document.routes.count == limit - 1)
+
+        let exactCapacity = try RigMappingDecisions.make(roles: [.choose(firstChoice, id: firstID)])
+        let change = try fixture.review.apply(exactCapacity, to: fixture.document)
+        #expect(change.document.routes.count == limit && change.added == [firstID])
+    }
+
+    @Test func replacingTheHeldRouteCountsTheFinalCandidateAndDecliningFreesItsSlot() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try Self.heldOfferChoiceFixture(["role.a-input"])
+        let inputRole = try #require(fixture.inputRoles.first)
+        let choice = try #require(fixture.choices[inputRole])
+        let choiceID = try #require(fixture.choiceIDs[inputRole])
+        let offer = try Fixture.replacement(fixture.review, fixture.outputRole.rawValue, first: 0)
+        let replacementID = try RouteID("rte.output-replacement")
+        let replace = try RigMappingDecisions.make(
+            routes: [.replace(fixture.outputRoute, with: offer, id: replacementID)],
+            roles: [.choose(choice, id: choiceID)]
+        )
+        let replaced = try fixture.review.apply(replace, to: fixture.document)
+        try replaced.document.validate()
+        #expect(replaced.document.routes.count == limit)
+        #expect(replaced.removed == [fixture.outputRoute] && replaced.added == [choiceID, replacementID])
+        #expect(!replaced.stillUnmapped.contains(fixture.outputRole))
+
+        let declined = try RigMappingDecisions.make(roles: [
+            .choose(choice, id: choiceID), .leaveUnmapped(fixture.outputRole)
+        ])
+        let declinedChange = try fixture.review.apply(declined, to: fixture.document)
+        #expect(declinedChange.document.routes.count == limit)
+        #expect(declinedChange.kept.contains(fixture.outputRoute))
+        #expect(declinedChange.stillUnmapped.contains(fixture.outputRole))
+    }
+
+    @Test func removingAMismatchedRouteMakesRoomForAnApplyChoice() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fillers = try (1..<(limit - 1)).map { index in
+            try Fixture.route("rte.fill.\(index)", role: "role.fill.\(index)", device: "dev.fill",
+                              direction: .input, channels: [0], binding: .stale)
+        }
+        let mismatchID = try RouteID("rte.mismatch")
+        let inputRole = try RoleID("role.a-input")
+        let autoRole = try RoleID("role.b-auto")
+        let outputRole = try RoleID("role.z-output")
+        let base = try Fixture.document([Fixture.device("dev.in-a", inputs: 2),
+                                         Fixture.device("dev.in-b", inputs: 2),
+                                         Fixture.device("dev.fill", inputs: 1),
+                                         Fixture.device("dev.auto", outputs: 1)],
+                                        routes: [Fixture.route(mismatchID.rawValue, role: outputRole.rawValue,
+                                                               device: "dev.in-a", direction: .input,
+                                                               channels: [0], binding: .confirmed)] + fillers)
+        let roles = try [Fixture.role(inputRole.rawValue, .input, channels: 1),
+                         Fixture.role(autoRole.rawValue, channels: 1),
+                         Fixture.role(outputRole.rawValue, channels: 1)]
+        let review = try RigMappingReview.make(roles: roles, document: base)
+        let choice = try Fixture.candidate(review, inputRole.rawValue, first: 0)
+        let choiceID = try RouteID("rte.input-choice")
+        #expect(base.routes.count == limit - 1)
+        #expect(review.pendingChoices.map(\.rawValue) == [inputRole.rawValue])
+        #expect(review.additions.map(\.role.rawValue) == [autoRole.rawValue])
+        #expect(Fixture.refusal { _ = try review.choosing(choice, id: choiceID) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
+
+        let decisions = try RigMappingDecisions.make(routes: [.remove(mismatchID)],
+                                                     roles: [.choose(choice, id: choiceID)])
+        let change = try review.apply(decisions, to: base)
+        try change.document.validate()
+        #expect(change.document.routes.count == limit)
+        #expect(change.removed == [mismatchID] && change.added.count == 2)
+        #expect(change.added.contains(choiceID) && change.added.contains(where: { $0 != choiceID }))
+    }
+
     @Test func twoLostRolesCanBeReplacedAtFullRouteCapacity() throws {
         let limit = DeviceCapabilityLimits.routes
         let fillers = try (1..<(limit - 1)).map { index in
@@ -211,5 +379,52 @@ struct RigMappingReviewReplaceTests {
         #expect(recovered.document.routes.count == limit)
         #expect(recovered.added.map(\.rawValue).contains(recoveredRoute.rawValue))
         #expect(recovered.removed.map(\.rawValue) == [spaceRoute.rawValue] && recovered.stillUnmapped.isEmpty)
+    }
+}
+
+@Suite("Rig mapping review: choice capacity accounting")
+struct RigMappingReviewCapacityTests {
+    @Test func decliningAnAutoProposalCreditsChoiceCapacity() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try RigMappingReviewReplaceTests.heldOfferChoiceFixture(
+            ["role.a-input"], withCapacityProposal: true
+        )
+        let role = try RoleID("role.a-input")
+        let choice = try #require(fixture.choices[role])
+        let choiceID = try #require(fixture.choiceIDs[role])
+        #expect(fixture.document.routes.count == limit - 1)
+        #expect(fixture.review.pendingChoices == [role])
+        #expect(fixture.review.additions.map(\.role.rawValue) == ["role.b-auto"])
+        #expect(fixture.review.replacementOffers[fixture.outputRole]?.count == 1)
+        let chooseOnly = try RigMappingDecisions.make(roles: [.choose(choice, id: choiceID)])
+        #expect(Fixture.refusal { _ = try fixture.review.apply(chooseOnly, to: fixture.document) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
+
+        let declineAuto = try RigMappingDecisions.make(roles: [
+            .choose(choice, id: choiceID), .leaveUnmapped(try RoleID("role.b-auto"))
+        ])
+        let change = try fixture.review.apply(declineAuto, to: fixture.document)
+        #expect(change.document.routes.count == limit && change.added == [choiceID])
+    }
+
+    @Test func replacingHeldRouteDoesNotCreditItsSlotForTwoChoices() throws {
+        let limit = DeviceCapabilityLimits.routes
+        let fixture = try RigMappingReviewReplaceTests.heldOfferChoiceFixture(
+            ["role.a-input", "role.b-input"]
+        )
+        let first = try RoleID("role.a-input")
+        let second = try RoleID("role.b-input")
+        let firstChoice = try #require(fixture.choices[first])
+        let secondChoice = try #require(fixture.choices[second])
+        let offer = try Fixture.replacement(fixture.review, fixture.outputRole.rawValue, first: 0)
+        let decisions = try RigMappingDecisions.make(
+            routes: [.replace(fixture.outputRoute, with: offer, id: try RouteID("rte.output-replacement"))],
+            roles: [
+                .choose(firstChoice, id: try #require(fixture.choiceIDs[first])),
+                .choose(secondChoice, id: try #require(fixture.choiceIDs[second]))
+            ]
+        )
+        #expect(Fixture.refusal { _ = try fixture.review.apply(decisions, to: fixture.document) }
+                == .mapping(.routeCapacityExhausted(limit: limit)))
     }
 }

@@ -68,8 +68,10 @@ struct RigMappingReview: Hashable, Sendable {
     let baseRevision: ContractRevision
     /// The device document the review was made from; `apply` refuses any other at `baseRevision`.
     let baseDocument: DeviceCapabilityDocument
-    /// The RG1 proposal, updated by `choosing`.
+    /// The original RG1 proposal; RG2 choices are kept separately in `chosenRoutes`.
     private(set) var proposal: RigMappingProposal
+    /// RG2 choices; `proposal` does not reflect them.
+    private(set) var chosenRoutes: [RoleID: AudioRoute]
     /// Routes the user may remove or replace, sorted by route. Routes are kept unless a decision
     /// removes them; a confirmed or proposed route that still fits its role is never a candidate.
     let removalCandidates: [RigRemovalCandidate]
@@ -83,22 +85,26 @@ struct RigMappingReview: Hashable, Sendable {
     /// mismatched role, or a role the route budget left unmapped). `choosing` a role drops its entry.
     ///
     /// Capacity: a `replace` swaps one route for one, so it is not counted against
-    /// `DeviceCapabilityLimits.routes` and is accepted at 4,096 routes; it does not go through RG1's
-    /// `choosing`, which counts the route being replaced. RG1 still hands its route budget to
+    /// `DeviceCapabilityLimits.routes` and is accepted at 4,096 routes. A `choose` is checked against
+    /// the final candidate count, excluding held offers and including explicit removals and replacements.
+    /// RG1 still hands its route budget to
     /// single-candidate roles in `RoleID` order, so near the limit a role can get no offer (its
     /// `replace` is refused with `candidateNotOffered`); remove another eligible route to free capacity,
     /// then make a new review.
     private(set) var replacementOffers: [RoleID: [RigRouteCandidate]]
 
     /// The proposed routes, in role order, without the single candidates held in `replacementOffers`.
-    var additions: [AudioRoute] { Self.additions(of: proposal, offers: replacementOffers) }
+    var additions: [AudioRoute] {
+        (Self.additions(of: proposal, offers: replacementOffers) + chosenRoutes.values)
+            .sorted { $0.role < $1.role }
+    }
 
     /// Roles whose single RG1 candidate is held as a replacement offer instead of being added: with
     /// no decision or `.keep` they stay unmapped, and only a `replace` binds the candidate.
     var heldRoles: Set<RoleID> { Self.heldRoles(of: proposal, offers: replacementOffers) }
 
     /// Roles awaiting a choice, sorted.
-    var pendingChoices: [RoleID] { proposal.awaitingChoice }
+    var pendingChoices: [RoleID] { proposal.awaitingChoice.filter { chosenRoutes[$0] == nil } }
 
     /// Roles that stay unmapped, sorted, with their reasons.
     var unmapped: [RigUnmappedRole] {
@@ -109,10 +115,12 @@ struct RigMappingReview: Hashable, Sendable {
     }
 
     private init(base: DeviceCapabilityDocument, proposal: RigMappingProposal,
-                 removalCandidates: [RigRemovalCandidate], replacementOffers: [RoleID: [RigRouteCandidate]]) {
+                 removalCandidates: [RigRemovalCandidate], replacementOffers: [RoleID: [RigRouteCandidate]],
+                 chosenRoutes: [RoleID: AudioRoute] = [:]) {
         baseRevision = base.revision
         baseDocument = base
         self.proposal = proposal
+        self.chosenRoutes = chosenRoutes
         self.removalCandidates = removalCandidates
         self.replacementOffers = replacementOffers
         let additions = Self.additions(of: proposal, offers: replacementOffers)
@@ -134,17 +142,46 @@ struct RigMappingReview: Hashable, Sendable {
         )
     }
 
-    /// Binds one offered candidate of a role awaiting a choice (RG1 `choosing`) and recomputes the
-    /// overlaps. Returns the updated review; the receiver is unchanged.
+    /// Binds one offered candidate of a role whose RG1 outcome awaits a choice and recomputes overlaps.
+    /// Returns the updated review; the receiver is unchanged.
     func choosing(_ candidate: RigRouteCandidate, id: RouteID) throws(RigReviewRefusal) -> RigMappingReview {
-        let chosen = try RigReviewRefusal.lifting { () throws(RigMappingRefusal) in
-            try proposal.choosing(candidate, id: id)
-        }
+        let route = try choiceRoute(candidate, id: id, selected: chosenRoutes)
         var updated = self
-        updated.proposal = chosen
+        updated.chosenRoutes[candidate.role] = route
         updated.replacementOffers[candidate.role] = nil
         updated.overlaps = RigChannelOverlapScan.overlaps(in: baseDocument.routes + updated.additions)
         return updated
+    }
+
+    /// Shared internal choice validation. `apply` supplies route/decline credits; `choosing` has none
+    /// and is deliberately stricter. The accounting inputs are trusted.
+    func choiceRoute(
+        _ candidate: RigRouteCandidate, id: RouteID, selected: [RoleID: AudioRoute],
+        removed: Set<RouteID> = [], replacementCount: Int = 0, declined: Set<RoleID> = []
+    ) throws(RigReviewRefusal) -> AudioRoute {
+        guard let mapping = proposal.mappings.first(where: { $0.role == candidate.role }) else {
+            throw .mapping(.unknownRole(candidate.role))
+        }
+        guard case .awaitingChoice(let offered) = mapping.outcome,
+              offered.candidates.contains(candidate), selected[candidate.role] == nil else {
+            throw .mapping(.candidateNotOffered(candidate))
+        }
+
+        let proposed = Self.additions(of: proposal, offers: replacementOffers)
+            .filter { !declined.contains($0.role) }
+        let selectedRoutes = selected.values.filter { !declined.contains($0.role) }
+        let finalCount = baseDocument.routes.count - removed.count + replacementCount
+            + proposed.count + selectedRoutes.count + 1
+        guard finalCount <= DeviceCapabilityLimits.routes else {
+            throw .mapping(.routeCapacityExhausted(limit: DeviceCapabilityLimits.routes))
+        }
+        guard !baseDocument.routes.contains(where: { $0.id == id }),
+              !proposed.contains(where: { $0.id == id }),
+              !selectedRoutes.contains(where: { $0.id == id }) else {
+            throw .mapping(.routeIDInUse(id))
+        }
+        return AudioRoute(id: id, role: candidate.role, device: candidate.device,
+                          direction: candidate.direction, channels: candidate.channels, binding: .proposed)
     }
 
     /// The proposed routes of `proposal`, in role order, without the held roles' routes.
