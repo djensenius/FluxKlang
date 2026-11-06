@@ -62,6 +62,11 @@ struct RigUnmappedRole: Hashable, Sendable {
     }
 }
 
+private struct RigReplacementOfferSet {
+    let offers: [RoleID: [RigRouteCandidate]]
+    let truncations: [RoleID: RigCandidateTruncation]
+}
+
 /// A review of the RG1 mapping proposal for one device document revision.
 struct RigMappingReview: Hashable, Sendable {
     /// The revision of the device document the review was made from; `apply` refuses any other.
@@ -83,6 +88,8 @@ struct RigMappingReview: Hashable, Sendable {
     /// held here instead of being added, or the candidates of a role awaiting a choice), or else in
     /// RG1's proposal over the document without those removal candidates, at the same revision (a
     /// mismatched role, or a role the route budget left unmapped). `choosing` a role drops its entry.
+    /// `replacementTruncations` reports omitted candidates above `RigMappingLimits.candidatesPerRole`;
+    /// callers must not present the listed offers as complete when that role has an entry.
     ///
     /// Capacity: a `replace` swaps one route for one, so it is not counted against
     /// `DeviceCapabilityLimits.routes` and is accepted at 4,096 routes. A `choose` is checked against
@@ -92,6 +99,8 @@ struct RigMappingReview: Hashable, Sendable {
     /// `replace` is refused with `candidateNotOffered`); remove another eligible route to free capacity,
     /// then make a new review.
     private(set) var replacementOffers: [RoleID: [RigRouteCandidate]]
+    /// Present exactly when an offer came from an RG1 `.awaitingChoice` with truncation metadata.
+    private(set) var replacementTruncations: [RoleID: RigCandidateTruncation]
 
     /// The proposed routes, in role order, without the single candidates held in `replacementOffers`.
     var additions: [AudioRoute] {
@@ -115,15 +124,16 @@ struct RigMappingReview: Hashable, Sendable {
     }
 
     private init(base: DeviceCapabilityDocument, proposal: RigMappingProposal,
-                 removalCandidates: [RigRemovalCandidate], replacementOffers: [RoleID: [RigRouteCandidate]],
+                 removalCandidates: [RigRemovalCandidate], replacement: RigReplacementOfferSet,
                  chosenRoutes: [RoleID: AudioRoute] = [:]) {
         baseRevision = base.revision
         baseDocument = base
         self.proposal = proposal
         self.chosenRoutes = chosenRoutes
         self.removalCandidates = removalCandidates
-        self.replacementOffers = replacementOffers
-        let additions = Self.additions(of: proposal, offers: replacementOffers)
+        replacementOffers = replacement.offers
+        replacementTruncations = replacement.truncations
+        let additions = Self.additions(of: proposal, offers: replacement.offers)
         overlaps = RigChannelOverlapScan.overlaps(in: base.routes + additions)
     }
 
@@ -137,8 +147,8 @@ struct RigMappingReview: Hashable, Sendable {
         let candidates = removalCandidates(of: proposal, routes: document.routes)
         return RigMappingReview(
             base: document, proposal: proposal, removalCandidates: candidates,
-            replacementOffers: try replacementOffers(for: candidates, roles: roles, proposal: proposal,
-                                                     document: document)
+            replacement: try replacementOffers(for: candidates, roles: roles, proposal: proposal,
+                                               document: document)
         )
     }
 
@@ -149,6 +159,7 @@ struct RigMappingReview: Hashable, Sendable {
         var updated = self
         updated.chosenRoutes[candidate.role] = route
         updated.replacementOffers[candidate.role] = nil
+        updated.replacementTruncations[candidate.role] = nil
         updated.overlaps = RigChannelOverlapScan.overlaps(in: baseDocument.routes + updated.additions)
         return updated
     }
@@ -209,14 +220,19 @@ struct RigMappingReview: Hashable, Sendable {
     private static func replacementOffers(
         for candidates: [RigRemovalCandidate], roles: [ProjectRole], proposal: RigMappingProposal,
         document: DeviceCapabilityDocument
-    ) throws(RigReviewRefusal) -> [RoleID: [RigRouteCandidate]] {
+    ) throws(RigReviewRefusal) -> RigReplacementOfferSet {
         let replaceable = candidates.filter { [.mismatched, .deviceMissing, .stale].contains($0.reason) }
         let wanted = Set(replaceable.map(\.role))
         var offers: [RoleID: [RigRouteCandidate]] = [:]
+        var truncations: [RoleID: RigCandidateTruncation] = [:]
         for mapping in proposal.mappings where wanted.contains(mapping.role) {
-            offers[mapping.role] = offered(by: mapping.outcome)
+            guard let offered = offered(by: mapping.outcome) else { continue }
+            offers[mapping.role] = offered.candidates
+            Self.recordTruncation(offered.truncation, for: mapping.role, in: &truncations)
         }
-        guard offers.count < wanted.count else { return offers }
+        guard offers.count < wanted.count else {
+            return RigReplacementOfferSet(offers: offers, truncations: truncations)
+        }
         let removed = Set(replaceable.map(\.route))
         var without = document
         without.routes.removeAll { removed.contains($0.id) }
@@ -224,18 +240,30 @@ struct RigMappingReview: Hashable, Sendable {
             try RigMappingProposal.make(roles: roles, devices: without)
         }
         for mapping in fallback.mappings where wanted.contains(mapping.role) && offers[mapping.role] == nil {
-            offers[mapping.role] = offered(by: mapping.outcome)
+            guard let offered = offered(by: mapping.outcome) else { continue }
+            offers[mapping.role] = offered.candidates
+            Self.recordTruncation(offered.truncation, for: mapping.role, in: &truncations)
         }
-        return offers
+        return RigReplacementOfferSet(offers: offers, truncations: truncations)
     }
 
     /// The candidates an RG1 outcome offers, or `nil` when it offers none.
-    private static func offered(by outcome: RigRoleOutcome) -> [RigRouteCandidate]? {
+    private static func offered(
+        by outcome: RigRoleOutcome
+    ) -> (candidates: [RigRouteCandidate], truncation: RigCandidateTruncation?)? {
         switch outcome {
-        case .proposed(_, let candidate): [candidate]
-        case .awaitingChoice(let offered): offered.candidates
+        case .proposed(_, let candidate): ([candidate], nil)
+        case .awaitingChoice(let offered): (offered.candidates, offered.truncation)
         default: nil
         }
+    }
+
+    private static func recordTruncation(
+        _ truncation: RigCandidateTruncation?, for role: RoleID,
+        in truncations: inout [RoleID: RigCandidateTruncation]
+    ) {
+        guard let truncation else { return }
+        truncations[role] = truncation
     }
 
     /// One candidate per route of RG1's reported lists, with the highest-precedence reason.

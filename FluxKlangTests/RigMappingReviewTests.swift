@@ -385,4 +385,107 @@ struct RigMappingReviewTests {
         #expect(review == before && chosen.additions.map(\.id.rawValue) == ["rte.cue"])
         #expect(chosen.pendingChoices.map(\.rawValue) == ["rol.space"])
     }
+
+    @Test func fallbackOffersExposeTruncation() throws {
+        let route = try Fixture.route("rte.mono-mismatch", role: "role.mono-truncation", device: "dev.present",
+                                      channels: [0, 1], binding: .confirmed)
+        let base = try Fixture.document([Fixture.device("dev.present", outputs: 100)], routes: [route])
+        let role = try RoleID("role.mono-truncation")
+        let review = try RigMappingReview.make(roles: [Fixture.role(role.rawValue, channels: 1)], document: base)
+        let offers = try #require(review.replacementOffers[role])
+        let truncation = try #require(review.replacementTruncations[role])
+        #expect(offers.count == 64)
+        #expect(truncation.listed == 64 && truncation.total == 100 && truncation.omitted == 36)
+
+        let replacementID = try RouteID("rte.mono-replacement")
+        let firstOffer = try #require(offers.first)
+        let decision = try RigMappingDecisions.make(
+            routes: [.replace(route.id, with: firstOffer, id: replacementID)]
+        )
+        let change = try review.apply(decision, to: base)
+        #expect(change.removed == [route.id] && change.added == [replacementID])
+        #expect(change.document.routes.last?.channels == [0])
+    }
+
+    @Test func proposalOffersExposeTruncation() throws {
+        let role = try RoleID("role.missing-truncation")
+        let base = try Fixture.document(
+            [
+                Fixture.device("dev.lost", outputs: 1, presence: .missing),
+                Fixture.device("dev.present", outputs: 100)
+            ],
+            routes: [Fixture.route("rte.missing-truncation", role: role.rawValue, device: "dev.lost", channels: [0],
+                                   binding: .deviceMissing)]
+        )
+        let review = try RigMappingReview.make(roles: [Fixture.role(role.rawValue, channels: 1)], document: base)
+        let offers = try #require(review.replacementOffers[role])
+        let truncation = try #require(review.replacementTruncations[role])
+        #expect(review.pendingChoices == [role] && offers.count == 64)
+        #expect(truncation.listed == 64 && truncation.total == 100 && truncation.omitted == 36)
+    }
+
+    @Test func offerTruncationAt64Boundary() throws {
+        let role = try RoleID("role.truncation-boundary")
+        let limit = RigMappingLimits.candidatesPerRole
+        let exact = try Self.replacementReview(outputs: limit)
+        #expect(limit == 64 && exact.replacementOffers[role]?.count == limit)
+        #expect(exact.replacementTruncations[role] == nil)
+
+        let over = try Self.replacementReview(outputs: limit + 1)
+        let truncation = try #require(over.replacementTruncations[role])
+        #expect(over.replacementOffers[role]?.count == limit)
+        #expect(truncation.listed == limit && truncation.total == limit + 1 && truncation.omitted == 1)
+    }
+
+    @Test func completeAndHeldOffersHaveNoTruncation() throws {
+        let role = try RoleID("role.truncation-boundary")
+        let fewer = try Self.replacementReview(outputs: 10)
+        #expect(fewer.pendingChoices == [role] && fewer.replacementOffers[role]?.count == 10)
+        #expect(fewer.replacementTruncations[role] == nil)
+
+        let held = try Self.replacementReview(outputs: 1)
+        #expect(held.heldRoles == [role] && held.replacementOffers[role]?.count == 1)
+        #expect(held.replacementTruncations[role] == nil)
+    }
+
+    @Test func choosingClearsOneTruncation() throws {
+        let first = try RoleID("role.alpha-truncation")
+        let second = try RoleID("role.beta-truncation")
+        let base = try Fixture.document(
+            [
+                Fixture.device("dev.lost", outputs: 1, presence: .missing),
+                Fixture.device("dev.present", outputs: 100)
+            ],
+            routes: [
+                Fixture.route("rte.alpha-lost", role: first.rawValue, device: "dev.lost", channels: [0],
+                              binding: .deviceMissing),
+                Fixture.route("rte.beta-lost", role: second.rawValue, device: "dev.lost", channels: [0],
+                              binding: .deviceMissing)
+            ]
+        )
+        let roles = try [Fixture.role(first.rawValue, channels: 1), Fixture.role(second.rawValue, channels: 1)]
+        let review = try RigMappingReview.make(roles: roles, document: base)
+        let before = review
+        #expect(Set(review.replacementTruncations.keys) == Set([first, second]))
+        let offer = try #require(review.replacementOffers[first]?.first)
+        let chosen = try review.choosing(offer, id: RouteID("rte.alpha-choice"))
+        #expect(chosen.replacementTruncations[first] == nil)
+        #expect(chosen.replacementTruncations[second] == review.replacementTruncations[second])
+        #expect(Set(chosen.replacementTruncations.keys) == Set([second]))
+        #expect(chosen.replacementOffers[first] == nil && chosen.replacementOffers[second] != nil)
+        #expect(review == before)
+    }
+
+    private static func replacementReview(outputs: Int) throws -> RigMappingReview {
+        let role = "role.truncation-boundary"
+        let base = try Fixture.document(
+            [
+                Fixture.device("dev.lost", outputs: 1, presence: .missing),
+                Fixture.device("dev.present", outputs: outputs)
+            ],
+            routes: [Fixture.route("rte.boundary-lost", role: role, device: "dev.lost", channels: [0],
+                                   binding: .deviceMissing)]
+        )
+        return try RigMappingReview.make(roles: [Fixture.role(role, channels: 1)], document: base)
+    }
 }
