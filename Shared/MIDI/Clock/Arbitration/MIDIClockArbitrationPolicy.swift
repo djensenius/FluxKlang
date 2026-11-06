@@ -3,7 +3,7 @@
 //  FluxKlang
 //
 //  The validated product values of MIDI clock leader arbitration: the source
-//  table bound, the leader pulse timeout, the reacquire pulse count and the
+//  table bound, the leader silence timeout, the reacquire pulse count and the
 //  jitter tolerance a steady pulse must meet. Built only through `make`.
 //
 
@@ -14,18 +14,21 @@ struct MIDIClockArbitrationPolicy: Equatable, Sendable {
     static let timeoutNanosRange: ClosedRange<Int64> = 50_000_000...2_000_000_000
     static let jitterTolerancePerMilleRange = 1...500
 
-    /// 16 sources, 500 ms timeout, 24 steady pulses (one quarter) and 25 % jitter tolerance.
+    /// 16 sources, 500 ms timeout, 24 steady pulses (one quarter) and a quarter period of jitter beyond the lag.
     static let standard = MIDIClockArbitrationPolicy(
         validatedMaximumSources: 16, timeoutNanos: 500_000_000, reacquirePulses: 24, jitterTolerancePerMille: 250
     )
 
     /// The most sources the arbiter's table holds; one more is refused.
     var maximumSources: Int { storedMaximumSources }
-    /// A leader pulse gap strictly longer than this loses the leader.
+    /// Leader silence strictly longer than this loses the leader while its transport runs and idles it while
+    /// stopped. It must exceed the slowest pulse interval the leader is expected to send (20 BPM is 125 ms per
+    /// pulse), or every gap of a slow leader reads as silence: the 50 ms floor bounds the value, not the tempo.
     var timeoutNanos: Int64 { storedTimeoutNanos }
-    /// N: the consecutive steady pulses that lock or relock the leader.
+    /// N: the steady pulses that lock or relock the leader.
     var reacquirePulses: Int { storedReacquirePulses }
-    /// A pulse is steady when its interval differs from the previous one by at most this many thousandths of it.
+    /// A pulse is steady when it lands within L + this many thousandths of the run's reference period of its
+    /// due time, where L = 2 is the tempo estimator's lag bound (`MIDIClockSteadyRun`).
     var jitterTolerancePerMille: Int { storedJitterTolerancePerMille }
 
     private let storedMaximumSources: Int

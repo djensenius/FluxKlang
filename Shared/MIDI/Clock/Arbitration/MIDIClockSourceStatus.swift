@@ -3,7 +3,8 @@
 //  FluxKlang
 //
 //  The visible state of MIDI clock arbitration: which source is leader, whether
-//  it is locked or degraded (and why), and per source what the arbiter ignored.
+//  it is locked, degraded (and why) or idle, and per source what the arbiter
+//  ignored.
 //
 
 /// The transport's clock authority: the internal clock or one external source.
@@ -27,30 +28,34 @@ enum MIDIClockMessageKind: Int, CaseIterable, Sendable {
     }
 }
 
-/// Why the selected external leader is degraded. The last tempo is held; no other source takes over.
+/// How a silence past the timeout was seen: why the selected external leader is degraded (transport running)
+/// or idle (transport stopped). No other source takes over.
 enum MIDIClockDegradedReason: Equatable, Sendable {
-    /// `poll(now:)` found no leader pulse for longer than the timeout.
-    case silence(lastPulse: HostStamp, detectedAt: HostStamp)
-    /// A leader pulse arrived more than the timeout after the previous one.
-    case lateArrival(lastPulse: HostStamp, detectedAt: HostStamp)
+    /// `poll(now:)` found no leader message since `lastMessage` for longer than the timeout.
+    case silence(lastMessage: HostStamp, detectedAt: HostStamp)
+    /// A leader message arrived more than the timeout after the previous one.
+    case lateArrival(lastMessage: HostStamp, detectedAt: HostStamp)
 }
 
 /// The leader's lock as the transport and UI see it.
 enum MIDIClockLeaderStatus: Equatable, Sendable {
     /// The internal clock is leader; every external source is competing.
     case `internal`
-    /// An external leader selected and not yet locked since its selection.
+    /// An external leader selected and not yet locked since its selection or since it went idle.
     case acquiring(MIDIInputID, steadyPulses: Int)
-    /// The leader is locked; `tempo` is its latest estimate, nil until the estimator has one.
+    /// The leader is locked; `tempo` is the estimator's current estimate, nil while it is pending.
     case locked(MIDIInputID, tempo: MIDIClockTempoEstimate?)
-    /// The leader was lost: the transport keeps `heldTempo` until `steadyPulses` reaches the policy's N.
+    /// The leader was lost while running: the transport keeps `heldTempo` until `steadyPulses` reaches N.
     case degraded(MIDIInputID, reason: MIDIClockDegradedReason, heldTempo: MIDIClockTempoEstimate?,
                   steadyPulses: Int)
+    /// The leader went silent while its transport was stopped. Not a loss: it claims no tempo, and its
+    /// next clock starts acquiring.
+    case idle(MIDIInputID)
 
     var leader: MIDIClockLeader {
         switch self {
         case .internal: .internal
-        case let .acquiring(id, _), let .locked(id, _), let .degraded(id, _, _, _): .external(id)
+        case let .acquiring(id, _), let .locked(id, _), let .degraded(id, _, _, _), let .idle(id): .external(id)
         }
     }
 
@@ -76,7 +81,7 @@ struct MIDIClockIgnoredCounts: Equatable, Sendable {
         }
     }
 
-    /// Counts one ignored message; true when it is the first of its kind (the one that is reported).
+    /// Counts one ignored message in place; true when it is the first of its kind (the one that is reported).
     mutating func record(_ kind: MIDIClockMessageKind) -> Bool {
         let count = counts[kind.rawValue]
         if count < .max { counts[kind.rawValue] = count + 1 }

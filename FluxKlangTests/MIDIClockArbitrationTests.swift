@@ -199,8 +199,34 @@ struct MIDIClockArbitrationTests {
         let reason = MIDIClockIgnoreReason.notLeader(selected: .internal)
         #expect(events == [.competingSource(Self.sourceA, .start, reason),
                            .competingSource(Self.sourceA, .clock, reason)])
-        #expect(try arbiter.poll(now: Self.host(10_000_000_000)) == nil)
+        #expect(try arbiter.poll(now: Self.host(10_000_000_000)).isEmpty)
         #expect(arbiter.sources.allSatisfy { !$0.isLeader })
+    }
+
+    @Test
+    func competingMessagesInterleavedWithTheLeadersNeverDisturbItsSteadyRun() throws {
+        var arbiter = try Self.arbiter()
+        var reference = try MIDIClockFollower()
+        var events = try arbiter.receive(.start, from: Self.sourceA, at: Self.host(0))
+        var expected = try [reference.receive(.start, at: Self.host(0))].compactMap { $0 }
+        for pulse in 1...6 {
+            let stamp = UInt64(pulse) * Self.period
+            events += try arbiter.receive(.clock, from: Self.sourceB, at: Self.host(stamp - 7_000_000))
+            events += try arbiter.receive(.start, from: Self.sourceC, at: Self.host(stamp - 3_000_000))
+            events += try arbiter.receive(.clock, from: Self.sourceA, at: Self.host(stamp))
+            events += try arbiter.receive(.clock, from: Self.sourceB, at: Self.host(stamp + 5_000_000))
+            if let event = try reference.receive(.clock, at: Self.host(stamp)) { expected.append(event) }
+            if pulse < 6 { #expect(arbiter.status == .acquiring(Self.sourceA, steadyPulses: max(pulse - 2, 0))) }
+        }
+        let reason = MIDIClockIgnoreReason.notLeader(selected: .external(Self.sourceA))
+        let arbitration = events.filter { if case .transport = $0 { false } else { true } }
+        #expect(arbitration == [.competingSource(Self.sourceB, .clock, reason),
+                                .competingSource(Self.sourceC, .start, reason),
+                                .leaderLocked(Self.sourceA, tempo: nil, after: .selection)])
+        #expect(Self.transport(events) == expected)
+        #expect(arbiter.source(Self.sourceB)?.ignored[.clock] == 12)
+        #expect(arbiter.source(Self.sourceC)?.ignored[.start] == 6)
+        #expect(arbiter.status == .locked(Self.sourceA, tempo: nil))
     }
 
     @Test
@@ -210,8 +236,8 @@ struct MIDIClockArbitrationTests {
         _ = try Self.feed(&arbiter, [.start, .clock, .clock, .clock], from: Self.sourceB)
         #expect(arbiter.source(Self.sourceB)?.followerState == .running)
         let change = try arbiter.selectLeader(.external(Self.sourceB), resumingAt: 15_360)
-        #expect(change == MIDIClockLeaderChange(previous: .external(Self.sourceA), selected: .external(Self.sourceB)))
-        #expect(change.bumpReason == .sourceLost)
+        #expect(change == MIDIClockLeaderChange(previous: .external(Self.sourceA), selected: .external(Self.sourceB),
+                                                bumpReason: .sourceLost))
         #expect(arbiter.leader == .external(Self.sourceB))
         #expect(arbiter.status == .acquiring(Self.sourceB, steadyPulses: 0))
         let statusB = try #require(arbiter.source(Self.sourceB))
@@ -225,17 +251,34 @@ struct MIDIClockArbitrationTests {
         #expect(Self.transport(fromB) == [.continued(ticks: 15_360, relocated: true),
                                           .pulse(ticks: 15_360, host: Self.host(11 * Self.period), located: false)])
         let back = try arbiter.selectLeader(.internal)
-        #expect(back == MIDIClockLeaderChange(previous: .external(Self.sourceB), selected: .internal))
+        #expect(back == MIDIClockLeaderChange(previous: .external(Self.sourceB), selected: .internal,
+                                              bumpReason: .sourceLost))
         #expect(arbiter.status == .internal)
+    }
+
+    @Test
+    func selectingTheInternalClockIgnoresTheResumePosition() throws {
+        var arbiter = try Self.arbiter()
+        let change = try arbiter.selectLeader(.internal, resumingAt: -1)
+        #expect(change == MIDIClockLeaderChange(previous: .external(Self.sourceA), selected: .internal,
+                                                bumpReason: .sourceLost))
+        #expect(arbiter.leader == .internal && arbiter.status == .internal)
+        _ = try arbiter.selectLeader(.external(Self.sourceA))
+        #expect(try arbiter.selectLeader(.internal, resumingAt: .min).selected == .internal)
+        // An external selection still validates its position.
+        #expect(throws: MIDIClockArbitrationError.clock(.negativeTicks(-1))) {
+            try arbiter.selectLeader(.external(Self.sourceB), resumingAt: -1)
+        }
+        #expect(arbiter.leader == .internal)
     }
 
     @Test
     func refusedSelectionsLeaveTheArbiterUnchanged() throws {
         var arbiter = try Self.arbiter()
-        _ = try Self.feed(&arbiter, [.start, .clock], from: Self.sourceA)
+        _ = try Self.feed(&arbiter, [.start, .clock, .clock, .clock, .clock], from: Self.sourceA)
         _ = try Self.feed(&arbiter, [.clock], from: Self.sourceB)
-        let status = arbiter.status
-        let sources = arbiter.sources
+        #expect(arbiter.status == .acquiring(Self.sourceA, steadyPulses: 2))
+        var untouched = arbiter
         #expect(throws: MIDIClockArbitrationError.alreadySelected(.external(Self.sourceA))) {
             try arbiter.selectLeader(.external(Self.sourceA))
         }
@@ -245,7 +288,26 @@ struct MIDIClockArbitrationTests {
         #expect(throws: MIDIClockArbitrationError.clock(.negativeTicks(-1))) {
             try arbiter.selectLeader(.external(Self.sourceB), resumingAt: -1)
         }
-        #expect(arbiter.status == status && arbiter.sources == sources && arbiter.leader == .external(Self.sourceA))
+        // The arbiter holds C1 types that are not Equatable, so the refused arbiter and an untouched copy must
+        // behave identically: the same continuation through lock, tempo, loss and a new leader.
+        func continuation(_ copy: inout MIDIClockLeaderArbiter) throws -> [MIDIClockArbitrationEvent] {
+            var events = try Self.feed(&copy, Array(repeating: .clock, count: 30), from: Self.sourceA,
+                                       start: 5 * Self.period)
+            events += try Self.feed(&copy, [.clock, .start], from: Self.sourceB, start: 5 * Self.period)
+            events += try copy.poll(now: Self.host(35 * Self.period + 500_000_001))
+            _ = try copy.selectLeader(.external(Self.sourceB), resumingAt: 15_360)
+            events += try Self.feed(&copy, [.continue, .clock], from: Self.sourceB, start: 70 * Self.period)
+            return events
+        }
+        #expect(arbiter.status == untouched.status && arbiter.sources == untouched.sources)
+        let refused = try continuation(&arbiter)
+        let expected = try continuation(&untouched)
+        #expect(refused == expected)
+        #expect(refused.contains(.leaderLocked(Self.sourceA, tempo: nil, after: .selection)))
+        let tempo = MIDIClockTempoEstimate(microsPerQuarter: 480_000, clamped: false)
+        #expect(refused.contains(.leaderTempo(Self.sourceA, .acquired(tempo))))
+        #expect(arbiter.status == untouched.status && arbiter.sources == untouched.sources)
+        #expect(arbiter.leader == untouched.leader && arbiter.stalePulses == untouched.stalePulses)
         var idle = try Self.arbiter(leader: .internal)
         #expect(throws: MIDIClockArbitrationError.alreadySelected(.internal)) { try idle.selectLeader(.internal) }
     }
