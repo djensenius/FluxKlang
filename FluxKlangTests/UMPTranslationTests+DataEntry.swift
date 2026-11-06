@@ -43,7 +43,7 @@ struct UMPTranslationDataEntryTests {
         UMPTranslationLoss(reason: reason, group: try UMPGroup(group), channel: try UMPChannel(channel))
     }
 
-    @Test func dataEntryMSBIsHeldUntilItsLSBOrTheNextMessageOnItsGroupAndChannel() throws {
+    @Test func dataEntryMSBIsHeldUntilItsLSBOrTheNextMessage() throws {
         var upward = UMPMIDI1ToMIDI2Translator()
         func messages(_ voice: UMPMIDI1ChannelVoice) throws -> [UMPMIDI2ChannelVoice] {
             try upward.translate(voice).messages
@@ -103,6 +103,17 @@ struct UMPTranslationDataEntryTests {
         #expect(upward.state(group: try UMPGroup(0), channel: try UMPChannel(1)).parameterKind == .registered)
         #expect(upward.heldDataEntry == nil)
         #expect(upward.losses.total == 0)
+        // A CC 38 on the same channel in another group is not the completing CC 38: it sends the held CC 6 first.
+        var groups = UMPMIDI1ToMIDI2Translator()
+        for (group, value) in [(UInt8(1), UInt8(2)), (0, 9)] {
+            for (controller, byte) in [(UInt8(101), UInt8(0)), (100, 1), (6, value)] {
+                _ = try groups.translate(Self.cc(0, controller, byte, group: group))
+            }
+        }
+        #expect(groups.heldDataEntry == (try Self.mt4(0, 0, Self.rpn(0, 1, 9 << 7))))
+        #expect(try groups.translate(Self.cc(0, 38, 5, group: 1)).messages
+            == [try Self.mt4(0, 0, Self.rpn(0, 1, 9 << 7)), try Self.mt4(1, 0, Self.rpn(0, 1, 2 << 7 | 5))])
+        #expect(groups.heldDataEntry == nil)
     }
 
     @Test func flushSendsTheOneHeldDataEntryExactlyOnce() throws {
@@ -281,5 +292,15 @@ struct UMPTranslationDataEntryTests {
         #expect(upward.flushAll().isEmpty)
         #expect(try upward.translate(Self.cc(4, 38, 1, group: 2)).messages
             == [try Self.mt4(2, 4, Self.nrpn(0, 1, 5 << 7 | 1))])
+
+        // Resetting another channel leaves the held CC 6 alone.
+        var held = UMPMIDI1ToMIDI2Translator()
+        for (controller, value) in [(UInt8(99), UInt8(0)), (98, 1), (6, 5)] {
+            _ = try held.translate(Self.cc(3, controller, value, group: 2))
+        }
+        #expect(held.reset(group: try UMPGroup(2), channel: try UMPChannel(4)).isEmpty)
+        #expect(held.heldDataEntry == (try Self.mt4(2, 3, Self.nrpn(0, 1, 5 << 7))))
+        #expect(try held.translate(Self.cc(3, 38, 1, group: 2)).messages
+            == [try Self.mt4(2, 3, Self.nrpn(0, 1, 5 << 7 | 1))])
     }
 }

@@ -66,7 +66,8 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
         return output
     }
 
-    /// Sends the Data Entry held on one group and channel (its CC 6 with LSB 0), if any. See #362.
+    /// Sends the Data Entry held on one group and channel (its CC 6 with LSB 0), if any; returns `[]` when the held
+    /// CC 6 is on another group or channel. See #362.
     mutating func flush(group: UMPGroup, channel: UMPChannel) -> [UMPMIDI2ChannelVoice] {
         guard let voice = held, voice.group == group, voice.channel == channel else { return [] }
         held = nil
@@ -83,7 +84,7 @@ struct UMPMIDI1ToMIDI2Translator: Equatable, Sendable {
 
     /// Forgets the state of one group and channel (for example after its sender reconnects). A held Data Entry on
     /// it is a value the sender set, so it is returned rather than discarded: the caller must forward the returned
-    /// messages before anything else on that group and channel.
+    /// messages before any message translated after this call.
     mutating func reset(group: UMPGroup, channel: UMPChannel) -> [UMPMIDI2ChannelVoice] {
         let held = flush(group: group, channel: channel)
         channels[group, channel] = UMPUpChannelState()
