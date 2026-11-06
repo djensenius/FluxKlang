@@ -5,7 +5,8 @@
 //  One cell of the wiring matrix window: the bare class of the wire from the
 //  row's output port to the column's input port in the draft's graph, under
 //  the headings of the destination list, and the draft markers from the
-//  review diff. Built only by `WiringMatrix.window`.
+//  review diff. The cell struct, its fileprivate init and the row builder are
+//  in WiringMatrix.swift, so cells are built only by `WiringMatrix.window`.
 //
 
 /// What a cell's pair classifies as: a connection class, or the refusal of that pair (or of its whole row).
@@ -16,26 +17,8 @@ enum WiringMatrixCellState: Hashable, Sendable {
     case uncheckable(WiringPreviewRefusal)
 }
 
-/// One matrix cell. `from` is the row's port, `to` the column's.
-struct WiringMatrixCell: Hashable, Sendable {
-    private(set) var from: PortAddress
-    private(set) var to: PortAddress
-    private(set) var state: WiringMatrixCellState
-    /// The draft-added edges on this pair (review diff `addedEdge` rows), sorted by ID.
-    private(set) var draftAdded: [EdgeID]
-    /// The active edges on this pair the draft will remove (review diff `removedEdge` rows), sorted by ID.
-    private(set) var willRemove: [EdgeID]
-
-    fileprivate init(
-        from: PortAddress, to: PortAddress, state: WiringMatrixCellState, draftAdded: [EdgeID], willRemove: [EdgeID]
-    ) {
-        self.from = from
-        self.to = to
-        self.state = state
-        self.draftAdded = draftAdded
-        self.willRemove = willRemove
-    }
-
+/// What a cell shows; the cell itself and its builder are in WiringMatrix.swift.
+extension WiringMatrixCell {
     /// The heading the destination list gives this pair.
     var connectionClass: WiringDestinationClass {
         switch state {
@@ -44,54 +27,22 @@ struct WiringMatrixCell: Hashable, Sendable {
         }
     }
 
-    /// The edge a toggle off removes: the first wire on this pair in the draft's graph (`existing`), or `nil`.
+    /// The edge a toggle off removes: the classified `existing` edge (the first wire on this pair in the draft's
+    /// graph), or, for an `.uncheckable` cell (for example a row refused at the edge bound), `wiredEdge`, the same
+    /// first wire found by node and port IDs; `nil` for every other cell.
     var existingEdge: EdgeID? {
-        if case .classified(.existing(let edge)) = state { return edge }
-        return nil
-    }
-
-    /// Whether the cell is on (the pair is wired in the draft's graph).
-    var isOn: Bool { existingEdge != nil }
-}
-
-/// Builds cells for `WiringMatrix.window` only.
-enum WiringMatrixCellBuilder {
-    /// The cells of one row: one shared batch context for the row (`batch`), or the row's whole-list refusal.
-    static func row(
-        _ source: PortAddress, columns: [PortAddress], batch: Result<WiringCandidateBatch, WiringPreviewRefusal>,
-        markers: WiringMatrixMarkers
-    ) -> [WiringMatrixCell] {
-        switch batch {
-        case .failure(let refusal):
-            return columns.map { column in
-                cell(source, column, state: .uncheckable(refusal), markers: markers)
-            }
-        case .success(var context):
-            var cells: [WiringMatrixCell] = []
-            cells.reserveCapacity(columns.count)
-            for column in columns {
-                let state: WiringMatrixCellState
-                do { state = .classified(try context.classify(to: column).connection) } catch {
-                    state = .uncheckable(error)
-                }
-                cells.append(cell(source, column, state: state, markers: markers))
-            }
-            return cells
+        switch state {
+        case .classified(.existing(let edge)): edge
+        case .classified: nil
+        case .uncheckable: wiredEdge
         }
     }
 
-    private static func cell(
-        _ source: PortAddress, _ column: PortAddress, state: WiringMatrixCellState, markers: WiringMatrixMarkers
-    ) -> WiringMatrixCell {
-        let pair = WiringMatrixMarkers.Pair(from: source, to: column)
-        return WiringMatrixCell(
-            from: source, to: column, state: state,
-            draftAdded: markers.added[pair] ?? [], willRemove: markers.removed[pair] ?? []
-        )
-    }
+    /// Whether the cell is on (`existingEdge` is set).
+    var isOn: Bool { existingEdge != nil }
 }
 
-/// The review diff's edge rows, by (from, to) pair.
+/// The review diff's edge rows and the draft graph's first wire, by (from, to) pair.
 struct WiringMatrixMarkers {
     /// A pair by node and port IDs only, as the classifier resolves endpoints (extension bags are ignored).
     struct Pair: Hashable {
@@ -110,8 +61,15 @@ struct WiringMatrixMarkers {
 
     private(set) var added: [Pair: [EdgeID]] = [:]
     private(set) var removed: [Pair: [EdgeID]] = [:]
+    /// The first edge of `graph` on each pair, in graph order (the first-wins rule of `WiringCandidateContext`).
+    private(set) var wired: [Pair: EdgeID] = [:]
 
-    init(_ diff: WiringReviewDiff) {
+    /// The markers of `diff`, and the first wires of `graph` (the draft's graph) in one O(edges) pass.
+    init(_ diff: WiringReviewDiff, graph: GraphDocument) {
+        for edge in graph.edges {
+            let pair = Pair(from: edge.from, to: edge.to)
+            if wired[pair] == nil { wired[pair] = edge.id }
+        }
         for change in diff.changes {
             switch change {
             case .addedEdge(let edge): added[Pair(from: edge.from, to: edge.to), default: []].append(edge.id)

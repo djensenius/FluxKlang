@@ -3,9 +3,10 @@
 //  FluxKlangTests
 //
 //  Equivalent edit paths (#101 WP3): a drag end point, keyboard nudges and
-//  numeric x/y entry give the same folded `moveNode`; every remove path gives
-//  the same folded `disconnect`, and restore cancels it. Refusals change
-//  nothing and the active graph is never written.
+//  numeric x/y entry give the same folded `moveNode`, normalized to 1/1024
+//  layout unit and snapped to an off-grid base; every remove path gives the
+//  same folded `disconnect`, and restore cancels it. Refusals change nothing
+//  and the active graph is never written.
 //
 
 import Testing
@@ -54,6 +55,20 @@ private typealias Edit = WiringEditFixture
 @Suite("Wiring edit paths")
 struct WiringEditPathTests {
     static let keys = NodeID(validated: "nod.keys")
+
+    /// The fixture graph with nod.keys at (`horizontal`, `vertical`).
+    static func keys(at horizontal: Double, _ vertical: Double = 0) throws -> GraphDocument {
+        var graph = Fixture.graph
+        let index = try #require(graph.nodes.firstIndex { $0.id == keys })
+        graph.nodes[index].position = GraphPoint(x: horizontal, y: vertical)
+        return graph
+    }
+
+    /// The x of nod.keys's move in `draft`, or `nil` without one.
+    static func movedX(_ draft: DraftEdits) -> Double? {
+        for case .moveNode(keys, let point?) in draft.edits { return point.x }
+        return nil
+    }
 
     @Test func dragNudgesAndNumericEntryGiveTheSameMove() throws {
         // nod.keys starts at (1, 0); two grid steps and one fine step right, one grid step up.
@@ -107,6 +122,67 @@ struct WiringEditPathTests {
         let fineBack = [WiringNudge(.rightward)] + Array(repeating: WiringNudge(.leftward, fine: true), count: 8)
         let fine = try Edit.nudged(Self.keys, fineBack)
         #expect(fine == Edit.draft())
+    }
+
+    @Test func fineNudgesNumericEntryAndDragShareOneNormalization() throws {
+        let graph = try Self.keys(at: 0)
+        let draft = Edit.draft(on: graph)
+        let typed = try WiringMoveComposer.move(Self.keys, x: 0.3, y: 0, in: draft, active: graph)
+        let dragged = try WiringMoveComposer.move(Self.keys, x: 0.30000000000000004, y: 0, in: draft, active: graph)
+        #expect(typed == dragged && Self.movedX(typed) == 307.0 / 1024)
+        // 0.1 + 0.2 (one fine, one grid nudge) is 0.30000000000000004 unnormalized; both land on 0.3's grid point.
+        let grid = Edit.grid(step: 0.2, fineStep: 0.1)
+        let stepped = try Edit.nudged(Self.keys, [WiringNudge(.rightward, fine: true), WiringNudge(.rightward)],
+                                      grid: grid, from: draft, active: graph)
+        #expect(stepped == typed)
+        // Each nudge lands where typing its unrounded target lands.
+        var nudged = draft
+        for expected in [102.0, 204, 306] {
+            let target = (Self.movedX(nudged) ?? 0) + 0.1
+            let entry = try WiringMoveComposer.move(Self.keys, x: target, y: 0, in: nudged, active: graph)
+            nudged = try Edit.nudged(Self.keys, [WiringNudge(.rightward, fine: true)], grid: grid, from: nudged,
+                                     active: graph)
+            #expect(nudged == entry && Self.movedX(nudged) == expected / 1024)
+        }
+        // Each 0.1 nudge rounds 0.4/1024 down, so three are 306/1024, not 0.3's 307/1024 (see the resolution doc).
+        #expect(nudged != typed)
+    }
+
+    @Test func aReturnToAnOffGridBaseDropsTheMove() throws {
+        for (base, step) in [(0.1, 8.0), (0.3, 1), (0.1, 0.2)] {
+            let graph = try Self.keys(at: base, base)
+            let draft = Edit.draft(on: graph)
+            let grid = Edit.grid(step: step, fineStep: step)
+            let there = try Edit.nudged(Self.keys, [WiringNudge(.rightward), WiringNudge(.downward)], grid: grid,
+                                        from: draft, active: graph)
+            #expect(there.edits.count == 1, "\(base) ± \(step)")
+            let back = try Edit.nudged(Self.keys, [WiringNudge(.leftward), WiringNudge(.upward, fine: true)],
+                                       grid: grid, from: there, active: graph)
+            #expect(back == draft, "\(base) ± \(step)")
+        }
+        // Numeric entry near an off-grid base snaps to it too, and only on the base's grid point.
+        let graph = try Self.keys(at: 0.1, 0.3)
+        let draft = Edit.draft(on: graph)
+        #expect(try WiringMoveComposer.move(Self.keys, x: 0.1000001, y: 0.2999, in: draft, active: graph) == draft)
+        let near = try WiringMoveComposer.move(Self.keys, x: 0.1 + 1.0 / 1024, y: 0.3, in: draft, active: graph)
+        #expect(near.edits == [.moveNode(Self.keys, to: GraphPoint(x: 103.0 / 1024, y: 0.3))])
+    }
+
+    @Test func coordinatesRoundHalfAwayFromZeroOntoTheResolution() throws {
+        #expect(WiringMoveComposer.resolution == 1.0 / 1024)
+        let graph = try Self.keys(at: 5)
+        let draft = Edit.draft(on: graph)
+        let cases: [(Double, Double)] = [
+            (1.0 / 2048, 1.0 / 1024), (-1.0 / 2048, -1.0 / 1024), (3.0 / 2048, 2.0 / 1024), (2.0 + 1.0 / 4096, 2),
+            (0x1p42 + 0.25, 0x1p42 + 0.25), (-0x1p50, -0x1p50)
+        ]
+        for (value, expected) in cases {
+            let moved = try WiringMoveComposer.move(Self.keys, x: value, y: value, in: draft, active: graph)
+            #expect(moved.edits == [.moveNode(Self.keys, to: GraphPoint(x: expected, y: expected))], "\(value)")
+        }
+        // A small negative coordinate rounds to +0, never -0.
+        let zero = try WiringMoveComposer.move(Self.keys, x: -1.0 / 4096, y: 1, in: draft, active: graph)
+        #expect(Self.movedX(zero)?.sign == .plus)
     }
 
     @Test func aMoveKeepsThePositionExtensions() throws {
@@ -252,6 +328,12 @@ struct WiringEditPathTests {
         }
         #expect(throws: WiringEditRefusal.unknownEdge(ghost)) {
             try WiringRemoveComposer.restore(edge: ghost, into: removed, active: active)
+        }
+        // Still in the draft's graph is checked before the active lookup: a draft-added edge is not restorable.
+        let request = WiringComposeFixture.request("edg.keys-mains", ("nod.keys", "out"), ("nod.mains", "in"))
+        let added = try WiringDraftComposer.compose(request, into: Edit.draft(), active: active)
+        #expect(throws: WiringEditRefusal.notInDraftOrActive(request.edge)) {
+            try WiringRemoveComposer.restore(edge: request.edge, into: added, active: active)
         }
         // A draft-added edge is not an active edge: nothing to restore once it is gone.
         #expect(throws: WiringEditRefusal.unknownEdge(Fixture.id("edg.keys-mains"))) {

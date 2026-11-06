@@ -23,6 +23,10 @@ enum WiringEditRefusal: Error, Hashable, Sendable {
     /// The edge is known, but not where the path needs it: a remove of an active edge the draft already removes,
     /// or a restore of an edge that is not an active edge the draft removes (it is still in the draft's graph).
     case notInDraftOrActive(EdgeID)
+    /// A matrix toggle off of a cell from an older window: the draft's graph has an edge with the cell's edge ID,
+    /// but on another pair (its from or to node or port ID differs from the cell's), so the toggle would remove a
+    /// different wire.
+    case staleCell(EdgeID)
     /// The matrix window asks for more than `WiringMatrix.maximumRows` rows or `maximumColumns` columns.
     case windowTooLarge(rows: Int, columns: Int)
     /// The connect composer refused the matrix toggle on.

@@ -9,6 +9,10 @@
 //  equal `DraftEdits` values or equal refusals; and every remove path (the
 //  matrix toggle off, and Delete, the row button and VoiceOver, which all
 //  call `WiringRemoveComposer.remove`) gives the same draft, which restore undoes.
+//  The list path composes the listed candidate's pair, which is the cell's
+//  pair, so it is the port-picker request; the proof that the list and the
+//  matrix agree is the class assertion (the listed connection is the cell's
+//  state), plus the toggle-versus-picker comparison.
 //
 
 import Testing
@@ -224,13 +228,8 @@ struct WiringEditPathEquivalenceTests {
             into: draft, active: active
         )
         if let listed = try? context.lists[cell.from]?.get().candidates.first(where: { $0.to == cell.to }) {
-            let viaList = composed(
-                WiringConnectRequest(
-                    edge: edge, from: listed.from, to: listed.to, conversion: conversion, feedback: feedback
-                ),
-                into: draft, active: active
-            )
-            #expect(viaList == picker, "\(cell.from) → \(cell.to)", sourceLocation: sourceLocation)
+            // The list path's request is the picker's exactly when the candidate is the cell's pair.
+            #expect(listed.from == cell.from, "\(cell.from) → \(cell.to)", sourceLocation: sourceLocation)
             #expect(WiringMatrixCellState.classified(listed.connection) == cell.state, sourceLocation: sourceLocation)
         } else {
             #expect(cell.connectionClass == .uncheckable, sourceLocation: sourceLocation)
@@ -240,7 +239,12 @@ struct WiringEditPathEquivalenceTests {
                 try WiringRemoveComposer.remove(edge: existing, from: draft, active: active)
             }
             #expect(toggled == removed, "\(cell.from) → \(cell.to)", sourceLocation: sourceLocation)
-            #expect(picker == .failure(.compose(.existing(existing))), sourceLocation: sourceLocation)
+            if case .classified = cell.state {
+                #expect(picker == .failure(.compose(.existing(existing))), sourceLocation: sourceLocation)
+            } else {
+                // A wired `.uncheckable` cell (`wiredEdge`): the picker cannot classify the pair either.
+                #expect(cell.wiredEdge == existing, sourceLocation: sourceLocation)
+            }
         } else {
             #expect(toggled == picker, "\(cell.from) → \(cell.to)", sourceLocation: sourceLocation)
         }

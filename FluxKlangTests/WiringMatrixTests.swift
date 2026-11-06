@@ -5,7 +5,9 @@
 //  The wiring matrix window (#101 WP3): output ports as rows, input ports as
 //  columns, each cell classified as the destination list classifies the pair
 //  (one shared context per row), draft markers from the review diff, a
-//  64 × 64 window bound, and toggles through the connect and remove composers.
+//  64 × 64 window bound, and toggles through the connect and remove composers
+//  (a stale cell never removes a different wire; a wired cell at the edge
+//  bound still shows on and toggles off).
 //
 
 import Testing
@@ -54,6 +56,15 @@ struct WiringMatrixTests {
                 }
                 seen.insert(cell.connectionClass)
                 #expect(cell.from == source && cell.to == destination, sourceLocation: sourceLocation)
+                // The pair's first wire in graph order, by node and port IDs; a classified `existing` names it too.
+                let first = graph.edges.first { edge in
+                    (edge.from.node, edge.from.port, edge.to.node, edge.to.port)
+                        == (source.node, source.port, destination.node, destination.port)
+                }
+                #expect(cell.wiredEdge == first?.id, sourceLocation: sourceLocation)
+                if case .classified(.existing(let edge)) = cell.state {
+                    #expect(cell.wiredEdge == edge && cell.existingEdge == edge, sourceLocation: sourceLocation)
+                }
                 let classified = Result { () throws(WiringPreviewRefusal) in
                     try WiringCandidate.classify(from: source, to: destination, in: graph).connection
                 }
@@ -151,6 +162,14 @@ struct WiringMatrixTests {
         let after = try Self.window(toggled, active: graph)
         #expect(Self.cell(after, ("nod.keys", "out"), ("nod.verb", "in"))?.existingEdge == duplicate.id)
         #expect(Self.cell(matrix, ("nod.keys", "out"), ("nod.mains", "in"))?.existingEdge == nil)
+        // A mis-oriented wire: its pair is notOffered, so the cell is off although `wiredEdge` names the wire.
+        let ports = [Fixture.address("nod.verb", "in"), Fixture.address("nod.keys", "out")]
+        let backward = Fixture.edge("edg.backward", ports[0], ports[1])
+        let skewed = Fixture.with([backward])
+        let mis = try WiringMatrix.window(rows: ports, columns: ports, active: skewed, draft: Edit.draft(on: skewed))
+        let wrongWay = try #require(mis.cell(row: 0, column: 1))
+        #expect(wrongWay.state == .classified(.notOffered) && wrongWay.wiredEdge == backward.id)
+        #expect(wrongWay.existingEdge == nil && !wrongWay.isOn)
     }
 
     @Test func draftMarkersComeFromTheReviewDiff() throws {
@@ -214,8 +233,73 @@ struct WiringMatrixTests {
         #expect(throws: WiringEditRefusal.windowTooLarge(rows: 64, columns: 65)) {
             try WiringMatrix.window(rows: Array(outputs.prefix(64)), columns: inputs, active: graph, draft: draft)
         }
+        // The bound is checked before the draft.
+        var stale = draft
+        stale.baseRevision = Edit.revision(7)
+        #expect(throws: WiringEditRefusal.windowTooLarge(rows: 65, columns: 0)) {
+            try WiringMatrix.window(rows: outputs, columns: [], active: graph, draft: stale)
+        }
         let empty = try WiringMatrix.window(rows: [], columns: inputs.prefix(3).map { $0 }, active: graph, draft: draft)
         #expect(empty.cells.isEmpty && empty.columns.count == 3)
+    }
+
+    @Test func wiredCellsAtTheEdgeBoundShowOnAndToggleOff() throws {
+        let keysOut = Fixture.address("nod.keys", "out"), verbIn = Fixture.address("nod.verb", "in")
+        let mainsIn = Fixture.address("nod.mains", "in")
+        var graph = Fixture.graph
+        // More wires on keys → verb after the fixture's own, up to exactly the bound.
+        graph.edges += (graph.edges.count..<ProjectGraphLimits.edges).map {
+            GraphEdge(id: Fixture.id("edg.fill-\($0)"), from: keysOut, to: verbIn)
+        }
+        #expect(graph.edges.count == ProjectGraphLimits.edges)
+        let draft = Edit.draft(on: graph)
+        let matrix = try WiringMatrix.window(rows: [keysOut], columns: [verbIn, mainsIn], active: graph, draft: draft)
+        let atBound = WiringMatrixCellState.uncheckable(
+            .bounds(.exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges))
+        )
+        let keysVerb = Fixture.id("edg.keys-verb") as EdgeID
+        let wired = try #require(matrix.cell(row: 0, column: 0))
+        #expect(wired.state == atBound && wired.connectionClass == .uncheckable)
+        #expect(wired.wiredEdge == keysVerb && wired.existingEdge == keysVerb && wired.isOn)
+        let open = try #require(matrix.cell(row: 0, column: 1))
+        #expect(open.state == atBound && open.wiredEdge == nil && open.existingEdge == nil && !open.isOn)
+        // `classify` calls the pair existing at the bound; the cell removes the same edge.
+        #expect(try WiringCandidate.classify(from: keysOut, to: verbIn, in: graph).connection == .existing(keysVerb))
+        let toggled = try WiringMatrix.toggle(wired, request: WiringMatrixConnect(edge: Fixture.id("edg.unused")),
+                                              in: draft, active: graph)
+        #expect(toggled == (try WiringRemoveComposer.remove(edge: keysVerb, from: draft, active: graph)))
+        #expect(toggled.edits == [.disconnect(keysVerb)])
+    }
+
+    @Test func aStaleCellNeverRemovesADifferentWire() throws {
+        let active = Fixture.graph
+        let request = WiringMatrixConnect(edge: Fixture.id("edg.other"))
+        let keysMains = WiringComposeFixture.request("edg.reuse", ("nod.keys", "out"), ("nod.mains", "in"))
+        let first = try WiringDraftComposer.compose(keysMains, into: Edit.draft(), active: active)
+        let cell = try #require(Self.cell(try Self.window(first), ("nod.keys", "out"), ("nod.mains", "in")))
+        #expect(cell.existingEdge == keysMains.edge)
+        // The ID is removed, then reused on echo → mains.
+        let removed = try WiringRemoveComposer.remove(edge: keysMains.edge, from: first, active: active)
+        let echoMains = WiringComposeFixture.request("edg.reuse", ("nod.echo", "out"), ("nod.mains", "in"))
+        let reused = try WiringDraftComposer.compose(echoMains, into: removed, active: active)
+        #expect(throws: WiringEditRefusal.staleCell(keysMains.edge)) {
+            try WiringMatrix.toggle(cell, request: request, in: reused, active: active)
+        }
+        #expect(reused == (try WiringDraftComposer.compose(echoMains, into: Edit.draft(), active: active)))
+        // Reused on keys → echo: only the destination differs, and that is stale too.
+        let keysEcho = WiringComposeFixture.request("edg.reuse", ("nod.keys", "out"), ("nod.echo", "in"))
+        let retargeted = try WiringDraftComposer.compose(keysEcho, into: removed, active: active)
+        #expect(throws: WiringEditRefusal.staleCell(keysMains.edge)) {
+            try WiringMatrix.toggle(cell, request: request, in: retargeted, active: active)
+        }
+        // The fresh cell removes it.
+        let fresh = try #require(Self.cell(try Self.window(reused), ("nod.echo", "out"), ("nod.mains", "in")))
+        #expect(try WiringMatrix.toggle(fresh, request: request, in: reused, active: active) == Edit.draft())
+        // Endpoint extension bags are ignored: the same pair by IDs is not stale.
+        var tagged = Fixture.address("nod.keys", "out")
+        tagged.extensions = ["tag": .bool(true)]
+        let bagged = Edit.draft([.connect(Fixture.edge("edg.reuse", tagged, Fixture.address("nod.mains", "in")))])
+        #expect(try WiringMatrix.toggle(cell, request: request, in: bagged, active: active) == Edit.draft())
     }
 
     @Test func eachRowValidatesOnce() throws {
