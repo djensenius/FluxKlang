@@ -4,9 +4,15 @@
 /// Render-owned ramp state with one slot per prepared parameter. A new ramp replaces the parameter's active ramp
 /// from the caller's `current` value; nothing is queued. Reference model; not RT-certified.
 ///
-/// Storage is one allocation of `parameterCount` slots made in `init`. A single thread (render) owns the instance,
-/// so the slots and the active counter are plain memory, not atomics. Hot-path methods range-check `parameter`
-/// before forming an index, never allocate and never trap, including at `Int64` extremes.
+/// Storage is two allocations of `parameterCount` entries made in `init`: the slots and each parameter's last known
+/// value (`lastValue`). A single thread (render) owns the instance, so the slots, the values and the active counter
+/// are plain memory, not atomics. Hot-path methods range-check `parameter` before forming an index, never allocate
+/// and never trap, including at `Int64` extremes.
+///
+/// Shared across a `.replacingCycle` handoff (round 2l, Copilot thread PRRT_kwDOS3CuTM60f7vt): the last known values
+/// live here, beside the ramps, not in a cycle, so a replacement given these slots reports and ramps from the values
+/// its retired predecessor left (a completed ramp's target included). Only one cycle uses the slots at a time; the
+/// happens-before across the handoff is the ownership claim's (see `KernelCycleStart.replacingCycle`).
 final class RampSlots: @unchecked Sendable {
     enum PreparationError: Error, Equatable, Sendable {
         /// `parameterCount` is outside `1...maximumParameters`.
@@ -32,6 +38,9 @@ final class RampSlots: @unchecked Sendable {
     /// Number of parameters with an active ramp; O(1) and never above `parameterCount`.
     private(set) var activeCount = 0
     private let slots: UnsafeMutablePointer<Ramp>
+    /// Each parameter's last known value: what its latest `advance` returned, kept after the ramp completes and the
+    /// slot goes idle; 0 before any.
+    private let values: UnsafeMutablePointer<Float>
 
     init(parameterCount: Int) throws(PreparationError) {
         guard parameterCount >= 1, parameterCount <= Self.maximumParameters else {
@@ -40,12 +49,15 @@ final class RampSlots: @unchecked Sendable {
         self.parameterCount = parameterCount
         slots = UnsafeMutablePointer<Ramp>.allocate(capacity: parameterCount)
         slots.initialize(repeating: .idle, count: parameterCount)
+        values = UnsafeMutablePointer<Float>.allocate(capacity: parameterCount)
+        values.initialize(repeating: 0, count: parameterCount)
     }
 
     /// Control-side teardown only.
     deinit {
         slots.deinitialize(count: parameterCount)
         slots.deallocate()
+        values.deallocate()
     }
 
     /// Starts a ramp from `current` to `target` over `durationFrames`, replacing any active ramp on `parameter`.
@@ -64,6 +76,7 @@ final class RampSlots: @unchecked Sendable {
 
     /// Moves `parameter`'s ramp forward by `frames` (negative counts as 0) and returns its value, or `nil` when the
     /// parameter is idle or out of range. The call that reaches the end returns exactly `target` and frees the slot.
+    /// The value returned is also stored as the parameter's `lastValue`.
     func advance(parameter: UInt32, frames: Int64) -> Float? {
         guard let index = index(parameter), slots[index].active else { return nil }
         let step = max(frames, 0)
@@ -72,10 +85,19 @@ final class RampSlots: @unchecked Sendable {
         if step >= remaining {
             slots[index].active = false
             activeCount &-= 1
-            return slots[index].target
+            values[index] = slots[index].target
+            return values[index]
         }
         slots[index].elapsed &+= step
-        return Self.sample(slots[index])
+        values[index] = Self.sample(slots[index])
+        return values[index]
+    }
+
+    /// `parameter`'s last known value: what its latest `advance` returned (kept once the ramp completes and the slot
+    /// goes idle), or 0 before any; `nil` when out of range. `set` does not change it.
+    func lastValue(parameter: UInt32) -> Float? {
+        guard let index = index(parameter) else { return nil }
+        return values[index]
     }
 
     /// Reads `parameter`'s value without moving the ramp: what the last `advance` returned, or `current` before
