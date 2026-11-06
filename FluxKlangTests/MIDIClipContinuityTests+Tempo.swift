@@ -169,16 +169,38 @@ struct MIDIClipContinuityTempoTests {
     @Test
     func aFloorLeavesOutExactlyTheTicksBelowItAcrossPassesLoopsAndCuts() throws {
         // At 120 BPM a tick is 1.5625 frames, so each frame holds at most one tick: an event's tick is at or above
-        // the floor exactly when its frame is at or after the floor tick's frame.
+        // the floor exactly when its frame is at or after the floor tick's frame. The second window starts after
+        // events of lower ticks.
         let items = [Base.note(110, 150), Base.controlChange(119), Base.note(5, 30, pitch: 62), Base.controlChange(0)]
         let placement = try Base.placement(items, length: 200, start: 1001, loop: (20, 120))
         let clock = try Base.clock()
-        let events = try Base.events(placement, 0, 4000, clock: clock)
-        #expect(events.count == 6 + 3 * 14)
-        for floor in Int64(990)...2610 {
-            let floorFrame = try clock.frame(atTicks: floor)
-            #expect(try placement.events(from: 0, to: 4000, clock: clock, current: Self.live, floor: floor)
-                == events.filter { $0.frame >= floorFrame }, "floor \(floor)")
+        #expect(try Base.events(placement, 0, 4000, clock: clock).count == 6 + 3 * 14)
+        for start: Int64 in [0, 2001] {
+            let events = try Base.events(placement, start, 4000, clock: clock)
+            for floor in Int64(990)...2610 {
+                let floorFrame = try clock.frame(atTicks: floor)
+                #expect(try placement.events(from: start, to: 4000, clock: clock, current: Self.live, floor: floor)
+                    == events.filter { $0.frame >= floorFrame }, "window \(start), floor \(floor)")
+            }
+        }
+    }
+
+    @Test
+    func aFloorAtOrBelowTheWindowsFirstTickLeavesOutNothing() throws {
+        // Windows that start after frame 0, with events of lower ticks before them. A floor at or below the window's
+        // first tick, however low, must not pull those in: the floor only ever raises the window's first tick.
+        let items = [Base.note(110, 150), Base.controlChange(119), Base.note(5, 30, pitch: 62), Base.controlChange(0)]
+        let placement = try Base.placement(items, length: 200, start: 1001, loop: (20, 120))
+        let clock = try Base.clock()
+        // Frame 2000 is tick 1280's own frame; frames 2001 and 3001 lie between ticks (1.5625 frames per tick).
+        for (start, first) in [(Int64(2000), Int64(1280)), (2001, 1281), (3001, 1921)] {
+            #expect(try MIDIClipPlacement.firstTick(atOrAfterFrame: start, clock: clock) == first)
+            let events = try Base.events(placement, start, 4000, clock: clock)
+            #expect(try !Base.events(placement, 0, start, clock: clock).isEmpty && !events.isEmpty)
+            for floor in [Int64.min, -1_000_000] + Array(-2...first) {
+                #expect(try placement.events(from: start, to: 4000, clock: clock, current: Self.live, floor: floor)
+                    == events, "window \(start), floor \(floor)")
+            }
         }
     }
 

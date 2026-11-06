@@ -196,6 +196,43 @@ struct MIDIClipContinuityTests {
     }
 
     @Test
+    func aLoopWrapIsCheckedAfterTheTransportAndTheClock() throws {
+        // The refusal order (DESIGN.md): `rebind` checks the transport generation, then the clock against `current`,
+        // then the loop iteration; `render` checks the clock and the bound generations before the loop iteration.
+        var scheduler = MIDIClipScheduler(placement: try Base.placement([Base.note(0, Self.quarter)]))
+        _ = try scheduler.render(from: 0, to: 20_000, clock: Base.clock(), current: Self.live)
+        _ = scheduler.stop()
+        let wrapped = try Self.clock(Self.live, frame: 20_000, ticks: 0, loopIteration: 1)
+        _ = try scheduler.render(from: 20_000, to: 20_001, clock: wrapped, current: Self.live)
+        #expect(scheduler.loopIteration == 1)
+        let restarted = scheduler
+        // Every clock below has loop iteration 0. A locate after the wrap re-anchors with loop iteration 0 (media
+        // contract §5.4): it is a transport change, not a wrap.
+        let located = try Self.generations(transport: 2)
+        let locatedClock = try Self.clock(located, frame: 20_001)
+        #expect(Base.refusal { try scheduler.rebind(clock: locatedClock, current: located, atFrame: 20_001) }
+            == .transportChangedRequiresStop(expected: .initial, got: located.transport))
+        // A stale clock is stale, in `rebind` and in `render`.
+        let stale: [(MIDIClipGenerations, MIDIClipRefusal)] = [
+            (try Self.generations(map: 2), .staleMusicalMap),
+            (try Self.generations(sample: 2, map: 2), .clock(.staleSampleGeneration))
+        ]
+        for (current, expected) in stale {
+            #expect(Base.refusal { try scheduler.rebind(clock: Base.clock(), current: current, atFrame: 20_001) }
+                == expected)
+            #expect(Base.refusal {
+                try scheduler.render(from: 20_001, to: 20_002, clock: Base.clock(), current: current)
+            } == expected)
+        }
+        // A live clock with other generations is a clock revision for `render`.
+        let revised = try Self.generations(map: 2)
+        let revisedClock = try Self.clock(revised)
+        #expect(Base.refusal { try scheduler.render(from: 20_001, to: 20_002, clock: revisedClock, current: revised) }
+            == .clockRevisionChanged(expected: Self.live, got: revised))
+        #expect(scheduler == restarted)
+    }
+
+    @Test
     func aRebindToAStaleOrOverflowingClockIsRefusedAndChangesNothing() throws {
         var scheduler = MIDIClipScheduler(placement: try Base.placement([Base.note(0, Self.quarter)]))
         _ = try scheduler.render(from: 0, to: 30_000, clock: Base.clock(), current: Self.live)
