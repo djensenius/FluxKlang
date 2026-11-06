@@ -249,6 +249,8 @@ targets:
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests+ReleaseMarkers.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
+      - path: FluxKlangTests/RigMappingTests.swift
+      - path: FluxKlangTests/RigMappingTests+Candidates.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
