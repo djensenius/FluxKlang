@@ -239,4 +239,80 @@ struct RecordingTakeBackwardJumpTests {
             }
         }
     }
+
+    /// Round 8d (Copilot, delta review): a closed take's empty segment [s, s) holds no frames and
+    /// owns nothing, so an overflow crossing s is never refused `.takeSealed` by it. A: take 1 opens
+    /// at 1000 and is discarded with no frames (take 2 then opened at 2000, or not): [990, 1010) is
+    /// pre-roll, like [900, 920). C: take 1 records [0, 1000), a jump to 5000 leaves an empty
+    /// trailing segment and take 1 is finished; take 2 opens at 6000: [4990, 5010) is ignored,
+    /// like [3000, 3020).
+    @Test
+    func closedTakesEmptySegmentOwnsNothing() throws {
+        for opensTake2 in [false, true] {
+            var ledger = try Fixture.ledger(opening: Fixture.take1, at: 1000)
+            try ledger.discard(Fixture.take1, reason: .noCapturedFrames)
+            if opensTake2 { try ledger.open(Fixture.opening(Fixture.take2, 1, 2000)) }
+            #expect(try ledger.ingest(Fixture.overflow(1, 990, frames: 20)).isEmpty)
+            #expect(try ledger.ingest(Fixture.overflow(1, 900, frames: 20)).isEmpty)
+        }
+        var ledger = try Fixture.ledger()
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 1000))
+        #expect(try ledger.ingest(Fixture.jump(1, 5000)) == [.split(Fixture.take1)])
+        #expect(try ledger.finish(Fixture.take1, reason: .user).segments.map(\.frames) == [1000])
+        try ledger.open(Fixture.opening(Fixture.take2, 1, 6000))
+        #expect(try ledger.ingest(Fixture.overflow(1, 4990, frames: 20)).isEmpty)
+        #expect(try ledger.ingest(Fixture.overflow(1, 3000, frames: 20)).isEmpty)
+    }
+
+    /// Round 8d, D: take 2 opens at 500 and is discarded with no frames; take 1 records [1000,
+    /// 2000) and a jump to 500 ends it. [490, 510) is refused `.recordNotOwned` at 500, like [500,
+    /// 520), not `.takeSealed` by take 2's empty segment.
+    @Test
+    func discardedEmptyTakeNeverHidesTheJumpTarget() throws {
+        var ledger = try Fixture.ledger(opening: Fixture.take2, at: 500)
+        try ledger.discard(Fixture.take2, reason: .noCapturedFrames)
+        try ledger.open(Fixture.opening(Fixture.take1, 1, 1000))
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 2000))
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        #expect(try ledger.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, ended)])
+        let notOwned = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: 500)
+        for frame: Int64 in [490, 500] {
+            let record = Fixture.overflow(1, frame, frames: 20)
+            Fixture.refusal(notOwned) { () throws(TakeLedgerError) in _ = try ledger.ingest(record) }
+        }
+    }
+
+    /// Round 8d, unchanged: an open, device-stopped take keeps its empty segment's ownership. Take 1
+    /// records [0, 1000), restarts into generation 2 at 1000, records [1000, 2000), jumps back to
+    /// 500 and is stopped there. [490, 510) only crosses the empty segment [500, 500): it is owned
+    /// and refused `.overflowOutsideSegment`, never ignored.
+    @Test
+    func stoppedTakesEmptySegmentStillOwnsACrossingOverflow() throws {
+        var ledger = try Fixture.ledger()
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 1000))
+        let restart = Fixture.restart(2, 1000, previousFrame: 1000, host: 2_500_000_000)
+        #expect(try ledger.ingest(restart) == [.split(Fixture.take1)])
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(2, 2000))
+        #expect(try ledger.ingest(Fixture.jump(2, 500)) == [.split(Fixture.take1)])
+        #expect(try ledger.ingest(Fixture.stop(2, 500, .deviceLost)) == [.recorded(Fixture.take1)])
+        let refusal = TakeLedgerError.overflowOutsideSegment(startFrame: 490, endFrame: 510)
+        Fixture.refusal(refusal) { () throws(TakeLedgerError) in
+            _ = try ledger.ingest(Fixture.overflow(2, 490, frames: 20))
+        }
+        #expect(try ledger.finish(Fixture.take1, reason: .deviceLost).segments.map(\.frames) == [1000, 1000])
+    }
+
+    /// Round 8d: the crossing check saturates the overflow's end. Take 1 opens at Int64.max - 3 and
+    /// a jump to Int64.max - 5 ends it; [Int64.max - 10, +20) crosses the target and is refused there.
+    @Test
+    func crossingCheckSaturatesTheOverflowEnd() throws {
+        var ledger = try Fixture.ledger(opening: Fixture.take1, at: Int64.max - 3)
+        try ledger.advance(Fixture.take1, to: Fixture.stamp(1, Int64.max - 1))
+        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
+        #expect(try ledger.ingest(Fixture.jump(1, Int64.max - 5)) == [.ended(Fixture.take1, ended)])
+        let refusal = TakeLedgerError.recordNotOwned(stream: Fixture.streamSlot, frame: Int64.max - 5)
+        Fixture.refusal(refusal) { () throws(TakeLedgerError) in
+            _ = try ledger.ingest(Fixture.overflow(1, Int64.max - 10, frames: 20))
+        }
+    }
 }

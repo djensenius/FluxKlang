@@ -213,8 +213,9 @@ struct TakeLedgerState: Sendable {
     }
 
     /// Whether this take owns the record (§8.3): same stream and clock, a segment of the
-    /// same generation, and overlapping frames. While capturing, the current segment extends
-    /// past the frontier, so a record beyond capture progress is owned, then refused, never
+    /// same generation, and overlapping frames (a closed take's empty segment overlaps none).
+    /// While capturing, the current segment extends past the frontier, so a record beyond
+    /// capture progress is owned, then refused, never
     /// ignored, and an empty current segment also owns a `captureStopped` at its start. An
     /// overflow without a length (nil or 0 frames) is owned like a 1-frame one: ownership is
     /// decided first, then `appendOverflow` refuses the length (`.missingOverflowFrames`).
@@ -226,6 +227,9 @@ struct TakeLedgerState: Sendable {
         return segments.indices.contains { index in
             let segment = segments[index]
             guard segment.generation == sample.generation else { return false }
+            // A closed take's empty segment holds no frames, so it owns nothing. An open take's
+            // still owns what crosses its start: a stopped take refuses it (`.overflowOutsideSegment`).
+            guard isOpen || !segment.isEmpty else { return false }
             let isCapturingCurrent = isCapturing && index == last
             let upper = isCapturingCurrent ? Int64.max : segment.endFrame
             if case .captureStopped = kind {

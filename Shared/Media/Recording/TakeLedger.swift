@@ -178,8 +178,8 @@ struct TakeLedger: Sendable {
     /// unowned, it is refused `.recordNotOwned` (a take the ledger ended owns no further record).
     /// Ownership is decided before the frames are checked: an overflow without a length is routed
     /// like a 1-frame one, then its owner refuses it (`.missingOverflowFrames`, or `.takeSealed`).
-    /// An unowned overflow that crosses an ended take's jump target is routed as its part from
-    /// the target on (`postJumpPart`); one that ends at or before the target is pre-roll.
+    /// An unowned overflow that crosses the jump target of an open take the ledger ended is refused
+    /// `.recordNotOwned` at that target (`postJumpTarget`); one that ends at or before it is pre-roll.
     mutating func ingest(_ record: RuntimeDiscontinuity) throws(TakeLedgerError) -> [TakeIngestEffect] {
         switch record.kind {
         case .clockRestart(let previousFrame):
@@ -188,8 +188,10 @@ struct TakeLedger: Sendable {
             return try jump(record.sample, stream: record.stream)
         case .overflow, .captureStopped:
             guard let stream = record.stream else { throw .missingStream }
-            if owner(of: record) == nil, let part = postJumpPart(of: record, stream: stream) {
-                return try route(part, stream: stream)
+            // Its part [target, end) could have no other owner: a take overlapping it also overlaps
+            // the whole overflow, so it would own the record. Refusing directly is routing that part.
+            if owner(of: record) == nil, let target = postJumpTarget(of: record, stream: stream) {
+                throw .recordNotOwned(stream: stream, frame: target)
             }
             return try route(record, stream: stream)
         default:
@@ -209,27 +211,24 @@ struct TakeLedger: Sendable {
         return [.recorded(owner)]
     }
 
-    /// The part of an overflow [start, end) from the jump target of an open take the ledger ended
-    /// on its stream, clock and generation, when start < target < end: post-jump audio, routed
-    /// exactly like an overflow that starts at the target, never dropped. The end saturates, and a
-    /// lengthless overflow spans one frame, so it never crosses. With several such targets the
-    /// earliest is used. Nil for any other record.
-    private func postJumpPart(of record: RuntimeDiscontinuity, stream: UInt32) -> RuntimeDiscontinuity? {
+    /// The jump target of an open take the ledger ended on an overflow's stream, clock and
+    /// generation, when the overflow [start, end) crosses it (start < target < end): its part from
+    /// the target on is post-jump audio, never dropped. An unowned one is refused like an overflow
+    /// that starts at the target, so the refusal reports the target, the first post-jump frame no
+    /// take owns, not the record's own start. The end saturates, and a lengthless overflow spans
+    /// one frame, so it never crosses. With several such targets the earliest is used. Nil for any
+    /// other record.
+    private func postJumpTarget(of record: RuntimeDiscontinuity, stream: UInt32) -> Int64? {
         guard case .overflow = record.kind else { return nil }
         let start = record.sample.frame
         let (sum, overflowed) = start.addingReportingOverflow(max(Int64(record.frames ?? 0), 1))
         let end = overflowed ? Int64.max : sum
-        let targets = states.values.compactMap { state -> Int64? in
+        return states.values.compactMap { state -> Int64? in
             guard state.isOpen, state.opening.streamSlot == stream, state.opening.startClockSlot == record.sample.clock,
                   let stop = state.stop, stop.reason.isLedgerStop, stop.reportedGeneration == record.sample.generation,
                   start < stop.reportedFrame, stop.reportedFrame < end else { return nil }
             return stop.reportedFrame
-        }
-        guard let target = targets.min() else { return nil }
-        let sample = RuntimeSampleStamp(clock: record.sample.clock, generation: record.sample.generation, frame: target)
-        // end - target < end - start <= frames, so the clipped length fits.
-        return RuntimeDiscontinuity(kind: .overflow, sample: sample, frames: UInt32(end - target),
-                                    stream: record.stream, host: record.host)
+        }.min()
     }
 
     /// An unowned record is refused when an open take records its stream and clock and it is
