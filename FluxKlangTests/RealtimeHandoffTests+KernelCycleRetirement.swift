@@ -176,6 +176,7 @@ extension RealtimeHandoffTests {
             #expect(emitted.isEmpty && decided.discardedWhileSilenced == 1 && decided.pending == 1)
             let loss = replacement.retire()
             #expect(counts(loss) == [1, 0, 0, 0, 0] && !loss.receiverStateMayBeStale)
+            #expect(try successor(of: rig).inheritedRetirementLoss == loss)
         }
 
         /// A `.freshFanIn` cycle takes nothing over, so it inherits no loss.

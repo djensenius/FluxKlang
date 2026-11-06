@@ -57,9 +57,10 @@ struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
 /// (render) hands it back; see `claimForCycle(fresh:from:)` and `releaseCycleClaim(_:loss:)`.
 ///
 /// Retirement loss (rounds 2i and 2j). The loss is five plain `Int` fields, one per count (so an optimized TSan build
-/// sees a race on any of them; TSan does not race-check a `__tsan_memcpy` copy, such as a whole struct's), ordered by
-/// the claim word and never read or written outside a claim. `releaseCycleClaim` writes them only while its claim is
-/// still held (an odd word only its holder can move), then hands the claim back with a releasing compare-exchange.
+/// can report a race on any of them when it observes one; a Debug TSan build was observed not to report the
+/// whole-struct copy, and still does not), ordered by the claim word and never read or written outside a claim.
+/// `releaseCycleClaim` writes them only while its claim is still held (an odd word only its holder can move), then
+/// hands the claim back with a releasing compare-exchange.
 /// `claimForCycle` reads them only after its acquiring compare-exchange has succeeded, reading the even word that
 /// release wrote (only a release writes an even nonzero word). So the writes happen-before the reads. The next write
 /// needs the next claim, whose holder's read happens-before its own retire (the host hands the prepared cycle to render
