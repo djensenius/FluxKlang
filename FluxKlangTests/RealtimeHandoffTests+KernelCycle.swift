@@ -29,7 +29,7 @@ struct CycleRig {
     let cycle: KernelCycle
 
     init(lanes: Int = 2, laneCapacity: Int = 20, blockCapacity: Int = 64, pulsesPerBlock: Int = 4,
-         staleTolerance: Int64 = 48, perLaneQuota: Int = 64) throws {
+         staleTolerance: Int64 = 48, perLaneQuota: Int = 64, telemetry: KernelCycleTelemetryOutput? = nil) throws {
         faults = try FaultLatch(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
         events = try FanInHandoff(policy: Self.policy(lanes: lanes, laneCapacity: laneCapacity),
                                   laneCapacity: laneCapacity, reserved: 16, faults: faults,
@@ -38,7 +38,7 @@ struct CycleRig {
         safety = try SafetyFlags(scopes: 2)
         ramps = try RampSlots(parameterCount: 4)
         let parts = KernelCycleParts(events: events, faults: faults, ownership: ownership, safety: safety,
-                                     ramps: ramps)
+                                     ramps: ramps, telemetry: telemetry, start: .freshFanIn)
         cycle = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: pulsesPerBlock,
                                                               staleTolerance: staleTolerance),
                                 blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
@@ -437,13 +437,14 @@ extension RealtimeHandoffTests {
             // The controls dispatch at 576; from 640 the lane drains 4 a cycle, `noteOn(60)` first and 340 late.
             var emitted: [CycleEmission] = []
             var discarded = 0
-            var result = KernelCycleResult()
+            var last: KernelCycleResult?
             for block in Int64(5)..<24 {
                 let cycle = rig.run(block * 64, 64)
-                result = cycle.0
+                last = cycle.0
                 emitted += cycle.1
-                discarded &+= result.discardedWhileSilenced
+                discarded &+= cycle.0.discardedWhileSilenced
             }
+            let result = try #require(last)
             #expect(!result.flushing && result.pending == 0 && discarded == 1)
             #expect(rig.events.drain(perLaneQuota: 1, total: 1) { _, _ in } == 0)
             #expect(emitted.filter { $0.event.payload == control(0) }.count == 1)

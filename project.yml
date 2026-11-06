@@ -193,6 +193,10 @@ targets:
       - path: FluxKlangTests/AudioRoutingTestFixtures.swift
       - path: FluxKlangTests/AudioMuteContractTests.swift
       - path: FluxKlangTests/AudioGainContractTests.swift
+      - path: FluxKlangTests/RouteLatencyTests.swift
+      - path: FluxKlangTests/RouteLatencyTests+Calibration.swift
+      - path: FluxKlangTests/RouteLatencyTests+Impulse.swift
+      - path: FluxKlangTests/RouteLatencyTests+Alignment.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
@@ -254,22 +258,30 @@ targets:
       - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests+ReleaseMarkers.swift
+      - path: FluxKlangTests/MIDICaptureExportTests.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Protocol.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Restart.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Clock.swift
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
-      - path: FluxKlangTests/WiringEditPathTests.swift
-      - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
-      - path: FluxKlangTests/WiringMatrixTests.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
       - path: FluxKlangTests/RigMappingTests.swift
       - path: FluxKlangTests/RigMappingTests+Candidates.swift
+      - path: FluxKlangTests/RigMappingReviewTests.swift
+      - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
+      - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
       - path: FluxKlangTests/ShowTransitionTests.swift
+      - path: FluxKlangTests/ShowFootInputTests.swift
+      - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests.swift
+      - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
@@ -278,6 +290,8 @@ targets:
       - path: FluxKlangTests/UMPTranslationTests.swift
       - path: FluxKlangTests/UMPTranslationTests+State.swift
       - path: FluxKlangTests/UMPTranslationTests+DataEntry.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+Property.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
@@ -286,6 +300,15 @@ targets:
       - path: FluxKlangTests/ParameterAutomationTests+Arbitration.swift
       - path: FluxKlangTests/ParameterAutomationTests+Resume.swift
       - path: FluxKlangTests/ParameterAutomationTests+Transport.swift
+      - path: FluxKlangTests/AutomationRenderTests.swift
+      - path: FluxKlangTests/AutomationRenderTests+Tempo.swift
+      - path: FluxKlangTests/AutomationRenderTests+Loop.swift
+      - path: FluxKlangTests/AutomationRenderTests+Handback.swift
+      - path: FluxKlangTests/PatchTransitionTests.swift
+      - path: FluxKlangTests/PatchTransitionTests+Bounds.swift
+      - path: FluxKlangTests/PatchTransitionTests+Lifecycle.swift
+      - path: FluxKlangTests/PatchTransitionTests+Repeated.swift
+      - path: FluxKlangTests/PatchTransitionTests+Sustain.swift
       - path: FluxKlangTests/PrefetchTests.swift
       - path: FluxKlangTests/PrefetchTests+Playhead.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
@@ -296,6 +319,9 @@ targets:
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
+      - path: FluxKlangTests/TunerPitchTests.swift
+      - path: FluxKlangTests/TunerPitchTests+Smoother.swift
+      - path: FluxKlangTests/TunerPitchTests+Fixtures.swift
       - path: FluxKlangTests/MetronomeGridTests.swift
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
@@ -304,10 +330,16 @@ targets:
       - path: FluxKlangTests/MIDIClockTempoTests.swift
       - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
       - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests+Admission.swift
+      - path: FluxKlangTests/ActionSetSubmissionTests+Cancel.swift
       - path: FluxKlangTests/SpatialRenderTests.swift
       - path: FluxKlangTests/SpatialRenderTests+Masks.swift
       - path: FluxKlangTests/SpatialRenderTests+Calibration.swift
@@ -339,6 +371,11 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingAcknowledge.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingTakeover.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift

@@ -12,7 +12,8 @@
 /// deterministic.
 ///
 /// Rule. Every applied `noteOff` event (decided, or consumed while silenced or flushing, whether or not it
-/// released anything) records `max(tombstone, event.frame)` for its key. A decided `noteOn` whose original
+/// released anything) and every `noteOff` still pending in a retired cycle's block buffer (`KernelCycle.retire()`)
+/// records `max(tombstone, event.frame)` for its key. A decided `noteOn` whose original
 /// `event.frame` is strictly before its key's tombstone is superseded: never emitted or owned, counted in
 /// `KernelCycleResult.discardedSuperseded`. Ties go to the `noteOn` (round 4b): a `noteOn` at its key's release
 /// frame is a new note (a same-frame retrigger) whose own `noteOff` comes later, so it cannot stick. A same-frame
@@ -23,13 +24,18 @@
 ///
 /// Panic and resets. Synthesized releases (safety requests, critical-fault recovery) record nothing, so a fresh
 /// `noteOn` after a panic sounds normally; tombstones already recorded are kept (they only ever suppress notes
-/// whose release was seen). "Release wins" includes a `noteOff` consumed undecided while silenced: it records its
-/// own, possibly future, event frame and is deliberately not clamped to `blockStart`. Clamping would let an
+/// whose release was seen). "Release wins" includes a `noteOff` consumed undecided while silenced or left pending by
+/// a retired cycle: it records its own, possibly future, event frame and is deliberately not clamped to
+/// `blockStart`. Clamping would let an
 /// earlier-stamped `noteOn` of that key, arriving after recovery, sound with no release left (a stuck note).
 /// The trade-off is fail-safe: that `noteOn` is suppressed instead (a possible missed note, never a stuck one).
 /// Bound: such a tombstone can suppress its key for at most the deadline policy's lookahead after `blockStart`
 /// plus `lateTolerance` (96,000 frames, about 2 s at 48 kHz, for MIDI receive), never more than
 /// `KernelLimits.maximumHorizonFrames`. Accepted trade-off.
+///
+/// Sharing (round 2g): `NoteOwnership` allocates and owns the table, so every `KernelCycle` over one ownership
+/// (a `.replacingCycle` replacement included) reads and writes the same history; a replacement never forgets a
+/// release its predecessor applied. Same contract as the ownership: only render touches it, one cycle at a time.
 ///
 /// Storage: `scopes × 16 × 128` `Int64` words, allocated in `init` and freed in `deinit`. Render only after init.
 final class ReleaseTombstones: @unchecked Sendable {
