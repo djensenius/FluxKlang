@@ -32,11 +32,12 @@ enum MIDICaptureRefusal: Error, Equatable, Sendable {
     case staleGeneration
     /// No anchor of the current sample clock generation has been observed since the last restart.
     case noCurrentAnchor
-    /// A musical map was given without an anchored transport, was missing while one is anchored, was not built from
-    /// the latest remembered musical anchor at or before the capture frame (or the genuine first anchor before it),
-    /// or is not at the current musical map revision, or has a different nominal rate.
+    /// A musical map was given without an anchored transport, was missing while one is anchored, or was not built from
+    /// the latest retained anchor at or before the frame, or the genuine first anchor for frames before its successor
+    /// (including equality with the first; without a successor, the first remains the basis). Also covers an evicted
+    /// required anchor, a stale musical-map revision, or a different nominal rate.
     case musicalMapMismatch
-    /// A derived musical tick would be negative.
+    /// An observed musical anchor or a derived musical tick would be negative.
     case negativeMusicalTicks
     /// The anchor's host ticks precede the latest `clockRestart`'s.
     case anchorPredatesRestart(restart: HostStamp)
