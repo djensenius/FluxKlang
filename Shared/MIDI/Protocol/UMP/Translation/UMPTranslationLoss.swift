@@ -1,6 +1,14 @@
 /// Why a translated message lost information. Every loss is declared and counted; nothing is dropped silently.
 ///
-/// The MIDI 2.0 → MIDI 1.0 reasons mirror the SMF export loss categories of media-contract §9.3.
+/// The reasons refine the SMF export loss categories of media-contract §9.3:
+///
+/// | Reason | §9.3 category |
+/// |---|---|
+/// | `velocityDownscaled`, `noteOnVelocityRemapped`, `valueDownscaled`, `attributeDropped` | the same name |
+/// | `perNoteController`, `perNotePitchBend`, `perNoteManagement` | `perNoteDropped` |
+/// | `relativeController` | `umpOnlyDropped` |
+/// | `controllerReservedInMIDI2`, `nullParameterAddress`, `dataIncrementUnmapped` | none (translation only) |
+/// | `incompleteBankSelect`, `dataEntryWithoutParameter`, `dataEntryLSBWithoutMSB` | none (MIDI 1.0 → 2.0 only) |
 enum UMPTranslationLossReason: Equatable, Hashable, Sendable, CaseIterable {
     // MIDI 1.0 → MIDI 2.0 (incomplete MIDI 1.0 sequences).
     /// A Program Change arrived after only one of Bank Select MSB (CC 0) and LSB (CC 32); it is sent with
@@ -9,8 +17,12 @@ enum UMPTranslationLossReason: Equatable, Hashable, Sendable, CaseIterable {
     /// Data Entry (CC 6 or CC 38) arrived with no complete RPN/NRPN selected, or with the null RPN (127/127)
     /// selected; nothing is sent.
     case dataEntryWithoutParameter
-    /// Data Entry LSB (CC 38) arrived before any Data Entry MSB (CC 6) for the selected parameter; nothing is sent.
+    /// Data Entry LSB (CC 38) arrived before any Data Entry MSB (CC 6) for the selected parameter, or after a Data
+    /// Increment/Decrement made the receiver's value unknown; nothing is sent.
     case dataEntryLSBWithoutMSB
+    /// Data Increment or Decrement (CC 96/97): the RPN/NRPN selection it applies to was absorbed, so a bare MIDI 2.0
+    /// CC 96/97 would mean nothing; nothing is sent.
+    case dataIncrementUnmapped
 
     // MIDI 2.0 → MIDI 1.0 (messages or fields MIDI 1.0 cannot carry).
     /// Registered or assignable per-note controllers (MT 0x4 status 0x0 and 0x1); nothing is sent.
@@ -26,7 +38,8 @@ enum UMPTranslationLossReason: Equatable, Hashable, Sendable, CaseIterable {
     case controllerReservedInMIDI2
     /// A registered controller at bank 127, index 127: in MIDI 1.0 that address is the null RPN; nothing is sent.
     case nullParameterAddress
-    /// A Note On or Off had an attribute type or attribute value other than 0; the note is sent without it.
+    /// A Note On or Off had an attribute type other than 0; the note is sent without its attribute. With type 0
+    /// the attribute value has no meaning and is not counted.
     case attributeDropped
     /// A MIDI 2.0 Note On whose velocity scales down to 0 is sent with velocity 1, so it stays a Note On.
     case noteOnVelocityRemapped
@@ -63,8 +76,8 @@ struct UMPTranslationLossCounts: Equatable, Sendable {
 
 /// What one translated message produced: zero or more messages in the other protocol, plus its declared losses.
 ///
-/// Empty `messages` with empty `losses` means the input only updated translator state (a Bank Select, or an RPN or
-/// NRPN selection, waiting for its Program Change or Data Entry).
+/// Empty `messages` with empty `losses` means the input only updated translator state (a Bank Select, an RPN or
+/// NRPN selection, or a held Data Entry MSB, waiting for its Program Change, Data Entry or Data Entry LSB).
 struct UMPTranslationOutput<Message: Equatable & Sendable>: Equatable, Sendable {
     let messages: [Message]
     let losses: [UMPTranslationLoss]

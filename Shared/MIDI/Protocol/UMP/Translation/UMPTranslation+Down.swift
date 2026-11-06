@@ -1,14 +1,19 @@
 /// Translates MIDI 2.0 channel voice in UMP (MT 0x4) to MIDI 1.0 channel voice (MT 0x2).
 ///
-/// Follows the MIDI 2.0 Protocol → MIDI 1.0 Protocol default translation of MMA/AMEI M2-104-UM "Universal MIDI
+/// Based on the MIDI 2.0 Protocol → MIDI 1.0 Protocol default translation of MMA/AMEI M2-104-UM "Universal MIDI
 /// Packet (UMP) Format and MIDI 2.0 Protocol". Values are reduced only through `UMPScaling.scaleDown` (right shift).
 ///
 /// - A Note On whose velocity scales down to 0 is sent with velocity 1, so it is not read as a Note Off
 ///   (`noteOnVelocityRemapped`).
 /// - A Program Change with Bank Valid sends CC 0 and CC 32 first, unless this channel was already sent that bank.
 /// - A Registered/Assignable Controller sends CC 101/100 (or 99/98) unless that address is already selected, then
-///   CC 6 with the 14-bit MSB when the address or MSB changed (followed by CC 38 only for a non-zero LSB, because a
-///   Data Entry MSB resets the LSB to 0), otherwise CC 38 alone. No null RPN is sent afterwards.
+///   CC 6 with the 14-bit MSB when the address or MSB changed, then always CC 38 with the LSB (some receivers only
+///   commit a parameter on CC 38). A MIDI 1.0 sequence that never sent CC 38 therefore comes back from 1 → 2 → 1
+///   with an extra CC 38 = 0, which means the same (a Data Entry MSB resets the LSB to 0). No null RPN is sent
+///   afterwards.
+/// - After forwarding Data Increment/Decrement (CC 96/97) the receiver's parameter value is unknown, so the next
+///   parameter write resends CC 6. After forwarding Reset All Controllers (CC 121) the receiver's selection is
+///   null, so the next write resends the selection; the bank is kept.
 /// - Messages MIDI 1.0 cannot carry send nothing and declare a typed loss; precision and attribute losses are
 ///   declared alongside the sent message. Nothing is dropped silently.
 ///
@@ -25,6 +30,12 @@ struct UMPMIDI2ToMIDI1Translator: Equatable, Sendable {
 
     /// What the MIDI 1.0 receiver of one group and channel has been sent.
     func state(group: UMPGroup, channel: UMPChannel) -> UMPDownChannelState { channels[group, channel] }
+
+    /// Forgets what one group and channel's receiver was sent (for example after it reconnects), so the next
+    /// Program Change with a bank and the next parameter write send every byte again.
+    mutating func reset(group: UMPGroup, channel: UMPChannel) {
+        channels[group, channel] = UMPDownChannelState()
+    }
 
     /// Translates one message, updating state and loss counts.
     mutating func translate(
@@ -50,12 +61,12 @@ struct UMPMIDI2ToMIDI1Translator: Equatable, Sendable {
             out.lose(.perNoteManagement)
         case .relativeRegisteredController, .relativeAssignableController:
             out.lose(.relativeController)
-        case let .noteOff(note, velocity, attributeType, attribute):
-            out.attributes(attributeType, attribute)
+        case let .noteOff(note, velocity, attributeType, _):
+            out.attributes(attributeType)
             let reduced = try out.velocity(velocity)
             try out.send(.noteOff(channel: out.midi1Channel, note: note.value, velocity: reduced))
-        case let .noteOn(note, velocity, attributeType, attribute):
-            out.attributes(attributeType, attribute)
+        case let .noteOn(note, velocity, attributeType, _):
+            out.attributes(attributeType)
             var reduced = try out.velocity(velocity)
             if reduced == 0 {
                 reduced = 1
@@ -71,6 +82,8 @@ struct UMPMIDI2ToMIDI1Translator: Equatable, Sendable {
             }
             let reduced = UInt8(try out.reduce(value, toBits: 7))
             try out.send(.controlChange(channel: out.midi1Channel, controller: index.value, value: reduced))
+            if index.value == 96 || index.value == 97 { channels[out.group, out.channel].dataEntryMSB = nil }
+            if index.value == 121 { channels[out.group, out.channel].resetAllControllers() }
         case let .programChange(program, bank):
             try programChange(program, bank: bank, into: &out)
         case let .channelPressure(value):
@@ -116,10 +129,8 @@ struct UMPMIDI2ToMIDI1Translator: Equatable, Sendable {
         if state.dataEntryMSB?.value != msb {
             try out.send(.controlChange(channel: out.midi1Channel, controller: 6, value: msb))
             state.dataEntryMSB = try UMPSevenBit(msb)
-            if lsb != 0 { try out.send(.controlChange(channel: out.midi1Channel, controller: 38, value: lsb)) }
-        } else {
-            try out.send(.controlChange(channel: out.midi1Channel, controller: 38, value: lsb))
         }
+        try out.send(.controlChange(channel: out.midi1Channel, controller: 38, value: lsb))
         channels[out.group, out.channel] = state
     }
 }
@@ -147,8 +158,10 @@ private struct UMPDownBuilder {
         losses.append(UMPTranslationLoss(reason: reason, group: group, channel: channel))
     }
 
-    mutating func attributes(_ attributeType: UInt8, _ attribute: UInt16) {
-        if attributeType != 0 || attribute != 0 { lose(.attributeDropped) }
+    /// Media-contract §9.3 counts an attribute loss only for attribute type ≠ 0; with type 0 the attribute value
+    /// carries no meaning.
+    mutating func attributes(_ attributeType: UInt8) {
+        if attributeType != 0 { lose(.attributeDropped) }
     }
 
     /// 16 → 7 bits; declares `velocityDownscaled` when the original is not the upscale of the result.

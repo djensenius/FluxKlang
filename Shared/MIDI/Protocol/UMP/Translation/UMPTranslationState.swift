@@ -12,7 +12,9 @@ struct UMPParameterAddress: Equatable, Sendable {
     let index: UMPSevenBit
 
     /// RPN 127/127 is the MIDI 1.0 null RPN: it deselects, so Data Entry after it addresses nothing.
-    /// NRPN 127/127 is an ordinary address here, because MIDI 2.0 Assignable Controller 127/127 is one.
+    /// NRPN 127/127 is an ordinary address here, because MIDI 2.0 Assignable Controller 127/127 is one. Hazard (kept
+    /// as implemented): downward, Assignable Controller 127/127 is sent as NRPN 127/127, which some MIDI 1.0
+    /// receivers treat as a null selection and so ignore the Data Entry that follows.
     var isNull: Bool { kind == .registered && bank.value == 127 && index.value == 127 }
 }
 
@@ -21,7 +23,10 @@ struct UMPParameterAddress: Equatable, Sendable {
 /// - Bank Select MSB and LSB persist (as in MIDI 1.0) until replaced; a Program Change does not clear them.
 /// - RPN/NRPN selection bytes persist until replaced. Selecting the other family clears both bytes first, so a
 ///   mixed RPN MSB + NRPN LSB pair never forms an address. Any selection byte clears the Data Entry MSB.
-/// - The Data Entry MSB is the last CC 6 value for the current selection; CC 38 combines with it.
+/// - The Data Entry MSB is the last CC 6 value for the current selection; CC 38 combines with it. Data Increment or
+///   Decrement (CC 96/97) forgets it, because the receiver's value is then unknown.
+/// - The held Data Entry is the controller a CC 6 produced, waiting for its CC 38; it is sent with LSB 0 when
+///   anything else arrives on this group and channel, or on `flush`.
 struct UMPUpChannelState: Equatable, Sendable {
     var bankMSB: UMPSevenBit?
     var bankLSB: UMPSevenBit?
@@ -29,6 +34,7 @@ struct UMPUpChannelState: Equatable, Sendable {
     var parameterMSB: UMPSevenBit?
     var parameterLSB: UMPSevenBit?
     var dataEntryMSB: UMPSevenBit?
+    var heldDataEntry: UMPMIDI2ChannelVoice?
 
     init() {}
 
@@ -38,7 +44,8 @@ struct UMPUpChannelState: Equatable, Sendable {
         return UMPParameterAddress(kind: parameterKind, bank: parameterMSB, index: parameterLSB)
     }
 
-    /// Bank Valid needs both Bank Select bytes.
+    /// Bank Valid needs both Bank Select bytes. Project decision: a missing byte is not guessed (the references
+    /// differ); see `UMPMIDI1ToMIDI2Translator`.
     var bank: UMPBankSelect? {
         guard let bankMSB, let bankLSB else { return nil }
         return UMPBankSelect(msb: bankMSB, lsb: bankLSB)
@@ -54,6 +61,14 @@ struct UMPUpChannelState: Equatable, Sendable {
         if isMSB { parameterMSB = value } else { parameterLSB = value }
         dataEntryMSB = nil
     }
+
+    /// Reset All Controllers (CC 121): the RPN/NRPN selection and Data Entry MSB are forgotten; the bank is kept.
+    mutating func resetAllControllers() {
+        parameterKind = nil
+        parameterMSB = nil
+        parameterLSB = nil
+        dataEntryMSB = nil
+    }
 }
 
 /// MIDI 2.0 → MIDI 1.0 state of one group and channel: what the MIDI 1.0 receiver has already been sent, so
@@ -64,6 +79,13 @@ struct UMPDownChannelState: Equatable, Sendable {
     var dataEntryMSB: UMPSevenBit?
 
     init() {}
+
+    /// Reset All Controllers (CC 121) sent to the receiver: its selection is null and its Data Entry MSB unknown,
+    /// so the next parameter write resends them; the bank is kept.
+    mutating func resetAllControllers() {
+        parameter = nil
+        dataEntryMSB = nil
+    }
 }
 
 /// Fixed-size per-group, per-channel state: exactly 16 groups × 16 channels, so it never grows.
@@ -76,6 +98,9 @@ struct UMPTranslationTable<Element: Equatable & Sendable>: Equatable, Sendable {
     init(repeating element: Element) {
         storedElements = Array(repeating: element, count: Self.capacity)
     }
+
+    /// Every element, group 0 channel 0 first, then by channel within each group.
+    var elements: [Element] { storedElements }
 
     subscript(group: UMPGroup, channel: UMPChannel) -> Element {
         get { storedElements[Int(group.value) * 16 + Int(channel.value)] }

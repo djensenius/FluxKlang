@@ -28,9 +28,13 @@ struct UMPTranslationTests {
     /// Controllers the translators handle statefully (bank select, data entry, NRPN and RPN selection).
     static let statefulControllers: Set<UInt8> = [0, 6, 32, 38, 98, 99, 100, 101]
 
+    /// Data Increment/Decrement: forwarded down, but a declared loss up (their selection was absorbed).
+    static let dataIncrementControllers: Set<UInt8> = [96, 97]
+
     @Test func midi1ToMIDI2ToMIDI1IsTheIdentityForEveryStatelessMessage() throws {
         // Every status 0x80...0xEF with every data byte pair. One translator pair for the whole sweep, so no state
-        // may leak between messages. Group varies with the channel so every group is used too.
+        // may leak between messages. Group varies with the channel so every group is used too. CC 96/97 are
+        // excluded because upward they are a declared loss (dataIncrementUnmappedIsADeclaredLossUpward).
         var upward = UMPMIDI1ToMIDI2Translator()
         var downward = UMPMIDI2ToMIDI1Translator()
         var checked = 0
@@ -38,7 +42,8 @@ struct UMPTranslationTests {
         for status in UInt8(0x80)...0xEF {
             let single = (0xC0...0xDF).contains(status)
             for data1 in UInt8(0)...127 {
-                if status & 0xF0 == 0xB0, Self.statefulControllers.contains(data1) { continue }
+                if status & 0xF0 == 0xB0,
+                   Self.statefulControllers.union(Self.dataIncrementControllers).contains(data1) { continue }
                 for data2 in single ? [nil] : (UInt8(0)...127).map(Optional.some) {
                     let voice = try Self.mt2(status & 0x0F, status, data1, data2)
                     let mid = try upward.translate(voice)
@@ -58,8 +63,8 @@ struct UMPTranslationTests {
             }
         }
         #expect(failures.isEmpty, "\(failures.prefix(5))")
-        // 16 channels × (4 two-byte families × 128² + 120 controllers × 128 + 2 one-byte families × 128).
-        #expect(checked == 1_298_432)
+        // 16 channels × (4 two-byte families × 128² + 118 controllers × 128 + 2 one-byte families × 128).
+        #expect(checked == 1_294_336)
         #expect(upward.losses.total == 0)
         #expect(downward.losses.total == 0)
     }
@@ -195,7 +200,8 @@ struct UMPTranslationTests {
 
     @Test func noteAttributesAreDroppedWithADeclaredLoss() throws {
         let note = try Self.seven(60)
-        for (type, attribute, lost) in [(UInt8(0), UInt16(0), false), (3, 0x1234, true), (0, 1, true), (1, 0, true)] {
+        // Media-contract §9.3 counts only attribute type ≠ 0; with type 0 the attribute value means nothing.
+        for (type, attribute, lost) in [(UInt8(0), UInt16(0), false), (3, 0x1234, true), (0, 1, false), (1, 0, true)] {
             let noteOn = try Self.down(.noteOn(note: note, velocity: 0xFFFF, attributeType: type, attribute: attribute))
             let noteOff = try Self.down(.noteOff(note: note, velocity: 0, attributeType: type, attribute: attribute))
             #expect(noteOn.messages.map(\.event) == [.channel(status: 0x90, data1: 60, data2: 127)])
