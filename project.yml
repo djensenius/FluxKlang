@@ -255,6 +255,8 @@ targets:
       - path: FluxKlangTests/ShowTransitionTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
+      - path: FluxKlangTests/StandardMIDIFileTests.swift
+      - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
       - path: FluxKlangTests/UMPCodecTests+ChannelVoice.swift
       - path: FluxKlangTests/UMPCodecTests+Scaling.swift
