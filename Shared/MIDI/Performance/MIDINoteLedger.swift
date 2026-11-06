@@ -2,9 +2,9 @@
 /// received the note-on whatever the current routing is. Nothing expires: only a release, the loss of the input or
 /// the route, or a panic removes an entry. Storage is reserved up front and never grows past the policy.
 ///
-/// A key-down press that loses every layer to `routeLost` or a route-scoped panic while a newer key-down press of the
-/// same key is held leaves a release marker, so its own Note Off sends nothing instead of releasing that newer press
-/// (`releaseMarkers`). A press that reached no route records nothing, so its Note Off can end the key's next press.
+/// A key-down press losing every layer to `routeLost` or a route-scoped panic while a newer key-down press of its key
+/// is held leaves a release marker (`releaseMarkers`): its own Note Off sends nothing, not ending that newer press.
+/// An unrouted press records nothing: its Note Off ends the key's oldest pending entry (a marker or a press) early.
 ///
 /// Every change goes through `route`, `panic`, `routeLost` and `inputLost`. The primitives they share are private to
 /// this file: they keep the ledger's invariants only after their caller's capacity check.
@@ -27,7 +27,7 @@ struct MIDINoteLedger: Equatable, Sendable {
     /// Arrival order, so the first key-down instance of an input note belongs to its oldest press.
     private(set) var notes: [MIDINoteInstance] = []
     /// Ascending by press and unique: lost key-down presses, each kept only while a newer key-down press of its key is
-    /// (`markPressesLosingEveryLayer`). They share `policy.noteCapacity` with `notes`.
+    /// held (`markPressesLosingEveryLayer`). They share `policy.noteCapacity` with `notes`.
     private(set) var releaseMarkers: [MIDIReleaseMarker] = []
     /// Ascending and unique.
     private(set) var pedalHolds: [MIDIPedalHold] = []

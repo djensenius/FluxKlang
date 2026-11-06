@@ -404,4 +404,92 @@ extension MIDIPerformanceRecoveryTests {
         Fixture.expectRefused(Fixture.off(60), .unownedNote(input: Fixture.keys, channel: 1, note: 60), in: ledger,
                               routing: piano)
     }
+
+    // MARK: - Round 2c: seeded random sequences
+
+    /// Delta review: notes, releases, pedals, channel mode messages, route losses (the route is reused at once, as
+    /// if reconnected), panics and input losses at random over two inputs, two channels, two keys and three routes,
+    /// with small capacities so refusals happen. A refusal changes nothing. After every step each marker orders a
+    /// newer key-down press of its key, markers are sorted by press, and notes and markers fit the note capacity.
+    @Test(arguments: [UInt64(1), 4, 8, 343])
+    func randomSequencesKeepReleaseMarkerInvariants(seed: UInt64) throws {
+        let policy = try #require(MIDINoteLedgerPolicy(noteCapacity: 12, pedalCapacity: 6))
+        let routes = [Fixture.piano, Fixture.strings, Fixture.bass]
+        let inputs = [Fixture.keys, Fixture.pads]
+        // Every subset of the routes for both inputs (the empty one leaves a press unrouted), an octave layer, a split.
+        var routings = try (0..<8).map { mask in
+            try #require(MIDIRouting(rules: routes.indices.filter { mask >> $0 & 1 == 1 }.flatMap { index in
+                try inputs.map { try Fixture.rule(routes[index], from: $0) }
+            }))
+        }
+        routings.append(try Fixture.routing(
+            Fixture.rule(Fixture.piano), Fixture.rule(Fixture.piano, transpose: 12),
+            Fixture.rule(Fixture.bass, from: Fixture.pads, channels: 1...1)
+        ))
+        var random = ReleaseMarkerSplitMix64(state: seed)
+        var ledger = MIDINoteLedger(policy: policy)
+        var markersSeen = 0
+        for step in 0..<400 {
+            let route = routes[random.next(3)]
+            switch random.next(100) {
+            case ..<70:
+                let event = Self.randomEvent(input: inputs[random.next(2)], using: &random)
+                let before = ledger
+                var outputs: [MIDIRoutedOutput] = []
+                do {
+                    try ledger.route(event, routing: routings[random.next(routings.count)], into: &outputs)
+                } catch {
+                    #expect(outputs.isEmpty && ledger == before, "seed \(seed) step \(step): \(error)")
+                }
+            case ..<82: _ = ledger.routeLost(route)
+            case ..<94: _ = ledger.panic(.route(route), allNotesAndSoundOff: random.next(2) == 0)
+            case ..<96: _ = ledger.panic()
+            default: _ = ledger.inputLost(inputs[random.next(2)])
+            }
+            let markers = ledger.releaseMarkers
+            markersSeen += markers.count
+            try #require(markers.allSatisfy { marker in
+                ledger.notes.contains {
+                    $0.keyDown && $0.press > marker.press && $0.input == marker.input
+                        && $0.channel == marker.channel && $0.inputNote == marker.inputNote
+                }
+            }, "seed \(seed) step \(step): a marker orders no newer key-down press")
+            try #require(zip(markers, markers.dropFirst()).allSatisfy { $0.press < $1.press },
+                         "seed \(seed) step \(step): markers out of press order")
+            try #require(ledger.notes.count + markers.count <= policy.noteCapacity,
+                         "seed \(seed) step \(step): over the note capacity")
+        }
+        #expect(markersSeen > 0)
+    }
+
+    /// A Note On (velocity 1...127), Note Off, Note On velocity 0, sustain, sostenuto or soft pedal change, or
+    /// CC 120, 121 or 123...127, on channel 1 or 2 and key 60 or 62.
+    private static func randomEvent(
+        input: MIDIInputID, using random: inout ReleaseMarkerSplitMix64
+    ) -> MIDIPerformanceEvent {
+        let channel = UInt8(1 + random.next(2))
+        let note = UInt8(60 + 2 * random.next(2))
+        let pedal = UInt8([64, 66, 67][random.next(3)])
+        let mode = UInt8([120, 121, 123, 124, 125, 126, 127][random.next(7)])
+        let message: MIDI1Semantic = switch random.next(12) {
+        case 0...5: .noteOn(channel: channel, note: note, velocity: UInt8(1 + random.next(127)))
+        case 6...7: .noteOff(channel: channel, note: note, velocity: UInt8(random.next(128)))
+        case 8: .noteOn(channel: channel, note: note, velocity: 0)
+        case 9...10: .controlChange(channel: channel, controller: pedal, value: UInt8(random.next(128)))
+        default: .controlChange(channel: channel, controller: mode, value: 0)
+        }
+        return Fixture.event(message, from: input)
+    }
+}
+
+/// SplitMix64, so each seed replays the same sequence everywhere.
+private struct ReleaseMarkerSplitMix64 {
+    var state: UInt64
+
+    mutating func next(_ bound: Int) -> Int {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var mixed = (state ^ (state >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        mixed = (mixed ^ (mixed >> 27)) &* 0x94D0_49BB_1331_11EB
+        return Int((mixed ^ (mixed >> 31)) % UInt64(bound))
+    }
 }
