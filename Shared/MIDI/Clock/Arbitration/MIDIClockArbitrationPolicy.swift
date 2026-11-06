@@ -22,8 +22,10 @@ struct MIDIClockArbitrationPolicy: Equatable, Sendable {
     /// The most sources the arbiter's table holds; one more is refused.
     var maximumSources: Int { storedMaximumSources }
     /// Leader silence strictly longer than this loses the leader while its transport runs and idles it while
-    /// stopped. It must exceed the slowest pulse interval the leader is expected to send (20 BPM is 125 ms per
-    /// pulse), or every gap of a slow leader reads as silence: the 50 ms floor bounds the value, not the tempo.
+    /// stopped. Clocks may arrive up to L = 2 pulses late (C1's lag bound), so one gap can span L + 1 pulse
+    /// intervals: the timeout must exceed (L + 1) times the slowest pulse interval the leader is expected to send
+    /// (375 ms at 20 BPM, 125 ms per pulse), or a slow leader's batched clocks read as silence. The 50 ms floor
+    /// bounds the value, not the tempo.
     var timeoutNanos: Int64 { storedTimeoutNanos }
     /// N: the steady pulses that lock or relock the leader.
     var reacquirePulses: Int { storedReacquirePulses }

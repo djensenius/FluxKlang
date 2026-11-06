@@ -129,6 +129,32 @@ struct MIDIClockArbitrationSteadyRunTests {
     }
 
     @Test
+    func batchedDeliveryAtTwentyBPMIsNotALossUnderTheStandardTimeout() throws {
+        // 20 BPM is 125 ms per pulse. Triplets every 375 ms exercise the maximum (L + 1) * P gap for L = 2.
+        // The standard 500 ms timeout covers it; a 200 ms timeout reads the same gap as a loss.
+        let batches = (0..<60).map { UInt64($0 / 3) * 375_000_000 }
+        let gaps = zip(batches, batches.dropFirst()).map { $1 - $0 }
+        #expect(gaps.max() == 375_000_000)
+        var standard = try MIDIClockLeaderArbiter(policy: .standard, timebase: Self.nanos)
+        try standard.addSource(Self.sourceA)
+        _ = try standard.selectLeader(.external(Self.sourceA))
+        _ = try standard.receive(.start, from: Self.sourceA, at: Self.host(0))
+        let events = try Self.clocks(&standard, at: batches)
+        let slowest = MIDIClockTempoEstimate(microsPerQuarter: 3_000_000, clamped: false)
+        #expect(events.filter { $0.bumpReason == .sourceLost }.isEmpty)
+        #expect(Self.locks(events) == [.leaderLocked(Self.sourceA, tempo: slowest, after: .selection)])
+        #expect(standard.status == .locked(Self.sourceA, tempo: slowest))
+        let short = try MIDIClockArbitrationPolicy.make(maximumSources: 16, timeoutNanos: 200_000_000,
+                                                        reacquirePulses: 24, jitterTolerancePerMille: 250)
+        var tight = try MIDIClockLeaderArbiter(policy: short, timebase: Self.nanos)
+        try tight.addSource(Self.sourceA)
+        _ = try tight.selectLeader(.external(Self.sourceA))
+        _ = try tight.receive(.start, from: Self.sourceA, at: Self.host(0))
+        let tightEvents = try Self.clocks(&tight, at: Array(batches.prefix(6)))
+        #expect(tightEvents.contains { if case .leaderLost = $0 { true } else { false } })
+    }
+
+    @Test
     func pulsesSharingAHostTimeCountByTheirSpanUpToTheLagBound() throws {
         // Three clocks per host time every 60 ms: two may lag the third by L = 2, so the run locks.
         var triples = try Self.arbiter()

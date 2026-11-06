@@ -45,6 +45,7 @@ struct MIDIClockSteadyRun: Sendable {
     private(set) var steadyPulses = 0
 
     /// Adds the next pulse at `host`. `seed` (the estimator's period, if any) seeds a run that starts here.
+    /// The arbiter stops advancing a run once it locks at `cap`, so the cap is a defensive bound it never reaches.
     mutating func advance(to host: HostStamp, seed: Period?, tolerancePerMille: Int, cap: Int) {
         guard let anchor else {
             restart(at: host.ticks, keeping: 0, seed: seed)

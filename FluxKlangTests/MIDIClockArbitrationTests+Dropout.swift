@@ -171,20 +171,47 @@ struct MIDIClockArbitrationDropoutTests {
                                      intervals: Array(repeating: 25_000_000, count: 5))
         #expect(Self.arbitration(relock) == [.leaderLocked(Self.sourceA, tempo: nil, after: .loss)])
         #expect(arbiter.status == .locked(Self.sourceA, tempo: nil))
+        // The new lock never estimated a tempo, so its loss holds none, not the previous lock's.
+        let relocked = last + 2 * Self.timeout + 125_000_000, lostAt = relocked + Self.timeout + 1
+        let again = MIDIClockDegradedReason.silence(lastMessage: Self.host(relocked), detectedAt: Self.host(lostAt))
+        #expect(try arbiter.poll(now: Self.host(lostAt)).last
+                    == .leaderLost(Self.sourceA, reason: again, heldTempo: nil))
     }
 
     @Test
     func aSilenceShorterThanTheEstimatorsDropoutStillRestartsItsTempo() throws {
-        // A 50 ms timeout loses the leader on a 60 ms gap, which the estimator's 87 ms dropout would keep.
+        // A 50 ms timeout loses the leader on a 60 ms gap, which the estimator's 87 ms dropout would keep. The
+        // restarted estimator still reports its loss first, so a consumer never sees two `.acquired` in a row.
         var arbiter = try Self.trackedArbiter(timeout: 50_000_000)
-        let late = 25 * Self.period + 60_000_000
+        let last = 25 * Self.period
+        let late = last + 60_000_000
         let lost = try Self.clocks(&arbiter, at: late, intervals: Self.steady(4))
-        let reason = MIDIClockDegradedReason.lateArrival(lastMessage: Self.host(25 * Self.period),
-                                                         detectedAt: Self.host(late))
-        #expect(Self.arbitration(lost) == [.leaderLost(Self.sourceA, reason: reason, heldTempo: Self.tempo)])
+        let reason = MIDIClockDegradedReason.lateArrival(lastMessage: Self.host(last), detectedAt: Self.host(late))
+        #expect(Self.arbitration(lost) == [.leaderTempo(Self.sourceA, .lost(lastPulse: Self.host(last))),
+                                           .leaderLost(Self.sourceA, reason: reason, heldTempo: Self.tempo)])
         let relock = try Self.clocks(&arbiter, at: late + 5 * Self.period, intervals: [])
         #expect(Self.arbitration(relock) == [.leaderLocked(Self.sourceA, tempo: nil, after: .loss)])
         #expect(arbiter.status == .locked(Self.sourceA, tempo: nil))
+        // The same gap while stopped idles the leader, and the estimator's loss still comes first.
+        var stopped = try Self.trackedArbiter(timeout: 50_000_000)
+        _ = try stopped.receive(.stop, from: Self.sourceA, at: Self.host(last))
+        let idle = Self.arbitration(try Self.clocks(&stopped, at: late, intervals: Self.steady(24)))
+        #expect(idle == [.leaderTempo(Self.sourceA, .lost(lastPulse: Self.host(last))),
+                         .leaderIdle(Self.sourceA, reason: reason),
+                         .leaderLocked(Self.sourceA, tempo: nil, after: .idle),
+                         .leaderTempo(Self.sourceA, .acquired(Self.tempo))])
+    }
+
+    @Test
+    func staleClocksNeverFeedTheTempoEstimator() throws {
+        // Clocks 0-100 ms lock, a poll at 700 ms loses; of clocks 120-800 ms, the 29 stale ones skip the estimator.
+        var arbiter = try Self.arbiter()
+        _ = try arbiter.receive(.start, from: Self.sourceA, at: Self.host(0))
+        try Self.clocks(&arbiter, at: 0, intervals: Self.steady(5))
+        #expect(try arbiter.poll(now: Self.host(700_000_000)).map(\.bumpReason) == [.sourceLost])
+        let resumed = try Self.clocks(&arbiter, at: 6 * Self.period, intervals: Self.steady(34))
+        #expect(Self.arbitration(resumed) == [.leaderLocked(Self.sourceA, tempo: nil, after: .loss)])
+        #expect(arbiter.stalePulses == 29)
     }
 
     @Test
@@ -201,11 +228,22 @@ struct MIDIClockArbitrationDropoutTests {
         let back = try Self.clocks(&arbiter, at: resume + 5 * Self.period, intervals: Self.steady(19))
         #expect(Self.arbitration(back) == [.leaderTempo(Self.sourceA, .reacquired(Self.tempo))])
         #expect(arbiter.status == .locked(Self.sourceA, tempo: Self.tempo))
-        // A poll inside the timeout forwards the estimator's dropout too.
+    }
+
+    @Test
+    func theHeldTempoDoesNotDependOnPollCadence() throws {
+        // A poll at 600 ms forwards the estimator's dropout inside the timeout; the loss still holds its tempo.
+        let last = 25 * Self.period
+        let detected: UInt64 = 1_000_000_001
+        let dropout = MIDIClockArbitrationEvent.leaderTempo(Self.sourceA, .lost(lastPulse: Self.host(last)))
+        let reason = MIDIClockDegradedReason.silence(lastMessage: Self.host(last), detectedAt: Self.host(detected))
+        let lost = MIDIClockArbitrationEvent.leaderLost(Self.sourceA, reason: reason, heldTempo: Self.tempo)
         var polled = try Self.trackedArbiter()
-        let dropout = try polled.poll(now: Self.host(last + 100_000_000))
-        #expect(dropout == [.leaderTempo(Self.sourceA, .lost(lastPulse: Self.host(last)))])
+        #expect(try polled.poll(now: Self.host(600_000_000)) == [dropout])
         #expect(polled.status == .locked(Self.sourceA, tempo: nil))
+        #expect(try polled.poll(now: Self.host(detected)) == [lost])
+        var direct = try Self.trackedArbiter()
+        #expect(try direct.poll(now: Self.host(detected)) == [dropout, lost])
     }
 
     @Test
@@ -248,6 +286,9 @@ struct MIDIClockArbitrationDropoutTests {
         #expect(arbiter.status == .idle(Self.sourceA) && !arbiter.status.isDegraded)
         #expect(arbiter.status.leader == .external(Self.sourceA))
         #expect(try arbiter.poll(now: Self.host(detected)).isEmpty)
+        // An idle leader bumped nothing, so switching away from it bumps its loss.
+        var switched = arbiter
+        #expect(try switched.selectLeader(.external(Self.sourceB)).bumpReason == .sourceLost)
         // Clocks resume while stopped: a fresh run relocks with no bump.
         let first = try Self.clocks(&arbiter, at: detected, intervals: [])
         #expect(first.isEmpty && arbiter.status == .acquiring(Self.sourceA, steadyPulses: 0))
@@ -333,6 +374,12 @@ struct MIDIClockArbitrationDropoutTests {
         #expect(arbiter.stalePulses == 0)
         let fresh = try Self.clocks(&arbiter, at: Self.period, intervals: Self.steady(5), from: Self.sourceB)
         #expect(fresh == [.leaderLocked(Self.sourceB, tempo: nil, after: .selection)])
+        // A stale Start (200 ms, idle poll at 601 ms) restarts the silence: a clock at 650 ms is not a loss.
+        var idle = try Self.arbiter()
+        try Self.clocks(&idle, at: 0, intervals: Self.steady(5))
+        #expect(try idle.poll(now: Self.host(601_000_000)).count == 1 && idle.status == .idle(Self.sourceA))
+        #expect(Self.arbitration(try idle.receive(.start, from: Self.sourceA, at: Self.host(200_000_000))).isEmpty)
+        #expect(Self.arbitration(try Self.clocks(&idle, at: 650_000_000, intervals: [])).isEmpty)
     }
 
     @Test
@@ -420,7 +467,9 @@ struct MIDIClockArbitrationDropoutTests {
         #expect(arbiter.sources != sources && arbiter.status == afterPulse)
         #expect(try arbiter.poll(now: Self.host(9 * Self.period)).isEmpty)
     }
+}
 
+extension MIDIClockArbitrationDropoutTests {
     @Test
     func aLockedLeadersTempoFollowsTheEstimator() throws {
         var arbiter = try Self.arbiter(reacquire: 24)

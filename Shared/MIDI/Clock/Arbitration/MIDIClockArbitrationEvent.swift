@@ -30,13 +30,16 @@ enum MIDIClockArbitrationEvent: Equatable, Sendable {
     /// The leader reached N steady pulses. `tempo` is the estimator's current estimate, nil while pending:
     /// a relock never reports a tempo from before the silence.
     case leaderLocked(MIDIInputID, tempo: MIDIClockTempoEstimate?, after: MIDIClockLockCause)
-    /// The leader went silent past the timeout while its transport ran. It stays selected and the tempo
-    /// it reported is held. Reported once per loss episode.
+    /// The leader went silent past the timeout while its transport ran. It stays selected, and `heldTempo` is
+    /// the last tempo its estimator reported during the current lock (nil if none), whatever the poll cadence.
+    /// Reported once per loss episode.
     case leaderLost(MIDIInputID, reason: MIDIClockDegradedReason, heldTempo: MIDIClockTempoEstimate?)
     /// The leader went silent past the timeout while its transport was stopped. Not a loss: no tempo is
     /// claimed and nothing is bumped.
     case leaderIdle(MIDIInputID, reason: MIDIClockDegradedReason)
-    /// The leader's tempo estimator acquired, lost or reacquired its own lock; the status tempo follows it.
+    /// The leader's tempo estimator acquired, lost or reacquired its own lock. While the leader is locked, the
+    /// status tempo follows it; before `leaderLocked` the leader claims no tempo (`.acquired` can come while
+    /// still acquiring), so consumers apply no tempo until `leaderLocked`.
     /// Never bumps: the arbiter's `leaderLost` and `leaderLocked` own the leader's source generation.
     case leaderTempo(MIDIInputID, MIDIClockLockEvent)
     /// The first message of `kind` ignored from a non-leader since the leader was selected;

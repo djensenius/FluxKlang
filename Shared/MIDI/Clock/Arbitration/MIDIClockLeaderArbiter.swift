@@ -18,12 +18,14 @@
 //
 //  Silence: no leader message of any kind since its selection for strictly
 //  longer than the timeout, seen when the next message arrives or by
-//  `poll(now:)`, restarts the steady run and the estimator. While the leader's
-//  follower transport runs (armed or running) silence is a loss: a locked,
-//  acquiring or idle leader reports exactly one `leaderLost` (`.sourceLost`)
-//  per episode, the transport holds the tempo it last reported, and N steady
-//  pulses relock it (`.sourceReacquired`). While the transport is stopped,
-//  silence is not a loss: a locked or acquiring leader reports `leaderIdle`,
+//  `poll(now:)`, restarts the steady run and the estimator (a locked estimator
+//  reports `leaderTempo(.lost)` first, even if its own dropout is longer than
+//  the timeout). While the leader's follower transport runs (armed or running)
+//  silence is a loss: a locked, acquiring or idle leader reports exactly one
+//  `leaderLost` (`.sourceLost`) per episode, the transport holds the last
+//  tempo estimated during the lock (nil if none, whatever the poll cadence),
+//  and N steady pulses relock it (`.sourceReacquired`). While the transport is
+//  stopped, silence is not a loss: a locked or acquiring leader reports `leaderIdle`,
 //  claims no tempo and bumps nothing; its next clock starts a fresh steady run,
 //  and a relock from idle bumps nothing either. Leader clocks stamped before
 //  the latest poll that found the leader silent were queued behind that
@@ -81,6 +83,9 @@ struct MIDIClockLeaderArbiter: Sendable {
     private let freshEstimator: MIDIClockTempoEstimator
     /// The leader's last message since its selection: silence is measured from here.
     private var leaderLastMessage: HostStamp?
+    /// The last tempo the estimator reported during the current lock; `leaderLost` holds it, whatever the poll
+    /// cadence. Reset on selection, idle and each new lock.
+    private var lastLockedTempo: MIDIClockTempoEstimate?
     /// The latest poll that found the leader silent past the timeout, since the selection.
     private var silencePoll: HostStamp?
     private var lastPoll: HostStamp?
@@ -170,6 +175,7 @@ struct MIDIClockLeaderArbiter: Sendable {
         run = MIDIClockSteadyRun()
         estimator = freshEstimator
         leaderLastMessage = nil
+        lastLockedTempo = nil
         silencePoll = nil
         stalePulses = 0
         return change
@@ -235,12 +241,18 @@ struct MIDIClockLeaderArbiter: Sendable {
     }
 
     /// Ends a silence: the estimator reports its own dropout, then it and the steady run restart. A running
-    /// transport loses the leader (once per episode); a stopped one idles a locked or acquiring leader.
+    /// transport loses the leader (once per episode); a stopped one idles a locked or acquiring leader. A locked
+    /// estimator whose dropout outlasts this silence still reports `.lost`, so its next lock is never a second
+    /// `.acquired` without one between.
     private mutating func silence(_ id: MIDIInputID, _ reason: MIDIClockDegradedReason, running: Bool,
                                   at now: HostStamp) throws(MIDIClockArbitrationError) -> [MIDIClockArbitrationEvent] {
-        let heldTempo = phase == .locked ? estimator.estimate : nil
+        let heldTempo = phase == .locked ? lastLockedTempo : nil
         var events: [MIDIClockArbitrationEvent] = []
-        if let event = try pollEstimator(now) { events.append(.leaderTempo(id, event)) }
+        if let event = try pollEstimator(now) {
+            events.append(.leaderTempo(id, event))
+        } else if estimator.lock == .locked, let lastPulse = estimator.lastPulse {
+            events.append(.leaderTempo(id, .lost(lastPulse: lastPulse)))
+        }
         estimator = freshEstimator
         run = MIDIClockSteadyRun()
         switch phase {
@@ -250,9 +262,11 @@ struct MIDIClockLeaderArbiter: Sendable {
             break
         case .locked where !running:
             phase = .idle(.idle)
+            lastLockedTempo = nil
             events.append(.leaderIdle(id, reason: reason))
         case let .acquiring(cause) where !running:
             phase = .idle(cause)
+            lastLockedTempo = nil
             events.append(.leaderIdle(id, reason: reason))
         case .locked, .acquiring, .idle:
             phase = .lost(reason, heldTempo: heldTempo)
@@ -277,7 +291,9 @@ struct MIDIClockLeaderArbiter: Sendable {
         }
         let cause: MIDIClockLockCause
         switch phase {
-        case .locked: return events
+        case .locked:
+            if let estimate = estimator.estimate { lastLockedTempo = estimate }
+            return events
         case let .acquiring(acquiring): cause = acquiring
         case .lost: cause = .loss
         case let .idle(idle):
@@ -288,6 +304,7 @@ struct MIDIClockLeaderArbiter: Sendable {
                     cap: policy.reacquirePulses)
         guard run.steadyPulses >= policy.reacquirePulses else { return events }
         phase = .locked
+        lastLockedTempo = estimator.estimate
         events.append(.leaderLocked(id, tempo: estimator.estimate, after: cause))
         return events
     }
