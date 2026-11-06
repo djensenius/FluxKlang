@@ -37,8 +37,9 @@
 //  set at the first frame whose position shows it.
 //  Automation resumes from the arbiter's value where it takes back control,
 //  including a knot on that frame the arbiter has not yet passed. A touch that
-//  takes the value holds what the host shows on that frame (a sub-ramp only
-//  approximates a power curve), so touching without moving never jumps.
+//  takes the value from a rendering lane holds what the host shows on that frame
+//  (a sub-ramp only approximates a power curve), so touching without moving
+//  never jumps.
 //
 //  Clock: like CL1, the renderer binds to the generations of its first render
 //  after creation or `reset()` and refuses others (`clockRevisionChanged`), and
@@ -139,11 +140,12 @@ struct AutomationBlockRenderer: Hashable, Sendable {
     }
 
     /// Applies a gesture at the arbiter's position (the end of the last block). Its effect on the output
-    /// starts with the next block. A touch that takes the value from automation holds what the host shows on the
-    /// next block's first frame rather than the exact curve (a power sub-ramp only approximates it), so touching
-    /// without moving never jumps. A gesture that takes the value from automation ends lane rendering even when
-    /// automation resumes before the next block (a lane without breakpoints resumes at once), so that block
-    /// renders the value automation resumed with.
+    /// starts with the next block. A touch that takes the value from a rendering lane holds what the host shows
+    /// on the next block's first frame rather than the exact curve (a power sub-ramp only approximates it), so
+    /// touching without moving never jumps. A gesture that takes the value from automation ends lane rendering
+    /// even when automation resumes before the next block (a lane without breakpoints resumes at once), so that
+    /// block renders the value automation resumed with, and a touch after such a hand-back holds that value, not
+    /// the one the host still shows.
     mutating func perform(_ gesture: AutomationRenderGesture) throws(AutomationRenderRefusal) -> ArbitrationResult {
         guard let cursor, let position = arbiter.position else { throw .notStarted }
         var next = arbiter
@@ -152,7 +154,7 @@ struct AutomationBlockRenderer: Hashable, Sendable {
             switch gesture {
             case let .touch(source, priority):
                 result = try next.touch(source, priority: priority, at: position)
-                if arbiter.owner == .automation, let shown = host?.value(at: cursor), shown != next.value {
+                if isRenderingLane, let shown = host?.value(at: cursor), shown != next.value {
                     _ = try next.move(source, to: shown, at: position)
                 }
             case let .move(source, value): result = try next.move(source, to: value, at: position)
