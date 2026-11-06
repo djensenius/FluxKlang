@@ -58,9 +58,10 @@ struct WiringMatrix: Hashable, Sendable {
     /// The window `rows` × `columns` of the draft's graph, `active.applying(draft.edits)`. Refused, with nothing
     /// changed, when it has more than `maximumRows` rows or `maximumColumns` columns (`windowTooLarge`, checked
     /// first) or the draft does not check against `active` (`preview`). A row whose whole destination list would
-    /// be refused gets that refusal in every cell (`.uncheckable`); such a cell still knows its pair's first wire
-    /// (`wiredEdge`), so it shows on and toggles off. Rows and columns are not checked for orientation: an input
-    /// port as a row or an output port as a column gives `notOffered` cells, as `classify` does.
+    /// be refused gets that refusal in every cell (`.uncheckable`), except that at the edge bound wired pairs are
+    /// classified by the single-pair path; a still-uncheckable wired cell knows its first wire (`wiredEdge`), so it
+    /// shows on and toggles off. Rows and columns are not checked for orientation: an input port as a row or an
+    /// output port as a column gives `notOffered` cells, as `classify` does.
     static func window(
         rows: [PortAddress], columns: [PortAddress], active: GraphDocument, draft: DraftEdits
     ) throws(WiringEditRefusal) -> WiringMatrix {
@@ -90,7 +91,9 @@ struct WiringMatrix: Hashable, Sendable {
             let batch = Result { () throws(WiringPreviewRefusal) in
                 try WiringCandidateBatch(from: source, in: graph, onValidate: onValidate)
             }
-            cells += WiringMatrixCellBuilder.row(source, columns: columns, batch: batch, markers: markers)
+            cells += WiringMatrixCellBuilder.row(
+                source, columns: columns, batch: batch, markers: markers, graph: graph
+            )
         }
         return WiringMatrix(rows: rows, columns: columns, cells: cells)
     }
@@ -128,16 +131,18 @@ struct WiringMatrix: Hashable, Sendable {
         }
     }
 
-    /// `staleCell` when the draft's graph has `edge` on a pair other than `cell`'s (node and port IDs only, the
-    /// pair key of the markers and of `wiredEdge`); `preview` when the draft does not check.
+    /// `staleCell` when the draft's graph has `edge` on a pair other than `cell`'s (node and port IDs only; endpoint
+    /// extension bags are ignored, as for the markers); `preview` when the draft does not check.
     private static func refuseStale(
         _ edge: EdgeID, of cell: WiringMatrixCell, in draft: DraftEdits, active: GraphDocument
     ) throws(WiringEditRefusal) {
         let graph: GraphDocument
         do { graph = try WiringDraftGraph.make(active: active, draft: draft).graph } catch { throw .preview(error) }
         guard let found = graph.edges.first(where: { $0.id == edge }) else { return }
-        let pair = WiringMatrixMarkers.Pair(from: cell.from, to: cell.to)
-        if WiringMatrixMarkers.Pair(from: found.from, to: found.to) != pair { throw .staleCell(edge) }
+        guard found.from.node == cell.from.node, found.from.port == cell.from.port,
+              found.to.node == cell.to.node, found.to.port == cell.to.port else {
+            throw .staleCell(edge)
+        }
     }
 
     private static func ports(_ direction: PortDirection, in graph: GraphDocument) -> [PortAddress] {
@@ -183,12 +188,26 @@ private enum WiringMatrixCellBuilder {
     /// The cells of one row: one shared batch context for the row (`batch`), or the row's whole-list refusal.
     static func row(
         _ source: PortAddress, columns: [PortAddress], batch: Result<WiringCandidateBatch, WiringPreviewRefusal>,
-        markers: WiringMatrixMarkers
+        markers: WiringMatrixMarkers, graph: GraphDocument
     ) -> [WiringMatrixCell] {
         switch batch {
         case .failure(let refusal):
             return columns.map { column in
-                cell(source, column, state: .uncheckable(refusal), markers: markers)
+                let pair = WiringMatrixMarkers.Pair(from: source, to: column)
+                if case .bounds(.exceeded(let path, let maximum)) = refusal,
+                   path == "$.edges", maximum == ProjectGraphLimits.edges, markers.wired[pair] != nil {
+                    // The shared batch cannot add its probe at the edge bound. Classify just wired
+                    // pairs through the single-pair path, which can still recognize an existing wire.
+                    let state: WiringMatrixCellState
+                    do throws(WiringPreviewRefusal) {
+                        let connection = try WiringCandidate.classify(from: source, to: column, in: graph).connection
+                        state = .classified(connection)
+                    } catch {
+                        state = .uncheckable(error)
+                    }
+                    return cell(source, column, state: state, markers: markers)
+                }
+                return cell(source, column, state: .uncheckable(refusal), markers: markers)
             }
         case .success(var context):
             var cells: [WiringMatrixCell] = []

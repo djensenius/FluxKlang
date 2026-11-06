@@ -7,17 +7,19 @@
 //  so N nudges are one move and a move back to the base position drops it. A
 //  move changes only x and y: the extension bag and unknown members of the
 //  node's current position are kept, so the paths agree and a return to the
-//  base position compares equal. Every target coordinate goes through one
-//  normalization (`WiringMoveComposer.resolution`): it is quantized to 1/1024
-//  layout unit, and a coordinate that lands on the base position's grid point
-//  is the base value exactly, so floating-point drift cannot keep a move alive.
+//  base position compares equal. `WiringMoveState` retains each keyboard
+//  gesture's decimal offset across calls, so sub-ULP steps are not lost when an
+//  intermediate graph point is converted back to Double. Each target goes
+//  through one normalization: it is quantized to 1e-12 layout unit, and a
+//  coordinate landing on the base position's grid point is the base value.
 //  The active graph is only read.
 //
 
+import Foundation
+
 /// The caller's grid: one nudge moves `step`, a fine (Shift) nudge `fineStep`. The UI owner (#99/#101)
-/// picks the values; both must be finite and greater than zero. Nudge targets land on the 1/1024 resolution
-/// (`WiringMoveComposer.resolution`), so a step below half of it does not move a node, and N nudges of a step that
-/// is not a multiple of it can differ from one move by N steps (each nudge rounds).
+/// picks the values; both must be finite and greater than zero. Each nudge target lands on the `resolution` grid
+/// (`WiringMoveComposer.resolution`), while `WiringMoveState` retains the unrounded accumulated offset.
 struct WiringMoveGrid: Hashable, Sendable {
     private(set) var step: Double
     private(set) var fineStep: Double
@@ -67,15 +69,43 @@ struct WiringNudge: Hashable, Sendable {
     }
 }
 
+/// Explicit per-gesture precision state for repeated keyboard nudges.
+///
+/// The accumulated offsets are separate from `DraftEdits`: the draft remains
+/// its normalized graph edit list, while callers retain this value for the
+/// duration of a nudge sequence and use `draft` for review or history.
+struct WiringMoveState: Hashable, Sendable {
+    private(set) var draft: DraftEdits
+    private var anchors: [NodeID: WiringMoveAnchor] = [:]
+
+    init(draft: DraftEdits) {
+        self.draft = draft
+    }
+
+    func anchor(for node: NodeID) -> WiringMoveAnchor? { anchors[node] }
+
+    mutating func replaceDraft(_ draft: DraftEdits, anchor: WiringMoveAnchor?, for node: NodeID) {
+        self.draft = draft
+        anchors[node] = anchor
+    }
+}
+
+struct WiringMoveAnchor: Hashable, Sendable {
+    var horizontal: Double
+    var vertical: Double
+    var offsetX: Decimal = .zero
+    var offsetY: Decimal = .zero
+}
+
 /// Moves nodes in drafts. Pure and deterministic; the result is a new `DraftEdits` value.
 enum WiringMoveComposer {
-    /// The fixed binary resolution every move target lands on: 1/1024 layout unit (a power of two, so the grid
-    /// points and the scaling are exact). Each coordinate is rounded to the nearest multiple; a value exactly
-    /// halfway rounds away from zero, and -0 becomes +0. From 2^42 up every finite value is already a multiple, so
-    /// it is kept as is. A coordinate whose grid point is the grid point of the node's base position (its position
-    /// in the active graph) is the base value exactly, even when that is off the grid (such as 0.1), so a return
-    /// to base by any path drops the move.
-    static let resolution: Double = 0x1p-10
+    /// The fixed decimal resolution every move target lands on: 1e-12 layout unit. Each coordinate is rounded to
+    /// the nearest multiple; a value exactly halfway rounds away from zero, and -0 becomes +0. From 2^42 up every
+    /// finite value is already a multiple, so it is kept as is. A coordinate whose grid point is the grid point of
+    /// the node's base position (its position in the active graph) is the base value exactly, even when that is off
+    /// the grid, so a return to base by any path drops the move. The finer decimal grid keeps successive 0.1 nudges
+    /// equivalent to a numeric 0.3 entry.
+    static let resolution: Double = 1e-12
 
     /// `draft` with `node` moved to (`x`, `y`), normalized to `resolution` (snapped to the base position when it
     /// lands on its grid point): the drag end point and the numeric x/y entry path. Refused, with
@@ -89,20 +119,61 @@ enum WiringMoveComposer {
         return try commit(node, to: placed(current, base: base, horizontal, vertical), in: draft, active: active)
     }
 
-    /// `draft` with `node` moved one grid step (one `fineStep` for a fine nudge, the Shift path) in the nudge's
-    /// direction from its position in the draft's graph, normalized as `move` normalizes. Refused like `move`, and
-    /// with `unplacedNode` when the
-    /// node has no position, or `nonFinitePosition` when the step overflows a coordinate.
+    /// Numeric entry or drag in a stateful sequence. This resets the node's nudge anchor to the entered target.
+    static func move(
+        _ node: NodeID, x horizontal: Double, y vertical: Double, in state: WiringMoveState, active: GraphDocument
+    ) throws(WiringEditRefusal) -> WiringMoveState {
+        let draft = try move(node, x: horizontal, y: vertical, in: state.draft, active: active)
+        var moved = state
+        let (current, _) = try positions(of: node, in: draft, active: active)
+        if let current {
+            moved.replaceDraft(
+                draft, anchor: WiringMoveAnchor(horizontal: current.x, vertical: current.y), for: node
+            )
+        } else {
+            moved.replaceDraft(draft, anchor: nil, for: node)
+        }
+        return moved
+    }
+
+    /// `state` with `node` moved one grid step (one `fineStep` for a fine nudge, the Shift path) in the nudge's
+    /// direction, normalized as `move` normalizes. The retained anchor makes repeated sub-ULP steps accumulate.
+    /// Refused like `move`, with `unplacedNode` when the node has no position, or `nonFinitePosition` on overflow.
     static func nudge(
-        _ node: NodeID, _ nudge: WiringNudge, grid: WiringMoveGrid, in draft: DraftEdits, active: GraphDocument
-    ) throws(WiringEditRefusal) -> DraftEdits {
-        let (found, base) = try positions(of: node, in: draft, active: active)
+        _ node: NodeID, _ nudge: WiringNudge, grid: WiringMoveGrid, in state: WiringMoveState, active: GraphDocument
+    ) throws(WiringEditRefusal) -> WiringMoveState {
+        let (found, base) = try positions(of: node, in: state.draft, active: active)
         guard let current = found else { throw .unplacedNode(node) }
         let distance = grid.distance(fine: nudge.fine)
-        let horizontal = current.x + nudge.direction.offset.dx * distance
-        let vertical = current.y + nudge.direction.offset.dy * distance
-        guard horizontal.isFinite, vertical.isFinite else { throw .nonFinitePosition(node) }
-        return try commit(node, to: placed(current, base: base, horizontal, vertical), in: draft, active: active)
+        var anchor = state.anchor(for: node) ?? WiringMoveAnchor(horizontal: current.x, vertical: current.y)
+        guard
+            let horizontalOffset = accumulated(
+                anchor.offsetX, distance: distance, direction: nudge.direction.offset.dx
+            ),
+            let verticalOffset = accumulated(
+                anchor.offsetY, distance: distance, direction: nudge.direction.offset.dy
+            ),
+            let horizontal = translated(anchor.horizontal, by: horizontalOffset),
+            let vertical = translated(anchor.vertical, by: verticalOffset),
+            horizontal.isFinite, vertical.isFinite
+        else {
+            // Outside Decimal's range, fall back to coordinate arithmetic and start a fresh anchor.
+            let horizontal = current.x + distance * nudge.direction.offset.dx
+            let vertical = current.y + distance * nudge.direction.offset.dy
+            guard horizontal.isFinite, vertical.isFinite else { throw .nonFinitePosition(node) }
+            let point = placed(current, base: base, horizontal, vertical)
+            var moved = state
+            let draft = try commit(node, to: point, in: state.draft, active: active)
+            moved.replaceDraft(draft, anchor: WiringMoveAnchor(horizontal: point.x, vertical: point.y), for: node)
+            return moved
+        }
+        anchor.offsetX = horizontalOffset
+        anchor.offsetY = verticalOffset
+        let point = placed(current, base: base, horizontal, vertical)
+        var moved = state
+        let draft = try commit(node, to: point, in: state.draft, active: active)
+        moved.replaceDraft(draft, anchor: anchor, for: node)
+        return moved
     }
 
     /// The node's position in the draft's graph (`nil` when unplaced), after checking the draft, and its base
@@ -136,9 +207,41 @@ enum WiringMoveComposer {
 
     /// The nearest multiple of `resolution` (halfway away from zero; -0 becomes +0). Finite in, finite out.
     private static func quantized(_ value: Double) -> Double {
-        // From 2^42 up the spacing of doubles is at least 2^-10, and scaling up could overflow.
+        // From 2^42 up the spacing of doubles already exceeds `resolution`; preserve the exact value there.
         guard value.magnitude < 0x1p42 else { return value }
-        return (value / resolution).rounded(.toNearestOrAwayFromZero) * resolution + 0
+        guard var decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else {
+            return value
+        }
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &decimal, 12, .plain)
+        let result = Double(rounded.description) ?? value
+        return result == 0 ? 0 : result
+    }
+
+    /// Accumulates one signed nudge without converting the intermediate result to Double.
+    private static func accumulated(_ offset: Decimal, distance: Double, direction: Double) -> Decimal? {
+        guard direction != 0 else { return offset }
+        guard let step = Decimal(string: String(direction * distance), locale: Locale(identifier: "en_US_POSIX")) else {
+            return nil
+        }
+        var result = Decimal()
+        var previous = offset
+        var delta = step
+        guard NSDecimalAdd(&result, &previous, &delta, .plain) == .noError else { return nil }
+        return result
+    }
+
+    /// Adds a retained decimal offset to its anchor, converting only the final target to Double.
+    private static func translated(_ coordinate: Double, by offset: Decimal) -> Double? {
+        guard let origin = Decimal(string: String(coordinate), locale: Locale(identifier: "en_US_POSIX")) else {
+            return nil
+        }
+        var result = Decimal()
+        var base = origin
+        var delta = offset
+        guard NSDecimalAdd(&result, &base, &delta, .plain) == .noError else { return nil }
+        guard let translated = Double(result.description), translated.isFinite else { return nil }
+        return translated
     }
 
     /// Folds the one move into the draft's edits.
