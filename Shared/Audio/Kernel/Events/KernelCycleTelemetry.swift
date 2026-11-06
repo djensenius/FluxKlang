@@ -110,6 +110,11 @@ enum KernelCycleStart: Sendable, Equatable {
     /// Nothing else pending in the retired cycle is carried over: this cycle's `inheritedRetirementLoss` counts what
     /// its immediate predecessor dropped (that one retirement only, never cumulative), so control checks it on every
     /// replacement and reconciles receiver state first whenever it `receiverStateMayBeStale`.
+    /// Ramp values (round 2l): given the retired cycle's `RampSlots`, it reports and ramps from the last known values
+    /// the slots keep (`RampSlots.lastValue`), not from 0. Happens-before: the retired cycle's last slot writes are
+    /// sequenced before its `retire()`'s releasing claim CAS, which this cycle's acquiring claim CAS in `init` reads,
+    /// and the host's install of the prepared cycle (release/acquire) orders that before its first render read; no
+    /// further atomic. A run after `retire()` touches nothing, so the two never use the slots at once.
     case replacingCycle
 }
 
@@ -124,6 +129,9 @@ struct KernelCycleParts {
     let ownership: NoteOwnership
     /// Must have as many scopes as `ownership`.
     let safety: SafetyFlags
+    /// The ramps and each parameter's last known value, which outlive a cycle: a `.replacingCycle` cycle continues
+    /// from what its retired predecessor left. A new `RampSlots` starts every parameter at 0, so a `.freshFanIn`
+    /// cycle given new slots starts from 0; one given used slots continues from their values (and active ramps).
     let ramps: RampSlots
     /// Where every cycle publishes its `KernelCycleTelemetry`; `nil` publishes nothing (the cycle still keeps it).
     /// Fail-closed: with `nil`, `acknowledgeCritical` has no sample to read, so it never approves and a critical
