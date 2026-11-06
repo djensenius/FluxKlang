@@ -14,10 +14,10 @@
 ///
 /// Clock observations must arrive in host order, and the log refuses those that do not: a restart must start the next
 /// generation and carry its nominal rate; a restart or locate may not precede the latest restart, locate or current
-/// anchor; an anchor may not precede the latest restart and, after its generation's first anchor, must agree with it
-/// (§5.2). Discontinuities name their stream through `stream:`; `RuntimeDiscontinuity.stream` and `.sample.clock` are
-/// runtime slots, which the log reads only to cross-check: a stream slot without a `stream:` always disagrees, and
-/// with a `RuntimePreparation` both slots must be the ones it maps for `clock` and `stream:`.
+/// anchor; an anchor may not precede the latest restart or locate and, after its generation's first anchor, must agree
+/// with it (§5.2). Discontinuities name their stream through `stream:`; `RuntimeDiscontinuity.stream` and
+/// `.sample.clock` are runtime slots, which the log reads only to cross-check: a stream slot without a `stream:` always
+/// disagrees, and with a `RuntimePreparation` both slots must be the ones it maps for `clock` and `stream:`.
 struct MIDICaptureLog: Equatable, Sendable {
     static let maximumStreams = 64
     static let maximumCaptures = 65_536
@@ -67,6 +67,10 @@ struct MIDICaptureLog: Equatable, Sendable {
     private(set) var transport: MusicalStamp?
     /// The latest `maximumMusicalAnchors` distinct anchors carrying `transport`'s transport generation, oldest first.
     private(set) var musicalAnchors: [ClockAnchor] = []
+    /// The genuine first musical anchor of the current transport, retained while rolling anchor history is bounded.
+    private(set) var firstMusicalAnchor: ClockAnchor?
+    /// Whether an anchor needed to resolve a capture frame may have fallen out of `musicalAnchors`.
+    private var musicalAnchorHistoryWasEvicted = false
     private(set) var latestRestart: HostStamp?
     private(set) var latestLocate: HostStamp?
     private var pins: [StreamID: ProtocolPin] = [:]
@@ -113,6 +117,9 @@ struct MIDICaptureLog: Equatable, Sendable {
         if let restart = latestRestart, anchor.host.ticks < restart.ticks {
             throw .anchorPredatesRestart(restart: restart)
         }
+        if let locate = latestLocate, anchor.host.ticks < locate.ticks {
+            throw .anchorPredatesLocate(locate: locate)
+        }
         if let currentAnchor,
            anchor.host.ticks <= currentAnchor.host.ticks || anchor.sample.frame <= currentAnchor.sample.frame {
             throw .anchorDisagrees
@@ -138,9 +145,14 @@ struct MIDICaptureLog: Equatable, Sendable {
     private mutating func remember(_ anchor: ClockAnchor, _ musical: MusicalStamp) {
         if transport?.transport != musical.transport {
             musicalAnchors = []
+            firstMusicalAnchor = anchor
+            musicalAnchorHistoryWasEvicted = false
         }
         if !musicalAnchors.contains(anchor) {
-            if musicalAnchors.count == Self.maximumMusicalAnchors { musicalAnchors.removeFirst() }
+            if musicalAnchors.count == Self.maximumMusicalAnchors {
+                musicalAnchors.removeFirst()
+                musicalAnchorHistoryWasEvicted = true
+            }
             musicalAnchors.append(anchor)
         }
         transport = musical
@@ -168,6 +180,8 @@ struct MIDICaptureLog: Equatable, Sendable {
             try requireNotBackwards(host)
             transport = nil
             musicalAnchors = []
+            firstMusicalAnchor = nil
+            musicalAnchorHistoryWasEvicted = false
             latestLocate = host
         case .formatChange:
             guard let stream else { throw .formatChangeNeedsStream }
@@ -189,6 +203,8 @@ struct MIDICaptureLog: Equatable, Sendable {
         currentAnchor = nil
         transport = nil
         musicalAnchors = []
+        firstMusicalAnchor = nil
+        musicalAnchorHistoryWasEvicted = false
         latestRestart = host
         restartAnchor = ClockAnchor(
             sample: SampleStamp(clock: clock, generation: generation, frame: discontinuity.sample.frame),
@@ -290,9 +306,8 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
         guard let map else { throw .musicalMapMismatch }
         guard map.nominalRate == nominalRate else { throw .musicalMapMismatch }
-        // The map must come from a musical anchor of the current transport generation (each one is on `clock` in the
-        // current sample generation) and carry the current musical map revision.
-        guard musicalAnchors.contains(map.anchor), map.map.revision == transport.musicalMap else {
+        let expectedAnchor = try musicalAnchor(atOrBefore: frame)
+        guard map.anchor == expectedAnchor, map.map.revision == transport.musicalMap else {
             throw .musicalMapMismatch
         }
         let ticks: Int64
@@ -303,5 +318,15 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
         guard ticks >= 0 else { throw .negativeMusicalTicks }
         return ticks
+    }
+
+    /// Resolves the map basis for a frame, retaining the genuine first anchor as a pre-anchor fallback.
+    private func musicalAnchor(atOrBefore frame: Int64) throws(MIDICaptureRefusal) -> ClockAnchor {
+        if let latest = musicalAnchors.last(where: { $0.sample.frame <= frame }) { return latest }
+        if let firstMusicalAnchor, frame < firstMusicalAnchor.sample.frame { return firstMusicalAnchor }
+        guard !musicalAnchorHistoryWasEvicted, let firstMusicalAnchor else {
+            throw .musicalMapMismatch
+        }
+        return firstMusicalAnchor
     }
 }

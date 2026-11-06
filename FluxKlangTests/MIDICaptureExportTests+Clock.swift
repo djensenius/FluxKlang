@@ -209,6 +209,18 @@ struct MIDICaptureClockTests {
         #expect(log.firstAnchors[two]?.host == restart)
     }
 
+    @Test func musicalAnchorsMayNotPrecedeTheLatestLocate() throws {
+        var log = try Fixture.log([Fixture.keysA])
+        try log.observe(anchor: Fixture.anchor(1, frame: 0, host: 0, transport: 1))
+        try log.observe(Fixture.discontinuity(.locate, host: 48_000_000), stream: nil)
+        let located = log
+
+        #expect(Fixture.refusal {
+            try log.observe(anchor: Fixture.anchor(1, frame: 48_000, host: 24_000_000, transport: 1))
+        } == .anchorPredatesLocate(locate: HostStamp(ticks: 48_000_000)))
+        #expect(log == located)
+    }
+
     @Test func restartsStepToTheNextGeneration() throws {
         var log = try Fixture.example09Captures()
         let before = log
@@ -280,22 +292,25 @@ struct MIDICaptureClockTests {
             nominalRate: 48_000, currentSample: .initial, currentTransport: .initial)
         #expect(Fixture.refusal { try capture(revised) } == .musicalMapMismatch)
         #expect(log == before)
-        // Loop wraps add anchors on the same transport; delayed captures through earlier ones keep their ticks.
+        // Loop wraps add anchors on the same transport; maps must match the latest anchor at/before the frame.
         // The log remembers the latest 64: `first` and 63 wraps keep it, the 64th wrap forgets it.
         for wrap in 1..<MIDICaptureLog.maximumMusicalAnchors {
             try log.observe(anchor: Self.wrap(wrap))
         }
         #expect(log.musicalAnchors.count == 64 && log.musicalAnchors.first == first)
-        let delayed = try capture(firstMap, host: 2_412_000_000)
-        #expect(delayed == .recorded(try #require(log.records.last)))
-        #expect(log.records.last?.musicalTicks == 2_560)
+        #expect(Fixture.refusal { try capture(firstMap, host: 2_412_000_000) } == .musicalMapMismatch)
+        let frame24kAnchor = try Self.wrap(50)
+        let frame24kMap = try Fixture.musicalMap(frame24kAnchor, microsPerQuarter: 3_000_000)
+        let atFrame24k = try capture(frame24kMap, host: 2_412_000_000)
+        #expect(atFrame24k == .recorded(try #require(log.records.last)))
+        #expect(log.records.last?.musicalTicks == 0)
         try log.observe(anchor: Self.wrap(MIDICaptureLog.maximumMusicalAnchors))
         let oldest = try Self.wrap(1)
         #expect(log.musicalAnchors.count == 64 && log.musicalAnchors.first == oldest)
         let forgetting = log
         #expect(Fixture.refusal { try capture(firstMap, host: 2_412_000_000) } == .musicalMapMismatch)
         #expect(log == forgetting)
-        _ = try capture(Fixture.musicalMap(oldest, microsPerQuarter: 3_000_000), host: 2_412_000_000)
+        _ = try capture(Fixture.musicalMap(oldest, microsPerQuarter: 3_000_000), host: 2_400_240_000)
         // A new transport generation forgets every anchor of the old one.
         let transport2 = try Fixture.anchor(1, frame: 48_000, host: 2_424_000_000, transport: 2)
         try log.observe(anchor: transport2)
@@ -307,6 +322,48 @@ struct MIDICaptureClockTests {
         try log.observe(anchor: afterLocate)
         try log.observe(Fixture.restart(2, host: 2_448_000_000), stream: nil, nominalRate: 48_000)
         #expect(log.musicalAnchors.isEmpty)
+    }
+
+    @Test func captureFailsClosedWhenItsLatestMusicalAnchorWasEvicted() throws {
+        var log = try Fixture.log([Fixture.keysA])
+        let first = try Fixture.anchor(1, frame: 0, host: 2_400_000_000, transport: 1)
+        try log.observe(anchor: first)
+        let firstMap = try Fixture.musicalMap(first, microsPerQuarter: 3_000_000)
+        for wrap in 1...(MIDICaptureLog.maximumMusicalAnchors + 1) {
+            try log.observe(anchor: Self.wrap(wrap))
+        }
+        // Wrap 1 is evicted; frame 480 lies after the genuine first anchor but before retained history.
+        let before = log
+        #expect(Fixture.refusal {
+            try log.capture([0x2090_3C64], stream: Fixture.keysA, host: HostStamp(ticks: 2_400_240_000),
+                            endpoint: .midi1, port: .midi1, musicalMap: firstMap, current: .initial)
+        } == .musicalMapMismatch)
+        #expect(log == before)
+    }
+
+    @Test func loopWrapUsesTheLatestMusicalAnchorAtOrBeforeTheCaptureFrame() throws {
+        var log = try Fixture.log([Fixture.keysA])
+        let first = try Fixture.anchor(1, frame: 0, host: 0, transport: 1)
+        try log.observe(anchor: first)
+        let firstMap = try Fixture.musicalMap(first, microsPerQuarter: 500_000)
+        let wrapped = ClockAnchor(
+            sample: SampleStamp(clock: Fixture.clock, generation: .initial, frame: 48_000),
+            host: HostStamp(ticks: 24_000_000),
+            musical: MusicalStamp(transport: .initial, musicalMap: .initial, ticks: 0, loopIteration: 1))
+        try log.observe(anchor: wrapped)
+        let wrapMap = try Fixture.musicalMap(wrapped, microsPerQuarter: 500_000)
+        let before = log
+
+        #expect(try firstMap.ticks(atFrame: 72_000) == 46_080)
+        #expect(Fixture.refusal {
+            try log.capture([0x2090_3C64], stream: Fixture.keysA, host: HostStamp(ticks: 36_000_000),
+                            endpoint: .midi1, port: .midi1, musicalMap: firstMap, current: .initial)
+        } == .musicalMapMismatch)
+        #expect(log == before)
+        let outcome = try log.capture([0x2090_3C64], stream: Fixture.keysA, host: HostStamp(ticks: 36_000_000),
+                                      endpoint: .midi1, port: .midi1, musicalMap: wrapMap, current: .initial)
+        #expect(outcome == .recorded(try #require(log.records.last)))
+        #expect(log.records.last?.sample.frame == 72_000 && log.records.last?.musicalTicks == 15_360)
     }
 
     /// Loop wrap `index`: 480 frames (240,000 host ticks) apart, back at tick 0 in pass `index`.
