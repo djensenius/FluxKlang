@@ -77,6 +77,18 @@ struct UMPTranslationStreamTests {
         #expect(stream.losses.total == 0)
     }
 
+    @Test func anIdleFlushSendsADataEntryHeldOnAnyGroupAndChannel() throws {
+        var stream = UMPTranslationStream()
+        try Self.selectMPE(&stream, at: 0, channel: 3, group: 2)
+        #expect(try stream.receive(Self.cc(3, 6, 15, group: 2), at: Self.msec) == Self.empty)
+        let deadline = 6 * Self.msec
+        #expect(stream.deadline == deadline)
+        #expect(try stream.poll(at: deadline - 1).isEmpty)
+        #expect(try stream.poll(at: deadline) == [try Self.mpe(15, channel: 3, group: 2)])
+        #expect(stream.translator.heldDataEntry == nil)
+        #expect(stream.idleFlushes == 1)
+    }
+
     @Test func endOfStreamSendsAHeldDataEntryAndKeepsTheTranslatorState() throws {
         var stream = UMPTranslationStream()
         try Self.selectMPE(&stream, at: 100 * Self.msec)
@@ -116,6 +128,20 @@ struct UMPTranslationStreamTests {
         #expect(throws: UMPTranslationStreamRefusal.timeWentBackward(previous: 5 * Self.msec, got: 4 * Self.msec)) {
             try stream.poll(at: 4 * Self.msec)
         }
+    }
+
+    /// `endOfStream()` joins segments of one logical stream: the Data Entry MSB is kept, so a late CC 38 at the start
+    /// of the next segment sends the controller again with that MSB and its LSB.
+    @Test func aLateDataEntryLSBAfterEndOfStreamUsesTheKeptMSB() throws {
+        var stream = UMPTranslationStream()
+        try Self.selectMPE(&stream, at: 10 * Self.msec)
+        _ = try stream.receive(Self.cc(0, 6, 15), at: 10 * Self.msec)
+        #expect(stream.endOfStream() == [try Self.mpe(15)])
+        #expect(try stream.receive(Self.cc(0, 38, 3), at: 0)
+            == UMPTranslationOutput(messages: [try Self.mpe(15, lsb: 3)], losses: []))
+        #expect(stream.deadline == nil)
+        #expect(stream.losses.total == 0)
+        #expect(stream.translator.losses.total == 0)
     }
 
     @Test(arguments: [UInt64(1_000_000), UInt64(6_000_000 - 1)])

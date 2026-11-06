@@ -10,7 +10,8 @@
 ///   for `deadline` and calls `poll(at:)`, which sends the CC 6 at or after the deadline (not one nanosecond earlier).
 ///   A message received at or after the deadline first sends the held CC 6 and then its own translation, in that
 ///   order. Both count as idle flushes.
-/// - End of stream: `endOfStream()`, for example at the end of an SMF track.
+/// - End of stream: `endOfStream()`, at the end of one segment of a logical stream (for example one SMF track that
+///   the next segment continues); the translator state carries into the next segment.
 /// - Teardown or reset: `reset()`, or `reset(group:channel:)` for one group and channel.
 ///
 /// The translator sends a held CC 6 before every message except the CC 38 that completes it, so a CC 6 still held
@@ -22,8 +23,11 @@
 ///
 /// Time is supplied by the caller in monotonic nanoseconds (the I/O layer converts host ticks); this type reads no
 /// clock and arms no timer. `receive` and `poll` refuse a time earlier than the last one this stream accepted; equal
-/// times are accepted. `endOfStream()` and `reset()` clear that baseline, so the next stream may start at any time.
-/// The deadline never wraps: a CC 6 whose deadline would pass `UInt64.max` is refused (`deadlineOverflow`).
+/// times are accepted. `endOfStream()` and `reset()` clear that baseline, so the next segment or stream may start at
+/// any time.
+/// The deadline never wraps: a CC 6 whose deadline would pass `UInt64.max` is refused (`deadlineOverflow`). Refusing
+/// drops a valid CC 6, whereas capping the deadline at `UInt64.max` would flush it at most one timeout early; both
+/// happen only with a broken clock.
 ///
 /// Telemetry is cumulative for the life of the value and survives `reset()`: `losses` (every loss the translator
 /// declared, including those of translators that `reset()` replaced), `idleFlushes`, `endOfStreamFlushes` and
@@ -56,6 +60,8 @@ struct UMPTranslationStream: Equatable, Sendable {
     }
 
     /// Translates one message received at `time`. If a held CC 6 has reached its deadline, it is sent first.
+    /// A live caller whose times may step back (CoreMIDI timestamp 0 meaning "now", or jitter) may pass
+    /// `max(time, lastAcceptedTime ?? time)` rather than drop the message on `timeWentBackward`.
     mutating func receive(
         _ voice: UMPMIDI1ChannelVoice, at time: UInt64
     ) throws(UMPTranslationStreamRefusal) -> UMPTranslationOutput<UMPMIDI2ChannelVoice> {
@@ -88,8 +94,11 @@ struct UMPTranslationStream: Equatable, Sendable {
         return flushIfIdle(at: time)
     }
 
-    /// Ends the stream: sends any held CC 6 and clears the time baseline, so the next stream (for example the next SMF
-    /// track) may start at any time. The translator's bank, parameter selection and Data Entry MSB are kept.
+    /// Ends a segment: sends any held CC 6 and clears the time baseline, so the next segment may start at any time.
+    /// The translator's bank, parameter selection and Data Entry MSB are kept, so a late CC 38 at the start of the
+    /// next segment sends the controller again with the kept MSB. Use it between consecutive segments of one logical
+    /// stream, not between independent streams: those need their own stream or `reset()` (for example each track of
+    /// a Format 1 SMF, whose tracks are concurrent).
     mutating func endOfStream() -> [UMPMIDI2ChannelVoice] {
         let flushed = translator.flushAll()
         endOfStreamFlushes += flushed.count
