@@ -2,7 +2,7 @@
 //  MIDICaptureLog.swift
 //  FluxKlang
 //
-//  A per-stream MIDI capture log (#112 CL4, media-contract.md §9.1–§9.2). It
+//  A per-stream MIDI capture log (#112 CL4, media-contract.md §5.2, §9.1–§9.2). It
 //  stores UMP words verbatim with the frame derived through the current anchor,
 //  musical ticks exactly when a transport is anchored, and the protocol fields.
 //  It keeps the first anchor of every sample clock generation, so a native UMP
@@ -11,11 +11,21 @@
 //
 
 /// The capture log of one sample clock. Records keep delivery order within and across streams.
+///
+/// Clock observations must arrive in host order, and the log refuses those that do not: a restart must start the next
+/// generation and carry its nominal rate; a restart or locate may not precede the latest restart, locate or current
+/// anchor; an anchor may not precede the latest restart and, after its generation's first anchor, must agree with it
+/// (§5.2). Discontinuities name their stream through `stream:`; `RuntimeDiscontinuity.stream` and `.sample.clock` are
+/// runtime slots, which the log reads only to cross-check: a stream slot without a `stream:` always disagrees, and
+/// with a `RuntimePreparation` both slots must be the ones it maps for `clock` and `stream:`.
 struct MIDICaptureLog: Equatable, Sendable {
     static let maximumStreams = 64
     static let maximumCaptures = 65_536
     static let maximumUnsupported = 4_096
     static let maximumGenerations = 4_096
+    /// The musical anchors of the current transport generation a musical map may be built from; the oldest is
+    /// forgotten first, so a map from an older anchor of a long loop is refused (fail closed).
+    static let maximumMusicalAnchors = 64
 
     /// Proof that the log admitted a capture: only this file can make one, so only the log builds records.
     struct Admission: Sendable {
@@ -28,10 +38,19 @@ struct MIDICaptureLog: Equatable, Sendable {
         let port: MIDIPortProtocol
     }
 
+    /// The runtime slots of the log's clock and streams, from a `RuntimePreparation`.
+    private struct RuntimeSlots: Equatable, Sendable {
+        let clock: UInt32
+        let streams: [StreamID: UInt32]
+    }
+
     let streams: [StreamID]
     let clock: ClockID
     let timebase: HostTimebase
-    let nominalRate: Int
+    /// The nominal rate of the current generation: the initializer's until a restart supplies the next one's.
+    private(set) var nominalRate: Int
+    /// The nominal rate of each generation in `firstAnchors`, kept when it is first anchored.
+    private(set) var rates: [Generation: Int] = [:]
     private(set) var records: [MIDICaptureRecord] = []
     private(set) var unsupported: [MIDICaptureUnsupported] = []
     /// Streams no export may claim losslessly, with their first taint.
@@ -42,14 +61,22 @@ struct MIDICaptureLog: Equatable, Sendable {
     private(set) var currentGeneration: Generation?
     /// The latest anchor of `currentGeneration`; nil until the first anchor after a restart.
     private(set) var currentAnchor: ClockAnchor?
+    /// The new-generation sample and host stamp of the latest restart, used as that generation's drift reference.
+    private var restartAnchor: ClockAnchor?
     /// The latest musical stamp while a transport is anchored; a locate or restart clears it until the next one.
     private(set) var transport: MusicalStamp?
+    /// The latest `maximumMusicalAnchors` distinct anchors carrying `transport`'s transport generation, oldest first.
+    private(set) var musicalAnchors: [ClockAnchor] = []
     private(set) var latestRestart: HostStamp?
     private(set) var latestLocate: HostStamp?
     private var pins: [StreamID: ProtocolPin] = [:]
+    private let slots: RuntimeSlots?
 
-    /// Refuses more than `maximumStreams` streams, a repeated stream, an invalid nominal rate or a zero timebase.
-    init(streams: [StreamID], clock: ClockID, timebase: HostTimebase, nominalRate: Int) throws(MIDICaptureRefusal) {
+    /// Refuses more than `maximumStreams` streams, a repeated stream, an invalid nominal rate, a zero timebase, and a
+    /// `preparation` that maps no sample clock slot for `clock` or no capture stream slot for a stream. `nominalRate`
+    /// is the rate of the first generation the log anchors unless a restart before it supplies another.
+    init(streams: [StreamID], clock: ClockID, timebase: HostTimebase, nominalRate: Int,
+         preparation: RuntimePreparation? = nil) throws(MIDICaptureRefusal) {
         guard streams.count <= Self.maximumStreams else {
             throw .tooManyStreams(count: streams.count, limit: Self.maximumStreams)
         }
@@ -63,47 +90,84 @@ struct MIDICaptureLog: Equatable, Sendable {
         self.clock = clock
         self.timebase = timebase
         self.nominalRate = nominalRate
+        slots = try preparation.map { preparation throws(MIDICaptureRefusal) in
+            do throws(RuntimePreparationError) {
+                var streamSlots: [StreamID: UInt32] = [:]
+                for stream in streams {
+                    streamSlots[stream] = try preparation.slot(for: .stream(stream, direction: .capture))
+                }
+                return RuntimeSlots(clock: try preparation.slot(for: .sampleClock(clock)), streams: streamSlots)
+            } catch {
+                throw .runtimeSlotsUnmapped
+            }
+        }
     }
 
-    /// Records an anchor of the current generation (any generation for the log's first anchor, or the generation a
-    /// restart started). The first anchor of each generation is kept; the latest becomes the current anchor.
+    /// Records an advancing anchor of the current generation (any generation for the log's first anchor, or the
+    /// generation a restart started), at or after the latest restart. Later anchors must advance in host and frame
+    /// and agree with the generation's first anchor, or its restart stamp when restarted (§5.2–§5.3).
     mutating func observe(anchor: ClockAnchor) throws(MIDICaptureRefusal) {
         guard anchor.sample.clock == clock else { throw .foreignClock(anchor.sample.clock) }
         let generation = anchor.sample.generation
         if let currentGeneration, generation != currentGeneration { throw .staleGeneration }
-        if firstAnchors[generation] == nil {
+        if let restart = latestRestart, anchor.host.ticks < restart.ticks {
+            throw .anchorPredatesRestart(restart: restart)
+        }
+        if let currentAnchor,
+           anchor.host.ticks <= currentAnchor.host.ticks || anchor.sample.frame <= currentAnchor.sample.frame {
+            throw .anchorDisagrees
+        }
+        let first = firstAnchors[generation]
+        if let reference = restartAnchor ?? first {
+            guard let map = try? SampleClockMap(anchor: reference, nominalRate: nominalRate, timebase: timebase),
+                  map.agrees(anchor) else { throw .anchorDisagrees }
+        }
+        if first == nil {
             guard firstAnchors.count < Self.maximumGenerations else {
                 throw .capacity(limit: Self.maximumGenerations)
             }
             firstAnchors[generation] = anchor
+            rates[generation] = nominalRate
         }
         currentGeneration = generation
         currentAnchor = anchor
-        if let musical = anchor.musical { transport = musical }
+        if let musical = anchor.musical { remember(anchor, musical) }
     }
 
-    /// Applies a discontinuity of this clock. `clockRestart` starts a new generation and `locate` ends the transport
-    /// anchor; both need host ticks, which later captures are checked against. `formatChange` names its stream and
-    /// re-pins that stream's protocols on its next capture. Other kinds do not affect MIDI capture.
-    mutating func observe(_ discontinuity: RuntimeDiscontinuity, stream: StreamID?) throws(MIDICaptureRefusal) {
+    /// Makes `musical` the anchored transport and remembers its anchor for musical maps.
+    private mutating func remember(_ anchor: ClockAnchor, _ musical: MusicalStamp) {
+        if transport?.transport != musical.transport {
+            musicalAnchors = []
+        }
+        if !musicalAnchors.contains(anchor) {
+            if musicalAnchors.count == Self.maximumMusicalAnchors { musicalAnchors.removeFirst() }
+            musicalAnchors.append(anchor)
+        }
+        transport = musical
+    }
+
+    /// Applies a discontinuity of this clock. `clockRestart` starts the next generation at `nominalRate`, which only
+    /// a restart carries and a restart needs; `locate` ends the transport anchor. Both need host ticks at or after
+    /// the latest restart, locate and current anchor, which later captures are checked against. `formatChange` names
+    /// its stream and re-pins that stream's protocols on its next capture. Other kinds do not affect MIDI capture.
+    mutating func observe(_ discontinuity: RuntimeDiscontinuity, stream: StreamID?,
+                          nominalRate rate: Int? = nil) throws(MIDICaptureRefusal) {
         if let stream, !streams.contains(stream) { throw .undeclaredStream(stream) }
+        try crossCheck(discontinuity, stream: stream)
         if case .clockRestart = discontinuity.kind {
-            guard let host = discontinuity.host else { throw .discontinuityNeedsHost }
-            guard let raw = Int(exactly: discontinuity.sample.generation), let generation = try? Generation(raw),
-                  generation != currentGeneration, firstAnchors[generation] == nil else { throw .staleGeneration }
-            currentGeneration = generation
-            currentAnchor = nil
-            transport = nil
-            latestRestart = host
+            try restart(discontinuity, rate: rate)
             return
         }
+        guard rate == nil else { throw .nominalRateWithoutRestart }
         if let currentGeneration, Int(exactly: discontinuity.sample.generation) != currentGeneration.value {
             throw .staleGeneration
         }
         switch discontinuity.kind {
         case .locate:
             guard let host = discontinuity.host else { throw .discontinuityNeedsHost }
+            try requireNotBackwards(host)
             transport = nil
+            musicalAnchors = []
             latestLocate = host
         case .formatChange:
             guard let stream else { throw .formatChangeNeedsStream }
@@ -113,11 +177,49 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
     }
 
+    /// A restart starts the next generation (generations step by one and are never ordered, M2) at its own rate.
+    private mutating func restart(_ discontinuity: RuntimeDiscontinuity, rate: Int?) throws(MIDICaptureRefusal) {
+        guard let host = discontinuity.host else { throw .discontinuityNeedsHost }
+        guard let raw = Int(exactly: discontinuity.sample.generation), let generation = try? Generation(raw),
+              currentGeneration.map({ (try? $0.next()) == generation }) ?? true else { throw .staleGeneration }
+        try requireNotBackwards(host)
+        guard let rate else { throw .restartNeedsRate }
+        guard MediaNominalRate.isValid(rate) else { throw .invalidRate(rate) }
+        currentGeneration = generation
+        currentAnchor = nil
+        transport = nil
+        musicalAnchors = []
+        latestRestart = host
+        restartAnchor = ClockAnchor(
+            sample: SampleStamp(clock: clock, generation: generation, frame: discontinuity.sample.frame),
+            host: host,
+            musical: nil)
+        nominalRate = rate
+    }
+
+    /// Refuses a restart or locate before the latest restart, locate or current anchor, which would reopen the past.
+    private func requireNotBackwards(_ host: HostStamp) throws(MIDICaptureRefusal) {
+        let cutoff = [latestRestart, latestLocate, currentAnchor?.host].compactMap { $0 }.max { $0.ticks < $1.ticks }
+        if let cutoff, host.ticks < cutoff.ticks { throw .discontinuityPredatesCutoff(host: host, cutoff: cutoff) }
+    }
+
+    /// A stream slot needs a `stream:`; with runtime slots, the clock and stream slots must be the mapped ones.
+    private func crossCheck(_ discontinuity: RuntimeDiscontinuity,
+                            stream: StreamID?) throws(MIDICaptureRefusal) {
+        if let slot = discontinuity.stream {
+            guard let stream else { throw .discontinuitySlotMismatch }
+            if let slots, slots.streams[stream] != slot { throw .discontinuitySlotMismatch }
+        }
+        if let slots, discontinuity.sample.clock != slots.clock { throw .discontinuitySlotMismatch }
+    }
+
     // The parameters are the §9.2 capture inputs (words, stream, host, protocols, clocks), kept flat.
     // swiftlint:disable function_parameter_count
-    /// Captures one packet. A capture stamped before the latest restart or locate is recorded in `unsupported`, taints
-    /// its stream and returns `.unsupported`; otherwise its frame derives through the current anchor of `current`,
-    /// and its musical ticks through `musicalMap`, which must be given exactly when a transport is anchored.
+    /// Captures one packet on the current generation `current`, in its stream's pinned protocols. A capture stamped
+    /// before the latest restart or locate is recorded in `unsupported`, taints its stream and returns
+    /// `.unsupported`; otherwise its frame derives through the current anchor at the generation's rate, and its
+    /// nonnegative musical ticks through a same-rate `musicalMap`, which must be given exactly when a transport is
+    /// anchored.
     mutating func capture(_ words: [UInt32], stream: StreamID, host: HostStamp, endpoint: MIDIEndpointProtocol,
                           port: MIDIPortProtocol, musicalMap: MusicalClockMap?,
                           current: Generation) throws(MIDICaptureRefusal) -> MIDICaptureOutcome {
@@ -129,6 +231,10 @@ struct MIDICaptureLog: Equatable, Sendable {
             throw .invalidPacket(error)
         }
         let stamp = try MIDIProtocolStamp.classify(packet, endpoint: endpoint, port: port)
+        guard let currentGeneration else { throw .noCurrentAnchor }
+        guard current == currentGeneration else { throw .staleGeneration }
+        let pin = ProtocolPin(endpoint: endpoint, port: port)
+        if let pinned = pins[stream], pinned != pin { throw .protocolChangedWithoutFormatChange(stream: stream) }
         if let reason = unsupportedReason(host) {
             guard unsupported.count < Self.maximumUnsupported else {
                 taint(stream, .refusedAtCapacity)
@@ -137,13 +243,12 @@ struct MIDICaptureLog: Equatable, Sendable {
             unsupported.append(MIDICaptureUnsupported(Admission(), stream: stream, packet: packet, host: host,
                                                       protocolStamp: stamp, reason: reason))
             taint(stream, .unsupportedCapture)
+            pins[stream] = pin
             return .unsupported(reason)
         }
-        let pin = ProtocolPin(endpoint: endpoint, port: port)
-        if let pinned = pins[stream], pinned != pin { throw .protocolChangedWithoutFormatChange(stream: stream) }
         guard let anchor = currentAnchor else { throw .noCurrentAnchor }
         let frame = try frame(atHost: host, anchor: anchor, current: current)
-        let ticks = try musicalTicks(atFrame: frame, map: musicalMap, current: current)
+        let ticks = try musicalTicks(atFrame: frame, map: musicalMap)
         guard records.count < Self.maximumCaptures else {
             taint(stream, .refusedAtCapacity)
             throw .capacity(limit: Self.maximumCaptures)
@@ -178,18 +283,25 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
     }
 
-    private func musicalTicks(atFrame frame: Int64, map: MusicalClockMap?,
-                              current: Generation) throws(MIDICaptureRefusal) -> Int64? {
+    private func musicalTicks(atFrame frame: Int64, map: MusicalClockMap?) throws(MIDICaptureRefusal) -> Int64? {
         guard let transport else {
             guard map == nil else { throw .musicalMapMismatch }
             return nil
         }
-        guard let map, map.anchor.sample.clock == clock, map.anchor.sample.generation == current,
-              map.musical.transport == transport.transport else { throw .musicalMapMismatch }
+        guard let map else { throw .musicalMapMismatch }
+        guard map.nominalRate == nominalRate else { throw .musicalMapMismatch }
+        // The map must come from a musical anchor of the current transport generation (each one is on `clock` in the
+        // current sample generation) and carry the current musical map revision.
+        guard musicalAnchors.contains(map.anchor), map.map.revision == transport.musicalMap else {
+            throw .musicalMapMismatch
+        }
+        let ticks: Int64
         do throws(ClockMapError) {
-            return try map.ticks(atFrame: frame)
+            ticks = try map.ticks(atFrame: frame)
         } catch {
             throw .overflow
         }
+        guard ticks >= 0 else { throw .negativeMusicalTicks }
+        return ticks
     }
 }

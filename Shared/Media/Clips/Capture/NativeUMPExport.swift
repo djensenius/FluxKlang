@@ -35,7 +35,8 @@ struct NativeUMPExport: Equatable, Sendable {
     static func make(from log: MIDICaptureLog, id: ExportID, streams: [StreamID],
                      origin: SampleStamp) throws(MIDICaptureRefusal) -> NativeUMPExport {
         let selected = try validate(streams, in: log)
-        guard origin.clock == log.clock, let anchor = log.firstAnchors[origin.generation] else {
+        guard origin.clock == log.clock, let anchor = log.firstAnchors[origin.generation],
+              let rate = log.rates[origin.generation] else {
             throw .originAnchorUnknown(clock: origin.clock, generation: origin.generation)
         }
         let records = log.records.filter { selected.contains($0.stream) }
@@ -44,7 +45,7 @@ struct NativeUMPExport: Equatable, Sendable {
         offsets.reserveCapacity(records.count)
         for record in records {
             offsets.append(try offset(of: record.host, anchor: anchor, originFrame: origin.frame,
-                                      timebase: log.timebase, rate: log.nominalRate))
+                                      timebase: log.timebase, rate: rate))
         }
         return NativeUMPExport(id: id, streams: streams, origin: origin, packets: records.map(\.packet),
                                offsetsNs: offsets)
@@ -70,7 +71,8 @@ struct NativeUMPExport: Equatable, Sendable {
     }
 
     /// `roundHalfUp(((host − anchorHost)·numer·rate − (originFrame − anchorFrame)·10⁹·denom) / (denom·rate))`: the
-    /// checker's `rnd((host − host_at(anchor, originFrame))·nsPerTick)`, in exact `Int128` arithmetic.
+    /// checker's `rnd((host − host_at(anchor, originFrame))·nsPerTick)`, in exact `Int128` arithmetic, where `rate` is
+    /// the origin generation's own nominal rate.
     private static func offset(of host: HostStamp, anchor: ClockAnchor, originFrame: Int64,
                                timebase: HostTimebase, rate: Int) throws(MIDICaptureRefusal) -> Int64 {
         let rate = Int128(rate)

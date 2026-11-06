@@ -19,8 +19,9 @@ enum MIDICaptureFixture {
     static let unknown = StreamID(validated: "str.synth-unknown")
     static let umpExport = ExportID(validated: "exp.ump")
 
-    static func log(_ streams: [StreamID], timebase: HostTimebase = timebase) throws -> MIDICaptureLog {
-        try MIDICaptureLog(streams: streams, clock: clock, timebase: timebase, nominalRate: 48_000)
+    static func log(_ streams: [StreamID], timebase: HostTimebase = timebase,
+                    nominalRate: Int = 48_000) throws -> MIDICaptureLog {
+        try MIDICaptureLog(streams: streams, clock: clock, timebase: timebase, nominalRate: nominalRate)
     }
 
     /// An anchor of `smp.main`; with `transport`, it also anchors `mus.main` at `ticks`.
@@ -34,31 +35,35 @@ enum MIDICaptureFixture {
     }
 
     static func discontinuity(_ kind: RuntimeDiscontinuityKind, generation: UInt64 = 1,
-                              host: UInt64?) -> RuntimeDiscontinuity {
-        RuntimeDiscontinuity(kind: kind, sample: RuntimeSampleStamp(clock: 0, generation: generation, frame: 0),
+                              frame: Int64 = 0, host: UInt64?) -> RuntimeDiscontinuity {
+        RuntimeDiscontinuity(kind: kind, sample: RuntimeSampleStamp(clock: 0, generation: generation, frame: frame),
                              frames: nil, stream: nil, host: host.map { HostStamp(ticks: $0) })
     }
 
-    static func restart(_ generation: UInt64, host: UInt64?) -> RuntimeDiscontinuity {
-        discontinuity(.clockRestart(previousFrame: 0), generation: generation, host: host)
+    static func restart(_ generation: UInt64, host: UInt64?, frame: Int64 = 0) -> RuntimeDiscontinuity {
+        discontinuity(.clockRestart(previousFrame: 0), generation: generation, frame: frame, host: host)
     }
 
     /// A one-segment musical map through `anchor`, which must carry a musical stamp.
-    static func musicalMap(_ anchor: ClockAnchor, microsPerQuarter: Int64) throws -> MusicalClockMap {
+    static func musicalMap(_ anchor: ClockAnchor, microsPerQuarter: Int64,
+                           nominalRate: Int = 48_000) throws -> MusicalClockMap {
         let map = try MusicalMap(clock: musicalClock, revision: .initial,
                                  segments: [TempoSegment(atTicks: 0, microsPerQuarter: microsPerQuarter)])
         let musical = try #require(anchor.musical)
-        return try MusicalClockMap(anchor: anchor, map: map, nominalRate: 48_000,
+        return try MusicalClockMap(anchor: anchor, map: map, nominalRate: nominalRate,
                                    currentSample: anchor.sample.generation, currentTransport: musical.transport)
     }
 
-    /// Captures in the current generation, through a musical map on the current anchor when it carries a transport.
+    /// Captures in the current generation, through a musical map on the current anchor (at the current generation's
+    /// rate) when it carries a transport.
     @discardableResult
     static func capture(_ log: inout MIDICaptureLog, _ stream: StreamID, _ words: [UInt32], host: UInt64,
                         endpoint: MIDIEndpointProtocol = .midi1, port: MIDIPortProtocol = .midi1,
                         microsPerQuarter: Int64 = 3_000_000) throws -> MIDICaptureOutcome {
         let anchor = try #require(log.currentAnchor)
-        let map = try anchor.musical.map { _ in try musicalMap(anchor, microsPerQuarter: microsPerQuarter) }
+        let map = try anchor.musical.map { _ in
+            try musicalMap(anchor, microsPerQuarter: microsPerQuarter, nominalRate: log.nominalRate)
+        }
         return try log.capture(words, stream: stream, host: HostStamp(ticks: host), endpoint: endpoint, port: port,
                                musicalMap: map, current: anchor.sample.generation)
     }
@@ -90,7 +95,7 @@ enum MIDICaptureFixture {
 
     /// Example 09 seq 8 and 10: the device restart and generation 2's anchor.
     static func restartExample09(_ log: inout MIDICaptureLog) throws {
-        try log.observe(restart(2, host: 2_490_000_000), stream: nil)
+        try log.observe(restart(2, host: 2_490_000_000), stream: nil, nominalRate: 48_000)
         try log.observe(anchor: anchor(2, frame: 0, host: 2_490_000_000, transport: 2, ticks: 16_000))
     }
 

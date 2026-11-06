@@ -62,7 +62,7 @@ struct MIDICaptureRestartTests {
     @Test func restartWithoutANewAnchorStillReportsOldStamps() throws {
         var log = try Fixture.example09Captures()
         let anchor = try #require(log.currentAnchor)
-        try log.observe(Fixture.restart(2, host: 2_490_000_000), stream: nil)
+        try log.observe(Fixture.restart(2, host: 2_490_000_000), stream: nil, nominalRate: 48_000)
         let two = try Generation(2)
         #expect(log.currentAnchor == nil && log.currentGeneration == two && log.transport == nil)
         func capture(_ host: UInt64, current: Generation) throws -> MIDICaptureOutcome {
@@ -71,9 +71,11 @@ struct MIDICaptureRestartTests {
         }
         let before = log
         #expect(Fixture.refusal { try capture(2_490_000_000, current: two) } == .noCurrentAnchor)
-        #expect(Fixture.refusal { try capture(2_490_000_000, current: .initial) } == .noCurrentAnchor)
+        // The ended generation is stale, on the recorded and the unsupported path alike.
+        #expect(Fixture.refusal { try capture(2_490_000_000, current: .initial) } == .staleGeneration)
+        #expect(Fixture.refusal { try capture(2_480_000_000, current: .initial) } == .staleGeneration)
         #expect(log == before)
-        #expect(try capture(2_480_000_000, current: .initial) == .unsupported(.predatesClockRestart(
+        #expect(try capture(2_480_000_000, current: two) == .unsupported(.predatesClockRestart(
             restart: HostStamp(ticks: 2_490_000_000))))
         // An anchor of the ended generation is stale now; one of the new generation re-anchors.
         #expect(Fixture.refusal { try log.observe(anchor: anchor) } == .staleGeneration)
@@ -115,10 +117,10 @@ struct MIDICaptureRestartTests {
     @Test func musicalTicksExactlyWhenATransportIsAnchored() throws {
         var log = try Fixture.log([Fixture.keysA])
         let plain = try Fixture.anchor(1, frame: 0, host: 2_400_000_000)
-        let musical = try Fixture.anchor(1, frame: 0, host: 2_400_000_000, transport: 1)
+        let musical = try Fixture.anchor(1, frame: 48_000, host: 2_424_000_000, transport: 1)
         let map = try Fixture.musicalMap(musical, microsPerQuarter: 3_000_000)
-        func capture(_ map: MusicalClockMap?) throws -> MIDICaptureOutcome {
-            try log.capture([0x2090_3C64], stream: Fixture.keysA, host: HostStamp(ticks: 2_412_000_000),
+        func capture(_ map: MusicalClockMap?, host: UInt64 = 2_436_000_000) throws -> MIDICaptureOutcome {
+            try log.capture([0x2090_3C64], stream: Fixture.keysA, host: HostStamp(ticks: host),
                             endpoint: .midi1, port: .midi1, musicalMap: map, current: .initial)
         }
         try log.observe(anchor: plain)
@@ -128,7 +130,7 @@ struct MIDICaptureRestartTests {
         try log.observe(anchor: musical)
         let before = log
         #expect(Fixture.refusal { try capture(nil) } == .musicalMapMismatch)
-        let otherTransport = try Fixture.musicalMap(Fixture.anchor(1, frame: 0, host: 2_400_000_000, transport: 2),
+        let otherTransport = try Fixture.musicalMap(Fixture.anchor(1, frame: 48_000, host: 2_424_000_000, transport: 2),
                                                     microsPerQuarter: 3_000_000)
         #expect(Fixture.refusal { try capture(otherTransport) } == .musicalMapMismatch)
         let otherClock = ClockAnchor(sample: SampleStamp(clock: ClockID(validated: "smp.other"), generation: .initial,
@@ -139,9 +141,21 @@ struct MIDICaptureRestartTests {
         _ = try capture(map)
         #expect(log.records.last?.musicalTicks == 2_560)
         // An anchor without a musical stamp keeps the transport anchored.
-        try log.observe(anchor: plain)
-        _ = try capture(map)
-        #expect(log.records.map(\.musicalTicks) == [nil, 2_560, 2_560])
+        try log.observe(anchor: Fixture.anchor(1, frame: 96_000, host: 2_448_000_000))
+        _ = try capture(map, host: 2_460_000_000)
+        #expect(log.records.map(\.musicalTicks) == [nil, 2_560, 7_680])
+    }
+
+    @Test func delayedCaptureBeforeMusicalAnchorRefusesNegativeTicks() throws {
+        var log = try Fixture.log([Fixture.keysA])
+        try log.observe(anchor: Fixture.anchor(1, frame: 48_000, host: 24_000_000, transport: 1))
+        let before = log
+
+        #expect(Fixture.refusal {
+            try Fixture.capture(&log, Fixture.keysA, [0x2090_3C64], host: 0)
+        } == .negativeMusicalTicks)
+        #expect(log == before)
+        #expect(log.records.isEmpty)
     }
 
     @Test func delayedDeliveryWithinAGenerationDerivesThroughTheCurrentAnchor() throws {
@@ -222,10 +236,10 @@ struct MIDICaptureRestartTests {
     @Test func unsupportedCapacityRefusesAndKeepsTheFirstTaint() throws {
         var log = try Fixture.log([Fixture.keysA, Fixture.keysB])
         try log.observe(anchor: Fixture.anchor(1, frame: 0, host: 0))
-        try log.observe(Fixture.restart(2, host: 1_000_000), stream: nil)
+        try log.observe(Fixture.restart(2, host: 1_000_000), stream: nil, nominalRate: 48_000)
         func capture(_ host: UInt64, on stream: StreamID = Fixture.keysA) throws -> MIDICaptureOutcome {
             try log.capture([0x2090_3C64], stream: stream, host: HostStamp(ticks: host), endpoint: .midi1,
-                            port: .midi1, musicalMap: nil, current: .initial)
+                            port: .midi1, musicalMap: nil, current: try Generation(2))
         }
         for index in 0..<MIDICaptureLog.maximumUnsupported {
             _ = try capture(UInt64(index))
@@ -245,11 +259,12 @@ struct MIDICaptureRestartTests {
         var log = try Fixture.log([Fixture.keysA])
         try log.observe(anchor: Fixture.anchor(1, frame: 0, host: 0))
         for generation in 2...MIDICaptureLog.maximumGenerations {
-            try log.observe(Fixture.restart(UInt64(generation), host: UInt64(generation)), stream: nil)
+            try log.observe(Fixture.restart(UInt64(generation), host: UInt64(generation)), stream: nil,
+                            nominalRate: 48_000)
             try log.observe(anchor: Fixture.anchor(generation, frame: 0, host: UInt64(generation)))
         }
         #expect(log.firstAnchors.count == 4_096)
-        try log.observe(Fixture.restart(4_097, host: 5_000), stream: nil)
+        try log.observe(Fixture.restart(4_097, host: 5_000), stream: nil, nominalRate: 48_000)
         let before = log
         #expect(Fixture.refusal { try log.observe(anchor: Fixture.anchor(4_097, frame: 0, host: 5_000)) }
             == .capacity(limit: 4_096))
@@ -282,9 +297,9 @@ struct MIDICaptureRestartTests {
                             endpoint: .midi1, port: .midi1, musicalMap: nil, current: try Generation(2))
         } == .staleGeneration)
         #expect(log == before)
-        // A restart may not return to a generation the log has anchored already.
+        // A restart may not return to a generation the log has anchored already, nor repeat the current one.
         try Fixture.restartExample09(&log)
-        try log.observe(Fixture.restart(3, host: 2_500_000_000), stream: nil)
+        try log.observe(Fixture.restart(3, host: 2_500_000_000), stream: nil, nominalRate: 48_000)
         #expect(Fixture.refusal { try log.observe(Fixture.restart(3, host: 2_505_000_000), stream: nil) }
             == .staleGeneration)
         // A musical map anchored in the ended sample generation is refused, even on the current transport.

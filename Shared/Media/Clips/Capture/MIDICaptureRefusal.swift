@@ -3,7 +3,7 @@
 //  FluxKlang
 //
 //  Typed refusals of the MIDI capture log and its native UMP export (#112 CL4,
-//  media-contract.md §9.1–§9.2). A refused call returns nothing and leaves the log
+//  media-contract.md §5.2, §9.1–§9.2). A refused call returns nothing and leaves the log
 //  unchanged, with one exception: a capture refused at capacity taints its stream
 //  so that no later export of that stream can claim to be lossless.
 //
@@ -28,13 +28,31 @@ enum MIDICaptureRefusal: Error, Equatable, Sendable {
     case protocolChangedWithoutFormatChange(stream: StreamID)
     /// The anchor is on another sample clock than the log's.
     case foreignClock(ClockID)
-    /// The generation is not the log's current sample clock generation, or a restart does not start a new one.
+    /// The generation is not the log's current sample clock generation, or a restart does not start the next one.
     case staleGeneration
     /// No anchor of the current sample clock generation has been observed since the last restart.
     case noCurrentAnchor
-    /// A musical map was given without an anchored transport, was missing while one is anchored, or is not on the
-    /// log's clock, current sample generation and current transport.
+    /// A musical map was given without an anchored transport, was missing while one is anchored, was not built from
+    /// one of the log's remembered musical anchors of the current transport generation, or is not at the current
+    /// musical map revision, or has a different nominal rate.
     case musicalMapMismatch
+    /// A derived musical tick would be negative.
+    case negativeMusicalTicks
+    /// The anchor's host ticks precede the latest `clockRestart`'s.
+    case anchorPredatesRestart(restart: HostStamp)
+    /// An anchor does not advance from the current anchor or agree with its generation's drift reference (§5.2–§5.3).
+    case anchorDisagrees
+    /// A `clockRestart` or `locate` precedes the latest restart, locate or current anchor (`cutoff`).
+    case discontinuityPredatesCutoff(host: HostStamp, cutoff: HostStamp)
+    /// A `clockRestart` carries no nominal rate for its new generation.
+    case restartNeedsRate
+    /// A nominal rate was given with a discontinuity other than `clockRestart`.
+    case nominalRateWithoutRestart
+    /// The discontinuity's runtime stream slot is given without a `stream:`, or its stream or clock slot is not the
+    /// one the log's `RuntimePreparation` maps.
+    case discontinuitySlotMismatch
+    /// The `RuntimePreparation` maps no sample clock slot for the log's clock or no capture slot for a stream.
+    case runtimeSlotsUnmapped
     /// A `clockRestart` or `locate` discontinuity carries no host ticks to check later captures against.
     case discontinuityNeedsHost
     /// A `formatChange` discontinuity names no stream.
