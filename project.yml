@@ -254,6 +254,10 @@ targets:
       - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests+ReleaseMarkers.swift
+      - path: FluxKlangTests/MIDICaptureExportTests.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Protocol.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Restart.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+Clock.swift
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
