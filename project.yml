@@ -232,6 +232,8 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests+Hardening.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
       - path: FluxKlangTests/RecordingTakeTests.swift
       - path: FluxKlangTests/RecordingTakeTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeTests+Recovery.swift
