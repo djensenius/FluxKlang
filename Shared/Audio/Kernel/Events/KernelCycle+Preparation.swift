@@ -1,0 +1,73 @@
+// #360 E5bf: the control-side checks `KernelCycle.init` runs before it makes anything or claims the ownership, in the
+// order `PreparationError` reports them. They sit in this file because `KernelCycle.swift` is at the file-length
+// cap; they read only `KernelCycleParts` and change nothing, so a refusal here has claimed nothing.
+// Reference model; not RT-certified.
+
+/// What the preparation checks established and `KernelCycle.init` still needs: the deadline policy, whether the
+/// start is `.freshFanIn`, and the claim word as read, which the final claim compare-exchanges from.
+struct KernelCyclePreparation {
+    let deadline: DeadlinePolicy
+    let fresh: Bool
+    let claimState: NoteOwnership.CycleClaimState
+}
+
+extension KernelCycle {
+    /// Checks, in this order: the shape (`.notRenderEvents`, `.deadline`, `.blockCapacityOutOfRange`,
+    /// `.perLaneQuotaOutOfRange`), the wiring (`.scopeCountMismatch`, `.telemetrySlotOutOfRange`,
+    /// `.admissionRefusalsMismatch`), then the ownership (`.ownershipClaim`, `.admissionRefusalsRequired`). `init`
+    /// then issues the acknowledgement identity (`.ackIdentitiesExhausted`) and makes the claim itself. The first
+    /// defect found is the one reported; nothing is claimed or issued here.
+    static func prepare(_ parts: KernelCycleParts, blockCapacity: Int,
+                        perLaneQuota: Int) throws(PreparationError) -> KernelCyclePreparation {
+        let deadline = try checkShape(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
+        try checkWiring(parts)
+        let claimState = try checkOwnership(parts)
+        return KernelCyclePreparation(deadline: deadline, fresh: parts.start == .freshFanIn, claimState: claimState)
+    }
+
+    private static func checkShape(_ parts: KernelCycleParts, blockCapacity: Int,
+                                   perLaneQuota: Int) throws(PreparationError) -> DeadlinePolicy {
+        let policy = parts.events.policy
+        guard policy.purpose == .events, policy.consumer == .render else { throw .notRenderEvents }
+        let deadline: DeadlinePolicy
+        do {
+            deadline = try DeadlinePolicy(policy: policy)
+        } catch {
+            throw .deadline(error)
+        }
+        guard blockCapacity >= 1, blockCapacity <= Self.maximumBlockCapacity else {
+            throw .blockCapacityOutOfRange(blockCapacity)
+        }
+        guard perLaneQuota >= 1, perLaneQuota <= KernelLimits.maximumCapacity else {
+            throw .perLaneQuotaOutOfRange(perLaneQuota)
+        }
+        return deadline
+    }
+
+    private static func checkWiring(_ parts: KernelCycleParts) throws(PreparationError) {
+        guard parts.ownership.scopeCount == parts.safety.scopeCount else {
+            throw .scopeCountMismatch(ownership: parts.ownership.scopeCount, safety: parts.safety.scopeCount)
+        }
+        if let output = parts.telemetry, output.slot < 0 || output.slot >= output.slots.slotCount {
+            throw .telemetrySlotOutOfRange(output.slot)
+        }
+        if let refusals = parts.admissionRefusals,
+           refusals.handoff != parts.events.identity || refusals.laneCount != parts.events.laneCount {
+            throw .admissionRefusalsMismatch
+        }
+    }
+
+    /// The claim refusal comes first: an odd word (a live cycle) is `.predecessorNotRetired` and a used word under
+    /// `.freshFanIn` is `.alreadyUsed`, whether or not the table is missing. Only a replacement over a word an
+    /// earlier cycle retired (nonzero, even) can then lack the table: a new one would leave producers admitted
+    /// before it counting into the retired cycle's table. A first cycle (word 0) may omit it under either start.
+    private static func checkOwnership(_ parts: KernelCycleParts)
+        throws(PreparationError) -> NoteOwnership.CycleClaimState {
+        let claimState = parts.ownership.cycleClaimState()
+        if let refusal = NoteOwnership.cycleClaimRefusal(claimState, fresh: parts.start == .freshFanIn) {
+            throw .ownershipClaim(refusal)
+        }
+        if parts.admissionRefusals == nil, claimState.hasRetiredCycle { throw .admissionRefusalsRequired }
+        return claimState
+    }
+}
