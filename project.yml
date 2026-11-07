@@ -389,6 +389,11 @@ targets:
       - path: FluxKlangTests/PluginResourceTests+Order.swift
       - path: FluxKlangTests/PluginResourceTests+Pressure.swift
       - path: FluxKlangTests/PluginResourceTests+Versions.swift
+      - path: FluxKlangTests/PeerControlMessageTests.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Command.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Golden.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Hostile.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Roundtrip.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
