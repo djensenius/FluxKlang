@@ -9,11 +9,22 @@
 //  the class. No compatibility rule is restated here.
 //
 
+/// Scoped observation of validation calls, primarily for pure tests. Task-local so parallel tests do not interfere.
+enum WiringCandidateValidationObserver {
+    @TaskLocal static var observer: (@Sendable () -> Void)?
+}
+
 /// Classifies port pairs through contract validation. See `WiringCandidate.classify`.
 enum WiringCandidateClassifier {
     /// Stem of the temporary edge ID the candidate is validated under; a numeric
     /// suffix is added until it names no edge of the graph.
     static let probeStem: StaticString = "wpv.probe"
+
+    /// The one graph-validation entry point in `Shared/Wiring`, with an optional task-local observer.
+    static func validationErrors(of graph: GraphDocument) -> [GraphValidationError] {
+        WiringCandidateValidationObserver.observer?()
+        return graph.validationErrors()
+    }
 
     /// The class of `from` → `to`. The bare wire is classified first, so a
     /// supplied conversion or feedback never masks direction, duplicate or signal
@@ -66,7 +77,7 @@ enum WiringCandidateClassifier {
 
     /// Validation errors, refusing the graph when the contract stops before checking wires.
     private static func checkedErrors(_ graph: GraphDocument) throws(WiringPreviewRefusal) -> [GraphValidationError] {
-        try checked(graph.validationErrors())
+        try checked(validationErrors(of: graph))
     }
 
     /// `errors` (a graph's validation errors), refused when the contract stopped before checking wires.
