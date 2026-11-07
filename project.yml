@@ -207,6 +207,15 @@ targets:
       - path: FluxKlangTests/GraphCompilerPlanTests+Semantics.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Delay.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Determinism.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Fixtures.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Golden.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Kernels.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Limits.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Refusals.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Schedules.swift
       - path: FluxKlangTests/PreparationProjectBudgetTests.swift
       - path: FluxKlangTests/ProjectPreparationContextTests.swift
       - path: FluxKlangTests/ProjectPackagePathTests.swift
