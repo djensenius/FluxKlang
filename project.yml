@@ -226,6 +226,17 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
       - path: FluxKlangTests/ProjectPackageIOTests.swift
       - path: FluxKlangTests/ProjectPackageIOTests+Hardening.swift
+      - path: FluxKlangTests/ProjectStagingTests.swift
+      - path: FluxKlangTests/ProjectStagingTests+Aliasing.swift
+      - path: FluxKlangTests/ProjectStagingTests+CombiningMarks.swift
+      - path: FluxKlangTests/ProjectStagingTests+CrashSweep.swift
+      - path: FluxKlangTests/ProjectStagingTests+Export.swift
+      - path: FluxKlangTests/ProjectStagingTests+Faults.swift
+      - path: FluxKlangTests/ProjectStagingTests+Import.swift
+      - path: FluxKlangTests/ProjectStagingTests+Plan.swift
+      - path: FluxKlangTests/ProjectStagingTests+Recovery.swift
+      - path: FluxKlangTests/ProjectStagingTests+Scenario.swift
+      - path: FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift
       - path: FluxKlangTests/MIDIProtocolTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Policy.swift
