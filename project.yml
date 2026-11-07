@@ -383,6 +383,24 @@ targets:
       - path: FluxKlangTests/ActiveSensingTests+Arming.swift
       - path: FluxKlangTests/ActiveSensingTests+Timeout.swift
       - path: FluxKlangTests/ActiveSensingTests+Refusal.swift
+      - path: FluxKlangTests/PluginResourceTests.swift
+      - path: FluxKlangTests/PluginResourceTests+Latency.swift
+      - path: FluxKlangTests/PluginResourceTests+Ledger.swift
+      - path: FluxKlangTests/PluginResourceTests+Order.swift
+      - path: FluxKlangTests/PluginResourceTests+Pressure.swift
+      - path: FluxKlangTests/PluginResourceTests+Versions.swift
+      - path: FluxKlangTests/PeerControlMessageTests.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Command.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Golden.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Hostile.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Roundtrip.swift
+      - path: FluxKlangTests/RemoteDispatchTests.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Dispatch.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Limits.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Mirror.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Order.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Refusals.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Sources.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
