@@ -417,6 +417,10 @@ targets:
       - path: FluxKlangTests/KernelCycleFollowUpTests.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift
+      - path: FluxKlangTests/MPEZoneTests.swift
+      - path: FluxKlangTests/MPEZoneTests+Config.swift
+      - path: FluxKlangTests/MPEZoneTests+Allocator.swift
+      - path: FluxKlangTests/MPEZoneTests+Expression.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
