@@ -8,6 +8,8 @@ import Foundation
 /// A value-type fake volume for `StagingFileSystem`. Every primitive is logged with its outcome and consults a
 /// script by index (relative to `arm`), so tests can inject faults, crashes (before or after a primitive, or a torn
 /// `createFile`), planted nodes and silent corruption. `removeTree` is expanded into one primitive per node.
+/// The script-keyed maps (plant, remove, mutateOnRead, statusSizeSkew, silent) match by exact spelling and are not
+/// folded under `caseInsensitive`.
 struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     struct Node: Equatable, Sendable {
         var kind: ProjectPackageEntryKind
@@ -15,6 +17,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         var linkCount = 1
         var volume = 1
         var generation: UInt64 = 1
+        /// Unique per node and kept by a rename; assigned when the node is placed.
+        var identity: UInt64 = 0
     }
 
     struct Shape: Equatable, Sendable {
@@ -84,6 +88,13 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     private var script = Script()
     private var base = 0
     private var nextGeneration: UInt64 = 2
+    private var nextIdentity: UInt64 = 1
+    /// When true every path is folded with `lowercased()` on entry, so `Set` and `set` name one node.
+    let caseInsensitive: Bool
+
+    init(caseInsensitive: Bool = false) {
+        self.caseInsensitive = caseInsensitive
+    }
 
     var mutations: [Entry] { log.filter(\.operation.isMutating) }
 
@@ -97,19 +108,24 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     // MARK: Seeding (not logged)
 
     mutating func seedDirectory(_ path: String, volume: Int = 1) {
-        nodes[path] = Node(kind: .directory, volume: volume)
+        place(fold(path), Node(kind: .directory, volume: volume))
     }
 
     mutating func seedFile(_ path: String, _ bytes: Data, linkCount: Int = 1, volume: Int = 1) {
-        nodes[path] = Node(kind: .regularFile, bytes: bytes, linkCount: linkCount, volume: volume)
+        place(fold(path), Node(kind: .regularFile, bytes: bytes, linkCount: linkCount, volume: volume))
     }
 
     mutating func unseed(_ path: String) {
-        nodes[path] = nil
+        nodes[fold(path)] = nil
+    }
+
+    /// Forces a node's identity so a test can give nodes of two volumes the same one.
+    mutating func setIdentity(_ path: String, to identity: UInt64) {
+        nodes[fold(path)]?.identity = identity
     }
 
     mutating func seedNode(_ path: String, kind: ProjectPackageEntryKind) {
-        nodes[path] = Node(kind: kind)
+        place(fold(path), Node(kind: kind))
     }
 
     mutating func seed(package contents: ProjectPackageContents, at root: String, volume: Int = 1) {
@@ -124,6 +140,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     static func join(_ base: String, _ child: String) -> String { base.isEmpty ? child : base + "/" + child }
 
     func shapes(at root: String) -> [String: Shape] {
+        let root = fold(root)
         var result: [String: Shape] = [:]
         for (path, node) in nodes where StagingPlan.isWithin(path, of: root) {
             let suffix = StagingPlan.remainder(of: path, beneath: root).map { "/" + $0 } ?? ""
@@ -140,27 +157,42 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         return result
     }
 
+    /// The nodes with identities zeroed, for comparing two volumes that were built in different orders.
+    var nodesIgnoringIdentity: [String: Node] {
+        nodes.mapValues { node in
+            var copy = node
+            copy.identity = 0
+            return copy
+        }
+    }
+
     func nodes(outside roots: [String]) -> [String: Node] {
-        nodes.filter { path, _ in !roots.contains { StagingPlan.isWithin(path, of: $0) } }
+        let folded = roots.map(fold)
+        return nodes.filter { path, _ in !folded.contains { StagingPlan.isWithin(path, of: $0) } }
     }
 
     // MARK: StagingFileSystem
 
     mutating func status(at path: String) throws(StagingIOFault) -> StagingNodeStatus? {
-        try perform(.status(path)) { store throws(StagingIOFault) in
+        let path = fold(path)
+        return try perform(.status(path)) { store throws(StagingIOFault) in
             guard !path.isEmpty else {
-                return StagingNodeStatus(kind: .directory, byteCount: 0, linkCount: 1, volume: 1, generation: 0)
+                return StagingNodeStatus(
+                    kind: .directory, byteCount: 0, linkCount: 1, volume: 1, generation: 0, identity: 0
+                )
             }
             guard let node = store.nodes[path] else { return nil }
             return StagingNodeStatus(
                 kind: node.kind, byteCount: node.bytes.count + (store.script.statusSizeSkew[path] ?? 0),
-                linkCount: node.linkCount, volume: node.volume, generation: node.generation
+                linkCount: node.linkCount, volume: node.volume, generation: node.generation,
+                identity: node.identity
             )
         }
     }
 
     mutating func listDirectory(at path: String, limit: Int) throws(StagingIOFault) -> [String] {
-        try perform(.list(path, limit)) { store throws(StagingIOFault) in
+        let path = fold(path)
+        return try perform(.list(path, limit)) { store throws(StagingIOFault) in
             guard path.isEmpty || store.nodes[path]?.kind == .directory else { throw .notFound }
             let names = store.nodes.keys.compactMap { key -> String? in
                 Self.parent(of: key) == path ? Self.leaf(of: key) : nil
@@ -173,7 +205,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func read(at path: String, offset: Int, count: Int) throws(StagingIOFault) -> Data {
-        try perform(.read(path, offset, count)) { store throws(StagingIOFault) in
+        let path = fold(path)
+        return try perform(.read(path, offset, count)) { store throws(StagingIOFault) in
             guard let node = store.nodes[path], node.kind == .regularFile, offset >= 0, count >= 0 else {
                 throw .notFound
             }
@@ -191,6 +224,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func makeDirectory(at path: String) throws(StagingIOFault) {
+        let path = fold(path)
         try perform(.makeDirectory(path)) { store throws(StagingIOFault) in
             try store.checkCreatable(path)
             if store.script.silent[path] == .dropDirectory { return }
@@ -199,6 +233,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func createFile(at path: String, bytes: Data) throws(StagingIOFault) {
+        let path = fold(path)
         let index = log.count - base
         if !isDown, script.crashIndex == index, case let .torn(prefix) = script.crash {
             if (try? checkCreatable(path)) != nil {
@@ -225,6 +260,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func syncDirectory(at path: String) throws(StagingIOFault) {
+        let path = fold(path)
         try perform(.syncDirectory(path)) { store throws(StagingIOFault) in
             let dropped = store.script.silent[path] == .dropDirectory
             guard path.isEmpty || dropped || store.nodes[path]?.kind == .directory else {
@@ -234,6 +270,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func rename(from source: String, to destination: String) throws(StagingIOFault) {
+        let (source, destination) = (fold(source), fold(destination))
         try perform(.rename(source, destination)) { store throws(StagingIOFault) in
             guard let node = store.nodes[source] else { throw .notFound }
             guard store.nodes[destination] == nil else { throw .exists }
@@ -249,6 +286,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     mutating func removeTree(at path: String) throws(StagingIOFault) {
+        let path = fold(path)
         let doomed = nodes.keys.filter { StagingPlan.isWithin($0, of: path) }
             .sorted { $1.utf8.lexicographicallyPrecedes($0.utf8) }
         if doomed.isEmpty {
@@ -283,11 +321,22 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         return parent.isEmpty ? 1 : nodes[parent]?.volume ?? 1
     }
 
+    private func fold(_ path: String) -> String {
+        caseInsensitive ? path.lowercased() : path
+    }
+
+    private mutating func place(_ path: String, _ node: Node) {
+        var stamped = node
+        stamped.identity = nextIdentity
+        nextIdentity += 1
+        nodes[path] = stamped
+    }
+
     private mutating func insert(_ path: String, _ node: Node) {
         var stamped = node
         stamped.generation = nextGeneration
         nextGeneration += 1
-        nodes[path] = stamped
+        place(path, stamped)
     }
 
     private mutating func perform<Value>(
@@ -298,7 +347,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
             log.append(Entry(operation: operation, outcome: .down))
             throw .interrupted
         }
-        if let path = script.plant[index] { nodes[path] = Node(kind: .directory) }
+        if let path = script.plant[index] { place(path, Node(kind: .directory)) }
         if let path = script.remove[index] { nodes[path] = nil }
         if script.crashIndex == index, script.crash == .before {
             isDown = true

@@ -12,8 +12,9 @@ enum StagedPackageImport {
         return try walk.run(root: root, in: &store)
     }
 
-    /// Pure checks (chunk size, overlap, source path), then destination pre-flight, then the source read, then
-    /// the operation budget, then the same staged promotion as an export. The source is never mutated.
+    /// Pure checks (chunk size, spelling overlap, source path), then the read-only alias check by node identity,
+    /// destination pre-flight, the source read, the operation budget, then the same staged promotion as an
+    /// export. The source is never mutated.
     static func run<FS: StagingFileSystem>(
         from source: String, plan: StagingPlan, policy: ProjectPackageManifestPolicy,
         chunkByteCount: Int, in store: inout FS
@@ -25,6 +26,7 @@ enum StagedPackageImport {
         } catch {
             throw .package(error)
         }
+        try StagingAliasCheck.refuseAliases(source: source, plan: plan, in: &store)
         try StagedPackageExport.preflight(plan, in: &store)
         let contents = try read(from: source, policy: policy, chunkByteCount: chunkByteCount, in: &store)
         let ordered = try StagedPackageExport.prepare(plan: plan, contents: contents)

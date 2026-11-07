@@ -153,10 +153,10 @@ extension ProjectStagingTests {
         forward.seed(package: old, at: Fixture.destination)
         backward.seed(package: old, at: Fixture.destination)
         backward.seedDirectory("other")
-        #expect(forward == backward)
+        #expect(forward.nodesIgnoringIdentity == backward.nodesIgnoringIdentity)
         _ = Fixture.export(try Fixture.plan(.replaceExisting), new, &forward)
         _ = Fixture.export(try Fixture.plan(.replaceExisting), new, &backward)
-        #expect(forward == backward)
+        #expect(forward.nodesIgnoringIdentity == backward.nodesIgnoringIdentity)
         #expect(forward.log == backward.log)
     }
 

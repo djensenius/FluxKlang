@@ -21,7 +21,11 @@ extension ProjectStagingTests {
         }
         switch log[index].operation {
         case .status, .list, .read:
-            if index < 4 { return failed(.preflight, .notNeeded) }
+            // An import's alias probes (status calls) come first, then the 4 pre-flight statuses; an export only has
+            // the pre-flight ones. The probe count is derived from the seeded nodes, not from production code.
+            let probes = scenario.imports
+                ? Scenario.aliasProbeCount(source: Fixture.source, plan: scenario.plan, in: scenario.start) : 0
+            if index < probes + 4 { return failed(.preflight, .notNeeded) }
             return index < firstMutation ? failed(.readSource, .notNeeded) : failed(.verifyReread, .removed)
         case let .makeDirectory(path):
             return path == stg ? failed(.createStagingRoot, .notNeeded) : failed(.writeEntry, .removed)
