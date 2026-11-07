@@ -257,6 +257,13 @@ targets:
       - path: FluxKlangTests/MeterDisplayTests+Staleness.swift
       - path: FluxKlangTests/MeterDisplayTests+LateConsumption.swift
       - path: FluxKlangTests/MeterDisplayTests+Ordering.swift
+      - path: FluxKlangTests/MeterTapTests.swift
+      - path: FluxKlangTests/MeterTapTests+Accumulation.swift
+      - path: FluxKlangTests/MeterTapTests+Bounds.swift
+      - path: FluxKlangTests/MeterTapTests+Fixtures.swift
+      - path: FluxKlangTests/MeterTapTests+Invalid.swift
+      - path: FluxKlangTests/MeterTapTests+Level.swift
+      - path: FluxKlangTests/MeterTapTests+Publish.swift
       - path: FluxKlangTests/OSCSchedulingTests.swift
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
@@ -340,6 +347,12 @@ targets:
       - path: FluxKlangTests/SpatialMaskTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
+      - path: FluxKlangTests/OSCNamespaceTests.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Arguments.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Grammar.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/MTCFollowerTests.swift
@@ -371,6 +384,13 @@ targets:
       - path: FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift
       - path: FluxKlangTests/MIDISourceRegistryTests.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Bounds.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Determinism.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Goldens.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Keys.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Precedence.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Widths.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Bounds.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Endpoint.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Isolation.swift
