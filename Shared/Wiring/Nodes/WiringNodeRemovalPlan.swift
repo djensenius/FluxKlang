@@ -3,10 +3,11 @@
 //  FluxKlang
 //
 //  What removing a node takes with it: every edge of the draft's graph that
-//  touches the node is disconnected first, because `GraphEdit.removeNode` is
-//  only valid once its attached edges are gone. The plan is a read-only
-//  preview (the UI can list the wires that go with the node) and exactly what
-//  `WiringNodeComposer.remove` folds.
+//  touches the node is disconnected first. That is this composer's policy, not
+//  a rule of `GraphEdit.removeNode`: applying a `removeNode` removes the node's
+//  attached edges itself, so no caller may rely on a precondition there. The
+//  plan is a read-only preview (the UI can list the wires that go with the
+//  node) and exactly what `WiringNodeComposer.remove` folds.
 //
 
 /// The edges that go with a node, built only by `make`. Valid for the draft and active graph it was built from.
