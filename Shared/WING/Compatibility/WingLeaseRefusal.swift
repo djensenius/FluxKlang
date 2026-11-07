@@ -9,6 +9,7 @@ enum WingLeaseRefusal: Error, Equatable, Sendable {
     case tooManySettings(count: Int, limit: Int)
     case originMismatch(expected: WingLeaseOrigin, got: WingLeaseOrigin)
     case grantNotCurrent(issuedAt: Int, expiry: Int, now: Int)
+    case grantAlreadyApplied(issuedAt: Int, lastAppliedIssuedAt: Int)
     case grantExpired(expiry: Int, now: Int)
     case budgetExceeded(requested: Int, remaining: Int)
     case restoreRequired(writtenSettingCount: Int)

@@ -29,7 +29,8 @@ enum WingLeaseEvent: Equatable, Sendable {
 /// expiry tick and a setting budget) and `restoring` (only restore writes within a declared plan). Restoration is NOT
 /// atomic: it is applied setting by setting and ends in `verified`, `partial` or `unverified` by counts.
 /// Expiry stops further writes but never drops the restore obligation. Returning to `unleased` clears the grant and
-/// the counters, keeps `lastTick` (time never runs backwards across leases) and sets or clears `lastOutcome`.
+/// the counters, keeps `lastTick` (time never runs backwards across leases) and `lastGrantIssuedAt` (a grant is
+/// spendable once; a later grant needs a strictly newer `issuedAt`) and sets or clears `lastOutcome`.
 /// The lease holds counts only, never setting addresses or values, and never reads a clock.
 struct WingCompatibilityLease: Equatable, Sendable {
     private(set) var phase: WingLeasePhase = .unleased
@@ -38,6 +39,9 @@ struct WingCompatibilityLease: Equatable, Sendable {
     private(set) var plannedRestoreCount = 0
     private(set) var restoreSentCount = 0
     private(set) var lastTick: WingLeaseTick?
+    /// The `issuedAt` of the newest grant ever applied. Kept across every reset, so a grant that was applied once
+    /// (same or older `issuedAt`) can never be spent again: a new write after a cycle needs a newer human grant.
+    private(set) var lastGrantIssuedAt: WingLeaseTick?
     private(set) var lastOutcome: WingLeaseOutcome?
 
     init() {}
@@ -135,10 +139,14 @@ struct WingCompatibilityLease: Equatable, Sendable {
                 now: tick.rawValue
             )
         }
+        if let applied = lastGrantIssuedAt, newGrant.issuedAt <= applied {
+            throw .grantAlreadyApplied(issuedAt: newGrant.issuedAt.rawValue, lastAppliedIssuedAt: applied.rawValue)
+        }
         var next = self
         next.phase = .authorizedWrite
         next.grant = newGrant
         next.writtenSettingCount = 0
+        next.lastGrantIssuedAt = newGrant.issuedAt
         return next
     }
 

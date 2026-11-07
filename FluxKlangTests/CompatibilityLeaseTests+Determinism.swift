@@ -30,9 +30,10 @@ extension CompatibilityLeaseTests {
     private static func caseCount(_ refusal: WingLeaseRefusal) -> Int {
         switch refusal {
         case .notPermitted, .readNotPermitted, .tickRegressed, .invalidCount, .tooManySettings, .originMismatch,
-             .grantNotCurrent, .grantExpired, .budgetExceeded, .restoreRequired, .restoreExceedsWritten,
-             .restoreBudgetExceeded, .restoreCountMismatch, .invalidConfirmedCount, .confirmedExceedsSent:
-            15
+             .grantNotCurrent, .grantAlreadyApplied, .grantExpired, .budgetExceeded, .restoreRequired,
+             .restoreExceedsWritten, .restoreBudgetExceeded, .restoreCountMismatch, .invalidConfirmedCount,
+             .confirmedExceedsSent:
+            16
         }
     }
 
@@ -43,6 +44,10 @@ extension CompatibilityLeaseTests {
         return [
             Attempt(.unleased, .release, 5, .notPermitted(phase: .unleased, event: .release)),
             Attempt(try discovering(at: 10), .grant(grant), 99, .grantNotCurrent(issuedAt: 100, expiry: 150, now: 99)),
+            Attempt(
+                try rediscovered(), .grant(try makeGrant()), 100,
+                .grantAlreadyApplied(issuedAt: 100, lastAppliedIssuedAt: 100)
+            ),
             Attempt(written, .release, 100, .restoreRequired(writtenSettingCount: 5)),
             Attempt(written, .admitWrite(origin: .human, settingCount: 0), 100, .invalidCount(0)),
             Attempt(
@@ -87,7 +92,7 @@ extension CompatibilityLeaseTests {
 
     @Test func leaseEveryRefusalLeavesTheLeaseAndItsLastTickUnchangedAndRepeatsIdentically() throws {
         let all = try Self.attempts()
-        #expect(all.count == 14)
+        #expect(all.count == 15)
         for attempt in all {
             let lastTick = attempt.lease.lastTick
             try Self.expectRefusal(attempt.lease, attempt.event, at: attempt.tick, attempt.expected)
@@ -95,7 +100,7 @@ extension CompatibilityLeaseTests {
         }
     }
 
-    @Test func leaseAllFifteenRefusalCasesAreProducedByAtLeastOneTest() throws {
+    @Test func leaseAllSixteenRefusalCasesAreProducedByAtLeastOneTest() throws {
         var names = Set(try Self.attempts().map { Self.caseName($0.expected) })
         let gate = try WingLeaseGate.decide(.read, in: .unleased, at: Self.tick(0))
         guard case let .refused(read) = gate else {
@@ -106,8 +111,9 @@ extension CompatibilityLeaseTests {
         names.insert(Self.caseName(read))
         #expect(names == [
             "notPermitted", "readNotPermitted", "tickRegressed", "invalidCount", "tooManySettings", "originMismatch",
-            "grantNotCurrent", "grantExpired", "budgetExceeded", "restoreRequired", "restoreExceedsWritten",
-            "restoreBudgetExceeded", "restoreCountMismatch", "invalidConfirmedCount", "confirmedExceedsSent"
+            "grantNotCurrent", "grantAlreadyApplied", "grantExpired", "budgetExceeded", "restoreRequired",
+            "restoreExceedsWritten", "restoreBudgetExceeded", "restoreCountMismatch", "invalidConfirmedCount",
+            "confirmedExceedsSent"
         ])
         #expect(names.count == Self.caseCount(read))
     }
