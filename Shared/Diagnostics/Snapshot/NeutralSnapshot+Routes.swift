@@ -140,11 +140,16 @@ struct RefusedIdentities {
     }
 
     func refuses(_ raw: String) -> Bool {
-        guard let form = Self.form(raw) else { return true }
+        let scan = UntrustedTextSanitizer.filterScalars(
+            raw.unicodeScalars, keeping: Self.maximumIdentityScalars, trimmed: true
+        )
+        guard let form = Self.identityForm(scan).scalars else { return true }
         if forms.contains(form) { return true }
         let marker = UntrustedLabel.withheldMarker
-        return UntrustedTextSanitizer.redactMatchForm(of: raw, withheld: terms, marker: marker, scanIsComplete: true)
-            .changed
+        let activeTerms = UntrustedTextSanitizer.applicableTerms(terms, for: scan)
+        return UntrustedTextSanitizer.redactMatchForm(
+            of: raw, withheld: activeTerms, marker: marker, scanIsComplete: scan.isComplete
+        ).changed
     }
 
     /// The identity form when it fits `maximumIdentityFormBytes`, else nil (it cannot
@@ -186,10 +191,21 @@ struct RefusedIdentities {
         let filtered = UntrustedTextSanitizer.filterScalars(
             raw.unicodeScalars, keeping: maximumIdentityScalars, trimmed: true
         )
+        return identityForm(filtered)
+    }
+
+    /// Builds an identity form from the same trimmed scan used to prepare its withheld term.
+    static func identityForm(_ filtered: UntrustedTextSanitizer.Scan) -> IdentityForm {
         let source = UntrustedTextSanitizer.sourceForm(filtered.text).trimmingCharacters(in: .whitespacesAndNewlines)
         if source.unicodeScalars.count > maximumIdentityFormBytes { return .tooLong }
         guard filtered.isComplete else { return .unknown }
         let form = UntrustedTextSanitizer.caselessForm(source.unicodeScalars)
-        return fits(form) ? .form(form) : .tooLong
+        // The equality form strips new blanks; the parallel A1 form preserves the
+        // old byte bound so removing one cannot create a newly fitting identity.
+        let a1Source = UntrustedTextSanitizer.sourceForm(filtered.a1Text ?? filtered.text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceBytes = UntrustedTextSanitizer.caselessForm(a1Source.unicodeScalars)
+            .reduce(0) { $0 + $1.utf8.count }
+        return fits(form) && sourceBytes <= maximumIdentityFormBytes ? .form(form) : .tooLong
     }
 }
