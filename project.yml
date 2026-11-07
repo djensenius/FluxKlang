@@ -359,6 +359,15 @@ targets:
       - path: FluxKlangTests/MediaBlockPoolTests+Lease.swift
       - path: FluxKlangTests/MediaBlockPoolTests+RandomSequences.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Statistics.swift
+      - path: FluxKlangTests/MediaIOWorkerTests.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Mapping.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpCompletion.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpIssue.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpRecovery.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Reader.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Requests.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Wiring.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Writer.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
@@ -456,6 +465,12 @@ targets:
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Determinism.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Gate.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Grant.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Restore.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Transitions.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests+Conflicts.swift
