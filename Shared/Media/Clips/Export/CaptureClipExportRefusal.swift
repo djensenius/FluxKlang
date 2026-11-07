@@ -11,7 +11,9 @@
 /// stream (those four in list order, wrapped in `.capture`), missing musical ticks, no captures, length out of range,
 /// an undecodable MIDI 1 packet, nothing exportable, ticks out of range, a Note On while sounding, too many items,
 /// then the clip's own refusal. A selection whose captures are all untimed holds both a missing-ticks and a
-/// no-captures defect, and the missing ticks are reported.
+/// no-captures defect, and the missing ticks are reported. The length check covers a requested length and, when none
+/// is requested, the default length taken from the selected MIDI 1 channel-voice captures (decodable or not): both
+/// are checked before any capture is decoded, so an out-of-range default length wins over an undecodable packet.
 enum CaptureClipExportRefusal: Error, Equatable, Sendable {
     /// The log's own export refusal (`exportStreamsEmpty`, `exportStreamsDuplicate`, `undeclaredStream`,
     /// `containsUnsupportedCapture`, `captureRefusedAtCapacity`, `exportHasNoCaptures`), with its payload.
@@ -22,7 +24,8 @@ enum CaptureClipExportRefusal: Error, Equatable, Sendable {
     /// A selected capture carries no musical ticks (no transport was anchored): SMF needs ticks and wall-clock time
     /// is never guessed. `stream` and `index` (into `MIDICaptureLog.records`) name the first such capture.
     case noMusicalTime(stream: StreamID, index: Int)
-    /// The requested clip length, or the default length of the selected captures, is outside
+    /// The requested clip length, or the default length of the selected MIDI 1 channel-voice captures (taken from
+    /// the last of them before any is decoded), is outside
     /// `1...MIDIClip.maximumLengthTicks`. The payload is the offending length; a default length whose quarter-note
     /// product would overflow `Int64` is reported as `Int64.max`.
     case lengthOutOfRange(Int64)

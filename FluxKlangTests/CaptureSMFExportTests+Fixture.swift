@@ -47,18 +47,20 @@ extension CaptureSMFExportTests {
         static let sysEx: [UInt32] = [0x3004_0102, 0x0300_0000]
         static let realTime: [UInt32] = [0x10F8_0000]
 
-        static func anchor(transport: Int?, frame: Int64 = 0, ticks: Int64 = 0) throws -> ClockAnchor {
+        static func anchor(transport: Int?, frame: Int64 = 0, ticks: Int64 = 0,
+                           host: UInt64? = nil) throws -> ClockAnchor {
             let musical = try transport.map {
                 MusicalStamp(transport: try Generation($0), musicalMap: .initial, ticks: ticks, loopIteration: 0)
             }
             return ClockAnchor(sample: SampleStamp(clock: clock, generation: .initial, frame: frame),
-                               host: HostStamp(ticks: baseHost + UInt64(frame) * hostPerTick), musical: musical)
+                               host: HostStamp(ticks: host ?? baseHost + UInt64(frame) * hostPerTick), musical: musical)
         }
 
-        /// A musical map through `anchor`, which must carry a musical stamp.
-        static func map(_ anchor: ClockAnchor) throws -> MusicalClockMap {
+        /// A musical map through `anchor`, which must carry a musical stamp. At the default 320,000 microseconds per
+        /// quarter and 48 kHz one tick is exactly one frame; at 500,000 it is 1.5625 frames.
+        static func map(_ anchor: ClockAnchor, microsPerQuarter: Int64 = 320_000) throws -> MusicalClockMap {
             let map = try MusicalMap(clock: musicalClock, revision: .initial,
-                                     segments: [TempoSegment(atTicks: 0, microsPerQuarter: 320_000)])
+                                     segments: [TempoSegment(atTicks: 0, microsPerQuarter: microsPerQuarter)])
             let musical = try #require(anchor.musical)
             return try MusicalClockMap(anchor: anchor, map: map, nominalRate: 48_000,
                                        currentSample: anchor.sample.generation, currentTransport: musical.transport)
@@ -94,27 +96,34 @@ extension CaptureSMFExportTests {
         }
     }
 
-    /// A log under construction: every capture at clip tick `tick` is stamped `tick` musical ticks after the
-    /// transport anchor, or with no musical ticks when no transport is anchored.
+    /// A log under construction: a capture at `tick` sits `tick` frames after the transport anchor (`tick` musical
+    /// ticks only at the default tempo), or has no musical ticks when no transport is anchored.
     struct Feed {
         private(set) var log: MIDICaptureLog
         private var musicalMap: MusicalClockMap?
-        private var anchorFrame: Int64 = 0
+        private var anchorHost = Fixture.baseHost
+        private let microsPerQuarter: Int64
 
-        init(_ streams: [StreamID], transport: Bool = true) throws {
+        /// `unanchored` leaves the log without any anchor, for `anchorTransport` to place the first one.
+        init(_ streams: [StreamID], transport: Bool = true, microsPerQuarter: Int64 = 320_000,
+             unanchored: Bool = false) throws {
+            self.microsPerQuarter = microsPerQuarter
             log = try MIDICaptureLog(streams: streams, clock: Fixture.clock, timebase: Fixture.timebase,
                                      nominalRate: 48_000)
+            if unanchored { return }
             let anchor = try Fixture.anchor(transport: transport ? 1 : nil)
             try log.observe(anchor: anchor)
-            musicalMap = transport ? try Fixture.map(anchor) : nil
+            musicalMap = transport ? try Fixture.map(anchor, microsPerQuarter: microsPerQuarter) : nil
         }
 
-        /// Anchors the transport at `frame`, so captures from there on carry musical ticks from `ticks`.
-        mutating func anchorTransport(atFrame frame: Int64, ticks: Int64 = 0) throws {
-            let anchor = try Fixture.anchor(transport: 1, frame: frame, ticks: ticks)
+        /// Anchors the transport at `frame`, so captures from there on carry musical ticks from `ticks`. The anchor's
+        /// host is `host`, or the host of `frame` at one host-tick step per frame when nil; captures then follow
+        /// that host one frame per `hostPerTick`, so a huge `frame` needs an explicit `host`.
+        mutating func anchorTransport(atFrame frame: Int64, ticks: Int64 = 0, host: UInt64? = nil) throws {
+            let anchor = try Fixture.anchor(transport: 1, frame: frame, ticks: ticks, host: host)
             try log.observe(anchor: anchor)
-            musicalMap = try Fixture.map(anchor)
-            anchorFrame = frame
+            musicalMap = try Fixture.map(anchor, microsPerQuarter: microsPerQuarter)
+            anchorHost = anchor.host.ticks
         }
 
         /// A locate at clip tick `tick`: captures stamped before it are unsupported and taint their stream.
@@ -139,7 +148,7 @@ extension CaptureSMFExportTests {
         mutating func add(_ stream: StreamID, _ words: [UInt32], tick: Int64,
                           endpoint: MIDIEndpointProtocol = .midi1,
                           port: MIDIPortProtocol = .midi1) throws -> MIDICaptureOutcome {
-            let host = Fixture.baseHost + UInt64(tick + anchorFrame) * Fixture.hostPerTick
+            let host = anchorHost + UInt64(tick) * Fixture.hostPerTick
             return try log.capture(words, stream: stream, host: HostStamp(ticks: host), endpoint: endpoint,
                                    port: port, musicalMap: musicalMap, current: .initial)
         }

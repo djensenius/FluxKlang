@@ -183,4 +183,46 @@ extension CaptureSMFExportTests {
         #expect(file.bytes == header + [0x4D, 0x54, 0x72, 0x6B, 0, 0, 0, 23] + track)
         #expect(file.reorderedItems == 0)
     }
+
+    @Test func anInferredLengthOutOfRangeIsReportedBeforeAnUndecodablePacketAndAnInRangeOneIsNot() throws {
+        let longest = MIDIClip.maximumLengthTicks
+        var feed = try Fixture.Feed([Fixture.streamA])
+        try feed.add(Fixture.streamA, [0x2000_0000], tick: 0)
+        try feed.add(Fixture.streamA, Fixture.controlChange(1, 7, 100), tick: longest)
+        let inferred = (longest / MusicalTime.ticksPerQuarter + 1) * MusicalTime.ticksPerQuarter
+        #expect(inferred > longest)
+        #expect(Fixture.refusal(feed.log, [Fixture.streamA]) == .lengthOutOfRange(inferred))
+        #expect(Fixture.refusal(feed.log, [Fixture.streamA], length: 1) == .invalidChannelVoice(
+            stream: Fixture.streamA, index: 0, .reservedStatus(mt: .midi1ChannelVoice, status: 0)))
+        var inRange = try Fixture.Feed([Fixture.streamA])
+        try inRange.add(Fixture.streamA, [0x2000_0000], tick: 0)
+        try inRange.add(Fixture.streamA, Fixture.controlChange(1, 7, 100), tick: 1_000)
+        #expect(Fixture.refusal(inRange.log, [Fixture.streamA]) == .invalidChannelVoice(
+            stream: Fixture.streamA, index: 0, .reservedStatus(mt: .midi1ChannelVoice, status: 0)))
+        var late = try Fixture.Feed([Fixture.streamA])
+        try late.add(Fixture.streamA, Fixture.controlChange(1, 7, 100), tick: 0)
+        try late.add(Fixture.streamA, [0x2000_0000], tick: longest)
+        #expect(Fixture.refusal(late.log, [Fixture.streamA]) == .lengthOutOfRange(inferred))
+        #expect(Fixture.refusal(late.log, [Fixture.streamA], length: 1) == .invalidChannelVoice(
+            stream: Fixture.streamA, index: 1, .reservedStatus(mt: .midi1ChannelVoice, status: 0)))
+    }
+
+    @Test func aCaptureThatIsNotMIDI1ChannelVoiceNeverExtendsTheInferredLength() throws {
+        var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
+        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
+        try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 100)
+        try feed.add(Fixture.streamA, Fixture.utility, tick: 100_000)
+        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: MIDIClip.maximumLengthTicks, endpoint: .midi2,
+                     port: .midi2)
+        let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
+        #expect(export.clip.lengthTicks == MusicalTime.ticksPerQuarter)
+        #expect(export.droppedUMPOnly == 2)
+    }
+
+    @Test func aSelectionWithNoMIDI1ChannelVoiceReportsNothingExportableWhenTheLengthIsInferred() throws {
+        var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
+        try feed.add(Fixture.streamA, Fixture.utility, tick: MIDIClip.maximumLengthTicks)
+        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 5, endpoint: .midi2, port: .midi2)
+        #expect(Fixture.refusal(feed.log, [Fixture.streamA, Fixture.streamB]) == .nothingExportable(dropped: 2))
+    }
 }

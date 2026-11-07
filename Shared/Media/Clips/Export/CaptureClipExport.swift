@@ -10,7 +10,8 @@
 /// A clip converted from captures, with what the conversion counted. Built only by `make`.
 ///
 /// The clip's tick scale is the log's musical ticks (`MusicalTime.ticksPerQuarter`, 15,360 per quarter) and its
-/// tempo is synthetic: the file carries no tempo, so `smf()` always reports `.syntheticTempoMap`.
+/// tempo is synthetic: the file carries no tempo, so `smf()` always reports `.syntheticTempoMap`, and rounding
+/// capture positions to ticks is declared as `.timingQuantized` with its count.
 struct CaptureClipExport: Equatable, Sendable {
     private(set) var clip: MIDIClip
     /// Selected captures that are not MIDI 1 channel voice (MIDI 2 channel voice and every other message type).
@@ -27,15 +28,19 @@ struct CaptureClipExport: Equatable, Sendable {
     /// selected capture, those dropped as UMP-only included, and only for types that carry a group; pairing stays
     /// keyed by (channel, note), so an off of one group can close a note of another.
     private(set) var groupsFlattened: Int
+    /// Selected captures, UMP-only ones included, whose musical ticks map back to another frame than the one they
+    /// were captured at (or whose map-back is unknown): the export's positions are rounded to ticks.
+    private(set) var timingQuantized: Int
 
     private init(clip: MIDIClip, droppedUMPOnly: Int, pairing: CaptureNotePairing, fidelityUnverified: Bool,
-                 groupsFlattened: Int) {
+                 groupsFlattened: Int, timingQuantized: Int) {
         self.clip = clip
         self.droppedUMPOnly = droppedUMPOnly
         unpairedOffs = pairing.unpairedOffs
         openNotesClosed = pairing.openNotesClosed
         widenedNotes = pairing.widenedNotes
         self.fidelityUnverified = fidelityUnverified
+        self.timingQuantized = timingQuantized
         self.groupsFlattened = groupsFlattened
     }
 
@@ -70,9 +75,10 @@ struct CaptureClipExport: Equatable, Sendable {
     }
 
     /// Exports the captures of `streams`. `lengthTicks` is the clip length in `1...MIDIClip.maximumLengthTicks`, or
-    /// nil for the next quarter boundary strictly after the last message (one quarter at least). Messages merge by
-    /// (ticks, stream id by UTF-8 bytes ascending, record index), so the order of `streams` never matters. The
-    /// refusal order is that of `CaptureClipExportRefusal`. Nothing in `log` changes.
+    /// nil for the next quarter boundary strictly after the last MIDI 1 channel-voice capture (one quarter at least);
+    /// that default is taken from the selected MT 0x2 captures and checked before any of them is decoded. Messages
+    /// merge by (ticks, stream id by UTF-8 bytes ascending, record index), so the order of `streams` never matters.
+    /// The refusal order is that of `CaptureClipExportRefusal`. Nothing in `log` changes.
     static func make(from log: MIDICaptureLog, streams: [StreamID],
                      lengthTicks: Int64?) throws(CaptureClipExportRefusal) -> CaptureClipExport {
         let selected = try select(streams, in: log)
@@ -89,18 +95,12 @@ struct CaptureClipExport: Equatable, Sendable {
             throw .noMusicalTime(stream: untimed.record.stream, index: untimed.index)
         }
         guard !records.isEmpty else { throw .capture(.exportHasNoCaptures) }
-        if let lengthTicks, !(1...MIDIClip.maximumLengthTicks).contains(lengthTicks) {
-            throw .lengthOutOfRange(lengthTicks)
-        }
+        let requested = try resolvedLength(lengthTicks, records)
         let conversion = try convert(records)
-        guard !conversion.messages.isEmpty else { throw .nothingExportable(dropped: conversion.dropped) }
-        let converted = conversion.messages.sorted { $0.precedes($1) }
-        let length: Int64
-        if let lengthTicks {
-            length = lengthTicks
-        } else {
-            length = try defaultLength(lastTicks: converted.reduce(0) { max($0, $1.ticks) })
+        guard let length = requested, !conversion.messages.isEmpty else {
+            throw .nothingExportable(dropped: conversion.dropped)
         }
+        let converted = conversion.messages.sorted { $0.precedes($1) }
         let timed = converted.map { CaptureTimedMessage(ticks: $0.ticks, message: $0.message) }
         let pairing = try CaptureNotePairing.pair(timed, lengthTicks: length)
         let clip: MIDIClip
@@ -111,7 +111,27 @@ struct CaptureClipExport: Equatable, Sendable {
         }
         return CaptureClipExport(clip: clip, droppedUMPOnly: conversion.dropped, pairing: pairing,
                                  fidelityUnverified: conversion.unverified,
-                                 groupsFlattened: groupsFlattened(in: records))
+                                 groupsFlattened: groupsFlattened(in: records),
+                                 timingQuantized: timingQuantized(in: records))
+    }
+
+    /// The explicit length, checked; or, when nil, the default length of the selected MT 0x2 captures (decodable or
+    /// not), nil when there is none so that `nothingExportable` reports.
+    private static func resolvedLength(_ lengthTicks: Int64?,
+                                       _ records: [Selected]) throws(CaptureClipExportRefusal) -> Int64? {
+        if let lengthTicks {
+            guard (1...MIDIClip.maximumLengthTicks).contains(lengthTicks) else { throw .lengthOutOfRange(lengthTicks) }
+            return lengthTicks
+        }
+        let voice = records.filter { $0.record.packet.messageType == .midi1ChannelVoice }
+        guard !voice.isEmpty else { return nil }
+        return try defaultLength(lastTicks: voice.reduce(0) { max($0, $1.ticks) })
+    }
+
+    /// The captures whose ticks map back to another frame than the captured one. A nil round trip (the map-back
+    /// overflowed) can never equal the frame, so it counts.
+    private static func timingQuantized(in records: [Selected]) -> Int {
+        records.count { $0.record.musicalRoundTripFrame != $0.record.sample.frame }
     }
 
     /// The group count of the media contract's `groupsFlattened`: the selected captures whose type carries a group
@@ -146,8 +166,9 @@ struct CaptureClipExport: Equatable, Sendable {
     }
 
     /// The file for `clip`, written by `StandardMIDIFile.write`, with the losses of this export: the synthetic tempo
-    /// map always, `umpOnlyDropped` for the dropped captures, `fidelityUnverified` when flagged and `groupsFlattened`
-    /// when the selection spans groups. Unpaired Note Offs, closed open notes and widened notes are counted on this
+    /// map always, `umpOnlyDropped` for the dropped captures, `fidelityUnverified` when flagged, `groupsFlattened`
+    /// when the selection spans groups and `timingQuantized` (added to whatever the writer reported) when capture
+    /// positions were rounded to ticks. Unpaired Note Offs, closed open notes and widened notes are counted on this
     /// value, not as §9.3 categories.
     func smf() -> SMFWriteResult {
         let written = StandardMIDIFile.write(clip)
@@ -156,6 +177,7 @@ struct CaptureClipExport: Equatable, Sendable {
         if droppedUMPOnly > 0 { losses[.umpOnlyDropped] = droppedUMPOnly }
         if fidelityUnverified { losses[.fidelityUnverified] = 1 }
         if groupsFlattened > 0 { losses[.groupsFlattened] = groupsFlattened }
+        if timingQuantized > 0 { losses[.timingQuantized, default: 0] += timingQuantized }
         return SMFWriteResult(bytes: written.bytes, losses: SMFExportLossReport(losses: losses),
                               reorderedItems: written.reorderedItems)
     }
