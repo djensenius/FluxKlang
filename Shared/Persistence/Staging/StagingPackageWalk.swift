@@ -2,7 +2,7 @@ import Foundation
 
 /// A bounded, no-follow walk of a package tree on a `StagingFileSystem`, mirroring the P3 reader's semantics:
 /// status first, then P1 admission, then placement checks, then chunked reads that always probe one byte past the
-/// remaining allowance, then a second status that must show the same generation and size.
+/// remaining allowance, then a second status that must equal the first in every field.
 struct StagingPackageWalk {
     private static let manifestName = ProjectPackageManifest.manifestMemberPath
 
@@ -122,11 +122,14 @@ struct StagingPackageWalk {
         }
     }
 
+    /// The final status must equal the status the member was admitted on in every field (kind, size, link count,
+    /// volume and generation) and agree with the bytes read. Generation and size alone are not enough: a hard link,
+    /// a volume change or a kind change after admission leaves both untouched while invalidating the kind,
+    /// link-count and volume checks that admission made on the first status.
     private mutating func confirmUnchanged<FS: StagingFileSystem>(
         _ path: String, _ before: StagingNodeStatus, byteCount: Int, _ store: inout FS
     ) throws(StagingRefusal) {
-        guard let after = try status(path, &store), after.generation == before.generation,
-              after.byteCount == before.byteCount, after.byteCount == byteCount else {
+        guard let after = try status(path, &store), after == before, after.byteCount == byteCount else {
             throw .packageIO(.memberChanged)
         }
         do {

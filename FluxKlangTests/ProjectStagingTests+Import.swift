@@ -204,6 +204,34 @@ extension ProjectStagingTests {
         }
     }
 
+    @Test func aLinkVolumeOrKindChangeWithoutAGenerationChangeIsRefusedAsChanged() throws {
+        let mutations: [Fake.ReadMutation] = [.addLink, .changeVolume, .changeKind]
+        for member in ["/d/a", "/manifest.json"] {
+            for mutation in mutations {
+                var fake = seeded(try Fixture.tiny("s"))
+                fake.arm(Fake.Script(mutateOnRead: [Fixture.source + member: mutation]))
+                let result = try readSource(&fake)
+                #expect(Fixture.refusal(result) == .packageIO(.memberChanged), "\(member) \(mutation)")
+                #expect(fake.mutations.isEmpty, "\(member) \(mutation)")
+            }
+        }
+    }
+
+    @Test func aStatusSizeThatDisagreesWithTheBytesReadIsRefusedAsChanged() throws {
+        var fake = seeded(try Fixture.tiny("s"))
+        fake.arm(Fake.Script(statusSizeSkew: [Fixture.source + "/d/a": 1]))
+        #expect(Fixture.refusal(try readSource(&fake)) == .packageIO(.memberChanged))
+        #expect(fake.mutations.isEmpty)
+    }
+
+    @Test func aMutationScriptedForAnUnreadPathLeavesTheReadIntact() throws {
+        let contents = try Fixture.tiny("s")
+        var fake = seeded(contents)
+        fake.arm(Fake.Script(mutateOnRead: [Fixture.source + "/absent": .addLink]))
+        #expect(Fixture.value(try readSource(&fake)) == contents)
+        #expect(fake.mutations.isEmpty)
+    }
+
     @Test func aMemberThatVanishesBetweenListingAndStatusIsRefusedAsChanged() throws {
         var fake = seeded(try Fixture.tiny("s"))
         fake.arm(Fake.Script(remove: [12: Fixture.source + "/project.json"]))

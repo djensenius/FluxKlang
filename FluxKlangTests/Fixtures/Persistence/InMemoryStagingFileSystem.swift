@@ -53,7 +53,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
     }
 
     enum ReadMutation: Equatable, Sendable {
-        case bumpGeneration, appendByte
+        case bumpGeneration, appendByte, addLink, changeVolume, changeKind
     }
 
     struct Script: Equatable, Sendable {
@@ -66,6 +66,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         var extraListedNames: [String] = []
         var silent: [String: Silent] = [:]
         var mutateOnRead: [String: ReadMutation] = [:]
+        /// Added to the byte count every status reports for the path; the bytes themselves are untouched.
+        var statusSizeSkew: [String: Int] = [:]
 
         static func fault(_ fault: StagingIOFault, at index: Int) -> Script {
             Script(faults: [index: fault])
@@ -151,8 +153,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
             }
             guard let node = store.nodes[path] else { return nil }
             return StagingNodeStatus(
-                kind: node.kind, byteCount: node.bytes.count, linkCount: node.linkCount,
-                volume: node.volume, generation: node.generation
+                kind: node.kind, byteCount: node.bytes.count + (store.script.statusSizeSkew[path] ?? 0),
+                linkCount: node.linkCount, volume: node.volume, generation: node.generation
             )
         }
     }
@@ -176,10 +178,13 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
                 throw .notFound
             }
             let slice = Data(node.bytes.dropFirst(offset).prefix(count))
-            switch offset == 0 ? store.script.mutateOnRead[path] : nil {
-            case .bumpGeneration: store.nodes[path]?.generation += 100
-            case .appendByte: store.nodes[path]?.bytes.append(0x58)
-            case nil: break
+            switch store.script.mutateOnRead[path] {
+            case .bumpGeneration where offset == 0: store.nodes[path]?.generation += 100
+            case .appendByte where offset == 0: store.nodes[path]?.bytes.append(0x58)
+            case .addLink where offset == 0: store.nodes[path]?.linkCount += 1
+            case .changeVolume where offset == 0: store.nodes[path]?.volume += 1
+            case .changeKind where slice.isEmpty: store.nodes[path]?.kind = .symbolicLink
+            default: break
             }
             return slice
         }
