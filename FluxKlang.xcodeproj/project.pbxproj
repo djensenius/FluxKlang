@@ -291,6 +291,7 @@
 		19E97A5132A878AD7248D608 /* PluginHostNegotiationTests+Spec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B11B2216A625CB35A31D7C /* PluginHostNegotiationTests+Spec.swift */; };
 		19F651F5EB4FC01086F9EE58 /* PortView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E70D3009B51EEB9AFA31AF /* PortView.swift */; };
 		19FABEDB13E34ECBC75A689A /* MTCFollower+HostMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43DA551AF6A87662574AE05 /* MTCFollower+HostMap.swift */; };
+		1A0C999A43DCBED5DD1710EB /* MIDIControlChangeDecodeTests+RealTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3440A3F8FE8C3CEED2E5A0D6 /* MIDIControlChangeDecodeTests+RealTime.swift */; };
 		1A18BFAB9DF3221C1113E086 /* StudioCanvasNodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00B197D31B1C77FB7FB99BBC /* StudioCanvasNodeCard.swift */; };
 		1A34FBD6719FA2F5EE9A43C3 /* PeerFramedChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA40ECDDB1C747598BD7553 /* PeerFramedChannel.swift */; };
 		1A79C4496E3269FC5D7CAC68 /* ProjectStagingTests+Faults.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FFAEF121D5920A5175FE87 /* ProjectStagingTests+Faults.swift */; };
@@ -505,6 +506,7 @@
 		2E233232A1A16758DCFD1B34 /* PluginResourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E47C70F828CE13113477D1F /* PluginResourceTests.swift */; };
 		2E2A3B3313E9064876AB581E /* StagingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88B030DDD8CAC21C5E929597 /* StagingRecovery.swift */; };
 		2E2A77C91F3B0F37BE8D3B97 /* ProjectPackageManifestValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F48ABB0F051144C2D459093A /* ProjectPackageManifestValidation.swift */; };
+		2E5CFCAD778FC8746219BAF8 /* MIDIControlChangeDecodeTests+RealTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3440A3F8FE8C3CEED2E5A0D6 /* MIDIControlChangeDecodeTests+RealTime.swift */; };
 		2E6CBC48808A713A14DBD8D2 /* MIDIClipOwnershipTests+Host.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7B4B82F2D3671CC6A6AD80 /* MIDIClipOwnershipTests+Host.swift */; };
 		2E8B2D3453AF70A4D4054116 /* UITestAppSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42B67D211AF82F0B7211B3F0 /* UITestAppSupport.swift */; };
 		2E99928D5C62BC435D687BF7 /* CalibrationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C040E13B1D10D0FA70D9BB9 /* CalibrationRecord.swift */; };
@@ -610,6 +612,7 @@
 		3A096BD6CCE38EAE46506332 /* RenderNegotiationLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = C806092B5B918EE1F70FFAB3 /* RenderNegotiationLimits.swift */; };
 		3A130DB5CE4C6154083EEDEC /* PatchTransitionTests+Repeated.swift in Sources */ = {isa = PBXBuildFile; fileRef = 101631FDE46C00BED7F65870 /* PatchTransitionTests+Repeated.swift */; };
 		3A1D5AB33746640972EAF19A /* ScriptedActivationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 380008634D64B68AC490823E /* ScriptedActivationEngine.swift */; };
+		3A3800C6D0DC68BF3211F901 /* MIDIControlChangeDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA62166EEBDF45F218A2032 /* MIDIControlChangeDecodeTests.swift */; };
 		3A4B08E5458CF851FB647B22 /* ProductionAccessScopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DFDEC4864A753548EB8C68D /* ProductionAccessScopeTests.swift */; };
 		3A56DE667B2487D7673C0699 /* ParameterAutomationTests+Transport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07D89AC71F65F23BBDCA60BF /* ParameterAutomationTests+Transport.swift */; };
 		3A670CFF14A145BCF77B5114 /* WiringDraftComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF45D59E8CE955BB3A8B6A58 /* WiringDraftComposer.swift */; };
@@ -1612,6 +1615,7 @@
 		99DDFE202B8E13A3C56F77E7 /* ProductionAccessAudit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3CEBDC14F2252386C1D4C1E /* ProductionAccessAudit.swift */; };
 		99FD94D12290DDB015B5C5C0 /* PerformCellModelTests+Entry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F03BD1E482EF4934A715E2DD /* PerformCellModelTests+Entry.swift */; };
 		9A23422F30B2C55B4B0191A8 /* SaveFault.swift in Sources */ = {isa = PBXBuildFile; fileRef = D75200C3D7021421225E5C01 /* SaveFault.swift */; };
+		9A2D14BFDBCFCACA66A7EF4C /* MIDIControlChangeDecodeTests+Fragments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12662F01FFB3D78FEAC9D699 /* MIDIControlChangeDecodeTests+Fragments.swift */; };
 		9A36EBCEB963A9026FF8124F /* ActivationTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C4F7825771C039E62BA128 /* ActivationTransaction.swift */; };
 		9A40F472173633E97D196F4D /* MIDIClockError.swift in Sources */ = {isa = PBXBuildFile; fileRef = A189ADFA18FC194AD3111CBE /* MIDIClockError.swift */; };
 		9A45313FEBEF953D7C58AAF9 /* StorageInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 083CCBD6606BEE322A794A06 /* StorageInventory.swift */; };
@@ -2128,6 +2132,7 @@
 		C9BCFCFBCE2F874A3B4C2EA0 /* MIDIClockFollowerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F7704E6CD0C89793F64CAA /* MIDIClockFollowerTests.swift */; };
 		CA1E0F5560A85EAE27F2544A /* ProjectCheckpointTests+Compare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C90CCA7056FA7DC0717825C /* ProjectCheckpointTests+Compare.swift */; };
 		CA3B5598AB4C28312C2D8F56 /* ProjectMediaAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EBD995D9A0B296AE7A563D0 /* ProjectMediaAction.swift */; };
+		CA8207F39CFE43630E0EA361 /* MIDIControlChangeDecodeTests+Legacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03695900A57ACF5BC29C17E4 /* MIDIControlChangeDecodeTests+Legacy.swift */; };
 		CA83FE2E70582DB1AFD8F34C /* StagedPackageExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C58C81E0B41222DB84D948C8 /* StagedPackageExport.swift */; };
 		CACDF6A588A21BE0A07671AA /* MediaIOWorkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 174BC346340418F87850953E /* MediaIOWorkerTests.swift */; };
 		CADE29FFFD9294FF46C03549 /* FixtureFaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A76B68C085A89A01A627B0 /* FixtureFaults.swift */; };
@@ -2172,6 +2177,7 @@
 		CEC7C05CD7CD8788E83B38F1 /* RunStatisticsTests+Uncertainty.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00C778484E06759BCCADDF96 /* RunStatisticsTests+Uncertainty.swift */; };
 		CEDC4B517B6C73DA3A973C65 /* BackingClipVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37891683E38613C80CEA069E /* BackingClipVoice.swift */; };
 		CEE98A08A702B20E7243045F /* SpatialRouteAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5086E6383F1081D47E97E06 /* SpatialRouteAvailability.swift */; };
+		CF0BC03BD0E64B84F5236F3B /* MIDIControlChangeDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA62166EEBDF45F218A2032 /* MIDIControlChangeDecodeTests.swift */; };
 		CF2DDC112085E40309945AB5 /* InMemoryStagingFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF16DD448F8C3AE15F89BAD /* InMemoryStagingFileSystem.swift */; };
 		CF3A4EC965EA606FF8F1507D /* OpenSoundControl+ControlMapper+Arguments.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF441D34E9ABA3C95A178F19 /* OpenSoundControl+ControlMapper+Arguments.swift */; };
 		CF3C7B01AB5F244DD7BDB958 /* SpatialPlacementEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04513BD2D633C621AD40E440 /* SpatialPlacementEditor.swift */; };
@@ -2288,6 +2294,7 @@
 		D9BC4F9EDBA20E228CA07985 /* NativeUMPExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B574C4B38AED57E3E4A3311 /* NativeUMPExport.swift */; };
 		D9DBD26029DBD5BE4242FBF0 /* CommandAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3303B038460EE95529FD811 /* CommandAdmission.swift */; };
 		D9DD7149749251854FD1ECEF /* EnvironmentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13665485049541610241F126 /* EnvironmentStore.swift */; };
+		D9E076A0CFBC9D0FEBA254F3 /* MIDIControlChangeDecodeTests+Fragments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12662F01FFB3D78FEAC9D699 /* MIDIControlChangeDecodeTests+Fragments.swift */; };
 		D9E5F3C54313A55F364DC164 /* PathDelayCompensation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 765FDA52EBDCEAAD633840F0 /* PathDelayCompensation.swift */; };
 		D9E6A7714D169A7BD0DF699A /* PeerSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E9AC21767BA97B5654FD47E /* PeerSyncTests.swift */; };
 		D9F9A325D05435A4B20AF5DD /* FaderStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74D86EAB14C2477BCE38AF29 /* FaderStripView.swift */; };
@@ -2640,6 +2647,7 @@
 		F77CA6C415DA80F9C8EAE55D /* KernelCycleTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 144A417CC9DEF428E3E81903 /* KernelCycleTelemetry.swift */; };
 		F77EF836EB77B5C6915479FB /* AssistantChatController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D4AE9445F93B75EC985FE5 /* AssistantChatController.swift */; };
 		F7A829B071E281E097830A9D /* HostAuthorityTests+ActorLeaseLoss.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDFE91EB1B6EAEF9A3951E23 /* HostAuthorityTests+ActorLeaseLoss.swift */; };
+		F7F2E3A7093CB34025AB1A57 /* MIDIControlChangeDecodeTests+Legacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03695900A57ACF5BC29C17E4 /* MIDIControlChangeDecodeTests+Legacy.swift */; };
 		F7FA32D3B3C47C2CD7A840E9 /* MeterDisplayTests+Ballistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9D163911BE1757039924489 /* MeterDisplayTests+Ballistics.swift */; };
 		F81F63B707D11B7AC7631DD9 /* ProjectRecoveryTests+TransitionMatrix.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62148F0DB042B7C4951F10F5 /* ProjectRecoveryTests+TransitionMatrix.swift */; };
 		F83962A177F4CD04E337032A /* ProjectPackageManifestCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93284AA12D14DABA1235E509 /* ProjectPackageManifestCodecTests.swift */; };
@@ -2779,6 +2787,7 @@
 		02EF9849BC889B740ACF7F9B /* WiringComposeRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiringComposeRefusal.swift; sourceTree = "<group>"; };
 		0325249A945B2C6126F18AFD /* StudioGraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioGraphTests.swift; sourceTree = "<group>"; };
 		03377C11A2065FB1B74F6436 /* PatchVariationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatchVariationEditor.swift; sourceTree = "<group>"; };
+		03695900A57ACF5BC29C17E4 /* MIDIControlChangeDecodeTests+Legacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIControlChangeDecodeTests+Legacy.swift"; sourceTree = "<group>"; };
 		03D9A4D92160B6D9C95FAB82 /* MIDISourceRegistry+Feed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDISourceRegistry+Feed.swift"; sourceTree = "<group>"; };
 		03E9A11725CD2F8860993396 /* OSCTransportTests+Budget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OSCTransportTests+Budget.swift"; sourceTree = "<group>"; };
 		03FFA57202AA358D069412B2 /* StudioLiveChannelDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioLiveChannelDetailsView.swift; sourceTree = "<group>"; };
@@ -2862,6 +2871,7 @@
 		11EF715AA50C16087CF51136 /* MIDIInternalTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIInternalTransport.swift; sourceTree = "<group>"; };
 		11F7894785DBEC0E11DFA8C2 /* StagingFault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagingFault.swift; sourceTree = "<group>"; };
 		123F8991C21FA5E6DA36334D /* BackingClipSpec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackingClipSpec.swift; sourceTree = "<group>"; };
+		12662F01FFB3D78FEAC9D699 /* MIDIControlChangeDecodeTests+Fragments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIControlChangeDecodeTests+Fragments.swift"; sourceTree = "<group>"; };
 		12701398AAB33E351617AFD9 /* AssistantRoutingAppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantRoutingAppModelTests.swift; sourceTree = "<group>"; };
 		128695DC22161717106B18DE /* ControlIntakeRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlIntakeRefusal.swift; sourceTree = "<group>"; };
 		128C740CF4F33B3F501C5897 /* StudioConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioConnectionsView.swift; sourceTree = "<group>"; };
@@ -3040,6 +3050,7 @@
 		33846096BCBB90F50AA104F5 /* PeerControlMessageTests+Hostile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerControlMessageTests+Hostile.swift"; sourceTree = "<group>"; };
 		33C88B0C8DBC4A9FC4E78D05 /* PrefetchPlayhead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrefetchPlayhead.swift; sourceTree = "<group>"; };
 		3419E51D6E2D0147057E7A94 /* HostAuthorityTests+CommitReports.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityTests+CommitReports.swift"; sourceTree = "<group>"; };
+		3440A3F8FE8C3CEED2E5A0D6 /* MIDIControlChangeDecodeTests+RealTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIControlChangeDecodeTests+RealTime.swift"; sourceTree = "<group>"; };
 		34453778BC5EC0F515B6376A /* ShowSong.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowSong.swift; sourceTree = "<group>"; };
 		3452EE1EB7970740BD1AFC26 /* RigBaseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RigBaseline.swift; sourceTree = "<group>"; };
 		345578080CB2BA19B233E700 /* TemporaryMoveFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryMoveFlowView.swift; sourceTree = "<group>"; };
@@ -3282,6 +3293,7 @@
 		5E2CE2F6EA8A083455F82C52 /* MIDIEndpointKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIEndpointKey.swift; sourceTree = "<group>"; };
 		5E4884FF1B2AD16A0B920CAA /* StudioInspectorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioInspectorViews.swift; sourceTree = "<group>"; };
 		5E7EF30C78AECED80D4C64B9 /* PreferencePrivacyTests+Allowlist.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PreferencePrivacyTests+Allowlist.swift"; sourceTree = "<group>"; };
+		5EA62166EEBDF45F218A2032 /* MIDIControlChangeDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlChangeDecodeTests.swift; sourceTree = "<group>"; };
 		5EBEF8501AE0D02A9C701538 /* DeviceLossReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceLossReport.swift; sourceTree = "<group>"; };
 		5F4DD18B23D5827E1C74381E /* AppModelPersistenceOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelPersistenceOwnershipTests.swift; sourceTree = "<group>"; };
 		5F63799BA65964B5F5C9E3B3 /* PeerStatusProjectionTests+Delta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerStatusProjectionTests+Delta.swift"; sourceTree = "<group>"; };
@@ -6649,6 +6661,10 @@
 				60B187E245B35CF9FD31FB37 /* MIDIClockPulseScheduleTests.swift */,
 				594539BD5CCF4D7B6BAA5245 /* MIDIClockTempoEstimatorTests.swift */,
 				25E90A99238D455EC868E3AE /* MIDIClockTempoTests.swift */,
+				5EA62166EEBDF45F218A2032 /* MIDIControlChangeDecodeTests.swift */,
+				12662F01FFB3D78FEAC9D699 /* MIDIControlChangeDecodeTests+Fragments.swift */,
+				03695900A57ACF5BC29C17E4 /* MIDIControlChangeDecodeTests+Legacy.swift */,
+				3440A3F8FE8C3CEED2E5A0D6 /* MIDIControlChangeDecodeTests+RealTime.swift */,
 				CD38FC54BAC391E1A0DF2514 /* MIDIControlIntakeTests.swift */,
 				1304D11D5C5E657BA1DEDFE4 /* MIDIControlIntakeTests+Bounds.swift */,
 				C0F599D129E361F8AF1A9AE7 /* MIDIControlIntakeTests+Determinism.swift */,
@@ -9023,6 +9039,10 @@
 				A2E00BEA68FAC8D69652FF67 /* MIDIClockPulseScheduleTests.swift in Sources */,
 				6062A217B5FBCBBA8B459DF0 /* MIDIClockTempoEstimatorTests.swift in Sources */,
 				1D602E6A412498F48C40E855 /* MIDIClockTempoTests.swift in Sources */,
+				D9E076A0CFBC9D0FEBA254F3 /* MIDIControlChangeDecodeTests+Fragments.swift in Sources */,
+				CA8207F39CFE43630E0EA361 /* MIDIControlChangeDecodeTests+Legacy.swift in Sources */,
+				1A0C999A43DCBED5DD1710EB /* MIDIControlChangeDecodeTests+RealTime.swift in Sources */,
+				3A3800C6D0DC68BF3211F901 /* MIDIControlChangeDecodeTests.swift in Sources */,
 				A67FAE0285B6BB1B2DE9F816 /* MIDIControlIntakeTests+Bounds.swift in Sources */,
 				0DB7AC04AFE2ED275CEBF567 /* MIDIControlIntakeTests+Determinism.swift in Sources */,
 				A22A5CBE2034EC65380A8CA6 /* MIDIControlIntakeTests+Goldens.swift in Sources */,
@@ -9645,6 +9665,10 @@
 				59AD47B8B50AD632B426CD27 /* MIDIClockPulseScheduleTests.swift in Sources */,
 				14445056C5C8CE59EF623D6A /* MIDIClockTempoEstimatorTests.swift in Sources */,
 				53433E3907449903CDE0B665 /* MIDIClockTempoTests.swift in Sources */,
+				9A2D14BFDBCFCACA66A7EF4C /* MIDIControlChangeDecodeTests+Fragments.swift in Sources */,
+				F7F2E3A7093CB34025AB1A57 /* MIDIControlChangeDecodeTests+Legacy.swift in Sources */,
+				2E5CFCAD778FC8746219BAF8 /* MIDIControlChangeDecodeTests+RealTime.swift in Sources */,
+				CF0BC03BD0E64B84F5236F3B /* MIDIControlChangeDecodeTests.swift in Sources */,
 				2F8B4B45E5E71E19A1525445 /* MIDIControlIntakeTests+Bounds.swift in Sources */,
 				FD8ADC8350F8A3EEB9CC725E /* MIDIControlIntakeTests+Determinism.swift in Sources */,
 				76BFDEBFB015269BF3E9827C /* MIDIControlIntakeTests+Goldens.swift in Sources */,
