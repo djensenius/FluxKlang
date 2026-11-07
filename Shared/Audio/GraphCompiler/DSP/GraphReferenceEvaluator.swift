@@ -45,7 +45,7 @@ struct GraphReferenceEvaluator: Sendable {
         schedule: RoutingSchedule, limits: ReferenceEvaluatorLimits = .standard
     ) throws(ReferenceEvaluatorRefusal) {
         let scratchFloats = schedule.accounting.scratchFloats
-        guard scratchFloats >= 1 else { throw .scheduleDefect(.accountingMismatch) }
+        try Self.checkScratchCount(scratchFloats)
         guard scratchFloats <= limits.maximumScratchFloats else {
             throw .resourceLimit(.scratchFloats, required: scratchFloats, maximum: limits.maximumScratchFloats)
         }
@@ -71,6 +71,12 @@ struct GraphReferenceEvaluator: Sendable {
         outputFloatsPerBlock = outputFloats
         self.schedule = schedule
         self.limits = limits
+    }
+
+    /// Accepted scratch counts are `0...Int.max`: a graph with no nodes or edges legitimately needs no scratch. A
+    /// negative count is an accounting defect (unreachable through GC2) and is `.scheduleDefect(.accountingMismatch)`.
+    static func checkScratchCount(_ scratchFloats: Int) throws(ReferenceEvaluatorRefusal) {
+        guard scratchFloats >= 0 else { throw .scheduleDefect(.accountingMismatch) }
     }
 
     private static func endpointFloats(

@@ -176,6 +176,53 @@ extension GraphReferenceEvaluatorTests {
         #expect(none.executedNodes.isEmpty)
     }
 
+    @Test("GC3 the builder's empty graph has zero scratch and runs through evaluate and run")
+    func referenceEvaluatorEmptyGraphHasZeroScratch() throws {
+        let plan = try Self.schedule(Self.graph([], []))
+        #expect(plan.accounting.scratchFloats == 0)
+        #expect(plan.accounting.sampleWork == 0)
+        let tightest = try ReferenceEvaluatorLimits(
+            maximumScratchFloats: 1, maximumStateFloats: 1, maximumBlocksPerRun: 1,
+            maximumRunWork: 1, maximumRunOutputFloats: 1
+        )
+        let evaluator = try GraphReferenceEvaluator(schedule: plan, limits: tightest)
+        #expect(evaluator.inputFloatsPerBlock == 0)
+        #expect(evaluator.outputFloatsPerBlock == 0)
+        #expect(evaluator.initialState == ReferenceEvaluatorState(blocksProcessed: 0, lines: []))
+        let block = try evaluator.evaluate([], state: evaluator.initialState)
+        #expect(block.output.isEmpty)
+        #expect(block.executedNodes.isEmpty)
+        #expect(block.chargedWork == 0)
+        #expect(block.state == ReferenceEvaluatorState(blocksProcessed: 1, lines: []))
+        let run = try evaluator.run([[]], from: evaluator.initialState)
+        #expect(run.outputs == [[]])
+        #expect(run.chargedWork == 0)
+        #expect(run.state == block.state)
+        #expect(throws: ReferenceEvaluatorRefusal.invalidBlockCount(0)) {
+            try evaluator.run([], from: evaluator.initialState)
+        }
+        #expect(throws: ReferenceEvaluatorRefusal.resourceLimit(.blocks, required: 2, maximum: 1)) {
+            try evaluator.run([[], []], from: evaluator.initialState)
+        }
+        #expect(throws: ReferenceEvaluatorRefusal.blockFailed(
+            block: 0, fault: .inputSizeMismatch(expected: 0, actual: 1)
+        )) {
+            try evaluator.evaluate([0], state: evaluator.initialState)
+        }
+        let stray = ReferenceEvaluatorState(blocksProcessed: 0, lines: [[]])
+        #expect(throws: ReferenceEvaluatorRefusal.stateMismatch) { try evaluator.evaluate([], state: stray) }
+    }
+
+    @Test("GC3 the scratch count guard accepts zero and refuses a negative count")
+    func referenceEvaluatorScratchCountGuardBoundary() throws {
+        try GraphReferenceEvaluator.checkScratchCount(0)
+        try GraphReferenceEvaluator.checkScratchCount(1)
+        try GraphReferenceEvaluator.checkScratchCount(Int.max)
+        let defect = ReferenceEvaluatorRefusal.scheduleDefect(.accountingMismatch)
+        #expect(throws: defect) { try GraphReferenceEvaluator.checkScratchCount(-1) }
+        #expect(throws: defect) { try GraphReferenceEvaluator.checkScratchCount(Int.min) }
+    }
+
     @Test("GC3 an input endpoint of sixty-four channels keeps every sample in place")
     func referenceEvaluatorSixtyFourChannelInput() throws {
         let input = (0..<256).map { Float($0) - 100 }
