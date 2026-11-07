@@ -399,6 +399,11 @@ targets:
       - path: FluxKlangTests/OSCTransportTests+Scripts.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
+      - path: FluxKlangTests/TimecodeMachineTests.swift
+      - path: FluxKlangTests/TimecodeMachineTests+Authorization.swift
+      - path: FluxKlangTests/TimecodeMachineTests+Gate.swift
+      - path: FluxKlangTests/TimecodeMachineTests+SendGrant.swift
+      - path: FluxKlangTests/TimecodeMachineTests+TempoSharing.swift
       - path: FluxKlangTests/MTCFollowerTests.swift
       - path: FluxKlangTests/MTCFollowerTests+Dropout.swift
       - path: FluxKlangTests/MTCFollowerTests+Fixtures.swift
