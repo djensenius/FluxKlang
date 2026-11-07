@@ -347,6 +347,10 @@ targets:
       - path: FluxKlangTests/MIDIClipOwnershipTests+Markers.swift
       - path: FluxKlangTests/MIDIClipOwnershipTests+Rebind.swift
       - path: FluxKlangTests/MIDIClipOwnershipTests+Refusals.swift
+      - path: FluxKlangTests/MediaTapPlanTests.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Order.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
