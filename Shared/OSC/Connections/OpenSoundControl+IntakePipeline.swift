@@ -18,7 +18,10 @@
 //  message in it costs one allow-list match: at most `AllowList.maximumEntries`
 //  (256) entries, each bounded by `AddressPattern.matches` at tokens x address
 //  bytes x pattern bytes, with the address and pattern each at most the codec's
-//  1,024 string bytes.
+//  1,024 string bytes and a pattern at most the codec's 32 wildcard constructs
+//  (so at most 65 tokens). That bound holds because `EndpointPolicy` refuses an
+//  allow-list entry beyond the codec's string and complexity limits: `AllowList`
+//  checks only its entry count, and a pattern can be built under raised limits.
 //
 
 extension OpenSoundControl {

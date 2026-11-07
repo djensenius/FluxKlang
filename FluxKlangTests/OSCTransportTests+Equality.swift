@@ -210,3 +210,172 @@ extension OSCTransportTests {
         }
     }
 }
+
+/// Allow-list entries beyond the codec limits (#89, O2b). `AllowList` checks only its entry count, and an
+/// `AddressPattern` can be built under raised limits, so a policy holds every entry to the codec's string and
+/// complexity limits itself. Each oversized pattern below is built under `raisedLimits`, so it exists before the
+/// policy sees it, and its size is asserted, so that no test can pass vacuously.
+extension OSCTransportFixture {
+    /// Limits far above the standard ones (1,024 string bytes and 32 wildcard constructs).
+    static let raisedLimits = OSC.Limits(maximumStringBytes: 200_000, maximumPatternComplexity: 200_000)
+
+    /// The three ways an endpoint can receive: datagrams, SLIP frames and length-prefixed frames.
+    static let transports: [OSC.EndpointTransport] = [.datagram, .stream(.slip), .stream(.lengthPrefixed)]
+
+    /// A pattern built under `raisedLimits`.
+    static func raised(_ text: String) throws -> OSC.AddressPattern {
+        try OSC.AddressPattern(text, limits: raisedLimits)
+    }
+
+    /// A literal address of exactly `count` bytes: a slash and `count - 1` letters.
+    static func literal(bytes count: Int) -> String { "/" + String(repeating: "a", count: count - 1) }
+
+    /// A pattern of a slash and `count` stars: `count` wildcard constructs in `count + 1` bytes.
+    static func wildcards(_ count: Int) -> String { "/" + String(repeating: "*", count: count) }
+
+    /// A policy over `entries`. Its byte allowance holds a whole stream chunk. Throws what the list or the policy
+    /// refuses.
+    static func policy(
+        allowing entries: [OSC.AddressPattern], on transport: OSC.EndpointTransport = .datagram,
+        budget: OSC.IntakeBudget? = nil, idle: UInt64 = 10, packetBytes: Int = 1_024, depth: Int = 8
+    ) throws -> OSC.EndpointPolicy {
+        try OSC.EndpointPolicy(
+            transport: transport, allowList: OSC.AllowList(entries), budget: budget ?? Self.budget(bytes: 2_048),
+            maximumPeers: 4, idleTicks: idle, maximumPacketBytes: packetBytes, maximumBundleDepth: depth
+        )
+    }
+}
+
+/// A policy refuses an allow-list entry beyond the codec limits, and names the first one by its index.
+extension OSCTransportTests {
+    // MARK: Allow-list entries against the codec limits
+
+    @Test("An allow-list entry of exactly the string limit is accepted and one byte more is refused, by index")
+    func entryByteCountIsBoundedByTheStringLimit() throws {
+        let known = try Fixture.raised("/go")
+        let widest = try Fixture.raised(Fixture.literal(bytes: 1_024))
+        let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        #expect(widest.bytes.count == 1_024 && widest.complexity == 0)
+        #expect(over.bytes.count == 1_025 && over.complexity == 0)
+        // The standard limits refuse the larger pattern; only the raised ones let it exist.
+        #expect(throws: OSC.CodecError.invalidAddress(.tooLong(byteCount: 1_025, limit: 1_024))) {
+            try OSC.AddressPattern(Fixture.literal(bytes: 1_025))
+        }
+        let accepted = try Fixture.policy(allowing: [known, widest])
+        #expect(accepted.allowList.entries == [known, widest] && accepted.limits.maximumStringBytes == 1_024)
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, over])
+        }
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 0)) { try Fixture.policy(allowing: [over]) }
+        // The bound is the codec's string limit, which a smaller packet size does not lower: the same two lists on
+        // 64 byte packets. The wide entry could never match an address of such a packet, and holding it is harmless.
+        let small = try Fixture.policy(allowing: [known, widest], packetBytes: 64)
+        #expect(small.maximumPacketBytes == 64 && small.allowList.entries == [known, widest])
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, over], packetBytes: 64)
+        }
+    }
+
+    @Test("An allow-list entry of exactly 32 wildcard constructs is accepted and 33 are refused, by index")
+    func entryComplexityIsBoundedByThePatternLimit() throws {
+        let known = try Fixture.raised("/go")
+        let busiest = try Fixture.raised(Fixture.wildcards(32))
+        let over = try Fixture.raised(Fixture.wildcards(33))
+        // A few bytes each, so the complexity alone can be the reason.
+        #expect(busiest.complexity == 32 && busiest.bytes.count == 33)
+        #expect(over.complexity == 33 && over.bytes.count == 34)
+        #expect(throws: OSC.CodecError.invalidAddress(.tooComplex(complexity: 33, limit: 32))) {
+            try OSC.AddressPattern(Fixture.wildcards(33))
+        }
+        let accepted = try Fixture.policy(allowing: [known, busiest])
+        #expect(accepted.allowList.entries == [known, busiest] && accepted.limits.maximumPatternComplexity == 32)
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, over])
+        }
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 0)) { try Fixture.policy(allowing: [over]) }
+    }
+
+    @Test("An allow-list entry of a slash and 100 000 stars is refused, though the allow-list itself accepts it")
+    func aWildcardFloodEntryIsRefusedAtConstruction() throws {
+        // The review's example: matching it would walk 100 001 tokens for every message of every packet.
+        let flood = try Fixture.raised(Fixture.wildcards(100_000))
+        #expect(flood.bytes.count == 100_001 && flood.complexity == 100_000)
+        #expect(throws: OSC.CodecError.invalidAddress(.tooLong(byteCount: 100_001, limit: 1_024))) {
+            try OSC.AddressPattern(Fixture.wildcards(100_000))
+        }
+        // `AllowList` checks only how many entries it holds, so it keeps the flood without complaint.
+        #expect(try OSC.AllowList([flood]).entries == [flood])
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 0)) { try Fixture.policy(allowing: [flood]) }
+        let known = try Fixture.raised("/go")
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, flood], on: .stream(.slip))
+        }
+    }
+
+    @Test("The first allow-list entry beyond a limit is reported, and 256 entries at the limits are accepted")
+    func firstOffendingEntryIsReported() throws {
+        let known = try Fixture.raised("/go")
+        let widest = try Fixture.raised(Fixture.literal(bytes: 1_024))
+        let busiest = try Fixture.raised(Fixture.wildcards(32))
+        let long = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        let busy = try Fixture.raised(Fixture.wildcards(33))
+        // Either reason counts, and the earlier of two offenders wins whichever way round they come.
+        let second = Config.allowListEntryExceedsCodecLimits(index: 1)
+        #expect(throws: second) { try Fixture.policy(allowing: [known, long, busy]) }
+        #expect(throws: second) { try Fixture.policy(allowing: [known, busy, long]) }
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 2)) {
+            try Fixture.policy(allowing: [known, widest, busy, long])
+        }
+        // The longest list, every entry at a limit, is accepted; a bad entry at its very end is still found.
+        let full = (0..<OSC.AllowList.maximumEntries).map { $0.isMultiple(of: 2) ? widest : busiest }
+        let accepted = try Fixture.policy(allowing: full)
+        #expect(accepted.allowList.entries.count == 256 && accepted.allowList.entries == full)
+        let flawed = Array(full.dropLast()) + [long]
+        #expect(flawed.count == 256)
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 255)) { try Fixture.policy(allowing: flawed) }
+    }
+
+    @Test("Datagram, SLIP and length-prefix endpoints hold an allow-list to the same codec limits",
+          arguments: Fixture.transports)
+    func bothTransportsCheckTheAllowList(_ transport: OSC.EndpointTransport) throws {
+        let known = try Fixture.raised("/go")
+        let widest = try Fixture.raised(Fixture.literal(bytes: 1_024))
+        let busiest = try Fixture.raised(Fixture.wildcards(32))
+        let accepted = try Fixture.policy(allowing: [known, widest, busiest], on: transport)
+        #expect(accepted.transport == transport && accepted.allowList.entries == [known, widest, busiest])
+        let long = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        let busy = try Fixture.raised(Fixture.wildcards(33))
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 2)) {
+            try Fixture.policy(allowing: [known, widest, long], on: transport)
+        }
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, busy, busiest], on: transport)
+        }
+    }
+
+    @Test("A bad allow-list entry is reported after the knob checks and before the budget and idle checks")
+    func entryCheckHasItsPlaceInTheValidationOrder() throws {
+        let known = try Fixture.raised("/go")
+        let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        let badEntry = Config.allowListEntryExceedsCodecLimits(index: 1)
+        // Before it: a bad knob is reported even when the list is bad too.
+        #expect(throws: Config.invalidCount(.bundleDepth, 0)) {
+            try Fixture.policy(allowing: [known, over], depth: 0)
+        }
+        // After it: each rule is reported for a good list, but not for a bad one.
+        let small = try Fixture.budget(bytes: 8)
+        #expect(throws: badEntry) { try Fixture.policy(allowing: [known, over], budget: small) }
+        #expect(throws: Config.budgetCannotFitPacket(maximumBytes: 8, maximumPacketBytes: 1_024)) {
+            try Fixture.policy(allowing: [known], budget: small)
+        }
+        let tight = try Fixture.budget(bytes: 1_024)
+        #expect(throws: badEntry) { try Fixture.policy(allowing: [known, over], on: .stream(.slip), budget: tight) }
+        #expect(throws: Config.budgetCannotFitChunk(maximumBytes: 1_024, maximumChunkBytes: 1_028)) {
+            try Fixture.policy(allowing: [known], on: .stream(.slip), budget: tight)
+        }
+        #expect(throws: badEntry) { try Fixture.policy(allowing: [known, over], idle: 5) }
+        #expect(throws: Config.idleBeforeWindowEnds(idleTicks: 5, windowTicks: 10)) {
+            try Fixture.policy(allowing: [known], idle: 5)
+        }
+    }
+}

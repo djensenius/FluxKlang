@@ -9,6 +9,12 @@
 //  endpoint holds no state. Every value validates once at construction and has
 //  private storage afterwards, so an out-of-range policy cannot be represented.
 //
+//  The allow-list is held to the codec limits the endpoint decodes with:
+//  `AllowList` checks only its entry count, and an `AddressPattern` can be built
+//  under raised limits, so each entry's byte count and complexity is checked
+//  here and the first entry beyond them is refused by its index. That bound is
+//  what keeps the work of one allow-list match small.
+//
 
 extension OpenSoundControl {
     /// An opaque, host-assigned key for one remote peer: a datagram source or one
@@ -50,6 +56,11 @@ extension OpenSoundControl {
         case invalidCount(EndpointKnob, Int)
         /// A tick span below one.
         case invalidTicks(EndpointKnob, UInt64)
+        /// An allow-list entry is beyond the codec limits the endpoint decodes with: more bytes than
+        /// `maximumStringBytes` or more wildcard constructs than `maximumPatternComplexity`. `AllowList` checks only
+        /// its entry count and a pattern can be built under raised limits, so the policy checks every entry. `index`
+        /// is the position of the first such entry; no pattern text is carried.
+        case allowListEntryExceedsCodecLimits(index: Int)
         /// The byte allowance is below the packet size: a full-size packet could never fit a window.
         case budgetCannotFitPacket(maximumBytes: Int, maximumPacketBytes: Int)
         /// A stream endpoint's byte allowance is below one whole chunk (a maximum-size frame and its length
@@ -76,7 +87,8 @@ extension OpenSoundControl {
         static let lengthHeaderBytes = 4
 
         private(set) var transport: EndpointTransport
-        /// Passed to the immediate stage unchanged: inbound wildcards stay refused (Q-OSC-NS, provisional v1).
+        /// Passed to the immediate stage unchanged: inbound wildcards stay refused (Q-OSC-NS, provisional v1). Every
+        /// entry fits the codec `limits` (checked at construction), which is what bounds the work of one match.
         private(set) var allowList: AllowList
         private(set) var budget: IntakeBudget
         private(set) var maximumPeers: Int
@@ -86,8 +98,9 @@ extension OpenSoundControl {
         /// A top-level bundle has depth 1; a bare message has depth 0.
         private(set) var maximumBundleDepth: Int
 
-        /// Validation order: peers, idle, packet bytes, bundle depth, then the byte allowance against the
-        /// packet size, then (stream endpoints only) against one whole chunk, then idle against the window.
+        /// Validation order: peers, idle, packet bytes, bundle depth, then every allow-list entry against the codec
+        /// limits (the first entry beyond them is the one reported), then the byte allowance against the packet size,
+        /// then (stream endpoints only) against one whole chunk, then idle against the window.
         init(
             transport: EndpointTransport, allowList: AllowList, budget: IntakeBudget, maximumPeers: Int,
             idleTicks: UInt64, maximumPacketBytes: Int = EndpointPolicy.packetBytesLimit,
@@ -100,6 +113,10 @@ extension OpenSoundControl {
             }
             guard (1...Self.bundleDepthLimit).contains(maximumBundleDepth) else {
                 throw .invalidCount(.bundleDepth, maximumBundleDepth)
+            }
+            let codec = Self.codecLimits(packetBytes: maximumPacketBytes, depth: maximumBundleDepth)
+            if let index = Self.firstEntryBeyond(codec, in: allowList) {
+                throw .allowListEntryExceedsCodecLimits(index: index)
             }
             guard budget.maximumBytes >= maximumPacketBytes else {
                 throw .budgetCannotFitPacket(maximumBytes: budget.maximumBytes, maximumPacketBytes: maximumPacketBytes)
@@ -121,8 +138,20 @@ extension OpenSoundControl {
         }
 
         /// The codec bounds for decoding and framing: the policy's packet size and depth, the rest standard.
-        var limits: Limits {
-            Limits(maximumPacketBytes: maximumPacketBytes, maximumBundleDepth: maximumBundleDepth)
+        var limits: Limits { Self.codecLimits(packetBytes: maximumPacketBytes, depth: maximumBundleDepth) }
+
+        /// The one place the codec bounds are built. `init` holds the allow-list to them before every stored property
+        /// is set, when `limits` cannot be read yet, so the check and the decoder must share these values.
+        private static func codecLimits(packetBytes: Int, depth: Int) -> Limits {
+            Limits(maximumPacketBytes: packetBytes, maximumBundleDepth: depth)
+        }
+
+        /// The position of the first entry beyond `limits`: more bytes than its string limit allows, or more wildcard
+        /// constructs than its complexity limit. Only what the pattern holds counts, not the limits it was made under.
+        private static func firstEntryBeyond(_ limits: Limits, in allowList: AllowList) -> Int? {
+            allowList.entries.firstIndex { entry in
+                entry.bytes.count > limits.maximumStringBytes || entry.complexity > limits.maximumPatternComplexity
+            }
         }
 
         /// Most bytes one stream chunk may carry: one maximum-size frame and its length header. On a stream
