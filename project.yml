@@ -414,6 +414,9 @@ targets:
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Policy.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
