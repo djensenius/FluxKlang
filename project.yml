@@ -351,6 +351,16 @@ targets:
       - path: FluxKlangTests/BackingClipPlaybackTests+StopVoice.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
+      - path: FluxKlangTests/SMFTempoImportTests.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Differential.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Events.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Fixtures.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Meter.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Order.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Proposal.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Reader.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Structure.swift
+      - path: FluxKlangTests/SMFTempoImportTests+Tempo.swift
       - path: FluxKlangTests/UMPCodecTests.swift
       - path: FluxKlangTests/UMPCodecTests+ChannelVoice.swift
       - path: FluxKlangTests/UMPCodecTests+Scaling.swift
