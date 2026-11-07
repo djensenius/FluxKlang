@@ -110,23 +110,33 @@ The same packet bytes give the same mapped operation by either route, however a 
 
 A controller that moves a control is told the host's answer through the feedback planner, which emits neutral
 position messages. It does not encode OSC; a host turns a message into whatever its client expects. Position and value
-convert by one rule over the binding's writable range (the descriptor range capped by its ceiling): for a linear or
-stepped curve a position is `(value - lower) / (upper - lower)`, a value at or beyond an end sits at position 0 or 1,
-and position 1 converts back to the upper end. A fader-taper curve has no defined law yet and is refused. Three short
-scripts in the tests show the behaviour that matters to a client author. The first two are separate examples; the
-second does not continue from the first.
+convert by one rule over the binding's writable range. That range is the descriptor range capped by its ceiling,
+narrowed by the binding's own lower and upper bounds when it has them and, for a stepped parameter, shrunk inward to
+whole numbers (the lower end rounds up and the upper end rounds down); a binding whose range comes out empty, with the
+lower end above the upper end, is refused. Over that range, for a linear or stepped curve, a position is
+`(value - lower) / (upper - lower)`, a value at or beyond an end sits at position 0 or 1, and position 1 converts back
+to the upper end. A fader-taper curve has no defined law yet and is refused. Three short scripts in the tests show the
+behaviour that matters to a client author. The first two are separate examples; the second does not continue from the
+first.
 
 - A request of 90 on a control whose host ceiling is 50 reaches the host as a plain set of 90, and the descriptor
-  refuses it above the ceiling. The binding's range is 0 to 50, so 90 sits at position 1, which converts back to 50.
+  refuses it above the ceiling. The binding has no bounds of its own, so its range is 0 to 50, the descriptor range
+  capped by the ceiling; 90 sits at position 1, which converts back to 50.
 - A control shown at position 0.9 (value 45) while the host holds 50 is sent one correction at position 1 (value
-  50). The echo the client sends back is that same position; it is recognised as an echo and is not applied again.
-  A later refresh says nothing until `forget` makes the planner tell the client again.
-- The emit budget is per binding: a binding emits at most `emitBudget` messages in any `windowTicks + 1` consecutive
-  ticks. It is not an endpoint-wide traffic bound, and bindings share no quota. A correction over the budget is
-  coalesced, not lost. `due(at:)` is a poll: it returns the ids of the bindings that can be planned again at the tick
-  you pass. It neither returns nor schedules a retry tick, so a host polls with the current tick and re-plans the
-  bindings it returns. The test fixture's ticks (10 returns nothing, 11 returns the binding) are values of that
-  fixture's policy, not a rule.
+  50). The echo the client sends back is that same position; the planner classes it as an echo, not a move, so the
+  host does not apply it again. It compares positions as steps of the binding's feedback grid and only inside the
+  policy's window, so a client that reads a position back must round it to the same step. A later refresh says
+  nothing until `forget` makes the planner tell the client again.
+- The emit budget is per binding: while a binding's track persists, it emits at most `emitBudget` messages in any
+  `windowTicks + 1` consecutive ticks. It is not an endpoint-wide traffic bound, and bindings share no quota. A
+  correction over the budget is coalesced, not lost. The bound does not outlive the track: `forget` drops a binding's
+  track and its ledger, so the next plan is answered at once, and a change of the binding's source or feedback grid
+  starts a fresh track. A host that does either can therefore send more than `emitBudget` messages for that binding
+  within one window. `due(at:)` is a poll: it returns, in ascending id order, the bindings that owe a correction (a
+  held, echo-suppressed or coalesced one, or one owed after the host refused a controller's valid move) whose retry
+  tick has come and whose source is not held. It neither returns nor schedules a retry tick, so a host polls with the
+  current tick and re-plans the bindings it returns. The test fixture's ticks (10 returns nothing, 11 returns the
+  binding) are values of that fixture's policy, not a rule.
 
 ## Setting up a client
 
@@ -146,9 +156,15 @@ The tests in this slice do not pin these behaviours of the merged code, so do no
 - SLIP framing of a stream, and stream frames longer than 255 bytes.
 - Peer isolation: that one sender's strikes never count against another.
 - How a controller's value is turned into OSC bytes on the way out; the feedback tests stop at the planner's message.
-- Hold and touch handling in the feedback planner.
+- Hold and touch handling in the feedback planner, and which corrections `due(at:)` lists beyond a coalesced one.
 - Whether a transport verb is enabled at all; the tests enable all three.
 - The shape of an action route (its segment count).
 - A host that applies a set: the tests stop at the mapped operation and the descriptor's ceiling check, and do not
   run a host that writes the value and then plans feedback from the request.
 - The `windowTicks + 1` span of the emit budget at other window sizes, and bindings that share a window.
+- That `forget`, or a change of a binding's source or feedback grid, starts the emit budget afresh: the scripts call
+  `forget` only to tell the client again, and the rule comes from the planner's own documentation.
+- Echo recognition at other positions, after the window has passed, or when a client rounds a position differently
+  from the feedback grid.
+- A conversion over a binding with its own lower and upper bounds, or over a stepped parameter: the scripts use a
+  linear parameter and a binding with no bounds of its own.
