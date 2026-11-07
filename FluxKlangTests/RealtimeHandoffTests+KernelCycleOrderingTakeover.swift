@@ -454,12 +454,13 @@ extension RealtimeHandoffTests {
         }
 
         /// Copilot round 4 (4487174356): a `.freshFanIn` preparation reads the never-claimed claim word, then another
-        /// cycle claims, sounds note 9 and retires before it claims. Its claim from that stale state is
-        /// `.alreadyUsed` and changes nothing, as is a `.replacingCycle` claim from a free word another cycle has
-        /// since claimed (`.predecessorNotRetired`); a replacement still takes note 9 over; a stale release of a
-        /// handed-back claim releases nothing, and its non-empty loss never replaces the one the holder left (round
-        /// 2j). Kills: the claim compare-exchanging from a re-read word (check-then-claim); a stale release releasing
-        /// any claim; the loss stored without the `== claim.held` guard.
+        /// cycle claims, sounds note 9 (set directly: the racer never runs) and retires before it claims. Its claim
+        /// from that stale state is `.alreadyUsed` and changes nothing. A `.replacingCycle` claim from the retired
+        /// snapshot (taken while the word was free) is `.predecessorNotRetired` once `next` holds the word. `racer`
+        /// and `next` share `rig.events` while `rig.cycle` lives. A replacement takes note 9 over; a stale release
+        /// of a handed-back claim releases nothing, and its non-empty loss never replaces the one the holder left
+        /// (round 2j). Kills: the claim compare-exchanging from a re-read word (check-then-claim); a stale release
+        /// releasing any claim; the loss stored without the `== claim.held` guard.
         @Test func freshClaimRacingAClaimRunRetireIsRefused() throws {
             let rig = try CycleRig()
             let ownership = try NoteOwnership(scopes: 2)
