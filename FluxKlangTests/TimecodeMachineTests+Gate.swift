@@ -142,9 +142,11 @@ extension TimecodeMachineTests {
         #expect(first == second)
         #expect(first.hashValue == second.hashValue)
         #expect(first != different)
-        #expect(MMCIntent.authorized(message: MMCMessage(deviceID: receiver, command: .play), by: policy)
-            == MMCIntent.authorized(message: MMCMessage(deviceID: receiver, command: .play), by: policy))
-        #expect(MMCIntent.authorized(message: MMCMessage(deviceID: receiver, command: .stop), by: policy) == nil)
+        let play = MMCMessage(deviceID: receiver, command: .play)
+        #expect(MMCIntentGate.evaluate(message: play, policy: policy, receiver: receiver)
+            == MMCIntentGate.evaluate(message: play, policy: policy, receiver: receiver))
+        #expect(MMCIntentGate.evaluate(message: MMCMessage(deviceID: receiver, command: .stop),
+                                       policy: policy, receiver: receiver) == .refused(.notAuthorized(.stop)))
     }
 
     @Test func machineGateDecisionsLeaveMessageAndPolicyUnchanged() throws {

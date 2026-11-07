@@ -75,8 +75,10 @@ extension TimecodeMachineTests {
     }
 
     @Test func machineEntryCountIsRefusedBeforeDuplicates() throws {
-        let entries = try Self.distinctEntries(count: 64) + [Self.entry(.stop)]
+        let distinct = try Self.distinctEntries(count: 64)
+        let entries = distinct + [distinct[10]]
         #expect(entries.count == 65)
+        #expect(Set(entries).count == 64)
         #expect(throws: MMCAuthorizationError.tooManyEntries(count: 65, limit: 64)) {
             try MMCAuthorization.make(entries: entries)
         }
