@@ -41,9 +41,10 @@ extension OpenSoundControl {
     /// Refusal order for a call is total, first match wins: disabled, wrong transport, tick regression,
     /// payload size (a chunk above `maximumChunkBytes`, a datagram above the byte allowance), peer table,
     /// quarantine, packet budget, byte budget. Gate refusals are uncharged and leave the pipeline equal to
-    /// its value before the call. After the gates the input is charged, then decoded (`malformed`), then
-    /// staged (`notAdmitted`). Peers are isolated: a peer's results depend on its own history, the shared
-    /// tick, and (first contact only) table occupancy.
+    /// its value before the call; equality compares everything (every peer's ledger, its whole framer and its
+    /// offered-byte count), so that claim is exact. After the gates the input is charged, then decoded
+    /// (`malformed`), then staged (`notAdmitted`). Peers are isolated: a peer's results depend on its own
+    /// history, the shared tick, and (first contact only) table occupancy.
     ///
     /// Transport contract. The caller owns everything outside this value:
     /// - `PeerKey`: one key per datagram source and one fresh, never reused key per stream connection. There
@@ -238,48 +239,25 @@ extension OpenSoundControl {
         }
     }
 
-    /// What `StreamFramer` exposes. It is not Equatable, so peer equality and hashing use this signature plus
-    /// the peer's offered-byte count. It is a proxy, not an identity: it cannot see a pending SLIP escape, the
-    /// length a length-prefix framer is waiting for, or buffered contents. The twin and replay tests, which
-    /// give both sides the same bytes, vouch for those internals.
-    fileprivate struct FramerSignature: Hashable {
-        let framing: StreamFraming
-        let state: FramerState
-        let buffered: Int
-        let limit: Int
-
-        init(_ framer: StreamFramer) {
-            framing = framer.framing
-            state = framer.state
-            buffered = framer.bufferedByteCount
-            limit = framer.maximumFrameBytes
-        }
-    }
-
-    /// One tracked peer: its ledger and, on stream endpoints, its framer.
+    /// One tracked peer: its ledger and, on stream endpoints, its framer. Equality and hashing are synthesized
+    /// over all of it: the ledger, the complete framer (framing, limit, state, buffered bytes, partial header,
+    /// expected length and pending SLIP escape) and `offeredBytes`, which is history rather than state. Nothing
+    /// a later call could observe is left out, so `==` is a real check that a refused call changed nothing.
     fileprivate struct IntakePeer: Sendable, Hashable {
         var ledger: PeerLedger
         var framer: StreamFramer?
-        /// Every byte offered to the framer so far. Two peers fed different bytes differ even where the
-        /// signature cannot tell their framers apart; refused chunks are never offered.
+        /// How many bytes have been offered to the framer so far: history, not state. No later call reads it,
+        /// and it counts bytes, not calls, so cutting one stream into other chunks leaves it as it was. It is
+        /// part of the value on purpose: equality also tells apart two peers that were fed different amounts and
+        /// still show one ledger (a window rolled in between) and one framer (ignored SLIP ENDs, a finished
+        /// frame), which makes pipeline equality history-sensitive by design. A refused call never reaches
+        /// `feed`, so it changes neither this count nor the framer.
         var offeredBytes = 0
-
-        private var signature: FramerSignature? { framer.map(FramerSignature.init) }
 
         /// Offers `bytes` to the framer, if the endpoint has one, and returns what it completed.
         mutating func feed(_ bytes: [UInt8]) -> [FrameEvent] {
             offeredBytes &+= bytes.count
             return framer?.append(bytes) ?? []
-        }
-
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.ledger == rhs.ledger && lhs.offeredBytes == rhs.offeredBytes && lhs.signature == rhs.signature
-        }
-
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(ledger)
-            hasher.combine(offeredBytes)
-            hasher.combine(signature)
         }
     }
 }

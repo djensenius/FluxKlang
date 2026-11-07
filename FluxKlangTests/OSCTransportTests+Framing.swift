@@ -418,7 +418,7 @@ extension OSCTransportTests {
         )
     }
 
-    @Test("Two pipelines fed different bytes differ even when every ledger and framer summary agrees")
+    @Test("Two pipelines fed different bytes differ even when everything a caller can read agrees")
     func offeredBytesSeparateOtherwiseIdenticalPeers() throws {
         var longer = try Fixture.stream(.slip)
         Fixture.chunk(&longer, [0xC0, 0xC0, 0xC0], at: 0)
@@ -433,7 +433,7 @@ extension OSCTransportTests {
         #expect(longer != shorter)
     }
 
-    @Test("Length-prefix pipelines fed different bytes differ even when every ledger and framer summary agrees")
+    @Test("Length-prefix pipelines fed different bytes differ even when everything a caller can read agrees")
     func offeredBytesSeparateLengthPrefixPeers() throws {
         let frame = try Fixture.frames(1, .lengthPrefixed)
         var longer = try Fixture.stream(.lengthPrefixed)
