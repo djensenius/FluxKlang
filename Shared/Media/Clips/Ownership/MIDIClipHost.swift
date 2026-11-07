@@ -7,7 +7,9 @@
 //  the identity exclusive (one clip per input, no copy of a clip to stop twice or against another ledger) and the
 //  ledger binding fixed (a clip is only ever routed into this host's ledger). A clip's stop is its scheduler's own
 //  Note Offs routed under the clip's input: never a panic, an input loss or a route loss, which are broader than the
-//  clip's ownership. Another input's notes (a drone) therefore survive every clip operation.
+//  clip's ownership. Another input's notes (a drone) therefore survive every clip operation. Clips that can share a
+//  destination, channel and note are rendered together (`render(inputs:)`): their events are merged by frame before
+//  the ledger sees them, so a held-back Note Off follows the scheduled frames and not the call order.
 //
 
 /// Why a host operation was refused. A refusal leaves the whole host (ledger and every clip) unchanged.
@@ -25,6 +27,10 @@ enum MIDIClipHostRefusal: Error, Equatable, Sendable {
     case inputNotBound(MIDIInputID)
     /// A pass-through event carries the input of a bound clip.
     case inputBoundToClip(MIDIInputID)
+    /// A multi-clip render was given no inputs.
+    case noInputs
+    /// A multi-clip render listed this input twice (the first repeated input, in list order).
+    case inputListedTwice(MIDIInputID)
     /// The clip's scheduler refused.
     case clip(MIDIClipRefusal)
     /// The batch was refused before the ledger was touched.
@@ -72,22 +78,66 @@ struct MIDIClipHost: Equatable, Sendable {
         clips.append(BoundClip(input: input, scheduler: MIDIClipScheduler(placement: placement)))
     }
 
-    /// Renders the clip of `input` over `[start, end)` and routes its events into the ledger. A scheduler refusal
-    /// leaves the clip and the ledger unchanged; a per-event ledger refusal is reported without aborting the rest.
+    /// Renders the clip of `input` over `[start, end)` and routes its events into the ledger: exactly
+    /// `render(inputs: [input], ...)`. Clips that can share a destination, channel and note must be rendered
+    /// TOGETHER in one `render(inputs:)` call: separate calls route one clip's whole window before the next one's,
+    /// so a shared note's release decision would depend on call order instead of scheduled frames.
     mutating func render(
         input: MIDIInputID, from start: Int64, to end: Int64, clock: MusicalClockMap, current: MIDIClipGenerations
     ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
-        let slot = try slot(of: input)
-        var scheduler = clips[slot].scheduler
-        let events: [MIDIClipEvent]
-        do throws(MIDIClipRefusal) {
-            events = try scheduler.render(from: start, to: end, clock: clock, current: current)
-        } catch {
-            throw .clip(error)
+        try render(inputs: [input], from: start, to: end, clock: clock, current: current)
+    }
+
+    /// Renders every listed clip over the same window `[start, end)` (each scheduler on a copy), merges all their
+    /// events into ONE sequence ordered by (frame, the clip's position in `inputs`, the event's index within its
+    /// clip) and routes it once through the shared ledger, each event under its own clip's input and routing. A
+    /// per-event ledger refusal is reported without aborting the rest. All-or-nothing: the ledger and every
+    /// scheduler are committed only after the whole batch is known to be accepted. Refusals, in this order: an
+    /// empty list, the first input listed twice, the first unbound input, the first clip (in list order) whose
+    /// scheduler refuses, a merged batch over `MIDIClipOwnershipReport.maximumBatchEvents`. A refusal changes
+    /// nothing.
+    mutating func render(
+        inputs: [MIDIInputID], from start: Int64, to end: Int64, clock: MusicalClockMap,
+        current: MIDIClipGenerations
+    ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
+        let slots = try slots(of: inputs)
+        var schedulers: [MIDIClipScheduler] = []
+        var merged: [MergedEvent] = []
+        for (position, slot) in slots.enumerated() {
+            var scheduler = clips[slot].scheduler
+            do throws(MIDIClipRefusal) {
+                let events = try scheduler.render(from: start, to: end, clock: clock, current: current)
+                for (index, event) in events.enumerated() {
+                    merged.append(MergedEvent(position: position, index: index, sourced: MIDIClipSourcedEvent(
+                        event: event, clip: clips[slot].input
+                    )))
+                }
+            } catch {
+                throw .clip(error)
+            }
+            schedulers.append(scheduler)
         }
-        let report = try route(events, slot: slot)
-        clips[slot].scheduler = scheduler
+        merged.sort()
+        var working = ledger
+        let report = try route(merged.map(\.sourced), ledger: &working)
+        ledger = working
+        for (slot, scheduler) in zip(slots, schedulers) { clips[slot].scheduler = scheduler }
         return report
+    }
+
+    /// One clip event in the merge, ordered by (frame, clip position in the list, index within the clip).
+    private struct MergedEvent: Comparable {
+        let position: Int
+        let index: Int
+        let sourced: MIDIClipSourcedEvent
+
+        static func < (lhs: MergedEvent, rhs: MergedEvent) -> Bool {
+            (lhs.sourced.event.frame, lhs.position, lhs.index) < (rhs.sourced.event.frame, rhs.position, rhs.index)
+        }
+
+        static func == (lhs: MergedEvent, rhs: MergedEvent) -> Bool {
+            lhs.position == rhs.position && lhs.index == rhs.index && lhs.sourced == rhs.sourced
+        }
     }
 
     /// The frame the next render of `input` must start at: the end of its last render, or the cursor a `rebind`
@@ -155,13 +205,33 @@ struct MIDIClipHost: Equatable, Sendable {
         return slot
     }
 
-    private mutating func route(
-        _ events: [MIDIClipEvent], slot: Int
+    /// The slots of `inputs`, in list order, after the list checks (empty, repeated, unbound).
+    private func slots(of inputs: [MIDIInputID]) throws(MIDIClipHostRefusal) -> [Int] {
+        guard !inputs.isEmpty else { throw .noInputs }
+        var seen: Set<MIDIInputID> = []
+        for id in inputs where !seen.insert(id).inserted { throw .inputListedTwice(id) }
+        var slots: [Int] = []
+        for id in inputs { slots.append(try slot(of: id)) }
+        return slots
+    }
+
+    private func route(
+        _ batch: [MIDIClipSourcedEvent], ledger: inout MIDINoteLedger
     ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
         do throws(MIDIClipOwnershipRefusal) {
-            return try MIDIClipOwnershipReport.route(events, through: clips[slot].input, ledger: &ledger)
+            return try MIDIClipOwnershipReport.route(batch, ledger: &ledger)
         } catch {
             throw .ownership(error)
         }
+    }
+
+    private mutating func route(
+        _ events: [MIDIClipEvent], slot: Int
+    ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
+        let clip = clips[slot].input
+        var working = ledger
+        let report = try route(events.map { MIDIClipSourcedEvent(event: $0, clip: clip) }, ledger: &working)
+        ledger = working
+        return report
     }
 }

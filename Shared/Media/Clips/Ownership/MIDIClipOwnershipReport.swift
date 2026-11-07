@@ -2,11 +2,12 @@
 //  MIDIClipOwnershipReport.swift
 //  FluxKlang
 //
-//  What routing clip events through the note ledger produced (#112 CL9). Every event is routed under the clip's
-//  own input, in order. A ledger refusal of one event never aborts the rest: an `.unownedNote` refusal of a note
-//  release (Note Off, or Note On with velocity 0) is benign and counted, any other refusal (a poly pressure of an
-//  unowned note included) is recorded (the first `maximumRefusals`, then counted as dropped). Every output keeps the
-//  scheduled frame of the clip event that produced it.
+//  What routing clip events through the note ledger produced (#112 CL9). Every event is routed under its own clip's
+//  input, in the batch's order (a merged batch of several clips is ordered by frame). A ledger refusal of one
+//  event never aborts the rest: an `.unownedNote` refusal of a note release (Note Off, or Note On with velocity 0)
+//  is benign and counted, any other refusal (a poly pressure of an unowned note included) is recorded (the first
+//  `maximumRefusals`, then counted as dropped). Every output keeps the scheduled frame of the clip event that
+//  produced it.
 //
 
 /// One output of a routed clip event with the frame the scheduler gave that event.
@@ -21,14 +22,22 @@ struct MIDIClipTimedOutput: Equatable, Sendable {
     }
 }
 
-/// One clip event the ledger refused, with its position in the routed batch.
+/// One clip event with the clip (input and routing) that produced it, ready to be routed in a merged batch.
+struct MIDIClipSourcedEvent: Equatable, Sendable {
+    let event: MIDIClipEvent
+    let clip: MIDIClipInput
+}
+
+/// One clip event the ledger refused, with its position in the routed batch and the input of its clip.
 struct MIDIClipOwnershipRefusedEvent: Equatable, Sendable {
     let index: Int
+    let input: MIDIInputID
     let event: MIDIClipEvent
     let refusal: MIDIPerformanceRefusal
 
-    fileprivate init(index: Int, event: MIDIClipEvent, refusal: MIDIPerformanceRefusal) {
+    fileprivate init(index: Int, input: MIDIInputID, event: MIDIClipEvent, refusal: MIDIPerformanceRefusal) {
         self.index = index
+        self.input = input
         self.event = event
         self.refusal = refusal
     }
@@ -65,18 +74,27 @@ struct MIDIClipOwnershipReport: Equatable, Sendable {
     static func route(
         _ events: [MIDIClipEvent], through input: MIDIClipInput, ledger: inout MIDINoteLedger
     ) throws(MIDIClipOwnershipRefusal) -> MIDIClipOwnershipReport {
-        guard events.count <= maximumBatchEvents else {
-            throw .batchTooLarge(count: events.count, limit: maximumBatchEvents)
+        try route(events.map { MIDIClipSourcedEvent(event: $0, clip: input) }, ledger: &ledger)
+    }
+
+    /// Routes a merged batch in the given order, each event under ITS OWN clip's input and routing. The batch rules
+    /// are those of `route(_:through:ledger:)`; `index` of a refused event is its position in `batch`.
+    static func route(
+        _ batch: [MIDIClipSourcedEvent], ledger: inout MIDINoteLedger
+    ) throws(MIDIClipOwnershipRefusal) -> MIDIClipOwnershipReport {
+        guard batch.count <= maximumBatchEvents else {
+            throw .batchTooLarge(count: batch.count, limit: maximumBatchEvents)
         }
         var report = MIDIClipOwnershipReport()
-        for (index, (event, performance)) in zip(events, input.performanceEvents(events)).enumerated() {
+        for (index, sourced) in batch.enumerated() {
             report.routedEventCount += 1
             var scratch: [MIDIRoutedOutput] = []
+            let performance = MIDIPerformanceEvent(input: sourced.clip.input, message: sourced.event.message)
             do {
-                try ledger.route(performance, routing: input.routing, into: &scratch)
-                report.timedOutputs += scratch.map { MIDIClipTimedOutput(frame: event.frame, output: $0) }
+                try ledger.route(performance, routing: sourced.clip.routing, into: &scratch)
+                report.timedOutputs += scratch.map { MIDIClipTimedOutput(frame: sourced.event.frame, output: $0) }
             } catch {
-                report.record(error, index: index, event: event)
+                report.record(error, index: index, sourced: sourced)
             }
         }
         return report
@@ -91,11 +109,13 @@ struct MIDIClipOwnershipReport: Equatable, Sendable {
         }
     }
 
-    private mutating func record(_ refusal: MIDIPerformanceRefusal, index: Int, event: MIDIClipEvent) {
-        if case .unownedNote = refusal, Self.isRelease(event.message) {
+    private mutating func record(_ refusal: MIDIPerformanceRefusal, index: Int, sourced: MIDIClipSourcedEvent) {
+        if case .unownedNote = refusal, Self.isRelease(sourced.event.message) {
             unownedNoteCount += 1
         } else if refusals.count < Self.maximumRefusals {
-            refusals.append(MIDIClipOwnershipRefusedEvent(index: index, event: event, refusal: refusal))
+            refusals.append(MIDIClipOwnershipRefusedEvent(
+                index: index, input: sourced.clip.input, event: sourced.event, refusal: refusal
+            ))
         } else {
             droppedRefusalCount += 1
         }

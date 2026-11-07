@@ -173,4 +173,185 @@ extension MIDIClipOwnershipTests {
             == .ownership(.batchTooLarge(count: 4098, limit: 4096)))
         #expect(host == before)
     }
+
+    /// Two clips on `route1` (inputs `clipID` and `otherID`) over one ledger.
+    private static func pairHost(_ first: [MIDIClipItem], _ second: [MIDIClipItem],
+                                 second route: MIDIRouteID = route1,
+                                 ledger: MIDINoteLedger? = nil) throws -> MIDIClipHost {
+        var host = try Self.host(first, ledger: ledger)
+        try Self.addClip(second, id: otherID, to: [route], in: &host)
+        return host
+    }
+
+    private static func together(_ host: inout MIDIClipHost, _ inputs: [MIDIInputID], from start: Int64 = 0,
+                                 to end: Int64) throws -> MIDIClipOwnershipReport {
+        try host.render(inputs: inputs, from: start, to: end, clock: try Self.clock(), current: live)
+    }
+
+    private static func offs(_ report: MIDIClipOwnershipReport) -> [MIDIClipTimedOutput] {
+        report.timedOutputs.filter { if case .noteOff = $0.output.message { true } else { false } }
+    }
+
+    @Test
+    func overlappingNotesOfTwoClipsHoldBackTheFirstNoteOffWhicheverClipComesFirst() throws {
+        let held = Self.note(0, Self.quarter, release: 5)
+        let later = Self.note(Self.quarter / 2, 2 * Self.quarter, release: 9)
+        var results: [(MIDIClipOwnershipReport, MIDIClipHost)] = []
+        for order in [[Self.clipID, Self.otherID], [Self.otherID, Self.clipID]] {
+            var host = try Self.pairHost([held], [later])
+            let report = try Self.together(&host, order, to: 60_000)
+            let wire = Self.offs(report)
+            #expect(wire.map(\.frame) == [48_000])
+            #expect(wire.map(\.output) == [MIDIRoutedOutput(route: Self.route1, message: Self.off(60, velocity: 9))])
+            #expect(report.routedEventCount == 4 && report.refusals.isEmpty && report.unownedNoteCount == 0)
+            #expect(host.ledger.notes.isEmpty)
+            let cursors = [try host.cursor(of: Self.clipID), try host.cursor(of: Self.otherID)]
+            #expect(cursors == [60_000, 60_000])
+            results.append((report, host))
+        }
+        let forward = try #require(results.first)
+        let swapped = try #require(results.last)
+        #expect(forward.0 == swapped.0 && forward.1 == swapped.1)
+    }
+
+    @Test
+    func separateRendersOfOverlappingClipsSendTheFirstNoteOffEarlyWhichIsWhyTheyMustBeRenderedTogether() throws {
+        var host = try Self.pairHost([Self.note(0, Self.quarter, release: 5)],
+                                     [Self.note(Self.quarter / 2, 2 * Self.quarter, release: 9)])
+        let first = try Self.render(&host, Self.clipID, to: 60_000)
+        let second = try Self.render(&host, Self.otherID, to: 60_000)
+        #expect(Self.offs(first).map(\.frame) == [24_000] && Self.offs(second).map(\.frame) == [48_000])
+    }
+
+    @Test
+    func mergedEventsOfTheSameFrameFollowTheListPositionAndKeepEachClipsOwnOrder() throws {
+        let firstItems = [Self.note(0, Self.quarter), Self.note(0, Self.quarter, pitch: 64)]
+        let secondItems = [Self.note(0, Self.quarter, pitch: 62)]
+        for order in [[Self.clipID, Self.otherID], [Self.otherID, Self.clipID]] {
+            var host = try Self.pairHost(firstItems, secondItems, second: Self.route2)
+            let report = try Self.together(&host, order, to: 12_000)
+            let clipOn60 = MIDIRoutedOutput(route: Self.route1, message: Self.on(60))
+            let clipOn64 = MIDIRoutedOutput(route: Self.route1, message: Self.on(64))
+            let otherOn62 = MIDIRoutedOutput(route: Self.route2, message: Self.on(62))
+            let expected = order.first == Self.clipID ? [clipOn60, clipOn64, otherOn62]
+                : [otherOn62, clipOn60, clipOn64]
+            #expect(report.outputs == expected)
+            #expect(report.timedOutputs.map(\.frame) == [0, 0, 0])
+        }
+    }
+
+    @Test
+    func aOneElementInputListEqualsTheSingleInputRenderExactly() throws {
+        var single = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
+        var listed = single
+        let viaSingle = try Self.render(&single, Self.clipID, to: 30_000)
+        let viaList = try Self.together(&listed, [Self.clipID], to: 30_000)
+        #expect(viaSingle == viaList && single == listed)
+        let cursors = [try listed.cursor(of: Self.clipID), try listed.cursor(of: Self.otherID)]
+        #expect(cursors == [30_000, nil])
+    }
+
+    @Test
+    func anEmptyInputListIsRefusedAndNothingChanges() throws {
+        var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
+        _ = try Self.together(&host, [Self.clipID], to: 6_000)
+        let before = host
+        #expect(Self.refusal { try Self.together(&host, [], from: 6_000, to: 12_000) } == .noInputs)
+        #expect(host == before)
+    }
+
+    @Test
+    func aRepeatedInputIsRefusedBeforeAnUnboundOneAndTheFirstRepeatedInListOrderIsNamed() throws {
+        var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
+        let before = host
+        let unbound = Self.thirdID
+        #expect(Self.refusal { try Self.together(&host, [unbound, Self.clipID, Self.clipID], to: 6_000) }
+            == .inputListedTwice(Self.clipID))
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, Self.clipID, unbound], to: 6_000) }
+            == .inputListedTwice(Self.clipID))
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, Self.otherID, Self.otherID, Self.clipID],
+                                                 to: 6_000) } == .inputListedTwice(Self.otherID))
+        #expect(host == before)
+    }
+
+    @Test
+    func theFirstUnboundInputInListOrderIsRefusedAndNoListedClipMoves() throws {
+        var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
+        let before = host
+        let unboundA = Self.thirdID
+        let unboundB = MIDIInputID(4)
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, unboundA, unboundB], to: 6_000) }
+            == .inputNotBound(unboundA))
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, unboundB, unboundA], to: 6_000) }
+            == .inputNotBound(unboundB))
+        let cursor = try host.cursor(of: Self.clipID)
+        #expect(host == before && cursor == nil)
+    }
+
+    @Test
+    func theFirstClipInListOrderWhoseSchedulerRefusesIsReportedAndEarlierClipsDoNotMove() throws {
+        var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
+        _ = try Self.render(&host, Self.clipID, to: 12_000)
+        _ = try Self.render(&host, Self.otherID, to: 6_000)
+        let before = host
+        let firstRefuses = MIDIClipHostRefusal.clip(.nonContiguousWindow(expected: 12_000, start: 18_000))
+        let secondRefuses = MIDIClipHostRefusal.clip(.nonContiguousWindow(expected: 6_000, start: 18_000))
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, Self.otherID], from: 18_000, to: 24_000) }
+            == firstRefuses)
+        #expect(Self.refusal { try Self.together(&host, [Self.otherID, Self.clipID], from: 18_000, to: 24_000) }
+            == secondRefuses)
+        #expect(host == before)
+        // Only the SECOND listed clip refuses: the first one's cursor and the ledger stay put.
+        #expect(Self.refusal { try Self.together(&host, [Self.clipID, Self.otherID], from: 12_000, to: 24_000) }
+            == .clip(.nonContiguousWindow(expected: 6_000, start: 12_000)))
+        let cursors = [try host.cursor(of: Self.clipID), try host.cursor(of: Self.otherID)]
+        #expect(host == before && cursors == [12_000, 6_000])
+    }
+
+    private static func crowd(shortFirst: Bool) -> [MIDIClipItem] {
+        (0..<2048).map { (index: Int) -> MIDIClipItem in
+            let end: Int64 = shortFirst && index == 0 ? 1_000 : 20_000
+            let channel = UInt8(1 + index / 128)
+            return .note(MIDIClipNote(channel: channel, note: UInt8(index % 128), velocity: 100,
+                                      releaseVelocity: 64, startTicks: Int64(index), endTicks: end))
+        }
+    }
+
+    @Test
+    func aMergedBatchOfFourThousandNinetySixEventsIsRoutedAndOneMoreIsRefusedWholeAcrossTwoClips() throws {
+        let big = try Self.ledger(noteCapacity: 4096)
+        var host = try Self.pairHost(Self.crowd(shortFirst: false), Self.crowd(shortFirst: false), ledger: big)
+        let full = try Self.together(&host, [Self.clipID, Self.otherID], to: 4_000)
+        #expect(full.routedEventCount == 4096 && full.refusals.isEmpty && host.ledger.notes.count == 4096)
+        var over = try Self.pairHost(Self.crowd(shortFirst: false), Self.crowd(shortFirst: true), ledger: big)
+        let before = over
+        #expect(Self.refusal { try Self.together(&over, [Self.clipID, Self.otherID], to: 4_000) }
+            == .ownership(.batchTooLarge(count: 4097, limit: 4096)))
+        let cursor = try over.cursor(of: Self.clipID)
+        #expect(over == before && cursor == nil && over.ledger.notes.isEmpty)
+    }
+
+    @Test
+    func aLedgerRefusalInAMergedBatchNamesTheClipOfTheEventAndItsMergedIndex() throws {
+        let tight = try Self.ledger(noteCapacity: 1)
+        for order in [[Self.clipID, Self.otherID], [Self.otherID, Self.clipID]] {
+            var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)],
+                                         ledger: tight)
+            let report = try Self.together(&host, order, to: 30_000)
+            let refused = try #require(report.refusals.first)
+            #expect(report.refusals.count == 1 && refused.index == 1 && report.routedEventCount == 4)
+            #expect(refused.input == order[1] && report.unownedNoteCount == 1)
+        }
+    }
+
+    @Test
+    func aLaterEventOfAnotherClipKeepsItsOwnFrameAfterAnEarlierClipsRefusedEvent() throws {
+        let tight = try Self.ledger(noteCapacity: 1)
+        var host = try Self.pairHost([Self.note(0, Self.quarter)],
+                                     [Self.note(Self.quarter / 4, Self.quarter, pitch: 62)], ledger: tight)
+        let report = try Self.together(&host, [Self.otherID, Self.clipID], to: 30_000)
+        let refused = try #require(report.refusals.first)
+        #expect(refused.input == Self.otherID && refused.index == 1 && refused.event.frame == 6_000)
+        #expect(report.timedOutputs.map(\.frame) == [0, 24_000])
+    }
 }

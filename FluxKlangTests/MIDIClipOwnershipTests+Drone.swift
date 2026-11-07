@@ -98,6 +98,30 @@ extension MIDIClipOwnershipTests {
     }
 
     @Test
+    func stoppingTwoClipsThatShareANoteEmitsOneNoteOffFromTheLastStopInEitherOrder() throws {
+        let release = [Self.clipID: UInt8(33), Self.otherID: UInt8(44)]
+        for order in [[Self.clipID, Self.otherID], [Self.otherID, Self.clipID]] {
+            var host = try Self.host([Self.note(0, 2 * Self.quarter, release: 33)], id: Self.clipID)
+            try Self.addClip([Self.note(0, 2 * Self.quarter, release: 44)], id: Self.otherID, in: &host)
+            _ = try Self.render(&host, Self.clipID, to: 100)
+            _ = try Self.render(&host, Self.otherID, to: 100)
+            let first = try #require(order.first)
+            let last = try #require(order.last)
+            let lastBefore = Self.entries(of: last, in: host.ledger)
+            #expect(lastBefore.count == 1)
+            let early = try host.stop(input: first)
+            #expect(early.outputs.isEmpty && early.refusals.isEmpty && early.unownedNoteCount == 0)
+            #expect(Self.entries(of: first, in: host.ledger).isEmpty)
+            #expect(Self.entries(of: last, in: host.ledger) == lastBefore)
+            let lastRelease = try #require(release[last])
+            let final = try host.stop(input: last)
+            let expected = MIDIRoutedOutput(route: Self.route1, message: Self.off(60, velocity: lastRelease))
+            #expect(final.outputs == [expected])
+            #expect(host.ledger.notes.isEmpty)
+        }
+    }
+
+    @Test
     func aPedalHeldByAnotherInputSustainsTheClipsNoteAndItsReleaseFollowsThePedal() throws {
         var host = MIDIClipHost(ledger: try Self.ledger())
         let pedalDown = MIDI1Semantic.controlChange(channel: 1, controller: 64, value: 127)
