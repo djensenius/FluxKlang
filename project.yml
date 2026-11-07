@@ -291,6 +291,15 @@ targets:
       - path: FluxKlangTests/RigMappingReviewTests.swift
       - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
       - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
+      - path: FluxKlangTests/RigReservationTests.swift
+      - path: FluxKlangTests/RigReservationTests+Approvals.swift
+      - path: FluxKlangTests/RigReservationTests+Baseline.swift
+      - path: FluxKlangTests/RigReservationTests+Booking.swift
+      - path: FluxKlangTests/RigReservationTests+Determinism.swift
+      - path: FluxKlangTests/RigReservationTests+Experiments.swift
+      - path: FluxKlangTests/RigReservationTests+Refusals.swift
+      - path: FluxKlangTests/RigReservationTests+Release.swift
+      - path: FluxKlangTests/RigReservationTests+Restoration.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
