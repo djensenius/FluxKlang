@@ -21,7 +21,9 @@ struct WorkspaceStatusSegment: Hashable, Sendable {
     /// "<Title>: <sentence>": what VoiceOver reads for the segment.
     let label: String
     let severity: WorkspaceStatusSeverity
-    /// What entered a lost or muted state, in a stable order. A new item here is a new error to announce.
+    /// What entered a lost or muted state, in a stable order. Names are kept as they come, duplicates included,
+    /// and the announcer compares them as a multiset: an item that occurs more often than before is a new
+    /// error to announce.
     let lostItems: [String]
 
     var title: String { id.title }
@@ -44,14 +46,16 @@ struct WorkspaceStatusSegment: Hashable, Sendable {
 // MARK: - Engine
 
 extension WorkspaceStatusSegment {
-    /// The Engine segment. The `over:` set of a preparing lifecycle does not change the text.
+    /// The Engine segment. A preparing lifecycle always keeps the strip text `Preparing rev N...`; the `over:`
+    /// set it renders meanwhile decides the rest: over an absent or a running set the segment is normal, over a
+    /// degraded set it is an error that lists the lost capabilities (see `preparingEngine(revision:over:)`).
     static func engine(_ engine: WorkspaceStatusEngine) throws(WorkspaceStatusRefusal) -> Self {
         try WorkspaceStatusInputs.validate(name: engine.hostName, field: .hostName)
         switch engine.lifecycle {
         case .stopped:
             return Self(.engine, text: "Engine stopped", severity: .normal)
-        case .preparing(let revision, over: _):
-            return Self(.engine, text: "Preparing rev \(revision.value)...", severity: .normal)
+        case .preparing(let revision, over: let base):
+            return preparingEngine(revision: revision, over: base)
         case .running:
             return Self(.engine, text: "Running (\(engine.hostName))", severity: .normal)
         case .degraded(let lost):
@@ -64,12 +68,35 @@ extension WorkspaceStatusSegment {
         }
     }
 
+    /// A preparing engine. The strip says `Preparing rev N...` over every base. Over an absent or a running set
+    /// that is all there is. Over a degraded set the capabilities stay lost while the revision prepares, so the
+    /// segment stays an error with the same lost items as a degraded engine (a loss during preparation is a new
+    /// error, and an ongoing loss does not read as cleared), and the label continues with the degraded engine's
+    /// sentence: `Preparing rev 43... Running: A, B Lost/Muted`.
+    private static func preparingEngine(revision: ContractRevision, over base: RunningSetState) -> Self {
+        let text = "Preparing rev \(revision.value)..."
+        switch base {
+        case .absent, .running:
+            return Self(.engine, text: text, severity: .normal)
+        case .degraded(let lost):
+            let names = lost.map(\.rawValue)
+            let detail = "\(text) \(lostCapabilitiesSentence(names))"
+            return Self(.engine, text: text, detail: detail, severity: .error, lostItems: names)
+        }
+    }
+
     private static func degradedEngine(lost: [CapabilityID]) -> Self {
         // Follow-up before integration: raw CapabilityIDs (possibly UUIDs) are spoken, not display names.
         let names = lost.map(\.rawValue)
+        return Self(.engine, text: lostCapabilitiesSentence(names), severity: .error, lostItems: names)
+    }
+
+    /// `Running: A, B Lost/Muted`, cut off after four names with `, and N more` (every name in it is lost, so
+    /// "more" counts only lost ones); `Running: Lost/Muted` when the list is empty. Shared by the degraded
+    /// engine and by a preparing engine over a degraded set, so the two cannot disagree.
+    private static func lostCapabilitiesSentence(_ names: [String]) -> String {
         let list = WorkspaceStatusFormat.summary(names, limit: maximumDeviceRows)
-        let text = list.isEmpty ? "Running: Lost/Muted" : "Running: \(list) Lost/Muted"
-        return Self(.engine, text: text, severity: .error, lostItems: names)
+        return list.isEmpty ? "Running: Lost/Muted" : "Running: \(list) Lost/Muted"
     }
 }
 

@@ -149,11 +149,27 @@ struct WorkspaceStatusAnnouncer: Hashable, Sendable {
         return high + polite
     }
 
-    /// A segment is a new error when it is in error now and either was not in error before or lists a lost
-    /// item that it did not list before.
+    /// A segment is a new error when it is in error now and either was not in error before or lists some lost
+    /// item more often than before. The lost items are compared as a MULTISET, because names are not unique:
+    /// a second loss of a name that is already lost (`["Pad A"]` to `["Pad A", "Pad A"]`) is a new error,
+    /// while an item that leaves, the same list again and a reshuffle that keeps every count are not.
     fileprivate static func isNewError(from old: WorkspaceStatusSegment, to now: WorkspaceStatusSegment) -> Bool {
         guard now.severity == .error else { return false }
-        return old.severity != .error || now.lostItems.contains { !old.lostItems.contains($0) }
+        return old.severity != .error || occursMoreOften(in: now.lostItems, than: old.lostItems)
+    }
+
+    /// Whether some item occurs more often in `items` than in `others`. It counts `others` once, then spends
+    /// those counts on `items` one by one: the first item whose count is already used up occurs more often.
+    /// Linear and integer-only, and the dictionary is never iterated, so no hash order reaches the result.
+    private static func occursMoreOften(in items: [String], than others: [String]) -> Bool {
+        var remaining: [String: Int] = [:]
+        for item in others { remaining[item] = (remaining[item] ?? 0) + 1 }
+        for item in items {
+            let left = (remaining[item] ?? 0) - 1
+            if left < 0 { return true }
+            remaining[item] = left
+        }
+        return false
     }
 
     /// Whether `now` says something `announced` did not: other words or other lost items. A different severity

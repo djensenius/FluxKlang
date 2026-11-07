@@ -3,7 +3,8 @@
 //  FluxKlangTests
 //
 //  The Engine and Clock segments of the status strip (#99 W3): every lifecycle case and its words, the
-//  degraded summary bound, the clock's nominal and actual rates, and the kilohertz and summary formatters.
+//  degraded summary bound, a preparing engine over a degraded set, the clock's nominal and actual rates, and
+//  the kilohertz and summary formatters.
 //
 
 import Testing
@@ -32,9 +33,9 @@ extension WorkspaceStatusTests {
         )
     }
 
-    @Test func preparingShowsTheRevisionWhateverIsRenderingMeanwhile() throws {
+    @Test func preparingShowsTheRevisionAndStaysNormalOverAnAbsentOrRunningSet() throws {
         let revision = try ContractRevision(43)
-        let bases: [RunningSetState] = [.absent, .running, .degraded([CapabilityID(validated: "audio.out")])]
+        let bases: [RunningSetState] = [.absent, .running]
         for base in bases {
             let preparing = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: base) }
             Self.expectSegment(
@@ -46,6 +47,49 @@ extension WorkspaceStatusTests {
         let last = try ContractRevision(ContractRevision.maximumValue)
         let newest = try Self.segment(.engine) { $0.lifecycle = .preparing(last, over: .running) }
         #expect(newest.text == "Preparing rev 9007199254740991...")
+    }
+
+    @Test func preparingOverADegradedEngineKeepsTheStripTextAndCarriesTheLostSet() throws {
+        let revision = try ContractRevision(43)
+        let lost = [CapabilityID(validated: "audio.out"), CapabilityID(validated: "midi.in")]
+        let preparing = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: .degraded(lost)) }
+        Self.expectSegment(
+            preparing, text: "Preparing rev 43...",
+            label: "Engine: Preparing rev 43... Running: audio.out, midi.in Lost/Muted", severity: .error,
+            lostItems: ["audio.out", "midi.in"]
+        )
+        #expect(preparing.glyphName == "exclamationmark.octagon")
+        let degraded = try Self.segment(.engine) { $0.lifecycle = .degraded(lost) }
+        #expect(preparing.severity == degraded.severity)
+        #expect(preparing.lostItems == degraded.lostItems)
+    }
+
+    @Test func preparingOverADegradedEngineWithNoNamedCapabilitiesIsStillAnError() throws {
+        let revision = try ContractRevision(43)
+        let preparing = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: .degraded([])) }
+        Self.expectSegment(
+            preparing, text: "Preparing rev 43...", label: "Engine: Preparing rev 43... Running: Lost/Muted",
+            severity: .error
+        )
+    }
+
+    @Test func preparingOverManyLostCapabilitiesListsFourThenAndNMore() throws {
+        let revision = try ContractRevision(43)
+        let lead = "Engine: Preparing rev 43... Running: "
+        let fourLost = try Self.capabilities(4)
+        let four = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: .degraded(fourLost)) }
+        #expect(four.text == "Preparing rev 43...")
+        #expect(four.label == lead + "cap.1, cap.2, cap.3, cap.4 Lost/Muted")
+        #expect(four.lostItems == ["cap.1", "cap.2", "cap.3", "cap.4"])
+        let fiveLost = try Self.capabilities(5)
+        let five = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: .degraded(fiveLost)) }
+        #expect(five.text == "Preparing rev 43...")
+        #expect(five.label == lead + "cap.1, cap.2, cap.3, cap.4, and 1 more Lost/Muted")
+        #expect(five.lostItems == ["cap.1", "cap.2", "cap.3", "cap.4", "cap.5"])
+        let sevenLost = try Self.capabilities(7)
+        let seven = try Self.segment(.engine) { $0.lifecycle = .preparing(revision, over: .degraded(sevenLost)) }
+        #expect(seven.label == lead + "cap.1, cap.2, cap.3, cap.4, and 3 more Lost/Muted")
+        #expect(seven.lostItems.count == 7)
     }
 
     @Test func heldByOtherNamesTheProjectAtAttention() throws {
