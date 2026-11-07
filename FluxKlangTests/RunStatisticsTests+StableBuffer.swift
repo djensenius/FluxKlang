@@ -54,6 +54,7 @@ extension RunStatisticsTests {
                         Self.bufferRun(512, samples: 1)]
         let finding = try Self.finding(runs)
         #expect(finding.outcome == .insufficientEvidence(frames: [128, 512]))
+        #expect(!finding.unstableAboveLowestStable)
         #expect(finding.tested.map(\.verdict) == [.unstable, .insufficient, .stable, .insufficient])
         let smallest = try Self.finding([Self.bufferRun(64, samples: 2), Self.bufferRun(128)])
         #expect(smallest.outcome == .insufficientEvidence(frames: [64]))
@@ -92,6 +93,22 @@ extension RunStatisticsTests {
         let flagged = try Self.finding([Self.bufferRun(64), Self.bufferRun(128, dropouts: 1)])
         #expect(flagged.outcome == .instabilityNotObserved(smallestTested: 64))
         #expect(flagged.unstableAboveLowestStable)
+    }
+
+    @Test func anUnstableLargerSizeIsFlaggedInEveryOutcomeFromTheFirstStableSizeOnly() throws {
+        let limits = try Self.criteria()
+        let runs = try [Self.bufferRun(64, samples: 4), Self.bufferRun(128, samples: 5),
+                        Self.bufferRun(256, samples: 5, dropouts: 1)]
+        let insufficient = try Self.finding(runs, limits)
+        #expect(insufficient.outcome == .insufficientEvidence(frames: [64]))
+        #expect(insufficient.unstableAboveLowestStable)
+        let noStable = try Self.finding([Self.bufferRun(64, samples: 4), Self.bufferRun(128, dropouts: 1)], limits)
+        #expect(noStable.outcome == .insufficientEvidence(frames: [64]))
+        #expect(!noStable.unstableAboveLowestStable)
+        let twoStable = try Self.finding([Self.bufferRun(64), Self.bufferRun(128, dropouts: 1), Self.bufferRun(256)],
+                                         limits)
+        #expect(twoStable.outcome == .instabilityNotObserved(smallestTested: 64))
+        #expect(twoStable.unstableAboveLowestStable)
     }
 
     @Test func criteriaLimitsAcceptTheMaximumAndRefuseOneBeyondForDropoutsAndMisses() throws {
@@ -177,6 +194,23 @@ extension RunStatisticsTests {
         let runs = try [Self.bufferRun(64), Self.bufferRun(64, workload: "work.b", deadline: 101)]
         #expect(throws: RunRefusal.variablesDiffer([.workload])) { try Self.finding(runs) }
         #expect(throws: RunRefusal.variablesDiffer([.workload])) { try Self.finding(runs.reversed()) }
+    }
+
+    @Test func aDeadlineMismatchAtAnySizeIsReportedBeforeADropoutOverflowAtAnotherSize() throws {
+        let limits = try Self.criteria(dropouts: Int.max)
+        let runs = try [Self.bufferRun(64, dropouts: Int.max), Self.bufferRun(64, dropouts: 1),
+                        Self.bufferRun(128), Self.bufferRun(128, deadline: 101)]
+        #expect(throws: RunRefusal.deadlineMismatch(100, 101)) { try Self.finding(runs, limits) }
+        #expect(throws: RunRefusal.deadlineMismatch(100, 101)) { try Self.finding(runs.reversed(), limits) }
+        let overflowOnly = Array(runs.prefix(2))
+        #expect(throws: RunRefusal.arithmeticOverflow) { try Self.finding(overflowOnly, limits) }
+    }
+
+    @Test func theSmallestSizeWithADeadlineMismatchIsTheOneReported() throws {
+        let runs = try [Self.bufferRun(128, deadline: 200), Self.bufferRun(128, deadline: 300),
+                        Self.bufferRun(64), Self.bufferRun(64, deadline: 101)]
+        #expect(throws: RunRefusal.deadlineMismatch(100, 101)) { try Self.finding(runs) }
+        #expect(throws: RunRefusal.deadlineMismatch(100, 101)) { try Self.finding(runs.reversed()) }
     }
 
     @Test func aDeadlineMismatchIsReportedBeforeADropoutOverflowOfTheSameRuns() throws {

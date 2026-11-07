@@ -76,7 +76,8 @@ enum StableBufferOutcome: Hashable, Sendable {
     case instabilityNotObserved(smallestTested: Int)
     /// Every tested size had an unstable run.
     case noneStable
-    /// The smallest non-unstable size lacks samples; every insufficient size is listed ascending.
+    /// The smallest non-unstable size lacks samples; every insufficient size is listed ascending. A larger unstable
+    /// size is still reported through `StableBufferFinding.unstableAboveLowestStable`.
     case insufficientEvidence(frames: [Int])
 }
 
@@ -89,7 +90,9 @@ struct StableBufferFinding: Hashable, Sendable {
     let outcome: StableBufferOutcome
     /// Evidence for every tested buffer size, ascending by frames.
     let tested: [BufferEvidence]
-    /// A larger size was unstable although a smaller one was stable: the observation is not monotonic.
+    /// A larger size was unstable although a smaller one was stable (the first stable entry of `tested` is
+    /// followed by an unstable entry): the observation is not monotonic. Derived in every outcome; false when no
+    /// size is stable.
     let unstableAboveLowestStable: Bool
 
     private init(outcome: StableBufferOutcome, tested: [BufferEvidence], unstableAboveLowestStable: Bool) {
@@ -98,29 +101,45 @@ struct StableBufferFinding: Hashable, Sendable {
         self.unstableAboveLowestStable = unstableAboveLowestStable
     }
 
-    /// Refuses an empty set, too many runs, runs differing in any variable but buffer frames, then runs pooled at
-    /// one buffer size with different deadlines (`deadlineMismatch`; sizes may differ), then an overflowing sum.
+    /// Refuses, in this order: an empty set, too many runs, runs differing in any variable but buffer frames, runs
+    /// pooled at one buffer size with different deadlines (`deadlineMismatch`; every size is checked, ascending, and
+    /// the smallest offending size is reported; sizes may differ from each other), then an overflowing sum.
     static func make(runs: [RunRecord], criteria: StabilityCriteria) throws(RunRefusal) -> Self {
         try RunSetCheck.validate(runs, ignoring: .bufferFrames)
         let groups = Dictionary(grouping: runs, by: \.variables.bufferFrames)
+        let sizes = groups.keys.sorted()
+        for frames in sizes { try requireOneDeadline(groups[frames] ?? []) }
         var tested: [BufferEvidence] = []
-        for frames in groups.keys.sorted() {
+        for frames in sizes {
             tested.append(try evidence(frames: frames, runs: groups[frames] ?? [], criteria: criteria))
         }
+        let above = unstableAfterFirstStable(tested)
         guard let index = tested.firstIndex(where: { $0.verdict != .unstable }) else {
-            return Self(outcome: .noneStable, tested: tested, unstableAboveLowestStable: false)
+            return Self(outcome: .noneStable, tested: tested, unstableAboveLowestStable: above)
         }
         let candidate = tested[index]
         guard candidate.verdict == .stable else {
             let lacking = tested.filter { $0.verdict == .insufficient }.map(\.frames)
             return Self(outcome: .insufficientEvidence(frames: lacking), tested: tested,
-                        unstableAboveLowestStable: false)
+                        unstableAboveLowestStable: above)
         }
         let outcome: StableBufferOutcome = index == 0
             ? .instabilityNotObserved(smallestTested: candidate.frames)
             : .lowestStableObserved(frames: candidate.frames, evidence: candidate)
-        let above = tested[(index + 1)...].contains { $0.verdict == .unstable }
         return Self(outcome: outcome, tested: tested, unstableAboveLowestStable: above)
+    }
+
+    /// True when some size above the smallest stable one is unstable; false when no size is stable.
+    private static func unstableAfterFirstStable(_ tested: [BufferEvidence]) -> Bool {
+        guard let stable = tested.firstIndex(where: { $0.verdict == .stable }) else { return false }
+        return tested[(stable + 1)...].contains { $0.verdict == .unstable }
+    }
+
+    private static func requireOneDeadline(_ runs: [RunRecord]) throws(RunRefusal) {
+        let deadlines = runs.map(\.deadlineNanoseconds)
+        if let smallest = deadlines.min(), let largest = deadlines.max(), smallest != largest {
+            throw .deadlineMismatch(smallest, largest)
+        }
     }
 
     private static func verdict(of run: RunRecord, criteria: StabilityCriteria) -> BufferVerdict {
@@ -131,10 +150,6 @@ struct StableBufferFinding: Hashable, Sendable {
 
     private static func evidence(frames: Int, runs: [RunRecord],
                                  criteria: StabilityCriteria) throws(RunRefusal) -> BufferEvidence {
-        let deadlines = runs.map(\.deadlineNanoseconds)
-        if let smallest = deadlines.min(), let largest = deadlines.max(), smallest != largest {
-            throw .deadlineMismatch(smallest, largest)
-        }
         var verdicts: [BufferVerdict] = []
         var samples = 0
         var misses = 0
