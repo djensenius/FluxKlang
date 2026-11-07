@@ -272,6 +272,11 @@ targets:
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
+      - path: FluxKlangTests/WiringEditPathTests.swift
+      - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
+      - path: FluxKlangTests/WiringEditPathTests+Quantization.swift
+      - path: FluxKlangTests/WiringMatrixTests.swift
+      - path: FluxKlangTests/WiringMatrixTests+EdgeBound.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
       - path: FluxKlangTests/RigMappingTests.swift
@@ -346,6 +351,12 @@ targets:
       - path: FluxKlangTests/MIDIClockMathTests.swift
       - path: FluxKlangTests/MIDIClockFollowerTests.swift
       - path: FluxKlangTests/MIDIClockTempoTests.swift
+      - path: FluxKlangTests/MIDIInternalClockTests.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Bounds.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+HostStamp.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Order.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Plan.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Transport.swift
       - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
       - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests.swift
@@ -412,6 +423,14 @@ targets:
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Projects.swift
+      - path: FluxKlangTests/WorkspaceStatusTests.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Announcer.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Devices.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+EngineClock.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+FocusOrder.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Pending.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Refusals.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
