@@ -401,6 +401,33 @@ targets:
       - path: FluxKlangTests/RemoteDispatchTests+Order.swift
       - path: FluxKlangTests/RemoteDispatchTests+Refusals.swift
       - path: FluxKlangTests/RemoteDispatchTests+Sources.swift
+      - path: FluxKlangTests/UMPStreamMessageTests.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Decode.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Hostile.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+ProductID.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
+      - path: FluxKlangTests/PeerEndpointPolicyTests.swift
+      - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
+      - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
+      - path: FluxKlangTests/PeerEndpointPolicyTests+Policy.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
+      - path: FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift
+      - path: FluxKlangTests/MPEZoneTests.swift
+      - path: FluxKlangTests/MPEZoneTests+Config.swift
+      - path: FluxKlangTests/MPEZoneTests+Allocator.swift
+      - path: FluxKlangTests/MPEZoneTests+Expression.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Harness.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Bindings.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Clamp.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+OSC.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Refresh.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Automation.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
