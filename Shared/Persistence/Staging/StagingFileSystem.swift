@@ -1,6 +1,6 @@
 import Foundation
 
-/// What a volume reports about one node, without following links.
+/// What a volume reports about one node: the no-follow status of the path's final component.
 struct StagingNodeStatus: Sendable, Equatable {
     let kind: ProjectPackageEntryKind
     let byteCount: Int
@@ -8,11 +8,11 @@ struct StagingNodeStatus: Sendable, Equatable {
     let volume: Int
     /// Changes whenever the node's content changes; used to detect a member that moved under a read.
     let generation: UInt64
-    /// The identity of the node the path resolves to: unique within a volume and stable across renames, so two
-    /// statuses with the same `volume` and `identity` are the same node whatever their spellings. The status of
-    /// EACH path prefix must be that of the node the prefix resolves to, and an adapter must REFUSE a path whose
-    /// resolution crosses a symlinked component it cannot resolve to a stable identity, so a symlinked ancestor
-    /// cannot hide an alias.
+    /// The identity of the node the final component is: unique within a volume and stable across renames, so two
+    /// statuses with the same `volume` and `identity` are the same node whatever their spellings. Intermediate
+    /// components must be resolved by the adapter (a path whose resolution crosses a symlink it cannot resolve to a
+    /// stable identity must be refused); the pipeline itself refuses a symlinked prefix when it probes aliases,
+    /// because a link's status cannot show where it leads.
     let identity: UInt64
 }
 

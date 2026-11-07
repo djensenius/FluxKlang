@@ -116,4 +116,102 @@ extension ProjectStagingTests {
         #expect(refusal != .overlappingPaths)
         #expect(fake.nodes == before)
     }
+
+    // MARK: Symlinked prefixes
+
+    private static let linkKinds: [ProjectPackageEntryKind] = [.symbolicLink, .unsupported]
+
+    /// Models `link -> destination`: the link's status shows the link's own identity, and `link/source` shares
+    /// one node identity with the destination's `source`.
+    @Test func aSourceBeneathASymlinkToTheDestinationIsRefusedAndTheStoreIsUntouched() throws {
+        var fake = Fixture.volume(old: try Fixture.tiny("old"))
+        fake.seed(package: try Fixture.tiny("new"), at: Fixture.destination + "/source")
+        let real = try #require(fake.nodes[Fixture.destination + "/source"]?.identity)
+        fake.seedNode("link", kind: .symbolicLink)
+        fake.seed(package: try Fixture.tiny("new"), at: "link/source")
+        fake.setIdentity("link/source", to: real)
+        let before = fake.nodes
+        let result = try Fixture.importRun(Fixture.plan(.replaceExisting), from: "link/source", &fake)
+        #expect(Fixture.refusal(result) == .overlappingPaths)
+        #expect(fake.nodes == before)
+        #expect(fake.mutations.isEmpty)
+        #expect(fake.nodes[Fixture.destination + "/source"]?.identity == real)
+        #expect(fake.shapes(at: Fixture.destination + "/source") == Fixture.shapes(try Fixture.tiny("new")))
+    }
+
+    @Test func aSymlinkPrefixOnAnyPlanNameIsRefusedBeforeAnyMutation() throws {
+        // The staging and backup names share the destination's parent, so the destination chain is the only
+        // distinct reachable case.
+        for kind in Self.linkKinds {
+            var fake = Fixture.volume(source: try Fixture.tiny("new"))
+            fake.seedNode("p", kind: kind)
+            fake.seedDirectory("p/inner")
+            let before = fake.nodes
+            let plan = try Fixture.plan(.createNew, destination: "p/inner/Set.fluxklang")
+            let result = try Fixture.importRun(plan, &fake)
+            #expect(Fixture.refusal(result) == .overlappingPaths, "\(kind)")
+            #expect(fake.nodes == before)
+            #expect(fake.mutations.isEmpty)
+        }
+    }
+
+    @Test func aSymlinkAtTheOutermostOrDeepestStrictPrefixIsRefusedButRealDirectoriesSucceed() throws {
+        let plan = try Fixture.plan(.createNew, destination: "a/b/Out.fluxklang")
+        for fromSource in [false, true] {
+            for linked in ["a", "a/b", ""] {
+                for kind in Self.linkKinds {
+                    var fake = fromSource ? Fixture.volume() : Fixture.volume(source: try Fixture.tiny("new"))
+                    for directory in ["a", "a/b"] {
+                        if directory == linked {
+                            fake.seedNode(directory, kind: kind)
+                        } else {
+                            fake.seedDirectory(directory)
+                        }
+                    }
+                    if fromSource { fake.seed(package: try Fixture.tiny("new"), at: "a/b/src") }
+                    let before = fake.nodes
+                    let path = fromSource ? "a/b/src" : Fixture.source
+                    let result = try Fixture.importRun(plan, from: path, &fake)
+                    let label = "\(fromSource) \(linked) \(kind)"
+                    if linked.isEmpty {
+                        #expect(Fixture.value(result) != nil, "\(label)")
+                    } else {
+                        #expect(Fixture.refusal(result) == .overlappingPaths, "\(label)")
+                        #expect(fake.nodes == before, "\(label)")
+                        #expect(fake.mutations.isEmpty, "\(label)")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func aSymlinkOrUnsupportedLeafKeepsItsLaterKindRefusal() throws {
+        for kind in Self.linkKinds {
+            var source = Fixture.volume()
+            source.seedNode(Fixture.source, kind: kind)
+            let sourceResult = try Fixture.importRun(Fixture.plan(.createNew), &source)
+            #expect(Fixture.refusal(sourceResult) == .packageIO(.missingMember), "\(kind)")
+            var destination = Fixture.volume(source: try Fixture.tiny("new"))
+            destination.seedNode(Fixture.destination, kind: kind)
+            let destinationResult = try Fixture.importRun(Fixture.plan(.replaceExisting), &destination)
+            #expect(Fixture.refusal(destinationResult) == .destinationRefused, "\(kind)")
+            #expect(destination.mutations.isEmpty)
+        }
+    }
+
+    @Test func aSymlinkPrefixEndsTheProbesSoALaterStatusFaultIsNeverReached() throws {
+        var fake = Fixture.volume()
+        fake.seedNode("a", kind: .symbolicLink)
+        fake.seedDirectory("a/b")
+        fake.seed(package: try Fixture.tiny("new"), at: "a/b/src")
+        fake.arm(.fault(.ioError, at: 1))
+        let result = try Fixture.importRun(Fixture.plan(.createNew), from: "a/b/src", &fake)
+        #expect(Fixture.refusal(result) == .overlappingPaths)
+        #expect(fake.log.count == 1)
+        var faulted = fake
+        faulted.arm(.fault(.ioError, at: 0))
+        let early = try Fixture.importRun(Fixture.plan(.createNew), from: "a/b/src", &faulted)
+        let expected = StagingRefusal.ioFailed(step: .preflight, fault: .ioError, cleanup: .notNeeded)
+        #expect(Fixture.refusal(early) == expected)
+    }
 }

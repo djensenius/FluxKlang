@@ -14,10 +14,13 @@ enum StagingAliasCheck {
     }
 
     /// Refuses with `.overlappingPaths` when the source is, or lies beneath, one of the plan's names, or when one of
-    /// them is, or lies beneath, the source. An absent source is left to the later read. The source chain is probed
-    /// first, then the destination, staging and backup chains; each chain costs at most one status call per path
-    /// component, so a run issues at most 4 x the deepest path depth status calls and mutates nothing. A failed
-    /// probe is the same typed pre-flight failure as a failed pre-flight status.
+    /// them is, or lies beneath, the source. A status is the no-follow status of the final component, so a symlinked
+    /// (or unsupported) strict prefix is refused with the same `.overlappingPaths` before its identity is recorded:
+    /// a link's own status cannot show where it leads. A symlink leaf is left to the later kind checks. An absent
+    /// source is left to the later read. The source chain is probed first, then the destination, staging and backup
+    /// chains; each chain costs at most one status call per path component, so a run issues at most 4 x the deepest
+    /// path depth status calls and mutates nothing. A failed probe is the same typed pre-flight failure as a failed
+    /// pre-flight status.
     static func refuseAliases<FS: StagingFileSystem>(
         source: String, plan: StagingPlan, in store: inout FS
     ) throws(StagingRefusal) {
@@ -38,7 +41,8 @@ enum StagingAliasCheck {
     ) throws(StagingRefusal) -> Chain {
         var result = Chain()
         var prefix = ""
-        for component in path.unicodeScalars.split(separator: "/", omittingEmptySubsequences: false) {
+        let components = path.unicodeScalars.split(separator: "/", omittingEmptySubsequences: false)
+        for (index, component) in components.enumerated() {
             prefix = StagingPlan.join(prefix, String(component))
             let status: StagingNodeStatus?
             do {
@@ -49,6 +53,10 @@ enum StagingAliasCheck {
             guard let status else {
                 result.isComplete = false
                 return result
+            }
+            let isStrictPrefix = index < components.count - 1
+            if isStrictPrefix, status.kind == .symbolicLink || status.kind == .unsupported {
+                throw .overlappingPaths
             }
             result.nodes.append(NodeID(volume: status.volume, identity: status.identity))
         }
