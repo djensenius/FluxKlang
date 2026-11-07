@@ -207,6 +207,15 @@ targets:
       - path: FluxKlangTests/GraphCompilerPlanTests+Semantics.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Delay.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Determinism.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Fixtures.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Golden.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Kernels.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Limits.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Refusals.swift
+      - path: FluxKlangTests/GraphReferenceEvaluatorTests+Schedules.swift
       - path: FluxKlangTests/PreparationProjectBudgetTests.swift
       - path: FluxKlangTests/ProjectPreparationContextTests.swift
       - path: FluxKlangTests/ProjectPackagePathTests.swift
@@ -291,6 +300,15 @@ targets:
       - path: FluxKlangTests/RigMappingReviewTests.swift
       - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
       - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
+      - path: FluxKlangTests/RigReservationTests.swift
+      - path: FluxKlangTests/RigReservationTests+Approvals.swift
+      - path: FluxKlangTests/RigReservationTests+Baseline.swift
+      - path: FluxKlangTests/RigReservationTests+Booking.swift
+      - path: FluxKlangTests/RigReservationTests+Determinism.swift
+      - path: FluxKlangTests/RigReservationTests+Experiments.swift
+      - path: FluxKlangTests/RigReservationTests+Refusals.swift
+      - path: FluxKlangTests/RigReservationTests+Release.swift
+      - path: FluxKlangTests/RigReservationTests+Restoration.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
@@ -341,12 +359,27 @@ targets:
       - path: FluxKlangTests/MediaBlockPoolTests+Lease.swift
       - path: FluxKlangTests/MediaBlockPoolTests+RandomSequences.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Statistics.swift
+      - path: FluxKlangTests/MediaIOWorkerTests.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Mapping.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpCompletion.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpIssue.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+PumpRecovery.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Reader.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Requests.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Wiring.swift
+      - path: FluxKlangTests/MediaIOWorkerTests+Writer.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
       - path: FluxKlangTests/SpatialMaskTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
+      - path: FluxKlangTests/OSCNamespaceTests.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Arguments.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Grammar.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/MTCFollowerTests.swift
@@ -432,6 +465,12 @@ targets:
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Determinism.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Gate.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Grant.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Restore.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Transitions.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests+Conflicts.swift
