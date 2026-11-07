@@ -362,6 +362,34 @@ extension WorkspaceStatusTests {
             #expect(announcer.pendingSegments.isEmpty, "\(list.id)")
         }
     }
+
+    /// A device named "A missing, B" that is stale reads exactly like a missing device "A" and a stale device
+    /// "B", yet the first is no loss at all: only the lost items tell the two apart.
+    @Test func aLostItemThatLeavesBehindTheSameWordsIsStillSpokenAtItsDueTick() throws {
+        let quiet = try Self.projection()
+        let lost = try Self.projection { $0.devices = [Self.device("A", .missing), Self.device("B", .stale)] }
+        let spelled = try Self.projection { $0.devices = [Self.device("A missing, B", .stale)] }
+        let words = "Devices: A missing, B stale"
+        #expect(lost.segment(.devices).label == words)
+        #expect(spelled.segment(.devices).label == words)
+        #expect(lost.segment(.devices).lostItems == ["A"])
+        #expect(spelled.segment(.devices).lostItems.isEmpty)
+        #expect(lost.segment(.devices).severity == .error)
+        #expect(spelled.segment(.devices).severity == .attention)
+        var announcer = WorkspaceStatusAnnouncer()
+        let first = try announcer.announcements(previous: quiet, current: lost, tick: 0)
+        #expect(Self.kinds(first) == ["high devices"])
+        #expect(first.map(\.text) == [words])
+        let held = try announcer.announcements(previous: lost, current: spelled, tick: 1)
+        #expect(held.isEmpty)
+        #expect(announcer.pendingSegments == [.devices])
+        #expect(announcer.nextDueTick(for: .devices) == 4)
+        let spoken = try announcer.announcements(previous: spelled, current: spelled, tick: 4)
+        #expect(Self.kinds(spoken) == ["polite devices"])
+        #expect(spoken.map(\.text) == [words])
+        #expect(announcer.pendingSegments.isEmpty)
+        #expect(announcer.lastAnnouncedTick(for: .devices) == 4)
+    }
 }
 
 // MARK: - A capability lost while the engine prepares

@@ -34,6 +34,10 @@ struct WorkspaceStatusAnnouncement: Hashable, Sendable {
 /// Decides which segment changes to announce. Per segment it remembers the last state it saw, the last state
 /// it announced and the tick of that announcement; a refused call leaves all of it unchanged.
 ///
+/// A segment changed when its label changed or when its lost items did. The lost items are compared as a
+/// multiset (a reshuffle that keeps every count, such as two hidden lost items trading places behind "and N
+/// more", is not a change), so the same words about the same things lost are never spoken again.
+///
 /// The announcer has no timer. A routine change inside the throttle window is HELD, and it is spoken only by a
 /// LATER call of `announcements(previous:current:tick:)` made at or after `nextDueTick(for:)`; a caller that
 /// calls only when the projection changes therefore never says "error cleared". Poll `pendingSegments` from
@@ -57,7 +61,9 @@ struct WorkspaceStatusAnnouncer: Hashable, Sendable {
             announcedTick = nil
         }
 
-        /// True while the last state seen says something the last announced state did not: a held change.
+        /// True while the last state seen says something the last announced state did not: a held change. That
+        /// is another label or other lost items, compared as a multiset (a reshuffle that keeps every count is
+        /// not a change).
         var isPending: Bool { WorkspaceStatusAnnouncer.differs(known, from: announced) }
 
         /// Decides what to announce for `now`, records the decision and moves `known` to `now`.
@@ -98,18 +104,19 @@ struct WorkspaceStatusAnnouncer: Hashable, Sendable {
         memory[id]?.announcedTick
     }
 
-    /// The segments with a held change, in segment order: the last state seen differs (label or lost items)
-    /// from the last state announced. Empty before the first call, and again once the held change is spoken
-    /// or reverts.
+    /// The segments with a held change, in segment order: the last state seen differs from the last state
+    /// announced in its label or in its lost items, compared as a multiset (a reshuffle that keeps every count
+    /// is not a change). Empty before the first call, and again once the held change is spoken or reverts.
     var pendingSegments: [WorkspaceStatusSegmentID] {
         WorkspaceStatusSegmentID.allCases.filter { memory[$0]?.isPending ?? false }
     }
 
-    /// The tick at which a call speaks the held change of `id`, or nil when nothing is pending for it: the
-    /// tick of its last announcement plus `throttleTicks`, saturating at `UInt64.max`. A call at an earlier
-    /// tick keeps holding it. A held change always follows an announcement, so the fallback to the newest
-    /// accepted tick (a segment that was never announced is due at once) is total but cannot be reached
-    /// through this API.
+    /// The tick at which a call speaks the held change of `id`, or nil when nothing is pending for it (see
+    /// `pendingSegments`: a reshuffle of the lost items that keeps every count is no held change, so it has
+    /// no due tick): the tick of its last announcement plus `throttleTicks`, saturating at `UInt64.max`. A
+    /// call at an earlier tick keeps holding it. A held change always follows an announcement, so the
+    /// fallback to the newest accepted tick (a segment that was never announced is due at once) is total but
+    /// cannot be reached through this API.
     func nextDueTick(for id: WorkspaceStatusSegmentID) -> UInt64? {
         guard let entry = memory[id], entry.isPending else { return nil }
         return entry.announcedTick.map(Self.dueTick(after:)) ?? lastTick
@@ -172,12 +179,26 @@ struct WorkspaceStatusAnnouncer: Hashable, Sendable {
         return false
     }
 
-    /// Whether `now` says something `announced` did not: other words or other lost items. A different severity
-    /// with the same words and lost items (`.connected` to `.synced`) is not a new thing to say.
+    /// Whether `now` says something `announced` did not: other words or other lost items. The lost items are
+    /// compared as a MULTISET (see `haveSameItems`), so a reshuffle that keeps every count, such as two hidden
+    /// lost items trading places, is not a change; the label is compared as a string, so a reorder of the
+    /// VISIBLE rows still is. A different severity with the same words and lost items (`.connected` to
+    /// `.synced`) is not a new thing to say.
     fileprivate static func differs(
         _ now: WorkspaceStatusSegment, from announced: WorkspaceStatusSegment
     ) -> Bool {
-        now.label != announced.label || now.lostItems != announced.lostItems
+        now.label != announced.label || !haveSameItems(now.lostItems, announced.lostItems)
+    }
+
+    /// Whether two lists hold the same items the same number of times, in any order: the counts are equal and
+    /// no item occurs more often in one than in the other. Names are not unique, so this is neither an array
+    /// comparison (it would see a reshuffle) nor a `Set` comparison (`["A", "A", "B"]` and `["A", "B", "B"]`
+    /// differ). The count check is needed because `occursMoreOften` only looks one way: `["A"]` and
+    /// `["A", "B"]` must differ. The announcer asks about lists where the first is already part of the second (an
+    /// item listed more often than before is a new error, announced at once), so there equal counts alone would
+    /// settle it; the one-way check keeps the answer right for any two lists.
+    private static func haveSameItems(_ items: [String], _ others: [String]) -> Bool {
+        items.count == others.count && !occursMoreOften(in: items, than: others)
     }
 
     /// The tick at which a change is due after an announcement at `tick`: `tick + throttleTicks`, saturating

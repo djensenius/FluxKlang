@@ -387,3 +387,94 @@ extension WorkspaceStatusTests {
         #expect(WorkspaceStatusAnnouncer() == WorkspaceStatusAnnouncer())
     }
 }
+
+// MARK: - Lost items behind "and N more"
+
+extension WorkspaceStatusTests {
+    @Test func aReshuffleOfHiddenLostItemsIsNeitherPendingNorSpokenAgain() throws {
+        let quiet = try Self.projection()
+        let reshuffles: [(before: [String], after: [String])] = [
+            (["A", "B"], ["B", "A"]), (["A", "A", "B"], ["B", "A", "A"])
+        ]
+        for list in CappedList.allCases {
+            for (before, after) in reshuffles {
+                let id = list.id
+                let start = try list.projection(list.visible + before)
+                let shuffled = try list.projection(list.visible + after)
+                let words = list.label(list.visible, hidden: before.count)
+                #expect(start.segment(id).label == words, "\(list) \(before)")
+                #expect(shuffled.segment(id).label == words, "\(list) \(before)")
+                #expect(start.segment(id).lostItems != shuffled.segment(id).lostItems, "\(list) \(before)")
+                var announcer = WorkspaceStatusAnnouncer()
+                let first = try announcer.announcements(previous: quiet, current: start, tick: 0)
+                #expect(Self.kinds(first) == ["high \(id.rawValue)"], "\(list) \(before)")
+                #expect(first.map(\.text) == [words], "\(list) \(before)")
+                let swapped = try announcer.announcements(previous: start, current: shuffled, tick: 1)
+                #expect(swapped.isEmpty, "\(list) \(before)")
+                #expect(announcer.pendingSegments.isEmpty, "\(list) \(before)")
+                #expect(announcer.nextDueTick(for: id) == nil, "\(list) \(before)")
+                for tick in [UInt64(4), 5, 100] {
+                    let later = try announcer.announcements(previous: shuffled, current: shuffled, tick: tick)
+                    #expect(later.isEmpty, "\(list) \(before) at tick \(tick)")
+                }
+                #expect(announcer.lastAnnouncedTick(for: id) == 0, "\(list) \(before)")
+                let grown = try list.projection(list.visible + after + ["A"])
+                let loud = try announcer.announcements(previous: shuffled, current: grown, tick: 101)
+                #expect(Self.kinds(loud) == ["high \(id.rawValue)"], "\(list) \(before)")
+                let more = list.label(list.visible, hidden: after.count + 1)
+                #expect(loud.map(\.text) == [more], "\(list) \(before)")
+            }
+        }
+    }
+
+    @Test func aReorderOfTheVisibleLostItemsIsAChangeAndIsSpokenOnceTheThrottleAllows() throws {
+        let quiet = try Self.projection()
+        for list in CappedList.allCases {
+            let id = list.id
+            let reversed = Array(list.visible.reversed())
+            let start = try list.projection(list.visible + ["A", "B"])
+            let moved = try list.projection(reversed + ["A", "B"])
+            let words = list.label(list.visible, hidden: 2)
+            let newWords = list.label(reversed, hidden: 2)
+            #expect(newWords != words, "\(list)")
+            #expect(moved.segment(id).label == newWords, "\(list)")
+            var announcer = WorkspaceStatusAnnouncer()
+            let first = try announcer.announcements(previous: quiet, current: start, tick: 0)
+            #expect(first.map(\.text) == [words], "\(list)")
+            let held = try announcer.announcements(previous: start, current: moved, tick: 3)
+            #expect(held.isEmpty, "\(list)")
+            #expect(announcer.pendingSegments == [id], "\(list)")
+            #expect(announcer.nextDueTick(for: id) == 4, "\(list)")
+            let spoken = try announcer.announcements(previous: moved, current: moved, tick: 4)
+            #expect(Self.kinds(spoken) == ["polite \(id.rawValue)"], "\(list)")
+            #expect(spoken.map(\.text) == [newWords], "\(list)")
+            #expect(announcer.pendingSegments.isEmpty, "\(list)")
+            #expect(announcer.lastAnnouncedTick(for: id) == 4, "\(list)")
+        }
+    }
+
+    @Test func aDifferentHiddenLossBehindTheSameWordsIsStillAHighAnnouncement() throws {
+        let quiet = try Self.projection()
+        let swaps: [(before: [String], after: [String])] = [
+            (["A", "B"], ["A", "C"]), (["A", "A", "B"], ["A", "B", "B"])
+        ]
+        for list in CappedList.allCases {
+            for (before, after) in swaps {
+                let id = list.id
+                let start = try list.projection(list.visible + before)
+                let end = try list.projection(list.visible + after)
+                let words = list.label(list.visible, hidden: before.count)
+                #expect(start.segment(id).label == words, "\(list) \(before)")
+                #expect(end.segment(id).label == words, "\(list) \(before)")
+                var announcer = WorkspaceStatusAnnouncer()
+                let first = try announcer.announcements(previous: quiet, current: start, tick: 0)
+                #expect(Self.kinds(first) == ["high \(id.rawValue)"], "\(list) \(before)")
+                let second = try announcer.announcements(previous: start, current: end, tick: 1)
+                #expect(Self.kinds(second) == ["high \(id.rawValue)"], "\(list) \(before)")
+                #expect(second.map(\.text) == [words], "\(list) \(before)")
+                #expect(announcer.pendingSegments.isEmpty, "\(list) \(before)")
+                #expect(announcer.lastAnnouncedTick(for: id) == 1, "\(list) \(before)")
+            }
+        }
+    }
+}

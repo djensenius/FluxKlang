@@ -282,3 +282,70 @@ extension WorkspaceStatusTests {
         )
     }
 }
+
+// MARK: - Lists that hide lost items behind "and N more"
+
+extension WorkspaceStatusTests {
+    /// A list whose label shows its first rows and only counts the rest ("and N more"): the places where lost
+    /// items can trade places, or one of them be replaced by another, without one word of the label changing.
+    enum CappedList: CaseIterable, Sendable {
+        case devices
+        case peers
+        case degradedEngine
+        case preparingEngine
+
+        /// The segment that shows the list.
+        var id: WorkspaceStatusSegmentID {
+            switch self {
+            case .devices: .devices
+            case .peers: .peers
+            case .degradedEngine, .preparingEngine: .engine
+            }
+        }
+
+        /// As many distinct names as the label lists before "and N more".
+        var visible: [String] {
+            switch self {
+            case .devices: WorkspaceStatusTests.names("D", 4)
+            case .peers: WorkspaceStatusTests.names("P", 3)
+            case .degradedEngine, .preparingEngine: WorkspaceStatusTests.names("cap.", 4)
+            }
+        }
+
+        /// The projection in which exactly these names are lost, in this order: missing devices, disconnected
+        /// peers, lost capabilities of a degraded engine, or of an engine that prepares revision 43 over it.
+        func projection(_ names: [String]) throws -> WorkspaceStatusProjection {
+            switch self {
+            case .devices, .peers:
+                return try WorkspaceStatusTests.lostProjection(names, in: id)
+            case .degradedEngine:
+                let lost = try names.map { try CapabilityID($0) }
+                return try WorkspaceStatusTests.projection { $0.lifecycle = .degraded(lost) }
+            case .preparingEngine:
+                let lost = try names.map { try CapabilityID($0) }
+                let revision = try ContractRevision(43)
+                return try WorkspaceStatusTests.projection {
+                    $0.lifecycle = .preparing(revision, over: .degraded(lost))
+                }
+            }
+        }
+
+        /// The exact label when `shown` are the names it lists and `hidden` more lost items sit behind
+        /// "and N more": the number of items left out, and for devices and peers the number of them that are lost.
+        func label(_ shown: [String], hidden: Int) -> String {
+            let more = ", and \(hidden) more"
+            let joined = shown.joined(separator: ", ")
+            switch self {
+            case .devices: return "Devices: " + rows(shown, "missing") + more + ", \(hidden) missing"
+            case .peers: return "Peers: " + rows(shown, "disconnected") + more + ", \(hidden) disconnected"
+            case .degradedEngine: return "Engine: Running: \(joined)\(more) Lost/Muted"
+            case .preparingEngine: return "Engine: Preparing rev 43... Running: \(joined)\(more) Lost/Muted"
+            }
+        }
+
+        /// "D1 missing, D2 missing": each name with the word of its state.
+        private func rows(_ names: [String], _ word: String) -> String {
+            names.map { "\($0) \(word)" }.joined(separator: ", ")
+        }
+    }
+}
