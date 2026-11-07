@@ -110,7 +110,7 @@ extension MIDIInternalClockTests {
         }
         let pending = try running.stopping(atFrame: 100, in: runningMap)
         let run = Self.run(from: 1_600, at: 0, .continue)
-        #expect(pending.state == .stopping(run, stopFrame: 100, restingAtTicks: 1_664))
+        #expect(pending.state == .stopping(run, stopFrame: 100))
         let map = try Self.map(for: pending, anchorTicks: 1_600)
         #expect(throws: refusal) { try Self.plan(pending, map, Self.window(0, 2_000)) }
         let onTime = try Self.plan(pending, map, Self.window(1, 2_000))
@@ -118,6 +118,8 @@ extension MIDIInternalClockTests {
         let late = try Self.plan(pending, map, Self.window(2_000, 2_000))
         #expect(late.events == [Self.event(2_000, .stop)])
         for holding in [onTime, late] {
+            // The position is that of the requested frame 100, also when the Stop is planned at a later frame.
+            #expect(holding.restingTicks == 1_664)
             let settled = pending.settled(after: holding)
             #expect(settled.state == .stopped(atTicks: 1_664))
             #expect(settled.generation == pending.generation)
@@ -165,8 +167,10 @@ extension MIDIInternalClockTests {
         let settled = pending.settled(after: late)
         #expect(settled.state == .stopped(atTicks: 960))
         #expect(settled.generation == pending.generation)
+        // The resting position is that of the requested frame 1,500 (tick 960), not of the planned frame 2,000.
+        #expect(late.restingTicks == 960)
         let run = Self.run(from: 0, at: 0, .start)
-        #expect(pending.state == .stopping(run, stopFrame: 1_500, restingAtTicks: 960))
+        #expect(pending.state == .stopping(run, stopFrame: 1_500))
     }
 
     @Test
@@ -222,6 +226,60 @@ extension MIDIInternalClockTests {
         let settled = pending.settled(after: holding)
         let afterStop = try Self.plan(settled, Self.map(for: settled), Self.window(0, 4_096))
         #expect(afterStop.events.isEmpty)
+    }
+
+    // MARK: - The resting position travels with the plan
+
+    @Test
+    func aTempoEditWhileAStopIsPendingMovesWhereTheTransportRestsToTheAcceptedPlansMap() throws {
+        let running = try Self.started()
+        let pending = try running.stopping(atFrame: 12_000, in: Self.map(for: running))
+        // The accepted map doubles the tempo from tick 3,840 on: frame 12,000 is then tick 11,520, not 7,680.
+        let edited = try Self.map(for: pending, tempos: [(0, 500_000), (3_840, 250_000)])
+        let holding = try Self.plan(pending, edited, Self.window(11_000, 1_001))
+        #expect(holding.events == [Self.clock(11_000, 16), Self.clock(11_500, 17), Self.event(12_000, .stop)])
+        #expect(holding.restingTicks == 11_520)
+        let settled = pending.settled(after: holding)
+        #expect(settled.state == .stopped(atTicks: 11_520))
+        #expect(settled.generation == pending.generation)
+        let continued = try settled.continuing(atFrame: 20_000)
+        let continuedMap = try Self.map(for: continued, anchorFrame: 20_000, anchorTicks: 11_520)
+        let resumed = try Self.plan(continued, continuedMap, Self.window(20_000, 1))
+        #expect(resumed.events == [Self.event(20_000, .songPosition(3)), Self.event(20_000, .continue),
+                                   Self.clock(20_000, 18)])
+        // Control: planned with the unedited map, the same pending Stop rests where it was requested.
+        let control = try Self.plan(pending, Self.map(for: pending), Self.window(12_000, 1))
+        #expect(control.restingTicks == 7_680)
+        #expect(pending.settled(after: control).state == .stopped(atTicks: 7_680))
+    }
+
+    @Test
+    func aPlanThatHoldsTheStopRefusesAMapThatCannotPlaceTheRequestedFrameButEarlierWindowsStillPlan() throws {
+        let running = try Self.started()
+        let nearby = try Self.map(for: running, rate: 192_000, tempos: [(0, 60_000)], anchorFrame: Int64.max - 1_000)
+        let pending = try running.stopping(atFrame: Int64.max - 1, in: nearby)
+        // The accepted map is anchored at frame 0, where the requested frame is beyond the tick range.
+        let farMap = try Self.map(for: pending, rate: 192_000, tempos: [(0, 60_000)])
+        let earlier = try Self.plan(pending, farMap, Self.window(0, 1_000))
+        #expect(earlier.events == [Self.event(0, .start), Self.clock(0, 0), Self.clock(480, 1), Self.clock(960, 2)])
+        #expect(earlier.restingTicks == nil)
+        #expect(throws: MIDIInternalClockError.clockMap(.overflow)) {
+            try Self.plan(pending, farMap, Self.window(Int64.max - 1, 1))
+        }
+    }
+
+    @Test
+    func aPlanThatHoldsTheStopRefusesAMapThatPlacesTheRequestedFrameBelowZero() throws {
+        let running = try Self.started()
+        let pending = try running.stopping(atFrame: 2_500, in: Self.map(for: running))
+        // Anchored at frame 100,000, tick 0: frame 2,500 lies 97,500 frames before it, at tick -62,400.
+        let shifted = try Self.map(for: pending, anchorFrame: 100_000)
+        #expect(throws: MIDIInternalClockError.positionOutOfRange(ticks: -62_400)) {
+            try Self.plan(pending, shifted, Self.window(3_000, 1_000))
+        }
+        let earlier = try Self.plan(pending, shifted, Self.window(1_000, 1_000))
+        #expect(earlier.events.isEmpty)
+        #expect(earlier.restingTicks == nil)
     }
 
     // MARK: - Windows around the Start

@@ -113,4 +113,49 @@ extension MIDIInternalClockTests {
             try Self.plan(overfull, overfullMap, Self.window(480, 245_282))
         }
     }
+
+    // MARK: - The last plannable frames
+
+    @Test
+    func aStopAtTheLastPlannableFrameIsPlannedAndOneFrameLaterIsRefusedAtTheRequest() throws {
+        #expect(MIDIInternalTransport.lastPlannableFrame == Int64.max - 1)
+        let running = try Self.started()
+        let nearby = try Self.map(for: running, anchorFrame: Int64.max - 1_000)
+        let refusal = MIDIInternalClockError.frameNotPlannable(frame: Int64.max)
+        #expect(throws: refusal) { try running.stopping(atFrame: Int64.max, in: nearby) }
+        // The frame is refused before the map is asked to place it, so even a map that cannot place it gets this.
+        let fast = try Self.map(for: running, rate: 192_000, tempos: [(0, 60_000)])
+        #expect(throws: refusal) { try running.stopping(atFrame: Int64.max, in: fast) }
+        #expect(running.generation.value == 2)
+        #expect(running.state == .running(Self.run(from: 0, at: 0, .start)))
+        let pending = try running.stopping(atFrame: Int64.max - 1, in: nearby)
+        let pendingMap = try Self.map(for: pending, anchorFrame: Int64.max - 1_000)
+        let holding = try Self.plan(pending, pendingMap, Self.window(Int64.max - 1, 1))
+        #expect(holding.events == [Self.event(Int64.max - 1, .stop)])
+        #expect(holding.restingTicks == 639)
+        #expect(pending.settled(after: holding).state == .stopped(atTicks: 639))
+    }
+
+    @Test
+    func aRunMayBeginAtTheLastFrameThatLeavesRoomForItsStopAndTheTwoFramesAfterAreRefused() throws {
+        let last = MIDIInternalTransport.lastPlannableFrame - 1
+        #expect(last == Int64.max - 2)
+        let startedRun = try MIDIInternalTransport.initial.starting(atFrame: last)
+        let continuedRun = try MIDIInternalTransport.initial.continuing(atFrame: last)
+        #expect(startedRun.state == .running(Self.run(from: 0, at: last, .start)))
+        #expect(continuedRun.state == .running(Self.run(from: 0, at: last, .continue)))
+        for frame in [Int64.max - 1, Int64.max] {
+            let refusal = MIDIInternalClockError.frameNotPlannable(frame: frame)
+            #expect(throws: refusal) { try MIDIInternalTransport.initial.starting(atFrame: frame) }
+            #expect(throws: refusal) { try MIDIInternalTransport.initial.continuing(atFrame: frame) }
+        }
+        for running in [startedRun, continuedRun] {
+            let pending = try running.stopping(atFrame: Int64.max - 1, in: Self.map(for: running, anchorFrame: last))
+            let pendingMap = try Self.map(for: pending, anchorFrame: last)
+            let holding = try Self.plan(pending, pendingMap, Self.window(Int64.max - 1, 1))
+            #expect(holding.events == [Self.event(Int64.max - 1, .stop)])
+            #expect(holding.restingTicks == 1)
+            #expect(pending.settled(after: holding).state == .stopped(atTicks: 1))
+        }
+    }
 }

@@ -23,6 +23,10 @@ enum MIDIInternalClockError: Error, Equatable, Sendable {
     case stopPending(stopFrame: Int64)
     /// A Stop must come at least one frame after the first frame of the run.
     case stopNotAfterStart(startFrame: Int64, stopFrame: Int64)
+    /// A frame no plan can hold: a Stop after `MIDIInternalTransport.lastPlannableFrame`, or the first frame of a
+    /// run that would leave no frame for its Stop. Refused at the request, so the transport never waits for a Stop
+    /// that no window could carry.
+    case frameNotPlannable(frame: Int64)
     /// A position outside `0...MIDIClockMath.maximumSongPositionTicks`, or a negative resting position.
     case positionOutOfRange(ticks: Int64)
     /// A Continue position that is not a whole Song Position unit; the remainder is its distance above the floor.

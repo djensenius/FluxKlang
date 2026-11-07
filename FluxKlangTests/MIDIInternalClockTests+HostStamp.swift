@@ -212,4 +212,21 @@ extension MIDIInternalClockTests {
             #expect(throws: mismatch) { try subject.stamped(with: foreignAndStale, current: .initial) }
         }
     }
+
+    @Test
+    func settlingAfterTheStampedPlanRestsWhereSettlingAfterTheUnstampedPlanDoes() throws {
+        let pending = try Self.stopPending(atFrame: 2_500)
+        let map = try Self.map(for: pending)
+        let holding = try Self.plan(pending, map, Self.window(0, 2_501))
+        let stamped = try holding.stamped(with: Self.hostMap(), current: .initial)
+        #expect(holding.restingTicks == 1_600)
+        #expect(stamped.restingTicks == 1_600)
+        #expect(stamped.events.allSatisfy { $0.hostStamp != nil })
+        #expect(pending.settled(after: stamped) == pending.settled(after: holding))
+        #expect(pending.settled(after: stamped).state == .stopped(atTicks: 1_600))
+        let withoutStop = try Self.plan(pending, map, Self.window(0, 2_500))
+        let stampedWithoutStop = try withoutStop.stamped(with: Self.hostMap(), current: .initial)
+        #expect(stampedWithoutStop.restingTicks == nil)
+        #expect(pending.settled(after: stampedWithoutStop) == pending)
+    }
 }

@@ -46,16 +46,20 @@ extension MIDIInternalClockTests {
     }
 
     @Test
-    func stoppingRecordsTheStopFrameAndTheMapsRestingPosition() throws {
+    func stoppingRecordsTheStopFrameAndThePlanThatHoldsItCarriesTheRestingPosition() throws {
         let running = try Self.started()
         let map = try Self.map(for: running)
         let run = Self.run(from: 0, at: 0, .start)
         let pending = try running.stopping(atFrame: 2_500, in: map)
         let third = try Generation(3)
         #expect(pending.generation == third)
-        #expect(pending.state == .stopping(run, stopFrame: 2_500, restingAtTicks: 1_600))
+        #expect(pending.state == .stopping(run, stopFrame: 2_500))
+        let holding = try Self.plan(pending, Self.map(for: pending), Self.window(0, 2_501))
+        #expect(holding.restingTicks == 1_600)
         let earlier = try running.stopping(atFrame: 2_000, in: map)
-        #expect(earlier.state == .stopping(run, stopFrame: 2_000, restingAtTicks: 1_280))
+        #expect(earlier.state == .stopping(run, stopFrame: 2_000))
+        let earlierPlan = try Self.plan(earlier, Self.map(for: earlier), Self.window(0, 2_001))
+        #expect(earlierPlan.restingTicks == 1_280)
         let second = try Generation(2)
         #expect(running.generation == second)
     }
@@ -66,7 +70,11 @@ extension MIDIInternalClockTests {
         let map = try Self.map(for: running, anchorFrame: 6_000, anchorTicks: 3_840)
         let pending = try running.stopping(atFrame: 12_000, in: map)
         let run = Self.run(from: 3_840, at: 6_000, .continue)
-        #expect(pending.state == .stopping(run, stopFrame: 12_000, restingAtTicks: 7_680))
+        #expect(pending.state == .stopping(run, stopFrame: 12_000))
+        let pendingMap = try Self.map(for: pending, anchorFrame: 6_000, anchorTicks: 3_840)
+        let holding = try Self.plan(pending, pendingMap, Self.window(12_000, 1))
+        #expect(holding.restingTicks == 7_680)
+        #expect(pending.settled(after: holding).state == .stopped(atTicks: 7_680))
     }
 
     @Test
@@ -140,7 +148,9 @@ extension MIDIInternalClockTests {
         }
         let pending = try running.stopping(atFrame: 101, in: map)
         let run = Self.run(from: 0, at: 100, .start)
-        #expect(pending.state == .stopping(run, stopFrame: 101, restingAtTicks: 1))
+        #expect(pending.state == .stopping(run, stopFrame: 101))
+        let holding = try Self.plan(pending, Self.map(for: pending, anchorFrame: 100), Self.window(101, 1))
+        #expect(holding.restingTicks == 1)
     }
 
     @Test
@@ -148,7 +158,7 @@ extension MIDIInternalClockTests {
         let running = try Self.started()
         let map = try Self.map(for: running, rate: 192_000, tempos: [(0, 60_000)])
         #expect(throws: MIDIInternalClockError.clockMap(.overflow)) {
-            try running.stopping(atFrame: Int64.max, in: map)
+            try running.stopping(atFrame: Int64.max - 1, in: map)
         }
     }
 
@@ -158,7 +168,10 @@ extension MIDIInternalClockTests {
         let map = try Self.map(for: running, anchorFrame: 100_000)
         let atZero = try running.stopping(atFrame: 100_000, in: map)
         let run = Self.run(from: 0, at: 0, .start)
-        #expect(atZero.state == .stopping(run, stopFrame: 100_000, restingAtTicks: 0))
+        #expect(atZero.state == .stopping(run, stopFrame: 100_000))
+        let holding = try Self.plan(atZero, Self.map(for: atZero, anchorFrame: 100_000), Self.window(100_000, 1))
+        #expect(holding.restingTicks == 0)
+        #expect(atZero.settled(after: holding).state == .stopped(atTicks: 0))
         #expect(throws: MIDIInternalClockError.positionOutOfRange(ticks: -1)) {
             try running.stopping(atFrame: 99_999, in: map)
         }
@@ -173,9 +186,10 @@ extension MIDIInternalClockTests {
         let map = try Self.map(for: running)
         let pending = try running.stopping(atFrame: 98_304_000, in: map)
         let run = Self.run(from: 0, at: 0, .start)
-        #expect(pending.state == .stopping(run, stopFrame: 98_304_000, restingAtTicks: 62_914_560))
+        #expect(pending.state == .stopping(run, stopFrame: 98_304_000))
         let holding = try Self.plan(pending, Self.map(for: pending), Self.window(98_304_000, 1))
         #expect(holding.events == [Self.event(98_304_000, .stop)])
+        #expect(holding.restingTicks == 62_914_560)
         let stopped = pending.settled(after: holding)
         #expect(stopped.state == .stopped(atTicks: 62_914_560))
         #expect(throws: MIDIInternalClockError.positionOutOfRange(ticks: 62_914_560)) {
@@ -201,7 +215,7 @@ extension MIDIInternalClockTests {
         #expect(running.generation.value == 2)
         #expect(running.state == .running(run))
         #expect(pending.generation.value == 3)
-        #expect(pending.state == .stopping(run, stopFrame: 2_500, restingAtTicks: 1_600))
+        #expect(pending.state == .stopping(run, stopFrame: 2_500))
         #expect(try stopped.starting(atFrame: 0).generation.value == 2)
         #expect(try running.stopping(atFrame: 2_500, in: map).generation.value == 3)
         #expect(pending.settled(after: holding).generation.value == 3)
@@ -268,6 +282,15 @@ extension MIDIInternalClockTests {
         }
         #expect(throws: MIDIInternalClockError.stopNotAfterStart(startFrame: 0, stopFrame: 0)) {
             try running.stopping(atFrame: 0, in: map)
+        }
+        #expect(throws: MIDIInternalClockError.frameNotPlannable(frame: Int64.max)) {
+            try stoppedAtLast.starting(atFrame: Int64.max)
+        }
+        #expect(throws: MIDIInternalClockError.frameNotPlannable(frame: Int64.max)) {
+            try stoppedAtLast.continuing(atFrame: Int64.max)
+        }
+        #expect(throws: MIDIInternalClockError.frameNotPlannable(frame: Int64.max)) {
+            try running.stopping(atFrame: Int64.max, in: map)
         }
     }
 

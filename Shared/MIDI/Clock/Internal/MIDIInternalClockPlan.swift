@@ -17,19 +17,29 @@ struct MIDIInternalClockPlan: Equatable, Sendable {
     /// The most events one plan may hold: pulses, Song Position, Start or Continue and Stop together.
     static let maximumPlanEvents = 512
 
+    /// The events of a plan and, when they hold the pending Stop, where the transport rests after it.
+    typealias Emission = (events: [MIDIInternalClockEvent], restingTicks: Int64?)
+
     let transportGeneration: Generation
     let sampleGeneration: Generation
     let sampleClock: ClockID
     let window: MIDIInternalClockWindow
     let events: [MIDIInternalClockEvent]
+    /// Where the transport rests once this plan's Stop has been delivered: this plan's own map at the REQUESTED Stop
+    /// frame, rounded half-up (`MIDIInternalTransport.stopRestingTicks`), not at the frame the Stop is planned at.
+    /// The position and the Stop event come from one `plannedStop` result, so a plan has a position exactly when
+    /// `events` holds the Stop. `settled(after:)` takes the position from here, so a tempo edit between the request
+    /// and the plan moves it together with the clocks the receivers counted. Nil for a plan that holds no Stop.
+    let restingTicks: Int64?
 
     private init(transportGeneration: Generation, sampleGeneration: Generation, sampleClock: ClockID,
-                 window: MIDIInternalClockWindow, events: [MIDIInternalClockEvent]) {
+                 window: MIDIInternalClockWindow, emission emitted: Emission) {
         self.transportGeneration = transportGeneration
         self.sampleGeneration = sampleGeneration
         self.sampleClock = sampleClock
         self.window = window
-        self.events = events
+        events = emitted.events
+        restingTicks = emitted.restingTicks
     }
 
     /// Plans `window` for a transport driven by `map`.
@@ -43,36 +53,45 @@ struct MIDIInternalClockPlan: Equatable, Sendable {
     /// while a Stop is pending (`locating(toTicks:)` is refused with `stopPending`), so the caller plans the next
     /// window instead of retrying the refused one. When the Start or Continue falls inside the window the map must
     /// place the run's first tick on the frame the run began at; later windows trust the map, because a tempo
-    /// change re-anchors it. A pending Stop is planned by every window that ends after its
-    /// frame: at the Stop frame itself, or at the window's first frame when the Stop's frame has already gone by, so
-    /// a Stop is never lost. Clocks before the Stop are planned; the pulse at the Stop frame and every later pulse
-    /// are suppressed, so a window holding a late Stop holds no clock. The caller settles the transport
-    /// (`settled(after:)`) once the stamped plan that holds the Stop has been handed over. Loops are not
-    /// interpreted: the map is planned linearly even if a loop boundary lies inside the window.
+    /// change re-anchors it.
+    ///
+    /// A pending Stop is planned by every window that ends after its frame: at the Stop frame itself, or at the
+    /// window's first frame when the Stop's frame has already gone by, so a Stop is never lost. Clocks before the
+    /// Stop are planned; the pulse at the Stop frame and every later pulse are suppressed, so a window holding a
+    /// late Stop holds no clock. The plan that holds the Stop also carries `restingTicks`, where the transport
+    /// rests: this plan's own map at the REQUESTED Stop frame, even when the Stop is planned later because that
+    /// frame has gone by. Only that plan evaluates it, so earlier windows plan with a map that could not place the
+    /// frame. A map that cannot is refused (`clockMap` when the frame is beyond the tick range,
+    /// `positionOutOfRange` when the position is negative) and the caller supplies one that can, for example the
+    /// map the Stop was requested with, re-issued for the pending transport generation (`make` requires the map to
+    /// belong to it). The caller settles the transport (`settled(after:)`) once the stamped plan that holds the
+    /// Stop has been handed over. Loops are not interpreted: the map is planned linearly even if a loop boundary
+    /// lies inside the window.
     static func make(transport: MIDIInternalTransport, leader: MIDIClockLeader, map: MusicalClockMap,
                      window: MIDIInternalClockWindow) throws(MIDIInternalClockError) -> MIDIInternalClockPlan {
         guard leader == .internal else { throw .notLeader(leader) }
         guard map.anchor.sample.generation == window.sampleGeneration else { throw .staleSampleGeneration }
         guard map.musical.transport == transport.generation else { throw .staleTransport }
-        let events: [MIDIInternalClockEvent]
+        let emitted: Emission
         switch transport.state {
         case .stopped:
-            events = []
+            emitted = (events: [], restingTicks: nil)
         case let .running(run):
-            events = try emission(of: run, stopFrame: nil, in: map, window: window)
-        case let .stopping(run, stopFrame, _):
-            events = try emission(of: run, stopFrame: stopFrame, in: map, window: window)
+            emitted = try emission(of: run, stopFrame: nil, in: map, window: window)
+        case let .stopping(run, stopFrame):
+            emitted = try emission(of: run, stopFrame: stopFrame, in: map, window: window)
         }
         return MIDIInternalClockPlan(transportGeneration: transport.generation,
                                      sampleGeneration: window.sampleGeneration,
-                                     sampleClock: map.anchor.sample.clock, window: window, events: events)
+                                     sampleClock: map.anchor.sample.clock, window: window, emission: emitted)
     }
 
     /// The plan with the lookahead host tick of every event: the earliest tick of `hostMap` whose frame is at
     /// least the event's frame (`MIDIHostStamping`). `current` is the current sample-clock generation; the plan and
     /// the host map must both belong to it, and the host map to the plan's sample clock. The host map is checked
     /// before any event, so an empty plan refuses a stale host map like any other. All events are stamped or none
-    /// are.
+    /// are. The resting position is carried over unchanged, so settling after the stamped plan rests where
+    /// settling after the unstamped one would.
     func stamped(with hostMap: SampleClockMap, current: Generation) throws(MIDIInternalClockError)
         -> MIDIInternalClockPlan {
         guard sampleGeneration == current else { throw .staleSampleGeneration }
@@ -91,35 +110,43 @@ struct MIDIInternalClockPlan: Equatable, Sendable {
             result.append(event.stamped(host))
         }
         return MIDIInternalClockPlan(transportGeneration: transportGeneration, sampleGeneration: sampleGeneration,
-                                     sampleClock: sampleClock, window: window, events: result)
+                                     sampleClock: sampleClock, window: window,
+                                     emission: (events: result, restingTicks: restingTicks))
     }
 }
 
 private extension MIDIInternalClockPlan {
-    /// The events of `run` inside `window`: Song Position and Start or Continue at the run's first frame, the
-    /// Stop at the frame `plannedStopFrame` gives, and the clocks before it, sorted into the documented order.
+    /// The events of `run` inside `window` and the resting position of its Stop: Song Position and Start or
+    /// Continue at the run's first frame, the Stop and its position as `plannedStop` gives them, and the clocks
+    /// before the Stop, sorted into the documented order.
     static func emission(of run: MIDIInternalTransport.Run, stopFrame: Int64?, in map: MusicalClockMap,
-                         window: MIDIInternalClockWindow) throws(MIDIInternalClockError) -> [MIDIInternalClockEvent] {
+                         window: MIDIInternalClockWindow) throws(MIDIInternalClockError) -> Emission {
         let pointer = try plannedSongPositionPointer(for: run, stopFrame: stopFrame, in: window)
-        guard run.atFrame < window.endFrame else { return [] }
+        guard run.atFrame < window.endFrame else { return (events: [], restingTicks: nil) }
         var events: [MIDIInternalClockEvent] = []
         if run.atFrame >= window.startFrame {
             try requireAnchored(run, in: map)
             events += startEvents(of: run, pointer: pointer)
         }
-        let stopAt = plannedStopFrame(stopFrame, in: window)
-        if let stopAt {
-            events.append(MIDIInternalClockEvent(frame: stopAt, message: .stop))
+        let stop = try plannedStop(stopFrame, in: map, window: window)
+        if let stop {
+            events.append(MIDIInternalClockEvent(frame: stop.frame, message: .stop))
         }
-        let pulseEvents = try clocks(of: run, stopAt: stopAt, in: map, window: window, reserved: events.count)
-        return (events + pulseEvents).sorted(by: MIDIInternalClockEvent.precedes)
+        let pulseEvents = try clocks(of: run, stopAt: stop?.frame, in: map, window: window, reserved: events.count)
+        return (events: (events + pulseEvents).sorted(by: MIDIInternalClockEvent.precedes),
+                restingTicks: stop?.restingTicks)
     }
 
-    /// The frame `window` plans a pending Stop at: its own frame, or the window's first frame once that frame has
-    /// gone by, so a Stop is never lost. Nil when there is no Stop or it lies at or after the window's end.
-    static func plannedStopFrame(_ stopFrame: Int64?, in window: MIDIInternalClockWindow) -> Int64? {
+    /// The Stop `window` plans for a Stop requested at `stopFrame`: at that frame, or at the window's first frame
+    /// once it has gone by, so a Stop is never lost, with the resting position of the REQUESTED frame in `map`. The
+    /// Stop event and the position both come from this one result, so a plan holds one exactly when it holds the
+    /// other. Nil when there is no Stop or it lies at or after the window's end: only the plan that holds the Stop
+    /// evaluates the position, so earlier windows plan with a map that could not place it.
+    static func plannedStop(_ stopFrame: Int64?, in map: MusicalClockMap, window: MIDIInternalClockWindow)
+        throws(MIDIInternalClockError) -> (frame: Int64, restingTicks: Int64)? {
         guard let stopFrame, stopFrame < window.endFrame else { return nil }
-        return max(stopFrame, window.startFrame)
+        let resting = try MIDIInternalTransport.stopRestingTicks(atFrame: stopFrame, in: map)
+        return (frame: max(stopFrame, window.startFrame), restingTicks: resting)
     }
 
     /// The Song Position Pointer `window` needs of `run`: nil for a Start; a position that is not a whole unit is
