@@ -163,4 +163,53 @@ extension ActiveSensingTests {
         #expect(observer.phase == .lost(since: maxStamp - 50))
         #expect(observer.lastTick == maxStamp - 50)
     }
+
+    @Test
+    func aByteWithAnEarlierStampIsRefusedAndChangesNothing() throws {
+        var observer = try Self.armed(action: .requestInputLost, at: 50)
+        let before = observer
+        for byte in [UInt8(0x40), 0xFE, 0xFF] {
+            #expect(throws: ActiveSensingRefusal.tickRegressed(last: 50, found: 49)) {
+                try observer.observe(byte: byte, at: Self.at(49))
+            }
+            #expect(observer == before, "byte \(byte)")
+        }
+        #expect(try observer.observe(byte: 0x40, at: Self.at(50)) == .none)
+    }
+
+    @Test
+    func aLateSensingByteWhoseReArmOverflowsIsRefusedAndALaterPollReportsTheLoss() throws {
+        let maxStamp = UInt64.max
+        var observer = try Self.armed(timeout: 100, action: .requestInputLost, at: maxStamp - 150)
+        let before = observer
+        #expect(throws: ActiveSensingRefusal.deadlineOverflow) {
+            try observer.observe(byte: 0xFE, at: Self.at(maxStamp))
+        }
+        #expect(observer == before)
+        #expect(try observer.poll(at: Self.at(maxStamp)) == Self.lost(request: true))
+        #expect(observer.phase == .lost(since: maxStamp - 50))
+    }
+
+    @Test
+    func aSensingByteOnALostObserverAtAnOverflowingStampIsRefusedWithTheWholeValueUnchanged() throws {
+        let maxStamp = UInt64.max
+        var observer = try Self.armed(timeout: 100, at: maxStamp - 150)
+        #expect(try observer.poll(at: Self.at(maxStamp - 50)) == Self.lost())
+        let before = observer
+        #expect(throws: ActiveSensingRefusal.deadlineOverflow) {
+            try observer.observe(byte: 0xFE, at: Self.at(maxStamp - 40))
+        }
+        #expect(observer == before)
+        #expect(try observer.observe(byte: 0x40, at: Self.at(maxStamp - 40)) == .none)
+        #expect(observer.phase == .lost(since: maxStamp - 50))
+    }
+
+    @Test
+    func aLateDataByteAtAnOverflowingStampStillReportsTheLoss() throws {
+        let maxStamp = UInt64.max
+        var observer = try Self.armed(timeout: 100, action: .requestInputLost, at: maxStamp - 150)
+        #expect(try observer.observe(byte: 0x40, at: Self.at(maxStamp)) == Self.lost(request: true))
+        #expect(observer.phase == .lost(since: maxStamp - 50))
+        #expect(observer.lastTick == maxStamp)
+    }
 }

@@ -33,6 +33,9 @@ enum ActiveSensingOutcome: Equatable, Sendable {
 ///   is 0xFE, and 0xFF still disarms).
 /// - Time is monotonic: a stamp below the last accepted one is refused; an equal stamp is accepted; 0 is a stamp.
 /// - A refused call leaves the whole value unchanged. The observer reports; it never releases notes by itself.
+/// - Framing hides a SysEx until its F7, so a transfer longer than the timeout looks like silence if only parsed
+///   events are fed. Feed every received byte through `observe(byte:at:)` at its packet's stamp; feeding only parsed
+///   events is allowed, but then a long SysEx CAN be reported lost.
 struct ActiveSensingObserver: Equatable, Sendable {
     let input: MIDIInputID
     let policy: ActiveSensingPolicy
@@ -47,11 +50,29 @@ struct ActiveSensingObserver: Equatable, Sendable {
     }
 
     /// Feeds one event of this input at `stamp`. Refusals: `invalidTimeout`, `tickRegressed`, `deadlineOverflow`.
+    ///
+    /// A framing parser emits nothing for a SysEx until its F7, so feeding only parsed events makes a transfer longer
+    /// than the timeout look like silence and it CAN be reported lost; see `observe(byte:at:)`.
     mutating func observe(
         _ event: MIDI1Event,
         at stamp: HostStamp
     ) throws(ActiveSensingRefusal) -> ActiveSensingOutcome {
-        commit(try evaluate(event, at: stamp.ticks), at: stamp.ticks)
+        commit(try evaluate(Self.traffic(of: event), at: stamp.ticks), at: stamp.ticks)
+    }
+
+    /// Feeds one raw received byte of this input at its packet's `stamp`, before any message framing.
+    ///
+    /// Why it exists: the framing parser returns nothing for F0 and the payload bytes until F7, so a SysEx dump longer
+    /// than the timeout is continuous activity that produces no event. Feed every received byte, at the stamp of the
+    /// packet that carried it (bytes of one packet share a stamp; equal stamps are accepted), so the activity refreshes
+    /// the deadline. 0xFE arms or refreshes, 0xFF disarms, every other value (data or status) is plain activity: it
+    /// refreshes an armed deadline and never arms. Same refusals, order, late-event rule and atomicity as
+    /// `observe(_:at:)`.
+    mutating func observe(
+        byte: UInt8,
+        at stamp: HostStamp
+    ) throws(ActiveSensingRefusal) -> ActiveSensingOutcome {
+        commit(try evaluate(Self.traffic(ofByte: byte), at: stamp.ticks), at: stamp.ticks)
     }
 
     /// Advances time without an event. Refusals: `invalidTimeout`, `tickRegressed`.
@@ -78,14 +99,18 @@ extension ActiveSensingObserver {
         return step.outcome
     }
 
+    private static func traffic(ofByte byte: UInt8) -> Traffic {
+        switch byte {
+        case 0xFE: return .sensing
+        case 0xFF: return .reset
+        default: return .other
+        }
+    }
+
     private static func traffic(of event: MIDI1Event) -> Traffic {
         switch event {
         case .realTime(let status):
-            switch status {
-            case 0xFE: return .sensing
-            case 0xFF: return .reset
-            default: return .other
-            }
+            return traffic(ofByte: status)
         case .channel, .systemCommon, .sysEx:
             return .other
         }
@@ -98,7 +123,7 @@ extension ActiveSensingObserver {
     }
 
     /// Computes the next phase and outcome without touching `self`, so a refusal changes nothing.
-    private func evaluate(_ event: MIDI1Event?, at now: UInt64) throws(ActiveSensingRefusal) -> Step {
+    private func evaluate(_ traffic: Traffic?, at now: UInt64) throws(ActiveSensingRefusal) -> Step {
         try policy.validate()
         if let last = lastTick, now < last { throw .tickRegressed(last: last, found: now) }
         var step = Step(phase: phase, outcome: .none)
@@ -106,8 +131,8 @@ extension ActiveSensingObserver {
             step.phase = .lost(since: deadline)
             step.outcome = .lost(input: input, requestInputLost: policy.lossAction == .requestInputLost)
         }
-        guard let event else { return step }
-        switch Self.traffic(of: event) {
+        guard let traffic else { return step }
+        switch traffic {
         case .reset:
             step.phase = .unarmed
         case .sensing:

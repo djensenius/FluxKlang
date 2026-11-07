@@ -131,4 +131,39 @@ extension ActiveSensingTests {
         #expect(try run() == expected)
         #expect(try run() == expected)
     }
+
+    static let sysExTransferBytes: [UInt8] = [0xF0, 0x01, 0x02, 0x03, 0xF7]
+    static let sysExTransferTicks: [UInt64] = [90, 180, 270, 360, 450]
+
+    @Test
+    func aSysExTransferLongerThanTheTimeoutNeverReportsLossWhenEveryByteIsObserved() throws {
+        var observer = try Self.observer(timeout: 100, action: .requestInputLost)
+        #expect(try observer.observe(byte: 0xFE, at: Self.at(0)) == .armed)
+        for (byte, tick) in zip(Self.sysExTransferBytes, Self.sysExTransferTicks) {
+            #expect(try observer.observe(byte: byte, at: Self.at(tick)) == .none, "byte \(byte) at \(tick)")
+            #expect(observer.phase == .armed(deadline: tick + 100), "byte \(byte) at \(tick)")
+        }
+        #expect(observer.phase == .armed(deadline: 550))
+        #expect(observer.lastTick == 450)
+    }
+
+    @Test
+    func feedingOnlyParsedEventsLetsALongSysExLookLikeSilenceWhileRawBytesDoNot() throws {
+        var parser = try #require(MIDI1Parser(maximumSysExPayloadBytes: 16))
+        var parsed = try Self.armed(timeout: 100, action: .requestInputLost, at: 0)
+        var raw = parsed
+        var events: [MIDI1Event] = []
+        for (byte, tick) in zip(Self.sysExTransferBytes, Self.sysExTransferTicks) {
+            if let event = parser.consume(byte) {
+                events.append(event)
+                #expect(try parsed.observe(event, at: Self.at(tick)) == Self.lost(request: true))
+            }
+            #expect(try raw.observe(byte: byte, at: Self.at(tick)) == .none, "byte \(byte) at \(tick)")
+        }
+        #expect(events == [.sysEx(payload: [0x01, 0x02, 0x03])])
+        #expect(parsed.phase == .lost(since: 100))
+        #expect(parsed.lastTick == 450)
+        #expect(raw.phase == .armed(deadline: 550))
+        #expect(raw.lastTick == 450)
+    }
 }
