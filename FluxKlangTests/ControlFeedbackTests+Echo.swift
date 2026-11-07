@@ -245,7 +245,7 @@ extension ControlFeedbackTests {
         #expect(unit == .refused(.unitMismatch(expected: .percent, found: .decibels)))
     }
 
-    @Test("A refused input never creates a track or moves the controller's shown position")
+    @Test("A refused input never creates a track")
     func refusedInputCreatesNoTrack() throws {
         var planner = try Self.planner()
         let binding = try Self.binding()
@@ -263,6 +263,54 @@ extension ControlFeedbackTests {
         #expect(planner.shownStep(of: binding.id) == nil)
         let expected = try Self.advanced(Self.planner(), to: 4)
         #expect(planner == expected)
+    }
+
+    @Test("A refused move still makes the shown step unknown and owes the correction until a plan can answer")
+    func refusedMoveStillOwesTheCorrection() throws {
+        var planner = try Self.planner(window: 10, budget: 3)
+        let binding = try Self.binding()
+        let down = try Self.levelTruth(nil)
+        let truth = try Self.levelTruth(60)
+        _ = try Self.answer(&planner, binding, host: 60, now: 100)
+        let refusal = try planner.receive(.absolute(normalized: 0.4), for: binding, truth: down, now: 102)
+        #expect(refusal == .refused(.valueUnavailable(Self.level)))
+        #expect(planner.shownStep(of: binding.id) == nil)
+        #expect(try planner.due(at: 102) == [binding.id])
+        let unanswered = try planner.plan([binding], truth: down, reason: .refresh, now: 103)
+        #expect(unanswered == [Self.refused(binding, .valueUnavailable(Self.level))])
+        #expect(try planner.due(at: 103) == [binding.id])
+        let corrected = try Self.answer(&planner, binding, host: 60, .refresh, now: 104)
+        let expected = try Self.message(0.6, .refresh)
+        #expect(corrected == .message(expected))
+        #expect(planner.shownStep(of: binding.id) == 76)
+        #expect(try planner.due(at: 104).isEmpty)
+        let before = planner
+        let echo = try planner.receive(.absolute(normalized: 0.6), for: binding, truth: truth, now: 105)
+        #expect(echo == .echo)
+        let unchanged = try Self.advanced(before, to: 105)
+        #expect(planner == unchanged)
+    }
+
+    @Test("A refused move keeps the echo ledger, so the owed correction still waits for the emit budget")
+    func refusedMoveKeepsTheEmitBudget() throws {
+        var planner = try Self.planner(window: 10, budget: 1)
+        let binding = try Self.binding()
+        let down = try Self.levelTruth(nil)
+        _ = try Self.answer(&planner, binding, host: 60, now: 100)
+        let refusal = try planner.receive(.absolute(normalized: 0.4), for: binding, truth: down, now: 102)
+        #expect(refusal == .refused(.valueUnavailable(Self.level)))
+        // The host took no move, so a host value on the reported step is not taken for the controller's own move.
+        let notCaused = try Self.answer(&planner, binding, host: 40, .refresh, now: 102)
+        #expect(notCaused == .suppressed(.coalesced))
+        let coalesced = try Self.answer(&planner, binding, host: 60, .refresh, now: 102)
+        #expect(coalesced == .suppressed(.coalesced))
+        #expect(try planner.due(at: 110).isEmpty)
+        #expect(try planner.due(at: 111) == [binding.id])
+        let corrected = try Self.answer(&planner, binding, host: 60, .refresh, now: 111)
+        let expected = try Self.message(0.6, .refresh)
+        #expect(corrected == .message(expected))
+        let settled = try Self.answer(&planner, binding, host: 60, .refresh, now: 112)
+        #expect(settled == .suppressed(.unchanged))
     }
 
     @Test("Receiving admits N bindings and answers tableFull for the N+1st; tracked ones stay answerable")

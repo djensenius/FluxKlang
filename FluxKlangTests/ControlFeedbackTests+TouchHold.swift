@@ -197,6 +197,27 @@ extension ControlFeedbackTests {
         #expect(repeated == .suppressed(.unchanged))
     }
 
+    @Test("A move the host refused during a touch is corrected once on release")
+    func moveRefusedDuringATouchIsCorrectedOnRelease() throws {
+        var planner = try Self.planner()
+        let binding = try Self.binding()
+        let down = try Self.levelTruth(nil)
+        let truth = try Self.levelTruth(60)
+        _ = try Self.answer(&planner, binding, host: 60, now: 1)
+        _ = try planner.touch(Self.sourceA, now: 2)
+        let refusal = try planner.receive(.absolute(normalized: 0.4), for: binding, truth: down, now: 3)
+        #expect(refusal == .refused(.valueUnavailable(Self.level)))
+        #expect(planner.shownStep(of: binding.id) == nil)
+        #expect(try planner.due(at: 3).isEmpty)
+        let released = try planner.release(Self.sourceA, bindings: [binding], truth: truth, now: 4)
+        let expected = try Self.told(binding, 0.6, .release)
+        #expect(released == [expected])
+        #expect(planner.shownStep(of: binding.id) == 76)
+        #expect(try planner.due(at: 4).isEmpty)
+        let settled = try Self.answer(&planner, binding, host: 60, .refresh, now: 5)
+        #expect(settled == .suppressed(.unchanged))
+    }
+
     @Test("Release answers a binding the planner has not seen yet")
     func releaseAnswersUntrackedBindings() throws {
         var planner = try Self.planner()

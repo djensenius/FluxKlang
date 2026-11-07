@@ -29,7 +29,9 @@
 /// a full table refuses NEW bindings), and make an encoder that reads a position back round it exactly like
 /// `ControlFeedbackEcho.step(of:grid:)` on the `EncoderProfile.feedbackGrid` steps, or an echo will not match its
 /// message and is taken for a move. It must also re-plan every binding that `due(at:)` lists, and each binding again
-/// after its writes are applied: a held, coalesced or contradicted correction is sent only by such a re-plan.
+/// after its writes are applied: a held, coalesced or contradicted correction (a refused report can contradict too) is
+/// sent only by such a re-plan, and while host truth stays unavailable the re-plan is refused and the binding stays
+/// listed.
 struct ControlFeedbackPlanner: Hashable, Sendable {
     /// What the planner knows about one tracked binding.
     private struct Track: Hashable, Sendable {
@@ -38,7 +40,8 @@ struct ControlFeedbackPlanner: Hashable, Sendable {
         let source: ControlSourceID
         /// The step the controller is believed to show, or `nil` while unknown.
         var shown: Int?
-        /// Whether a correction is still owed (held, echo-suppressed, coalesced or contradicted by an echo).
+        /// Whether a correction is still owed (held, echo-suppressed, coalesced, or contradicted by a controller report
+        /// that disagrees with the shown step, whether the host judged that report or refused it).
         var deferred = false
         /// The first tick at which an owed correction may be sent.
         var retryAt: UInt64 = 0
@@ -116,7 +119,10 @@ struct ControlFeedbackPlanner: Hashable, Sendable {
     /// budget still applies; the echo of that message equals the shown step and changes nothing). Anything else valid
     /// is a `.move`, which is remembered so the host's equal write is not echoed back to the control that made it. A
     /// relative input is always a `.move` and records nothing. Refusals mirror
-    /// `ControlBinding.operation(for:current:descriptor:)`.
+    /// `ControlBinding.operation(for:current:descriptor:)`. A refused report is never an intent and never creates a
+    /// track, but a valid absolute one that contradicts an existing track still makes the shown step unknown and owes
+    /// the correction at once (the host may be unavailable only for now): the correction goes out at the first plan
+    /// that can answer, with the ledger and the emit budget kept.
     mutating func receive(_ input: ControlInput, for binding: ControlBinding, truth: ControlHostTruth,
                           now: UInt64) throws(ControlFeedbackRefusal) -> ControlFeedbackInbound {
         try requireTick(now)
@@ -137,6 +143,7 @@ struct ControlFeedbackPlanner: Hashable, Sendable {
                 return try receiveAbsolute(normalized, for: binding, now: now)
             }
         } catch {
+            noteRefusedReport(input, for: binding, now: now)
             return .refused(error)
         }
     }
@@ -174,9 +181,9 @@ struct ControlFeedbackPlanner: Hashable, Sendable {
         tracks[binding] = nil
     }
 
-    /// The bindings that owe a correction and may send it now (a held, echo-suppressed or coalesced binding whose retry
-    /// tick has come and whose source is not held), ascending by `BindingID`. Re-plan them with the current truth;
-    /// reason `.refresh` is conventional. Read-only.
+    /// The bindings that owe a correction and may send it now (a held, echo-suppressed or coalesced binding, or one
+    /// whose valid move the host refused, whose retry tick has come and whose source is not held), ascending by
+    /// `BindingID`. Re-plan them with the current truth; reason `.refresh` is conventional. Read-only.
     func due(at now: UInt64) throws(ControlFeedbackRefusal) -> [BindingID] {
         try requireTick(now)
         let ready = tracks.filter { entry in
@@ -329,5 +336,23 @@ struct ControlFeedbackPlanner: Hashable, Sendable {
         track.echo.recordCaused(step: step, now: now, window: policy.windowTicks)
         tracks[binding.id] = track
         return .move
+    }
+
+    /// The part of a refused `receive` that still matters. The host refusing a report (a target or value that is
+    /// unavailable for now, say) does not undo that the controller moved: a valid absolute report that contradicts an
+    /// EXISTING track makes the shown step unknown and owes the correction at once, so the first plan that can answer
+    /// re-sends host truth. It never creates a track, and it leaves a track of another source or grid alone (its
+    /// `shown` is on another grid; the next plan starts it afresh). The ledger is kept, so echo suppression and the
+    /// emit budget stand, and no `caused` entry is recorded because the host did not take the move.
+    private mutating func noteRefusedReport(_ input: ControlInput, for binding: ControlBinding, now: UInt64) {
+        guard case .absolute(let normalized) = input, !binding.profile.isRelative else { return }
+        let grid = binding.profile.feedbackGrid
+        guard let step = ControlFeedbackEcho.step(of: normalized, grid: grid) else { return }
+        guard var track = tracks[binding.id], track.grid == grid, track.source == binding.source,
+              track.shown != step else { return }
+        track.shown = nil
+        track.deferred = true
+        track.retryAt = now
+        tracks[binding.id] = track
     }
 }

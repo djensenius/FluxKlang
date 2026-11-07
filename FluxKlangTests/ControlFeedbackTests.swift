@@ -403,3 +403,70 @@ extension ControlFeedbackTests {
         }
     }
 }
+
+// MARK: - Refused reports
+
+extension ControlFeedbackTests {
+    @Test("A refused report changes nothing unless it contradicts an existing track of the same source and grid")
+    func refusedReportOnlyContradictsAnExistingTrack() throws {
+        struct Case {
+            let planned: ControlBinding?
+            let binding: ControlBinding
+            let input: ControlInput
+            let truth: ControlHostTruth
+            let refusal: ControlBindingRefusal
+        }
+        let fader = try Self.binding()
+        let encoder = try Self.binding("enc", profile: .twosComplement(width: .seven))
+        let rewired = try Self.binding("a", source: "b")
+        let finer = try Self.binding("a", profile: .absolute(resolution: 64))
+        let down = try Self.levelTruth(nil)
+        let healthy = try Self.levelTruth(60)
+        let low = ControlInput.absolute(normalized: 0.4)
+        let believed = ControlInput.absolute(normalized: 0.6)
+        let unavailable = ControlBindingRefusal.valueUnavailable(Self.level)
+        let cases = [
+            Case(planned: nil, binding: fader, input: low, truth: down, refusal: unavailable),
+            Case(planned: fader, binding: fader, input: believed, truth: down, refusal: unavailable),
+            Case(planned: fader, binding: fader, input: .absolute(normalized: .nan), truth: healthy,
+                 refusal: .nonFinite),
+            Case(planned: fader, binding: fader, input: .absolute(normalized: 2), truth: healthy,
+                 refusal: .inputOutOfRange(2)),
+            Case(planned: fader, binding: fader, input: .relative(delta: 1), truth: healthy,
+                 refusal: .inputMismatch),
+            Case(planned: encoder, binding: encoder, input: .absolute(normalized: 0.5), truth: healthy,
+                 refusal: .inputMismatch),
+            Case(planned: fader, binding: rewired, input: low, truth: down, refusal: unavailable),
+            Case(planned: fader, binding: finer, input: low, truth: down, refusal: unavailable)
+        ]
+        for item in cases {
+            var planner = try Self.planner()
+            if let planned = item.planned { _ = try Self.answer(&planner, planned, host: 60, now: 100) }
+            let before = planner
+            let inbound = try planner.receive(item.input, for: item.binding, truth: item.truth, now: 102)
+            #expect(inbound == .refused(item.refusal))
+            let unchanged = try Self.advanced(before, to: 102)
+            #expect(planner == unchanged)
+            #expect(planner.trackedCount == (item.planned == nil ? 0 : 1))
+        }
+    }
+
+    @Test("Whatever the host refuses, a report that contradicts the shown step still owes the correction")
+    func everyHostRefusalOwesTheCorrection() throws {
+        let binding = try Self.binding()
+        let hazard = try Self.truth([Self.descriptor(Self.level, controlClass: .hazardous)], [Self.level: 5])
+        let truths: [(ControlHostTruth, ControlBindingRefusal)] = try [
+            (Self.truth([], [:]), .targetMissing(Self.level)), (Self.levelTruth(nil), .valueUnavailable(Self.level)),
+            (hazard, .unboundableClass(.hazardous)), (Self.levelTruth(.nan), .nonFinite),
+            (Self.levelTruth(5, unit: .decibels), .unitMismatch(expected: .percent, found: .decibels))
+        ]
+        for (truth, refusal) in truths {
+            var planner = try Self.planner()
+            _ = try Self.answer(&planner, binding, host: 60, now: 100)
+            let inbound = try planner.receive(.absolute(normalized: 0.4), for: binding, truth: truth, now: 102)
+            #expect(inbound == .refused(refusal))
+            #expect(planner.shownStep(of: binding.id) == nil)
+            #expect(try planner.due(at: 102) == [binding.id])
+        }
+    }
+}
