@@ -58,7 +58,7 @@ extension NeutralSnapshotTests {
             Self.node("node.b", label: "Café-Rig 1"),
             Self.node("node.c", label: "Rig\u{200B}-Y\u{0301}-2 x")
         ]
-        var inputs = try Snapshot.Inputs(graph: GraphDocument(id: GraphID(validated: "graph.n"), nodes: nodes))
+        var inputs = Snapshot.Inputs(graph: GraphDocument(id: GraphID(validated: "graph.n"), nodes: nodes))
         inputs.routes = [route]
         inputs.hardwareIdentifiers = ["Cafe\u{0301}-Rig", "Rig-\u{00DD}-2"]
         let snapshot = Snapshot.build(from: inputs)

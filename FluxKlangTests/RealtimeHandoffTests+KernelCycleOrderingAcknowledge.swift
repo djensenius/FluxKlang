@@ -133,7 +133,8 @@ extension RealtimeHandoffTests {
             let ticket = try rig.cycle.ackRequests.request(for: observation)
             rig.cycle.retire()
             let parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: rig.ownership,
-                                         safety: rig.safety, ramps: rig.ramps, telemetry: output)
+                                         safety: rig.safety, ramps: rig.ramps, telemetry: output,
+                                         admissionRefusals: rig.cycle.admissionRefusals)
             let replacement = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4,
                                                                              staleTolerance: 48),
                                               blockCapacity: 64, perLaneQuota: 64)
@@ -281,7 +282,8 @@ extension RealtimeHandoffTests {
                 }
                 let ownership = fresh ? try NoteOwnership(scopes: 2) : rig.ownership
                 var parts = KernelCycleParts(events: rig.events, faults: rig.faults, ownership: ownership,
-                                             safety: rig.safety, ramps: rig.ramps)
+                                             safety: rig.safety, ramps: rig.ramps,
+                                             admissionRefusals: rig.cycle.admissionRefusals)
                 if fresh { parts.start = .freshFanIn }
                 let replacement = try KernelCycle(parts, pulses: ClockPulseGate(maximumPulsesPerBlock: 4,
                                                                                  staleTolerance: 48),
