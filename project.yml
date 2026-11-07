@@ -261,6 +261,12 @@ targets:
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
       - path: FluxKlangTests/OSCSchedulingTests+Batches.swift
+      - path: FluxKlangTests/OSCTransportTests.swift
+      - path: FluxKlangTests/OSCTransportTests+Budget.swift
+      - path: FluxKlangTests/OSCTransportTests+Equality.swift
+      - path: FluxKlangTests/OSCTransportTests+Framing.swift
+      - path: FluxKlangTests/OSCTransportTests+Principal.swift
+      - path: FluxKlangTests/OSCTransportTests+Scripts.swift
       - path: FluxKlangTests/MIDIPerformanceTests.swift
       - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
