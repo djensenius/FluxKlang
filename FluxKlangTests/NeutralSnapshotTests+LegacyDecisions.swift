@@ -68,12 +68,9 @@ extension NeutralSnapshotUnicodeTests {
         #expect(UntrustedLabel(label).text == UntrustedLabel.withheldMarker)
     }
 
-    @Test func blankAtStartMiddleAndEndOfGraphemeKeepsA1CapDecision() {
+    @Test func blankAtStartMiddleAndEndOfGraphemeKeepsA1CapDecision() throws {
         let marks = "\u{0316}"
-        guard let blank = "\u{1BC9D}".unicodeScalars.first else {
-            Issue.record("Expected the pinned blank scalar")
-            return
-        }
+        let blank = try #require("\u{1BC9D}".unicodeScalars.first)
         let labelScalars = Array(("q" + String(repeating: marks, count: 7)).unicodeScalars)
         for position in [1, 4, labelScalars.count] {
             var label = labelScalars
@@ -135,4 +132,51 @@ extension NeutralSnapshotUnicodeTests {
         #expect(result.isTruncated)
         #expect(result.wasSanitized)
     }
+
+    @Test func blankRedactionRetainsA1TruncatedFlag() {
+        let result = UntrustedLabel(
+            "\u{13441}SN-123 abcd", maximumBytes: 16, withholding: ["SN-123"]
+        )
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+    }
+
+    @Test func shortBlankRedactionConservativelyReportsTruncation() {
+        let result = UntrustedLabel(
+            "A\u{13441}SN-123", maximumBytes: 16, withholding: ["SN-123"]
+        )
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+    }
+
+    @Test func legacyShadowScanBoundaryIsExact() {
+        let maximumBytes = 128
+        let scanLimit = UntrustedTextSanitizer.scanLimit(maximumBytes: maximumBytes, withheld: [])
+        let blank = "\u{13441}"
+        let exactRaw = blank + String(repeating: "A", count: scanLimit - 1)
+        let overRaw = blank + String(repeating: "A", count: scanLimit)
+        #expect(exactRaw.unicodeScalars.count == scanLimit)
+        #expect(overRaw.unicodeScalars.count == scanLimit + 1)
+
+        let exact = legacyDecision(for: exactRaw, scanLimit: scanLimit, maximumBytes: maximumBytes)
+        let over = legacyDecision(for: overRaw, scanLimit: scanLimit, maximumBytes: maximumBytes)
+        #expect(exact.scanIsComplete)
+        #expect(exact.needsByteCut)
+        #expect(!over.scanIsComplete)
+        #expect(over.needsByteCut)
+
+        let result = UntrustedLabel(overRaw, maximumBytes: maximumBytes)
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+    }
+}
+
+private func legacyDecision(
+    for raw: String, scanLimit: Int, maximumBytes: Int
+) -> UntrustedTextSanitizer.LegacyLabelDecision {
+    let hardened = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: scanLimit)
+        .text.precomposedStringWithCanonicalMapping
+    return UntrustedTextSanitizer.legacyLabelDecision(
+        raw, hardened: hardened, maximumBytes: maximumBytes, scanLimit: scanLimit
+    )
 }

@@ -87,7 +87,9 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
     static let withheldMarker = "[withheld]"
 
     let text: String
-    /// True when characters were dropped to fit the byte limit or the scan limit.
+    /// True when characters were dropped to fit the byte or scan limit.
+    /// A blank-decision fallback can report a cut A1 did not need when A1's own output fits the limit.
+    /// It never under-reports a cut A1 would have made and never changes `text` or `wasSanitized`.
     let isTruncated: Bool
     /// True when characters were replaced or removed, a grapheme was capped or a
     /// withheld string was redacted.
@@ -201,10 +203,21 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         }
         return Pass(
             text: cut.result.text,
-            isTruncated: cut.result.changed || !filtered.isComplete || legacyCutRisk,
+            isTruncated: truncationFlag(
+                cutChanged: cut.result.changed, scanIsComplete: filtered.isComplete,
+                legacyCutRisk: legacyCutRisk, blankDecisionRisk: blankDecisionRisk,
+                legacyGraphemeRisk: legacyGraphemeRisk
+            ),
             wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed,
             separators: cut.separators
         )
+    }
+
+    private static func truncationFlag(
+        cutChanged: Bool, scanIsComplete: Bool, legacyCutRisk: Bool,
+        blankDecisionRisk: Bool, legacyGraphemeRisk: Bool
+    ) -> Bool {
+        cutChanged || !scanIsComplete || legacyCutRisk || (blankDecisionRisk && legacyGraphemeRisk)
     }
 
     /// Actual redaction after new-blank removal withholds the whole label. This only

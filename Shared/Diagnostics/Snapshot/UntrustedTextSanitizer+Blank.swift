@@ -55,6 +55,8 @@ extension UntrustedTextSanitizer {
             $0.unicodeScalars.count > maximumScalarsPerGrapheme
         }
         let needsByteCut = prefixExceedsBound
+            // An incomplete scan means A1 needs a byte cut, whatever the measured display length.
+            // Keep the complete-scan guard separate so these cases stay independent and readable.
             || !scan.isComplete
             || (scan.isComplete && legacyDisplay.utf8.count > byteLimit)
         let needsScalarSubsequenceGuard = !scalarSubsequence(hardened, of: legacyDisplay)
