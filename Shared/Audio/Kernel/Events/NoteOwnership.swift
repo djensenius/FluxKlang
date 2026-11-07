@@ -96,12 +96,19 @@ final class NoteOwnership: @unchecked Sendable {
         case alreadyUsed
         /// The cycle last built over this ownership has not `retire()`d.
         case predecessorNotRetired
+        /// The word moved to a free (retired) state between the read and the claim, and the claim is not one the
+        /// new word refuses: another preparation claimed and retired in between. Refused with nothing changed;
+        /// prepare again from a fresh read.
+        case claimRaced
     }
 
     /// The claim word's state when `claimForCycle(fresh:from:)` began: what it compare-exchanges from, so the
     /// freshness check and the claim are one atomic step. Only `cycleClaimState()` makes one.
     struct CycleClaimState: Equatable, Sendable {
         fileprivate let word: UInt64
+
+        /// A cycle was claimed and has since retired: the word is nonzero and even.
+        var hasRetiredCycle: Bool { word != 0 && word & 1 == 0 }
     }
 
     /// A held claim; `releaseCycleClaim` hands it back. Only `claimForCycle(fresh:from:)` makes one.
@@ -137,6 +144,16 @@ final class NoteOwnership: @unchecked Sendable {
         words.initialize(repeating: 0, count: count)
     }
 
+#if DEBUG
+    /// Test-only (`DEBUG` builds only): an ownership whose claim word starts at `word` instead of 0, to reach the
+    /// wear-out guard (`UInt64.max - 1` and above refuse every claim) without 2^63 claims. A real ownership starts
+    /// at 0; an odd `word` reads as a live cycle that never retires.
+    convenience init(scopes: Int, seedingClaimWord word: UInt64) throws(PreparationError) {
+        try self.init(scopes: scopes)
+        liveCycle.store(word, ordering: .relaxed)
+    }
+#endif
+
     /// Control only, from `KernelCycle.init`, before it makes anything: the claim word now. Acquire pairs with
     /// `releaseCycleClaim`'s release, so a claim seen handed back follows the retiring cycle's tombstone writes.
     func cycleClaimState() -> CycleClaimState {
@@ -150,15 +167,18 @@ final class NoteOwnership: @unchecked Sendable {
 
     /// Control only, last in `KernelCycle.init`: claims this ownership from exactly `state` with one
     /// compare-exchange, or refuses (changing nothing) when `state` refuses or the word moved since: another
-    /// preparation raced this one. A `.freshFanIn` claim succeeds only from the never-claimed word, so a cycle that
-    /// claimed, ran and retired after `state` was read makes it `.alreadyUsed`, never a fresh start over used
-    /// ownership. A word worn out by 2^63 claims refuses every claim (`.alreadyUsed`) rather than wrap. The claim
-    /// carries the predecessor's retirement loss, read only after the compare-exchange succeeded (acquire).
+    /// preparation raced this one. A word that moved to one `refusal` refuses is refused as that (an odd word is a
+    /// live cycle, `.predecessorNotRetired`, which is correct, not spurious); a `.freshFanIn` claim succeeds only from
+    /// the never-claimed word, so a cycle that claimed, ran and retired after `state` was read makes it
+    /// `.alreadyUsed`. The one genuinely raced case is a replacement that lost the compare-exchange to a preparation
+    /// that has since retired: the word is free again and nothing refuses it, so it is `.claimRaced`. A word worn
+    /// out by 2^63 claims refuses every claim (`.alreadyUsed`) rather than wrap. The claim carries the predecessor's
+    /// retirement loss, read only after the compare-exchange succeeded (acquire).
     func claimForCycle(fresh: Bool, from state: CycleClaimState) throws(CycleClaimRefusal) -> CycleClaim {
         if let refusal = Self.refusal(state.word, fresh: fresh) { throw refusal }
         let (claimed, current) = liveCycle.compareExchange(expected: state.word, desired: state.word &+ 1,
                                                            successOrdering: .acquiring, failureOrdering: .acquiring)
-        guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .predecessorNotRetired }
+        guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .claimRaced }
         let inherited = KernelRetirementLoss(noteOns: lostNoteOns, controls: lostControls, programs: lostPrograms,
                                              ramps: lostRamps, clockPulses: lostClockPulses)
         return CycleClaim(held: state.word &+ 1, inherited: inherited)

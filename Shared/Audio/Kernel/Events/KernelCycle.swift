@@ -145,11 +145,13 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// state (re-send the current program, controllers and ramp targets) before relying on it. Nothing is carried over:
 /// a bounded carry-over is a later slice (E5c). A `.replacingCycle` cycle cannot be prepared over an ownership whose
 /// last cycle has not retired (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one
-/// any cycle has used (`.ownershipClaim(.alreadyUsed)`); the check and the claim are one compare-exchange on the
-/// ownership's claim word, so a racing preparation cannot pass the check, wait out another cycle's claim and retire,
-/// then claim fresh. So a replacement is prepared after the retire, and render runs no cycle in between (at least one
-/// block without event work). A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a second
-/// `retire()` too (it returns no loss).
+/// any cycle has used (`.ownershipClaim(.alreadyUsed)`); a replacement over a retired cycle must also pass the
+/// fan-in's `admissionRefusals` (`.admissionRefusalsRequired`, nothing claimed). The check and the claim are one
+/// compare-exchange on the ownership's claim word, so a racing preparation cannot pass the check, wait out another
+/// cycle's claim and retire, then claim fresh; a replacement that loses it to a cycle that has since retired is
+/// refused `.ownershipClaim(.claimRaced)`. So a replacement is prepared after the retire, and render runs no cycle
+/// in between (at least one block without event work). A `run` after `retire()` does nothing
+/// (`KernelCycleResult.retired`), and a second `retire()` too (it returns no loss).
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
@@ -218,9 +220,14 @@ final class KernelCycle: @unchecked Sendable {
         case ackIdentitiesExhausted
         /// `parts.admissionRefusals` belongs to another fan-in (identity or lane count differ).
         case admissionRefusalsMismatch
-        /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked last. A refusal from the
-        /// final claim (only when another preparation raced this one) has used one `KernelAckRequests` identity.
+        /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked after the wiring checks and
+        /// before `.admissionRefusalsRequired`. A refusal from the final claim (only when another preparation raced
+        /// this one) has used one `KernelAckRequests` identity.
         case ownershipClaim(NoteOwnership.CycleClaimRefusal)
+        /// `parts.admissionRefusals` is `nil` over an ownership an earlier cycle used and retired (claim word
+        /// nonzero and even): a new table would leave producers admitted earlier counting elsewhere. Checked
+        /// after `.ownershipClaim`; refuses with nothing claimed. A first cycle may omit it.
+        case admissionRefusalsRequired
     }
 
     /// Why `acknowledgeCritical` refused, checked in this order. Every refusal leaves the latch, the epoch and the
@@ -287,37 +294,12 @@ final class KernelCycle: @unchecked Sendable {
     /// Control-side preparation; allocates the block buffer and the ramp bookkeeping.
     init(_ parts: KernelCycleParts, pulses: ClockPulseGate, blockCapacity: Int,
          perLaneQuota: Int) throws(PreparationError) {
-        let policy = parts.events.policy
-        guard policy.purpose == .events, policy.consumer == .render else { throw .notRenderEvents }
-        let deadline: DeadlinePolicy
-        do {
-            deadline = try DeadlinePolicy(policy: policy)
-        } catch {
-            throw .deadline(error)
-        }
-        guard blockCapacity >= 1, blockCapacity <= Self.maximumBlockCapacity else {
-            throw .blockCapacityOutOfRange(blockCapacity)
-        }
-        guard perLaneQuota >= 1, perLaneQuota <= KernelLimits.maximumCapacity else {
-            throw .perLaneQuotaOutOfRange(perLaneQuota)
-        }
-        guard parts.ownership.scopeCount == parts.safety.scopeCount else {
-            throw .scopeCountMismatch(ownership: parts.ownership.scopeCount, safety: parts.safety.scopeCount)
-        }
-        if let output = parts.telemetry, output.slot < 0 || output.slot >= output.slots.slotCount {
-            throw .telemetrySlotOutOfRange(output.slot)
-        }
-        if let refusals = parts.admissionRefusals,
-           refusals.handoff != parts.events.identity || refusals.laneCount != parts.events.laneCount {
-            throw .admissionRefusalsMismatch
-        }
-        let fresh = parts.start == .freshFanIn
-        let claimState = parts.ownership.cycleClaimState()
-        if let refusal = NoteOwnership.cycleClaimRefusal(claimState, fresh: fresh) { throw .ownershipClaim(refusal) }
+        let checked = try Self.prepare(parts, blockCapacity: blockCapacity, perLaneQuota: perLaneQuota)
+        let deadline = checked.deadline
         guard let ackRequests = KernelAckRequests(faults: parts.faults, criticalScope: parts.events.criticalScope)
         else { throw .ackIdentitiesExhausted }
         do {
-            ownershipClaim = try parts.ownership.claimForCycle(fresh: fresh, from: claimState)
+            ownershipClaim = try parts.ownership.claimForCycle(fresh: checked.fresh, from: checked.claimState)
         } catch {
             throw .ownershipClaim(error)
         }

@@ -107,6 +107,8 @@ enum KernelCycleStart: Sendable, Equatable {
     /// the shared `NoteOwnership`: every note still marked sounding is released (see `KernelCycle`'s Takeover).
     /// Contract: the cycle last built over the ownership must have `retire()`d (render, after its last `run`)
     /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
+    /// It must also pass that cycle's `admissionRefusals` (see `admissionRefusals`), else `.admissionRefusalsRequired`.
+    /// If it loses the claim to a preparation that has since retired, it is refused `.ownershipClaim(.claimRaced)`.
     /// Nothing else pending in the retired cycle is carried over: this cycle's `inheritedRetirementLoss` counts what
     /// its immediate predecessor dropped (that one retirement only, never cumulative), so control checks it on every
     /// replacement and reconciles receiver state first whenever it `receiverStateMayBeStale`.
@@ -142,7 +144,9 @@ struct KernelCycleParts {
     /// The producers' admission refusal table for `events`, which lives as long as the fan-in (Copilot round 4):
     /// a replacement over the same fan-in passes the retired cycle's `admissionRefusals`, so a producer admitted
     /// before it (whose `ProducerAdmission` keeps its table) still counts where telemetry reads. `nil` makes a new
-    /// table: only for a fan-in no producer has counted on yet. It must be `events`' (same identity and lanes).
+    /// table only for a first cycle (an ownership no cycle has claimed). A replacement over a retired cycle must
+    /// pass that cycle's `admissionRefusals`; with `nil`, `KernelCycle.init` throws `.admissionRefusalsRequired`
+    /// and claims nothing. It must be `events`' (same identity and lanes).
     var admissionRefusals: KernelAdmissionRefusals?
     /// `.freshFanIn` only when no earlier cycle consumed `events` or used `ownership` (refused otherwise); anything
     /// else starts flushing and takes over (fail-safe).
