@@ -23,6 +23,12 @@ extension PluginHostNegotiationTests {
 
     private static let forcing: [RenderLiveChange] = [.maximumFrames, .busLayout, .format, .sampleRate]
 
+    /// Completes the outstanding preparation of `ledger` with its own token.
+    private static func record(_ ledger: ReprepareLedger, _ succeeded: Bool) throws -> ReprepareTransition {
+        let token = try #require(ledger.pendingToken)
+        return try ledger.recordingPreparation(token, succeeded: succeeded)
+    }
+
     @Test("reprepare budget accepts 1 and 8 and refuses 0, 9 and -1")
     func reprepareBudgetBounds() throws {
         #expect(try ReprepareBudget(maximumAttempts: 1).maximumAttempts == 1)
@@ -57,14 +63,14 @@ extension PluginHostNegotiationTests {
         #expect(first.decision == .reprepare(attempt: 1))
         #expect(first.ledger.status == .preparing)
         #expect(first.ledger.attempts == 1)
-        let second = try first.ledger.recordingPreparation(succeeded: false)
+        let second = try Self.record(first.ledger, false)
         #expect(second.decision == .reprepare(attempt: 2))
         #expect(second.ledger.attempts == 2)
-        let third = try second.ledger.recordingPreparation(succeeded: false)
+        let third = try Self.record(second.ledger, false)
         #expect(third.decision == .reprepare(attempt: 3))
         #expect(third.ledger.attempts == 3)
         #expect(third.ledger.status == .preparing)
-        let last = try third.ledger.recordingPreparation(succeeded: false)
+        let last = try Self.record(third.ledger, false)
         #expect(last.decision == .silence(.budgetExhausted(attempts: 3, maximum: 3)))
         #expect(last.ledger.status == .silenced)
         #expect(last.ledger.attempts == 3)
@@ -141,17 +147,23 @@ extension PluginHostNegotiationTests {
             #expect(transition.decision == .remainSilent)
             #expect(transition.ledger == silenced)
         }
-        #expect(throws: ReprepareFault.notPreparing(.silenced)) { try silenced.recordingPreparation(succeeded: true) }
-        #expect(throws: ReprepareFault.notPreparing(.silenced)) { try silenced.recordingPreparation(succeeded: false) }
+        let earlier = try #require(Self.preparingLedger(1).pendingToken)
+        #expect(throws: ReprepareFault.notPreparing(.silenced)) {
+            try silenced.recordingPreparation(earlier, succeeded: true)
+        }
+        #expect(throws: ReprepareFault.notPreparing(.silenced)) {
+            try silenced.recordingPreparation(earlier, succeeded: false)
+        }
     }
 
     @Test("reprepare recording a preparation while rendering is refused with the current status")
     func reprepareRecordingWhileRenderingIsRefused() throws {
         let rendering = try Self.ledger()
         let before = rendering
+        let earlier = try #require(Self.preparingLedger().pendingToken)
         for succeeded in [true, false] {
             #expect(throws: ReprepareFault.notPreparing(.rendering)) {
-                try rendering.recordingPreparation(succeeded: succeeded)
+                try rendering.recordingPreparation(earlier, succeeded: succeeded)
             }
         }
         #expect(rendering == before)
@@ -159,9 +171,9 @@ extension PluginHostNegotiationTests {
 
     @Test("reprepare success resets the attempts and a later change starts again at attempt 1")
     func reprepareSuccessResetsAttempts() throws {
-        let failed = try Self.preparingLedger().recordingPreparation(succeeded: false)
+        let failed = try Self.record(Self.preparingLedger(), false)
         #expect(failed.ledger.attempts == 2)
-        let resumed = try failed.ledger.recordingPreparation(succeeded: true)
+        let resumed = try Self.record(failed.ledger, true)
         #expect(resumed.decision == .resume)
         #expect(resumed.ledger.status == .rendering)
         #expect(resumed.ledger.attempts == 0)
@@ -174,10 +186,10 @@ extension PluginHostNegotiationTests {
     func reprepareBudgetOneExhaustsOnTheFirstFailure() throws {
         let preparing = try Self.preparingLedger(1)
         #expect(preparing.attempts == 1)
-        let failed = try preparing.recordingPreparation(succeeded: false)
+        let failed = try Self.record(preparing, false)
         #expect(failed.decision == .silence(.budgetExhausted(attempts: 1, maximum: 1)))
         #expect(failed.ledger.status == .silenced)
-        #expect(try Self.preparingLedger(1).recordingPreparation(succeeded: true).decision == .resume)
+        #expect(try Self.record(Self.preparingLedger(1), true).decision == .resume)
     }
 
     @Test("reprepare end to end: stale resources silence, the ledger reprepares and the guard dispatches again")
@@ -193,7 +205,7 @@ extension PluginHostNegotiationTests {
         let renegotiated = try fake.negotiate(Self.makeSpec(frames: 1_024, format: .float64), generation: live)
         #expect(renegotiated.generation == live)
         #expect(renegotiated.spec.format == .float64)
-        let resumed = try transition.ledger.recordingPreparation(succeeded: true)
+        let resumed = try Self.record(transition.ledger, true)
         #expect(resumed.decision == .resume)
         let decision = DispatchGuard.decide(Self.request(1_024, stamp: live), negotiated: renegotiated, live: live)
         #expect(decision == .dispatch(frames: 1_024))
@@ -213,7 +225,7 @@ extension PluginHostNegotiationTests {
         while transition.ledger.status == .preparing {
             let decision = DispatchGuard.decide(Self.request(64), negotiated: negotiated, live: live)
             fake.dispatch(decision, negotiated: negotiated)
-            transition = try transition.ledger.recordingPreparation(succeeded: false)
+            transition = try Self.record(transition.ledger, false)
             decisions.append(transition.decision)
         }
         #expect(decisions == [
@@ -223,6 +235,139 @@ extension PluginHostNegotiationTests {
         #expect(fake.silencedCalls == 3)
         #expect(fake.dispatchedFrames.isEmpty)
         #expect(transition.ledger.observing(.busLayout).decision == .remainSilent)
+    }
+
+    @Test("reprepare a late success of a superseded attempt is refused and attempt two then completes normally")
+    func reprepareLateSuccessAfterSupersessionIsRefused() throws {
+        let first = try Self.ledger(3).observing(.format)
+        let second = first.ledger.observing(.busLayout)
+        let early = try #require(first.ledger.pendingToken)
+        let current = try #require(second.ledger.pendingToken)
+        #expect(early != current)
+        #expect(second.decision == .reprepare(attempt: 2))
+        let before = second.ledger
+        #expect(throws: ReprepareFault.superseded(presented: early, current: current)) {
+            try before.recordingPreparation(early, succeeded: true)
+        }
+        #expect(before == second.ledger)
+        #expect(before.status == .preparing)
+        #expect(before.attempts == 2)
+        let resumed = try before.recordingPreparation(current, succeeded: true)
+        #expect(resumed.decision == .resume)
+        #expect(resumed.ledger.status == .rendering)
+        #expect(resumed.ledger.attempts == 0)
+        #expect(resumed.ledger.pendingToken == nil)
+    }
+
+    @Test("reprepare a late failure of a superseded attempt is refused and does not consume the current budget")
+    func reprepareLateFailureAfterSupersessionDoesNotConsumeTheBudget() throws {
+        let first = try Self.ledger(3).observing(.format)
+        let second = first.ledger.observing(.busLayout)
+        let early = try #require(first.ledger.pendingToken)
+        let current = try #require(second.ledger.pendingToken)
+        #expect(throws: ReprepareFault.superseded(presented: early, current: current)) {
+            try second.ledger.recordingPreparation(early, succeeded: false)
+        }
+        #expect(second.ledger.attempts == 2)
+        let third = try second.ledger.recordingPreparation(current, succeeded: false)
+        #expect(third.decision == .reprepare(attempt: 3))
+        #expect(third.ledger.attempts == 3)
+        let lastToken = try #require(third.ledger.pendingToken)
+        for stale in [early, current] {
+            #expect(throws: ReprepareFault.superseded(presented: stale, current: lastToken)) {
+                try third.ledger.recordingPreparation(stale, succeeded: false)
+            }
+        }
+        let last = try third.ledger.recordingPreparation(lastToken, succeeded: false)
+        #expect(last.decision == .silence(.budgetExhausted(attempts: 3, maximum: 3)))
+    }
+
+    @Test("reprepare replaying a completed token is refused while rendering and after a newer attempt starts")
+    func reprepareReplayOfACompletedTokenIsRefused() throws {
+        let started = try Self.ledger(3).observing(.format)
+        let used = try #require(started.ledger.pendingToken)
+        let resumed = try started.ledger.recordingPreparation(used, succeeded: true)
+        #expect(throws: ReprepareFault.notPreparing(.rendering)) {
+            try resumed.ledger.recordingPreparation(used, succeeded: true)
+        }
+        let again = resumed.ledger.observing(.sampleRate)
+        let newer = try #require(again.ledger.pendingToken)
+        #expect(newer != used)
+        #expect(throws: ReprepareFault.superseded(presented: used, current: newer)) {
+            try again.ledger.recordingPreparation(used, succeeded: true)
+        }
+        #expect(again.ledger.status == .preparing)
+        #expect(again.ledger.attempts == 1)
+    }
+
+    @Test("reprepare a token issued before a success reset is refused afterwards")
+    func reprepareTokenFromBeforeAResetIsRefused() throws {
+        let first = try Self.ledger(3).observing(.format)
+        let second = try Self.record(first.ledger, false)
+        let tokenOne = try #require(first.ledger.pendingToken)
+        let tokenTwo = try #require(second.ledger.pendingToken)
+        let reset = try Self.record(second.ledger, true)
+        #expect(reset.ledger.attempts == 0)
+        let fresh = reset.ledger.observing(.format)
+        let tokenThree = try #require(fresh.ledger.pendingToken)
+        #expect(fresh.ledger.attempts == 1)
+        #expect(fresh.ledger.issued == 3)
+        for stale in [tokenOne, tokenTwo] {
+            #expect(throws: ReprepareFault.superseded(presented: stale, current: tokenThree)) {
+                try fresh.ledger.recordingPreparation(stale, succeeded: true)
+            }
+        }
+        #expect(try Self.record(fresh.ledger, true).decision == .resume)
+    }
+
+    @Test("reprepare superseded results leave a ledger at the budget limit and one change later it silences")
+    func reprepareSupersededAttemptsAtTheBudgetBoundary() throws {
+        for maximum in [1, 2, 3, 8] {
+            var ledger = try Self.ledger(maximum)
+            var tokens: [ReprepareToken] = []
+            for expectedAttempt in 1...maximum {
+                let transition = ledger.observing(.busLayout)
+                #expect(transition.decision == .reprepare(attempt: expectedAttempt))
+                ledger = transition.ledger
+                tokens.append(try #require(ledger.pendingToken))
+            }
+            let latest = try #require(tokens.last)
+            let before = ledger
+            for stale in tokens.dropLast() {
+                for succeeded in [true, false] {
+                    #expect(throws: ReprepareFault.superseded(presented: stale, current: latest)) {
+                        try before.recordingPreparation(stale, succeeded: succeeded)
+                    }
+                }
+            }
+            #expect(ledger == before)
+            #expect(ledger.attempts == maximum)
+            let failed = try before.recordingPreparation(latest, succeeded: false)
+            #expect(failed.decision == .silence(.budgetExhausted(attempts: maximum, maximum: maximum)))
+            #expect(failed.ledger.pendingToken == nil)
+            #expect(failed.ledger.issued == maximum)
+        }
+    }
+
+    @Test("reprepare tokens never repeat across supersessions, resets and silence")
+    func reprepareTokensNeverRepeat() throws {
+        var ledger = try Self.ledger(8)
+        var tokens: [ReprepareToken] = []
+        for round in 1...40 {
+            for change in [RenderLiveChange.format, .busLayout] {
+                ledger = ledger.observing(change).ledger
+                tokens.append(try #require(ledger.pendingToken))
+            }
+            #expect(ledger.issued == round * 2)
+            ledger = try Self.record(ledger, true).ledger
+            #expect(ledger.issued == round * 2)
+            #expect(ledger.pendingToken == nil)
+        }
+        #expect(tokens.count == 80)
+        #expect(Set(tokens).count == 80)
+        let silenced = try Self.silencedLedger()
+        #expect(silenced.pendingToken == nil)
+        #expect(silenced.issued == 1)
     }
 
     private struct WalkModel {
@@ -266,7 +411,8 @@ extension PluginHostNegotiationTests {
     private static func step(_ operation: Int, _ ledger: ReprepareLedger) -> ReprepareTransition? {
         let changes = RenderLiveChange.allCases
         if operation < changes.count { return ledger.observing(changes[operation]) }
-        return try? ledger.recordingPreparation(succeeded: operation == changes.count)
+        guard let token = ledger.pendingToken else { return nil }
+        return try? ledger.recordingPreparation(token, succeeded: operation == changes.count)
     }
 
     private static func walk(maximum: Int) throws -> WalkResult {
