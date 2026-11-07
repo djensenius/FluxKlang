@@ -156,6 +156,45 @@ extension NeutralSnapshotUnicodeScanTests {
         }
     }
 
+    // MARK: - Round 6 monotone hardening
+
+    @Test func legacyHardwareOrderingKeepsA1SerialsInsideTheCap() {
+        let serial = "SN-12345"
+        var inputs = NeutralSnapshot.Inputs(graph: GraphDocument(id: GraphID(validated: "graph.round6")))
+        inputs.hardwareIdentifiers = [serial] + (0..<NeutralSnapshotAssembly.maximumWithheldCount).map {
+            "\u{13441}AAAA\($0)"
+        }
+        let assembly = NeutralSnapshotAssembly(inputs: inputs, limits: NeutralSnapshot.Limits())
+        let refused = RefusedIdentities(forms: assembly.withheldForms, terms: assembly.redacted)
+        #expect(assembly.withheld.contains(serial) && assembly.withheldOverflow == 1)
+        #expect(refused.refuses(serial) && assembly.label(serial).text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func newBlankRemovalCannotExposeAnOriginalGraphemeBase() {
+        let label = UntrustedLabel(
+            "Rig q\u{1BC9D}SN-12345 ok", withholding: ["\u{1BC9D}SN-12345"]
+        )
+        #expect(label.text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func literalMarkerWithNewBlankAtEdgeStillTrimsWhitespace() {
+        let label = UntrustedLabel(" [withheld] \u{13441}")
+        #expect(label.text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func blankFreeLabelsRetainLegacyPrefixesFromNewBlankCutTerms() {
+        let raw = String(repeating: "A", count: 1_023) + "\u{13441}A"
+        let scan = UntrustedTextSanitizer.filterScalars(
+            raw.unicodeScalars, keeping: UntrustedTextSanitizer.maximumWithheldBytes, trimmed: true
+        )
+        let terms = UntrustedTextSanitizer.withheldTerms([scan])
+        let legacy = terms.first { !$0.requiresNewBlank }
+        #expect(legacy?.isPrefix == true && legacy?.text == String(repeating: "A", count: 1_022))
+        #expect(terms.contains(where: { $0.requiresNewBlank && $0.isFailClosed }))
+        let label = UntrustedLabel(String(repeating: "A", count: 1_023), maximumBytes: 128, terms: terms)
+        #expect(label.text == UntrustedLabel.withheldMarker)
+    }
+
     /// Foundation still breaks each line (when it is fixed, the unreliable set can shrink),
     /// the standard library still agrees with the file, and for every column the match
     /// pipeline (NFC, then NFD) gives the file's NFD, or the label is withheld whole

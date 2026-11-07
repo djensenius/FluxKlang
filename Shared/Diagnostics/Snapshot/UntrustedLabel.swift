@@ -161,7 +161,11 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
                 of: display, withheld: activeTerms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
                 separators: inheritedSeparators ?? filtered.separators
             )
-        let settled = settle(redacted.result.text, separators: redacted.separators, terms: activeTerms)
+        let legacyGraphemeRisk = filtered.removedNewBlankBytes > 0 && redacted.result.changed
+        let protected = legacyGraphemeRisk
+            ? (result: (text: withheldMarker, changed: true), separators: [])
+            : redacted
+        let settled = settle(protected.result.text, separators: protected.separators, terms: activeTerms)
         let edgeTrimmed = filtered.removedNewBlankBytes > 0 && settled.result.text.contains(withheldMarker)
             ? Self.trimRedactedEdges(settled.result.text, separators: settled.separators)
             : (text: settled.result.text, separators: settled.separators)

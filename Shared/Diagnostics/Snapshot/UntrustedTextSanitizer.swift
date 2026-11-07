@@ -440,4 +440,21 @@ enum UntrustedTextSanitizer {
         }
         return String(text[..<end])
     }
+
+    /// The term the A1-filtered shadow would have prepared, independent of its A1h match text.
+    static func legacyWithheldTerm(_ filtered: Scan) -> WithheldTerm? {
+        let text = filtered.a1Text ?? filtered.text
+        let legacy = Scan(
+            text: text, changed: filtered.changed, isComplete: filtered.isComplete, separators: [],
+            removedNewBlankBytes: 0, a1Text: text
+        )
+        return withheldTerm(legacy)
+    }
+
+    static func preparedTerms(_ scan: Scan) -> [WithheldTerm] {
+        guard let term = withheldTerm(scan) else { return [] }
+        guard term.requiresNewBlank, term.isFailClosed,
+              let legacy = legacyWithheldTerm(scan), legacy.isPrefix else { return [term] }
+        return [legacy, term]
+    }
 }

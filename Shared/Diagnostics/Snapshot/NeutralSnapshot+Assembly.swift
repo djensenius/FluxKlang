@@ -49,7 +49,7 @@ struct NeutralSnapshotAssembly {
         redacted = UntrustedTextSanitizer.withheldTerms(prepared.map(\.scan))
     }
 
-    /// Hardware identifiers first, sorted by their prepared form and then their
+    /// Hardware identifiers first, sorted by their legacy prepared form and then their
     /// raw form in UTF-8 byte order, then each route's `withheldFields` in route-ID
     /// order, with routes sharing an ID ordered by those fields in UTF-8 byte order,
     /// until `maximumWithheldCount` distinct strings are held.
@@ -66,8 +66,8 @@ struct NeutralSnapshotAssembly {
         let scan: UntrustedTextSanitizer.Scan
     }
 
-    /// Collects each value with one trimmed scan. Hardware scans also provide their sort
-    /// keys; the selected scans then feed both identity and withheld-term construction.
+    /// Collects each value with one trimmed scan. Hardware scans provide A1 sort keys;
+    /// the selected hardened scans feed identity and withheld-term construction.
     private static func collectPreparedWithheld(
         _ inputs: NeutralSnapshot.Inputs
     ) -> (prepared: [PreparedWithheld], overflow: Int) {
@@ -76,13 +76,13 @@ struct NeutralSnapshotAssembly {
                 let scan = UntrustedTextSanitizer.filterScalars(
                     raw.unicodeScalars, keeping: RefusedIdentities.maximumIdentityScalars, trimmed: true
                 )
-                let key = UntrustedTextSanitizer.withheldTerm(scan)?.text ?? ""
-                return (key: key, item: PreparedWithheld(raw: raw, scan: scan))
+                let legacyKey = UntrustedTextSanitizer.legacyWithheldTerm(scan)?.text ?? ""
+                return (legacyKey: legacyKey, item: PreparedWithheld(raw: raw, scan: scan))
             }
             .sorted { lhs, rhs in
-                lhs.key.utf8.elementsEqual(rhs.key.utf8)
+                lhs.legacyKey.utf8.elementsEqual(rhs.legacyKey.utf8)
                     ? lhs.item.raw.utf8.lexicographicallyPrecedes(rhs.item.raw.utf8)
-                    : lhs.key.utf8.lexicographicallyPrecedes(rhs.key.utf8)
+                    : lhs.legacyKey.utf8.lexicographicallyPrecedes(rhs.legacyKey.utf8)
             }
         let routes = inputs.routes.map { (id: $0.route.id, fields: withheldFields(of: $0.route)) }
             .sorted { lhs, rhs in

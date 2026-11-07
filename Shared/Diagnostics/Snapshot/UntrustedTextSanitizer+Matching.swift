@@ -184,7 +184,7 @@ extension UntrustedTextSanitizer {
 
     /// Prepares terms from scans already shared with the identity-form pipeline.
     static func withheldTerms(_ scans: [Scan]) -> [WithheldTerm] {
-        let sorted = scans.compactMap(withheldTerm).sorted { lhs, rhs in
+        let sorted = scans.flatMap(preparedTerms).sorted { lhs, rhs in
             if lhs.text != rhs.text { return lhs.text < rhs.text }
             if lhs.isPrefix != rhs.isPrefix { return !lhs.isPrefix }
             if lhs.requiresNewBlank != rhs.requiresNewBlank { return !lhs.requiresNewBlank }
