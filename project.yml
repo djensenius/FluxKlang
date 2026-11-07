@@ -473,6 +473,12 @@ targets:
       - path: FluxKlangTests/PreferencePrivacyTests+Limits.swift
       - path: FluxKlangTests/PreferencePrivacyTests+Refusals.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
+      - path: FluxKlangTests/RemoteRoleTests.swift
+      - path: FluxKlangTests/RemoteRoleTests+Guard.swift
+      - path: FluxKlangTests/RemoteRoleTests+Lease.swift
+      - path: FluxKlangTests/RemoteRoleTests+Promotion.swift
+      - path: FluxKlangTests/RemoteRoleTests+RawInput.swift
+      - path: FluxKlangTests/RemoteRoleTests+Transitions.swift
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
