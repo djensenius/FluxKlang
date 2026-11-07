@@ -48,6 +48,8 @@ enum UMPStreamRefusal: Error, Equatable, Sendable {
     case invalidUTF8
     /// A text ends in a zero byte, which the zero padding of the wire format cannot carry.
     case trailingZeroByte
+    /// A Product Instance Id holds a byte outside printable ASCII 0x20...0x7E; the value is the first bad offset.
+    case productInstanceIDNotPrintableASCII(offset: Int)
     /// A limits factory argument is outside its range.
     case invalidLimit(UMPStreamLimitField, value: Int)
     /// `UMPPacket.init(words:)` refused the words of an encoded packet (unreachable through this API).

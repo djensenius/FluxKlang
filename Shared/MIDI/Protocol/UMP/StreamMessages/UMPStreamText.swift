@@ -12,7 +12,15 @@ enum UMPStreamTextEvent: Equatable, Sendable {
 enum UMPStreamText {
     static let laneBytes = 14
 
-    /// Canonical packets of one text: validated block index, then length, then trailing zero.
+    /// A Product Instance Id holds printable ASCII only (0x20...0x7E); the offset is that of the first other byte.
+    static func requirePrintableASCII(_ bytes: some Sequence<UInt8>) throws(UMPStreamRefusal) {
+        for (offset, byte) in bytes.enumerated() where !(0x20...0x7E).contains(byte) {
+            throw .productInstanceIDNotPrintableASCII(offset: offset)
+        }
+    }
+
+    /// Canonical packets of one text: validated block index, then length, then trailing zero, then (Product
+    /// Instance Id only) printable ASCII.
     static func packets(
         kind: UMPStreamTextKind,
         index: Int,
@@ -24,6 +32,7 @@ enum UMPStreamText {
         guard byteCount <= limits.maximumBytes(for: kind) else { throw .textTooLong(byteCount) }
         let bytes = Array(text.value.utf8)
         guard bytes.last != 0 else { throw .trailingZeroByte }
+        if kind == .productInstanceID { try requirePrintableASCII(bytes) }
         let size = kind.bytesPerPacket
         let count = max(1, (bytes.count + size - 1) / size)
         var result: [UMPPacket] = []
@@ -164,6 +173,7 @@ struct UMPStreamTextAssembler: Equatable, Sendable {
         index: Int,
         bytes: ArraySlice<UInt8>
     ) throws(UMPStreamRefusal) -> UMPStreamMessage {
+        if kind == .productInstanceID { try UMPStreamText.requirePrintableASCII(bytes) }
         guard let text = String(validating: bytes, as: UTF8.self) else { throw .invalidUTF8 }
         switch kind {
         case .endpointName: return .endpointName(UMPStreamString(text))

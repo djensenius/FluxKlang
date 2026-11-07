@@ -114,8 +114,9 @@ extension UMPStreamMessageTests {
         for round in 0..<600 {
             let kind = [UMPStreamTextKind.endpointName, .productInstanceID, .functionBlockName][round % 3]
             var value = ""
+            let pool = kind == .productInstanceID ? Array(alphabet.prefix(4)) : alphabet
             while true {
-                let piece = alphabet[generator.below(alphabet.count)]
+                let piece = pool[generator.below(pool.count)]
                 if value.utf8.count + piece.utf8.count > kind.specificationMaximumBytes { break }
                 value += piece
                 if generator.below(12) == 0 { break }

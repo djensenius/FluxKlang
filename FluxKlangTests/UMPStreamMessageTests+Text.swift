@@ -169,7 +169,7 @@ extension UMPStreamMessageTests {
     @Test func multiByteScalarsStraddlingAPacketBoundaryRoundTripAtEveryOffset() throws {
         for padding in 10...14 {
             let value = String(repeating: "x", count: padding) + "\u{E9}\u{1F3B9}\u{20AC}tail"
-            for kind in [UMPStreamTextKind.endpointName, .productInstanceID, .functionBlockName] {
+            for kind in [UMPStreamTextKind.endpointName, .functionBlockName] {
                 let message = Self.name(kind, value)
                 var assembler = try Self.fresh()
                 var last: UMPStreamTextEvent?
@@ -407,7 +407,9 @@ extension UMPStreamMessageTests {
         #expect(try Self.decodeRefusal(startPacket) == .wrongFormat(status: 3, format: 1))
         let badIndex = Self.textWords(status: 0x012, format: 0, index: 32, bytes: [0x41])
         #expect(try Self.decodeRefusal(badIndex) == .functionBlockOutOfRange(32))
-        #expect(try Self.decodeRefusal(Self.textWords(status: 0x004, format: 0, bytes: [0xFF])) == .invalidUTF8)
+        let invalid = Self.textWords(status: 0x004, format: 0, bytes: [0xFF])
+        #expect(try Self.decodeRefusal(invalid) == .productInstanceIDNotPrintableASCII(offset: 0))
+        #expect(try Self.decodeRefusal(Self.textWords(status: 0x003, format: 0, bytes: [0xFF])) == .invalidUTF8)
     }
 
     @Test func encodeChecksTheBlockIndexThenTheLengthThenTheTrailingZero() throws {
