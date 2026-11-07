@@ -335,6 +335,14 @@ targets:
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Counters.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Loop.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Readiness.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Render.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Spec.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+StateMachine.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+StopVoice.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
