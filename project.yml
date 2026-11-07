@@ -339,6 +339,18 @@ targets:
       - path: FluxKlangTests/ShowRecoveryTests+Randomized.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Conversion.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Drone.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Host.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Loop.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Markers.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Rebind.swift
+      - path: FluxKlangTests/MIDIClipOwnershipTests+Refusals.swift
+      - path: FluxKlangTests/MediaTapPlanTests.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Order.swift
+      - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
