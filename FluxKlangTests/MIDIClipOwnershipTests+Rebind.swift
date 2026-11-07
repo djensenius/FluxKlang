@@ -71,4 +71,50 @@ extension MIDIClipOwnershipTests {
         // The refused clip still stops cleanly.
         #expect(try host.stop(input: Self.clipID).outputs.count == 2)
     }
+
+    private static func movingFixture() throws -> MIDIClipHost {
+        let volume = { (ticks: Int64, value: UInt8) in
+            MIDIClipItem.event(ticks: ticks, message: .controlChange(channel: 1, controller: 7, value: value))
+        }
+        return try Self.host([Self.note(1, 4), volume(3, 3), volume(4, 4), Self.note(3, 10, pitch: 62)])
+    }
+
+    @Test
+    func aRebindThatMovesTheCursorIsReadBackAndTheNextRenderMustStartThere() throws {
+        var host = try Self.movingFixture()
+        #expect(try host.cursor(of: Self.clipID) == nil)
+        _ = try Self.render(&host, to: 6)
+        #expect(try host.cursor(of: Self.clipID) == 6)
+        let revised = try Self.generations(map: 2)
+        let fast = try Self.clock(revised, segments: [(0, 60_000)])
+        try host.rebind(input: Self.clipID, clock: fast, current: revised, atFrame: 6)
+        #expect(try host.cursor(of: Self.clipID) == 1)
+        let before = host
+        #expect(Self.refusal { try Self.render(&host, from: 6, to: 8, clock: fast, current: revised) }
+            == .clip(.nonContiguousWindow(expected: 1, start: 6)))
+        let stillMoved = try host.cursor(of: Self.clipID)
+        #expect(host == before && stillMoved == 1)
+        _ = try Self.render(&host, from: 1, to: 3, clock: fast, current: revised)
+        #expect(try host.cursor(of: Self.clipID) == 3)
+        _ = try host.stop(input: Self.clipID)
+        #expect(try host.cursor(of: Self.clipID) == nil)
+    }
+
+    @Test
+    func aCursorOfAnUnboundInputIsRefusedAndEachClipReportsItsOwnCursor() throws {
+        var host = try Self.movingFixture()
+        try Self.addClip([Self.note(0, Self.quarter)], id: Self.thirdID, in: &host)
+        #expect(Self.refusal { try host.cursor(of: Self.otherID) } == .inputNotBound(Self.otherID))
+        _ = try Self.render(&host, to: 6)
+        _ = try Self.render(&host, Self.thirdID, to: 9)
+        let first = try host.cursor(of: Self.clipID)
+        let second = try host.cursor(of: Self.thirdID)
+        #expect(first == 6 && second == 9)
+        let revised = try Self.generations(map: 2)
+        let fast = try Self.clock(revised, segments: [(0, 60_000)])
+        try host.rebind(input: Self.clipID, clock: fast, current: revised, atFrame: 6)
+        let moved = try host.cursor(of: Self.clipID)
+        let kept = try host.cursor(of: Self.thirdID)
+        #expect(moved == 1 && kept == 9)
+    }
 }

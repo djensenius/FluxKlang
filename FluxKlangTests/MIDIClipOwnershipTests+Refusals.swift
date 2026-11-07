@@ -146,4 +146,72 @@ extension MIDIClipOwnershipTests {
         #expect(report.refusals.map(\.index) == [0, 1] && report.routedEventCount == 3)
         #expect(report.outputs == [MIDIRoutedOutput(route: Self.route1, message: Self.on(60))] && ledger != before)
     }
+
+    @Test
+    func everyOutputKeepsTheSchedulerFrameOfItsEventAndARefusedEventShiftsNoLaterFrame() throws {
+        let items = [Self.note(0, Self.quarter), Self.note(7_680, 23_040, pitch: 64),
+                     Self.note(2 * Self.quarter, 3 * Self.quarter, pitch: 62)]
+        var host = try Self.host(items, ledger: Self.ledger(noteCapacity: 1))
+        let report = try Self.render(&host, to: 60_000)
+        #expect(report.timedOutputs.map(\.frame) == [0, 24_000, 48_000])
+        #expect(report.outputs == [MIDIRoutedOutput(route: Self.route1, message: Self.on(60)),
+                                   MIDIRoutedOutput(route: Self.route1, message: Self.off(60)),
+                                   MIDIRoutedOutput(route: Self.route1, message: Self.on(62))])
+        #expect(report.refusals.map(\.index) == [1] && report.unownedNoteCount == 1)
+        let stopped = try host.stop(input: Self.clipID)
+        #expect(stopped.timedOutputs.map(\.frame) == [60_000])
+        #expect(stopped.outputs == [MIDIRoutedOutput(route: Self.route1, message: Self.off(62))])
+    }
+
+    @Test
+    func anEventWithTwoMatchingRulesStampsBothOutputsWithItsOneFrame() throws {
+        var host = try Self.host([Self.note(0, Self.quarter)], to: [Self.route1, Self.route2])
+        let report = try Self.render(&host, to: 30_000)
+        #expect(report.timedOutputs.map(\.frame) == [0, 0, 24_000, 24_000])
+        #expect(report.outputs.map(\.route) == [Self.route1, Self.route2, Self.route1, Self.route2])
+    }
+
+    private static func pressure(_ pitch: UInt8 = 60, at frame: Int64) -> MIDIClipEvent {
+        MIDIClipEvent(frame: frame, pass: 0, item: 0,
+                      message: .polyphonicPressure(channel: 1, note: pitch, pressure: 40))
+    }
+
+    @Test
+    func aPolyPressureBeforeItsNoteOnIsARefusalAndNotABenignRelease() throws {
+        var ledger = try Self.ledger()
+        let report = try Self.routed([Self.pressure(at: 5)], in: &ledger)
+        let refused = try #require(report.refusals.first)
+        #expect(report.refusals.count == 1 && report.unownedNoteCount == 0)
+        #expect(refused.index == 0 && refused.event == Self.pressure(at: 5))
+        #expect(refused.refusal == .unownedNote(input: Self.clipID, channel: 1, note: 60))
+    }
+
+    @Test
+    func aPolyPressureAfterARefusedNoteOnIsListedAfterTheNoteOnRefusalInEventOrder() throws {
+        var ledger = try Self.fullLedger()
+        let report = try Self.routed([Self.eventOn(at: 0), Self.pressure(at: 1)], in: &ledger)
+        #expect(report.refusals.map(\.index) == [0, 1] && report.unownedNoteCount == 0)
+        #expect(report.refusals.map(\.refusal) == [.noteLedgerFull(input: Self.clipID, channel: 1, note: 60),
+                                                    .unownedNote(input: Self.clipID, channel: 1, note: 60)])
+        #expect(report.outputs.isEmpty)
+    }
+
+    @Test
+    func aNoteOffAndAZeroVelocityNoteOnOfAnUnownedNoteAreBothBenignAndNotRefusals() throws {
+        var ledger = try Self.ledger()
+        let silent = MIDIClipEvent(frame: 1, pass: 0, item: 0, message: Self.on(60, velocity: 0))
+        let report = try Self.routed([Self.eventOff(at: 0), silent], in: &ledger)
+        #expect(report.unownedNoteCount == 2 && report.refusals.isEmpty && report.droppedRefusalCount == 0)
+        #expect(report.outputs.isEmpty)
+    }
+
+    @Test
+    func polyPressureRefusalsPastTheBoundAreDroppedAndNeverCountedAsUnownedNotes() throws {
+        for (count, dropped) in [(256, 0), (257, 1)] {
+            var ledger = try Self.ledger()
+            let report = try Self.routed((0..<count).map { Self.pressure(at: Int64($0)) }, in: &ledger)
+            #expect(report.refusals.count == 256 && report.droppedRefusalCount == dropped)
+            #expect(report.unownedNoteCount == 0 && report.routedEventCount == count)
+        }
+    }
 }

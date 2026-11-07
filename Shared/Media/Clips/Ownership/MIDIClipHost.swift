@@ -90,7 +90,16 @@ struct MIDIClipHost: Equatable, Sendable {
         return report
     }
 
-    /// Rebinds the clip of `input` to a revised clock at `frame`. The ledger is never touched.
+    /// The frame the next render of `input` must start at: the end of its last render, or the cursor a `rebind`
+    /// moved. Nil before the first render and after `stop`.
+    func cursor(of input: MIDIInputID) throws(MIDIClipHostRefusal) -> Int64? {
+        let slot = try slot(of: input)
+        return clips[slot].scheduler.cursor
+    }
+
+    /// Rebinds the clip of `input` to a revised clock at `frame`, which must equal `cursor(of:)`. The ledger is
+    /// never touched. The cursor may MOVE: the next render must start at `cursor(of:)`, which can differ from
+    /// `frame`, or it is refused as `.nonContiguousWindow`.
     mutating func rebind(
         input: MIDIInputID, clock: MusicalClockMap, current: MIDIClipGenerations, atFrame frame: Int64
     ) throws(MIDIClipHostRefusal) {
