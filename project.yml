@@ -514,6 +514,11 @@ targets:
       - path: FluxKlangTests/PluginHostNegotiationTests+ReprepareTokens.swift
       - path: FluxKlangTests/PluginHostNegotiationTests+Spec.swift
       - path: FluxKlangTests/Fixtures/Plugins/FakeHostedProcessor.swift
+      - path: FluxKlangTests/PluginEditorStateTests.swift
+      - path: FluxKlangTests/PluginEditorStateTests+Editor.swift
+      - path: FluxKlangTests/PluginEditorStateTests+Qualification.swift
+      - path: FluxKlangTests/PluginEditorStateTests+Restore.swift
+      - path: FluxKlangTests/PluginEditorStateTests+Snapshot.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
