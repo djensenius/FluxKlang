@@ -88,17 +88,24 @@ struct WiringCandidate: Hashable, Sendable {
 /// Bare candidates of one source port in one graph, classified against one shared
 /// `WiringCandidateContext`: the graph is validated once per batch instead of once per pair.
 /// Every candidate (or refusal) equals what `WiringCandidate.classify(from:to:in:)` gives for the
-/// same pair, except the deviations documented on `WiringDestinationList.make`; source- and
-/// graph-level refusals are thrown once, by `init`.
+/// same pair, except the deviations documented on `WiringDestinationList.make` and the optional
+/// edge-bound matrix mode. At exactly 16,384 edges wired pairs keep their classification; every
+/// non-wired cell is `.uncheckable(.bounds)`. `classify` differs only for non-wired pairs with
+/// uncheckable or unknown endpoints. Source- and graph-level refusals are thrown once, by `init`.
 struct WiringCandidateBatch {
     private var context: WiringCandidateContext
 
     /// The graph is validated exactly once, internally; `onValidate` is called just before and only
-    /// observes it (a test seam that cannot change any class or refusal).
+    /// observes it (a test seam that cannot change any class or refusal). When requested by the
+    /// matrix at exactly 16,384 edges, wired pairs keep their classification and every non-wired pair
+    /// keeps the edge-bound refusal.
     init(
-        from source: PortAddress, in graph: GraphDocument, onValidate: () -> Void = {}
+        from source: PortAddress, in graph: GraphDocument, onValidate: () -> Void = {},
+        allowsExistingAtEdgeBound: Bool = false
     ) throws(WiringPreviewRefusal) {
-        context = try WiringCandidateContext(source: source, in: graph, onValidate: onValidate)
+        context = try WiringCandidateContext(
+            source: source, in: graph, onValidate: onValidate, allowsExistingAtEdgeBound: allowsExistingAtEdgeBound
+        )
     }
 
     /// The bare candidate source → `destination`, or the refusal of that pair alone.
