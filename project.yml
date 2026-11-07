@@ -342,6 +342,14 @@ targets:
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
+      - path: FluxKlangTests/MTCFollowerTests.swift
+      - path: FluxKlangTests/MTCFollowerTests+Dropout.swift
+      - path: FluxKlangTests/MTCFollowerTests+Fixtures.swift
+      - path: FluxKlangTests/MTCFollowerTests+HostMap.swift
+      - path: FluxKlangTests/MTCFollowerTests+Locate.swift
+      - path: FluxKlangTests/MTCFollowerTests+Lock.swift
+      - path: FluxKlangTests/MTCFollowerTests+Policy.swift
+      - path: FluxKlangTests/MTCFollowerTests+RealRate.swift
       - path: FluxKlangTests/TunerPitchTests.swift
       - path: FluxKlangTests/TunerPitchTests+Smoother.swift
       - path: FluxKlangTests/TunerPitchTests+Fixtures.swift
@@ -389,6 +397,12 @@ targets:
       - path: FluxKlangTests/PeerTrustTests.swift
       - path: FluxKlangTests/PeerTrustTests+Pairing.swift
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
+      - path: FluxKlangTests/PreferencePrivacyTests.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Allowlist.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Classes.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Inventory.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Limits.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Refusals.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
