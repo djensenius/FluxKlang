@@ -214,7 +214,9 @@ extension OSCTransportTests {
 /// Allow-list entries beyond the codec limits (#89, O2b). `AllowList` checks only its entry count, and an
 /// `AddressPattern` can be built under raised limits, so a policy holds every entry to the codec's string and
 /// complexity limits itself. Each oversized pattern below is built under `raisedLimits`, so it exists before the
-/// policy sees it, and its size is asserted, so that no test can pass vacuously.
+/// policy sees it. The sizes the tests rely on are asserted where each is first used (1,024 and 1,025 bytes, 32 and
+/// 33 wildcard constructs, and the 100,000-construct flood), together with the standard limits refusing the same
+/// text; later tests reuse these fixtures without repeating the assertion.
 extension OSCTransportFixture {
     /// Limits far above the standard ones (1,024 string bytes and 32 wildcard constructs).
     static let raisedLimits = OSC.Limits(maximumStringBytes: 200_000, maximumPatternComplexity: 200_000)
@@ -237,11 +239,11 @@ extension OSCTransportFixture {
     /// refuses.
     static func policy(
         allowing entries: [OSC.AddressPattern], on transport: OSC.EndpointTransport = .datagram,
-        budget: OSC.IntakeBudget? = nil, idle: UInt64 = 10, packetBytes: Int = 1_024, depth: Int = 8
+        budget: OSC.IntakeBudget? = nil, peers: Int = 4, idle: UInt64 = 10, packetBytes: Int = 1_024, depth: Int = 8
     ) throws -> OSC.EndpointPolicy {
         try OSC.EndpointPolicy(
             transport: transport, allowList: OSC.AllowList(entries), budget: budget ?? Self.budget(bytes: 2_048),
-            maximumPeers: 4, idleTicks: idle, maximumPacketBytes: packetBytes, maximumBundleDepth: depth
+            maximumPeers: peers, idleTicks: idle, maximumPacketBytes: packetBytes, maximumBundleDepth: depth
         )
     }
 }
@@ -358,7 +360,8 @@ extension OSCTransportTests {
         let known = try Fixture.raised("/go")
         let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
         let badEntry = Config.allowListEntryExceedsCodecLimits(index: 1)
-        // Before it: a bad knob is reported even when the list is bad too.
+        // Before it: a bad knob is reported even when the list is bad too (the depth here; each of the other three
+        // knobs that come first has a test of its own, below).
         #expect(throws: Config.invalidCount(.bundleDepth, 0)) {
             try Fixture.policy(allowing: [known, over], depth: 0)
         }
@@ -376,6 +379,55 @@ extension OSCTransportTests {
         #expect(throws: badEntry) { try Fixture.policy(allowing: [known, over], idle: 5) }
         #expect(throws: Config.idleBeforeWindowEnds(idleTicks: 5, windowTicks: 10)) {
             try Fixture.policy(allowing: [known], idle: 5)
+        }
+    }
+
+    @Test("A peer count out of range is reported before a bad allow-list entry; in range, the entry is reported")
+    func peerCountIsCheckedBeforeTheAllowList() throws {
+        let known = try Fixture.raised("/go")
+        let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        // 1 and 256 are the ends of the range, so only the list is wrong; 0 and 257 are one beyond each end.
+        for peers in [1, 256] {
+            #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+                try Fixture.policy(allowing: [known, over], peers: peers)
+            }
+        }
+        for peers in [0, 257] {
+            #expect(throws: Config.invalidCount(.peers, peers)) {
+                try Fixture.policy(allowing: [known, over], peers: peers)
+            }
+        }
+    }
+
+    @Test("An idle span of zero is reported before a bad allow-list entry; one tick is in range, so the entry is")
+    func idleSpanIsCheckedBeforeTheAllowList() throws {
+        let known = try Fixture.raised("/go")
+        let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        // A one tick window, so that an idle span of one tick is valid and only the list is wrong.
+        let oneTick = try Fixture.budget(window: 1, bytes: 2_048)
+        #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+            try Fixture.policy(allowing: [known, over], budget: oneTick, idle: 1)
+        }
+        #expect(throws: Config.invalidTicks(.idle, 0)) {
+            try Fixture.policy(allowing: [known, over], budget: oneTick, idle: 0)
+        }
+    }
+
+    @Test("A packet size out of range is reported before a bad allow-list entry; in range, the entry is reported")
+    func packetSizeIsCheckedBeforeTheAllowList() throws {
+        let known = try Fixture.raised("/go")
+        let over = try Fixture.raised(Fixture.literal(bytes: 1_025))
+        // An allowance of the largest packet, so that every size in range fits and only the list is wrong.
+        let roomy = try Fixture.budget(bytes: 65_536)
+        for size in [1, 65_536] {
+            #expect(throws: Config.allowListEntryExceedsCodecLimits(index: 1)) {
+                try Fixture.policy(allowing: [known, over], budget: roomy, packetBytes: size)
+            }
+        }
+        for size in [0, 65_537] {
+            #expect(throws: Config.invalidCount(.packetBytes, size)) {
+                try Fixture.policy(allowing: [known, over], budget: roomy, packetBytes: size)
+            }
         }
     }
 }

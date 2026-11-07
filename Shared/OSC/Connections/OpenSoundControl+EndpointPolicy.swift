@@ -9,11 +9,12 @@
 //  endpoint holds no state. Every value validates once at construction and has
 //  private storage afterwards, so an out-of-range policy cannot be represented.
 //
-//  The allow-list is held to the codec limits the endpoint decodes with:
-//  `AllowList` checks only its entry count, and an `AddressPattern` can be built
-//  under raised limits, so each entry's byte count and complexity is checked
-//  here and the first entry beyond them is refused by its index. That bound is
-//  what keeps the work of one allow-list match small.
+//  Every allow-list entry is checked against two of the codec limits the endpoint
+//  decodes with, the string byte limit and the pattern complexity limit, and not
+//  against the packet size. `AllowList` checks only its entry count, and an
+//  `AddressPattern` can be built under raised limits, so the first entry beyond
+//  either limit is refused here by its index. Those two limits are what keep the
+//  work of one allow-list match bounded.
 //
 
 extension OpenSoundControl {
@@ -88,7 +89,8 @@ extension OpenSoundControl {
 
         private(set) var transport: EndpointTransport
         /// Passed to the immediate stage unchanged: inbound wildcards stay refused (Q-OSC-NS, provisional v1). Every
-        /// entry fits the codec `limits` (checked at construction), which is what bounds the work of one match.
+        /// entry is within the string byte limit and the pattern complexity limit of the codec `limits` (checked at
+        /// construction; the packet size is not), which is what bounds the work of one match.
         private(set) var allowList: AllowList
         private(set) var budget: IntakeBudget
         private(set) var maximumPeers: Int
@@ -98,9 +100,10 @@ extension OpenSoundControl {
         /// A top-level bundle has depth 1; a bare message has depth 0.
         private(set) var maximumBundleDepth: Int
 
-        /// Validation order: peers, idle, packet bytes, bundle depth, then every allow-list entry against the codec
-        /// limits (the first entry beyond them is the one reported), then the byte allowance against the packet size,
-        /// then (stream endpoints only) against one whole chunk, then idle against the window.
+        /// Validation order: peers, idle, packet bytes, bundle depth, then every allow-list entry against the codec's
+        /// string byte limit and pattern complexity limit (the first entry beyond either is the one reported; the
+        /// packet size is not checked against an entry), then the byte allowance against the packet size, then
+        /// (stream endpoints only) against one whole chunk, then idle against the window.
         init(
             transport: EndpointTransport, allowList: AllowList, budget: IntakeBudget, maximumPeers: Int,
             idleTicks: UInt64, maximumPacketBytes: Int = EndpointPolicy.packetBytesLimit,
