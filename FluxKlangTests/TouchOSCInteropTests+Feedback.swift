@@ -194,45 +194,61 @@ extension TouchOSCInteropTests {
         return try #require(outcomes.first).result
     }
 
-    @Test("Script: a client asks for 90, the host ceiling caps it at 50, the echo is ignored and refresh is quiet")
-    func clampEchoAndRefreshScriptSendsTheClampedPositionOnce() throws {
+    @Test("Script: an OSC request of 90 reaches the host as a set, is above the ceiling, and sits at the top position")
+    func anOscRequestAboveTheCeilingIsASetAndConvertsToThePositionOfTheCeiling() throws {
         let route = try OSC.RouteTable(
             parameters: [OSC.ParameterRoute(name: "level", id: Self.level)], actions: [], transport: [],
             catalog: Self.levelCatalog()
         )
         let mapper = OSC.ControlMapper(table: route)
-        func hear(_ value: Float) throws -> ParameterValue {
-            let operation = try mapper.map(try Fixture.message("/fk/v1/param/level", [.float32(value)]))
-            guard case .set(_, let parameter) = operation else {
-                throw TouchOSCInteropFixture.FixtureError.badExample("")
-            }
-            return parameter
+        let operation = try mapper.map(try Fixture.message("/fk/v1/param/level", [.float32(90)]))
+        guard case .set(_, let requested) = operation else {
+            throw TouchOSCInteropFixture.FixtureError.badExample("")
         }
-        let requested = try hear(90)
         #expect(requested == ParameterValue(value: 90, unit: .percent))
         let descriptor = try #require(Self.levelCatalog()[Self.level])
         #expect(throws: ParameterValueError.aboveCeiling(90, ceiling: 50)) { try descriptor.check(requested) }
+        let range = try Self.levelBinding().validate(against: descriptor)
+        #expect(range == 0...50)
+        let position = try ControlBinding.position(of: requested.value, over: range, curve: descriptor.curve)
+        #expect(position == 1)
+        #expect(try ControlBinding.value(at: position, over: range, curve: descriptor.curve) == 50)
+    }
 
+    @Test("Script: a control shown at 45 while the host holds 50 gets position 1; its echo is ignored, refresh quiet")
+    func plannerCorrectionToTheCeilingIsDerivedEchoedAndRefreshIsQuiet() throws {
+        let descriptor = try #require(Self.levelCatalog()[Self.level])
         let binding = try Self.levelBinding()
+        let range = try binding.validate(against: descriptor)
+        let shown = 0.9
+        #expect(try ControlBinding.value(at: shown, over: range, curve: descriptor.curve) == 45)
         var planner = try Self.planner(budget: 3)
         let truth = try Self.levelTruth(50)
-        #expect(try planner.receive(.absolute(normalized: 0.9), for: binding, truth: truth, now: 0) == .move)
+        #expect(try planner.receive(.absolute(normalized: shown), for: binding, truth: truth, now: 0) == .move)
         let clamp = try Self.plan(&planner, binding, host: 50, .clamp, now: 1)
-        #expect(clamp == .message(try ControlFeedbackMessage(
-            binding: binding.id, source: binding.source, position: 1, reason: .clamp
-        )))
-        #expect(try planner.receive(.absolute(normalized: 1), for: binding, truth: truth, now: 2) == .echo)
+        let corrected = try ControlBinding.position(of: 50, over: range, curve: descriptor.curve)
+        let expected = try ControlFeedbackMessage(
+            binding: binding.id, source: binding.source, position: corrected, reason: .clamp
+        )
+        #expect(clamp == .message(expected))
+        #expect(expected.position == 1)
+        let echoed = try ControlBinding.value(at: expected.position, over: range, curve: descriptor.curve)
+        #expect(echoed == 50)
+        let echo = try planner.receive(.absolute(normalized: expected.position), for: binding, truth: truth, now: 2)
+        #expect(echo == .echo)
         #expect(try Self.plan(&planner, binding, host: 50, .refresh, now: 3) == .suppressed(.unchanged))
         planner.forget(binding.id)
         let resent = try Self.plan(&planner, binding, host: 50, .refresh, now: 4)
         #expect(resent == .message(try ControlFeedbackMessage(
-            binding: binding.id, source: binding.source, position: 1, reason: .refresh
+            binding: binding.id, source: binding.source, position: expected.position, reason: .refresh
         )))
         #expect(try Self.plan(&planner, binding, host: 50, .refresh, now: 5) == .suppressed(.unchanged))
     }
 
-    @Test("Script: eight corrections in one window are sent, the ninth is coalesced, and it is sent after the window")
+    @Test("Script: per binding, eight corrections in one window are sent, the ninth is coalesced, due(at:) is polled")
     func refreshBudgetScriptCoalescesTheNinthCorrection() throws {
+        // The budget is per binding (this script has one). `due(at:)` only lists bindings ready at the tick it is
+        // given: 10 (empty) and 11 (ready) are the values of this fixture's policy, not a rule a host may assume.
         let binding = try Self.levelBinding()
         var planner = try Self.planner(budget: 8)
         var sent = 0
