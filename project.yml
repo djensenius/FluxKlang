@@ -346,6 +346,12 @@ targets:
       - path: FluxKlangTests/MIDIClockMathTests.swift
       - path: FluxKlangTests/MIDIClockFollowerTests.swift
       - path: FluxKlangTests/MIDIClockTempoTests.swift
+      - path: FluxKlangTests/MIDIInternalClockTests.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Bounds.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+HostStamp.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Order.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Plan.swift
+      - path: FluxKlangTests/MIDIInternalClockTests+Transport.swift
       - path: FluxKlangTests/MIDIClockPulseScheduleTests.swift
       - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests.swift
