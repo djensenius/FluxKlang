@@ -131,9 +131,8 @@ extension MTCFollowerTests {
 
     @Test func extrapolationReportsOverflowForAnAbsurdElapsedTime() throws {
         let huge = HostTimebase(numer: .max, denom: 1)
-        var subject = try Self.follower(Self.policy(lock: 1), timebase: huge)
-        try Self.feed(&subject, Self.sequence(encoded: 1000, rate: .fps25, start: 1_000, ticksPerFrame: 1))
-        #expect(try subject.frameCount(at: Self.stamp(1_001)) == 1002)
-        #expect(Self.thrown { try subject.frameCount(at: Self.stamp(UInt64.max)) } == .overflow)
+        let anchor = MTCFollowerAnchor(frameCount: 1002, stamp: 1_001, rate: .fps25, direction: .forward)
+        #expect(try anchor.frameCount(atTicks: 1_001, timebase: huge) == 1002)
+        #expect(Self.thrown { try anchor.frameCount(atTicks: UInt64.max, timebase: huge) } == .overflow)
     }
 }

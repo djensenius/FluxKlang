@@ -254,9 +254,11 @@ extension MTCFollowerTests {
 
     private static let coarseMicrosecondTimebase = HostTimebase(numer: 1_000, denom: 1)
 
+    private enum Rounding { case floor, nearest, ceil }
+
     /// Eight sequences whose quarter frames are stamped at `k * quarter`, each stamp rounded alone to a whole tick.
     private static func quantizedStream(rate: SMPTEFrameRate, direction: MTCDirection, timebase: HostTimebase,
-                                        nearest: Bool) throws -> [[Stamped]] {
+                                        rounding: Rounding) throws -> [[Stamped]] {
         let real = MTCRealRate(rate)
         let step = direction == .forward ? 2 : -2
         return try (0..<8).map { index in
@@ -265,8 +267,41 @@ extension MTCFollowerTests {
                 let quarters = UInt64(8 * index + piece.offset)
                 let numerator = quarters * UInt64(real.denominator) * 1_000_000_000 * UInt64(timebase.denom)
                 let denominator = 4 * UInt64(real.numerator) * UInt64(timebase.numer)
-                let ticks = nearest ? (2 * numerator + denominator) / (2 * denominator) : numerator / denominator
+                let ticks = switch rounding {
+                case .floor: numerator / denominator
+                case .nearest: (2 * numerator + denominator) / (2 * denominator)
+                case .ceil: (numerator + denominator - 1) / denominator
+                }
                 return (frame: piece.element, ticks: streamStart + ticks)
+            }
+        }
+    }
+
+    private struct LockedFrames {
+        let policy: MTCFollowerPolicy
+        let forward: Int
+        let reverse: Int
+    }
+
+    @Test func aTimebaseJustFinerThanTheLimitStillLocksIdealRoundedStreamsWithoutAnyRelocation() throws {
+        let boundary = HostTimebase(numer: 16_666_666, denom: 1)
+        let expectations = [
+            LockedFrames(policy: try Self.policy(lock: 8, tolerance: 0), forward: 1016, reverse: 984),
+            LockedFrames(policy: .standard, forward: 1004, reverse: 996)
+        ]
+        for rate in [SMPTEFrameRate.fps24, .fps25, .fps30, .fps2997DropFrame] {
+            for direction in [MTCDirection.forward, .reverse] {
+                for rounding in [Rounding.floor, .nearest, .ceil] {
+                    for expectation in expectations {
+                        let sequences = try Self.quantizedStream(rate: rate, direction: direction,
+                                                                 timebase: boundary, rounding: rounding)
+                        var subject = try Self.follower(expectation.policy, timebase: boundary)
+                        let events = try Self.feed(&subject, sequences)
+                        let locked = direction == .forward ? expectation.forward : expectation.reverse
+                        #expect(events == [.locked(frameCount: locked)])
+                        #expect(subject.state == .locked)
+                    }
+                }
             }
         }
     }
@@ -277,8 +312,8 @@ extension MTCFollowerTests {
             for timebase in timebases {
                 for direction in [MTCDirection.forward, .reverse] {
                     for nearest in [false, true] {
-                        let sequences = try Self.quantizedStream(rate: rate, direction: direction,
-                                                                 timebase: timebase, nearest: nearest)
+                        let sequences = try Self.quantizedStream(
+                            rate: rate, direction: direction, timebase: timebase, rounding: nearest ? .nearest : .floor)
                         var subject = try Self.follower(Self.policy(lock: 8, tolerance: 0), timebase: timebase)
                         let events = try Self.feed(&subject, sequences)
                         let last = direction == .forward ? 1016 : 984

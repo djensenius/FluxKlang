@@ -9,7 +9,10 @@ struct MTCFollowerAnchor: Equatable, Hashable, Sendable {
     /// whole tick can place a position one tick short of its exact frame boundary, which would floor to one frame less.
     /// The cost, at tolerance 0 only: a relocation one frame further along the direction of travel than continuous
     /// play goes unreported when the elapsed time is exactly one tick short of a frame boundary, because the slack
-    /// then makes the jump look like continuous play.
+    /// then makes the jump look like continuous play. The follower factory guarantees the slack is under half a frame
+    /// period by refusing timebases whose tick is not shorter than half a 30 fps frame (`.timebaseTooCoarse`).
+    /// Direct callers of `MTCRealRate` and `MTCFollowerAnchor` are not guarded by that check, so the slack is sound
+    /// only for timebases the factory accepted.
     static let relocationSlackTicks: UInt64 = 1
 
     /// The frame count extrapolated to `ticks` at the exact real rate, wrapped into the 24-hour day.

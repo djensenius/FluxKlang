@@ -57,4 +57,26 @@ extension MTCFollowerTests {
         #expect(Self.thrown { try Self.policy(freewheel: 1) }
                 == .policyOutOfRange(field: .freewheelNanoseconds, value: 1))
     }
+
+    @Test func followerFactoryRefusesATimebaseWhoseTickIsNotShorterThanHalfAFrameAt30Fps() {
+        func refusal(_ numer: UInt32, _ denom: UInt32) -> MTCFollowerError? {
+            Self.thrown { try MTCFollower.make(policy: .standard, timebase: HostTimebase(numer: numer, denom: denom)) }
+        }
+        #expect(refusal(80_000_000, 1) == .timebaseTooCoarse)
+        #expect(refusal(16_666_666, 1) == nil)
+        #expect(refusal(16_666_667, 1) == .timebaseTooCoarse)
+        #expect(refusal(49_999_999, 3) == nil)
+        #expect(refusal(50_000_000, 3) == .timebaseTooCoarse)
+        #expect(refusal(.max, 1) == .timebaseTooCoarse)
+        #expect(refusal(.max, .max) == nil)
+        #expect(refusal(1, .max) == nil)
+    }
+
+    @Test func anInvalidTimebaseIsReportedBeforeATimebaseThatIsTooCoarse() {
+        let cases: [(UInt32, UInt32)] = [(0, 1), (1, 0), (0, 0), (.max, 0)]
+        for (numer, denom) in cases {
+            let timebase = HostTimebase(numer: numer, denom: denom)
+            #expect(Self.thrown { try MTCFollower.make(policy: .standard, timebase: timebase) } == .invalidTimebase)
+        }
+    }
 }

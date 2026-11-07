@@ -37,6 +37,8 @@ struct MTCFollowerCounters: Equatable, Hashable, Sendable {
 enum MTCFollowerError: Error, Equatable, Hashable, Sendable {
     case policyOutOfRange(field: MTCFollowerPolicy.Field, value: Int64)
     case invalidTimebase
+    /// A host tick is not strictly shorter than half a 30 fps frame period (`MTCRealRate.requireFollowerResolution`).
+    case timebaseTooCoarse
     case overflow
     case hostTimeRegressed(last: UInt64, received: UInt64)
     case malformedFullFrame(TimecodeError)

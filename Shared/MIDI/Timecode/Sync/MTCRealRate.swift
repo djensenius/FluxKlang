@@ -44,6 +44,22 @@ struct MTCRealRate: Equatable, Hashable, Sendable {
         guard timebase.numer > 0, timebase.denom > 0 else { throw .invalidTimebase }
     }
 
+    /// The fastest supported rate (30 fps) has the shortest frame, and a host tick must be strictly shorter than half
+    /// of it, so the one-tick relocation slack of `MTCFollowerAnchor` stays under half a frame period.
+    private static let fastestFramesPerSecond: UInt64 = 30
+    private static let framePeriodFractionDivisor: UInt64 = 2
+    private static let nanosecondsPerSecond: UInt64 = 1_000_000_000
+
+    /// Accepts a (valid) timebase of `numer / denom` ns per tick iff
+    /// `numer / denom < 1e9 / (fastest fps * divisor)`, decided on integers: `numer * 60 < 1e9 * denom`.
+    /// Both products fit `UInt64` for every `UInt32` input (at most 2.6e11 and 4.3e18).
+    static func requireFollowerResolution(_ timebase: HostTimebase) throws(MTCFollowerError) {
+        let scale = fastestFramesPerSecond * framePeriodFractionDivisor
+        guard UInt64(timebase.numer) * scale < nanosecondsPerSecond * UInt64(timebase.denom) else {
+            throw .timebaseTooCoarse
+        }
+    }
+
     static func narrow<Integer: FixedWidthInteger>(
         _ type: Integer.Type, _ value: Int128
     ) throws(MTCFollowerError) -> Integer {

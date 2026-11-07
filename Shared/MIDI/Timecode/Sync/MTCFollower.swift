@@ -37,6 +37,7 @@ struct MTCFollower: Sendable {
 
     static func make(policy: MTCFollowerPolicy, timebase: HostTimebase) throws(MTCFollowerError) -> MTCFollower {
         try MTCRealRate.validate(timebase)
+        try MTCRealRate.requireFollowerResolution(timebase)
         return MTCFollower(policy: policy, timebase: timebase)
     }
 
