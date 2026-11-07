@@ -347,6 +347,12 @@ targets:
       - path: FluxKlangTests/SpatialMaskTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests.swift
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
+      - path: FluxKlangTests/OSCNamespaceTests.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Arguments.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Grammar.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
+      - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/MTCFollowerTests.swift
