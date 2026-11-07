@@ -198,6 +198,13 @@ targets:
       - path: FluxKlangTests/RouteLatencyTests+Impulse.swift
       - path: FluxKlangTests/RouteLatencyTests+Alignment.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+Budget.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+FanIn.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+Feedback.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+Hardening.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+Schedule.swift
+      - path: FluxKlangTests/GraphCompilerPlanTests+Semantics.swift
       - path: FluxKlangTests/RoutingDSPTests.swift
       - path: FluxKlangTests/RoutingBoundaryTests.swift
       - path: FluxKlangTests/PreparationProjectBudgetTests.swift
