@@ -351,6 +351,49 @@ targets:
       - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
       - path: FluxKlangTests/MediaTapPlanTests+Order.swift
       - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
+      - path: FluxKlangTests/SpatialRouteStateTests.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Availability.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Identity.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Order.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+SpeakerState.swift
+      - path: FluxKlangTests/PerformCellModelTests.swift
+      - path: FluxKlangTests/PerformCellModelTests+Accessibility.swift
+      - path: FluxKlangTests/PerformCellModelTests+Entry.swift
+      - path: FluxKlangTests/PerformCellModelTests+States.swift
+      - path: FluxKlangTests/AUEventBridgeTests.swift
+      - path: FluxKlangTests/AUEventBridgeTests+Events.swift
+      - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
+      - path: FluxKlangTests/AUEventBridgeTests+Order.swift
+      - path: FluxKlangTests/AUEventBridgeTests+Ramps.swift
+      - path: FluxKlangTests/SpatialMixerTests.swift
+      - path: FluxKlangTests/SpatialMixerTests+Delay.swift
+      - path: FluxKlangTests/SpatialMixerTests+Gains.swift
+      - path: FluxKlangTests/SpatialMixerTests+Hostile.swift
+      - path: FluxKlangTests/SpatialMixerTests+Transition.swift
+      - path: FluxKlangTests/ProjectCheckpointTests.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Compare.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Journal.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Restore.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Retention.swift
+      - path: FluxKlangTests/WiringNodeEditTests.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Add.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Remove.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Order.swift
+      - path: FluxKlangTests/ActiveSensingTests.swift
+      - path: FluxKlangTests/ActiveSensingTests+Arming.swift
+      - path: FluxKlangTests/ActiveSensingTests+Timeout.swift
+      - path: FluxKlangTests/ActiveSensingTests+Refusal.swift
+      - path: FluxKlangTests/PluginResourceTests.swift
+      - path: FluxKlangTests/PluginResourceTests+Latency.swift
+      - path: FluxKlangTests/PluginResourceTests+Ledger.swift
+      - path: FluxKlangTests/PluginResourceTests+Order.swift
+      - path: FluxKlangTests/PluginResourceTests+Pressure.swift
+      - path: FluxKlangTests/PluginResourceTests+Versions.swift
+      - path: FluxKlangTests/PeerControlMessageTests.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Command.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Golden.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Hostile.swift
+      - path: FluxKlangTests/PeerControlMessageTests+Roundtrip.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
