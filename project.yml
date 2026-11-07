@@ -257,6 +257,13 @@ targets:
       - path: FluxKlangTests/MeterDisplayTests+Staleness.swift
       - path: FluxKlangTests/MeterDisplayTests+LateConsumption.swift
       - path: FluxKlangTests/MeterDisplayTests+Ordering.swift
+      - path: FluxKlangTests/MeterTapTests.swift
+      - path: FluxKlangTests/MeterTapTests+Accumulation.swift
+      - path: FluxKlangTests/MeterTapTests+Bounds.swift
+      - path: FluxKlangTests/MeterTapTests+Fixtures.swift
+      - path: FluxKlangTests/MeterTapTests+Invalid.swift
+      - path: FluxKlangTests/MeterTapTests+Level.swift
+      - path: FluxKlangTests/MeterTapTests+Publish.swift
       - path: FluxKlangTests/OSCSchedulingTests.swift
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
