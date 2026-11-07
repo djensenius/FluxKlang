@@ -351,6 +351,11 @@ targets:
       - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
       - path: FluxKlangTests/MediaTapPlanTests+Order.swift
       - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
+      - path: FluxKlangTests/SpatialRouteStateTests.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Availability.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Identity.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+Order.swift
+      - path: FluxKlangTests/SpatialRouteStateTests+SpeakerState.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
