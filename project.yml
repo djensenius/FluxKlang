@@ -370,6 +370,11 @@ targets:
       - path: FluxKlangTests/SpatialMixerTests+Gains.swift
       - path: FluxKlangTests/SpatialMixerTests+Hostile.swift
       - path: FluxKlangTests/SpatialMixerTests+Transition.swift
+      - path: FluxKlangTests/ProjectCheckpointTests.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Compare.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Journal.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Restore.swift
+      - path: FluxKlangTests/ProjectCheckpointTests+Retention.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
