@@ -471,6 +471,11 @@ targets:
       - path: FluxKlangTests/PatchVariationTests+Repair.swift
       - path: FluxKlangTests/PeerSyncTests.swift
       - path: FluxKlangTests/PeerSyncTests+Commands.swift
+      - path: FluxKlangTests/PeerStatusProjectionTests.swift
+      - path: FluxKlangTests/PeerStatusProjectionTests+Apply.swift
+      - path: FluxKlangTests/PeerStatusProjectionTests+Delta.swift
+      - path: FluxKlangTests/PeerStatusProjectionTests+Entry.swift
+      - path: FluxKlangTests/PeerStatusProjectionTests+Limits.swift
       - path: FluxKlangTests/PeerTrustTests.swift
       - path: FluxKlangTests/PeerTrustTests+Pairing.swift
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
