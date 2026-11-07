@@ -257,6 +257,60 @@ extension ProjectStagingTests {
         }
     }
 
+    private func volumesBeneath(_ root: String, _ fake: Fake) -> [Int] {
+        fake.nodes.filter { StagingPlan.isWithin($0.key, of: root) }.map(\.value.volume)
+    }
+
+    private func underVolumeTwoParent(old: ProjectPackageContents? = nil) -> Fake {
+        var fake = Fixture.volume()
+        fake.seedDirectory("p", volume: 2)
+        if let old { fake.seed(package: old, at: "p/Set.fluxklang", volume: 2) }
+        return fake
+    }
+
+    @Test func aCreateNewExportUnderAParentOnVolumeTwoStagesAndPromotesWithoutCrossingVolumes() throws {
+        var fake = underVolumeTwoParent()
+        let plan = try Fixture.plan(.createNew, destination: "p/Set.fluxklang")
+        let result = Fixture.export(plan, try Fixture.tiny("n"), &fake)
+        #expect(Fixture.value(result) == StagingReceipt(mode: .createNew, backupRetained: false))
+        let volumes = volumesBeneath("p/Set.fluxklang", fake)
+        #expect(volumes.count == 5)
+        #expect(volumes.allSatisfy { $0 == 2 })
+        #expect(fake.nodes["p"]?.volume == 2)
+        #expect(volumesBeneath("p/.Set.fluxklang.staging-t1", fake).isEmpty)
+    }
+
+    @Test func aReplaceExportUnderAParentOnVolumeTwoSwapsThePackageWithoutCrossingVolumes() throws {
+        var fake = underVolumeTwoParent(old: try Fixture.tiny("o"))
+        let plan = try Fixture.plan(.replaceExisting, destination: "p/Set.fluxklang")
+        let result = Fixture.export(plan, try Fixture.tiny("n"), &fake)
+        #expect(Fixture.value(result) == StagingReceipt(mode: .replaceExisting, backupRetained: false))
+        let volumes = volumesBeneath("p/Set.fluxklang", fake)
+        #expect(volumes.count == 5)
+        #expect(volumes.allSatisfy { $0 == 2 })
+        #expect(fake.nodes["p/Set.fluxklang/project.json"]?.bytes == Data("P-n".utf8))
+        #expect(volumesBeneath("p/.Set.fluxklang.previous-t1", fake).isEmpty)
+    }
+
+    @Test func aTornFileInsertedUnderAParentOnVolumeTwoReportsVolumeTwo() throws {
+        let contents = try Fixture.tiny("n")
+        let plan = try Fixture.plan(.createNew, destination: "p/Set.fluxklang")
+        var clean = underVolumeTwoParent()
+        _ = Fixture.export(plan, contents, &clean)
+        let created = clean.log.firstIndex { entry in
+            if case .createFile = entry.operation { return true }
+            return false
+        }
+        let index = try #require(created)
+        var fake = underVolumeTwoParent()
+        fake.arm(.crash(.torn(prefix: 2), at: index))
+        let result = Fixture.export(plan, contents, &fake)
+        #expect(Fixture.value(result) == nil)
+        let torn = try #require(fake.nodes["p/.Set.fluxklang.staging-t1/manifest.json"])
+        #expect(torn.volume == 2)
+        #expect(torn.bytes.count == 2)
+    }
+
     @Test func anOperationCountAboveTheCeilingRefusesBeforeAnyIOAndTheCountItselfRuns() throws {
         let contents = try Fixture.tiny("n")
         var refused = Fixture.volume()

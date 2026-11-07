@@ -112,11 +112,11 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         nodes[path] = Node(kind: kind)
     }
 
-    mutating func seed(package contents: ProjectPackageContents, at root: String) {
-        seedDirectory(root)
-        seedFile(Self.join(root, "manifest.json"), contents.manifestBytes)
-        for directory in contents.directories { seedDirectory(Self.join(root, directory)) }
-        for file in contents.files { seedFile(Self.join(root, file.path), file.bytes) }
+    mutating func seed(package contents: ProjectPackageContents, at root: String, volume: Int = 1) {
+        seedDirectory(root, volume: volume)
+        seedFile(Self.join(root, "manifest.json"), contents.manifestBytes, volume: volume)
+        for directory in contents.directories { seedDirectory(Self.join(root, directory), volume: volume) }
+        for file in contents.files { seedFile(Self.join(root, file.path), file.bytes, volume: volume) }
     }
 
     // MARK: Inspection
@@ -194,7 +194,7 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         try perform(.makeDirectory(path)) { store throws(StagingIOFault) in
             try store.checkCreatable(path)
             if store.script.silent[path] == .dropDirectory { return }
-            store.insert(path, Node(kind: .directory))
+            store.insert(path, Node(kind: .directory, volume: store.parentVolume(of: path)))
         }
     }
 
@@ -202,7 +202,8 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         let index = log.count - base
         if !isDown, script.crashIndex == index, case let .torn(prefix) = script.crash {
             if (try? checkCreatable(path)) != nil {
-                insert(path, Node(kind: .regularFile, bytes: bytes.prefix(prefix)))
+                let tornVolume = parentVolume(of: path)
+                insert(path, Node(kind: .regularFile, bytes: bytes.prefix(prefix), volume: tornVolume))
             }
             isDown = true
             log.append(Entry(operation: .createFile(path, bytes.count), outcome: .torn(prefix)))
@@ -214,10 +215,12 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
             switch store.script.silent[path] {
             case let .shorten(count): stored = Data(bytes.prefix(count))
             case .flipFirstByte: if !stored.isEmpty { stored[stored.startIndex] ^= 0xFF }
-            case let .plantSibling(name): store.insert(Self.join(Self.parent(of: path), name), Node(kind: .regularFile))
+            case let .plantSibling(name):
+                let sibling = Self.join(Self.parent(of: path), name)
+                store.insert(sibling, Node(kind: .regularFile, volume: store.parentVolume(of: sibling)))
             case .dropDirectory, nil: break
             }
-            store.insert(path, Node(kind: .regularFile, bytes: stored))
+            store.insert(path, Node(kind: .regularFile, bytes: stored, volume: store.parentVolume(of: path)))
         }
     }
 
@@ -272,6 +275,12 @@ struct InMemoryStagingFileSystem: StagingFileSystem, Equatable {
         guard nodes[path] == nil else { throw .exists }
         let parent = Self.parent(of: path)
         guard parent.isEmpty || nodes[parent]?.kind == .directory else { throw .notFound }
+    }
+
+    /// A new node takes the volume of the directory it is created in (the root volume is 1).
+    private func parentVolume(of path: String) -> Int {
+        let parent = Self.parent(of: path)
+        return parent.isEmpty ? 1 : nodes[parent]?.volume ?? 1
     }
 
     private mutating func insert(_ path: String, _ node: Node) {
