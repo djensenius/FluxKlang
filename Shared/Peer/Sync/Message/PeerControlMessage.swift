@@ -27,8 +27,12 @@ import Foundation
 ///     result   = sequence:u64 command:id outcome (see `PeerControlMessage+Command.swift`)
 ///
 /// Snapshot and delta entries are sorted strictly ascending by the UTF-8 bytes
-/// of their id, and delta updates and removals are disjoint, so every value has
-/// exactly one encoding. Command and result messages carry no session header:
+/// of their id, and delta updates and removals are disjoint, so every message
+/// has exactly one encoding: equal bytes decode to equal messages, and decoding
+/// then encoding reproduces the bytes bit for bit. The converse does not hold
+/// for signed zero: `Double ==` treats +0.0 and -0.0 as equal, so two messages
+/// that compare `==` can differ in the sign of a zero and then encode to
+/// different bytes. Command and result messages carry no session header:
 /// the intent holds its own epochs, and staleness is the command processor's
 /// decision, not the codec's. Sequences are 0...2^53-1 and generations are
 /// 1...2^53-1; a decoded value goes through the same throwing factories as a
@@ -115,7 +119,7 @@ struct PeerResyncWireRequest: Hashable, Sendable {
 
 /// Why a value cannot be encoded.
 enum PeerControlUnencodable: Hashable, Sendable {
-    /// A `CommandIntent` with unknown fields: the wire has no place for them.
+    /// A `CommandIntent` carrying extension data, top-level or nested in a known object: the wire has no place for it.
     case unknownFields
     /// `CommandResult.trigger` is deferred in this slice.
     case trigger

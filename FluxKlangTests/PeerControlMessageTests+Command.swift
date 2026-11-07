@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -107,6 +108,60 @@ extension PeerControlMessageTests {
             }
             #expect(failure == .unencodable(.textLength(text.utf8.count)))
             #expect(scratch.bytes.isEmpty)
+        }
+    }
+
+    @Test func intentWithNestedExtensionDataIsUnencodableEvenThoughItsTopLevelUnknownFieldsAreEmpty() throws {
+        let plain = F.intent()
+        let data = try ContractCoding.makeEncoder().encode(plain)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var revisions = try #require(object["revisions"] as? [String: Any])
+        revisions["future"] = ["nested": true]
+        object["revisions"] = revisions
+        let nested = try ContractCoding.decode(CommandIntent.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(nested.unknownFields.isEmpty)
+        #expect(nested.fields == plain.fields)
+        #expect(nested != plain)
+        #expect(F.encode(F.command(nested)) == .failure(.unencodable(.unknownFields)))
+        #expect(F.encode(F.command(plain)) == .success(F.bytes(F.command(plain))))
+        #expect(F.bytes(F.command(plain)).isEmpty == false)
+    }
+
+    @Test func messagesDifferingOnlyInTheSignOfAZeroAreEqualButEncodeToDifferentBytes() {
+        func messages(_ zero: Double) -> [PeerControlMessage] {
+            [F.snapshot([F.pid("a"): F.value(zero)]),
+             F.delta(updates: [F.pid("a"): F.value(zero)]),
+             F.command(F.intent(operation: .set(F.pid("p"), F.value(zero)))),
+             F.result(.refused(.command(.rejected(.invalidValue(.notIntegral(zero))))))]
+        }
+        func signs(_ message: PeerControlMessage) -> [FloatingPointSign] {
+            switch message {
+            case .snapshot(let snapshot): return snapshot.values.values.map { $0.value.sign }
+            case .delta(let delta): return delta.updates.values.map { $0.value.sign }
+            case .command(let envelope):
+                if case .set(_, let value) = envelope.intent.operation { return [value.value.sign] }
+                return []
+            case .result(let result):
+                if case .refused(.command(.rejected(.invalidValue(.notIntegral(let number))))) = result.outcome {
+                    return [number.sign]
+                }
+                return []
+            case .resync: return []
+            }
+        }
+        let positives = messages(0.0)
+        let negatives = messages(-0.0)
+        #expect(positives.count == 4 && negatives.count == 4)
+        for (positive, negative) in zip(positives, negatives) {
+            let label = "\(positive.tag)"
+            #expect(positive == negative, "\(label)")
+            let positiveBytes = F.bytes(positive)
+            let negativeBytes = F.bytes(negative)
+            #expect(positiveBytes.isEmpty == false, "\(label)")
+            #expect(positiveBytes != negativeBytes, "\(label)")
+            #expect((try? F.decode(negativeBytes).get()).map(signs) == [.minus], "\(label)")
+            #expect((try? F.decode(positiveBytes).get()).map(signs) == [.plus], "\(label)")
+            #expect((try? F.decode(negativeBytes).get()).map { F.bytes($0) } == negativeBytes, "\(label)")
         }
     }
 }

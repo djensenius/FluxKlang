@@ -23,7 +23,8 @@
 //      valueError = 1 nonFinite | 2 invalidDescriptor | 3 invalidRamp | 4 unitMismatch expected:u8 found:u8
 //                | 5 notIntegral double | 6 outOfRange double lower upper | 7 aboveCeiling double ceiling
 //
-//  An intent with unknown fields and a trigger outcome are not encodable here.
+//  An intent that carries extension data (top-level or nested inside a known object)
+//  and a trigger outcome are not encodable here.
 //
 
 import Foundation
@@ -36,7 +37,8 @@ extension PeerControlMessage {
         into writer: inout PeerWireWriter
     ) throws(PeerControlMessageError) {
         let intent = envelope.intent
-        guard intent.unknownFields.isEmpty else { throw .unencodable(.unknownFields) }
+        let clean = try? CommandIntent(intent.fields)
+        guard clean == intent else { throw .unencodable(.unknownFields) }
         writeSequence(envelope.sequence, into: &writer)
         try writeID(intent.id, into: &writer)
         writer.append(intent.commandClass.wireCode)
