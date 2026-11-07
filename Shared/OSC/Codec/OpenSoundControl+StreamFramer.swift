@@ -33,7 +33,7 @@ extension OpenSoundControl {
         case failed
     }
 
-    struct StreamFramer: Sendable {
+    struct StreamFramer: Sendable, Hashable {
         static let slipEnd: UInt8 = 0xC0
         static let slipEscape: UInt8 = 0xDB
         static let slipEscapedEnd: UInt8 = 0xDC
