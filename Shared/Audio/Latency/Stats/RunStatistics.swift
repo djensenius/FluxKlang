@@ -61,7 +61,7 @@ struct RunStatistics: Hashable, Sendable {
         p95 = Self.percentile(Self.p95Percent, needed: Self.p95Needed, sorted: sorted)
         p99 = Self.percentile(Self.p99Percent, needed: Self.p99Needed, sorted: sorted)
         maximumNanoseconds = sorted[count - 1]
-        let misses = sorted.filter { $0 > record.deadlineNanoseconds }.count
+        let misses = Self.deadlineMisses(in: record)
         deadlineMisses = misses
         missRatio = DeadlineMissRatio(numerator: misses, denominator: count)
         dropouts = record.dropouts
@@ -72,6 +72,11 @@ struct RunStatistics: Hashable, Sendable {
     /// Total: a `RunRecord` is already validated, so it has at least one sample.
     static func make(from record: RunRecord) -> Self {
         Self(sorted: record.renderNanoseconds.sorted(), record: record)
+    }
+
+    /// The single definition of a deadline miss (`render > deadline`, strict), as one linear scan without sorting.
+    static func deadlineMisses(in record: RunRecord) -> Int {
+        record.renderNanoseconds.reduce(0) { $0 + ($1 > record.deadlineNanoseconds ? 1 : 0) }
     }
 
     private static func percentile(_ percent: Int, needed: Int, sorted: [Int64]) -> PercentileResult {

@@ -111,6 +111,20 @@ extension RunStatisticsTests {
         #expect(twoStable.unstableAboveLowestStable)
     }
 
+    @Test func theFindingCountsTheSameDeadlineMissesAsRunStatisticsForUnsortedRenders() throws {
+        let first = try Self.record([101, 100, 99, 300, 1], deadline: 100, variables: Self.variables(buffer: 64))
+        let second = try Self.record([100, 100, 7, 101], deadline: 100, variables: Self.variables(buffer: 64))
+        let expected = RunStatistics.make(from: first).deadlineMisses + RunStatistics.make(from: second).deadlineMisses
+        #expect(expected == 3)
+        #expect(RunStatistics.deadlineMisses(in: first) == 2 && RunStatistics.deadlineMisses(in: second) == 1)
+        let limits = try Self.criteria(misses: 3, samples: 1)
+        let pooled = try #require(Self.finding([first, second], limits).tested.first)
+        #expect(pooled.totalDeadlineMisses == expected)
+        #expect(pooled.verdict == .stable)
+        let tight = try Self.criteria(misses: 1, samples: 1)
+        #expect(try Self.finding([first, second], tight).tested.first?.verdict == .unstable)
+    }
+
     @Test func criteriaLimitsAcceptTheMaximumAndRefuseOneBeyondForDropoutsAndMisses() throws {
         let limits = try Self.criteria(dropouts: 2, misses: 1)
         let atLimit = try Self.finding([Self.bufferRun(64, dropouts: 2, misses: 1)], limits)

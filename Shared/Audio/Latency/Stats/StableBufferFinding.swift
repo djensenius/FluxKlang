@@ -142,8 +142,7 @@ struct StableBufferFinding: Hashable, Sendable {
         }
     }
 
-    private static func verdict(of run: RunRecord, criteria: StabilityCriteria) -> BufferVerdict {
-        let misses = RunStatistics.make(from: run).deadlineMisses
+    private static func verdict(of run: RunRecord, misses: Int, criteria: StabilityCriteria) -> BufferVerdict {
         if run.dropouts > criteria.maximumDropouts || misses > criteria.maximumDeadlineMisses { return .unstable }
         return run.renderNanoseconds.count < criteria.minimumSamples ? .insufficient : .stable
     }
@@ -155,9 +154,10 @@ struct StableBufferFinding: Hashable, Sendable {
         var misses = 0
         var dropouts = 0
         for run in runs {
-            verdicts.append(verdict(of: run, criteria: criteria))
+            let runMisses = RunStatistics.deadlineMisses(in: run)
+            verdicts.append(verdict(of: run, misses: runMisses, criteria: criteria))
             samples += run.renderNanoseconds.count
-            misses += RunStatistics.make(from: run).deadlineMisses
+            misses += runMisses
             let (sum, overflow) = dropouts.addingReportingOverflow(run.dropouts)
             guard !overflow else { throw .arithmeticOverflow }
             dropouts = sum
