@@ -34,19 +34,20 @@ import Foundation
 ///    filtered label is empty for the same reason, it still emits the withheld marker.
 /// 3. Separator provenance is carried through redaction, every cap sweep, settle,
 ///    truncation and stable passes; only original control replacements may be dropped
-///    from compact matching. Any redaction in a label that removed a newly pinned
-///    blank withholds the whole label. A literal marker's edge padding can still be
-///    trimmed with provenance remapped. Each
-///    grapheme of the redacted text is limited
+///    from compact matching. Any redaction in a label that removed a newly pinned blank
+///    withholds the whole label. A compact-only separator redaction also withholds if the
+///    unredacted A1 shadow needs a cap/cut, if any exact redaction also occurs (its marker
+///    may move A1's later byte cut), or if the hardened display is not a scalar subsequence
+///    of A1's. Literal marker edge padding can still be trimmed with
+///    provenance remapped. Each grapheme of the redacted text is limited
 ///    to `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
 ///    anything, step 2 runs again, since dropping scalars can complete a withheld
 ///    string, and so on until stable (`settle`, bounded, failing closed).
 /// 4. The text is truncated to `maximumBytes` UTF-8 bytes on a grapheme boundary of
 ///    the final text, before any `withheldMarker` the cut would split (a cut marker
 ///    such as `[with` could pass for label text). If not even its first grapheme fits,
-///    the label is
-///    `withheldMarker` (or empty, flagged truncated, when the marker does not fit
-///    either), never a silently empty string.
+///    the label is `withheldMarker` (or empty, flagged truncated, when the marker does
+///    not fit either), never a silently empty string.
 ///
 /// 5. Steps 1–4 repeat until the text is a fixed point (bounded by
 ///    `maximumStablePasses`), and a final whole-string scan checks the postcondition;
@@ -57,9 +58,12 @@ import Foundation
 /// bytes; and labelling `text` again with the same terms returns `text`. So the emitted
 /// text is the text the last pass matched (up to canonical equivalence, which matching
 /// ignores): every renormalization, cap and cut is matched again before it is shown.
-/// After new-blank removal, withhold whole if A1's blank-kept shadow needs a cap/cut,
-/// A1h redacts or settle changes text, or the NFC display is not a scalar subsequence
-/// of A1's; a later A1h byte cut only removes text. The guard does not apply to labels
+/// After new-blank removal, withhold whole if A1's unredacted shadow needs a cap/cut, A1h
+/// redacts or settle changes text, or the NFC display is not a scalar subsequence of A1's.
+/// An incomplete scan with an active blank-dependent term and no removed new blank also
+/// withholds whole, even if a real match overlaps the synthetic tail: that match need not
+/// preserve A1's cut boundary. For compact-only separator redactions, withhold whole on
+/// those A1 risks; later A1h cuts only remove text. The guard does not apply to labels
 /// containing only A1-old blanks such as U+3164. Leading-prefix reconstruction can
 /// over-fire (e.g. `\u{200B} Rig\u{13441}` or a leading NUL), but cannot under-fire.
 ///
@@ -88,7 +92,7 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
 
     let text: String
     /// True when characters were dropped to fit the byte or scan limit.
-    /// A blank-decision fallback can report a cut A1 did not need when A1's own output fits the limit.
+    /// Blank and compact-plus-exact fallbacks can report a cut A1 did not need when its output fits the limit.
     /// It never under-reports a cut A1 would have made and never changes `text` or `wasSanitized`.
     let isTruncated: Bool
     /// True when characters were replaced or removed, a grapheme was capped or a
@@ -150,6 +154,13 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let separators: [Int]
     }
 
+    private struct Settled {
+        let result: UntrustedTextSanitizer.Result
+        let separators: [Int]
+        let compactOnly: Bool
+        let hasExact: Bool
+    }
+
     /// One pass of steps 1–4.
     private static func sanitizeOnce(
         _ raw: String, limit: Int, terms: [UntrustedTextSanitizer.WithheldTerm],
@@ -163,15 +174,17 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
             && UntrustedTextSanitizer.hasUnreliableNormalization(filtered.text.unicodeScalars)
         let emptyFailClosed = filtered.text.isEmpty && filtered.removedNewBlankBytes > 0
             && activeTerms.contains(where: { $0.isFailClosed })
-        let redacted = unreliable || emptyFailClosed
-            ? (result: (text: withheldMarker, changed: true), separators: [])
+        let redacted: UntrustedTextSanitizer.SeparatorRedaction = unreliable || emptyFailClosed
+            ? .init(result: (withheldMarker, true), separators: [], compactOnly: false, hasExact: false)
             : UntrustedTextSanitizer.redactMatchFormWithSeparators(
                 of: display, withheld: activeTerms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
                 separators: inheritedSeparators ?? filtered.separators
             )
         let legacyGraphemeRisk = redacted.result.changed
         let settled = settle(redacted.result.text, separators: redacted.separators, terms: activeTerms)
-        let legacyDecision = filtered.removedNewBlankBytes > 0
+        let compactOnlyRedaction = redacted.compactOnly || settled.compactOnly
+        let compactExactRedaction = compactOnlyRedaction && (redacted.hasExact || settled.hasExact)
+        let legacyDecision = filtered.removedNewBlankBytes > 0 || compactOnlyRedaction
             ? UntrustedTextSanitizer.legacyLabelDecision(
                 raw, hardened: display, maximumBytes: limit, scanLimit: scan
             )
@@ -186,8 +199,18 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
                 || legacyDecision.needsGraphemeCap
                 || legacyCutRisk
                 || legacyDecision.needsScalarSubsequenceGuard)
-        let protected = blankDecisionRisk
-            ? (result: (text: withheldMarker, changed: true), separators: [])
+        let incompleteBlankTermRisk = !filtered.isComplete
+            && filtered.removedNewBlankBytes == 0
+            && activeTerms.contains(where: { $0.requiresNewBlank })
+        let conservativeRedactionRisk = compactExactRedaction
+            || incompleteBlankTermRisk
+            || (blankDecisionRisk && legacyGraphemeRisk)
+        // Exact markers can grow A1's post-redaction display and move its byte cut left.
+        let compactDecisionRisk = compactOnlyRedaction
+            && (legacyDecision.needsGraphemeCap || legacyCutRisk
+                || legacyDecision.needsScalarSubsequenceGuard)
+        let protected = blankDecisionRisk || compactDecisionRisk || conservativeRedactionRisk
+            ? Settled(result: (withheldMarker, true), separators: [], compactOnly: false, hasExact: false)
             : settled
         let edgeTrimmed = filtered.removedNewBlankBytes > 0 && protected.result.text.contains(withheldMarker)
             ? Self.trimRedactedEdges(protected.result.text, separators: protected.separators)
@@ -205,8 +228,7 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
             text: cut.result.text,
             isTruncated: truncationFlag(
                 cutChanged: cut.result.changed, scanIsComplete: filtered.isComplete,
-                legacyCutRisk: legacyCutRisk, blankDecisionRisk: blankDecisionRisk,
-                legacyGraphemeRisk: legacyGraphemeRisk
+                legacyCutRisk: legacyCutRisk, conservativeRedactionRisk: conservativeRedactionRisk
             ),
             wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed,
             separators: cut.separators
@@ -214,10 +236,9 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
     }
 
     private static func truncationFlag(
-        cutChanged: Bool, scanIsComplete: Bool, legacyCutRisk: Bool,
-        blankDecisionRisk: Bool, legacyGraphemeRisk: Bool
+        cutChanged: Bool, scanIsComplete: Bool, legacyCutRisk: Bool, conservativeRedactionRisk: Bool
     ) -> Bool {
-        cutChanged || !scanIsComplete || legacyCutRisk || (blankDecisionRisk && legacyGraphemeRisk)
+        cutChanged || !scanIsComplete || legacyCutRisk || conservativeRedactionRisk
     }
 
     /// Actual redaction after new-blank removal withholds the whole label. This only
@@ -266,21 +287,32 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
 
     private static func settle(
         _ text: String, separators: [Int], terms: [UntrustedTextSanitizer.WithheldTerm]
-    ) -> (result: UntrustedTextSanitizer.Result, separators: [Int]) {
+    ) -> Settled {
         var capped = UntrustedTextSanitizer.capGraphemes(text, separators: separators)
         var changed = capped.result.changed
+        var compactOnly = false
+        var hasExact = false
         for _ in 0..<maximumSettlePasses {
-            guard capped.result.changed else { return ((capped.result.text, changed), capped.separators) }
+            guard capped.result.changed else {
+                return Settled(result: (capped.result.text, changed), separators: capped.separators,
+                               compactOnly: compactOnly, hasExact: hasExact)
+            }
             let again = UntrustedTextSanitizer.redactMatchFormWithSeparators(
                 of: capped.result.text, withheld: terms, marker: withheldMarker, scanIsComplete: true,
                 separators: capped.separators
             )
-            guard again.result.changed else { return ((capped.result.text, changed), capped.separators) }
+            compactOnly = compactOnly || again.compactOnly
+            hasExact = hasExact || again.hasExact
+            guard again.result.changed else {
+                return Settled(result: (capped.result.text, changed), separators: capped.separators,
+                               compactOnly: compactOnly, hasExact: hasExact)
+            }
             capped = UntrustedTextSanitizer.capGraphemes(again.result.text, separators: again.separators)
             changed = true
         }
         return capped.result.changed
-            ? ((withheldMarker, true), [])
-            : ((capped.result.text, changed), capped.separators)
+            ? Settled(result: (withheldMarker, true), separators: [], compactOnly: compactOnly, hasExact: hasExact)
+            : Settled(result: (capped.result.text, changed), separators: capped.separators,
+                      compactOnly: compactOnly, hasExact: hasExact)
     }
 }

@@ -11,6 +11,20 @@ import Foundation
 enum UntrustedTextSanitizer {
     typealias Result = (text: String, changed: Bool)
 
+    struct SeparatorRedaction {
+        let result: Result
+        let separators: [Int]
+        let compactOnly: Bool
+        let hasExact: Bool
+    }
+
+    struct RangeRedaction {
+        let result: Result
+        let ranges: [Range<Int>]
+        let compactOnly: Bool
+        let hasExact: Bool
+    }
+
     static let maximumScalarsPerGrapheme = 8
     static let zeroWidthJoiner: Unicode.Scalar = "\u{200D}"
     static let zeroWidthNonJoiner: Unicode.Scalar = "\u{200C}"

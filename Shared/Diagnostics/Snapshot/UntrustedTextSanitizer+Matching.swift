@@ -219,18 +219,24 @@ extension UntrustedTextSanitizer {
         ).result
     }
 
-    /// The matching pipeline with separator provenance remapped through range replacement.
+    /// `compactOnly` means a compact match added a range not covered by ordinary matches.
+    /// Separator provenance is remapped through the same range replacement.
     static func redactMatchFormWithSeparators(
         of display: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int]
-    ) -> (result: Result, separators: [Int]) {
+    ) -> SeparatorRedaction {
         let source = sourceForm(display)
         let redacted = redactWithRanges(
             source, withheld: withheld, marker: marker, scanIsComplete: scanIsComplete, separators: separators
         )
-        guard redacted.result.changed else { return ((display, false), separators) }
-        return (
-            redacted.result,
-            remapSeparators(separators, in: source, ranges: redacted.ranges, marker: marker)
+        guard redacted.result.changed else {
+            return SeparatorRedaction(
+                result: (display, false), separators: separators, compactOnly: false, hasExact: false
+            )
+        }
+        return SeparatorRedaction(
+            result: redacted.result,
+            separators: remapSeparators(separators, in: source, ranges: redacted.ranges, marker: marker),
+            compactOnly: redacted.compactOnly, hasExact: redacted.hasExact
         )
     }
 
@@ -270,16 +276,11 @@ extension UntrustedTextSanitizer {
     /// result therefore does not depend on term order, and no replacement can hide
     /// another term or the scan-cut tail.
     ///
-    /// A control or separator only splits a secret into two words, so the text is also
-    /// matched without its `separators` (ordinals among its U+0020 scalars), against
-    /// every term without its own (`WithheldTerm.compactForm`). Its ranges are added, so
-    /// this only withholds more: `SN-1\u{2028}2345` is withheld for `SN-12345`, and
-    /// `SN-12345` for a withheld `SN-1\n2345`.
+    /// Controls and separators can split a secret, so text and terms are also matched
+    /// without their recorded separators. `SN-1\u{2028}2345` and `SN-12345` match either way.
     ///
-    /// Accepted limit: only whole terms are found. A partial quote of a secret,
-    /// short or long (for example the first 300 bytes of a 2,000-byte secret,
-    /// shorter than its 1,024-byte prefix term), is not redacted, except in the
-    /// withheld tail of a scan-cut label.
+    /// Accepted limit: only whole terms are found; partial quotes are not redacted,
+    /// except in the withheld tail of a scan-cut label.
     static func redact(
         _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool = true,
         separators: [Int] = []
@@ -292,19 +293,31 @@ extension UntrustedTextSanitizer {
     /// One range calculation feeds both display replacement and separator remapping.
     private static func redactWithRanges(
         _ text: String, withheld: [WithheldTerm], marker: String, scanIsComplete: Bool, separators: [Int]
-    ) -> (result: Result, ranges: [Range<Int>]) {
+    ) -> RangeRedaction {
         let scalars = Array(text.unicodeScalars)
         let map = CaselessMap(text)
         var found = withheldRanges(in: map, terms: withheld, scanIsComplete: scanIsComplete)
-        if separators.isEmpty {
-            let split = withheld.filter { !$0.separators.isEmpty }
-            found += withheldRanges(in: map, terms: split, scanIsComplete: scanIsComplete, compact: true)
-        } else {
-            let compact = CaselessMap(text, dropping: separators)
-            found += withheldRanges(in: compact, terms: withheld, scanIsComplete: scanIsComplete, compact: true)
+        let exactCoverage = merge(found)
+        let exactMatches = withheldRanges(in: map, terms: withheld, scanIsComplete: true)
+        let hasExactMatch = !exactMatches.isEmpty
+        let compactMap = separators.isEmpty ? map : CaselessMap(text, dropping: separators)
+        let compactTerms = separators.isEmpty ? withheld.filter { !$0.separators.isEmpty } : withheld
+        let compactRanges = withheldRanges(
+            in: compactMap, terms: compactTerms, scanIsComplete: scanIsComplete, compact: true
+        )
+        let compactMatches = scanIsComplete ? compactRanges : withheldRanges(
+            in: compactMap, terms: compactTerms, scanIsComplete: true, compact: true
+        )
+        let compactOnly = compactMatches.contains { candidate in
+            !exactCoverage.contains { $0.lowerBound <= candidate.lowerBound && $0.upperBound >= candidate.upperBound }
         }
+        found += compactRanges
         let ranges = merge(found)
-        guard !ranges.isEmpty else { return ((text, false), []) }
+        guard !ranges.isEmpty else {
+            return RangeRedaction(
+                result: (text, false), ranges: [], compactOnly: false, hasExact: false
+            )
+        }
         var result = String.UnicodeScalarView()
         var cursor = 0
         for range in ranges {
@@ -313,47 +326,26 @@ extension UntrustedTextSanitizer {
             cursor = range.upperBound
         }
         result.append(contentsOf: scalars[cursor...])
-        return ((String(result), true), ranges)
+        return RangeRedaction(
+            result: (String(result), true), ranges: ranges, compactOnly: compactOnly, hasExact: hasExactMatch
+        )
     }
 
     /// Source scalar ranges to withhold, always whole source graphemes:
     /// - all of the text when a term is `WithheldTerm.failClosed`;
-    /// - every occurrence of every term in the caseless form (`occurrences`),
-    ///   overlapping ones included, expanded to the source graphemes that contain its
-    ///   first and last scalars (`CaselessMap`), which also covers marks that NFD
-    ///   reordered;
+    /// - every caseless occurrence, overlapping ones included, expanded to the source
+    ///   graphemes containing its first and last scalars (`CaselessMap`), covering NFD-reordered marks;
     /// - for a prefix term, its first match through the end of the text;
-    /// - when the scan was cut and a term exists, the text's final run of marks (under
-    ///   `matchClass`, possibly empty) plus the `L - 1` caseless scalars before it, where
-    ///   `L` is the longest caseless term, extended back to the start of the source
-    ///   grapheme that holds the first of them. A cut-off secret is a proper prefix of an
-    ///   occurrence, and an occurrence may hold any number of label marks in the runs
-    ///   next to its core (`occurrences`), so the window starts before the final run:
-    ///   - a cut in the run after the core leaves the core and the term's leading marks
-    ///     within `L - 1` scalars before that run;
-    ///   - a cut in the core leaves fewer than `L - lead` of its scalars (`lead` leading
-    ///     marks), so the window reaches into the run before the core when there are
-    ///     leading marks, and the grapheme extension withholds that run's base and all of
-    ///     its marks (a real `ι` in the run starts a grapheme of its own, but in an
-    ///     equivalent occurrence everything from such an `ι` to the core is the term's
-    ///     own, so within the window; otherwise only the `ι` over-match put it there);
-    ///   - a cut in the run before the core, or in the one run a term of marks only lies
-    ///     in, leaves that run final.
+    /// - for a cut scan, the final mark run and up to `L - 1` preceding caseless scalars,
+    ///   extended to whole graphemes, where `L` is the longest term. This catches partial
+    ///   terms and unfinished normalization segments, over-redacting only that tail. The
+    ///   final mark run is found in one backward walk.
     ///
-    ///   The grapheme extension also covers a normalization segment the cut left
-    ///   unfinished (Hangul L+V+T). The cost is over-redaction of the final run, up to
-    ///   `L - 1` caseless scalars and one grapheme of a label whose input exceeded the
-    ///   scan limit (at least 4,096 kept scalars, far past the default 128-byte label).
-    ///   Finding the run is one backward walk, linear in the text.
+    /// `compact` matches each term's `compactForm`, skipping terms without one.
     ///
-    /// With `compact`, each term's `compactForm` is matched instead (a term without one is
-    /// skipped), in a map that may hold no scalars (a text of dropped separators only).
-    ///
-    /// Cost: each term is tried at every caseless position, O(n·m) for n caseless
-    /// text scalars and m caseless term scalars. n is linear in the scan limit
-    /// (a scalar folds to at most three and NFD expands it by a bounded factor) and
-    /// m in `maximumWithheldBytes`. Per term, the edge checks add O(n) for the runs and
-    /// O(m) per match, within that bound. The compact pass at most doubles it.
+    /// Cost: O(n·m), with `n` linear in the scan limit and `m` bounded by
+    /// `maximumWithheldBytes`; edge checks add O(n) per term and O(m) per match.
+    /// Exact, compact and provenance scans can quadruple work on cut scans.
     static func withheldRanges(
         in map: CaselessMap, terms: [WithheldTerm], scanIsComplete: Bool, compact: Bool = false
     ) -> [Range<Int>] {

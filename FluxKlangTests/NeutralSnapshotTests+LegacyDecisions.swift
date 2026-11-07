@@ -14,6 +14,51 @@ import Testing
 #endif
 
 extension NeutralSnapshotUnicodeTests {
+    @Test func incompleteScanFailsClosedWhenA1hHasNoTailWindow() {
+        let term = "Q\u{13441}\u{13441}"
+        let raw = "x" + String(repeating: "\u{0316}", count: 4_090) + "abcdefgh"
+        let result = UntrustedLabel(raw, withholding: [term])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+    }
+
+    @Test func incompleteScanOrdinaryExactTermKeepsPartialRedaction() {
+        let term = "ABCDEFGHIJKLM"
+        let raw = term + String(repeating: "z", count: 4_200)
+        let result = UntrustedLabel(raw, withholding: [term])
+        #expect(result.text == UntrustedLabel.withheldMarker + String(repeating: "z", count: 118))
+        #expect(result.isTruncated)
+    }
+
+    @Test func incompleteScanBlankDependentTermFailsClosed() {
+        let term = "ABCDEFGH\u{13441}IJKLMNOP"
+        let raw = "ABCDEFGHIJKLMNOP" + String(repeating: "z", count: 4_200)
+        let result = UntrustedLabel(raw, maximumBytes: 20, withholding: [term])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
+    @Test func completeScanBlankDependentTermStaysInert() {
+        let term = "ABCDEFGH\u{13441}IJKLMNOP"
+        let raw = "ABCDEFGHIJKLMNOPzzzz"
+        let result = UntrustedLabel(raw, maximumBytes: 20, withholding: [term])
+        #expect(result.text == raw)
+        #expect(!result.isTruncated)
+        #expect(!result.wasSanitized)
+    }
+
+    /// A1's cut to `ABCDEFGHIJKLMNOPzzzz` is hand-traced, not computed by a test oracle.
+    /// Restored round-15 A1h returned `[withheld]zzzzzzzzzz`; the final guard withholds whole.
+    @Test func shadowTermAndRealMatchFailClosedAtA1Cut() {
+        let shadowTerm = "ABCDEFGH\u{13441}IJKLMNOP"
+        let raw = "ABCDEFGHIJKLMNOP" + String(repeating: "z", count: 4_074) + "SECRETzz"
+        let result = UntrustedLabel(raw, maximumBytes: 20, withholding: [shadowTerm, "SECRET"])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
     @Test func a1GraphemeCapDecisionSurvivesNewBlankRemoval() {
         let blank = "\u{1BC9D}"
         let marks = "\u{0316}"
@@ -168,6 +213,94 @@ extension NeutralSnapshotUnicodeTests {
         let result = UntrustedLabel(overRaw, maximumBytes: maximumBytes)
         #expect(result.text == UntrustedLabel.withheldMarker)
         #expect(result.isTruncated)
+    }
+
+    @Test func compactOnlyRedactionFailsClosedAtTheReviewersCut() {
+        let label = UntrustedLabel(
+            "ABC\nDEFGHIJKLMNO XYZ", maximumBytes: 16, withholding: ["ABCDEFGHIJKLMNO"]
+        )
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        #expect(label.isTruncated)
+        #expect(label.wasSanitized)
+    }
+
+    @Test func settlePassCompactOnlyRedactionFailsClosed() {
+        let marks = String(repeating: "\u{0316}", count: 9)
+        let term = "S" + String(repeating: "\u{0316}", count: 7) + "N-12345"
+        let label = UntrustedLabel("S" + marks + "N-1\n2345 XYZ", withholding: [term])
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        #expect(label.wasSanitized)
+    }
+
+    @Test func settlePassExactAndCompactRedactionsReportTruncation() {
+        let marks = String(repeating: "\u{0316}", count: 9)
+        let compactTerm = "S" + String(repeating: "\u{0316}", count: 7) + "N-12345"
+        let exactTerm = "R" + String(repeating: "\u{0316}", count: 7) + "Q"
+        let label = UntrustedLabel(
+            "S" + marks + "N-1\n2345 XYZ R" + marks + "Q tail",
+            withholding: [compactTerm, exactTerm]
+        )
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        #expect(label.isTruncated)
+        #expect(label.wasSanitized)
+    }
+
+    @Test func newBlankAndSeparatorRedactionFailsClosed() {
+        let label = UntrustedLabel("AB\u{13441}CD\nEFGH", withholding: ["CDEFGH"])
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        #expect(label.isTruncated)
+        #expect(label.wasSanitized)
+    }
+
+    @Test func compactAndExactRedactionsFailClosedAtA1Cut() {
+        let label = UntrustedLabel(
+            "ABCDEF ABCDEF ABCDEF LMNOP\nQRSTUVWX tail!!",
+            maximumBytes: 48,
+            withholding: ["ABCDEF", "LMNOPQRSTUVWX"]
+        )
+        #expect(label.text == UntrustedLabel.withheldMarker)
+        #expect(label.isTruncated)
+        #expect(label.wasSanitized)
+    }
+
+    @Test func compactOnlyRedactionUsesA1CutBoundary() {
+        let raw = "ABC\nDEFGHIJKLMNO XYZ"
+        let term = "ABCDEFGHIJKLMNO"
+        let a1DisplayLength = "ABC DEFGHIJKLMNO XYZ".utf8.count
+        let exact = UntrustedLabel(raw, maximumBytes: a1DisplayLength, withholding: [term])
+        let oneShort = UntrustedLabel(raw, maximumBytes: a1DisplayLength - 1, withholding: [term])
+        #expect(exact.text == "[withheld] XYZ")
+        #expect(oneShort.text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func compactOnlyRedactionKeepsPartialMatchWhenA1Fits() {
+        let label = UntrustedLabel(
+            "ABC\nDEFGHIJKLMNO XYZ", withholding: ["ABCDEFGHIJKLMNO"]
+        )
+        #expect(label.text == "[withheld] XYZ")
+    }
+
+    @Test func exactRedactionKeepsA1ByteCutBehavior() {
+        let label = UntrustedLabel(
+            "ABC\nDEFGHIJKLMNO XYZ", maximumBytes: 16, withholding: ["DEFGHIJKLMNO"]
+        )
+        #expect(label.text == "ABC [withheld] X")
+    }
+
+    @Test func compactOnlyRedactionFailsClosedForA1GraphemeCap() {
+        let overCap = "q" + String(repeating: "\u{0316}", count: 8)
+        let label = UntrustedLabel(
+            overCap + " ABC\nDEFGHIJKLMNO XYZ", withholding: ["ABCDEFGHIJKLMNO"]
+        )
+        #expect(label.text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func compactOnlyRedactionIsIdempotent() {
+        let raw = "ABC\nDEFGHIJKLMNO XYZ"
+        let terms = ["ABCDEFGHIJKLMNO"]
+        let first = UntrustedLabel(raw, withholding: terms)
+        let second = UntrustedLabel(first.text, withholding: terms)
+        #expect(second.text.unicodeScalars.elementsEqual(first.text.unicodeScalars))
     }
 }
 

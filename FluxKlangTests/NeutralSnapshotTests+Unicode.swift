@@ -65,7 +65,8 @@ struct NeutralSnapshotUnicodeTests {
         LabelCase("Cafe\u{0301} \u{1100}\u{1161}", ["가나다"], "Caf\u{E9} \u{AC00}", sanitized: false),
         LabelCase("Maß Straße-X ok", ["STRASSE-X"], "Ma\u{DF} \(marker) ok"),
         LabelCase("Gro\u{00DF}-123456 ok", ["s-123456"], "Gro\(marker) ok"),
-        LabelCase("ΣΊΓΜΑ-12 ok", ["σίγμα-12"], "\(marker) ok"), LabelCase("ΟΔΟΣ-1234", ["οδοσ-1234"], marker),
+        LabelCase("ΣΊΓΜΑ-12 ok", ["σίγμα-12"], "\(marker) ok"),
+        LabelCase("ΟΔΟΣ-1234", ["οδοσ-1234"], marker),
         LabelCase("DIYARBAKIR-1", ["dıyarbakır-1"], marker), LabelCase("\u{212A}ELVIN-99", ["kelvin-99"], marker),
         LabelCase("\u{212B}NGSTROM1", ["ångstrom1"], marker), LabelCase("\u{FB01}le-12345", ["file-12345"], marker),
         LabelCase("\u{1FB3}BCDEF", ["ΑΙBCDEF"], marker), LabelCase("abcabcabcab", ["abcabcab"], marker),
@@ -259,13 +260,25 @@ extension NeutralSnapshotUnicodeTests {
         #expect(given.separators == [0, 1])
     }
 
-    /// Equal terms with different separators are all kept, in order, once each.
-    @Test func equalTermsWithDifferentSeparatorsAreAllKept() {
+    @Test func equalTermsWithDifferentSeparatorsPreserveDistinctOrdinals() {
         let raw = ["A B\nC DEF", "A\nB C\nDEF", "A B\nC DEF", "A B C DEF"]
         let terms = UntrustedTextSanitizer.withheldTerms(raw)
         #expect(terms.map(\.separators) == [[], [0, 2], [1]])
-        let label = UntrustedLabel("AB CDEF / A BC DEF / A B C DEF", withholding: raw)
-        #expect(label.text == "\(Self.marker) / \(Self.marker) / \(Self.marker)")
+    }
+
+    @Test func firstSeparatorVariantRedactsOnlyItsCompactSpan() {
+        let label = UntrustedLabel("A BC DEF!", withholding: ["A B\nC DEF"])
+        #expect(label.text == "\(Self.marker)!")
+    }
+
+    @Test func secondSeparatorVariantRedactsOnlyItsCompactSpan() {
+        let label = UntrustedLabel("AB CDEF!", withholding: ["A\nB C\nDEF"])
+        #expect(label.text == "\(Self.marker)!")
+    }
+
+    @Test func exactVariantRedactsOnlyItsMatch() {
+        let label = UntrustedLabel("A B C DEF!", withholding: ["A B C DEF"])
+        #expect(label.text == "\(Self.marker)!")
     }
 
     /// Seeded differential: replacing every separator with a real space gives A1's input
@@ -313,6 +326,58 @@ extension NeutralSnapshotUnicodeTests {
             }
         }
         #expect(stricter >= 100, "\(stricter)")
+    }
+
+    @Test func separatorAndExactTermsStaySubsequenceAcrossByteLimits() {
+        let separators: Set<Unicode.Scalar> = ["\n", "\r", "\t", "\u{0B}", "\u{85}", "\u{2028}", "\u{2029}"]
+        let spaced = { (text: String) in
+            String(String.UnicodeScalarView(text.unicodeScalars.map { separators.contains($0) ? " " : $0 }))
+        }
+        let terms = ["SN-1\n2345", "ABCDEF"]
+        var generator = NeutralSnapshotUnicodeRandom(seed: 0x358_0013)
+        for limit in 8...64 {
+            let padding = Int.random(in: 0...5, using: &generator)
+            let raw = "Rig " + String(repeating: "x", count: padding)
+                + " SN-1\n2345 ABCDEF " + String(repeating: "z", count: 4_200)
+            let label = UntrustedLabel(raw, maximumBytes: limit, withholding: terms)
+            let reference = UntrustedLabel(
+                spaced(raw), maximumBytes: limit, withholding: terms.map(spaced)
+            )
+            #expect(
+                Self.isSubsequence(Self.revealed(label.text), of: Self.revealed(reference.text)),
+                "byte limit \(limit)"
+            )
+        }
+    }
+
+    /// At every byte limit 10...64 a label cut with a blank-dependent shadow term in play shows the whole marker. The
+    /// control, without that term, shows the separator-folded prefix; its revealed characters are a subsequence of the
+    /// folded reference label's.
+    @Test func cutBlankShadowWithRealMatchWithholdsWholeAtEveryByteLimit() {
+        let shadowTerm = "ABCDEFGH\u{13441}IJKLMNOP"
+        let ordinaryTerm = "SECRET"
+        let separators: Set<Unicode.Scalar> = ["\n", "\r", "\t", "\u{0B}", "\u{85}", "\u{2028}", "\u{2029}"]
+        let spaced = { (text: String) in
+            String(String.UnicodeScalarView(text.unicodeScalars.map { separators.contains($0) ? " " : $0 }))
+        }
+        var generator = NeutralSnapshotUnicodeRandom(seed: 0x358_0016)
+        for limit in 10...64 {
+            let noiseCount = Int.random(in: 0...5, using: &generator)
+            let raw = "ABCDEFGHIJKLMNOP\n" + String(repeating: "x", count: noiseCount)
+                + String(repeating: "z", count: 4_073 - noiseCount) + ordinaryTerm + "zz"
+            let shadow = UntrustedLabel(raw, maximumBytes: limit, withholding: [shadowTerm, ordinaryTerm])
+            #expect(shadow.text == Self.marker, "byte limit \(limit)")
+            #expect(shadow.isTruncated && shadow.wasSanitized, "byte limit \(limit)")
+
+            let control = UntrustedLabel(raw, maximumBytes: limit, withholding: [ordinaryTerm])
+            let reference = UntrustedLabel(spaced(raw), maximumBytes: limit, withholding: [ordinaryTerm])
+            #expect(control.text == String(spaced(raw).prefix(limit)), "byte limit \(limit)")
+            #expect(control.isTruncated, "byte limit \(limit)")
+            #expect(
+                Self.isSubsequence(Self.revealed(control.text), of: Self.revealed(reference.text)),
+                "byte limit \(limit)"
+            )
+        }
     }
 
     // MARK: - Blank lookalikes, marker truncation, precheck

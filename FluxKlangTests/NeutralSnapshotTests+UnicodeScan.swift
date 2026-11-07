@@ -256,8 +256,10 @@ extension NeutralSnapshotUnicodeScanTests {
     }
 
     @Test func theUnreliableGuardSkipsJoinersAndSelectorsAndNeedsAMark() {
-        let guarded = ["\u{105C9}", "x\u{16D68}", "\u{1D400}\u{0301}", "\u{1D400}\u{FE0F}\u{0301}", "😀\u{200D}\u{20E3}"]
-        let plain = ["\u{1D400} \u{0301}", "a\u{0301}", "\u{1D400}\u{1D401}", "😀\u{FE0F}", "👍🏽", "\u{0301}\u{1D400}"]
+        let guarded = ["\u{105C9}", "x\u{16D68}", "\u{1D400}\u{0301}",
+                       "\u{1D400}\u{FE0F}\u{0301}", "😀\u{200D}\u{20E3}"]
+        let plain = ["\u{1D400} \u{0301}", "a\u{0301}", "\u{1D400}\u{1D401}",
+                     "😀\u{FE0F}", "👍🏽", "\u{0301}\u{1D400}"]
         for text in guarded {
             #expect(UntrustedTextSanitizer.hasUnreliableNormalization(text.unicodeScalars), "\(text)")
         }
@@ -437,12 +439,55 @@ extension NeutralSnapshotUnicodeScanTests {
         #expect(trimmed.separators == [1])
     }
 
-    @Test func cutNewBlankTermsRemainApplicableToTailWindow() {
+    /// A matched tail does not prove that the A1 byte-cut boundary is preserved.
+    @Test func aMatchedCutTailStillWithholdsTheWholeLabel() {
         let marks = String(repeating: "\u{0316}", count: 4_089)
         let term = "SECRET\u{13441}"
         let label = "x" + marks + "SECRET\u{13441}Y"
-        let expected = "x" + String(repeating: "\u{0316}", count: 7) + UntrustedLabel.withheldMarker
-        #expect(UntrustedLabel(label, withholding: [term]).text == expected)
+        let result = UntrustedLabel(label, withholding: [term])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+    }
+
+    @Test func incompleteMatchedBlankTermTailWithholdsWholeAfterBlankRemoval() {
+        let blank = "\u{13441}"
+        let term = "SECRET" + blank
+        let raw = "x" + blank + String(repeating: "\u{0316}", count: 4_089) + "SECRET" + blank + "Y"
+        let terms = UntrustedTextSanitizer.withheldTerms([term])
+        let limit = UntrustedTextSanitizer.scanLimit(maximumBytes: UntrustedLabel.defaultMaximumBytes, withheld: [term])
+        let filtered = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: limit)
+        let active = UntrustedTextSanitizer.applicableTerms(terms, for: filtered)
+        let matched = UntrustedTextSanitizer.redactMatchFormWithSeparators(
+            of: filtered.text.precomposedStringWithCanonicalMapping,
+            withheld: active,
+            marker: UntrustedLabel.withheldMarker,
+            scanIsComplete: filtered.isComplete,
+            separators: filtered.separators
+        )
+        #expect(!filtered.isComplete && filtered.removedNewBlankBytes > 0)
+        #expect(matched.result.changed)
+        #expect(UntrustedLabel(raw, withholding: [term]).text == UntrustedLabel.withheldMarker)
+    }
+
+    @Test func incompleteScanWithoutBlankDependentTermKeepsBoundedPrefix() {
+        let raw = "x" + String(repeating: "z", count: 4_200)
+        let ordinaryTerm = "SECRET"
+        #expect(UntrustedTextSanitizer.withheldTerm(ordinaryTerm)?.requiresNewBlank == false)
+        let result = UntrustedLabel(raw, withholding: [ordinaryTerm])
+        #expect(result.text == String(raw.prefix(UntrustedLabel.defaultMaximumBytes)))
+        #expect(result.isTruncated)
+    }
+
+    @Test func completeScanBlankDependentTermKeepsLabelUnchanged() {
+        let raw = "Rig Table"
+        let term = "SECRET\u{13441}"
+        let limit = UntrustedTextSanitizer.scanLimit(
+            maximumBytes: UntrustedLabel.defaultMaximumBytes, withheld: [term]
+        )
+        let scan = UntrustedTextSanitizer.filterScalars(raw.unicodeScalars, keeping: limit)
+        #expect(scan.isComplete)
+        #expect(UntrustedTextSanitizer.withheldTerm(term)?.requiresNewBlank == true)
+        #expect(UntrustedLabel(raw, withholding: [term]).text == raw)
     }
 
     @Test func newBlankShadowTermsDoNotRefuseA1Aliases() throws {
