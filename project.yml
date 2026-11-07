@@ -394,6 +394,13 @@ targets:
       - path: FluxKlangTests/PeerControlMessageTests+Golden.swift
       - path: FluxKlangTests/PeerControlMessageTests+Hostile.swift
       - path: FluxKlangTests/PeerControlMessageTests+Roundtrip.swift
+      - path: FluxKlangTests/RemoteDispatchTests.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Dispatch.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Limits.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Mirror.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Order.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Refusals.swift
+      - path: FluxKlangTests/RemoteDispatchTests+Sources.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
