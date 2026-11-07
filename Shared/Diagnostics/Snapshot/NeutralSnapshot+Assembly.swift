@@ -39,17 +39,17 @@ struct NeutralSnapshotAssembly {
 
     init(inputs: NeutralSnapshot.Inputs, limits: NeutralSnapshot.Limits) {
         self.limits = limits
-        let (collected, overflow) = Self.collectWithheld(inputs)
-        let identities = collected.map { (raw: $0, form: RefusedIdentities.identityForm($0)) }
+        let (prepared, overflow) = Self.collectPreparedWithheld(inputs)
+        let identities = prepared.map { (raw: $0.raw, form: RefusedIdentities.identityForm($0.scan)) }
         withheldOverflow = overflow + identities.count { $0.form == .unknown }
         let known = identities.compactMap { identity in identity.form.scalars.map { (raw: identity.raw, form: $0) } }
             .filter { !$0.form.isEmpty }
         withheld = known.map(\.raw).sorted()
         withheldForms = Set(known.map(\.form))
-        redacted = UntrustedTextSanitizer.withheldTerms(collected)
+        redacted = UntrustedTextSanitizer.withheldTerms(prepared.map(\.scan))
     }
 
-    /// Hardware identifiers first, sorted by their prepared form and then their
+    /// Hardware identifiers first, sorted by their legacy prepared form and then their
     /// raw form in UTF-8 byte order, then each route's `withheldFields` in route-ID
     /// order, with routes sharing an ID ordered by those fields in UTF-8 byte order,
     /// until `maximumWithheldCount` distinct strings are held.
@@ -57,12 +57,32 @@ struct NeutralSnapshotAssembly {
     /// returned as `overflow` and reported in `Truncation.withheldOverflow`, together
     /// with the kept strings whose identity form is unknown (see `withheldOverflow`).
     static func collectWithheld(_ inputs: NeutralSnapshot.Inputs) -> (strings: [String], overflow: Int) {
+        let (prepared, overflow) = collectPreparedWithheld(inputs)
+        return (prepared.map(\.raw), overflow)
+    }
+
+    private struct PreparedWithheld {
+        let raw: String
+        let scan: UntrustedTextSanitizer.Scan
+    }
+
+    /// Collects each value with one trimmed scan. Hardware scans provide A1 sort keys;
+    /// the selected hardened scans feed identity and withheld-term construction.
+    private static func collectPreparedWithheld(
+        _ inputs: NeutralSnapshot.Inputs
+    ) -> (prepared: [PreparedWithheld], overflow: Int) {
         let hardware = inputs.hardwareIdentifiers
-            .map { (key: UntrustedTextSanitizer.withheldTerm($0)?.text ?? "", raw: $0) }
+            .map { raw in
+                let scan = UntrustedTextSanitizer.filterScalars(
+                    raw.unicodeScalars, keeping: RefusedIdentities.maximumIdentityScalars, trimmed: true
+                )
+                let legacyKey = UntrustedTextSanitizer.legacyWithheldTerm(scan)?.text ?? ""
+                return (legacyKey: legacyKey, item: PreparedWithheld(raw: raw, scan: scan))
+            }
             .sorted { lhs, rhs in
-                lhs.key.utf8.elementsEqual(rhs.key.utf8)
-                    ? lhs.raw.utf8.lexicographicallyPrecedes(rhs.raw.utf8)
-                    : lhs.key.utf8.lexicographicallyPrecedes(rhs.key.utf8)
+                lhs.legacyKey.utf8.elementsEqual(rhs.legacyKey.utf8)
+                    ? lhs.item.raw.utf8.lexicographicallyPrecedes(rhs.item.raw.utf8)
+                    : lhs.legacyKey.utf8.lexicographicallyPrecedes(rhs.legacyKey.utf8)
             }
         let routes = inputs.routes.map { (id: $0.route.id, fields: withheldFields(of: $0.route)) }
             .sorted { lhs, rhs in
@@ -71,14 +91,21 @@ struct NeutralSnapshotAssembly {
                     : lhs.fields.lexicographicallyPrecedes(rhs.fields) { $0.utf8.lexicographicallyPrecedes($1.utf8) }
             }
         var seen = Set<String>()
-        var collected: [String] = []
+        var collected: [PreparedWithheld] = []
         var overflow = 0
-        let add = { (candidate: String) in
+        let add = { (candidate: String, scan: UntrustedTextSanitizer.Scan?) in
             guard seen.insert(candidate).inserted else { return }
-            if collected.count < maximumWithheldCount { collected.append(candidate) } else { overflow += 1 }
+            if collected.count < maximumWithheldCount {
+                let prepared = scan ?? UntrustedTextSanitizer.filterScalars(
+                    candidate.unicodeScalars, keeping: RefusedIdentities.maximumIdentityScalars, trimmed: true
+                )
+                collected.append(PreparedWithheld(raw: candidate, scan: prepared))
+            } else {
+                overflow += 1
+            }
         }
-        hardware.forEach { add($0.raw) }
-        routes.forEach { $0.fields.forEach(add) }
+        hardware.forEach { add($0.item.raw, $0.item.scan) }
+        routes.forEach { $0.fields.forEach { add($0, nil) } }
         return (collected, overflow)
     }
 

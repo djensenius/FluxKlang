@@ -9,22 +9,27 @@
 //
 
 /// One accepted capture: the UMP words verbatim, host ticks, the frame derived through the current anchor, musical
-/// ticks exactly when a transport was anchored, and the §9.1 protocol fields. Host ticks are transient (M13).
+/// ticks exactly when a transport was anchored, the frame those ticks map back to, and the §9.1 protocol fields.
+/// Host ticks are transient (M13).
 struct MIDICaptureRecord: Equatable, Sendable {
     let stream: StreamID
     let packet: UMPPacket
     let host: HostStamp
     let sample: SampleStamp
     let musicalTicks: Int64?
+    /// The frame `musicalTicks` maps back to through the capture-time musical map; nil when there are no ticks or
+    /// the map-back overflowed Int64. A frame other than `sample.frame` means the ticks quantized the timing.
+    let musicalRoundTripFrame: Int64?
     let protocolStamp: MIDIProtocolStamp
 
     init(_ admission: MIDICaptureLog.Admission, stream: StreamID, packet: UMPPacket, host: HostStamp,
-         sample: SampleStamp, musicalTicks: Int64?, protocolStamp: MIDIProtocolStamp) {
+         sample: SampleStamp, musicalTicks: Int64?, musicalRoundTripFrame: Int64?, protocolStamp: MIDIProtocolStamp) {
         self.stream = stream
         self.packet = packet
         self.host = host
         self.sample = sample
         self.musicalTicks = musicalTicks
+        self.musicalRoundTripFrame = musicalRoundTripFrame
         self.protocolStamp = protocolStamp
     }
 }
