@@ -42,9 +42,11 @@ enum KeyValueAdmission {
     }
 
     /// Checks run stage by stage over all writes in key-byte order, so an earlier stage always wins and the
-    /// reported key is the first in byte order: (a) negative size, (b) key not allowlisted, (c) class mismatch,
-    /// (d) class not eligible, (e) duplicate key, (f) value above the cap; then the resident entries; then
-    /// (g) too many distinct keys and (h) too many bytes, both counting a rewritten resident key once.
+    /// reported key is the first in byte order: (a) negative size, (b) key not allowlisted, then, for the same
+    /// key, longer than `limits.maximumKeyBytes` (`.invalidKey(.tooLong)`), (c) class mismatch,
+    /// (d) class not eligible, (e) duplicate key, (f) value above the cap; then the resident entries (a resident
+    /// key longer than the limit is `.residentInvalid`); then (g) too many distinct keys and (h) too many bytes,
+    /// both counting a rewritten resident key once.
     static func evaluate(
         _ writes: [KeyValueRequest],
         against allowlist: KeyValueAllowlist,
@@ -73,11 +75,7 @@ enum KeyValueAdmission {
         limits: KeyValueLimits
     ) throws(KeyValueRefusal) {
         if let negative = ordered.first(where: { $0.valueBytes < 0 }) { throw .negativeSize(negative.key) }
-        var matched: [KeyValueAllowlistEntry] = []
-        for request in ordered {
-            guard let entry = allowlist.entry(for: request.key) else { throw .keyNotAllowlisted(request.key) }
-            matched.append(entry)
-        }
+        let matched = try matchEntries(ordered, allowlist: allowlist, limits: limits)
         for (request, entry) in zip(ordered, matched) where request.storageClass != entry.storageClass {
             throw .classMismatch(key: request.key, expected: entry.storageClass, got: request.storageClass)
         }
@@ -91,9 +89,27 @@ enum KeyValueAdmission {
         }
     }
 
-    /// Returns the resident entries no write replaces, after validating them by the rules (a) to (d) and (f). A
-    /// replaced resident is judged through the write that replaces it, so a write can shrink an over-limit value.
-    /// Every resident row whose key a write names is dropped, duplicate rows included and unvalidated: the plan keeps
+    /// Stage (b), per write in key order: the allowlist entry of the key, or `.keyNotAllowlisted`, then the key
+    /// length against the evaluation limit, or `.invalidKey(.tooLong)` (the allowlist `init` throws the same).
+    private static func matchEntries(
+        _ ordered: [KeyValueRequest],
+        allowlist: KeyValueAllowlist,
+        limits: KeyValueLimits
+    ) throws(KeyValueRefusal) -> [KeyValueAllowlistEntry] {
+        var matched: [KeyValueAllowlistEntry] = []
+        for request in ordered {
+            guard let entry = allowlist.entry(for: request.key) else { throw .keyNotAllowlisted(request.key) }
+            let keyBytes = request.key.rawValue.utf8.count
+            guard keyBytes <= limits.maximumKeyBytes else { throw .invalidKey(.tooLong(bytes: keyBytes)) }
+            matched.append(entry)
+        }
+        return matched
+    }
+
+    /// Returns the resident entries no write replaces, after validating them by the rules (a) to (d) and (f)
+    /// and the key length of stage (b), all as `.residentInvalid`. A replaced resident is judged through the write
+    /// that replaces it, so a write can shrink an over-limit value. Every resident row whose key a write names is
+    /// dropped, duplicate rows included and unvalidated: the plan keeps
     /// only the write's row for that key, which checks (a) to (f) have already validated.
     private static func residentKept(
         _ resident: [KeyValueRequest],
@@ -127,6 +143,7 @@ enum KeyValueAdmission {
         limits: KeyValueLimits
     ) -> Bool {
         guard request.valueBytes >= 0, let entry = allowlist.entry(for: request.key),
+              request.key.rawValue.utf8.count <= limits.maximumKeyBytes,
               entry.storageClass == request.storageClass,
               StoragePolicy.isKeyValueEligible(request.storageClass) else { return false }
         return request.valueBytes <= min(entry.maxValueBytes, limits.maximumValueBytes)
