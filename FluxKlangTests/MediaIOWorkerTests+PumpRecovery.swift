@@ -101,21 +101,21 @@ extension MediaIOWorkerTests {
     @Test
     func io2ResumeIsRefusedUnlessFailedAndUnlessTheGenerationIsNewer() throws {
         var idle = try Self.pump()
-        Self.expectRefusal(&idle, .notFailed) { try $0.resume(sourceGeneration: 2) }
-        Self.expectRefusal(&idle, .notFailed) { try $0.resume(sourceGeneration: 0) }
+        Self.expectRefusal(&idle, .notFailed) { try $0.resume(sourceGeneration: 2, position: 0) }
+        Self.expectRefusal(&idle, .notFailed) { try $0.resume(sourceGeneration: 0, position: 0) }
         var failed = try Self.pump()
         _ = try Self.failNext(&failed, .unavailable)
         Self.expectRefusal(&failed, .generationNotNewer(current: 1, proposed: 1)) {
-            try $0.resume(sourceGeneration: 1)
+            try $0.resume(sourceGeneration: 1, position: 0)
         }
         Self.expectRefusal(&failed, .generationNotNewer(current: 1, proposed: 0)) {
-            try $0.resume(sourceGeneration: 0)
+            try $0.resume(sourceGeneration: 0, position: 0)
         }
-        try failed.resume(sourceGeneration: 2)
+        try failed.resume(sourceGeneration: 2, position: 0)
         #expect(failed.state == .idle && failed.sourceGeneration == 2)
         var top = try Self.pump()
         _ = try Self.failNext(&top, .unavailable)
-        try top.resume(sourceGeneration: UInt64.max)
+        try top.resume(sourceGeneration: UInt64.max, position: 0)
         #expect(top.sourceGeneration == UInt64.max)
     }
 
@@ -123,7 +123,7 @@ extension MediaIOWorkerTests {
     func io2ResumeReportsTheRestoredSourceOnTheFirstDeliveryOnly() throws {
         var pump = try Self.pump()
         _ = try Self.failNext(&pump, .unavailable)
-        try pump.resume(sourceGeneration: 2)
+        try pump.resume(sourceGeneration: 2, position: 0)
         let (ticket, first) = try Self.fill(&pump, frames: 64)
         #expect(ticket.sourceGeneration == 2 && Self.delivery(first)?.restoredSource == true)
         #expect(Self.delivery(first)?.block.sourceGeneration == 2)
@@ -136,7 +136,7 @@ extension MediaIOWorkerTests {
         var pump = try Self.pump()
         for _ in 1...3 { _ = try Self.failNext(&pump, .ioFailure) }
         #expect(try Self.failNext(&pump, .ioFailure) == .sourceLost(.ioFailure))
-        try pump.resume(sourceGeneration: 2)
+        try pump.resume(sourceGeneration: 2, position: 0)
         #expect(try Self.failNext(&pump, .ioFailure) == .retryScheduled(attempt: 1))
         let (_, outcome) = try Self.fill(&pump, frames: 64)
         #expect(Self.delivery(outcome)?.restoredSource == true)
@@ -149,7 +149,7 @@ extension MediaIOWorkerTests {
         try pump.locate(to: 0)
         let second = try Self.issue(&pump)
         _ = try pump.fail(second.id, .unavailable)
-        try pump.resume(sourceGeneration: 2)
+        try pump.resume(sourceGeneration: 2, position: 0)
         #expect(try pump.receive(first.id, Self.readyPoll(1)) == .discardedStale)
         var overwritten = try Self.pump()
         let older = try Self.issue(&overwritten)
@@ -165,7 +165,7 @@ extension MediaIOWorkerTests {
         func run() throws -> (outcomes: [PrefetchFillOutcome], pump: PrefetchFillPump) {
             var pump = try Self.pump(source: 150)
             var reader = ScriptedMediaReader(script: try MediaReadScript(steps: [
-                .pending, .ready(frames: 30), .fail(.interrupted), .ready(frames: 64), .pending, .readyAtEnd(frames: 20)
+                .pending, .ready(frames: 30), .fail(.interrupted), .ready(frames: 34), .pending, .readyAtEnd(frames: 20)
             ]))
             let lease = try Self.lease()
             var outcomes: [PrefetchFillOutcome] = []
@@ -187,8 +187,9 @@ extension MediaIOWorkerTests {
         #expect(first.outcomes == second.outcomes && first.pump == second.pump)
         #expect(first.outcomes.count == 6 && first.pump.state == .ended)
         #expect(first.outcomes.first == .stillPending(polls: 1))
+        #expect(first.outcomes.dropFirst().first == .accumulated(frames: 30))
         #expect(first.pump.counters.shortReads == 1 && first.pump.counters.earlyEnds == 1)
-        #expect(first.pump.counters.retriesScheduled == 1 && first.pump.counters.framesDelivered == 114)
+        #expect(first.pump.counters.retriesScheduled == 1 && first.pump.counters.framesDelivered == 84)
     }
 
     @Test
@@ -253,7 +254,7 @@ extension MediaIOWorkerTests {
                 try result.pump.locate(to: frame)
                 position = frame
             } else if case .failed = result.pump.state {
-                try result.pump.resume(sourceGeneration: result.pump.sourceGeneration + 1)
+                try result.pump.resume(sourceGeneration: result.pump.sourceGeneration + 1, position: position)
             }
             result.log.append(entry)
             let pump = result.pump

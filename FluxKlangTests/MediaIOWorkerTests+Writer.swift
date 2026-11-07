@@ -137,4 +137,45 @@ extension MediaIOWorkerTests {
         for _ in 0..<256 { _ = try writer.write(request) }
         #expect(writer.acceptedFrames == 256 * 65_536)
     }
+
+    @Test
+    func io2WriterWriteAfterFinishBeforeAnyWriteIsRefusedAndLeavesTheScriptUntouched() throws {
+        var writer = try Self.writer([.accept(frames: 8), .pending])
+        _ = try writer.finish()
+        let before = writer
+        let request = try Self.writeRequest()
+        #expect(Self.refusal(MediaWriteFault.self) { try writer.write(request) } == .unavailable)
+        #expect(writer.acceptedFrames == 0 && writer.remainingSteps == 2 && writer.isFinished)
+        #expect(writer.scriptViolations == 1 && writer.callCount == 1 && writer.requests == [request])
+        var expected = before
+        #expect(Self.refusal(MediaWriteFault.self) { try expected.write(request) } == .unavailable)
+        #expect(writer == expected && writer != before)
+    }
+
+    @Test
+    func io2WriterEveryWriteAfterFinishIsCountedOneByOne() throws {
+        var writer = try Self.writer([.accept(frames: 4), .accept(frames: 4), .accept(frames: 4)])
+        _ = try writer.write(try Self.writeRequest())
+        _ = try writer.finish()
+        let request = try Self.writeRequest()
+        for expected in 1...3 {
+            #expect(Self.refusal(MediaWriteFault.self) { try writer.write(request) } == .unavailable)
+            #expect(writer.scriptViolations == UInt64(expected) && writer.acceptedFrames == 4)
+            #expect(writer.remainingSteps == 2 && writer.callCount == UInt64(expected + 1))
+        }
+    }
+
+    @Test
+    func io2WriterWriteAfterAFailedFinishIsRefusedToo() throws {
+        var failing = try Self.writer([.accept(frames: 2)], finish: .fail(.diskFull))
+        #expect(Self.refusal(MediaWriteFault.self) { try failing.finish() } == .diskFull)
+        let request = try Self.writeRequest()
+        #expect(Self.refusal(MediaWriteFault.self) { try failing.write(request) } == .unavailable)
+        #expect(failing.acceptedFrames == 0 && failing.remainingSteps == 1 && failing.scriptViolations == 1)
+        var over = try Self.writer([.accept(frames: 2), .pending], finish: .durableShortBy(frames: 3))
+        _ = try over.write(request)
+        #expect(Self.refusal(MediaWriteFault.self) { try over.finish() } == .ioFailure)
+        #expect(Self.refusal(MediaWriteFault.self) { try over.write(request) } == .unavailable)
+        #expect(over.acceptedFrames == 2 && over.remainingSteps == 1 && over.scriptViolations == 2)
+    }
 }

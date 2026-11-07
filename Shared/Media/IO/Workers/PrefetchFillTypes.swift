@@ -48,9 +48,20 @@ struct PrefetchFillDelivery: Equatable, Sendable {
     let reachedEnd: Bool
 }
 
+/// A block being assembled from nonterminal short reads. Invariant: `startFrame + frames` is the pump's `nextFrame`
+/// and `frames` is in `1..<plan.blockFrames`. The adapter keeps writing the next ticket's frames into the SAME leased
+/// block right after these `frames`; the pump never publishes a block that is neither full nor terminal.
+struct PrefetchFillPartialBlock: Equatable, Sendable {
+    let startFrame: Int64
+    let frames: Int
+}
+
 /// What a completion did to the pump. Retries, stale discards and slow reads are counted, not discontinuities.
 enum PrefetchFillOutcome: Equatable, Sendable {
     case delivered(PrefetchFillDelivery)
+    /// A nonterminal short read was ADDED to the block being assembled; nothing is published yet. `frames` is the
+    /// total gathered so far (`1..<plan.blockFrames`). The next ticket continues exactly where the read stopped.
+    case accumulated(frames: Int)
     case endedWithoutData
     /// The read is still pending after `polls` consecutive pending polls (1...8).
     case stillPending(polls: Int)

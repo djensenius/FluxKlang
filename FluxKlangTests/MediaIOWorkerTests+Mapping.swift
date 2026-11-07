@@ -50,6 +50,7 @@ extension MediaIOWorkerTests {
             (.delivered(restored), "sourceRestored"),
             (.delivered(plain), "nil"),
             (.endedWithoutData, "nil"),
+            (.accumulated(frames: 20), "nil"),
             (.stillPending(polls: 3), "nil"),
             (.retryScheduled(attempt: 2), "nil"),
             (.discardedStale, "nil")

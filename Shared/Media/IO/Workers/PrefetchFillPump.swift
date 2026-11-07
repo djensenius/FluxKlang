@@ -55,6 +55,8 @@ struct PrefetchFillPump: Equatable, Sendable {
     private(set) var sourceGeneration: UInt64
     private(set) var readGeneration: UInt64
     private(set) var inFlight: PrefetchFillTicket?
+    /// The block being assembled from nonterminal short reads, or nil. Dropped by `locate` and `resume`.
+    private(set) var partialBlock: PrefetchFillPartialBlock?
     private(set) var counters: PrefetchFillCounters
 
     private var consecutiveFailures: Int
@@ -72,6 +74,7 @@ struct PrefetchFillPump: Equatable, Sendable {
         state = .idle
         nextFrame = position
         inFlight = nil
+        partialBlock = nil
         counters = PrefetchFillCounters()
         consecutiveFailures = 0
         pendingPolls = 0
@@ -102,10 +105,16 @@ struct PrefetchFillPump: Equatable, Sendable {
 
     /// Decides the next read. Refusals first (position negative, beyond the source, `residentBlocks` outside
     /// `0...plan.blockCount`), then the first wait reason that holds: `failed`, `inFlight`, `ended`, `poolFull`
-    /// (`residentBlocks >= blockCount`), `satisfied` (the head is covered: `start - position >= headFrames`).
+    /// (`residentBlocks >= blockCount`, skipped while a partial block exists: its block is already leased),
+    /// `satisfied` (the head is covered by PUBLISHED frames: `published - position >= headFrames`, where `published`
+    /// is the start of the partial block when one exists, else `start`; frames gathered in a partial block are not
+    /// resident yet and never count).
     /// Otherwise it issues one ticket. `start` is `max(nextFrame, position)`: a consumer that ran ahead skips
-    /// source frames, counted in `framesSkipped` (the playhead's silence-and-skip rule). State `ended` also waits
-    /// with `.ended`, so a source that ended early is never re-read until `locate`.
+    /// source frames, counted in `framesSkipped` (the playhead's silence-and-skip rule). While a partial block
+    /// exists `start` is `nextFrame` (the block stays contiguous). If the consumer has meanwhile passed the partial
+    /// block, filling still completes it and the playhead discards it (`discardedPassed`): wasteful but intended,
+    /// because the next block then starts at the consumer. State `ended` also waits with `.ended`, so a source that
+    /// ended early is never re-read until `locate`.
     mutating func nextRequest(position: Int64, residentBlocks: Int) throws(PrefetchFillRefusal) -> PrefetchFillStep {
         try Self.checkPosition(position, sourceFrames: sourceFrames)
         guard (0...plan.blockCount).contains(residentBlocks) else {
@@ -121,20 +130,24 @@ struct PrefetchFillPump: Equatable, Sendable {
                                  residentBlocks: Int) throws(PrefetchFillRefusal) -> PrefetchFillStep {
         if case .failed = state { return .wait(.failed) }
         if inFlight != nil { return .wait(.inFlight) }
-        let start = max(nextFrame, position)
+        let start = partialBlock == nil ? max(nextFrame, position) : nextFrame
         if state == .ended || start >= sourceFrames {
             state = .ended
             return .wait(.ended)
         }
-        if residentBlocks >= plan.blockCount { return .wait(.poolFull) }
-        if start - position >= Int64(plan.headFrames) { return .wait(.satisfied) }
+        if partialBlock == nil, residentBlocks >= plan.blockCount { return .wait(.poolFull) }
+        let published = partialBlock?.startFrame ?? start
+        if published - position >= Int64(plan.headFrames) { return .wait(.satisfied) }
         return .request(try issue(start: start))
     }
 
     /// `lastTicketID == UInt64.max` is refused, but no public sequence reaches it (2^64 tickets).
+    /// The ticket covers the rest of the block being assembled (`blockFrames` minus the partial frames), clipped to
+    /// the end of the source.
     private mutating func issue(start: Int64) throws(PrefetchFillRefusal) -> PrefetchFillTicket {
         guard lastTicketID < UInt64.max else { throw .ticketCounterOverflow }
-        let frames = Int(min(Int64(plan.blockFrames), sourceFrames - start))
+        let room = Int64(plan.blockFrames - (partialBlock?.frames ?? 0))
+        let frames = Int(min(room, sourceFrames - start))
         let ticket = PrefetchFillTicket(id: lastTicketID + 1, startFrame: start, frames: frames,
                                         sourceGeneration: sourceGeneration, readGeneration: readGeneration)
         counters.noteIssued(skipped: start - nextFrame)
@@ -220,29 +233,60 @@ struct PrefetchFillPump: Equatable, Sendable {
         inFlight = nil
     }
 
+    /// A read with data (or a zero-frame end that closes a partial block). A read that fills its ticket or reaches
+    /// the end publishes the block, which includes every frame gathered before it; any other short read is added
+    /// to the partial block and nothing is published, so the pool cannot fill with blocks that cover too little.
     private mutating func deliver(_ ticket: PrefetchFillTicket,
                                   _ result: MediaReadResult) throws(PrefetchFillRefusal) -> PrefetchFillOutcome {
-        guard result.frames >= 1 else { return emptyRead(ticket, reachedEnd: result.reachedEnd) }
+        let gathered = partialBlock?.frames ?? 0
+        guard result.frames >= 1 || (result.reachedEnd && gathered >= 1) else {
+            return emptyRead(ticket, reachedEnd: result.reachedEnd)
+        }
+        let whole = PrefetchFillPartialBlock(startFrame: partialBlock?.startFrame ?? ticket.startFrame,
+                                             frames: gathered + result.frames)
+        guard result.frames == ticket.frames || result.reachedEnd else {
+            return accumulate(whole, end: ticket.startFrame + Int64(result.frames))
+        }
+        return try publish(whole, ticket: ticket, reachedEnd: result.reachedEnd)
+    }
+
+    /// Builds the block `whole` (its start and total frames), moves the cursor to its end and resets the runs.
+    private mutating func publish(_ whole: PrefetchFillPartialBlock, ticket: PrefetchFillTicket,
+                                  reachedEnd flagged: Bool) throws(PrefetchFillRefusal) -> PrefetchFillOutcome {
         let block: PrefetchBlock
         do {
-            block = try PrefetchBlock.make(startFrame: ticket.startFrame, frames: result.frames,
+            block = try PrefetchBlock.make(startFrame: whole.startFrame, frames: whole.frames,
                                            sourceGeneration: ticket.sourceGeneration,
                                            readGeneration: ticket.readGeneration)
         } catch {
             throw .blockRefused(error)
         }
+        partialBlock = nil
         nextFrame = block.endFrame
         consecutiveFailures = 0
         pendingPolls = 0
         inFlight = nil
-        counters.noteDelivery(frames: result.frames)
-        if result.frames < ticket.frames && !result.reachedEnd { counters.noteShortRead() }
-        if result.reachedEnd && nextFrame < sourceFrames { counters.noteEarlyEnd() }
-        let reachedEnd = result.reachedEnd || nextFrame >= sourceFrames
+        counters.noteDelivery(frames: whole.frames)
+        if flagged && nextFrame < sourceFrames { counters.noteEarlyEnd() }
+        let reachedEnd = flagged || nextFrame >= sourceFrames
         state = reachedEnd ? .ended : .idle
         let delivery = PrefetchFillDelivery(block: block, restoredSource: restoring, reachedEnd: reachedEnd)
         restoring = false
         return .delivered(delivery)
+    }
+
+    /// A nonterminal short read: counted, kept in the partial block, the cursor moves to `end`, and the failure and
+    /// poll runs reset (the read made progress). Not a delivery: `blocksDelivered` and `framesDelivered` count
+    /// published frames only.
+    private mutating func accumulate(_ partial: PrefetchFillPartialBlock, end: Int64) -> PrefetchFillOutcome {
+        partialBlock = partial
+        nextFrame = end
+        consecutiveFailures = 0
+        pendingPolls = 0
+        inFlight = nil
+        state = .idle
+        counters.noteShortRead()
+        return .accumulated(frames: partial.frames)
     }
 
     /// A zero-frame read: at the end it is `.endedWithoutData` (an early end, counted); otherwise a counted short
@@ -281,29 +325,37 @@ struct PrefetchFillPump: Equatable, Sendable {
 
     /// Moves the read cursor to `frame`. Order: negative frame, frame above the source, read generation at
     /// `UInt64.max`. Effects: the read generation increases by one, any ticket in flight is abandoned (its late
-    /// completion is `.discardedStale`), the failure and pending runs reset, and the state becomes `.idle` unless
-    /// it is `.failed` (only `resume` leaves that). Nothing is thrown after validation, so a refusal changes nothing.
+    /// completion is `.discardedStale`), the partial block is dropped (the playhead drops its blocks on a locate
+    /// too), the failure and pending runs reset, and the state becomes `.idle` unless it is `.failed` (only
+    /// `resume` leaves that). Nothing is thrown after validation, so a refusal changes nothing.
     mutating func locate(to frame: Int64) throws(PrefetchFillRefusal) {
         try Self.checkPosition(frame, sourceFrames: sourceFrames)
         guard readGeneration < UInt64.max else { throw .generationOverflow }
         readGeneration += 1
         if let ticket = inFlight { abandon(ticket) }
         nextFrame = frame
+        partialBlock = nil
         consecutiveFailures = 0
         pendingPolls = 0
         if case .failed = state { return }
         state = .idle
     }
 
-    /// Leaves `.failed` after the source came back under a strictly newer generation. Order: not failed, then
-    /// generation not newer. The next delivery reports `restoredSource` once. An earlier abandoned ticket stays
-    /// remembered. Nothing is thrown after validation, so a refusal changes nothing.
-    mutating func resume(sourceGeneration proposed: UInt64) throws(PrefetchFillRefusal) {
+    /// Leaves `.failed` after the source came back under a strictly newer generation, and restarts filling at the
+    /// consumer's CURRENT `position`, because `PrefetchPlayhead.adoptSourceGeneration` discards every resident block:
+    /// the cursor moves to `position` (possibly backwards) and the partial block is dropped. Order: not failed, then
+    /// generation not newer, then `position` negative, then `position` above the source (`position == sourceFrames`
+    /// is accepted). The next delivery reports `restoredSource` once. An earlier abandoned ticket stays remembered.
+    /// Nothing is thrown after validation, so a refusal changes nothing.
+    mutating func resume(sourceGeneration proposed: UInt64, position: Int64) throws(PrefetchFillRefusal) {
         guard case .failed = state else { throw .notFailed }
         guard proposed > sourceGeneration else {
             throw .generationNotNewer(current: sourceGeneration, proposed: proposed)
         }
+        try Self.checkPosition(position, sourceFrames: sourceFrames)
         sourceGeneration = proposed
+        nextFrame = position
+        partialBlock = nil
         state = .idle
         consecutiveFailures = 0
         pendingPolls = 0

@@ -42,12 +42,12 @@ enum MediaIOFaultMapping {
     }
 
     /// Only a latched source loss and the first delivery after `resume` are discontinuities. Retries, stale
-    /// discards, slow reads and early ends are counted by the pump, not reported.
+    /// discards, accumulated short reads, slow reads and early ends are counted by the pump, not reported.
     static func discontinuityKind(for outcome: PrefetchFillOutcome) -> RuntimeDiscontinuityKind? {
         switch outcome {
         case .sourceLost: .sourceLost
         case .delivered(let delivery): delivery.restoredSource ? .sourceRestored : nil
-        case .endedWithoutData, .stillPending, .retryScheduled, .discardedStale: nil
+        case .endedWithoutData, .accumulated, .stillPending, .retryScheduled, .discardedStale: nil
         }
     }
 

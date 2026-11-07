@@ -11,8 +11,10 @@
 ///
 /// Each `write` consumes exactly ONE step in order; `finish` consumes the script's finish step once. No clamping
 /// and no validation of the scripted frames against the request: an `accept(frames: a)` with `a` above the request
-/// is returned as-is, but `acceptedFrames` counts only what was scripted. A call with no step left, or a second
-/// `finish`, throws `.unavailable` and adds one to `scriptViolations`. A `durableShortBy(n)` with `n` above
+/// is returned as-is, but `acceptedFrames` counts only what was scripted. A call with no step left, a second
+/// `finish`, or a `write` after the finish step was consumed (even a failed finish) throws `.unavailable` and adds
+/// one to `scriptViolations`; such a write consumes no step, so `acceptedFrames` and `remainingSteps` stay as they
+/// were. A `durableShortBy(n)` with `n` above
 /// `acceptedFrames`, or an accept that would overflow `Int64`, throws `.ioFailure` and adds one violation.
 /// A throwing call changes only `callCount`, `requests`, `scriptViolations` and the consumed step.
 /// `finish` is counted neither in `callCount` nor in `requests`; `finish` before any write is legal.
@@ -53,6 +55,7 @@ struct ScriptedMediaWriter: MediaWriterWorker, Equatable {
         if requests.count < MediaIOLimits.maximumRecordedRequests {
             requests.append(request)
         }
+        guard !finishConsumed else { throw violation(.unavailable) }
         guard cursor < steps.count else { throw violation(.unavailable) }
         let step = steps[cursor]
         cursor += 1

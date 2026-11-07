@@ -28,13 +28,15 @@ extension MediaIOWorkerTests {
     }
 
     @Test
-    func io2PumpShortReadIsDeliveredAndTheNextTicketContinuesAfterIt() throws {
+    func io2PumpShortReadIsAccumulatedAndTheNextTicketContinuesAfterIt() throws {
         var pump = try Self.pump()
         let (_, outcome) = try Self.fill(&pump, frames: 20)
-        #expect(Self.delivery(outcome)?.block.frames == 20 && Self.delivery(outcome)?.reachedEnd == false)
-        #expect(pump.counters.shortReads == 1 && pump.counters.framesDelivered == 20 && pump.nextFrame == 20)
+        #expect(outcome == .accumulated(frames: 20) && Self.delivery(outcome) == nil)
+        #expect(pump.counters.shortReads == 1 && pump.counters.framesDelivered == 0 && pump.nextFrame == 20)
+        #expect(pump.counters.blocksDelivered == 0 && pump.partialBlock == PrefetchFillPartialBlock(
+            startFrame: 0, frames: 20))
         let next = try Self.issue(&pump)
-        #expect(next.startFrame == 20 && next.frames == 64 && next.id == 2)
+        #expect(next.startFrame == 20 && next.frames == 44 && next.id == 2)
     }
 
     @Test
@@ -218,5 +220,108 @@ extension MediaIOWorkerTests {
         #expect(try pump.receive(old.id, Self.ready(64)) == .discardedStale)
         #expect(pump.inFlight == live && pump.counters.blocksDelivered == 0 && pump.nextFrame == 64)
         #expect(Self.delivery(try pump.receive(live.id, Self.ready(64)))?.block.startFrame == 64)
+    }
+
+    @Test
+    func io2PumpShortReadsThatFillTheBlockExactlyPublishItOnce() throws {
+        var pump = try Self.pump()
+        _ = try Self.fill(&pump, frames: 20)
+        let (ticket, outcome) = try Self.fill(&pump, frames: 44)
+        #expect(ticket.startFrame == 20 && ticket.frames == 44)
+        let delivery = try #require(Self.delivery(outcome))
+        #expect(delivery.block.startFrame == 0 && delivery.block.frames == 64 && !delivery.reachedEnd)
+        #expect(pump.partialBlock == nil && pump.nextFrame == 64 && pump.state == .idle)
+        #expect(pump.counters.shortReads == 1 && pump.counters.blocksDelivered == 1)
+        #expect(pump.counters.framesDelivered == 64)
+        let next = try Self.issue(&pump)
+        #expect(next.startFrame == 64 && next.frames == 64)
+    }
+
+    @Test
+    func io2PumpTerminalShortReadPublishesThePartialBlock() throws {
+        var pump = try Self.pump()
+        #expect(try Self.fill(&pump, frames: 16).outcome == .accumulated(frames: 16))
+        let (ticket, outcome) = try Self.fill(&pump, frames: 10, reachedEnd: true)
+        #expect(ticket.startFrame == 16 && ticket.frames == 48)
+        let delivery = try #require(Self.delivery(outcome))
+        #expect(delivery.block.startFrame == 0 && delivery.block.frames == 26 && delivery.reachedEnd)
+        #expect(pump.partialBlock == nil && pump.nextFrame == 26 && pump.state == .ended)
+        #expect(pump.counters.shortReads == 1 && pump.counters.earlyEnds == 1)
+        #expect(pump.counters.blocksDelivered == 1 && pump.counters.framesDelivered == 26)
+    }
+
+    @Test
+    func io2PumpEmptyTerminalReadPublishesTheFramesAlreadyGathered() throws {
+        var pump = try Self.pump()
+        _ = try Self.fill(&pump, frames: 20)
+        let (_, outcome) = try Self.fill(&pump, frames: 0, reachedEnd: true)
+        let delivery = try #require(Self.delivery(outcome))
+        #expect(delivery.block.startFrame == 0 && delivery.block.frames == 20 && delivery.reachedEnd)
+        #expect(pump.partialBlock == nil && pump.nextFrame == 20 && pump.state == .ended)
+        #expect(pump.counters.earlyEnds == 1 && pump.counters.framesDelivered == 20)
+    }
+
+    @Test
+    func io2PumpEmptyNonTerminalReadKeepsThePartialBlock() throws {
+        var pump = try Self.pump()
+        _ = try Self.fill(&pump, frames: 20)
+        let ticket = try Self.issue(&pump)
+        #expect(try pump.receive(ticket.id, Self.ready(0)) == .retryScheduled(attempt: 1))
+        #expect(pump.partialBlock == PrefetchFillPartialBlock(startFrame: 0, frames: 20) && pump.nextFrame == 20)
+        #expect(pump.counters.shortReads == 2 && pump.counters.framesDelivered == 0)
+    }
+
+    @Test
+    func io2PumpAPartialBlockIsNeverBlockedByAFullPool() throws {
+        var pump = try Self.pump()
+        var empty = pump
+        #expect(try empty.nextRequest(position: 0, residentBlocks: 4) == .wait(.poolFull))
+        _ = try Self.fill(&pump, frames: 16)
+        let ticket = try Self.issue(&pump, resident: 4)
+        #expect(ticket.startFrame == 16 && ticket.frames == 48)
+    }
+
+    @Test
+    func io2PumpLocateDropsThePartialBlockAndRestartsAtTheTarget() throws {
+        var pump = try Self.pump()
+        _ = try Self.fill(&pump, frames: 16)
+        try pump.locate(to: 500)
+        #expect(pump.partialBlock == nil && pump.nextFrame == 500)
+        let ticket = try Self.issue(&pump, position: 500)
+        #expect(ticket.startFrame == 500 && ticket.frames == 64)
+    }
+
+    @Test
+    func io2PumpResumeRestartsAtTheConsumerPositionAndDropsThePartialBlock() throws {
+        var pump = try Self.pump()
+        _ = try Self.fill(&pump, frames: 16)
+        _ = try Self.failNext(&pump, .unavailable)
+        #expect(pump.partialBlock == PrefetchFillPartialBlock(startFrame: 0, frames: 16))
+        try pump.resume(sourceGeneration: 2, position: 300)
+        #expect(pump.partialBlock == nil && pump.nextFrame == 300 && pump.state == .idle)
+        let ticket = try Self.issue(&pump, position: 300)
+        #expect(ticket.startFrame == 300 && ticket.sourceGeneration == 2)
+        var atEnd = try Self.pump()
+        _ = try Self.failNext(&atEnd, .unavailable)
+        try atEnd.resume(sourceGeneration: 2, position: 1_000)
+        #expect(atEnd.nextFrame == 1_000)
+    }
+
+    @Test
+    func io2PumpResumeChecksStateThenGenerationThenThePositionAndChangesNothingOnRefusal() throws {
+        var idle = try Self.pump()
+        Self.expectRefusal(&idle, .notFailed) { try $0.resume(sourceGeneration: 1, position: -1) }
+        var failed = try Self.pump()
+        _ = try Self.failNext(&failed, .unavailable)
+        Self.expectRefusal(&failed, .generationNotNewer(current: 1, proposed: 1)) {
+            try $0.resume(sourceGeneration: 1, position: -1)
+        }
+        Self.expectRefusal(&failed, .negativePosition(-1)) { try $0.resume(sourceGeneration: 2, position: -1) }
+        Self.expectRefusal(&failed, .positionBeyondSource(position: 1_001, sourceFrames: 1_000)) {
+            try $0.resume(sourceGeneration: 2, position: 1_001)
+        }
+        #expect(failed.state == .failed(.unavailable) && failed.sourceGeneration == 1)
+        try failed.resume(sourceGeneration: 2, position: 0)
+        #expect(failed.state == .idle && failed.nextFrame == 0)
     }
 }
