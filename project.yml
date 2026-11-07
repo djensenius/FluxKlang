@@ -365,6 +365,11 @@ targets:
       - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
       - path: FluxKlangTests/AUEventBridgeTests+Order.swift
       - path: FluxKlangTests/AUEventBridgeTests+Ramps.swift
+      - path: FluxKlangTests/SpatialMixerTests.swift
+      - path: FluxKlangTests/SpatialMixerTests+Delay.swift
+      - path: FluxKlangTests/SpatialMixerTests+Gains.swift
+      - path: FluxKlangTests/SpatialMixerTests+Hostile.swift
+      - path: FluxKlangTests/SpatialMixerTests+Transition.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
