@@ -401,6 +401,11 @@ targets:
       - path: FluxKlangTests/RemoteDispatchTests+Order.swift
       - path: FluxKlangTests/RemoteDispatchTests+Refusals.swift
       - path: FluxKlangTests/RemoteDispatchTests+Sources.swift
+      - path: FluxKlangTests/UMPStreamMessageTests.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Decode.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Hostile.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+ProductID.swift
+      - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
