@@ -272,11 +272,6 @@ targets:
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
-      - path: FluxKlangTests/WiringEditPathTests.swift
-      - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
-      - path: FluxKlangTests/WiringEditPathTests+Quantization.swift
-      - path: FluxKlangTests/WiringMatrixTests.swift
-      - path: FluxKlangTests/WiringMatrixTests+EdgeBound.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
       - path: FluxKlangTests/RigMappingTests.swift
@@ -328,6 +323,12 @@ targets:
       - path: FluxKlangTests/PatchTransitionTests+Sustain.swift
       - path: FluxKlangTests/PrefetchTests.swift
       - path: FluxKlangTests/PrefetchTests+Playhead.swift
+      - path: FluxKlangTests/MediaBlockPoolTests.swift
+      - path: FluxKlangTests/MediaBlockPoolTests+Copy.swift
+      - path: FluxKlangTests/MediaBlockPoolTests+Generation.swift
+      - path: FluxKlangTests/MediaBlockPoolTests+Lease.swift
+      - path: FluxKlangTests/MediaBlockPoolTests+RandomSequences.swift
+      - path: FluxKlangTests/MediaBlockPoolTests+Statistics.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
@@ -379,6 +380,10 @@ targets:
       - path: FluxKlangTests/ControlTriggerTests.swift
       - path: FluxKlangTests/ControlTriggerTests+Detector.swift
       - path: FluxKlangTests/ControlTriggerTests+Clear.swift
+      - path: FluxKlangTests/ControlFeedbackTests.swift
+      - path: FluxKlangTests/ControlFeedbackTests+Corrections.swift
+      - path: FluxKlangTests/ControlFeedbackTests+Echo.swift
+      - path: FluxKlangTests/ControlFeedbackTests+TouchHold.swift
       - path: FluxKlangTests/DeviceLifecycleTests.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
