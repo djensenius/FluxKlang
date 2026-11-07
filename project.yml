@@ -378,6 +378,13 @@ targets:
       - path: FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift
       - path: FluxKlangTests/MIDISourceRegistryTests.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Bounds.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Determinism.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Goldens.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Keys.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Precedence.swift
+      - path: FluxKlangTests/MIDIControlIntakeTests+Widths.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Bounds.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Endpoint.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Isolation.swift
