@@ -456,6 +456,12 @@ targets:
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Determinism.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Gate.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Grant.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Restore.swift
+      - path: FluxKlangTests/CompatibilityLeaseTests+Transitions.swift
       - path: FluxKlangTests/ProjectPackageDocumentsTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests+Conflicts.swift
