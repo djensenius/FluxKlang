@@ -10,6 +10,9 @@ import Testing
 /// names: the writer, intent and queue types of the other lanes, CoreMIDI and WING names, the clock and random types
 /// `Date`, `UUID`, `ContinuousClock`, `SuspendingClock`, `DispatchTime` and `SystemRandomNumberGenerator`, words that
 /// start with `random` or `shuffle`, and a line that starts an import. Nothing outside that list is proven absent.
+/// The scan runs where the checkout sits next to the tests (macOS, and the simulator on the build machine). It is
+/// skipped, not failed, where the sources are not reachable (a device, or a machine that only runs the built tests),
+/// and a skipped scan proves nothing. The scanner self-tests below run everywhere.
 /// The scan is by name only: words are ASCII identifier runs (no canonical equivalence), and an import is
 /// recognised only at the start of a line, optionally behind one attribute such as `@testable`.
 extension RemoteDispatchTests {
@@ -37,6 +40,9 @@ extension RemoteDispatchTests {
             .map { here.appendingPathComponent($0).standardizedFileURL }
             .first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("RemoteMirror.swift").path) }
     }
+
+    /// Whether `sourceDirectory()` finds the RemoteRole sources from the path this file was compiled at.
+    private static let sourcesAreReachable = sourceDirectory() != nil
 
     private static func sourceText(_ name: String) throws -> String {
         let directory = try #require(sourceDirectory(), "the RemoteRole sources are not next to the tests")
@@ -78,7 +84,8 @@ extension RemoteDispatchTests {
         return found
     }
 
-    @Test func theRemoteDispatchSourcesNameNoLocalWritePathAndImportNothing() throws {
+    @Test(.enabled(if: Self.sourcesAreReachable, "the RemoteRole sources are not next to the tests"))
+    func theRemoteDispatchSourcesNameNoLocalWritePathAndImportNothing() throws {
         for source in Self.sourceFiles {
             let text = try Self.sourceText(source.name)
             #expect(text.contains(source.declaration), "\(source.name)")
