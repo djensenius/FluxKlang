@@ -84,27 +84,18 @@ struct MIDIControlChange: Equatable, Sendable {
     var bipolarValue: Float { normalizedValue * 2 - 1 }
 
     static func decode(_ bytes: [UInt8]) -> [MIDIControlChange] {
+        guard var parser = MIDI1Parser(maximumSysExPayloadBytes: 256) else { return [] }
         var messages: [MIDIControlChange] = []
-        var index = 0
-        var runningStatus: UInt8?
-        while index < bytes.count {
-            if bytes[index] & 0x80 != 0 {
-                runningStatus = bytes[index]
-                index += 1
-            }
-            guard let status = runningStatus else {
-                index += 1
+        for byte in bytes {
+            guard case let .channel(status, controller, value?)? = parser.consume(byte),
+                  status & 0xF0 == 0xB0 else {
                 continue
-            }
-            guard status & 0xF0 == 0xB0, index + 1 < bytes.count else {
-                break
             }
             messages.append(MIDIControlChange(
                 channel: Int(status & 0x0F) + 1,
-                controller: bytes[index],
-                value: bytes[index + 1]
+                controller: controller,
+                value: value
             ))
-            index += 2
         }
         return messages
     }
