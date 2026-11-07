@@ -19,6 +19,8 @@
 //  if d ∈ A (a new cycle) or s ∈ R and d ∈ Q (a bridge), the survivors become
 //  (R ∪ D) ∩ (Q ∪ A); otherwise they do not change. D ∩ (Q ∪ A) is a search
 //  from d restricted to Q ∪ A, run only for destinations that reach this rule.
+//  An edge-bound refusal happens before this search and does not populate the
+//  destination cache.
 //
 
 /// The precomputed state for classifying bare wires from one source port. Internal: it only
@@ -47,7 +49,9 @@ struct WiringCandidateContext {
     /// At the edge bound, the matrix may still classify existing pairs without a probe edge.
     private let atEdgeBound: Bool
     private let loops: WiringLoopIndex
-    private var cycles: [NodeID: WiringConnection] = [:]
+    /// The classification of each destination node whose cycle search has run, so a row asks once per node.
+    /// Readable by tests, which observe that nothing is classified (no search runs) at the edge bound.
+    private(set) var cycles: [NodeID: WiringConnection] = [:]
 
     /// Graph- and source-level refusals, in the order `classify` checks them: the baseline
     /// validation (bounds, then a graph the contract cannot check), an uncheckable source node, no
@@ -95,7 +99,8 @@ struct WiringCandidateContext {
 
     /// The bare wire source → `destination`, or its refusal. At exactly 16,384 edges wired pairs keep their
     /// classification; every non-wired cell is `.uncheckable(.bounds)`. `classify` differs only for non-wired
-    /// pairs with uncheckable or unknown endpoints.
+    /// pairs with uncheckable or unknown endpoints. A refused non-wired pair at the bound performs no reachability
+    /// search and is not cached.
     mutating func connection(to destination: PortAddress) throws(WiringPreviewRefusal) -> WiringConnection {
         let key = PortKey(node: destination.node, port: destination.port)
         if uncheckable.contains(destination.node) {
@@ -130,9 +135,9 @@ struct WiringCandidateContext {
             try refuseNonWiredAtEdgeBound(key)
             return .needsConversion(sourceChannels: width, destinationChannels: rows)
         }
+        try refuseNonWiredAtEdgeBound(key)
         let connection = cycles[destination.node] ?? loops.connection(to: destination.node)
         cycles[destination.node] = connection
-        try refuseNonWiredAtEdgeBound(key)
         return connection
     }
 

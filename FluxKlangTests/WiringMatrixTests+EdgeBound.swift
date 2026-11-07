@@ -17,7 +17,7 @@ private typealias Fixture = WiringPreviewFixture
 private typealias Edit = WiringEditFixture
 
 extension WiringMatrixTests {
-    @Test func nonWiredSameNodePairStaysAtBoundsAfterCycleCacheHit() throws {
+    @Test func nonWiredPairsToTwoPortsOfOneNodeStayAtBounds() throws {
         let echoOut = Fixture.address("nod.echo", "out"), mainsIn = Fixture.address("nod.mains", "in")
         var graph = Fixture.graph
         let mainsIndex = try #require(graph.nodes.firstIndex { $0.id == mainsIn.node })
@@ -97,6 +97,78 @@ extension WiringMatrixTests {
 
     @Test func edgeBoundWindowUsesOneValidationPerRowForWiredPairs() throws {
         try WiringMatrixEdgeBoundRegression.run()
+    }
+
+    @Test func edgeBoundRefusalSkipsCycleSearch() throws {
+        let graph = CycleSearchBoundFixture.graph(atLimit: true)
+        let destinations = CycleSearchBoundFixture.destinations
+        let source = CycleSearchBoundFixture.source
+        let boundRefusal = WiringPreviewRefusal.bounds(
+            .exceeded(path: "$.edges", maximum: ProjectGraphLimits.edges)
+        )
+        #expect(graph.edges.count == ProjectGraphLimits.edges)
+        var context = try WiringCandidateContext(
+            source: source, in: graph, onValidate: {}, allowsExistingAtEdgeBound: true
+        )
+        let wired = try context.connection(to: destinations[0])
+        #expect(wired == .existing(Fixture.id("edg.bound-existing")))
+        #expect(context.cycles.isEmpty)
+        for destination in destinations.dropFirst() {
+            let cached = context.cycles
+            #expect(throws: boundRefusal) { try context.connection(to: destination) }
+            #expect(context.cycles == cached)
+        }
+        #expect(context.cycles.isEmpty)
+
+        let belowBound = CycleSearchBoundFixture.graph(atLimit: false)
+        var belowContext = try WiringCandidateContext(
+            source: source, in: belowBound, onValidate: {}, allowsExistingAtEdgeBound: true
+        )
+        #expect(try belowContext.connection(to: destinations[0]) == wired)
+        for destination in destinations.dropFirst() {
+            let expected = WiringConnection.feedbackOnly(cycle: [source.node, destination.node].sorted())
+            #expect(try belowContext.connection(to: destination) == expected)
+            #expect(belowContext.cycles[destination.node] == expected)
+        }
+        #expect(belowContext.cycles.count == destinations.count - 1)
+    }
+}
+
+private enum CycleSearchBoundFixture {
+    static let source = Fixture.address("nod.bound-source", "out")
+    static let sourceInput = Fixture.address("nod.bound-source", "in")
+    static let relay = Fixture.address("nod.bound-relay", "in")
+    static let relayOutput = Fixture.address("nod.bound-relay", "out")
+    static let destinations = (0..<8).map { Fixture.address("nod.bound-d\($0)", "in") }
+
+    static func graph(atLimit: Bool) -> GraphDocument {
+        let nodes = [
+            Fixture.node("nod.bound-source", ports: [Fixture.audio("in", .input, 1),
+                                                     Fixture.audio("out", .output, 1)]),
+            Fixture.node("nod.bound-relay", ports: [Fixture.audio("in", .input, 1),
+                                                    Fixture.audio("out", .output, 1)])
+        ] + (0..<destinations.count).map {
+            Fixture.node("nod.bound-d\($0)", ports: [Fixture.audio("in", .input, 1),
+                                                      Fixture.audio("out", .output, 1)])
+        }
+        var edges = [
+            Fixture.edge("edg.bound-source-relay", source, relay),
+            Fixture.edge("edg.bound-relay-source", relayOutput, sourceInput),
+            Fixture.edge("edg.bound-existing", source, destinations[0])
+        ]
+        for index in destinations.indices {
+            let next = (index + 1) % destinations.count
+            edges.append(Fixture.edge(
+                "edg.bound-cycle-\(index)",
+                Fixture.address("nod.bound-d\(index)", "out"),
+                destinations[next]
+            ))
+        }
+        let limit = ProjectGraphLimits.edges - (atLimit ? 0 : 1)
+        for index in edges.count..<limit {
+            edges.append(Fixture.edge("edg.bound-fill-\(index)", source, relay))
+        }
+        return GraphDocument(id: Fixture.graphID, nodes: nodes, edges: edges)
     }
 }
 
