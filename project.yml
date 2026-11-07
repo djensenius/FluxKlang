@@ -257,6 +257,13 @@ targets:
       - path: FluxKlangTests/MeterDisplayTests+Staleness.swift
       - path: FluxKlangTests/MeterDisplayTests+LateConsumption.swift
       - path: FluxKlangTests/MeterDisplayTests+Ordering.swift
+      - path: FluxKlangTests/MeterTapTests.swift
+      - path: FluxKlangTests/MeterTapTests+Accumulation.swift
+      - path: FluxKlangTests/MeterTapTests+Bounds.swift
+      - path: FluxKlangTests/MeterTapTests+Fixtures.swift
+      - path: FluxKlangTests/MeterTapTests+Invalid.swift
+      - path: FluxKlangTests/MeterTapTests+Level.swift
+      - path: FluxKlangTests/MeterTapTests+Publish.swift
       - path: FluxKlangTests/OSCSchedulingTests.swift
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
@@ -397,6 +404,12 @@ targets:
       - path: FluxKlangTests/PeerTrustTests.swift
       - path: FluxKlangTests/PeerTrustTests+Pairing.swift
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
+      - path: FluxKlangTests/PreferencePrivacyTests.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Allowlist.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Classes.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Inventory.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Limits.swift
+      - path: FluxKlangTests/PreferencePrivacyTests+Refusals.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
