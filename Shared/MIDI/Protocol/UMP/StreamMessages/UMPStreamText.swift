@@ -20,8 +20,9 @@ enum UMPStreamText {
         limits: UMPStreamLimits
     ) throws(UMPStreamRefusal) -> [UMPPacket] {
         if kind == .functionBlockName { try UMPStreamFunctionBlockInfo.validateIndex(index) }
+        let byteCount = text.value.utf8.count
+        guard byteCount <= limits.maximumBytes(for: kind) else { throw .textTooLong(byteCount) }
         let bytes = Array(text.value.utf8)
-        guard bytes.count <= limits.maximumBytes(for: kind) else { throw .textTooLong(bytes.count) }
         guard bytes.last != 0 else { throw .trailingZeroByte }
         let size = kind.bytesPerPacket
         let count = max(1, (bytes.count + size - 1) / size)
