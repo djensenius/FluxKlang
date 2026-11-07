@@ -273,14 +273,15 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
         guard let anchor = currentAnchor else { throw .noCurrentAnchor }
         let frame = try frame(atHost: host, anchor: anchor, current: current)
-        let ticks = try musicalTicks(atFrame: frame, map: musicalMap)
+        let musical = try musicalDerivation(atFrame: frame, map: musicalMap)
         guard records.count < Self.maximumCaptures else {
             taint(stream, .refusedAtCapacity)
             throw .capacity(limit: Self.maximumCaptures)
         }
         let record = MIDICaptureRecord(Admission(), stream: stream, packet: packet, host: host,
                                        sample: SampleStamp(clock: clock, generation: current, frame: frame),
-                                       musicalTicks: ticks, protocolStamp: stamp)
+                                       musicalTicks: musical?.ticks, musicalRoundTripFrame: musical?.roundTrip,
+                                       protocolStamp: stamp)
         records.append(record)
         pins[stream] = pin
         return .recorded(record)
@@ -308,7 +309,14 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
     }
 
-    private func musicalTicks(atFrame frame: Int64, map: MusicalClockMap?) throws(MIDICaptureRefusal) -> Int64? {
+    /// The musical ticks of a capture and the frame they map back to through the same map, nil when it overflowed.
+    private struct MusicalDerivation {
+        let ticks: Int64
+        let roundTrip: Int64?
+    }
+
+    private func musicalDerivation(atFrame frame: Int64,
+                                   map: MusicalClockMap?) throws(MIDICaptureRefusal) -> MusicalDerivation? {
         guard let transport else {
             guard map == nil else { throw .musicalMapMismatch }
             return nil
@@ -326,7 +334,7 @@ struct MIDICaptureLog: Equatable, Sendable {
             throw .overflow
         }
         guard ticks >= 0 else { throw .negativeMusicalTicks }
-        return ticks
+        return MusicalDerivation(ticks: ticks, roundTrip: try? map.frame(atTicks: ticks))
     }
 
     /// Resolves the latest retained anchor, or the genuine first anchor only before its successor's frame.
