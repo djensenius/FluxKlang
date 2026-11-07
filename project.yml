@@ -454,6 +454,11 @@ targets:
       - path: FluxKlangTests/MIDISourceRegistryTests+Reset.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
+      - path: FluxKlangTests/ControlInputGateTests.swift
+      - path: FluxKlangTests/ControlInputGateTests+Counters.swift
+      - path: FluxKlangTests/ControlInputGateTests+Listening.swift
+      - path: FluxKlangTests/ControlInputGateTests+Phases.swift
+      - path: FluxKlangTests/ControlInputGateTests+Refusals.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
       - path: FluxKlangTests/ActionSetSubmissionTests.swift
