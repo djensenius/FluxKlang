@@ -13,6 +13,23 @@ import Testing
 @testable import FluxKlang
 #endif
 
+struct GeneratedMarkerCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let term: UntrustedTextSanitizer.WithheldTerm
+
+    var testDescription: String { name }
+}
+
+private let generatedMarkerCases: [GeneratedMarkerCase] = [
+    .init(name: "contained", term: .init(text: "withhe", isPrefix: false)),
+    .init(name: "contains", term: .init(text: "x[withheld]suffix", isPrefix: false)),
+    .init(name: "leading boundary", term: .init(text: "secret[", isPrefix: false)),
+    .init(name: "trailing boundary", term: .init(text: "]secret", isPrefix: false)),
+    .init(name: "compact contained", term: .init(text: "wi thhe", isPrefix: false, separators: [0])),
+    .init(name: "compact leading boundary", term: .init(text: "secretx[ w", isPrefix: false, separators: [0])),
+    .init(name: "compact trailing boundary", term: .init(text: "d ]secret", isPrefix: false, separators: [0]))
+]
+
 extension NeutralSnapshotUnicodeTests {
     @Test func incompleteScanFailsClosedWhenA1hHasNoTailWindow() {
         let term = "Q\u{13441}\u{13441}"
@@ -54,6 +71,52 @@ extension NeutralSnapshotUnicodeTests {
         let shadowTerm = "ABCDEFGH\u{13441}IJKLMNOP"
         let raw = "ABCDEFGHIJKLMNOP" + String(repeating: "z", count: 4_074) + "SECRETzz"
         let result = UntrustedLabel(raw, maximumBytes: 20, withholding: [shadowTerm, "SECRET"])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
+    @Test func incompleteScanScopedBlankTermMarksWholeLabelSanitized() {
+        let raw = String(repeating: "z", count: 4_200)
+        let result = UntrustedLabel(raw, withholding: ["Q\u{13441}\u{13441}"])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+        let short = UntrustedLabel(raw, maximumBytes: 5, withholding: ["Q\u{13441}\u{13441}"])
+        #expect(short.text.isEmpty)
+        #expect(short.wasSanitized)
+    }
+
+    /// Control: this blank-only fallback already passed before the round-17 sanitization fix.
+    @Test func incompleteScanBlankOnlyScopedTermMarksWholeLabelSanitized() {
+        let raw = String(repeating: "z", count: 4_200)
+        let result = UntrustedLabel(raw, withholding: ["\u{13441}\u{13442}"])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
+    @Test func markerMatchingTermPreservesLegacyWholeLabelOutcome() {
+        let result = UntrustedLabel("Rig withhe", maximumBytes: 14, withholding: ["withhe"])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
+    @Test(arguments: generatedMarkerCases)
+    func generatedMarkerOverlapShapesFailClosed(_ entry: GeneratedMarkerCase) {
+        let result = UntrustedLabel("Rig Table", maximumBytes: 128, terms: [entry.term])
+        #expect(result.text == UntrustedLabel.withheldMarker)
+        #expect(result.isTruncated)
+        #expect(result.wasSanitized)
+    }
+
+    @Test func generatedMarkerRiskWithNilCompactFormFailsClosed() {
+        let term = UntrustedTextSanitizer.WithheldTerm(
+            text: "x     [", isPrefix: false, separators: [1, 2, 3, 4, 5]
+        )
+        #expect(term.compactForm == nil)
+        let result = UntrustedLabel("Rig Table", maximumBytes: 128, terms: [term])
         #expect(result.text == UntrustedLabel.withheldMarker)
         #expect(result.isTruncated)
         #expect(result.wasSanitized)

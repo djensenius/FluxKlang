@@ -58,6 +58,10 @@ import Foundation
 /// bytes; and labelling `text` again with the same terms returns `text`. So the emitted
 /// text is the text the last pass matched (up to canonical equivalence, which matching
 /// ignores): every renormalization, cap and cut is matched again before it is shown.
+/// `NeutralSnapshot+Assembly` supplies the same prepared terms to every label. An active
+/// term that can match or overlap generated `[withheld]` withholds its label whole and
+/// marks it truncated, even without a label match. One ordinary shared term can therefore
+/// blank every label; shadow terms may be inactive on complete, clean scans.
 /// After new-blank removal, withhold whole if A1's unredacted shadow needs a cap/cut, A1h
 /// redacts or settle changes text, or the NFC display is not a scalar subsequence of A1's.
 /// An incomplete scan with an active blank-dependent term and no removed new blank also
@@ -89,14 +93,17 @@ import Foundation
 struct UntrustedLabel: Hashable, Sendable, Encodable {
     static let defaultMaximumBytes = 128
     static let withheldMarker = "[withheld]"
+    private static let withheldMarkerForm =
+        UntrustedTextSanitizer.caselessForm(withheldMarker.unicodeScalars)
 
     let text: String
     /// True when characters were dropped to fit the byte or scan limit.
+    /// An active marker-overlap term truncation-flags its label even without a match.
+    /// One ordinary shared term can therefore flag every label in the snapshot.
     /// Blank and compact-plus-exact fallbacks can report a cut A1 did not need when its output fits the limit.
     /// It never under-reports a cut A1 would have made and never changes `text` or `wasSanitized`.
     let isTruncated: Bool
-    /// True when characters were replaced or removed, a grapheme was capped or a
-    /// withheld string was redacted.
+    /// True when filtering or redaction changes the label, a grapheme is capped, or a protected fallback changes it.
     let wasSanitized: Bool
 
     /// Accepts raw withheld strings and prepares them like the snapshot builder
@@ -202,7 +209,9 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         let incompleteBlankTermRisk = !filtered.isComplete
             && filtered.removedNewBlankBytes == 0
             && activeTerms.contains(where: { $0.requiresNewBlank })
-        let conservativeRedactionRisk = compactExactRedaction
+        let generatedMarkerRisk = activeTerms.contains(where: Self.canMatchGeneratedMarker)
+        let conservativeRedactionRisk = generatedMarkerRisk
+            || compactExactRedaction
             || incompleteBlankTermRisk
             || (blankDecisionRisk && legacyGraphemeRisk)
         // Exact markers can grow A1's post-redaction display and move its byte cut left.
@@ -230,9 +239,44 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
                 cutChanged: cut.result.changed, scanIsComplete: filtered.isComplete,
                 legacyCutRisk: legacyCutRisk, conservativeRedactionRisk: conservativeRedactionRisk
             ),
-            wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed,
+            wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed
+                || protected.result.changed,
             separators: cut.separators
         )
+    }
+
+    private static func canMatchGeneratedMarker(_ term: UntrustedTextSanitizer.WithheldTerm) -> Bool {
+        // An active term that rematches the generated marker makes its label withhold whole
+        // and report truncation; check regular and compact forms.
+        let forms = [term.form.folded, term.compactForm?.folded].compactMap { $0 }
+        return forms.contains { form in
+            contains(form, in: withheldMarkerForm)
+                || contains(withheldMarkerForm, in: form)
+                || overlapsAtBoundary(form, and: withheldMarkerForm)
+        }
+    }
+
+    private static func contains(
+        _ needle: [Unicode.Scalar], in haystack: [Unicode.Scalar]
+    ) -> Bool {
+        guard !needle.isEmpty, needle.count <= haystack.count else { return false }
+        return (0...(haystack.count - needle.count)).contains { start in
+            haystack[start..<(start + needle.count)].elementsEqual(needle)
+        }
+    }
+
+    private static func overlapsAtBoundary(
+        _ lhs: [Unicode.Scalar], and rhs: [Unicode.Scalar]
+    ) -> Bool {
+        let maximum = min(lhs.count, rhs.count)
+        guard maximum > 0 else { return false }
+        for length in 1...maximum {
+            if lhs.suffix(length).elementsEqual(rhs.prefix(length))
+                || lhs.prefix(length).elementsEqual(rhs.suffix(length)) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func truncationFlag(
