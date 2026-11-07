@@ -512,6 +512,12 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests.swift
       - path: FluxKlangTests/PluginCatalogTests+Service.swift
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Codec.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Invalidation.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Limits.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Raw.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Refusals.swift
       - path: FluxKlangTests/PluginHostNegotiationTests.swift
       - path: FluxKlangTests/PluginHostNegotiationTests+Dispatch.swift
       - path: FluxKlangTests/PluginHostNegotiationTests+Generations.swift
