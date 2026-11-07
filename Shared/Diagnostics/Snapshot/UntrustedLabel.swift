@@ -34,8 +34,9 @@ import Foundation
 ///    filtered label is empty for the same reason, it still emits the withheld marker.
 /// 3. Separator provenance is carried through redaction, every cap sweep, settle,
 ///    truncation and stable passes; only original control replacements may be dropped
-///    from compact matching. If removing a newly pinned blank exposes whitespace at
-///    a redacted label's edge, that padding is trimmed with provenance remapped. Each
+///    from compact matching. Any redaction in a label that removed a newly pinned
+///    blank withholds the whole label. A literal marker's edge padding can still be
+///    trimmed with provenance remapped. Each
 ///    grapheme of the redacted text is limited
 ///    to `UntrustedTextSanitizer.maximumScalarsPerGrapheme` scalars. If that changed
 ///    anything, step 2 runs again, since dropping scalars can complete a withheld
@@ -56,6 +57,11 @@ import Foundation
 /// bytes; and labelling `text` again with the same terms returns `text`. So the emitted
 /// text is the text the last pass matched (up to canonical equivalence, which matching
 /// ignores): every renormalization, cap and cut is matched again before it is shown.
+/// After new-blank removal, withhold whole if A1's blank-kept shadow needs a cap/cut,
+/// A1h redacts or settle changes text, or the NFC display is not a scalar subsequence
+/// of A1's; a later A1h byte cut only removes text. The guard does not apply to labels
+/// containing only A1-old blanks such as U+3164. Leading-prefix reconstruction can
+/// over-fire (e.g. `\u{200B} Rig\u{13441}` or a leading NUL), but cannot under-fire.
 ///
 /// Withheld strings longer than `UntrustedTextSanitizer.maximumWithheldBytes` are
 /// matched by a match-form prefix, and a match redacts the rest of the label. One
@@ -161,14 +167,29 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
                 of: display, withheld: activeTerms, marker: withheldMarker, scanIsComplete: filtered.isComplete,
                 separators: inheritedSeparators ?? filtered.separators
             )
-        let legacyGraphemeRisk = filtered.removedNewBlankBytes > 0 && redacted.result.changed
-        let protected = legacyGraphemeRisk
+        let legacyGraphemeRisk = redacted.result.changed
+        let settled = settle(redacted.result.text, separators: redacted.separators, terms: activeTerms)
+        let legacyDecision = filtered.removedNewBlankBytes > 0
+            ? UntrustedTextSanitizer.legacyLabelDecision(
+                raw, hardened: display, maximumBytes: limit, scanLimit: scan
+            )
+            : UntrustedTextSanitizer.LegacyLabelDecision(
+                needsGraphemeCap: false, needsByteCut: false,
+                needsScalarSubsequenceGuard: false, scanIsComplete: true
+            )
+        let legacyCutRisk = legacyDecision.needsByteCut
+        let blankDecisionRisk = filtered.removedNewBlankBytes > 0
+            && (legacyGraphemeRisk
+                || settled.result.changed
+                || legacyDecision.needsGraphemeCap
+                || legacyCutRisk
+                || legacyDecision.needsScalarSubsequenceGuard)
+        let protected = blankDecisionRisk
             ? (result: (text: withheldMarker, changed: true), separators: [])
-            : redacted
-        let settled = settle(protected.result.text, separators: protected.separators, terms: activeTerms)
-        let edgeTrimmed = filtered.removedNewBlankBytes > 0 && settled.result.text.contains(withheldMarker)
-            ? Self.trimRedactedEdges(settled.result.text, separators: settled.separators)
-            : (text: settled.result.text, separators: settled.separators)
+            : settled
+        let edgeTrimmed = filtered.removedNewBlankBytes > 0 && protected.result.text.contains(withheldMarker)
+            ? Self.trimRedactedEdges(protected.result.text, separators: protected.separators)
+            : (text: protected.result.text, separators: protected.separators)
         var cut = UntrustedTextSanitizer.truncate(
             edgeTrimmed.text, maximumBytes: limit, marker: withheldMarker,
             separators: edgeTrimmed.separators
@@ -180,15 +201,14 @@ struct UntrustedLabel: Hashable, Sendable, Encodable {
         }
         return Pass(
             text: cut.result.text,
-            isTruncated: cut.result.changed || !filtered.isComplete,
+            isTruncated: cut.result.changed || !filtered.isComplete || legacyCutRisk,
             wasSanitized: filtered.changed || redacted.result.changed || settled.result.changed,
             separators: cut.separators
         )
     }
 
-    /// A1 can absorb edge spaces into a grapheme containing a newly removed blank
-    /// lookalike. When redaction leaves such spaces outside the replacement range,
-    /// discard them so the newer output never exposes extra edge padding.
+    /// Actual redaction after new-blank removal withholds the whole label. This only
+    /// trims padding around a literal marker in a pass-through label, so it shows less.
     static func trimRedactedEdges(_ text: String, separators: [Int]) -> (text: String, separators: [Int]) {
         let scalars = Array(text.unicodeScalars)
         var lower = 0

@@ -4,12 +4,80 @@
 //
 //  Pinned scalar sets that Unicode properties do not give: characters that render
 //  as nothing, and the points where Foundation's normalization breaks canonical
-//  equivalence on this toolchain.
+//  equivalence on this toolchain. Also records A1's legacy-label decision: what A1
+//  capped, cut or exposed after new-blank scalars were removed, so A1h fails closed.
 //
 
 import Foundation
 
 extension UntrustedTextSanitizer {
+    struct LegacyLabelDecision {
+        let needsGraphemeCap: Bool
+        let needsByteCut: Bool
+        let needsScalarSubsequenceGuard: Bool
+        /// Tests observe whether the bounded shadow scan finished or was cut (N73);
+        /// fail-closed uses `needsByteCut`.
+        let scanIsComplete: Bool
+    }
+
+    /// The bounded A1 shadow keeps new blanks. Prefix reconstruction can over-fire for
+    /// leading filtered scalars (including ZWSP and NUL), but the A1h subsequence check
+    /// makes that fail closed rather than expose text.
+    static func legacyLabelDecision(
+        _ raw: String, hardened: String, maximumBytes: Int, scanLimit: Int
+    ) -> LegacyLabelDecision {
+        let scan = filterScalars(raw.unicodeScalars, keeping: scanLimit, trimmed: true)
+        let byteLimit = max(0, maximumBytes)
+        var prefix = String.UnicodeScalarView()
+        var prefixBytes = 0
+        var prefixExceedsBound = false
+        // Every prefix scalar adds at least one byte, so this loop stops by byteLimit + 1 scalars.
+        for scalar in raw.unicodeScalars {
+            guard CharacterSet.whitespacesAndNewlines.contains(scalar) else { break }
+            let prefixScalar: Unicode.Scalar
+            switch scalar.properties.generalCategory {
+            case .control, .lineSeparator, .paragraphSeparator:
+                prefixScalar = " "
+            default:
+                prefixScalar = scalar
+            }
+            let (nextBytes, overflow) = prefixBytes.addingReportingOverflow(prefixScalar.utf8.count)
+            guard !overflow, nextBytes <= byteLimit else {
+                prefixExceedsBound = true
+                break
+            }
+            prefix.append(prefixScalar)
+            prefixBytes = nextBytes
+        }
+        let legacyDisplay = (String(prefix) + (scan.a1Text ?? scan.text))
+            .precomposedStringWithCanonicalMapping
+        let needsGraphemeCap = legacyDisplay.contains {
+            $0.unicodeScalars.count > maximumScalarsPerGrapheme
+        }
+        let needsByteCut = prefixExceedsBound
+            || !scan.isComplete
+            || (scan.isComplete && legacyDisplay.utf8.count > byteLimit)
+        let needsScalarSubsequenceGuard = !scalarSubsequence(hardened, of: legacyDisplay)
+        return LegacyLabelDecision(
+            needsGraphemeCap: needsGraphemeCap,
+            needsByteCut: needsByteCut,
+            needsScalarSubsequenceGuard: needsScalarSubsequenceGuard,
+            scanIsComplete: scan.isComplete
+        )
+    }
+
+    private static func scalarSubsequence(_ text: String, of legacy: String) -> Bool {
+        var index = legacy.unicodeScalars.startIndex
+        for scalar in text.unicodeScalars {
+            while index != legacy.unicodeScalars.endIndex, legacy.unicodeScalars[index] != scalar {
+                index = legacy.unicodeScalars.index(after: index)
+            }
+            guard index != legacy.unicodeScalars.endIndex else { return false }
+            index = legacy.unicodeScalars.index(after: index)
+        }
+        return true
+    }
+
     /// Scalars that render as nothing although they are neither default-ignorable nor
     /// format characters, so `filterScalars` removes them by value: the Hangul fillers
     /// (U+115F, U+1160, U+3164) and the halfwidth one (U+FFA0), the blank Braille pattern
