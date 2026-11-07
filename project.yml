@@ -375,6 +375,10 @@ targets:
       - path: FluxKlangTests/ProjectCheckpointTests+Journal.swift
       - path: FluxKlangTests/ProjectCheckpointTests+Restore.swift
       - path: FluxKlangTests/ProjectCheckpointTests+Retention.swift
+      - path: FluxKlangTests/WiringNodeEditTests.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Add.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Remove.swift
+      - path: FluxKlangTests/WiringNodeEditTests+Order.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
