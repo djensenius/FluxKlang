@@ -197,6 +197,12 @@ targets:
       - path: FluxKlangTests/RouteLatencyTests+Calibration.swift
       - path: FluxKlangTests/RouteLatencyTests+Impulse.swift
       - path: FluxKlangTests/RouteLatencyTests+Alignment.swift
+      - path: FluxKlangTests/RunStatisticsTests.swift
+      - path: FluxKlangTests/RunStatisticsTests+Comparison.swift
+      - path: FluxKlangTests/RunStatisticsTests+Percentiles.swift
+      - path: FluxKlangTests/RunStatisticsTests+Record.swift
+      - path: FluxKlangTests/RunStatisticsTests+StableBuffer.swift
+      - path: FluxKlangTests/RunStatisticsTests+Uncertainty.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
       - path: FluxKlangTests/GraphCompilerPlanTests.swift
       - path: FluxKlangTests/GraphCompilerPlanTests+Budget.swift
