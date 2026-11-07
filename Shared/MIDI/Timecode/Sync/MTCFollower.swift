@@ -157,8 +157,9 @@ struct MTCFollower: Sendable {
     private mutating func advance(to next: MTCFollowerAnchor) throws(MTCFollowerError) -> [MTCFollowerEvent] {
         var events: [MTCFollowerEvent] = []
         var continuous = true
-        if consecutivePositions >= 1, let previous = anchor, previous.direction != nil {
-            events = try previous.deviations(to: next, toleranceFrames: policy.toleranceFrames, timebase: timebase)
+        if let previous = anchor, previous.direction != nil {
+            events = try previous.deviations(to: next, toleranceFrames: policy.toleranceFrames,
+                                             judgesRelocation: consecutivePositions >= 1, timebase: timebase)
             continuous = events.isEmpty
         }
         anchor = next

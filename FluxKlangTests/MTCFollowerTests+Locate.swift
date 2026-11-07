@@ -124,4 +124,17 @@ extension MTCFollowerTests {
             #expect(subject.state == .located)
         }
     }
+
+    @Test func relocationSlackAdditionOverflowsOnlyWhenTheElapsedTicksLeaveNoRoomForIt() throws {
+        let previous = MTCFollowerAnchor(frameCount: 1000, stamp: 0, rate: .fps25, direction: .forward)
+        func judge(elapsed: UInt64) -> MTCFollowerError? {
+            let next = MTCFollowerAnchor(frameCount: 1002, stamp: elapsed, rate: .fps25, direction: .forward)
+            return Self.thrown {
+                try previous.deviations(to: next, toleranceFrames: 0, judgesRelocation: true,
+                                        timebase: Self.nanosecondTimebase)
+            }
+        }
+        #expect(judge(elapsed: UInt64.max) == .overflow)
+        #expect(judge(elapsed: UInt64.max - 1) == nil)
+    }
 }
