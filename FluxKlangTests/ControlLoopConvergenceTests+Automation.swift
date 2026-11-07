@@ -22,7 +22,7 @@ extension ControlLoopConvergenceTests {
         let reversed = try automationRun(reversed: true, hostFollows: true)
         #expect(forward == reversed)
         let automated = try #require(LoopHarness.step(of: 0.5))
-        #expect(forward.held.count == 3)
+        try #require(forward.held.count == 3)
         #expect(forward.held[1] == .suppressed(.hold))
         #expect(forward.sibling.count == 2)
         #expect(forward.deliveries.map(\.message.binding.rawValue) == ["bnd.a", "bnd.b", "bnd.a", "bnd.b"])
