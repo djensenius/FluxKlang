@@ -141,6 +141,15 @@ extension PerformCellModelTests {
         }
     }
 
+    @Test func aBooleanNumberOtherThanExactlyZeroOrOneKeepsItsNumericText() throws {
+        let half = try Self.unitModel(.boolean, lower: 0, upper: 1, ceiling: 0.5, curve: .stepped, value: 0)
+        #expect(half.accessibility.hint == "Range off to on. Ceiling 0.5")
+        let top = try Self.unitModel(.boolean, lower: 0, upper: 1, ceiling: 1, curve: .stepped, value: 1)
+        #expect(top.accessibility.hint == "Range off to on. Ceiling on")
+        let zero = try Self.unitModel(.boolean, lower: 0, upper: 1, ceiling: 0, curve: .stepped, value: 0)
+        #expect(zero.accessibility.hint == "Range off to on. Ceiling off")
+    }
+
     @Test func valueAndRangeTextForEveryUnit() throws {
         let rows: [(PerformCellModel, SpokenRow)] = [
             (try Self.unitModel(.decibels, lower: -90, upper: 10, value: -8.5),

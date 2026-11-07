@@ -76,9 +76,10 @@ extension PerformCellModel {
         )
     }
 
-    /// "-8 decibels", "30 percent", "0.5", "on"; `unitWord` false leaves the unit off the lower end of a range.
+    /// "-8 decibels", "30 percent", "0.5", "on"; a boolean says "off" only for exactly 0 and "on" only for exactly 1.
+    /// `unitWord` false leaves the unit off the lower end of a range.
     private static func spoken(_ number: Double, _ unit: ParameterUnit, unitWord: Bool) -> String {
-        if unit == .boolean { return number == 0 ? "off" : "on" }
+        if unit == .boolean, number == 0 || number == 1 { return number == 0 ? "off" : "on" }
         let text = PerformNumberText.text(number)
         guard unitWord else { return text }
         switch unit {
