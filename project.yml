@@ -406,6 +406,10 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Hostile.swift
       - path: FluxKlangTests/UMPStreamMessageTests+ProductID.swift
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
+      - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
