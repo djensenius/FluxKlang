@@ -335,6 +335,14 @@ targets:
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Counters.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Loop.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Readiness.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Render.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+Spec.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+StateMachine.swift
+      - path: FluxKlangTests/BackingClipPlaybackTests+StopVoice.swift
       - path: FluxKlangTests/StandardMIDIFileTests.swift
       - path: FluxKlangTests/StandardMIDIFileTests+Reader.swift
       - path: FluxKlangTests/UMPCodecTests.swift
@@ -473,6 +481,12 @@ targets:
       - path: FluxKlangTests/PreferencePrivacyTests+Limits.swift
       - path: FluxKlangTests/PreferencePrivacyTests+Refusals.swift
       - path: FluxKlangTests/PeerTrustTests+Vectors.swift
+      - path: FluxKlangTests/RemoteRoleTests.swift
+      - path: FluxKlangTests/RemoteRoleTests+Guard.swift
+      - path: FluxKlangTests/RemoteRoleTests+Lease.swift
+      - path: FluxKlangTests/RemoteRoleTests+Promotion.swift
+      - path: FluxKlangTests/RemoteRoleTests+RawInput.swift
+      - path: FluxKlangTests/RemoteRoleTests+Transitions.swift
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
@@ -506,6 +520,12 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests.swift
       - path: FluxKlangTests/PluginCatalogTests+Service.swift
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Codec.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Invalidation.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Limits.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Raw.swift
+      - path: FluxKlangTests/PluginCatalogCacheTests+Refusals.swift
       - path: FluxKlangTests/PluginHostNegotiationTests.swift
       - path: FluxKlangTests/PluginHostNegotiationTests+Dispatch.swift
       - path: FluxKlangTests/PluginHostNegotiationTests+Generations.swift
