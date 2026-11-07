@@ -423,6 +423,14 @@ targets:
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Projects.swift
+      - path: FluxKlangTests/WorkspaceStatusTests.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Announcer.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Devices.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+EngineClock.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+FocusOrder.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Pending.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+Refusals.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
