@@ -21,11 +21,13 @@ enum CalibrationStaleReason: String, CaseIterable, Hashable, Sendable {
 struct DeviceIdentitySnapshot: Hashable, Sendable {
     let deviceID: DeviceID
     let uid: String
+    fileprivate let uidBytes: [UInt8]
     let evidence: Set<IdentityEvidence>
 
     fileprivate init(deviceID: DeviceID, identity: DeviceIdentity) {
         self.deviceID = deviceID
         uid = identity.uid
+        uidBytes = Array(identity.uid.utf8)
         evidence = identity.evidence
     }
 }
@@ -89,7 +91,7 @@ struct CalibrationConfiguration: Hashable, Sendable {
     func staleReasons(comparedTo current: Self) -> [CalibrationStaleReason] {
         var reasons: [CalibrationStaleReason] = []
         if device.deviceID != current.device.deviceID { reasons.append(.deviceID) }
-        if device.uid != current.device.uid || device.evidence != current.device.evidence {
+        if device.uidBytes != current.device.uidBytes || device.evidence != current.device.evidence {
             reasons.append(.deviceIdentity)
         }
         if stream.sampleRateHz != current.stream.sampleRateHz { reasons.append(.sampleRate) }
