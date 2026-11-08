@@ -399,6 +399,7 @@ targets:
       - path: FluxKlangTests/ShowStageProjectionTests+Accessibility.swift
       - path: FluxKlangTests/ShowStageProjectionTests+Destinations.swift
       - path: FluxKlangTests/ShowStageProjectionTests+Lines.swift
+      - path: FluxKlangTests/ShowStageProjectionTests+Resume.swift
       - path: FluxKlangTests/ShowRecoveryTests+Randomized.swift
       - path: FluxKlangTests/MIDIResponseCurveTests.swift
       - path: FluxKlangTests/MIDIResponseCurveTests+Golden.swift
