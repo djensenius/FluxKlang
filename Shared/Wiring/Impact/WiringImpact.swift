@@ -82,8 +82,9 @@ struct WiringImpact: Equatable, Sendable {
     }
 
     /// `.none` is answered by `make` before this runs; its case is listed so the switch needs no fallback. The
-    /// `.preview` mapping in `reviewRows` and in the second `draftGraph` call is likewise unreachable (the same
-    /// draft and active graph already formed once); it exists because typed throws need a mapping for the error.
+    /// `.preview` mapping in `reviewRows` and in the second `draftGraph` call is not expected to be reached: both take
+    /// the composed draft, which each composer builds from the draft that already formed once. It exists because
+    /// typed throws need a mapping for the error.
     private static func compose(
         _ gesture: WiringImpactGesture, draft: DraftEdits, active: GraphDocument
     ) throws(WiringImpactRefusal) -> DraftEdits {
