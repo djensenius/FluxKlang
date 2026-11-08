@@ -265,6 +265,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
       - path: FluxKlangTests/NeutralSnapshotTests.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Fixtures.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Grid.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Hysteresis.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Refusals.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Grounding.swift
       - path: FluxKlangTests/LegacySidecarAdoptionTests.swift
       - path: FluxKlangTests/LegacySidecarAdoptionTests+Bounds.swift
