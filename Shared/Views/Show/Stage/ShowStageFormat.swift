@@ -18,9 +18,10 @@ enum ShowStageFormat {
     static func stale(_ status: ShowCursorStatus) -> String {
         switch status {
         case .current: "The cursor target is current."
-        case .setlistRemoved: "The setlist was removed. Jump to a song to continue."
-        case .entryRemoved: "The song entry was removed. Jump to a song to continue."
-        case .partRemoved: "The part was removed. Jump to a part to continue."
+        case .setlistRemoved: "The setlist was removed. Choose another setlist or restore this one to continue."
+        case .entryRemoved:
+            "The song entry was removed. Jump to another song entry, if the setlist has one, to continue."
+        case .partRemoved: "The part was removed. Jump to the song or to one of its parts to continue."
         case .partsAdded: "The song gained parts. Jump to a part to continue."
         }
     }

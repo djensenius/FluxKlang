@@ -59,10 +59,11 @@ extension ShowStageProjectionTests {
         let statuses: [ShowCursorStatus] = [.current, .setlistRemoved(Fix.list), .entryRemoved(entry),
                                             .partRemoved(Fix.partID("p1")), .partsAdded(Fix.songA)]
         let spokenStatuses: [String] = statuses.map { ShowStageFormat.stale($0) }
+        let entryWords = "The song entry was removed. Jump to another song entry, if the setlist has one, to continue."
         let statusWords: [String] = ["The cursor target is current.",
-                                     "The setlist was removed. Jump to a song to continue.",
-                                     "The song entry was removed. Jump to a song to continue.",
-                                     "The part was removed. Jump to a part to continue.",
+                                     "The setlist was removed. Choose another setlist or restore this one to continue.",
+                                     entryWords,
+                                     "The part was removed. Jump to the song or to one of its parts to continue.",
                                      "The song gained parts. Jump to a part to continue."]
         #expect(spokenStatuses == statusWords)
         let states: [ShowStageProjection.CursorState] = [.positioned, .unpositioned,
@@ -70,9 +71,55 @@ extension ShowStageProjectionTests {
                                                          .stale(.partsAdded(Fix.songA))]
         let spokenStates: [String] = states.map { ShowStageFormat.cursorState($0) }
         let stateWords: [String] = ["The cursor is on a song.", "The cursor is not on a song yet.",
-                                    "The setlist was removed. Jump to a song to continue.",
+                                    "The setlist was removed. Choose another setlist or restore this one to continue.",
                                     "The song gained parts. Jump to a part to continue."]
         #expect(spokenStates == stateWords)
+    }
+
+    @Test
+    func theRecoveryAdviceInTheStalePhrasesMatchesWhatTheRealCursorsJumpDoes() throws {
+        let catalog = try Fix.catalog()
+        let library = try Fix.mainLibrary()
+        let jumpTo: (SetlistEntryID, SongPartID?) -> ShowNavigationInput = { entry, part in
+            ShowNavigationInput(.jump(entry, part), source: Fix.foot, sequence: 2, tick: 0)
+        }
+
+        let gone = try library.removingSetlist(Fix.list)
+        let removedStatus = ShowCursorStatus.setlistRemoved(Fix.list)
+        let jumps: [ShowNavigationInput] = [jumpTo(Fix.entryID("e1"), nil), jumpTo(Fix.entryID("e1"), Fix.partID("a1")),
+                                            jumpTo(Fix.entryID("e3"), nil)]
+        for jump in jumps {
+            var cursor = try Fix.cursor(library, at: "e1", part: "a1")
+            let result = Fix.attempt(&cursor, jump, in: gone, catalog: catalog)
+            #expect(result == .refused(.cursorTargetRemoved(removedStatus)))
+        }
+        #expect(!ShowStageFormat.stale(removedStatus).contains("Jump"))
+
+        let setlist = try #require(library.setlist(Fix.list))
+        let withoutE2 = try library.replacingSetlist(setlist.removing(Fix.entryID("e2")))
+        var entryCursor = try Fix.cursor(library, at: "e2", part: "b1")
+        let entryResult = Fix.attempt(&entryCursor, jumpTo(Fix.entryID("e3"), nil), in: withoutE2, catalog: catalog)
+        #expect(entryResult == .moved(Fix.pos("e3", "a1")))
+        #expect(entryCursor.status(in: withoutE2) == .current)
+
+        let single = try Fix.song(Fix.songA, parts: ["p1"])
+        let other = try Fix.song(Fix.songB, parts: ["q1"])
+        let small = try Fix.library(songs: [single, other],
+                                    entries: [Fix.entry("e1", Fix.songA), Fix.entry("e2", Fix.songB)])
+        let lost = try small.upsertingSong(single.removingPart(Fix.partID("p1")), in: catalog)
+        var lostCursor = try Fix.cursor(small, at: "e1", part: "p1")
+        #expect(lostCursor.status(in: lost) == .partRemoved(Fix.partID("p1")))
+        let lostResult = Fix.attempt(&lostCursor, jumpTo(Fix.entryID("e1"), nil), in: lost, catalog: catalog)
+        #expect(lostResult == .moved(Fix.pos("e1", nil)))
+        #expect(lostCursor.status(in: lost) == .current)
+
+        let songC = try #require(library.song(Fix.songC))
+        let grown = try library.upsertingSong(songC.insertingPart(Fix.part("c1"), in: catalog), in: catalog)
+        var grownCursor = try Fix.cursor(library, at: "e4", part: nil)
+        #expect(grownCursor.status(in: grown) == .partsAdded(Fix.songC))
+        let grownResult = Fix.attempt(&grownCursor, jumpTo(Fix.entryID("e4"), nil), in: grown, catalog: catalog)
+        #expect(grownResult == .moved(Fix.pos("e4", "c1")))
+        #expect(grownCursor.status(in: grown) == .current)
     }
 
     @Test

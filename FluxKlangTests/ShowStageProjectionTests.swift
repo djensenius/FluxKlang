@@ -115,6 +115,19 @@ enum ShowStageFixture {
         }
     }
 
+    /// Runs the real command on the given cursor (mutating it when it moves).
+    static func attempt(_ cursor: inout ShowCursor, _ input: ShowNavigationInput, in library: ShowLibrary,
+                        catalog: ShowLinkCatalog) -> Reach {
+        do {
+            switch try cursor.navigate(input, in: library, catalog: catalog) {
+            case let .moved(stop): return .moved(stop.position)
+            case .ignored: return .ignored
+            }
+        } catch {
+            return .refused(error)
+        }
+    }
+
     struct Spot {
         let entry: SetlistEntryID
         let part: SongPartID?

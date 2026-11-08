@@ -19,7 +19,8 @@ struct ShowStageProjection: Hashable, Sendable {
         case positioned
         /// Made on an empty setlist and never moved.
         case unpositioned
-        /// The cursor's target is gone or stale: nothing is projected, and only a jump recovers.
+        /// The cursor's target is gone or stale: nothing is projected. A jump recovers a removed entry (if another
+        /// remains), a removed part and a song that gained parts; a removed setlist needs another cursor.
         case stale(ShowCursorStatus)
     }
 
