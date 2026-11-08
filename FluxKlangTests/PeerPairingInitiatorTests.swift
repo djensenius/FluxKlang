@@ -10,6 +10,8 @@ import Testing
 @Suite("PeerPairingInitiatorTests")
 struct PeerPairingInitiatorTests {
     let start = ContinuousClock.now
+    /// The number of the first attempt every fixture starts from a fresh initiator.
+    static let firstAttempt = PeerInitiatorAttemptID(value: 1)
     let own = PeerPairingInitiatorTests.identity(1)
     let host = PeerPairingInitiatorTests.identity(100)
 
@@ -84,13 +86,13 @@ struct PeerPairingInitiatorTests {
     private func advance(_ value: inout PeerPairingInitiator, stage: Stage, revealed: Bool) throws {
         switch stage {
         case .awaitingDecision:
-            try value.userConfirmed(codesMatch: true, now: start)
+            try value.userConfirmed(codesMatch: true, for: Self.firstAttempt, now: start)
             if revealed { _ = value.revealToSend(now: start) }
         case .paired:
-            try value.userConfirmed(codesMatch: true, now: start)
+            try value.userConfirmed(codesMatch: true, for: Self.firstAttempt, now: start)
             _ = value.revealToSend(now: start)
             try value.hostOutcome(approved: true, now: start)
-        case .denied: try value.userConfirmed(codesMatch: false, now: start)
+        case .denied: try value.userConfirmed(codesMatch: false, for: Self.firstAttempt, now: start)
         case .idle, .committed, .awaitingHostNonce, .showing, .timedOut: break
         }
     }
@@ -100,7 +102,8 @@ struct PeerPairingInitiatorTests {
         switch step {
         case .sent: try initiator.requestSent(now: now)
         case .host(let nonce): _ = try initiator.receiveHostNonce(nonce, now: now)
-        case .confirm(let match): try initiator.userConfirmed(codesMatch: match, now: now)
+        case .confirm(let match):
+            try initiator.userConfirmed(codesMatch: match, for: Self.firstAttempt, now: now)
         case .outcome(let approved): try initiator.hostOutcome(approved: approved, now: now)
         case .start(let spec, let nonce): _ = try initiator.startAttempt(spec, nonce: nonce, now: now)
         }

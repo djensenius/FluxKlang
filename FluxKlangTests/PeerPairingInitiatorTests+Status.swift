@@ -46,8 +46,8 @@ extension PeerPairingInitiatorTests {
 
     @Test("Only paired, denied and timed out are terminal")
     func statusIsTerminalOnlyForPairedDeniedAndTimedOut() throws {
-        let code = try shownCodeForStatusTests()
-        let open: [PeerPairingStatus] = [.idle, .committed, .awaitingHostNonce, .showingCode(code),
+        let prompt = try shownPromptForStatusTests()
+        let open: [PeerPairingStatus] = [.idle, .committed, .awaitingHostNonce, .showingCode(prompt),
                                          .awaitingHostDecision]
         let ended: [PeerPairingStatus] = [.paired, .denied(.codesDidNotMatch), .denied(.hostDenied),
                                           .denied(.nonceReplay), .timedOut]
@@ -55,16 +55,17 @@ extension PeerPairingInitiatorTests {
         #expect(ended.allSatisfy { $0.isTerminal })
     }
 
-    @Test("The status exposes the code only while it is shown")
+    @Test("The status exposes the prompt and its code only while it is shown")
     func statusCodeIsPresentOnlyWhileTheCodeIsShown() throws {
-        let code = try shownCodeForStatusTests()
-        #expect(PeerPairingStatus.showingCode(code).code == code)
+        let prompt = try shownPromptForStatusTests()
+        #expect(PeerPairingStatus.showingCode(prompt).code == prompt.code)
+        #expect(PeerPairingStatus.showingCode(prompt).prompt == prompt)
         let others: [PeerPairingStatus] = [.idle, .committed, .awaitingHostNonce, .awaitingHostDecision, .paired,
                                            .denied(.hostDenied), .timedOut]
-        #expect(others.allSatisfy { $0.code == nil })
+        #expect(others.allSatisfy { $0.code == nil && $0.prompt == nil })
     }
 
-    private func shownCodeForStatusTests() throws -> PeerConfirmationCode {
+    private func shownPromptForStatusTests() throws -> PeerInitiatorPrompt {
         var initiator = try self.initiator(at: .awaitingHostNonce)
         return try initiator.receiveHostNonce(Self.nonce(2), now: start)
     }
@@ -77,10 +78,12 @@ extension PeerPairingInitiatorTests {
         #expect(initiator.status == .committed)
         try initiator.requestSent(now: start)
         #expect(initiator.status == .awaitingHostNonce)
-        let code = try initiator.receiveHostNonce(Self.nonce(2), now: start)
-        #expect(initiator.status == .showingCode(code) && initiator.status.code == code)
+        let prompt = try initiator.receiveHostNonce(Self.nonce(2), now: start)
+        let code = prompt.code
+        #expect(initiator.status == .showingCode(prompt) && initiator.status.code == code)
+        #expect(prompt.attempt == Self.firstAttempt && initiator.status.prompt == prompt)
         #expect(code.digits.count == 6 && code.digits.allSatisfy(\.isNumber))
-        try initiator.userConfirmed(codesMatch: true, now: start)
+        try initiator.userConfirmed(codesMatch: true, for: prompt.attempt, now: start)
         #expect(initiator.status == .awaitingHostDecision)
         #expect(initiator.tick(now: start + .milliseconds(59_999)) == .awaitingHostDecision)
         _ = initiator.revealToSend(now: start)
@@ -91,7 +94,7 @@ extension PeerPairingInitiatorTests {
     @Test("Each way an attempt is denied has its own reason, and a timeout is not a denial")
     func statusDeniedReasonsNameTheirOwnCause() throws {
         var codes = try initiator(at: .showing)
-        try codes.userConfirmed(codesMatch: false, now: start)
+        try codes.userConfirmed(codesMatch: false, for: Self.firstAttempt, now: start)
         var host = try initiator(at: .awaitingDecision)
         try host.hostOutcome(approved: false, now: start)
         var replay = try initiator(at: .awaitingHostNonce)
@@ -126,7 +129,10 @@ extension PeerPairingInitiatorTests {
                     #expect(refusal(of: step, on: &initiator, at: start) == nil, "\(stage) \(step.kind)")
                     #expect(initiator != before, "\(stage) \(step.kind)")
                 } else {
-                    let expected: PeerInitiatorError = step.kind == "start" ? .busy : .unexpectedStep
+                    // No attempt was issued while idle, so a confirmation naming attempt 1 is stale there.
+                    let outOfPhase: PeerInitiatorError = stage == .idle && step.kind == "confirm"
+                        ? .staleAttempt : .unexpectedStep
+                    let expected: PeerInitiatorError = step.kind == "start" ? .busy : outOfPhase
                     #expect(refusal(of: step, on: &initiator, at: start) == expected, "\(stage) \(step.kind)")
                     #expect(initiator == before, "\(stage) \(step.kind)")
                 }

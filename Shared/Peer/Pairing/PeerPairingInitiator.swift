@@ -10,18 +10,24 @@
 //  no `Codable`. The initiator never builds grants and never touches a trust
 //  store: the host alone decides what a peer may do.
 //
-//  Every step first resolves an expired deadline: `now >= deadline` ends an
-//  attempt that is in flight as `.timedOut`, drops the attempt record (and its
-//  nonce) and throws `.timedOut`, before any other check. Every terminal attempt
-//  drops that record; no test can observe the drop itself, because the status
-//  already refuses a reveal.
+//  Deadlines: `now >= deadline` ends an attempt that is in flight as `.timedOut`,
+//  drops the attempt record (and its nonce) and throws `.timedOut`. Every step
+//  except `userConfirmed` resolves an expired deadline first. `userConfirmed`
+//  checks the attempt number first, so a stale answer changes nothing, not even a
+//  due timeout. Every terminal attempt drops that record; no test can observe the
+//  drop itself, because the status already refuses a reveal.
 //  Apart from that timeout and a replayed host nonce (which ends the attempt as
 //  `denied(.nonceReplay)`), a refused call changes nothing.
 //
 //  Limits: "reveal once" holds per VALUE, because a caller can copy this struct
-//  before the call and each copy reveals once. Replay protection lives in the
-//  host's nonce memory. Instant arithmetic near the clock's extremes is not
-//  exercised, as in the host.
+//  before the call and each copy reveals once. The attempt counter also lives in
+//  this value: keep one initiator value for the process lifetime, because a copy
+//  made before a start issues the same number again. Only the person's answer
+//  (`userConfirmed`) carries an attempt number, as in the host; the host's frames
+//  (`receiveHostNonce`, `hostOutcome`), `revealToSend` and `requestSent` do not,
+//  so a late host frame of an earlier attempt is not rejected by number. Replay
+//  protection lives in the host's nonce memory. Instant arithmetic near the
+//  clock's extremes is not exercised, as in the host.
 //
 
 /// Misuse or protocol failure refused by the initiator or the payload.
@@ -35,7 +41,11 @@ enum PeerInitiatorError: Error, Hashable, Sendable {
     case protocolVersionInvalid
     /// The nonce was seen recently (ours or the host's).
     case nonceReplay
+    /// The initiator's attempt counter reached `UInt64.max`; no further attempt can be numbered.
+    case attemptsExhausted
     case unexpectedStep
+    /// The answer names an attempt other than the latest one issued; nothing changed.
+    case staleAttempt
     /// The decision deadline passed; the attempt is now `.timedOut`.
     case timedOut
     /// The host approved although our nonce was never handed out.
@@ -73,6 +83,7 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
     static let nonceMemory = PeerPairingHost.nonceMemory
 
     private struct Attempt: Hashable, Sendable {
+        let id: PeerInitiatorAttemptID
         let hostIdentity: PeerIdentityFingerprint
         let request: PeerPairingRequest
         let nonce: PeerNonce
@@ -81,12 +92,14 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
 
         /// The request label is compared by its UTF-8 bytes in addition to the request's own equality.
         static func == (lhs: Attempt, rhs: Attempt) -> Bool {
-            lhs.hostIdentity == rhs.hostIdentity && lhs.nonce == rhs.nonce && lhs.deadline == rhs.deadline
+            lhs.id == rhs.id && lhs.hostIdentity == rhs.hostIdentity && lhs.nonce == rhs.nonce
+                && lhs.deadline == rhs.deadline
                 && lhs.nonceRevealed == rhs.nonceRevealed && lhs.request == rhs.request
                 && lhs.request.label.utf8.elementsEqual(rhs.request.label.utf8)
         }
 
         func hash(into hasher: inout Hasher) {
+            hasher.combine(id)
             hasher.combine(hostIdentity)
             hasher.combine(nonce)
             hasher.combine(deadline)
@@ -97,10 +110,20 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
 
     private(set) var status = PeerPairingStatus.idle
     private var attempt: Attempt?
+    /// The last issued attempt number; only ever increases, and a refused start does not consume one.
+    private var lastAttempt = PeerInitiatorAttemptID(value: 0)
     private var nonceOrder: [PeerNonce] = []
     private var seenNonces: Set<PeerNonce> = []
 
     init() {}
+
+    #if DEBUG
+    /// Tests only, so that they can reach counter exhaustion: production code must never call it, because
+    /// restarting the counter would reissue attempt numbers.
+    init(testingLastIssuedAttempt: PeerInitiatorAttemptID) {
+        lastAttempt = testingLastIssuedAttempt
+    }
+    #endif
 
     /// The phase name only: the six-digit code, the nonce and the attempt are not printed, so logging an
     /// initiator does not log the code.
@@ -117,8 +140,9 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
     }
 
     /// Commits to `nonce` and returns the request to send. Refuses, in this order and changing nothing:
-    /// `.busy`, `.sameIdentity`, `.invalidLabel`, `.protocolVersionInvalid`, `.nonceReplay`.
-    /// Allowed only while idle or after a terminal attempt; the nonce memory carries over.
+    /// `.busy`, `.sameIdentity`, `.invalidLabel`, `.protocolVersionInvalid`, `.nonceReplay`, `.attemptsExhausted`.
+    /// Allowed only while idle or after a terminal attempt; the nonce memory carries over. A refused start
+    /// consumes no attempt number; an accepted one issues `lastAttempt + 1`.
     mutating func startAttempt(_ spec: PeerPairingAttemptSpec, nonce: PeerNonce,
                                now: ContinuousClock.Instant) throws(PeerInitiatorError) -> PeerPairingRequest {
         guard status == .idle || status.isTerminal else { throw .busy }
@@ -126,27 +150,32 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
         guard PeerPairingLabelRule.isValid(spec.label) else { throw .invalidLabel }
         guard spec.session.protocolVersion >= 1 else { throw .protocolVersionInvalid }
         guard !seenNonces.contains(nonce) else { throw .nonceReplay }
+        guard lastAttempt.value < UInt64.max else { throw .attemptsExhausted }
         remember(nonce)
+        let issued = PeerInitiatorAttemptID(value: lastAttempt.value + 1)
+        lastAttempt = issued
         let request = PeerPairingRequest(identity: spec.identity, label: spec.label, requestedRole: spec.role,
                                          commitment: PeerPairingCommitment(identity: spec.identity, nonce: nonce),
                                          session: spec.session)
-        attempt = Attempt(hostIdentity: spec.hostIdentity, request: request, nonce: nonce,
+        attempt = Attempt(id: issued, hostIdentity: spec.hostIdentity, request: request, nonce: nonce,
                           deadline: now + Self.decisionWindow)
         status = .committed
         return request
     }
 
-    /// The request has been handed to the transport.
+    /// The request has been handed to the transport. Not tied to an attempt number.
     mutating func requestSent(now: ContinuousClock.Instant) throws(PeerInitiatorError) {
         try resolveDeadline(now: now)
         guard status == .committed else { throw .unexpectedStep }
         status = .awaitingHostNonce
     }
 
-    /// Takes the host's nonce and returns the code to show. A nonce in the memory (our own included) ends
-    /// the attempt as `denied(.nonceReplay)` and throws `.nonceReplay`.
-    mutating func receiveHostNonce(_ hostNonce: PeerNonce,
-                                   now: ContinuousClock.Instant) throws(PeerInitiatorError) -> PeerConfirmationCode {
+    /// Takes the host's nonce and returns the prompt to show (this attempt's number and code). A nonce in the
+    /// memory (our own included) ends the attempt as `denied(.nonceReplay)` and throws `.nonceReplay`.
+    /// Not tied to an attempt number: the host's frame is trusted to belong to the attempt in flight.
+    mutating func receiveHostNonce(
+        _ hostNonce: PeerNonce, now: ContinuousClock.Instant
+    ) throws(PeerInitiatorError) -> PeerInitiatorPrompt {
         try resolveDeadline(now: now)
         guard status == .awaitingHostNonce, let current = attempt else { throw .unexpectedStep }
         guard !seenNonces.contains(hostNonce) else {
@@ -156,9 +185,9 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
         remember(hostNonce)
         let transcript = PeerPairingTranscript(host: current.hostIdentity, request: current.request,
                                                hostNonce: hostNonce, peerNonce: current.nonce)
-        let code = PeerConfirmationCode(transcript)
-        status = .showingCode(code)
-        return code
+        let prompt = PeerInitiatorPrompt(attempt: current.id, code: PeerConfirmationCode(transcript))
+        status = .showingCode(prompt)
+        return prompt
     }
 
     /// Our nonce for the host's reveal step. It can be returned only while the code is shown (`showingCode`,
@@ -172,9 +201,14 @@ struct PeerPairingInitiator: Hashable, Sendable, CustomStringConvertible, Custom
         return current.nonce
     }
 
-    /// The person's answer. `codesMatch: false` denies, and the nonce cannot be revealed afterwards (a nonce
-    /// already revealed in `showingCode` stays revealed to the host).
-    mutating func userConfirmed(codesMatch: Bool, now: ContinuousClock.Instant) throws(PeerInitiatorError) {
+    /// The person's answer to the prompt of attempt `attempt`. Order: `.staleAttempt` first (any id but the latest
+    /// issued, a forged future id included), before the deadline is resolved, so a stale call changes nothing, not
+    /// even a due timeout; then `.timedOut`; then `.unexpectedStep` when no code is shown (the right attempt in
+    /// the wrong state is never `.staleAttempt`). `codesMatch: false` denies, and the nonce cannot be revealed
+    /// afterwards (a nonce already revealed in `showingCode` stays revealed to the host).
+    mutating func userConfirmed(codesMatch: Bool, for attempt: PeerInitiatorAttemptID,
+                                now: ContinuousClock.Instant) throws(PeerInitiatorError) {
+        guard attempt == lastAttempt else { throw .staleAttempt }
         try resolveDeadline(now: now)
         guard case .showingCode = status else { throw .unexpectedStep }
         if codesMatch {
