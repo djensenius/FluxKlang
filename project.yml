@@ -433,6 +433,10 @@ targets:
       - path: FluxKlangTests/PeerRetryClassTests+Classes.swift
       - path: FluxKlangTests/PeerRetryClassTests+Revalidate.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
+      - path: FluxKlangTests/PeerBackpressureTests.swift
+      - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
+      - path: FluxKlangTests/PeerBackpressureTests+Inbound.swift
+      - path: FluxKlangTests/PeerBackpressureTests+Telemetry.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Policy.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
@@ -712,6 +716,10 @@ targets:
       - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Pending.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Refusals.swift
+      - path: FluxKlangTests/ReviewSheetModelTests.swift
+      - path: FluxKlangTests/ReviewSheetModelTests+Rows.swift
+      - path: FluxKlangTests/ReviewSheetModelTests+Default.swift
+      - path: FluxKlangTests/ReviewSheetModelTests+Stale.swift
       - path: FluxKlangTests/PeerTransportTests.swift
       - path: FluxKlangTests/PeerTransportTests+Negotiation.swift
       - path: FluxKlangTests/ControlBindingTests.swift
