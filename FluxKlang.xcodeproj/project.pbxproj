@@ -661,6 +661,7 @@
 		33AC34BE68962DD1F3376B90 /* RealtimeHandoffTests+Ramps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E05E35C3F4C069B8D4BE38B /* RealtimeHandoffTests+Ramps.swift */; };
 		33AD83F15CD9EAEC44272672 /* CopilotAssistantGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF51B8A26B704629FF9267B0 /* CopilotAssistantGenerator.swift */; };
 		33B5FBA73EFF8DE2C1C20F6B /* WorkspaceNavigationReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A346542950D67960C362224 /* WorkspaceNavigationReducer.swift */; };
+		3400CB52FE3AE9DCA4B99368 /* MIDIClockArbitrationTests+Jitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE96EFB99FAE4588A8A2954 /* MIDIClockArbitrationTests+Jitter.swift */; };
 		34628A038C9CDCB040EC9138 /* CaptureSMFExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82DAEC3844DEFAE04346B74B /* CaptureSMFExportTests.swift */; };
 		349041C7DE6C4D3FDDDA71E1 /* OpenSoundControl+BundlePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9941C7B59EE7E7F17FBBC049 /* OpenSoundControl+BundlePlanner.swift */; };
 		34A75273B98E593DDFE87531 /* PatchTransitionTests+Bounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABC421F8F3A018968C93797 /* PatchTransitionTests+Bounds.swift */; };
@@ -1093,6 +1094,7 @@
 		571DA891A3C63D70165920E6 /* WorkspaceNavigationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DD66688E0E950B6C032A4CB /* WorkspaceNavigationModel.swift */; };
 		5743C2C2A3DAB1F545CD6DCB /* InterruptedTakeSalvageTests+Verdicts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 775BD9EFBDBEC88C3F9C49DE /* InterruptedTakeSalvageTests+Verdicts.swift */; };
 		574926AA9BC76E2F73CC6DBA /* ExplanationFact.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD2BCB4B612E58C40D2BFF4B /* ExplanationFact.swift */; };
+		57516945997C2BC05DC0E3B9 /* WorkspaceStatusTests+ShowReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B2E874FE5AF026DE46A7EC /* WorkspaceStatusTests+ShowReadiness.swift */; };
 		5753186F6B85A7C2B6475E49 /* RemoteRoleTests+Transitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 625BE0EED7AD72B5679D9D04 /* RemoteRoleTests+Transitions.swift */; };
 		5754B65C8630744B06C3E36F /* WorkspaceStatusTests+Devices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21F5F643DE0BC6C315126F1C /* WorkspaceStatusTests+Devices.swift */; };
 		57597F89164AE09C8D1F4D9B /* ParameterAutomationTests+Arbitration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3001A4716784BBC49AE632F3 /* ParameterAutomationTests+Arbitration.swift */; };
@@ -1484,6 +1486,7 @@
 		7495FC6D8480707EBE773838 /* HostAuthorityTests+RestoreCommitGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55BF511C353DB9B24AD7956 /* HostAuthorityTests+RestoreCommitGate.swift */; };
 		7499456DBEF873FB8D918000 /* MeterSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA5C4C6ED53839260D1E670 /* MeterSource.swift */; };
 		74A2C47A3B1417BD940046A6 /* MIDISourceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42FB318C12E51F28C086A44B /* MIDISourceRegistry.swift */; };
+		74E010AA3554C6E44D03A74C /* WorkspaceStatusShowReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D3A7F00D6D70E1B197B8A9 /* WorkspaceStatusShowReadiness.swift */; };
 		74ED3517894E0416848CD12F /* GraphReferenceEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF2F09B566D817B1F84E09E /* GraphReferenceEvaluatorTests.swift */; };
 		750447FB703422BFEA288603 /* GraphReferenceEvaluatorTests+Kernels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70E696A5BB243D66E7216EEC /* GraphReferenceEvaluatorTests+Kernels.swift */; };
 		7518AB36258F4B6295B1FC90 /* ControlLoopConvergenceTests+OSC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1206AFBCA508ABF6BE15AB85 /* ControlLoopConvergenceTests+OSC.swift */; };
@@ -1578,6 +1581,7 @@
 		7C5A69EA22DD371E14C3B2A5 /* BackingClipPlaybackTests+Render.swift in Sources */ = {isa = PBXBuildFile; fileRef = C158A7D073097F941A5D1FBA /* BackingClipPlaybackTests+Render.swift */; };
 		7C6581B0CA83EE508F4B0C50 /* ResourceLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 092C228C9272D951800FE27C /* ResourceLedger.swift */; };
 		7C745E659D4BC7B9EAEC8A5B /* GraphReferenceEvaluatorTests+Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52251670247471FC09DBFE58 /* GraphReferenceEvaluatorTests+Fixtures.swift */; };
+		7C75DB44F6613DAEC57E39B8 /* MIDIClockSourceJitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601CF4121C627868737B495F /* MIDIClockSourceJitter.swift */; };
 		7C86903DB59291C9B205F944 /* ProjectStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014737B3FB095D94CC08C597 /* ProjectStagingTests.swift */; };
 		7C91A7820A0EA6EACE682376 /* LegacySidecarPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFCC28F8CFB9482005976E45 /* LegacySidecarPlan.swift */; };
 		7C922B501A3A381D4D3BE518 /* PluginIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF7681162AE63734BECBD231 /* PluginIdentity.swift */; };
@@ -1893,6 +1897,7 @@
 		9572AB0D48DC28E0C36DF387 /* MediaIOWorkerTests+PumpCompletion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8743238F33BC8AB483AE1BDB /* MediaIOWorkerTests+PumpCompletion.swift */; };
 		95A2AF2635402EC737BF542E /* PeerStatusProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5089BD9440CABF7A5F30988 /* PeerStatusProjectionTests.swift */; };
 		95BFA2014AA1DF438BFDFC39 /* ControlFeedbackTests+Echo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 386216FB47B9F8E163BB69B5 /* ControlFeedbackTests+Echo.swift */; };
+		95C52457D760C9C9D05C0507 /* MIDIClockStampWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 480A14BC78E34ABB1AF1C915 /* MIDIClockStampWindow.swift */; };
 		95E5F6E4718C069DE6D20E0E /* SMFTempoImportTests+Events.swift in Sources */ = {isa = PBXBuildFile; fileRef = 648828CBBD03755C1A278917 /* SMFTempoImportTests+Events.swift */; };
 		95F901456433F2F42507E21D /* BackingRender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 899D3866F7EC93F429324278 /* BackingRender.swift */; };
 		96006ECE036640F94DC31640 /* PatchMatrixView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D8913CDF7132D0F55F15534 /* PatchMatrixView.swift */; };
@@ -2030,6 +2035,7 @@
 		9F6C4BE2F8F8CD6F17D9113C /* WiringStaleDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1803E78CADE9EAAECBFC93E /* WiringStaleDraft.swift */; };
 		9F779DF488FE40EB513F89ED /* StagingFault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F7894785DBEC0E11DFA8C2 /* StagingFault.swift */; };
 		9F7FF3586D3DB742ED749C85 /* HostAuthorityTests+ActorRestoreDependencies.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6B297784BD0D3C40CCC4900 /* HostAuthorityTests+ActorRestoreDependencies.swift */; };
+		9F8337ECA77C19D99F47F2EB /* WorkspaceStatusShowReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15D3A7F00D6D70E1B197B8A9 /* WorkspaceStatusShowReadiness.swift */; };
 		9F83B6C75FF0724B207B9B79 /* FaderLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 612EF1E4B6E1D25263BC78F5 /* FaderLayout.swift */; };
 		9F8F1B4D1D055E2FEBAECA40 /* PluginHostNegotiationTests+Reprepare.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1FF5182894500A00D823D64 /* PluginHostNegotiationTests+Reprepare.swift */; };
 		9F947060B857D272E9B5F1F3 /* ProjectPackageFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1111FCA11EFD0CDC6B8665D /* ProjectPackageFileSystem.swift */; };
@@ -2224,6 +2230,7 @@
 		AEE8BD011636ABF73C913465 /* ActionSetRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4883B5EB0AC2427C9907D071 /* ActionSetRefusal.swift */; };
 		AF08F6F3E4E97D98AD4627A8 /* UMPTranslationTests+DataEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783DD52B6F6FFCC78F21C789 /* UMPTranslationTests+DataEntry.swift */; };
 		AF177E0E3AED7A7F620AA255 /* AssistantRoutingFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B4B6AABFCE82BB99E7CE2B6 /* AssistantRoutingFixture.swift */; };
+		AF38E67B57209F6288D85F36 /* WorkspaceStatusTests+ShowReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B2E874FE5AF026DE46A7EC /* WorkspaceStatusTests+ShowReadiness.swift */; };
 		AF3B82EA31BABE1F3FBEB21A /* SettingsContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6168A7E728E3196D6787E965 /* SettingsContentView.swift */; };
 		AF4C09FC0F1065B0BCB7E1E8 /* SetupFlowTests+Flow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B854391DCFC3FDA6D12A7406 /* SetupFlowTests+Flow.swift */; };
 		AF54E6EAC0D03646F445FCBD /* ParameterCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E0A9B5E9A265C2BDA42E967 /* ParameterCatalog.swift */; };
@@ -2618,6 +2625,7 @@
 		CDF2DA9B7585458765DF6DAA /* ClockGenerationAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91348FA1F4AE2977513AEBA /* ClockGenerationAdapters.swift */; };
 		CDFBEF3B179E98156401B279 /* FanInHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA032371E0ACEFDEA08BBD7 /* FanInHandoff.swift */; };
 		CE08F46B8FF4D73646707F43 /* ShowResumePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172D2B601CCEF97C620B468B /* ShowResumePlanner.swift */; };
+		CE0B32FE34091172476CCCCE /* MIDIClockStampWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 480A14BC78E34ABB1AF1C915 /* MIDIClockStampWindow.swift */; };
 		CE30F54984C3400BA6A3F9DF /* MIDIPerformanceIDs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72AE872027E100AC6D5D7D19 /* MIDIPerformanceIDs.swift */; };
 		CE53285BFE95A66E095489DB /* GraphCompilerPlanTests+Hardening.swift in Sources */ = {isa = PBXBuildFile; fileRef = E148C1BFC609FE9F53FB4FE0 /* GraphCompilerPlanTests+Hardening.swift */; };
 		CE9432A8BBB11795CEA092C5 /* UMPStreamRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 050232CB65A17EAE83A8CAE1 /* UMPStreamRefusal.swift */; };
@@ -2728,6 +2736,7 @@
 		D708490033A91065F8994B30 /* ProjectCheckpointTests+Compare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C90CCA7056FA7DC0717825C /* ProjectCheckpointTests+Compare.swift */; };
 		D7120E21A678056959904C62 /* TransportDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B8C1ADB7A32CD6EA2EE718 /* TransportDocument.swift */; };
 		D724074D837A40A0F69D9EBA /* PluginResourceTests+Order.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F1FF2DBFF4DE837C1958619 /* PluginResourceTests+Order.swift */; };
+		D76254079B7B4F4A09126872 /* MIDIClockJitterWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A19CF3267D1E5F5665548C /* MIDIClockJitterWatch.swift */; };
 		D7748435840DA99BC24A0871 /* PluginHostNegotiationTests+ReprepareTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A57014920A2E37E35A2ACDF /* PluginHostNegotiationTests+ReprepareTokens.swift */; };
 		D776ECC2922CAFE54318DEFB /* OSCSchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3016459F105E3E32AD05F84D /* OSCSchedulingTests.swift */; };
 		D77941218FF46D0A697ED1FF /* GraphReferenceEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A45854815992FC780186FB2F /* GraphReferenceEvaluator.swift */; };
@@ -3061,11 +3070,13 @@
 		EE00B21ADC0E37D0753C77D3 /* AssistantBackendDraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56CF080FCE7DB8FA2438FBB6 /* AssistantBackendDraftStore.swift */; };
 		EE05F2AAE9450626BDE00ED6 /* MIDICapabilityNegotiationTests+Refusals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01EED4146F9D5065158DC009 /* MIDICapabilityNegotiationTests+Refusals.swift */; };
 		EE0992AB8ADCA07EA953E7DD /* MIDIClockSourceStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879862FA00731D2BB7A04739 /* MIDIClockSourceStatus.swift */; };
+		EE1FBA854AC2ECCAF3D593EB /* MIDIClockJitterWatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5A19CF3267D1E5F5665548C /* MIDIClockJitterWatch.swift */; };
 		EE2AE8CFB262ADBF5B141756 /* MIDIClipOwnershipTests+Refusals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 975694CD9D5F63E996CA089B /* MIDIClipOwnershipTests+Refusals.swift */; };
 		EE54F2CF8917B90C4F8A1C2A /* PeerSessionAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A971DFF9E68D19F366AD80 /* PeerSessionAuthorization.swift */; };
 		EE648E1630958328C4E36A43 /* MeterTapLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F811E0A7222E3F5623FB83 /* MeterTapLimits.swift */; };
 		EE7292DA5F1E67FB7325CD0E /* SMFTempoImportTests+Events.swift in Sources */ = {isa = PBXBuildFile; fileRef = 648828CBBD03755C1A278917 /* SMFTempoImportTests+Events.swift */; };
 		EE73C106A682E256356F65D3 /* LegacySidecarAdoptionTests+Bounds.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10392CF33A625F7473E2A235 /* LegacySidecarAdoptionTests+Bounds.swift */; };
+		EE73D179BA026C96A2654CDD /* MIDIClockSourceJitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601CF4121C627868737B495F /* MIDIClockSourceJitter.swift */; };
 		EE791356003EE16EBE678617 /* OpenSoundControl+EndpointPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA6011D19446A462D67ABC9 /* OpenSoundControl+EndpointPolicy.swift */; };
 		EE7C95189FB2A7A1E95E2AB0 /* AutomationBlockRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20688312E9346C779815907C /* AutomationBlockRenderer.swift */; };
 		EE7DB633C0AEC22580760D2E /* InputPatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 581CD8ACF8D35B9779227576 /* InputPatchView.swift */; };
@@ -3182,6 +3193,7 @@
 		F83962A177F4CD04E337032A /* ProjectPackageManifestCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93284AA12D14DABA1235E509 /* ProjectPackageManifestCodecTests.swift */; };
 		F8398D5E6651FF69C94C38E5 /* OSCNamespaceTests+Arguments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412F0C3E3506C1787C93ACD1 /* OSCNamespaceTests+Arguments.swift */; };
 		F85724C5114A3AADB9E3B15D /* RemoteControlDispatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = D059CBB32BADD926B6725A60 /* RemoteControlDispatch.swift */; };
+		F861168AD8F5EF24042B7591 /* MIDIClockArbitrationTests+Jitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE96EFB99FAE4588A8A2954 /* MIDIClockArbitrationTests+Jitter.swift */; };
 		F861FF6650CD88A9A50D84EF /* MeterTapLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93F811E0A7222E3F5623FB83 /* MeterTapLimits.swift */; };
 		F86DEC7EF350AFBE09AF55DD /* MediaIORequests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A95DB446CB65CB1DB719D1DD /* MediaIORequests.swift */; };
 		F87023AC05CD34B86BC90141 /* WiringComposeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38B761F7744EBBE9E2EEBD71 /* WiringComposeTests.swift */; };
@@ -3457,6 +3469,7 @@
 		158B6C4F77C258FE0615A162 /* Revisions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Revisions.swift; sourceTree = "<group>"; };
 		15A1489A0F91BAF28256AC08 /* KernelCycleFollowUpTests+AdmissionTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KernelCycleFollowUpTests+AdmissionTable.swift"; sourceTree = "<group>"; };
 		15CEFA4185CE04156E51C499 /* PeerEndpointPolicyTests+Policy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerEndpointPolicyTests+Policy.swift"; sourceTree = "<group>"; };
+		15D3A7F00D6D70E1B197B8A9 /* WorkspaceStatusShowReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceStatusShowReadiness.swift; sourceTree = "<group>"; };
 		1643468C202DA80A639FC318 /* PeerControlMessageTests+Golden.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerControlMessageTests+Golden.swift"; sourceTree = "<group>"; };
 		166CAFF9359EF791E0279B7C /* RealtimeHandoffTests+KernelCycleOrderingStress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+KernelCycleOrderingStress.swift"; sourceTree = "<group>"; };
 		16A488935855818E4005D574 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
@@ -3486,6 +3499,7 @@
 		1B3DA96DB43DA6A599A869E6 /* WiringComposeTests+Bulk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WiringComposeTests+Bulk.swift"; sourceTree = "<group>"; };
 		1B4C180B61A6434B2ADA9257 /* PeerBackpressureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerBackpressureTests.swift; sourceTree = "<group>"; };
 		1B73D3BB8B8C2D8AF3ED4668 /* PerformNumericEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformNumericEntry.swift; sourceTree = "<group>"; };
+		1BE96EFB99FAE4588A8A2954 /* MIDIClockArbitrationTests+Jitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIClockArbitrationTests+Jitter.swift"; sourceTree = "<group>"; };
 		1C4398B49D0BEAFF490A7525 /* LegacySidecarPlan+Probe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LegacySidecarPlan+Probe.swift"; sourceTree = "<group>"; };
 		1C6659BCC03E279D83733681 /* PreparationProjectBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreparationProjectBudgetTests.swift; sourceTree = "<group>"; };
 		1C7FF6982F837EB7BAA4FC6A /* KeyValueKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyValueKey.swift; sourceTree = "<group>"; };
@@ -3789,6 +3803,7 @@
 		47AE2617F3BFCE2F475789B1 /* WingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingTransport.swift; sourceTree = "<group>"; };
 		47D99DA199980671E852F6EB /* GraphReferenceEvaluatorTests+Limits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GraphReferenceEvaluatorTests+Limits.swift"; sourceTree = "<group>"; };
 		47E2C2B6DF6A7753D8377377 /* MusicalTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicalTimeline.swift; sourceTree = "<group>"; };
+		480A14BC78E34ABB1AF1C915 /* MIDIClockStampWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIClockStampWindow.swift; sourceTree = "<group>"; };
 		485B161D1C07CA25150072EA /* RigReservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RigReservation.swift; sourceTree = "<group>"; };
 		4883B5EB0AC2427C9907D071 /* ActionSetRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionSetRefusal.swift; sourceTree = "<group>"; };
 		4890AE4D778EC225EBCFBD8C /* RemoteDispatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDispatchTests.swift; sourceTree = "<group>"; };
@@ -3941,6 +3956,7 @@
 		5FBBCBC7F2AFD2E5528A2D17 /* CaptureNotePairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureNotePairing.swift; sourceTree = "<group>"; };
 		5FD3C7A5B013E8501714F71F /* AUEventBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AUEventBridgeTests.swift; sourceTree = "<group>"; };
 		6002EEFDAA2D889FF08DCB8F /* ControlContractTests+SchedulerMusicalObservations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+SchedulerMusicalObservations.swift"; sourceTree = "<group>"; };
+		601CF4121C627868737B495F /* MIDIClockSourceJitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIClockSourceJitter.swift; sourceTree = "<group>"; };
 		60642F17250910040743CC51 /* ProjectStagingTests+Import.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProjectStagingTests+Import.swift"; sourceTree = "<group>"; };
 		6069097D3E6D282024F7DDF8 /* MIDIInternalClockPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIInternalClockPlan.swift; sourceTree = "<group>"; };
 		60B187E245B35CF9FD31FB37 /* MIDIClockPulseScheduleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIClockPulseScheduleTests.swift; sourceTree = "<group>"; };
@@ -4635,6 +4651,7 @@
 		C22EF50295E4CDE232D1A10A /* HardwareServiceFactories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HardwareServiceFactories.swift; sourceTree = "<group>"; };
 		C232D0413B36A8EF0FC047E3 /* ContractFixtureIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractFixtureIDs.swift; sourceTree = "<group>"; };
 		C24F5935B1F0A8A1A882E0D1 /* BackingClipRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackingClipRefusal.swift; sourceTree = "<group>"; };
+		C2B2E874FE5AF026DE46A7EC /* WorkspaceStatusTests+ShowReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceStatusTests+ShowReadiness.swift"; sourceTree = "<group>"; };
 		C2C6C15B5F380754E3E9D6AE /* AudioMuteContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMuteContractTests.swift; sourceTree = "<group>"; };
 		C2DFA9B84C52D05F0BE42B50 /* PeerPairingInitiatorTests+Status.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerPairingInitiatorTests+Status.swift"; sourceTree = "<group>"; };
 		C2FB660D52674849A8C3FDC7 /* RigReservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RigReservationTests.swift; sourceTree = "<group>"; };
@@ -4775,6 +4792,7 @@
 		D51D1634EBC4B7EFD1049191 /* PeerPairingStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerPairingStatus.swift; sourceTree = "<group>"; };
 		D521C0B9BEF6772C0767E6EC /* HostAuthorityTests+RecoveryLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostAuthorityTests+RecoveryLifecycle.swift"; sourceTree = "<group>"; };
 		D583951A20109F1BB553EB04 /* ControlBindingGroupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlBindingGroupTests.swift; sourceTree = "<group>"; };
+		D5A19CF3267D1E5F5665548C /* MIDIClockJitterWatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIClockJitterWatch.swift; sourceTree = "<group>"; };
 		D5CC74466DF1C60A962DDF1B /* ClockGenerationUnificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockGenerationUnificationTests.swift; sourceTree = "<group>"; };
 		D64BD7BCB392D3013AF8EF17 /* AssistantActionPlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantActionPlanningTests.swift; sourceTree = "<group>"; };
 		D6A971DFF9E68D19F366AD80 /* PeerSessionAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSessionAuthorization.swift; sourceTree = "<group>"; };
@@ -5125,6 +5143,7 @@
 				2AF7DA966AD66BED9553E82D /* WorkspaceStatusRefusal.swift */,
 				8643E188B7F72B6F305B7CF6 /* WorkspaceStatusSegment.swift */,
 				30147D8CA3E27FC920BE4EEA /* WorkspaceStatusSegmentID.swift */,
+				15D3A7F00D6D70E1B197B8A9 /* WorkspaceStatusShowReadiness.swift */,
 			);
 			path = Status;
 			sourceTree = "<group>";
@@ -6828,8 +6847,11 @@
 				4898A57D4747AFC9D7468E19 /* MIDIClockArbitrationError.swift */,
 				0CDB362D4C2260DCBA378B20 /* MIDIClockArbitrationEvent.swift */,
 				86A709FE6A6E6E05760D373C /* MIDIClockArbitrationPolicy.swift */,
+				D5A19CF3267D1E5F5665548C /* MIDIClockJitterWatch.swift */,
 				53D79242C31331A570280941 /* MIDIClockLeaderArbiter.swift */,
+				601CF4121C627868737B495F /* MIDIClockSourceJitter.swift */,
 				879862FA00731D2BB7A04739 /* MIDIClockSourceStatus.swift */,
+				480A14BC78E34ABB1AF1C915 /* MIDIClockStampWindow.swift */,
 				53E1CCBF00F21AADFD553C2E /* MIDIClockSteadyRun.swift */,
 			);
 			path = Arbitration;
@@ -7885,6 +7907,7 @@
 				5A38597651B6A51DDCDA55EC /* MIDIClipTimingTests+Loop.swift */,
 				7B549C19D16949D28D95BBB3 /* MIDIClockArbitrationTests.swift */,
 				A1C5D9D92559BD3B287F34F6 /* MIDIClockArbitrationTests+Dropout.swift */,
+				1BE96EFB99FAE4588A8A2954 /* MIDIClockArbitrationTests+Jitter.swift */,
 				9873D607BA3A8340BEBFD3F6 /* MIDIClockArbitrationTests+SteadyRun.swift */,
 				78F7704E6CD0C89793F64CAA /* MIDIClockFollowerTests.swift */,
 				A2AA72842ACC4352EAF19132 /* MIDIClockJitterTests.swift */,
@@ -8354,6 +8377,7 @@
 				C960306E8846C9A0F487B9AD /* WorkspaceStatusTests+Peers.swift */,
 				D479997F00DADFC43B98439F /* WorkspaceStatusTests+Pending.swift */,
 				C8763B3C3F4382F94545C1EE /* WorkspaceStatusTests+Refusals.swift */,
+				C2B2E874FE5AF026DE46A7EC /* WorkspaceStatusTests+ShowReadiness.swift */,
 				8D6BC680CCBA2A909B62D303 /* Fixtures */,
 			);
 			path = FluxKlangTests;
@@ -8961,11 +8985,14 @@
 				0F1CD94390F4BB48C98A35A7 /* MIDIClockJitterNominal.swift in Sources */,
 				D1AB424E32ABA3D053EC0722 /* MIDIClockJitterRefusal.swift in Sources */,
 				14F1AEEE4121A03B3540D5C6 /* MIDIClockJitterSummary.swift in Sources */,
+				D76254079B7B4F4A09126872 /* MIDIClockJitterWatch.swift in Sources */,
 				35C3AB3EA75A20EAA7DDFC75 /* MIDIClockLeaderArbiter.swift in Sources */,
 				4DCC21E7E6196C798BEB3C70 /* MIDIClockMath.swift in Sources */,
 				AD9C274CC43FA1F59476B7F3 /* MIDIClockMessage.swift in Sources */,
 				1BDD5D218F456CA467590DAC /* MIDIClockPulseSchedule.swift in Sources */,
+				EE73D179BA026C96A2654CDD /* MIDIClockSourceJitter.swift in Sources */,
 				EE0992AB8ADCA07EA953E7DD /* MIDIClockSourceStatus.swift in Sources */,
+				CE0B32FE34091172476CCCCE /* MIDIClockStampWindow.swift in Sources */,
 				109A3E3D091167481F5F24CA /* MIDIClockSteadyRun.swift in Sources */,
 				80D39725790AB48AAB8341B0 /* MIDIClockTempoEstimator.swift in Sources */,
 				658FFADB8EB167BC87AC19CF /* MIDIClockTempoProposer.swift in Sources */,
@@ -9552,6 +9579,7 @@
 				6766F0CCFEAC3EE73F28B23E /* WorkspaceStatusRefusal.swift in Sources */,
 				FAEB366B37DBAC0EC26EB02F /* WorkspaceStatusSegment.swift in Sources */,
 				B2D7976E3454318F1BDAD17D /* WorkspaceStatusSegmentID.swift in Sources */,
+				9F8337ECA77C19D99F47F2EB /* WorkspaceStatusShowReadiness.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -9891,11 +9919,14 @@
 				D7E6F83DE5451A1D8F73EDF9 /* MIDIClockJitterNominal.swift in Sources */,
 				7A4580CB3B3F9447FEEAF56E /* MIDIClockJitterRefusal.swift in Sources */,
 				A8D377E09861E2B010C7963F /* MIDIClockJitterSummary.swift in Sources */,
+				EE1FBA854AC2ECCAF3D593EB /* MIDIClockJitterWatch.swift in Sources */,
 				2CA433BD1674F0C1C53757BD /* MIDIClockLeaderArbiter.swift in Sources */,
 				4C51DD9DC223BB801C58464D /* MIDIClockMath.swift in Sources */,
 				4B43EA2BE33499E096EB29C8 /* MIDIClockMessage.swift in Sources */,
 				4B0FE4E093421A3DEDF00531 /* MIDIClockPulseSchedule.swift in Sources */,
+				7C75DB44F6613DAEC57E39B8 /* MIDIClockSourceJitter.swift in Sources */,
 				0F831BA5F194D674BD8D4FE8 /* MIDIClockSourceStatus.swift in Sources */,
+				95C52457D760C9C9D05C0507 /* MIDIClockStampWindow.swift in Sources */,
 				11B71636F063746CDCA64C85 /* MIDIClockSteadyRun.swift in Sources */,
 				9D4A65A23B702582E5B4FB35 /* MIDIClockTempoEstimator.swift in Sources */,
 				EB37874C4422E4A598D09947 /* MIDIClockTempoProposer.swift in Sources */,
@@ -10482,6 +10513,7 @@
 				510661C48D3566CE4774FB09 /* WorkspaceStatusRefusal.swift in Sources */,
 				03FCF76282D10220F09979FF /* WorkspaceStatusSegment.swift in Sources */,
 				7ADEFD4973839D69B209248A /* WorkspaceStatusSegmentID.swift in Sources */,
+				74E010AA3554C6E44D03A74C /* WorkspaceStatusShowReadiness.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -10654,6 +10686,7 @@
 				E2D6B2D5D978101B20DB1DC8 /* MIDIClipTimingTests+Loop.swift in Sources */,
 				962937C390F14B16DD6E8B84 /* MIDIClipTimingTests.swift in Sources */,
 				9B967706AF9ADD2F498D87AC /* MIDIClockArbitrationTests+Dropout.swift in Sources */,
+				F861168AD8F5EF24042B7591 /* MIDIClockArbitrationTests+Jitter.swift in Sources */,
 				E5EEB82F269809072A7F6EF1 /* MIDIClockArbitrationTests+SteadyRun.swift in Sources */,
 				9ABD5D8DFE6BBF6F25173F6D /* MIDIClockArbitrationTests.swift in Sources */,
 				C9BCFCFBCE2F874A3B4C2EA0 /* MIDIClockFollowerTests.swift in Sources */,
@@ -11133,6 +11166,7 @@
 				63D3BEA85736B6D3B4B5993F /* WorkspaceStatusTests+Peers.swift in Sources */,
 				C91514D00513CCC2B78D5EA3 /* WorkspaceStatusTests+Pending.swift in Sources */,
 				2AA39F18315D5577DC30FE24 /* WorkspaceStatusTests+Refusals.swift in Sources */,
+				AF38E67B57209F6288D85F36 /* WorkspaceStatusTests+ShowReadiness.swift in Sources */,
 				0DFFA7F87C465EFE564A12BB /* WorkspaceStatusTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -11432,6 +11466,7 @@
 				7A8F4007E72243D5DAC732D0 /* MIDIClipTimingTests+Loop.swift in Sources */,
 				A2B31C2234C4A4EB689B688E /* MIDIClipTimingTests.swift in Sources */,
 				AAD4BB6280D5C77C3148BBB3 /* MIDIClockArbitrationTests+Dropout.swift in Sources */,
+				3400CB52FE3AE9DCA4B99368 /* MIDIClockArbitrationTests+Jitter.swift in Sources */,
 				D9515EE0042DB4417960A12C /* MIDIClockArbitrationTests+SteadyRun.swift in Sources */,
 				F8884009C0DCA5D340117E4B /* MIDIClockArbitrationTests.swift in Sources */,
 				6476ADB1659C0848D988BEA8 /* MIDIClockFollowerTests.swift in Sources */,
@@ -11939,6 +11974,7 @@
 				80CFBBF36DACB5665A022DBD /* WorkspaceStatusTests+Peers.swift in Sources */,
 				3849966817DE3C7E51D65548 /* WorkspaceStatusTests+Pending.swift in Sources */,
 				FE401E08519F87BF363C5707 /* WorkspaceStatusTests+Refusals.swift in Sources */,
+				57516945997C2BC05DC0E3B9 /* WorkspaceStatusTests+ShowReadiness.swift in Sources */,
 				BB859F122306B103791E3B56 /* WorkspaceStatusTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

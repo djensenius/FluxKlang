@@ -326,6 +326,7 @@ targets:
       - path: FluxKlangTests/MeterTapTests+Accumulation.swift
       - path: FluxKlangTests/MeterTapTests+Bounds.swift
       - path: FluxKlangTests/MeterTapTests+Fixtures.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+ShowReadiness.swift
       - path: FluxKlangTests/MeterTapTests+Invalid.swift
       - path: FluxKlangTests/MeterTapTests+Level.swift
       - path: FluxKlangTests/MeterTapTests+Publish.swift
@@ -666,6 +667,7 @@ targets:
       - path: FluxKlangTests/MIDIControlIntakeTests.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Bounds.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Determinism.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+Jitter.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Goldens.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Keys.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Precedence.swift
