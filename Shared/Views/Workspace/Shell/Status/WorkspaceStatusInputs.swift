@@ -86,6 +86,8 @@ struct WorkspaceStatusInputs: Hashable, Sendable {
     let diagnostics: WorkspaceStatusDiagnosticCounts
     let permissions: WorkspaceStatusPermissions
     let shell: WorkspaceStatusShell
+    /// The readiness of the setlist about to start, or nil when the caller has none.
+    var showReadiness: WorkspaceStatusShowReadiness?
 }
 
 // MARK: - Bounds and validation
