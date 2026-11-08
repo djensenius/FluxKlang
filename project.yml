@@ -270,6 +270,10 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
       - path: FluxKlangTests/NeutralSnapshotTests+LegacyDecisions.swift
+      - path: FluxKlangTests/ExplainGroundingTests.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Facts.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Citations.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Order.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
       - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
       - path: FluxKlangTests/SnapshotToolTests.swift
