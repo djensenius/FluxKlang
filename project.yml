@@ -201,6 +201,10 @@ targets:
       - path: FluxKlangTests/RunStatisticsTests+Comparison.swift
       - path: FluxKlangTests/RunStatisticsTests+Percentiles.swift
       - path: FluxKlangTests/RunStatisticsTests+Record.swift
+      - path: FluxKlangTests/MTCEmitTests.swift
+      - path: FluxKlangTests/MTCEmitTests+Golden.swift
+      - path: FluxKlangTests/MTCEmitTests+Refusals.swift
+      - path: FluxKlangTests/MTCEmitTests+Wrap.swift
       - path: FluxKlangTests/RunStatisticsTests+StableBuffer.swift
       - path: FluxKlangTests/RunStatisticsTests+Uncertainty.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
@@ -464,6 +468,10 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Decode.swift
       - path: FluxKlangTests/UMPStreamMessageTests+Hostile.swift
       - path: FluxKlangTests/UMPStreamMessageTests+ProductID.swift
+      - path: FluxKlangTests/ProgramRecallTests.swift
+      - path: FluxKlangTests/ProgramRecallTests+Numbering.swift
+      - path: FluxKlangTests/ProgramRecallTests+Order.swift
+      - path: FluxKlangTests/ProgramRecallTests+Resolve.swift
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
@@ -565,6 +573,10 @@ targets:
       - path: FluxKlangTests/MediaBlockPoolTests+Generation.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Lease.swift
       - path: FluxKlangTests/MediaBlockPoolTests+RandomSequences.swift
+      - path: FluxKlangTests/MIDIClockJitterTests.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Golden.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Refusals.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Verdict.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Statistics.swift
       - path: FluxKlangTests/MediaIOWorkerTests.swift
       - path: FluxKlangTests/MediaIOWorkerTests+Mapping.swift
@@ -723,6 +735,10 @@ targets:
       - path: FluxKlangTests/ProjectRecoveryTests+Conflicts.swift
       - path: FluxKlangTests/ProjectRecoveryTests+EffectOrdering.swift
       - path: FluxKlangTests/ProjectRecoveryTests+Retention.swift
+      - path: FluxKlangTests/SpatialMotionTests.swift
+      - path: FluxKlangTests/SpatialMotionTests+Evaluate.swift
+      - path: FluxKlangTests/SpatialMotionTests+Order.swift
+      - path: FluxKlangTests/SpatialMotionTests+Sampling.swift
       - path: FluxKlangTests/ProjectRecoveryTests+SaveFaults.swift
       - path: FluxKlangTests/ProjectRecoveryTests+TransitionMatrix.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
