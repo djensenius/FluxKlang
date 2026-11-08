@@ -230,6 +230,11 @@ extension WiringImpactTests {
 
     private static let noOpMove = WiringImpactGesture.moveNode(verb, x: 4, y: 0)
 
+    // The first three no-op tests below put the NaN in the ACTIVE graph, the case a caller can reach, because
+    // WiringImpact.make takes the active graph as given. The later tests that put a NaN into the DRAFT (the added
+    // node and moved row, the added node moved off NaN, the moved row moved off NaN, and the added edge) build the
+    // draft value directly: a draft from the history fold (DraftEditFold) refuses a NaN position or edge gain.
+
     @Test func impactNoOpMoveAfterDisconnectingAnEdgeWithANaNGainIsAnEmptyImpact() throws {
         let active = Self.nanFeedbackGraph()
         let start = Self.draft([.disconnect(Self.edgeID("edg.delay-verb-fb"))], on: active)
@@ -345,6 +350,33 @@ extension WiringImpactTests {
     @Test func impactRowDeltaRevisesAPositionWhoseBagHasAnExtraKey() {
         let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .double(.nan)]))
         let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .double(.nan), "b": .int(1)]))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactNoOpMoveKeepsAnAddedEdgeWithANaNGainOutOfTheRows() throws {
+        let feedback = EdgeFeedback(delayBlocks: 1, gainCeilingDb: .nan)
+        let edge = Fixture.edge(
+            "edg.keys-echo", Fixture.address("nod.keys", "out"), Fixture.address("nod.echo", "in"), feedback: feedback
+        )
+        let start = Self.draft([.connect(edge)])
+        let result = try WiringImpact.make(Self.noOpMove, draft: start, active: Fixture.graph)
+        #expect(result.rows.isEmpty)
+        #expect(result.isEmpty)
+    }
+
+    @Test func impactRowDeltaReadsANaNInThePositionUnknownFieldsAsTheSameValue() {
+        var first = Self.point(5, 0)
+        first.unknownFields = ["u": .double(.nan)]
+        var second = Self.point(5, 0)
+        second.unknownFields = ["u": .double(.nan)]
+        let before = Self.moved(from: Self.point(1, 0), to: first)
+        let after = Self.moved(from: Self.point(1, 0), to: second)
+        #expect(Self.delta(before, after).isEmpty)
+    }
+
+    @Test func impactRowDeltaRevisesTwoBagsOfOneSizeWithDifferentKeys() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .int(1)]))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["b": .int(1)]))
         #expect(Self.delta(first, second).map(\.effect) == [.revised])
     }
 

@@ -72,7 +72,9 @@ enum WiringImpactRowDelta {
     /// Whether two rows under one key are the same row. Invariant of the review diff: both diffs are built from the
     /// fixed active graph and one draft, and a gesture changes only node positions, so removed rows and added edge
     /// rows under one key are the same record on both sides, and an added or moved node row differs only by its
-    /// positions. Those are compared NaN-stably (`==` or both NaN, so +0.0 equals -0.0).
+    /// positions. Those are compared NaN-stably (`==` or both NaN, so +0.0 equals -0.0). The removed-node,
+    /// added-edge and removed-edge arms return true without comparing content for that reason: a gesture that ever
+    /// rewrites such a record under one key must also be compared here.
     private static func isUnchanged(_ old: WiringReviewChange, _ new: WiringReviewChange) -> Bool {
         switch (old, new) {
         case (.addedNode(let first), .addedNode(let second)):
