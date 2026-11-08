@@ -201,6 +201,10 @@ targets:
       - path: FluxKlangTests/RunStatisticsTests+Comparison.swift
       - path: FluxKlangTests/RunStatisticsTests+Percentiles.swift
       - path: FluxKlangTests/RunStatisticsTests+Record.swift
+      - path: FluxKlangTests/MTCEmitTests.swift
+      - path: FluxKlangTests/MTCEmitTests+Golden.swift
+      - path: FluxKlangTests/MTCEmitTests+Refusals.swift
+      - path: FluxKlangTests/MTCEmitTests+Wrap.swift
       - path: FluxKlangTests/RunStatisticsTests+StableBuffer.swift
       - path: FluxKlangTests/RunStatisticsTests+Uncertainty.swift
       - path: FluxKlangTests/GraphCompilerTests.swift
