@@ -137,7 +137,7 @@ extension MIDINoteLedger {
         for rule in context.routing.rules where rule.matches(context.input, channel: context.channel) {
             guard let sent = rule.transposed(note) else { continue }
             let message = MIDI1Semantic.noteOn(channel: context.channel, note: sent, velocity: velocity)
-            Self.appendOnce(MIDIRoutedOutput(route: rule.route, message: message), since: noteStart, to: &outputs)
+            Self.appendOnce(rule.routed(message), since: noteStart, to: &outputs)
         }
         guard notes.count + releaseMarkers.count + outputs.count - noteStart <= policy.noteCapacity else {
             outputs.removeSubrange(start...)
@@ -309,12 +309,12 @@ extension MIDINoteLedger {
     ) {
         let start = outputs.count
         for rule in context.routing.rules where rule.matches(context.input, channel: context.channel) {
-            Self.appendOnce(MIDIRoutedOutput(route: rule.route, message: message), since: start, to: &outputs)
+            Self.appendOnce(rule.routed(message), since: start, to: &outputs)
         }
     }
 
     private static func appendOnce(_ output: MIDIRoutedOutput, since start: Int, to outputs: inout [MIDIRoutedOutput]) {
-        guard !outputs[start...].contains(output) else { return }
+        guard !outputs[start...].contains(where: output.sharesTarget) else { return }
         outputs.append(output)
     }
 }
