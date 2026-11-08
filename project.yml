@@ -599,6 +599,10 @@ targets:
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
       - path: FluxKlangTests/OSCNamespaceTests.swift
       - path: FluxKlangTests/OSCNamespaceTests+Arguments.swift
+      - path: FluxKlangTests/PerformXYTests.swift
+      - path: FluxKlangTests/PerformXYTests+Golden.swift
+      - path: FluxKlangTests/PerformXYTests+Pickup.swift
+      - path: FluxKlangTests/PerformXYTests+Refusals.swift
       - path: FluxKlangTests/OSCNamespaceTests+Grammar.swift
       - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
       - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
