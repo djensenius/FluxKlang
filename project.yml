@@ -265,6 +265,10 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
       - path: FluxKlangTests/NeutralSnapshotTests.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Fixtures.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Grid.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Hysteresis.swift
+      - path: FluxKlangTests/AssistantInferenceGovernorTests+Refusals.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Grounding.swift
       - path: FluxKlangTests/LegacySidecarAdoptionTests.swift
       - path: FluxKlangTests/LegacySidecarAdoptionTests+Bounds.swift
@@ -369,7 +373,15 @@ targets:
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
       - path: FluxKlangTests/ShowRecoveryTests.swift
       - path: FluxKlangTests/ShowRecoveryTests+Batch.swift
+      - path: FluxKlangTests/ShowResumePlannerTests.swift
+      - path: FluxKlangTests/ShowResumePlannerTests+Capture.swift
+      - path: FluxKlangTests/ShowResumePlannerTests+Cursor.swift
+      - path: FluxKlangTests/ShowResumePlannerTests+Decisions.swift
       - path: FluxKlangTests/ShowRecoveryTests+Decisions.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Clipping.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Refusals.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Verdicts.swift
       - path: FluxKlangTests/ShowRecoveryTests+Navigation.swift
       - path: FluxKlangTests/ShowStageProjectionTests.swift
       - path: FluxKlangTests/ShowStageProjectionTests+Accessibility.swift
