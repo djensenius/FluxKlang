@@ -35,6 +35,9 @@ struct ShowStageProjection: Hashable, Sendable {
     let previousPart: ShowStageLine?
     let nextSong: ShowStageLine?
     let previousSong: ShowStageLine?
+    /// An offer to resume a saved position, or why none can be made. `nil` when there is no point, when the point is
+    /// for another setlist, or when the offered target is the cursor's own position. Never moves the cursor.
+    private(set) var resume: ShowStageResume?
 
     private init(setlist: ShowSetlist?, id: SetlistID, state: CursorState, lines: Lines) {
         self.setlist = id
@@ -59,9 +62,16 @@ struct ShowStageProjection: Hashable, Sendable {
     }
 
     /// Refuses only for a library or position that is inconsistent (`unknownSong`, `unknownPart`, `unknownEntry`),
-    /// which `ShowLibrary.make` and the cursor status rule out.
-    static func make(library: ShowLibrary, cursor: ShowCursor,
-                     catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowStageProjection {
+    /// which `ShowLibrary.make` and the cursor status rule out. The resume step runs after the projection succeeded.
+    static func make(library: ShowLibrary, cursor: ShowCursor, catalog: ShowLinkCatalog,
+                     resume point: ShowResumePoint? = nil) throws(ShowRefusal) -> ShowStageProjection {
+        var projection = try positionedProjection(library: library, cursor: cursor, catalog: catalog)
+        projection.resume = try ShowStageResume.make(point: point, cursor: cursor, library: library, catalog: catalog)
+        return projection
+    }
+
+    private static func positionedProjection(library: ShowLibrary, cursor: ShowCursor,
+                                             catalog: ShowLinkCatalog) throws(ShowRefusal) -> ShowStageProjection {
         let status = cursor.status(in: library)
         let stored = library.setlist(cursor.setlist)
         guard status == .current, let setlist = stored else {

@@ -9,7 +9,7 @@
 
 /// Why a proposal differs from the saved position. Where there is a payload, it is the saved ID that no longer
 /// resolves.
-enum ShowResumeBasis: Equatable, Sendable {
+enum ShowResumeBasis: Hashable, Sendable {
     /// The saved part is not in the song (or the song has no parts at all).
     case partMissing(SongPartID)
     /// The saved position had no part and the song now has parts.
@@ -23,7 +23,7 @@ enum ShowResumeBasis: Equatable, Sendable {
 }
 
 /// Why nothing can be resumed.
-enum ShowResumeBlock: Equatable, Sendable {
+enum ShowResumeBlock: Hashable, Sendable {
     case setlistRemoved(SetlistID)
     case setlistEmpty(SetlistID)
     /// The saved entry exists but plays another song than the point recorded, or the library has no such song.
