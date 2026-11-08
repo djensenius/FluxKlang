@@ -499,6 +499,10 @@ targets:
       - path: FluxKlangTests/PeerRetryClassTests.swift
       - path: FluxKlangTests/PeerRetryClassTests+Classes.swift
       - path: FluxKlangTests/PeerRetryClassTests+Revalidate.swift
+      - path: FluxKlangTests/WiringInspectorTests.swift
+      - path: FluxKlangTests/WiringInspectorTests+Node.swift
+      - path: FluxKlangTests/WiringInspectorTests+Edge.swift
+      - path: FluxKlangTests/WiringInspectorTests+Problems.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
