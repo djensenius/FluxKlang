@@ -26,7 +26,7 @@ enum ControlTriggerRefusal: Error, Hashable, Sendable {
     case nonFinite
     case inputOutOfRange(Double)
     /// Only latches and toggles can be cleared; a momentary binding has nothing to clear.
-    case notLatch(ControlTriggerMode)
+    case notClearable(ControlTriggerMode)
     /// Sequences saturate at `UInt64.max` rather than wrap. A press, switch-on, switch-off or clear is refused
     /// unless the sequences left also cover every release still owed (each held momentary binding with
     /// `emitsRelease`), so releases are never refused for exhaustion.

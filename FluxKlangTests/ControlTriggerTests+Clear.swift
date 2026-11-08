@@ -158,8 +158,8 @@ struct ControlTriggerClearTests {
         #expect(try Fixture.feed(&detector, 1)?.sequence == .max - 2)
         #expect(try Fixture.feed(&detector, 1, "bnd.plain", source: Fixture.button)?.sequence == .max - 1)
         let before = detector
-        #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) { try detector.clear(Self.id) }
-        #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) { try detector.clear(BindingID("bnd.plain")) }
+        #expect(throws: ControlTriggerRefusal.notClearable(.momentary)) { try detector.clear(Self.id) }
+        #expect(throws: ControlTriggerRefusal.notClearable(.momentary)) { try detector.clear(BindingID("bnd.plain")) }
         #expect(throws: ControlTriggerRefusal.unknownBinding(try BindingID("bnd.other"))) {
             try detector.clear(BindingID("bnd.other"))
         }
@@ -179,11 +179,11 @@ struct ControlTriggerClearTests {
         for emits in [nil, true] as [Bool?] {
             var detector = try ControlTriggerDetector(bindings: [Fixture.binding(emitsRelease: emits)])
             let released = detector
-            #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) { try detector.clear(Self.id) }
+            #expect(throws: ControlTriggerRefusal.notClearable(.momentary)) { try detector.clear(Self.id) }
             #expect(detector == released)
             #expect(try Fixture.feed(&detector, 1)?.action == .press)
             let held = detector
-            #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) { try detector.clear(Self.id) }
+            #expect(throws: ControlTriggerRefusal.notClearable(.momentary)) { try detector.clear(Self.id) }
             #expect(detector == held)
             Self.expectOwed(detector, emits == true ? 1 : 0)
             #expect(try Fixture.feed(&detector, 0)?.action == (emits == true ? .release : nil))
