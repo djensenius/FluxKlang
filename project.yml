@@ -375,6 +375,10 @@ targets:
       - path: FluxKlangTests/PerformCellModelTests+Accessibility.swift
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
       - path: FluxKlangTests/PerformCellModelTests+States.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
       - path: FluxKlangTests/AUEventBridgeTests.swift
       - path: FluxKlangTests/AUEventBridgeTests+Events.swift
       - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
@@ -633,6 +637,11 @@ targets:
       - path: FluxKlangTests/PeerStatusProjectionTests+Delta.swift
       - path: FluxKlangTests/PeerStatusProjectionTests+Entry.swift
       - path: FluxKlangTests/PeerStatusProjectionTests+Limits.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Handshake.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Payload.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Status.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Timeout.swift
       - path: FluxKlangTests/PeerTrustTests.swift
       - path: FluxKlangTests/PeerTrustTests+Pairing.swift
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
