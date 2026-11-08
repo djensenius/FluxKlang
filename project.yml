@@ -272,6 +272,10 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests+LegacyDecisions.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
       - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
+      - path: FluxKlangTests/SnapshotToolTests.swift
+      - path: FluxKlangTests/SnapshotToolTests+Requests.swift
+      - path: FluxKlangTests/SnapshotToolTests+Results.swift
+      - path: FluxKlangTests/SnapshotToolTests+Eligibility.swift
       - path: FluxKlangTests/RecordingTakeTests.swift
       - path: FluxKlangTests/RecordingTakeTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeTests+Recovery.swift
