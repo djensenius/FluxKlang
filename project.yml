@@ -667,6 +667,7 @@ targets:
       - path: FluxKlangTests/MIDIControlIntakeTests.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Bounds.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Determinism.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+Jitter.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Goldens.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Keys.swift
       - path: FluxKlangTests/MIDIControlIntakeTests+Precedence.swift

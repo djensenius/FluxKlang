@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "58111cd04577d378c2521349a4e798b98e2d4a6a4bae07c214ffc172e0612c4d",
+    "sha256": "0835f99f48c56291b7a5ad94615a43601c28d894e28cbc944598e15650707bf8",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -565,6 +565,7 @@
         "FluxKlangTests/MIDIControlIntakeTests.swift",
         "FluxKlangTests/MIDIControlIntakeTests+Bounds.swift",
         "FluxKlangTests/MIDIControlIntakeTests+Determinism.swift",
+        "FluxKlangTests/MIDIClockArbitrationTests+Jitter.swift",
         "FluxKlangTests/MIDIControlIntakeTests+Goldens.swift",
         "FluxKlangTests/MIDIControlIntakeTests+Keys.swift",
         "FluxKlangTests/MIDIControlIntakeTests+Precedence.swift",
