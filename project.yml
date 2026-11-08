@@ -468,6 +468,10 @@ targets:
       - path: FluxKlangTests/UMPStreamMessageTests+Decode.swift
       - path: FluxKlangTests/UMPStreamMessageTests+Hostile.swift
       - path: FluxKlangTests/UMPStreamMessageTests+ProductID.swift
+      - path: FluxKlangTests/ProgramRecallTests.swift
+      - path: FluxKlangTests/ProgramRecallTests+Numbering.swift
+      - path: FluxKlangTests/ProgramRecallTests+Order.swift
+      - path: FluxKlangTests/ProgramRecallTests+Resolve.swift
       - path: FluxKlangTests/UMPStreamMessageTests+Text.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
