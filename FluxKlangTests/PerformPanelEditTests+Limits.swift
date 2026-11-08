@@ -27,6 +27,7 @@ extension PerformPanelEditTests {
         let freed = try PerformPanelEditor.regrouping(Fixture.id(0), to: nil, in: panel, context: context)
         #expect(Fixture.sectionIDs(freed.layout) == [Fixture.ids([0, 1]), Fixture.ids([2])])
         #expect(Self.groups(freed.layout) == [nil, "B"])
+        try #require(freed.entries.count == 3)
         #expect(freed.entries[0].group == nil)
         #expect(freed.change == .changed)
     }
@@ -82,12 +83,15 @@ extension PerformPanelEditTests {
         #expect(shorter.change == .changed)
         #expect(sibling.change == .changed)
         #expect(longer.change == .changed)
+        try #require(shorter.entries.count == 3)
+        try #require(longer.entries.count == 3)
         #expect(shorter.entries[0].group == "Mix")
         #expect(longer.entries[1].group == "ABC")
         let empty = PerformPanelEditRefusal.layout(.invalidGroupLabel(index: 2, bytes: 0))
         #expect(throws: empty) { try PerformPanelEditor.regrouping(Fixture.id(2), to: "", in: panel, context: context) }
         let freed = try PerformPanelEditor.regrouping(Fixture.id(1), to: nil, in: panel, context: context)
         #expect(freed.change == .changed)
+        try #require(freed.entries.count == 3)
         #expect(freed.entries[1].group == nil)
     }
 
@@ -95,6 +99,7 @@ extension PerformPanelEditTests {
         let panel = [try Fixture.entry(0), try Fixture.entry(1), Fixture.waiting(try Fixture.entry(2))]
         let context = try Self.context()
         let edited = try PerformPanelEditor.relabeling(Fixture.id(2), to: "Lead", in: panel, context: context)
+        try #require(edited.entries.count == 3)
         #expect(edited.entries[2].input.labels.cell == "Lead")
         #expect(edited.entries[2].input.labels.binding == "Fader Cell 2")
         let model = try Self.cell(2, in: edited.layout).model
@@ -115,6 +120,7 @@ extension PerformPanelEditTests {
         #expect(named.change == .changed)
         let spelled = try PerformPanelEditor.relabeling(Fixture.id(0), to: "e\u{301}", in: composed, context: context)
         #expect(spelled.change == .changed)
+        try #require(spelled.entries.count == 2)
         #expect(spelled.entries[0].input.labels.cell.unicodeScalars.map { $0.value } == [0x65, 0x301])
     }
 
@@ -196,6 +202,8 @@ extension PerformPanelEditTests {
         let one = try PerformPanelEditor.regrouping(Fixture.id(0), to: "g", in: panel, context: context)
         let full = String(repeating: "g", count: 64)
         let sixtyFour = try PerformPanelEditor.regrouping(Fixture.id(0), to: full, in: panel, context: context)
+        try #require(one.entries.count == 2)
+        try #require(sixtyFour.entries.count == 2)
         #expect(one.entries[0].group == "g")
         #expect(sixtyFour.entries[0].group == full)
         let empty = PerformPanelEditRefusal.layout(.invalidGroupLabel(index: 0, bytes: 0))
@@ -214,8 +222,11 @@ extension PerformPanelEditTests {
         let accepted = try PerformPanelEditor.relabeling(Fixture.id(0), to: full, in: panel, context: context)
         let below = String(repeating: "a", count: 127)
         let shorter = try PerformPanelEditor.relabeling(Fixture.id(0), to: below, in: panel, context: context)
+        try #require(shorter.entries.count == 2)
         #expect(shorter.entries[0].input.labels.cell.utf8.count == 127)
         let bytes = try PerformPanelEditor.relabeling(Fixture.id(0), to: wide, in: panel, context: context)
+        try #require(accepted.entries.count == 2)
+        try #require(bytes.entries.count == 2)
         #expect(accepted.entries[0].input.labels.cell.utf8.count == 128)
         #expect(bytes.entries[0].input.labels.cell.utf8.count == 128)
         let over = String(repeating: "a", count: 129)
