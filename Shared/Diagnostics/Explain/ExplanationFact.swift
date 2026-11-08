@@ -177,13 +177,14 @@ extension ExplanationFact {
         )
     }
 
-    /// True when the snapshot left something out: a cap, a duplicate or a dangling element, or an overflow.
+    /// True when the snapshot left something out or altered a label: a cap, a duplicate or a dangling element, an
+    /// overflow, or a sanitized label.
     static func isIncomplete(_ truncation: NeutralSnapshot.Truncation) -> Bool {
         let categories = [
             truncation.nodes, truncation.ports, truncation.edges, truncation.parameters, truncation.routes,
             truncation.diagnostics
         ]
-        return truncation.isTruncated || categories.contains { $0.dropped > 0 }
+        return truncation.isTruncated || truncation.sanitizedLabels > 0 || categories.contains { $0.dropped > 0 }
     }
 
     /// Cites nothing: it reports counts only.

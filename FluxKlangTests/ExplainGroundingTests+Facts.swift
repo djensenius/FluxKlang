@@ -213,6 +213,32 @@ extension ExplainGroundingTests {
         #expect(first.statement.contains("labels sanitized \(truncation.sanitizedLabels),"))
     }
 
+    @Test func aSnapshotWithOnlySanitizedLabelsGetsATruncationFactAlthoughNothingWasDroppedOrShortened() throws {
+        let snapshot = Snapshot.build(from: try Self.fixtureInputs(label: "Node\u{202E}x", summary: "Sum\u{202E}y"))
+        let truncation = snapshot.truncation
+        let categories = [
+            truncation.nodes, truncation.ports, truncation.edges, truncation.parameters, truncation.routes,
+            truncation.diagnostics
+        ]
+        let allKept = categories.allSatisfy { $0.dropped == 0 }
+        let isTruncated = truncation.isTruncated
+        let sanitized = truncation.sanitizedLabels
+        #expect(sanitized > 0)
+        #expect(truncation.truncatedLabels == 0)
+        #expect(truncation.withheldOverflow == 0)
+        #expect(!isTruncated)
+        #expect(allKept)
+        let report = Self.report(snapshot)
+        let marked = report.facts.filter { $0.kind == .snapshotTruncated }
+        let fact = try #require(marked.first)
+        let expected = "The snapshot is incomplete: dropped nodes 0, ports 0, edges 0, parameters 0, routes 0, "
+            + "diagnostics 0; labels shortened 0, labels sanitized \(sanitized), withheld overflow 0. "
+            + "An id missing from the snapshot may still exist in the setup."
+        #expect(marked.count == 1)
+        #expect(fact.statement == expected)
+        #expect(!fact.statement.contains("Node"))
+    }
+
     @Test func aCompleteSnapshotGetsNoTruncationFactAndEveryReportCarriesTheSnapshotsOwnTruncationValue() throws {
         let complete = try Self.fixtureSnapshot()
         #expect(!Self.report(complete).facts.contains { $0.kind == .snapshotTruncated })

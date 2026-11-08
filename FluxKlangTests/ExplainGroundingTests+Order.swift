@@ -127,7 +127,7 @@ extension ExplainGroundingTests {
         #expect(labels.allSatisfy { !$0.isEmpty })
         #expect(labels.contains { $0.contains("ZZLABEL") })
         let statements = Self.statements(Self.report(snapshot))
-        #expect(statements.count == 14)
+        #expect(statements.count == 15)
         for statement in statements {
             #expect(statement.utf8.allSatisfy { $0 < 0x80 }, "\(statement)")
             let lowered = statement.lowercased()
