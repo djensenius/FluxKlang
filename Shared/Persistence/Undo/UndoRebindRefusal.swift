@@ -29,6 +29,7 @@ enum UndoRebindRefusal: Error, Equatable, Sendable {
     case targetGraphMismatch(expected: GraphID, found: GraphID)
     /// The target revision is not greater than the session revision.
     case targetNotNewer(session: ContractRevision, target: ContractRevision)
-    /// The session moved since the ticket was issued (depth, a stack count or the unsaved flag).
+    /// The binding matches, but the depth, a stack count, the unsaved flag or the mutation generation differs from
+    /// the session the ticket was issued for.
     case staleTicket
 }

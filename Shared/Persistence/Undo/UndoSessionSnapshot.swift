@@ -88,8 +88,9 @@ struct UndoSessionSnapshot: Equatable, Sendable {
     }
 
     // swiftlint:disable function_parameter_count
-    /// Each count is checked alone against the depth before the two are added, so the sum cannot overflow. Undo and
-    /// redo together hold at most `depth.value` entries, like a real history. The generation is not validated.
+    /// Each count is checked alone against the depth before the two are added. A `DraftHistoryDepth` is at most 1,000
+    /// (`DraftHistoryDepth.range`), so each count is at most 1,000 and the sum cannot overflow. Undo and redo together
+    /// hold at most `depth.value` entries, like a real history. The generation is not validated.
     static func make(
         binding: UndoSessionBinding,
         depth: DraftHistoryDepth,
