@@ -89,12 +89,18 @@ extension OSCReceiveContextTests {
             let tag = Fixture.tag(after: Int64(40 - step))
             try Fixture.admit(&wrapper, Fixture.timed(tag, Int32(step)), step.isMultiple(of: 2) ? alpha : bravo)
         }
+        // The expected ids are built outside the `#expect`s: as one expression, the compiler gave up type-checking the
+        // range arithmetic together with the comparison.
+        let queueOrder: [UInt64] = (0..<40).reversed().map { (id: Int) in UInt64(id) }
+        let alphaIDs: [UInt64] = (0..<20).map { (step: Int) in UInt64(step * 2) }
+        let bravoIDs: [UInt64] = (0..<20).map { (step: Int) in UInt64(step * 2 + 1) }
+        let bravoQueueOrder: [UInt64] = (0..<20).reversed().map { (step: Int) in UInt64(step * 2 + 1) }
         // The later the bundle, the earlier the id: the queue runs from id 39 down to id 0.
-        #expect(wrapper.scheduler.pending.map(\.id.value) == (0..<40).reversed().map { UInt64($0) })
+        #expect(wrapper.scheduler.pending.map(\.id.value) == queueOrder)
         let removed = wrapper.cancel(context: alpha)
-        #expect(removed.map(\.value) == (0..<20).map { UInt64($0 * 2) })
-        #expect(wrapper.scheduler.pending.map(\.id.value) == (0..<20).reversed().map { UInt64($0 * 2 + 1) })
-        #expect(wrapper.cancel(context: bravo).map(\.value) == (0..<20).map { UInt64($0 * 2 + 1) })
+        #expect(removed.map(\.value) == alphaIDs)
+        #expect(wrapper.scheduler.pending.map(\.id.value) == bravoQueueOrder)
+        #expect(wrapper.cancel(context: bravo).map(\.value) == bravoIDs)
     }
 
     @Test func cancelByContextOfAnUnknownContextReturnsEmptyAndLeavesWrapperUnchanged() throws {
