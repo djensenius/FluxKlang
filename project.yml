@@ -297,6 +297,10 @@ targets:
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
       - path: FluxKlangTests/OSCSchedulingTests+Batches.swift
+      - path: FluxKlangTests/OSCReceiveContextTests.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Cancel.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Order.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Revalidate.swift
       - path: FluxKlangTests/MIDIPerformanceTests.swift
       - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
