@@ -244,6 +244,10 @@ targets:
       - path: FluxKlangTests/ProjectStagingTests+Faults.swift
       - path: FluxKlangTests/ProjectStagingTests+Import.swift
       - path: FluxKlangTests/ProjectStagingTests+Plan.swift
+      - path: FluxKlangTests/PerformRecallTests.swift
+      - path: FluxKlangTests/PerformRecallTests+Epoch.swift
+      - path: FluxKlangTests/PerformRecallTests+Order.swift
+      - path: FluxKlangTests/PerformRecallTests+Release.swift
       - path: FluxKlangTests/ProjectStagingTests+Recovery.swift
       - path: FluxKlangTests/ProjectStagingTests+Scenario.swift
       - path: FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift
