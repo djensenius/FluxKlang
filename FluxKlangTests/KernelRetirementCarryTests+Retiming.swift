@@ -72,14 +72,23 @@ extension KernelRetirementCarryTests {
         #expect(plan.emissions.map(\.event.frame) == [100, 500])
     }
 
-    @Test func planBlockEndOverflowIsRefusedExactlyWhenFirstFramePlusCapacityExceedsInt64() throws {
-        let carry = Self.carry([Self.control()])
-        let last = Int64.max - 4_096
-        #expect(Self.refusal(carry, blockCapacity: 4_096, firstFrame: last) == nil)
-        #expect(Self.refusal(carry, blockCapacity: 4_096, firstFrame: last + 1) == .frameOverflow)
-        #expect(Self.refusal(carry, blockCapacity: 1, firstFrame: Int64.max - 1) == nil)
-        #expect(Self.refusal(carry, blockCapacity: 1, firstFrame: Int64.max) == .frameOverflow)
-        #expect(Self.refusal(KernelRetirementCarry(), blockCapacity: 1, firstFrame: Int64.max) == .frameOverflow)
+    @Test func planFirstFramesNearInt64MaxAreNotRefusedForCapacities1And4096AndRetimeExactly() throws {
+        let first = Int64.max - 64
+        let carry = Self.carry([
+            Self.control(frame: 5, sequence: 1),
+            Self.ramp(frame: 7, parameter: 3, duration: 60, sequence: 2)
+        ])
+        let wide = try Self.plan(carry, blockCapacity: 4_096, firstFrame: first)
+        #expect(wide.emissions.map(\.event.frame) == [first, first])
+        #expect(wide.emissions.map(\.completionFrame) == [nil, Int64.max - 4])
+        let late = Self.carry([Self.control(frame: Int64.max - 1)])
+        let one = try Self.plan(late, blockCapacity: 1, firstFrame: Int64.max - 1)
+        #expect(one.emissions.map(\.event.frame) == [Int64.max - 1])
+        let top = try Self.plan(Self.carry([Self.control(frame: 2)]), blockCapacity: 1, firstFrame: Int64.max)
+        #expect(top.emissions.map(\.event.frame) == [Int64.max])
+        let empty = try Self.plan(KernelRetirementCarry(), blockCapacity: 1, firstFrame: Int64.max)
+        #expect(empty.emissions.isEmpty)
+        #expect(empty.dropped == KernelRetirementLoss())
     }
 
     @Test func planRampCompletionOverflowIsRefusedExactlyAtTheInt64Boundary() throws {

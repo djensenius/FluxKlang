@@ -187,7 +187,8 @@ extension KernelRetirementCarryTests {
         #expect(Self.refusal(valid, blockCapacity: 4_100) == .blockCapacityOutOfRange(4_100))
         #expect(Self.refusal(valid, firstFrame: -12) == .negativeFrame(-12))
         #expect(Self.refusal(invalid) == .invalidRamp(parameter: 11))
-        #expect(Self.refusal(valid, firstFrame: Int64.max) == .frameOverflow)
+        let overflowing = Self.carry([Self.ramp(frame: Int64.max, parameter: 4, duration: 1)])
+        #expect(Self.refusal(overflowing) == .frameOverflow)
     }
 
     @Test func planBlockCapacityIsReportedBeforeANegativeFrame() throws {
@@ -201,12 +202,6 @@ extension KernelRetirementCarryTests {
         let carry = Self.carry([Self.ramp(parameter: 2, duration: -1)])
         #expect(Self.refusal(carry, firstFrame: -5) == .negativeFrame(-5))
         #expect(Self.refusal(carry, firstFrame: 5) == .invalidRamp(parameter: 2))
-    }
-
-    @Test func planInvalidRampIsReportedBeforeABlockEndOverflow() throws {
-        let carry = Self.carry([Self.ramp(parameter: 2, duration: -1)])
-        #expect(Self.refusal(carry, firstFrame: Int64.max) == .invalidRamp(parameter: 2))
-        #expect(Self.refusal(Self.carry([Self.ramp(parameter: 2)]), firstFrame: Int64.max) == .frameOverflow)
     }
 
     @Test func planInvalidRampIsReportedBeforeARampCompletionOverflow() throws {
@@ -225,7 +220,8 @@ extension KernelRetirementCarryTests {
         #expect(Self.refusal(carry, firstFrame: -1) == .negativeFrame(-1))
         #expect(Self.refusal(carry) == .invalidRamp(parameter: 3))
         let sound = Self.carry(Array(events.dropFirst()))
-        #expect(Self.refusal(sound, firstFrame: Int64.max) == .frameOverflow)
+        let overflowing = Self.carry([Self.ramp(frame: Int64.max, parameter: 4, duration: 1)])
+        #expect(Self.refusal(overflowing) == .frameOverflow)
         #expect(try Self.plan(sound).emissions.count == 2)
     }
 }

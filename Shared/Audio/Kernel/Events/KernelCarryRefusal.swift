@@ -10,6 +10,7 @@ enum KernelCarryRefusal: Error, Equatable, Sendable {
     case negativeFrame(Int64)
     /// A recorded `rampTo` has a negative duration or a non-finite value; reports the lowest such parameter.
     case invalidRamp(parameter: UInt32)
-    /// The replacement block's end, or a surviving ramp's completion frame, is not representable in `Int64`.
+    /// The completion frame of a surviving `rampTo` (its re-timed frame plus its duration) is not representable in
+    /// `Int64`. No other frame arithmetic is checked.
     case frameOverflow
 }

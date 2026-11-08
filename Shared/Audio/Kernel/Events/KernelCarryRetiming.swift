@@ -53,7 +53,7 @@ struct KernelCarryPlan: Sendable, Equatable {
 ///   (channel, controller) for a control, (channel) for a program or (parameter) for a rampTo, so events of
 ///   different scopes never supersede each other. Superseded events are counted in `superseded`, not as loss.
 /// - Invalid ramps: every recorded rampTo is checked, superseded ones too; the lowest invalid parameter is refused.
-///   A completion overflow is checked on surviving ramps only.
+///   A completion overflow (`frameOverflow`) is checked on surviving ramps only; no other frame arithmetic is done.
 /// - Re-timing: each survivor moves to `max(frame, replacementFirstFrame)`; a carried rampTo restarts with its full
 ///   duration, so its completion frame is the re-timed frame plus the duration.
 /// - Order: (re-timed frame, lane rank release < transport < state < content, original sequence, recorded index).
@@ -69,7 +69,9 @@ enum KernelCarryRetiming {
 
     /// Plans `carry` for a replacement of `replacementBlockCapacity` events whose first frame is
     /// `replacementFirstFrame`, refusing in the order documented on `KernelCarryRefusal`. An empty carry plans to an
-    /// empty plan unless the replacement block's end overflows `Int64`, which is refused as `frameOverflow`.
+    /// empty plan for any valid capacity and any non-negative first frame. The only `frameOverflow` is a surviving
+    /// ramp whose completion overflows `Int64`; the replacement block's frame span is not known here (it is passed to
+    /// `KernelCycle.run` per block), so no block end is checked.
     static func plan(
         carry: KernelRetirementCarry,
         replacementBlockCapacity: Int,
@@ -81,9 +83,6 @@ enum KernelCarryRetiming {
         }
         guard replacementFirstFrame >= 0 else { throw .negativeFrame(replacementFirstFrame) }
         if let parameter = lowestInvalidRamp(in: carry) { throw .invalidRamp(parameter: parameter) }
-        guard !replacementFirstFrame.addingReportingOverflow(Int64(replacementBlockCapacity)).overflow else {
-            throw .frameOverflow
-        }
         let (survivors, superseded) = survivors(of: carry)
         let ordered = try retimed(survivors, firstFrame: replacementFirstFrame)
         var dropped = KernelRetirementLoss()
