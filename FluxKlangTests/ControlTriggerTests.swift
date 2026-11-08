@@ -245,9 +245,9 @@ struct ControlTriggerTests {
     }
 
     @Test
-    func clearIsLatchOnly() throws {
+    func clearRefusesMomentary() throws {
         var detector = try ControlTriggerDetector(bindings: [Self.binding()])
-        #expect(throws: ControlTriggerRefusal.notLatch(.momentary)) {
+        #expect(throws: ControlTriggerRefusal.notClearable(.momentary)) {
             try detector.clear(BindingID("bnd.trigger"))
         }
         #expect(throws: ControlTriggerRefusal.unknownBinding(try BindingID("bnd.other"))) {
