@@ -99,4 +99,6 @@ struct MIDIClockSourceStatus: Equatable, Sendable {
     /// The host time of the source's last accepted message.
     let lastHost: HostStamp?
     let ignored: MIDIClockIgnoredCounts
+    /// The source's arrival jitter over its last clock stamps; nil when the arbiter has no jitter watch.
+    var jitter: MIDIClockSourceJitter?
 }
