@@ -276,6 +276,10 @@ targets:
       - path: FluxKlangTests/MIDICapabilityNegotiationTests+Downgrade.swift
       - path: FluxKlangTests/MIDICapabilityNegotiationTests+Refusals.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
+      - path: FluxKlangTests/UndoSessionRebindTests.swift
+      - path: FluxKlangTests/UndoSessionRebindTests+Order.swift
+      - path: FluxKlangTests/UndoSessionRebindTests+Stacks.swift
+      - path: FluxKlangTests/UndoSessionRebindTests+Ticket.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
       - path: FluxKlangTests/AssistantFallbackPolicyTests.swift
       - path: FluxKlangTests/AssistantFallbackPolicyTests+Consent.swift
