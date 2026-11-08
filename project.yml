@@ -320,6 +320,10 @@ targets:
       - path: FluxKlangTests/RigMappingReviewTests.swift
       - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
       - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
+      - path: FluxKlangTests/RigIdentityMatchTests.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Matching.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Selection.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Fallback.swift
       - path: FluxKlangTests/RigReservationTests.swift
       - path: FluxKlangTests/RigReservationTests+Approvals.swift
       - path: FluxKlangTests/RigReservationTests+Baseline.swift
