@@ -270,6 +270,10 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
       - path: FluxKlangTests/NeutralSnapshotTests+LegacyDecisions.swift
+      - path: FluxKlangTests/ExplainGroundingTests.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Facts.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Citations.swift
+      - path: FluxKlangTests/ExplainGroundingTests+Order.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
       - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
       - path: FluxKlangTests/SnapshotToolTests.swift
@@ -375,6 +379,10 @@ targets:
       - path: FluxKlangTests/PerformCellModelTests+Accessibility.swift
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
       - path: FluxKlangTests/PerformCellModelTests+States.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
       - path: FluxKlangTests/AUEventBridgeTests.swift
       - path: FluxKlangTests/AUEventBridgeTests+Events.swift
       - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
@@ -633,6 +641,11 @@ targets:
       - path: FluxKlangTests/PeerStatusProjectionTests+Delta.swift
       - path: FluxKlangTests/PeerStatusProjectionTests+Entry.swift
       - path: FluxKlangTests/PeerStatusProjectionTests+Limits.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Handshake.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Payload.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Status.swift
+      - path: FluxKlangTests/PeerPairingInitiatorTests+Timeout.swift
       - path: FluxKlangTests/PeerTrustTests.swift
       - path: FluxKlangTests/PeerTrustTests+Pairing.swift
       - path: FluxKlangTests/PeerTrustTests+Storage.swift
