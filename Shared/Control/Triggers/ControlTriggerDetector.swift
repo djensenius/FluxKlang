@@ -146,10 +146,11 @@ struct ControlTriggerDetector: Hashable, Sendable {
     /// Clears a toggle or latch: a `switchedOff` command when it is on, `nil` when it is already off. Clearing is a
     /// host action that only ends an action, so neither a current control source nor a present, `.live` target is
     /// required; only sequence headroom is, including the releases still owed. A momentary binding is refused with
-    /// `notLatch`. The held flag is kept, so a control still held must be released before its next press is an edge.
+    /// `notClearable`. The held flag is kept, so a control still held must be released before its next press is an
+    /// edge.
     mutating func clear(_ id: BindingID) throws(ControlTriggerRefusal) -> ControlTriggerCommand? {
         guard var entry = entries[id] else { throw .unknownBinding(id) }
-        guard entry.binding.mode != .momentary else { throw .notLatch(entry.binding.mode) }
+        guard entry.binding.mode != .momentary else { throw .notClearable(entry.binding.mode) }
         guard entry.state.isOn else { return nil }
         entry.state.isOn = false
         let command = try issue(.switchedOff, for: entry, cause: .clear)
