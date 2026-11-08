@@ -74,11 +74,17 @@ refuse a wildcard earlier, as it does for any address that is not on its allow-l
 | Bytes per segment              | 32      | 33 is `segmentTooLong`                               |
 | Messages per batch             | 1,024   | 1,025 is `tooManyMessages`, before any is read       |
 | Ramp duration                  | 60,000  | 60,001 ms and negative values are refused            |
-| Elements per bundle (intake)   | 1,024   | 1,025 is `malformed(tooManyElements)`                |
+| Elements per packet (intake)   | 1,024   | 1,025 in one bundle is `malformed(tooManyElements)`  |
 
 An address of exactly 256 bytes can never be accepted: six segments of at most 32 bytes make at most 198 bytes, so
 the segment limit is reached first. Segment bytes are `a` to `z`, `0` to `9`, `_` and `-`. The OSC codec admits
 printable ASCII only, so an address with a multi-byte UTF-8 byte is refused as malformed before the mapper runs.
+
+The intake element limit covers the whole packet, not each bundle. The decoder keeps one running count of every element
+it reads, whether a message or a nested bundle, and a nested bundle counts as one element of its parent as well as the
+elements inside it. An outer bundle that holds two child bundles of 512 messages each has 1,026 elements (the two child
+bundles and 1,024 messages), so it is refused as `malformed(tooManyElements)` although each child alone would fit. A
+client that nests bundles must keep the messages and nested bundles of the whole packet at 1,024 or fewer.
 
 ## Order of refusals
 
@@ -168,3 +174,5 @@ The tests in this slice do not pin these behaviours of the merged code, so do no
   from the feedback grid.
 - A conversion over a binding with its own lower and upper bounds, or over a stepped parameter: the scripts use a
   linear parameter and a binding with no bounds of its own.
+- Bundles nested inside a bundle: the notes state that the element limit counts the whole packet, from the decoder's
+  single running count, and the one test of the limit sends a flat bundle of 1,024 and of 1,025 messages.
