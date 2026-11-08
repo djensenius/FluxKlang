@@ -375,6 +375,10 @@ targets:
       - path: FluxKlangTests/PerformCellModelTests+Accessibility.swift
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
       - path: FluxKlangTests/PerformCellModelTests+States.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
+      - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
       - path: FluxKlangTests/AUEventBridgeTests.swift
       - path: FluxKlangTests/AUEventBridgeTests+Events.swift
       - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
