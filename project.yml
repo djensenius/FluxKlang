@@ -244,6 +244,10 @@ targets:
       - path: FluxKlangTests/ProjectStagingTests+Faults.swift
       - path: FluxKlangTests/ProjectStagingTests+Import.swift
       - path: FluxKlangTests/ProjectStagingTests+Plan.swift
+      - path: FluxKlangTests/PerformRecallTests.swift
+      - path: FluxKlangTests/PerformRecallTests+Epoch.swift
+      - path: FluxKlangTests/PerformRecallTests+Order.swift
+      - path: FluxKlangTests/PerformRecallTests+Release.swift
       - path: FluxKlangTests/ProjectStagingTests+Recovery.swift
       - path: FluxKlangTests/ProjectStagingTests+Scenario.swift
       - path: FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift
@@ -347,6 +351,10 @@ targets:
       - path: FluxKlangTests/WiringEditPathTests.swift
       - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
       - path: FluxKlangTests/WiringEditPathTests+Quantization.swift
+      - path: FluxKlangTests/ShowReadinessTests.swift
+      - path: FluxKlangTests/ShowReadinessTests+Golden.swift
+      - path: FluxKlangTests/ShowReadinessTests+Order.swift
+      - path: FluxKlangTests/ShowReadinessTests+Refusals.swift
       - path: FluxKlangTests/WiringMatrixTests.swift
       - path: FluxKlangTests/WiringMatrixTests+EdgeBound.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
@@ -595,6 +603,10 @@ targets:
       - path: FluxKlangTests/OpenSoundControlCodecTests+Framing.swift
       - path: FluxKlangTests/OSCNamespaceTests.swift
       - path: FluxKlangTests/OSCNamespaceTests+Arguments.swift
+      - path: FluxKlangTests/PerformXYTests.swift
+      - path: FluxKlangTests/PerformXYTests+Golden.swift
+      - path: FluxKlangTests/PerformXYTests+Pickup.swift
+      - path: FluxKlangTests/PerformXYTests+Refusals.swift
       - path: FluxKlangTests/OSCNamespaceTests+Grammar.swift
       - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
       - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
@@ -667,6 +679,10 @@ targets:
       - path: FluxKlangTests/ControlInputGateTests+Listening.swift
       - path: FluxKlangTests/ControlInputGateTests+Phases.swift
       - path: FluxKlangTests/ControlInputGateTests+Refusals.swift
+      - path: FluxKlangTests/SetupFlowTests.swift
+      - path: FluxKlangTests/SetupFlowTests+Flow.swift
+      - path: FluxKlangTests/SetupFlowTests+Manual.swift
+      - path: FluxKlangTests/SetupFlowTests+Order.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
       - path: FluxKlangTests/ActionSetSubmissionTests.swift
@@ -735,6 +751,10 @@ targets:
       - path: FluxKlangTests/ProjectRecoveryTests+Conflicts.swift
       - path: FluxKlangTests/ProjectRecoveryTests+EffectOrdering.swift
       - path: FluxKlangTests/ProjectRecoveryTests+Retention.swift
+      - path: FluxKlangTests/SpatialMotionTests.swift
+      - path: FluxKlangTests/SpatialMotionTests+Evaluate.swift
+      - path: FluxKlangTests/SpatialMotionTests+Order.swift
+      - path: FluxKlangTests/SpatialMotionTests+Sampling.swift
       - path: FluxKlangTests/ProjectRecoveryTests+SaveFaults.swift
       - path: FluxKlangTests/ProjectRecoveryTests+TransitionMatrix.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
