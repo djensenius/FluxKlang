@@ -573,6 +573,10 @@ targets:
       - path: FluxKlangTests/MediaBlockPoolTests+Generation.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Lease.swift
       - path: FluxKlangTests/MediaBlockPoolTests+RandomSequences.swift
+      - path: FluxKlangTests/MIDIClockJitterTests.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Golden.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Refusals.swift
+      - path: FluxKlangTests/MIDIClockJitterTests+Verdict.swift
       - path: FluxKlangTests/MediaBlockPoolTests+Statistics.swift
       - path: FluxKlangTests/MediaIOWorkerTests.swift
       - path: FluxKlangTests/MediaIOWorkerTests+Mapping.swift
