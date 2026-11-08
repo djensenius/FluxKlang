@@ -628,6 +628,7 @@ targets:
       - path: FluxKlangTests/OSCTransportTests+Framing.swift
       - path: FluxKlangTests/OSCTransportTests+Principal.swift
       - path: FluxKlangTests/OSCTransportTests+Scripts.swift
+      - path: FluxKlangTests/SetupFlowSourcesTests.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/TimecodeMachineTests.swift
