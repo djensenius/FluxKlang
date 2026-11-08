@@ -559,6 +559,10 @@ targets:
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
       - path: FluxKlangTests/MIDIClockMathTests.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Adapters.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Ledger.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Staleness.swift
       - path: FluxKlangTests/MIDIClockFollowerTests.swift
       - path: FluxKlangTests/MIDIClockTempoTests.swift
       - path: FluxKlangTests/MIDIInternalClockTests.swift
