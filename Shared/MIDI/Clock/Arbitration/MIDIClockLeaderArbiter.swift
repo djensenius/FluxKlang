@@ -10,7 +10,7 @@
 //
 //  Lock: the leader locks after N steady pulses (the policy's
 //  `reacquirePulses`), each judged against a stable reference period by
-//  `MIDIClockSteadyRun`. Once locked, jitter never unlocks. The status tempo is
+//  `MIDIClockSteadyRun`. Once locked, estimator jitter never unlocks. The status tempo is
 //  the C1 estimator's current estimate, read live, so it follows the estimator
 //  and is nil (pending) whenever the estimator has none, including on a relock.
 //  The estimator's own lock transitions are reported as `leaderTempo` and never
@@ -47,6 +47,13 @@
 //  never copies the estimator's timestamp ring; a selection or silence installs
 //  a fresh estimator sharing a template's ring, which its first pulse copies.
 //
+//  Jitter: with a `jitterWatch`, each source keeps its last clock stamps and its status reports their arrival
+//  jitter. It is reported only: no decision above reads it. A message refused as an unknown source, as
+//  non-monotonic or by the follower records nothing. An accepted clock writes one stamp: once the window is full it
+//  overwrites the oldest slot in place (an unverified performance claim: no test or mutant can tell an in-place
+//  update from a read, modify and write back), and while it fills it appends. The report is built when a status is
+//  read.
+//
 
 struct MIDIClockLeaderArbiter: Sendable {
     /// The selected leader's phase between selections.
@@ -65,10 +72,13 @@ struct MIDIClockLeaderArbiter: Sendable {
         var follower: MIDIClockFollower
         var lastHost: HostStamp?
         var ignored = MIDIClockIgnoredCounts()
+        var window: MIDIClockStampWindow?
     }
 
     let policy: MIDIClockArbitrationPolicy
     let timebase: HostTimebase
+    /// Set at init: when present every source reports its jitter.
+    let jitterWatch: MIDIClockJitterWatch?
     /// The policy timeout rounded up to whole host ticks.
     let timeoutTicks: UInt64
     private(set) var leader = MIDIClockLeader.internal
@@ -91,7 +101,8 @@ struct MIDIClockLeaderArbiter: Sendable {
     private var lastPoll: HostStamp?
 
     init(policy: MIDIClockArbitrationPolicy = .standard,
-         timebase: HostTimebase) throws(MIDIClockArbitrationError) {
+         timebase: HostTimebase,
+         jitterWatch: MIDIClockJitterWatch? = nil) throws(MIDIClockArbitrationError) {
         do {
             freshEstimator = try MIDIClockTempoEstimator(timebase: timebase)
         } catch {
@@ -100,6 +111,7 @@ struct MIDIClockLeaderArbiter: Sendable {
         estimator = freshEstimator
         self.policy = policy
         self.timebase = timebase
+        self.jitterWatch = jitterWatch
         let ticks = ExactMath.ceilDiv(Int128(policy.timeoutNanos) * Int128(timebase.denom), Int128(timebase.numer))
         timeoutTicks = UInt64(ticks)
     }
@@ -134,7 +146,8 @@ struct MIDIClockLeaderArbiter: Sendable {
         } catch {
             throw .clock(error)
         }
-        entries.insert(Entry(id: id, follower: follower), at: position)
+        let window = jitterWatch.map { MIDIClockStampWindow(watch: $0) }
+        entries.insert(Entry(id: id, follower: follower, window: window), at: position)
     }
 
     /// Unregisters a non-leader source.
@@ -199,6 +212,7 @@ struct MIDIClockLeaderArbiter: Sendable {
         }
         entries[index].follower = follower
         entries[index].lastHost = host
+        recordJitter(message, at: index, host)
         guard leader == .external(id) else {
             let kind = MIDIClockMessageKind(message)
             guard entries[index].ignored.record(kind) else { return [] }
@@ -332,6 +346,18 @@ struct MIDIClockLeaderArbiter: Sendable {
     private func snapshot(_ entry: Entry) -> MIDIClockSourceStatus {
         MIDIClockSourceStatus(id: entry.id, isLeader: leader == .external(entry.id),
                               followerState: entry.follower.state, nextPulseTicks: entry.follower.nextPulseTicks,
-                              lastHost: entry.lastHost, ignored: entry.ignored)
+                              lastHost: entry.lastHost, ignored: entry.ignored, jitter: jitterReport(entry))
+    }
+
+    /// Mutates the window in place, to avoid copying the ring per message (an unverified performance claim: no test
+    /// or mutant can tell an in-place update from a read, modify and write back).
+    private mutating func recordJitter(_ message: MIDIClockMessage, at index: Int, _ host: HostStamp) {
+        guard message == .clock else { return }
+        entries[index].window?.record(host)
+    }
+
+    private func jitterReport(_ entry: Entry) -> MIDIClockSourceJitter? {
+        guard let watch = jitterWatch, let window = entry.window else { return nil }
+        return MIDIClockSourceJitter.report(window: window, watch: watch)
     }
 }
