@@ -326,6 +326,7 @@ targets:
       - path: FluxKlangTests/MeterTapTests+Accumulation.swift
       - path: FluxKlangTests/MeterTapTests+Bounds.swift
       - path: FluxKlangTests/MeterTapTests+Fixtures.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+ShowReadiness.swift
       - path: FluxKlangTests/MeterTapTests+Invalid.swift
       - path: FluxKlangTests/MeterTapTests+Level.swift
       - path: FluxKlangTests/MeterTapTests+Publish.swift
