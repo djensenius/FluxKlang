@@ -320,6 +320,10 @@ targets:
       - path: FluxKlangTests/RigMappingReviewTests.swift
       - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
       - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
+      - path: FluxKlangTests/RigIdentityMatchTests.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Matching.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Selection.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Fallback.swift
       - path: FluxKlangTests/RigReservationTests.swift
       - path: FluxKlangTests/RigReservationTests+Approvals.swift
       - path: FluxKlangTests/RigReservationTests+Baseline.swift
@@ -413,9 +417,18 @@ targets:
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
+      - path: FluxKlangTests/MIDICIMessageTests.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Decode.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Order.swift
+      - path: FluxKlangTests/MIDICIMessageTests+MUID.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Hostile.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
+      - path: FluxKlangTests/PeerRetryClassTests.swift
+      - path: FluxKlangTests/PeerRetryClassTests+Classes.swift
+      - path: FluxKlangTests/PeerRetryClassTests+Revalidate.swift
+      - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Policy.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests.swift
       - path: FluxKlangTests/KernelCycleFollowUpTests+AdmissionTable.swift
@@ -514,6 +527,10 @@ targets:
       - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
       - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
       - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
+      - path: FluxKlangTests/TouchOSCInteropTests.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Table.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Packets.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Feedback.swift
       - path: FluxKlangTests/OSCTransportTests.swift
       - path: FluxKlangTests/OSCTransportTests+Budget.swift
       - path: FluxKlangTests/OSCTransportTests+Equality.swift
