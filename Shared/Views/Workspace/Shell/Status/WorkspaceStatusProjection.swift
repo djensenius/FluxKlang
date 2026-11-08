@@ -42,14 +42,17 @@ struct WorkspaceStatusProjection: Hashable, Sendable {
     let diagnostics: WorkspaceStatusDiagnosticSummary
     /// Whether Safe Mute and PANIC can be reached, as the shell reports it.
     let safetyControlsReachable: Bool
+    /// The show readiness line, or nil when the inputs carry none. It is not a segment.
+    let showReadiness: WorkspaceStatusShowReadinessLine?
 
     private init(
         segments: [WorkspaceStatusSegment], diagnostics: WorkspaceStatusDiagnosticSummary,
-        safetyControlsReachable: Bool
+        safetyControlsReachable: Bool, showReadiness: WorkspaceStatusShowReadinessLine?
     ) {
         self.segments = segments
         self.diagnostics = diagnostics
         self.safetyControlsReachable = safetyControlsReachable
+        self.showReadiness = showReadiness
     }
 
     /// The segment with this ID.
@@ -59,7 +62,8 @@ struct WorkspaceStatusProjection: Hashable, Sendable {
 
     /// Derives the projection. The first failure is reported, in this order: host name; device names by
     /// index; nominal rate; measured rate; for each peer by index its name then its stale-command count;
-    /// draft count; diagnostics errors, warnings, infos. Nothing is trimmed, truncated or clamped.
+    /// draft count; diagnostics errors, warnings, infos; then, when present, the show readiness counts.
+    /// Nothing is trimmed, truncated or clamped.
     static func make(_ inputs: WorkspaceStatusInputs) throws(WorkspaceStatusRefusal) -> Self {
         let engine = try WorkspaceStatusSegment.engine(inputs.engine)
         let devices = try WorkspaceStatusSegment.devices(inputs.devices, permissions: inputs.permissions)
@@ -68,9 +72,12 @@ struct WorkspaceStatusProjection: Hashable, Sendable {
         let draft = try WorkspaceStatusSegment.draft(count: inputs.draftCount)
         let safety = WorkspaceStatusSegment.safety(inputs.shell)
         let diagnostics = try WorkspaceStatusDiagnosticSummary.make(inputs.diagnostics)
+        let showReadiness = try inputs.showReadiness.map { counts throws(WorkspaceStatusRefusal) in
+            try WorkspaceStatusShowReadinessLine.make(counts)
+        }
         return Self(
             segments: [engine, devices, clock, peers, draft, safety], diagnostics: diagnostics,
-            safetyControlsReachable: inputs.shell.safetyControlsReachable
+            safetyControlsReachable: inputs.shell.safetyControlsReachable, showReadiness: showReadiness
         )
     }
 }

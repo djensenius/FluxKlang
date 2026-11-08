@@ -14,6 +14,9 @@ enum WorkspaceStatusField: Hashable, Sendable {
     case discardedCommands(peerIndex: Int)
     case draftCount
     case diagnosticCount(DiagnosticSeverity)
+    case showReadinessEntries
+    case showReadinessBlockedEntries
+    case showReadinessSetBlockers
 }
 
 /// Why `WorkspaceStatusProjection.make(_:)` or the announcer refused. The projection reports the first
@@ -31,4 +34,6 @@ enum WorkspaceStatusRefusal: Error, Hashable, Sendable {
     case measuredRateOutOfRange(Int)
     /// The announcer was given a tick smaller than the newest one it accepted; ticks never go backwards.
     case tickWentBackwards(last: UInt64, found: UInt64)
+    /// The show readiness input reports more blocked entries than entries.
+    case blockedEntriesExceedEntries(blocked: Int, entries: Int)
 }
