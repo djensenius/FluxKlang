@@ -98,23 +98,41 @@ enum WiringImpactRowDelta {
         first == second || (first.isNaN && second.isNaN)
     }
 
+    /// Compares two optional extension bags through `sameValue`; nil equals only nil.
     private static func sameBag(_ first: [String: JSONValue]?, _ second: [String: JSONValue]?) -> Bool {
         guard let first, let second else { return first == nil && second == nil }
-        guard first.count == second.count else { return false }
-        return first.allSatisfy { key, value in second[key].map { sameValue(value, $0) } ?? false }
+        return sameValue(.object(first), .object(second))
     }
 
+    /// NaN-stable equality of two JSON values: doubles by `sameNumber` (in `sameLeaf`), arrays by count then
+    /// element by element, objects by count then key by key, any other pair by `==`. It walks an explicit stack
+    /// of pairs, because a value built in memory has no nesting limit (only a decoded one is held to 512 levels)
+    /// and recursion could exhaust the call stack. `DraftEditFold.nonFiniteNumber(in:)` walks an explicit stack
+    /// for the same reason. Each pair is visited once. This hardens this comparator alone: `JSONValue`'s own `==`
+    /// and `hash(into:)`, and releasing a very deep value, still recurse.
     private static func sameValue(_ first: JSONValue, _ second: JSONValue) -> Bool {
-        switch (first, second) {
-        case (.double(let left), .double(let right)):
-            return sameNumber(left, right)
-        case (.array(let left), .array(let right)):
-            return left.count == right.count && zip(left, right).allSatisfy { sameValue($0, $1) }
-        case (.object(let left), .object(let right)):
-            return sameBag(left, right)
-        case _:
-            return first == second
+        var pending: [(JSONValue, JSONValue)] = [(first, second)]
+        while let (left, right) = pending.popLast() {
+            switch (left, right) {
+            case (.array(let lhs), .array(let rhs)):
+                guard lhs.count == rhs.count else { return false }
+                pending.append(contentsOf: zip(lhs, rhs).map { ($0, $1) })
+            case (.object(let lhs), .object(let rhs)):
+                guard lhs.count == rhs.count else { return false }
+                for (key, value) in lhs {
+                    guard let other = rhs[key] else { return false }
+                    pending.append((value, other))
+                }
+            case _:
+                if !sameLeaf(left, right) { return false }
+            }
         }
+        return true
+    }
+
+    private static func sameLeaf(_ first: JSONValue, _ second: JSONValue) -> Bool {
+        if case .double(let lhs) = first, case .double(let rhs) = second { return sameNumber(lhs, rhs) }
+        return first == second
     }
 
     private static func indexed(_ changes: [WiringReviewChange]) -> [RowKey: WiringReviewChange] {

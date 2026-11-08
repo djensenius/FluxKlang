@@ -401,4 +401,83 @@ extension WiringImpactTests {
         let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: long))
         #expect(Self.delta(first, second).map(\.effect) == [.revised])
     }
+
+    private static func row(_ bag: [String: JSONValue]) -> WiringReviewChange {
+        moved(from: point(1, 0), to: point(5, 0, bag: bag))
+    }
+
+    private static func layered(_ leaf: Double) -> [String: JSONValue] {
+        ["k": .array([.object(["m": .array([.double(leaf)])])])]
+    }
+
+    @Test func impactRowDeltaRevisesArraysThatDifferOnlyInTheLastElement() {
+        let first = Self.row(["a": .array([.int(1), .int(2), .int(3)])])
+        let second = Self.row(["a": .array([.int(1), .int(2), .int(4)])])
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAnArrayThatLostItsLastElement() {
+        let first = Self.row(["a": .array([.int(1), .int(2), .int(3)])])
+        let second = Self.row(["a": .array([.int(1), .int(2)])])
+        let effects: [WiringImpactEffect] = Self.delta(first, second).map(\.effect)
+        #expect(effects == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesArraysThatDifferOnlyInTheOrderOfTwoUnequalElements() {
+        let first = Self.row(["a": .array([.int(1), .int(2)])])
+        let second = Self.row(["a": .array([.int(2), .int(1)])])
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesObjectsOfOneSizeWhoseValuesDifferAtDepthThree() {
+        let first = Self.row(Self.layered(1))
+        let second = Self.row(Self.layered(2))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaReadsANaNAtDepthThreeOnBothSidesAsUnchanged() {
+        let first = Self.row(Self.layered(.nan))
+        let second = Self.row(Self.layered(.nan))
+        #expect(Self.delta(first, second).isEmpty)
+    }
+
+    @Test func impactRowDeltaRevisesANaNAtDepthThreeOnOneSideOnly() {
+        let first = Self.row(Self.layered(.nan))
+        let second = Self.row(Self.layered(1))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    /// A value 100,000 levels deep, built in memory (a decoded one is held to 512 levels). Freeing a value this
+    /// deep recurses and would itself overflow the stack, so every deep value lives in a static let and is never
+    /// released during the run. The deep tests expect a count and effects, so a failure never prints a deep value.
+    private static func deep(_ leaf: Double) -> JSONValue {
+        var value = JSONValue.double(leaf)
+        for _ in 0..<100_000 { value = .array([value]) }
+        return value
+    }
+
+    private static let deepNaN = deep(.nan)
+    private static let deepNaNTwin = deep(.nan)
+    private static let deepOne = deep(1)
+    private static let deepTwo = deep(2)
+
+    private static func addedRow(deep value: JSONValue) -> WiringReviewChange {
+        var added = node("nod.deep")
+        added.position = point(5, 0, bag: ["deep": value])
+        return .addedNode(added)
+    }
+
+    @Test func impactRowDeltaReadsTwoNaNLeavesAtTheBottomOfDeepValuesAsUnchanged() {
+        let first = Self.addedRow(deep: Self.deepNaN)
+        let second = Self.addedRow(deep: Self.deepNaNTwin)
+        let rowCount: Int = Self.delta(first, second).count
+        #expect(rowCount == 0)
+    }
+
+    @Test func impactRowDeltaRevisesDeepValuesWhoseBottomLeavesDiffer() {
+        let first = Self.addedRow(deep: Self.deepOne)
+        let second = Self.addedRow(deep: Self.deepTwo)
+        let effects: [WiringImpactEffect] = Self.delta(first, second).map(\.effect)
+        #expect(effects == [.revised])
+    }
 }
