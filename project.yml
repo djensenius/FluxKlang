@@ -523,6 +523,10 @@ targets:
       - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
       - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
       - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
+      - path: FluxKlangTests/TouchOSCInteropTests.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Table.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Packets.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Feedback.swift
       - path: FluxKlangTests/OSCTransportTests.swift
       - path: FluxKlangTests/OSCTransportTests+Budget.swift
       - path: FluxKlangTests/OSCTransportTests+Equality.swift
