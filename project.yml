@@ -359,6 +359,8 @@ targets:
       - path: FluxKlangTests/WiringMatrixTests.swift
       - path: FluxKlangTests/WiringMatrixTests+EdgeBound.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
+      - path: FluxKlangTests/WiringImpactTests.swift
+      - path: FluxKlangTests/WiringImpactTests+Golden.swift
       - path: FluxKlangTests/WiringPreviewTests+Diff.swift
       - path: FluxKlangTests/RigMappingTests.swift
       - path: FluxKlangTests/RigMappingTests+Candidates.swift
@@ -431,6 +433,8 @@ targets:
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
       - path: FluxKlangTests/PerformCellModelTests+States.swift
       - path: FluxKlangTests/PerformPanelLayoutTests.swift
+      - path: FluxKlangTests/PerformPanelEditTests.swift
+      - path: FluxKlangTests/PerformPanelEditTests+Limits.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
