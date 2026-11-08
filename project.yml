@@ -266,9 +266,17 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Fixtures.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Grounding.swift
+      - path: FluxKlangTests/LegacySidecarAdoptionTests.swift
+      - path: FluxKlangTests/LegacySidecarAdoptionTests+Bounds.swift
+      - path: FluxKlangTests/LegacySidecarAdoptionTests+Compose.swift
+      - path: FluxKlangTests/LegacySidecarAdoptionTests+Order.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Hardening.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
+      - path: FluxKlangTests/AssistantFallbackPolicyTests.swift
+      - path: FluxKlangTests/AssistantFallbackPolicyTests+Consent.swift
+      - path: FluxKlangTests/AssistantFallbackPolicyTests+Disclosure.swift
+      - path: FluxKlangTests/AssistantFallbackPolicyTests+Grid.swift
       - path: FluxKlangTests/NeutralSnapshotTests+LegacyDecisions.swift
       - path: FluxKlangTests/ExplainGroundingTests.swift
       - path: FluxKlangTests/ExplainGroundingTests+Facts.swift
