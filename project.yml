@@ -347,6 +347,10 @@ targets:
       - path: FluxKlangTests/WiringEditPathTests.swift
       - path: FluxKlangTests/WiringEditPathTests+Equivalence.swift
       - path: FluxKlangTests/WiringEditPathTests+Quantization.swift
+      - path: FluxKlangTests/ShowReadinessTests.swift
+      - path: FluxKlangTests/ShowReadinessTests+Golden.swift
+      - path: FluxKlangTests/ShowReadinessTests+Order.swift
+      - path: FluxKlangTests/ShowReadinessTests+Refusals.swift
       - path: FluxKlangTests/WiringMatrixTests.swift
       - path: FluxKlangTests/WiringMatrixTests+EdgeBound.swift
       - path: FluxKlangTests/WiringPreviewTests.swift
