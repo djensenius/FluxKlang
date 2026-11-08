@@ -388,6 +388,10 @@ targets:
       - path: FluxKlangTests/ShowStageProjectionTests+Destinations.swift
       - path: FluxKlangTests/ShowStageProjectionTests+Lines.swift
       - path: FluxKlangTests/ShowRecoveryTests+Randomized.swift
+      - path: FluxKlangTests/MIDIResponseCurveTests.swift
+      - path: FluxKlangTests/MIDIResponseCurveTests+Golden.swift
+      - path: FluxKlangTests/MIDIResponseCurveTests+Ownership.swift
+      - path: FluxKlangTests/MIDIResponseCurveTests+Transform.swift
       - path: FluxKlangTests/MIDIClipTimingTests.swift
       - path: FluxKlangTests/MIDIClipTimingTests+Loop.swift
       - path: FluxKlangTests/MIDIClipOwnershipTests.swift
