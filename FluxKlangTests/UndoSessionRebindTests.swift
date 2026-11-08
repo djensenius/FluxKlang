@@ -47,7 +47,19 @@ struct UndoSessionRebindTests {
             depth: try DraftHistoryDepth.make(depth),
             undoCount: undo,
             redoCount: redo,
-            hasUnsavedEdits: unsaved
+            hasUnsavedEdits: unsaved,
+            mutationGeneration: 0
+        )
+    }
+
+    static func reissued(_ snapshot: UndoSessionSnapshot, generation: UInt64) throws -> UndoSessionSnapshot {
+        try UndoSessionSnapshot.make(
+            binding: snapshot.binding,
+            depth: snapshot.depth,
+            undoCount: snapshot.undoCount,
+            redoCount: snapshot.redoCount,
+            hasUnsavedEdits: snapshot.hasUnsavedEdits,
+            mutationGeneration: generation
         )
     }
 

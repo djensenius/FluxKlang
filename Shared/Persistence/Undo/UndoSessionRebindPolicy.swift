@@ -22,6 +22,12 @@
 /// it need not contain them, and the policy cannot show that unsaved edits are kept. A `CheckpointRecord` carries no
 /// draft or graph id, so a record of another draft with the same revision and content is accepted; the caller must
 /// hand over the record of this draft.
+///
+/// Limits of the ticket check: `confirm` compares the binding, the depth, both stack counts, the unsaved flag and the
+/// snapshot's `mutationGeneration`. The counts and the flag cannot see every change (a recorded gesture at full depth,
+/// or an undo followed by a new gesture, can leave them equal when nothing is redoable and the draft already has
+/// unsaved edits); only the generation can, and the policy cannot verify that the caller changes it after every
+/// change to the draft or to the undo and redo stacks. `plan` never looks at the generation.
 enum UndoSessionRebindPolicy {
     static func plan(
         _ session: UndoSessionSnapshot,
@@ -44,7 +50,8 @@ enum UndoSessionRebindPolicy {
 
     /// Re-checks the session against the one the ticket was issued for, then recomputes the plan from the stored
     /// session and request. The binding is compared first (draft, graph, revision, content), then the depth, both
-    /// stack counts and the unsaved flag; any difference refuses. Nothing is cached and nothing expires by time.
+    /// stack counts, the unsaved flag and the mutation generation (one guard, one refusal); any difference refuses.
+    /// Nothing is cached and nothing expires by time.
     static func confirm(
         _ ticket: UndoRebindTicket,
         against session: UndoSessionSnapshot
@@ -54,6 +61,7 @@ enum UndoSessionRebindPolicy {
         guard stored.depth == session.depth,
               stored.undoCount == session.undoCount,
               stored.redoCount == session.redoCount,
+              stored.mutationGeneration == session.mutationGeneration,
               stored.hasUnsavedEdits == session.hasUnsavedEdits else {
             throw .staleTicket
         }

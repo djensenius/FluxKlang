@@ -118,12 +118,84 @@ extension UndoSessionRebindTests {
 
     @Test func confirmChecksTheBindingBeforeTheStackCountsWhenBothDiffer() throws {
         let ticket = try Self.issuedTicket(try Self.session(undo: 3, redo: 2))
-        let bothWrong = try Self.session(try Self.binding(seed: 3), undo: 4, redo: 2)
-        let countsOnly = try Self.session(undo: 4, redo: 2)
+        let wrongContent = try Self.session(try Self.binding(seed: 3), undo: 4, redo: 2)
+        let bothWrong = try Self.reissued(wrongContent, generation: 9)
+        let countsOnly = try Self.reissued(try Self.session(undo: 4, redo: 2), generation: 9)
         let contentExpected: UndoRebindRefusal = .contentMismatch(try Self.revision(5))
         let staleExpected: UndoRebindRefusal = .staleTicket
         #expect(Self.confirmRefusal(ticket, bothWrong) == contentExpected)
         #expect(Self.confirmRefusal(ticket, countsOnly) == staleExpected)
+    }
+
+    @Test func aFullDepthSessionWithEveryCheckedFieldEqualIsStaleOnlyWhenTheGenerationDiffers() throws {
+        let issued = try Self.reissued(
+            try Self.session(undo: 10, redo: 0, unsaved: true, depth: 10), generation: 41
+        )
+        let ticket = try Self.issuedTicket(issued)
+        let afterGesture = try Self.reissued(issued, generation: 42)
+        let sameGeneration = try Self.reissued(issued, generation: 41)
+        let stale: UndoRebindRefusal = .staleTicket
+        #expect(issued.undoCount == issued.depth.value)
+        #expect(issued.redoCount == 0)
+        #expect(issued.hasUnsavedEdits)
+        #expect(sameGeneration == issued)
+        #expect(afterGesture.mutationGeneration == 42)
+        #expect(Self.confirmRefusal(ticket, afterGesture) == stale)
+        #expect(Self.confirmRefusal(ticket, sameGeneration) == nil)
+    }
+
+    @Test func anUndoFollowedByAnEditAtANonFullDepthRestoresTheCountsButAMovedGenerationIsStale() throws {
+        let issued = try Self.reissued(try Self.session(undo: 3, redo: 0, unsaved: true, depth: 10), generation: 5)
+        let ticket = try Self.issuedTicket(issued)
+        let afterUndo = try Self.reissued(try Self.session(undo: 2, redo: 1, unsaved: true, depth: 10), generation: 6)
+        let afterEdit = try Self.reissued(try Self.session(undo: 3, redo: 0, unsaved: true, depth: 10), generation: 7)
+        let stale: UndoRebindRefusal = .staleTicket
+        #expect(issued.undoCount < issued.depth.value)
+        #expect(afterEdit.undoCount == issued.undoCount)
+        #expect(afterEdit.redoCount == issued.redoCount)
+        #expect(Self.confirmRefusal(ticket, afterUndo) == stale)
+        #expect(Self.confirmRefusal(ticket, afterEdit) == stale)
+    }
+
+    @Test func theGenerationIsComparedForEqualityAtItsExtremesInBothDirections() throws {
+        let top = UInt64.max
+        let belowTop = top - 1
+        let pairs: [(issued: UInt64, current: UInt64)] = [
+            (0, 1), (1, 0), (top, belowTop), (belowTop, top), (0, top), (top, 0), (7, 3), (3, 7)
+        ]
+        let stale: UndoRebindRefusal = .staleTicket
+        for pair in pairs {
+            let issued = try Self.reissued(try Self.session(), generation: pair.issued)
+            let current = try Self.reissued(issued, generation: pair.current)
+            let ticket = try Self.issuedTicket(issued)
+            #expect(Self.confirmRefusal(ticket, current) == stale)
+        }
+        for value in [UInt64(0), 1, belowTop, top] {
+            let issued = try Self.reissued(try Self.session(), generation: value)
+            let ticket = try Self.issuedTicket(issued)
+            #expect(Self.confirmRefusal(ticket, issued) == nil)
+        }
+    }
+
+    @Test func twoSnapshotsDifferingOnlyInTheGenerationGiveTheSamePlanFieldsAndStoreTheirOwnGeneration() throws {
+        let first = try Self.reissued(try Self.session(), generation: 0)
+        let second = try Self.reissued(first, generation: UInt64.max)
+        for trigger in try Self.allTriggers() {
+            let request = try Self.request(trigger, record: try Self.record())
+            let lhs = try UndoSessionRebindPolicy.plan(first, request)
+            let rhs = try UndoSessionRebindPolicy.plan(second, request)
+            #expect(lhs.kind == rhs.kind)
+            #expect(lhs.newBinding == rhs.newBinding)
+            #expect(lhs.undo == rhs.undo)
+            #expect(lhs.redo == rhs.redo)
+            #expect(lhs.redoable == rhs.redoable)
+            #expect(Self.scalars(lhs.reason) == Self.scalars(rhs.reason))
+            #expect(lhs.ticket.session.mutationGeneration == 0)
+            #expect(rhs.ticket.session.mutationGeneration == UInt64.max)
+        }
+        let bad = try Self.request(.restore(try Self.target()), record: nil)
+        #expect(Self.refusal(first, bad) == Self.refusal(second, bad))
+        #expect(Self.refusal(first, bad) != nil)
     }
 
     @Test func aTicketIssuedForAnotherSessionFailsWithTheFirstDifferingCheckNotAGenericRefusal() throws {
