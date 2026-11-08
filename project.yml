@@ -269,6 +269,9 @@ targets:
       - path: FluxKlangTests/NeutralSnapshotTests+Hardening.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Matching.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+LegacyDecisions.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
       - path: FluxKlangTests/RecordingTakeTests.swift
       - path: FluxKlangTests/RecordingTakeTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeTests+Recovery.swift
@@ -410,6 +413,11 @@ targets:
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Fragments.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+Legacy.swift
       - path: FluxKlangTests/MIDIControlChangeDecodeTests+RealTime.swift
+      - path: FluxKlangTests/MIDICIMessageTests.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Decode.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Order.swift
+      - path: FluxKlangTests/MIDICIMessageTests+MUID.swift
+      - path: FluxKlangTests/MIDICIMessageTests+Hostile.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
@@ -421,6 +429,20 @@ targets:
       - path: FluxKlangTests/MPEZoneTests+Config.swift
       - path: FluxKlangTests/MPEZoneTests+Allocator.swift
       - path: FluxKlangTests/MPEZoneTests+Expression.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Harness.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Bindings.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Clamp.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+OSC.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Refresh.swift
+      - path: FluxKlangTests/ControlLoopConvergenceTests+Automation.swift
+      - path: FluxKlangTests/CaptureSMFExportTests.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Bounds.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Fixture.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Groups.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Losses.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Order.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Pairing.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
