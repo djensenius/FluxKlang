@@ -43,9 +43,11 @@ enum WiringImpactRowDelta {
         let row: WiringImpactRow
     }
 
-    /// Rows only after are `added`, rows only before are `cancelled`, rows on both sides with different content are
-    /// `revised`, equal rows are left out. Sorted once by (kind in heading order, ID bytes). A row repeated under
-    /// one key on one side counts once (the first); the review diff never repeats one.
+    /// Rows only after are `added`, rows only before are `cancelled`, rows on both sides whose changeable content
+    /// differs are `revised`, the others are left out. Sorted once by (kind in heading order, ID bytes). A row
+    /// repeated under one key on one side counts once (the first); the review diff never repeats one. The review
+    /// rows are not compared with `==`: a NaN in a node, an edge or a position makes a row unequal to itself, so the
+    /// same row on both sides would read as revised (see `isUnchanged`).
     static func rows(before: [WiringReviewChange], after: [WiringReviewChange]) -> [WiringImpactRow] {
         let earlier = indexed(before)
         let later = indexed(after)
@@ -56,7 +58,7 @@ enum WiringImpactRowDelta {
                 keyed.append(KeyedRow(key: key, row: WiringImpactRow(effect: .added, change: change)))
                 continue
             }
-            if old != change {
+            if !isUnchanged(old, change) {
                 keyed.append(KeyedRow(key: key, row: WiringImpactRow(effect: .revised, change: change, previous: old)))
             }
         }
@@ -65,6 +67,52 @@ enum WiringImpactRowDelta {
         }
         keyed.sort(by: precedes)
         return keyed.map(\.row)
+    }
+
+    /// Whether two rows under one key are the same row. Invariant of the review diff: both diffs are built from the
+    /// fixed active graph and one draft, and a gesture changes only node positions, so removed rows and added edge
+    /// rows under one key are the same record on both sides, and an added or moved node row differs only by its
+    /// positions. Those are compared NaN-stably (`==` or both NaN, so +0.0 equals -0.0).
+    private static func isUnchanged(_ old: WiringReviewChange, _ new: WiringReviewChange) -> Bool {
+        switch (old, new) {
+        case (.addedNode(let first), .addedNode(let second)):
+            return sameNumbers(first.position, second.position)
+        case (.movedNode(_, let oldFrom, let oldTo), .movedNode(_, let newFrom, let newTo)):
+            return sameNumbers(oldFrom, newFrom) && sameNumbers(oldTo, newTo)
+        case (.removedNode, .removedNode), (.addedEdge, .addedEdge), (.removedEdge, .removedEdge):
+            return true
+        case _:
+            return false
+        }
+    }
+
+    private static func sameNumbers(_ first: GraphPoint?, _ second: GraphPoint?) -> Bool {
+        guard let first, let second else { return first == nil && second == nil }
+        return sameNumber(first.x, second.x) && sameNumber(first.y, second.y)
+            && sameBag(first.extensions, second.extensions) && sameBag(first.unknownFields, second.unknownFields)
+    }
+
+    private static func sameNumber(_ first: Double, _ second: Double) -> Bool {
+        first == second || (first.isNaN && second.isNaN)
+    }
+
+    private static func sameBag(_ first: [String: JSONValue]?, _ second: [String: JSONValue]?) -> Bool {
+        guard let first, let second else { return first == nil && second == nil }
+        guard first.count == second.count else { return false }
+        return first.allSatisfy { key, value in second[key].map { sameValue(value, $0) } ?? false }
+    }
+
+    private static func sameValue(_ first: JSONValue, _ second: JSONValue) -> Bool {
+        switch (first, second) {
+        case (.double(let left), .double(let right)):
+            return sameNumber(left, right)
+        case (.array(let left), .array(let right)):
+            return left.count == right.count && zip(left, right).allSatisfy { sameValue($0, $1) }
+        case (.object(let left), .object(let right)):
+            return sameBag(left, right)
+        case _:
+            return first == second
+        }
     }
 
     private static func indexed(_ changes: [WiringReviewChange]) -> [RowKey: WiringReviewChange] {

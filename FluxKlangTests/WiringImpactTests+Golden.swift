@@ -189,4 +189,184 @@ extension WiringImpactTests {
         }
         #expect(loopLines > 0)
     }
+
+    // MARK: NaN-stable rows
+
+    private static func point(_ horizontal: Double, _ vertical: Double, bag: [String: JSONValue]? = nil) -> GraphPoint {
+        var value = GraphPoint(x: horizontal, y: vertical)
+        value.extensions = bag
+        return value
+    }
+
+    private static func moved(from: GraphPoint?, to: GraphPoint?) -> WiringReviewChange {
+        .movedNode(keys, from: from, to: to)
+    }
+
+    private static func delta(_ before: WiringReviewChange, _ after: WiringReviewChange) -> [WiringImpactRow] {
+        WiringImpactRowDelta.rows(before: [before], after: [after])
+    }
+
+    private static func placing(_ node: NodeID, at position: GraphPoint, in graph: GraphDocument) -> GraphDocument {
+        var placed = graph
+        placed.nodes = graph.nodes.map { entry in
+            var copy = entry
+            if entry.id == node { copy.position = position }
+            return copy
+        }
+        return placed
+    }
+
+    private static func nanFeedbackGraph() -> GraphDocument {
+        var graph = Fixture.graph
+        graph.edges = graph.edges.map { edge in
+            var copy = edge
+            if edge.id == edgeID("edg.delay-verb-fb") {
+                copy.feedback = EdgeFeedback(delayBlocks: 1, gainCeilingDb: .nan)
+            }
+            return copy
+        }
+        return graph
+    }
+
+    private static let noOpMove = WiringImpactGesture.moveNode(verb, x: 4, y: 0)
+
+    @Test func impactNoOpMoveAfterDisconnectingAnEdgeWithANaNGainIsAnEmptyImpact() throws {
+        let active = Self.nanFeedbackGraph()
+        let start = Self.draft([.disconnect(Self.edgeID("edg.delay-verb-fb"))], on: active)
+        let result = try WiringImpact.make(Self.noOpMove, draft: start, active: active)
+        #expect(result.rows.isEmpty)
+        #expect(result.isEmpty)
+        #expect(result.summary == "No change. No new problems.")
+    }
+
+    @Test func impactNoOpMoveWithARemovedNodeOfANaNGainIsAnEmptyImpact() throws {
+        var gain = Self.gainNode("nod.gain")
+        gain.linearGain = .nan
+        let active = Fixture.with([], nodes: [gain])
+        let start = Self.draft([.removeNode(gain.id)], on: active)
+        let result = try WiringImpact.make(Self.noOpMove, draft: start, active: active)
+        #expect(result.rows.isEmpty)
+        #expect(result.isEmpty)
+    }
+
+    @Test func impactNoOpMoveWithAMovedRowFromANaNPositionIsAnEmptyImpact() throws {
+        let active = Self.placing(Self.keys, at: Self.point(.nan, 0), in: Fixture.graph)
+        let start = Self.draft([.moveNode(Self.keys, to: Self.point(5, 0))], on: active)
+        let result = try WiringImpact.make(Self.noOpMove, draft: start, active: active)
+        #expect(result.rows.isEmpty)
+        #expect(result.isEmpty)
+    }
+
+    @Test func impactNoOpMoveWithAnAddedNodeAndAMovedRowAtANaNPositionIsAnEmptyImpact() throws {
+        var added = Self.node("nod.new")
+        added.position = Self.point(.nan, .nan)
+        let edits: [GraphEdit] = [.addNode(added), .moveNode(Self.keys, to: Self.point(.nan, 0))]
+        let start = Self.draft(edits)
+        let result = try WiringImpact.make(Self.noOpMove, draft: start, active: Fixture.graph)
+        #expect(result.rows.isEmpty)
+        #expect(result.isEmpty)
+    }
+
+    @Test func impactMovingAnAddedNodeOffANaNPositionRevisesItsRow() throws {
+        var added = Self.node("nod.new")
+        added.position = Self.point(.nan, 0)
+        let start = Self.draft([.addNode(added)])
+        let result = try WiringImpact.make(.moveNode(added.id, x: 3, y: 0), draft: start, active: Fixture.graph)
+        #expect(Self.kinds(result) == [.addedNode])
+        #expect(Self.effects(result) == [.revised])
+    }
+
+    @Test func impactMovingARowOffANaNPositionRevisesIt() throws {
+        let start = Self.draft([.moveNode(Self.keys, to: Self.point(.nan, 0))])
+        let result = try WiringImpact.make(.moveNode(Self.keys, x: 3, y: 0), draft: start, active: Fixture.graph)
+        #expect(Self.effects(result) == [.revised])
+        #expect(result.summary == "Revises 1 earlier change. No new problems. Resolves 1 problem.")
+    }
+
+    @Test func impactRowDeltaRevisesAMoveFromFiniteToNaNAndFromNaNToFinite() {
+        let finite = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let broken = Self.moved(from: Self.point(1, 0), to: Self.point(.nan, 0))
+        let towards = Self.delta(finite, broken)
+        let back = Self.delta(broken, finite)
+        #expect(towards.map(\.effect) == [.revised])
+        #expect(back.map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAMoveWhenOnlyTheFromPositionDiffers() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let second = Self.moved(from: Self.point(2, 0), to: Self.point(5, 0))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAMoveWhenOnlyTheYCoordinateDiffers() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 1))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaReadsPlusZeroAndMinusZeroAsTheSamePosition() {
+        let plus = Self.moved(from: Self.point(0.0, 0.0), to: Self.point(5, 0.0))
+        let minus = Self.moved(from: Self.point(-0.0, -0.0), to: Self.point(5, -0.0))
+        #expect(Self.delta(plus, minus).isEmpty)
+    }
+
+    @Test func impactRowDeltaRevisesAMoveFromAPositionToNoPositionAndReadsTwoNoneAsTheSame() {
+        let placed = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let unplaced = Self.moved(from: Self.point(1, 0), to: nil)
+        #expect(Self.delta(placed, unplaced).map(\.effect) == [.revised])
+        #expect(Self.delta(unplaced, unplaced).isEmpty)
+    }
+
+    @Test func impactRowDeltaReadsANaNInAPositionBagAsTheSameValue() {
+        let bag: [String: JSONValue] = ["a": .double(.nan), "b": .array([.double(.nan), .int(1)])]
+        let nested: [String: JSONValue] = ["c": .object(["d": .double(.nan)])]
+        let row = Self.moved(from: Self.point(1, 0, bag: bag), to: Self.point(5, 0, bag: nested))
+        #expect(Self.delta(row, row).isEmpty)
+    }
+
+    private static func nestedBag(_ value: Double) -> [String: JSONValue] {
+        ["c": .object(["d": .double(value)])]
+    }
+
+    @Test func impactRowDeltaReadsANaNInANestedObjectAsTheSameValueAndAFiniteOneAsRevised() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: Self.nestedBag(.nan)))
+        let same = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: Self.nestedBag(.nan)))
+        let other = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: Self.nestedBag(1)))
+        #expect(Self.delta(first, same).isEmpty)
+        #expect(Self.delta(first, other).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAPositionWhoseBagDiffers() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .int(1)]))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .int(2)]))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAPositionWhoseBagHasAnExtraKey() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .double(.nan)]))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: ["a": .double(.nan), "b": .int(1)]))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAPositionWhoseUnknownFieldsDiffer() {
+        var other = Self.point(5, 0)
+        other.unknownFields = ["u": .int(1)]
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let second = Self.moved(from: Self.point(1, 0), to: other)
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAPositionWhoseBagIsAbsentOnOneSideOnly() {
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: [:]))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
+
+    @Test func impactRowDeltaRevisesAnArrayWithAnExtraElement() {
+        let short: [String: JSONValue] = ["a": .array([.double(.nan)])]
+        let long: [String: JSONValue] = ["a": .array([.double(.nan), .int(1)])]
+        let first = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: short))
+        let second = Self.moved(from: Self.point(1, 0), to: Self.point(5, 0, bag: long))
+        #expect(Self.delta(first, second).map(\.effect) == [.revised])
+    }
 }
