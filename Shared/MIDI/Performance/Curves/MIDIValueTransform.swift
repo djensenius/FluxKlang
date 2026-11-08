@@ -1,6 +1,6 @@
 /// A response curve registered for one control change number. A carrier only: `MIDIValueTransform.make` checks the
 /// number and the curve's domain, so a value of this type means nothing until a transform accepts it.
-struct MIDIControllerCurve: Equatable, Sendable {
+struct MIDIControllerCurve: Hashable, Sendable {
     let controller: UInt8
     let curve: MIDIResponseCurve
 }
@@ -10,7 +10,7 @@ struct MIDIControllerCurve: Equatable, Sendable {
 /// velocity of 1...127 stays 1...127, a velocity of 0 (a release) and every Note Off stay as they are, and no
 /// controller in `MIDIProtectedControllers` can be registered. Only `make` and `identity` build a value, and the
 /// controller list it stores is sorted ascending, so equal contents compare equal whatever order they came in.
-struct MIDIValueTransform: Equatable, Sendable {
+struct MIDIValueTransform: Hashable, Sendable {
     static let maximumControllerCurves = 16
     static let identity = MIDIValueTransform(velocity: nil, pressure: nil, controllers: [])
 
