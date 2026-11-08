@@ -10,6 +10,7 @@ struct MIDIRoutingRule: Hashable, Sendable {
     var channels: ClosedRange<UInt8> { storedChannels }
     var notes: ClosedRange<UInt8> { storedNotes }
     var transpose: Int { storedTranspose }
+    var transform: MIDIValueTransform? { storedTransform }
 
     // Private `let` storage behind get-only accessors: only this file's initializers can set it, so an initializer
     // in an extension elsewhere cannot skip the validation, and nothing changes it afterwards.
@@ -18,19 +19,23 @@ struct MIDIRoutingRule: Hashable, Sendable {
     private let storedChannels: ClosedRange<UInt8>
     private let storedNotes: ClosedRange<UInt8>
     private let storedTranspose: Int
+    private let storedTransform: MIDIValueTransform?
 
-    /// Refuses channels outside 1...16, notes above 127 and transpositions outside `transposeBounds`.
+    /// Refuses channels outside 1...16, notes above 127, transpositions outside `transposeBounds` and a transform
+    /// with a pressure curve.
     init?(
         input: MIDIInputID, route: MIDIRouteID, channels: ClosedRange<UInt8> = 1...16,
-        notes: ClosedRange<UInt8> = 0...127, transpose: Int = 0
+        notes: ClosedRange<UInt8> = 0...127, transpose: Int = 0, transform: MIDIValueTransform? = nil
     ) {
         guard channels.lowerBound >= 1, channels.upperBound <= UInt8(MIDI1PerformanceState.channelCount),
-              notes.upperBound <= 0x7F, Self.transposeBounds.contains(transpose) else { return nil }
+              notes.upperBound <= 0x7F, Self.transposeBounds.contains(transpose),
+              transform?.pressure == nil else { return nil }
         storedInput = input
         storedRoute = route
         storedChannels = channels
         storedNotes = notes
         storedTranspose = transpose
+        storedTransform = transform
     }
 
     func matches(_ input: MIDIInputID, channel: UInt8) -> Bool {

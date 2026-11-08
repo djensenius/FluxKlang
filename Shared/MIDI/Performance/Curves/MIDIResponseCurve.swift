@@ -1,7 +1,7 @@
 /// Which data byte a response curve reshapes. A velocity curve maps 1...127 to 1...127, so a sounding note stays
 /// sounding: velocity 0 is how a Note On says release, and no curve can produce it. A controller curve maps 0...127
 /// to 0...127 and serves control change values and both pressure kinds.
-enum MIDICurveDomain: Equatable, Sendable {
+enum MIDICurveDomain: Hashable, Sendable {
     case velocity
     case controller
 
@@ -15,7 +15,7 @@ enum MIDICurveDomain: Equatable, Sendable {
 }
 
 /// One breakpoint of a response curve: the curve passes through `output` at `input`.
-struct MIDICurvePoint: Equatable, Sendable {
+struct MIDICurvePoint: Hashable, Sendable {
     let input: UInt8
     let output: UInt8
 }
@@ -23,7 +23,7 @@ struct MIDICurvePoint: Equatable, Sendable {
 /// A response curve over MIDI 1 data bytes: breakpoints joined by straight segments, evaluated in integers (round
 /// half toward positive infinity) into a 128-entry table once, when the curve is built. Only the factories build a
 /// curve, so every value in existence satisfies the checks of `make(domain:points:)`.
-struct MIDIResponseCurve: Equatable, Sendable {
+struct MIDIResponseCurve: Hashable, Sendable {
     static let maximumPoints = 16
     static let highestValue: UInt8 = 127
     private static let tableSize = 128
