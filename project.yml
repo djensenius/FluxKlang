@@ -297,6 +297,10 @@ targets:
       - path: FluxKlangTests/OSCSchedulingTests+Era.swift
       - path: FluxKlangTests/OSCSchedulingTests+Clock.swift
       - path: FluxKlangTests/OSCSchedulingTests+Batches.swift
+      - path: FluxKlangTests/OSCReceiveContextTests.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Cancel.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Order.swift
+      - path: FluxKlangTests/OSCReceiveContextTests+Revalidate.swift
       - path: FluxKlangTests/MIDIPerformanceTests.swift
       - path: FluxKlangTests/MIDIPerformanceSustainTests.swift
       - path: FluxKlangTests/MIDIPerformanceRecoveryTests.swift
@@ -320,6 +324,10 @@ targets:
       - path: FluxKlangTests/RigMappingReviewTests.swift
       - path: FluxKlangTests/RigMappingReviewTests+Overlap.swift
       - path: FluxKlangTests/RigMappingReviewTests+Replace.swift
+      - path: FluxKlangTests/RigIdentityMatchTests.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Matching.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Selection.swift
+      - path: FluxKlangTests/RigIdentityMatchTests+Fallback.swift
       - path: FluxKlangTests/RigReservationTests.swift
       - path: FluxKlangTests/RigReservationTests+Approvals.swift
       - path: FluxKlangTests/RigReservationTests+Baseline.swift
@@ -523,6 +531,10 @@ targets:
       - path: FluxKlangTests/OSCNamespaceTests+Liveness.swift
       - path: FluxKlangTests/OSCNamespaceTests+Precedence.swift
       - path: FluxKlangTests/OSCNamespaceTests+Routes.swift
+      - path: FluxKlangTests/TouchOSCInteropTests.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Table.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Packets.swift
+      - path: FluxKlangTests/TouchOSCInteropTests+Feedback.swift
       - path: FluxKlangTests/OSCTransportTests.swift
       - path: FluxKlangTests/OSCTransportTests+Budget.swift
       - path: FluxKlangTests/OSCTransportTests+Equality.swift
@@ -551,6 +563,10 @@ targets:
       - path: FluxKlangTests/MetronomeGridTests+CountIn.swift
       - path: FluxKlangTests/MetronomeGridTests+Subdivisions.swift
       - path: FluxKlangTests/MIDIClockMathTests.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Adapters.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Ledger.swift
+      - path: FluxKlangTests/ClockGenerationUnificationTests+Staleness.swift
       - path: FluxKlangTests/MIDIClockFollowerTests.swift
       - path: FluxKlangTests/MIDIClockTempoTests.swift
       - path: FluxKlangTests/MIDIInternalClockTests.swift
