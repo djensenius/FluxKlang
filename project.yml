@@ -431,6 +431,8 @@ targets:
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
       - path: FluxKlangTests/PerformCellModelTests+States.swift
       - path: FluxKlangTests/PerformPanelLayoutTests.swift
+      - path: FluxKlangTests/PerformPanelEditTests.swift
+      - path: FluxKlangTests/PerformPanelEditTests+Limits.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
