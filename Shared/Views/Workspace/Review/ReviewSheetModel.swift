@@ -65,6 +65,65 @@ enum ReviewSheetRefusal: Error, Hashable, Sendable {
     case invalidHazardSummary(id: String)
     /// Two hazards have byte-equal ids; names the smallest such id by bytes.
     case duplicateHazardID(String)
+
+    /// Equality compares the hazard ids by UTF-8 bytes, so a refusal naming one id never equals a refusal naming a
+    /// canonically equivalent but byte-different one. The last arm names every case on the left and has no default,
+    /// so adding a case stops the build until its arm is written.
+    static func == (lhs: ReviewSheetRefusal, rhs: ReviewSheetRefusal) -> Bool {
+        switch (lhs, rhs) {
+        case let (.invalidLimits(lhsRows, lhsHazards), .invalidLimits(rhsRows, rhsHazards)):
+            lhsRows == rhsRows && lhsHazards == rhsHazards
+        case (.revisionOverflow, .revisionOverflow):
+            true
+        case let (.staleActiveRevisionMismatch(lhsStale, lhsActive), .staleActiveRevisionMismatch(rhsStale, rhsActive)):
+            lhsStale == rhsStale && lhsActive == rhsActive
+        case let (.tooManyRows(lhsCount, lhsMaximum), .tooManyRows(rhsCount, rhsMaximum)):
+            lhsCount == rhsCount && lhsMaximum == rhsMaximum
+        case let (.tooManyHazards(lhsCount, lhsMaximum), .tooManyHazards(rhsCount, rhsMaximum)):
+            lhsCount == rhsCount && lhsMaximum == rhsMaximum
+        case let (.invalidHazardID(lhsID), .invalidHazardID(rhsID)):
+            lhsID.utf8.elementsEqual(rhsID.utf8)
+        case let (.invalidHazardSummary(lhsID), .invalidHazardSummary(rhsID)):
+            lhsID.utf8.elementsEqual(rhsID.utf8)
+        case let (.duplicateHazardID(lhsID), .duplicateHazardID(rhsID)):
+            lhsID.utf8.elementsEqual(rhsID.utf8)
+        case (.invalidLimits, _), (.revisionOverflow, _), (.staleActiveRevisionMismatch, _), (.tooManyRows, _),
+             (.tooManyHazards, _), (.invalidHazardID, _), (.invalidHazardSummary, _), (.duplicateHazardID, _):
+            false
+        }
+    }
+
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .invalidLimits(let rows, let hazards):
+            hasher.combine(0)
+            hasher.combine(rows)
+            hasher.combine(hazards)
+        case .revisionOverflow:
+            hasher.combine(1)
+        case .staleActiveRevisionMismatch(let stale, let active):
+            hasher.combine(2)
+            hasher.combine(stale)
+            hasher.combine(active)
+        case .tooManyRows(let count, let maximum):
+            hasher.combine(3)
+            hasher.combine(count)
+            hasher.combine(maximum)
+        case .tooManyHazards(let count, let maximum):
+            hasher.combine(4)
+            hasher.combine(count)
+            hasher.combine(maximum)
+        case .invalidHazardID(let id):
+            hasher.combine(5)
+            ReviewHazard.combine(id, into: &hasher)
+        case .invalidHazardSummary(let id):
+            hasher.combine(6)
+            ReviewHazard.combine(id, into: &hasher)
+        case .duplicateHazardID(let id):
+            hasher.combine(7)
+            ReviewHazard.combine(id, into: &hasher)
+        }
+    }
 }
 
 /// The review sheet as a value: no mutating API, storage only `private(set)`, built only by `make`.

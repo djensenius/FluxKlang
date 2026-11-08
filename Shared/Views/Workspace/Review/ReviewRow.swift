@@ -17,7 +17,8 @@ enum ReviewRowKind: Hashable, Sendable, CaseIterable {
     case hazard
 }
 
-/// A caller-supplied hazard. The review never infers one.
+/// A caller-supplied hazard. The review never infers one. Equality and hashing compare the UTF-8 bytes of `id` and
+/// `summary`, so canonically equivalent but byte-different texts are different hazards, as `checked` treats them.
 struct ReviewHazard: Hashable, Sendable {
     /// 1...`ReviewSheetLimits.hazardIDBytes` UTF-8 bytes.
     var id: String
@@ -25,6 +26,24 @@ struct ReviewHazard: Hashable, Sendable {
     var summary: String
     /// True when the review cannot be activated while this hazard stands.
     var blocksActivation: Bool
+
+    static func == (lhs: ReviewHazard, rhs: ReviewHazard) -> Bool {
+        lhs.id.utf8.elementsEqual(rhs.id.utf8)
+            && lhs.summary.utf8.elementsEqual(rhs.summary.utf8)
+            && lhs.blocksActivation == rhs.blocksActivation
+    }
+
+    func hash(into hasher: inout Hasher) {
+        Self.combine(id, into: &hasher)
+        Self.combine(summary, into: &hasher)
+        hasher.combine(blocksActivation)
+    }
+
+    /// The byte length and then the bytes, so two text fields cannot blur into each other.
+    static func combine(_ text: String, into hasher: inout Hasher) {
+        hasher.combine(text.utf8.count)
+        for byte in text.utf8 { hasher.combine(byte) }
+    }
 
     /// The hazards in UTF-8 byte order of their ids, or the first refusal in the documented order: an invalid id,
     /// an invalid summary, a repeated id. Each refusal names the smallest offending id by bytes, so the result and the

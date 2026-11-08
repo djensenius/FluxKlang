@@ -168,6 +168,128 @@ extension ReviewSheetModelTests {
         }
     }
 
+    // MARK: Byte-wise equality
+
+    @Test func hazardsWhoseIDsDifferOnlyCanonicallyAreNotEqualAndByteEqualOnesAre() {
+        #expect(Self.hazard("\u{e9}", "s") != Self.hazard("e\u{301}", "s"))
+        #expect(Self.hazard("\u{e9}", "s") == Self.hazard("\u{e9}", "s"))
+    }
+
+    @Test func hazardsWhoseSummariesDifferOnlyCanonicallyAreNotEqualAndByteEqualOnesAre() {
+        #expect(Self.hazard("hz", "\u{e9}") != Self.hazard("hz", "e\u{301}"))
+        #expect(Self.hazard("hz", "e\u{301}") == Self.hazard("hz", "e\u{301}"))
+    }
+
+    @Test func hazardsThatDifferOnlyInBlockingAreNotEqual() {
+        #expect(Self.hazard("hz", "s", blocks: true) != Self.hazard("hz", "s", blocks: false))
+        #expect(Self.hazard("hz", "s", blocks: true) == Self.hazard("hz", "s", blocks: true))
+    }
+
+    @Test func aSetKeepsCanonicallyEquivalentHazardsApartAndCollapsesByteEqualOnes() {
+        let both: Set<ReviewHazard> = [Self.hazard("\u{e9}", "s"), Self.hazard("e\u{301}", "s")]
+        #expect(both.count == 2)
+        let copies: Set<ReviewHazard> = [Self.hazard("\u{e9}", "s"), Self.hazard("\u{e9}", "s")]
+        #expect(copies.count == 1)
+        let summaries: Set<ReviewHazard> = [Self.hazard("hz", "\u{e9}"), Self.hazard("hz", "e\u{301}")]
+        #expect(summaries.count == 2)
+    }
+
+    @Test func byteEqualHazardsAndRefusalsBuiltSeparatelyHashEqualAndFormOneSetElement() {
+        let bytes = String("x\u{e9}".dropFirst())
+        #expect(Self.hazard("\u{e9}", "s").hashValue == Self.hazard(bytes, "s").hashValue)
+        let idA = ReviewSheetRefusal.invalidHazardID("\u{e9}")
+        let idB = ReviewSheetRefusal.invalidHazardID(bytes)
+        #expect(idA.hashValue == idB.hashValue)
+        let repeatedA = ReviewSheetRefusal.duplicateHazardID("\u{e9}")
+        let repeatedB = ReviewSheetRefusal.duplicateHazardID(bytes)
+        #expect(repeatedA.hashValue == repeatedB.hashValue)
+        let refusals: Set<ReviewSheetRefusal> = [.invalidHazardSummary(id: "\u{e9}"), .invalidHazardSummary(id: bytes)]
+        #expect(refusals.count == 1)
+    }
+
+    @Test func refusalsNamingCanonicallyEquivalentIDsStayApartInASet() {
+        let ids: Set<ReviewSheetRefusal> = [.invalidHazardID("\u{e9}"), .invalidHazardID("e\u{301}")]
+        #expect(ids.count == 2)
+        let summaries: Set<ReviewSheetRefusal> = [
+            .invalidHazardSummary(id: "\u{e9}"), .invalidHazardSummary(id: "e\u{301}")
+        ]
+        #expect(summaries.count == 2)
+        let repeats: Set<ReviewSheetRefusal> = [.duplicateHazardID("\u{e9}"), .duplicateHazardID("e\u{301}")]
+        #expect(repeats.count == 2)
+    }
+
+    @Test func modelsBuiltFromInputsThatDifferOnlyInACanonicallyEquivalentHazardIDAreNotEqual() throws {
+        var precomposedInput = try Self.safeInput()
+        precomposedInput.hazards = [Self.hazard("\u{e9}", "s")]
+        var decomposedInput = try Self.safeInput()
+        decomposedInput.hazards = [Self.hazard("e\u{301}", "s")]
+        var again = try Self.safeInput()
+        again.hazards = [Self.hazard("\u{e9}", "s")]
+        #expect(precomposedInput != decomposedInput)
+        #expect(precomposedInput == again)
+        #expect(try Self.model(precomposedInput) != Self.model(decomposedInput))
+        #expect(try Self.model(precomposedInput) == Self.model(again))
+    }
+
+    @Test func modelsBuiltFromInputsThatDifferOnlyInACanonicallyEquivalentSummaryAreNotEqual() throws {
+        var precomposedInput = try Self.safeInput()
+        precomposedInput.hazards = [Self.hazard("hz", "\u{e9}")]
+        var decomposedInput = try Self.safeInput()
+        decomposedInput.hazards = [Self.hazard("hz", "e\u{301}")]
+        #expect(precomposedInput != decomposedInput)
+        #expect(try Self.model(precomposedInput) != Self.model(decomposedInput))
+    }
+
+    @Test func anOverlongIDIsRefusedNamingItsExactBytesNotACanonicallyEquivalentOne() throws {
+        let decomposedLong = Self.repeated(Self.decomposed, 33)
+        let precomposedLong = Self.repeated(Self.precomposed, 33)
+        var input = try Self.safeInput()
+        input.hazards = [Self.hazard(decomposedLong)]
+        #expect(Self.refusal(of: input) == .invalidHazardID(Self.repeated("e\u{301}", 33)))
+        #expect(Self.refusal(of: input) != .invalidHazardID(precomposedLong))
+    }
+
+    @Test func anEmptySummaryIsRefusedNamingTheExactBytesOfTheHazardID() throws {
+        var input = try Self.safeInput()
+        input.hazards = [Self.hazard(Self.decomposed, ""), Self.hazard(Self.precomposed, "ok")]
+        #expect(Self.refusal(of: input) == .invalidHazardSummary(id: "e\u{301}"))
+        #expect(Self.refusal(of: input) != .invalidHazardSummary(id: "\u{e9}"))
+    }
+
+    @Test func aRepeatedIDIsRefusedNamingItsExactBytesNotACanonicallyEquivalentOne() throws {
+        var input = try Self.safeInput()
+        input.hazards = [
+            Self.hazard(Self.decomposed, "1"), Self.hazard(Self.precomposed, "2"), Self.hazard(Self.decomposed, "3")
+        ]
+        #expect(Self.refusal(of: input) == .duplicateHazardID("e\u{301}"))
+        #expect(Self.refusal(of: input) != .duplicateHazardID("\u{e9}"))
+    }
+
+    @Test func everyRefusalCaseBuiltTwiceIsEqualAndHashesEqualButNotEqualToAnotherCase() throws {
+        let first: [ReviewSheetRefusal] = [
+            .invalidLimits(rows: 0, hazards: 65), .revisionOverflow,
+            .staleActiveRevisionMismatch(stale: try ContractRevision(3), active: try ContractRevision(4)),
+            .tooManyRows(count: 513, maximum: 512), .tooManyHazards(count: 65, maximum: 64),
+            .invalidHazardID("hz.a"), .invalidHazardSummary(id: "hz.b"), .duplicateHazardID("hz.c")
+        ]
+        let second: [ReviewSheetRefusal] = [
+            .invalidLimits(rows: 0, hazards: 65), .revisionOverflow,
+            .staleActiveRevisionMismatch(stale: try Self.revision(3), active: try Self.revision(4)),
+            .tooManyRows(count: 513, maximum: 512), .tooManyHazards(count: 65, maximum: 64),
+            .invalidHazardID("hz." + "a"), .invalidHazardSummary(id: "hz." + "b"), .duplicateHazardID("hz." + "c")
+        ]
+        #expect(first.count == 8 && second.count == 8)
+        for (left, right) in zip(first, second) {
+            #expect(left == right)
+            #expect(left.hashValue == right.hashValue)
+        }
+        #expect(ReviewSheetRefusal.tooManyRows(count: 1, maximum: 2) != .tooManyHazards(count: 1, maximum: 2))
+        #expect(ReviewSheetRefusal.tooManyRows(count: 1, maximum: 2) != .tooManyRows(count: 2, maximum: 2))
+        #expect(ReviewSheetRefusal.revisionOverflow != .invalidLimits(rows: 1, hazards: 1))
+        #expect(ReviewSheetRefusal.invalidHazardID("hz.a") != .duplicateHazardID("hz.a"))
+        #expect(ReviewSheetRefusal.invalidHazardID("hz.a") != .invalidHazardSummary(id: "hz.a"))
+    }
+
     // MARK: Hazard text
 
     @Test func aHazardIDIsAcceptedAt64BytesAndRefusedAt65BytesWithMultiByteCharacters() throws {
