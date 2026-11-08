@@ -240,7 +240,9 @@ extension ShowStageProjectionTests {
     func theThreeStageSourcesNameNoUserInterfaceClockTaskOrQueueSymbol() throws {
         let directory = try #require(Self.productionDirectory)
         let names = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
-        #expect(names == ["ShowStageFormat.swift", "ShowStageLine.swift", "ShowStageProjection.swift"])
+        let expected = ["ShowStageFormat+Resume.swift", "ShowStageFormat.swift", "ShowStageLine.swift",
+                        "ShowStageProjection.swift", "ShowStageResume.swift"]
+        #expect(names == expected)
         let forbidden = ["import SwiftUI", "Date(", "Clock", "Task", "DispatchQueue", "Combine", "random"]
         for name in names {
             let text = try String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)
