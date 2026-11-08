@@ -318,7 +318,7 @@ extension PeerBackpressureTests {
         #expect(backlog == before)
     }
 
-    @Test func snapshotAppliedClearsTheRequirementOnlyAtOrAboveTheFloor() throws {
+    @Test func snapshotAppliedClearsTheRequirementOnlyAtOrAboveTheRequiredSequence() throws {
         var backlog = try filled()
         _ = try backlog.collapse(to: try Fixture.sequence(6))
         let before = backlog
@@ -326,8 +326,8 @@ extension PeerBackpressureTests {
         #expect(!below)
         #expect(backlog == before)
         #expect(backlog.requiresSnapshot)
-        let atFloor = backlog.snapshotApplied(through: try Fixture.sequence(6))
-        #expect(atFloor)
+        let atRequired = backlog.snapshotApplied(through: try Fixture.sequence(6))
+        #expect(atRequired)
         #expect(!backlog.requiresSnapshot)
         let cleared = backlog
         let again = backlog.snapshotApplied(through: try Fixture.sequence(6))
@@ -371,7 +371,81 @@ extension PeerBackpressureTests {
         #expect(backlog.pendingDeltas == 1)
     }
 
-    @Test func backlogEqualitySeesTheRequirementTheFloorAndThePendingCounts() throws {
+    @Test func snapshotAppliedAndTheLaterDeltaAcknowledgeEndInEqualValuesInEitherOrder() throws {
+        var collapsed = try filled()
+        _ = try collapsed.collapse(to: try Fixture.sequence(6))
+        try record(&collapsed, 7, changes: 2)
+        var acknowledgeFirst = collapsed
+        var snapshotFirst = collapsed
+        let dropped = acknowledgeFirst.acknowledge(through: try Fixture.sequence(7))
+        let appliedLate = acknowledgeFirst.snapshotApplied(through: try Fixture.sequence(6))
+        let appliedEarly = snapshotFirst.snapshotApplied(through: try Fixture.sequence(6))
+        let droppedLate = snapshotFirst.acknowledge(through: try Fixture.sequence(7))
+        #expect(dropped == 1)
+        #expect(droppedLate == 1)
+        #expect(appliedLate)
+        #expect(appliedEarly)
+        #expect(acknowledgeFirst == snapshotFirst)
+        #expect(!acknowledgeFirst.requiresSnapshot)
+        #expect(acknowledgeFirst.snapshotRequiredAt == nil)
+        #expect(acknowledgeFirst.acknowledgedThrough == (try Fixture.sequence(7)))
+        #expect(acknowledgeFirst.recordedThrough == (try Fixture.sequence(7)))
+        #expect(acknowledgeFirst.pendingDeltas == 0)
+    }
+
+    @Test func snapshotAppliedBelowTheRequiredSequenceIsRefusedAfterLaterAcknowledgements() throws {
+        var backlog = try filled()
+        _ = try backlog.collapse(to: try Fixture.sequence(6))
+        try record(&backlog, 7, changes: 2)
+        backlog.acknowledge(through: try Fixture.sequence(7))
+        let before = backlog
+        let below = backlog.snapshotApplied(through: try Fixture.sequence(5))
+        #expect(!below)
+        #expect(backlog == before)
+        #expect(backlog.requiresSnapshot)
+        #expect(backlog.snapshotRequiredAt == (try Fixture.sequence(6)))
+    }
+
+    @Test func snapshotAppliedAtOrBelowTheAcknowledgeCursorClearsTheRequirementAndMovesNothing() throws {
+        var backlog = try filled()
+        _ = try backlog.collapse(to: try Fixture.sequence(6))
+        try record(&backlog, 7, changes: 2)
+        try record(&backlog, 8, changes: 3)
+        backlog.acknowledge(through: try Fixture.sequence(8))
+        var atCursor = backlog
+        let applied = backlog.snapshotApplied(through: try Fixture.sequence(7))
+        #expect(applied)
+        #expect(!backlog.requiresSnapshot)
+        #expect(backlog.acknowledgedThrough == (try Fixture.sequence(8)))
+        #expect(backlog.recordedThrough == (try Fixture.sequence(8)))
+        #expect(backlog.pendingDeltas == 0)
+        #expect(backlog.pendingChanges == 0)
+        let appliedAt = atCursor.snapshotApplied(through: try Fixture.sequence(8))
+        #expect(appliedAt)
+        #expect(!atCursor.requiresSnapshot)
+        #expect(atCursor.acknowledgedThrough == (try Fixture.sequence(8)))
+        #expect(atCursor.recordedThrough == (try Fixture.sequence(8)))
+        #expect(atCursor.pendingDeltas == 0)
+        #expect(atCursor.pendingChanges == 0)
+    }
+
+    @Test func aSecondCollapseRaisesTheRequiredSnapshotSoAnEarlierSnapshotDoesNotClearIt() throws {
+        var backlog = try filled()
+        _ = try backlog.collapse(to: try Fixture.sequence(6))
+        try record(&backlog, 7, changes: 2)
+        let second = try backlog.collapse(to: try Fixture.sequence(9))
+        #expect(second == PeerBacklogCollapse(droppedDeltas: 1, droppedChanges: 2))
+        #expect(backlog.snapshotRequiredAt == (try Fixture.sequence(9)))
+        let before = backlog
+        let between = backlog.snapshotApplied(through: try Fixture.sequence(8))
+        #expect(!between)
+        #expect(backlog == before)
+        let atSecond = backlog.snapshotApplied(through: try Fixture.sequence(9))
+        #expect(atSecond)
+        #expect(!backlog.requiresSnapshot)
+    }
+
+    @Test func backlogEqualitySeesTheRequirementTheAcknowledgeCursorAndThePendingContents() throws {
         let base = try filled()
         var collapsed = base
         _ = try collapsed.collapse(to: try Fixture.sequence(4))
@@ -384,5 +458,11 @@ extension PeerBackpressureTests {
         for (index, count) in [4, 3, 2, 1].enumerated() { try record(&swapped, index + 1, changes: count) }
         #expect(swapped != base)
         #expect(swapped.pendingChanges == base.pendingChanges)
+        var shifted = try Fixture.backlog(from: 3, deltas: 8, changes: 40)
+        for (index, count) in [1, 2, 3, 4].enumerated() { try record(&shifted, index + 4, changes: count) }
+        #expect(shifted != base)
+        #expect(shifted.pendingDeltas == base.pendingDeltas)
+        #expect(shifted.pendingChanges == base.pendingChanges)
+        #expect(shifted.acknowledgedThrough != base.acknowledgedThrough)
     }
 }
