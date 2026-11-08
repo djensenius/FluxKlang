@@ -378,6 +378,10 @@ targets:
       - path: FluxKlangTests/ShowResumePlannerTests+Cursor.swift
       - path: FluxKlangTests/ShowResumePlannerTests+Decisions.swift
       - path: FluxKlangTests/ShowRecoveryTests+Decisions.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Clipping.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Refusals.swift
+      - path: FluxKlangTests/InterruptedTakeSalvageTests+Verdicts.swift
       - path: FluxKlangTests/ShowRecoveryTests+Navigation.swift
       - path: FluxKlangTests/ShowStageProjectionTests.swift
       - path: FluxKlangTests/ShowStageProjectionTests+Accessibility.swift
