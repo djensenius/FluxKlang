@@ -82,14 +82,16 @@ struct WiringInspectorProblem: Hashable, Sendable {
 
     /// The problems of `errors` that concern `subject`, sorted by `stableID` (UTF-8 bytes, ascending) with equal
     /// stable IDs collapsed. `attached` are the edge IDs attached to a node subject (empty for an edge subject);
-    /// `title` is the subject's title, used in the sentences of node and cycle problems.
+    /// `title` is the subject's title, used in the sentences of node and cycle problems. `attached` is turned into a
+    /// set once, so matching an edge error to the node is an expected O(1) lookup per error.
     static func problems(
         _ errors: [GraphValidationError], subject: WiringInspectorSubject, attached: [EdgeID], title: String
     ) -> [WiringInspectorProblem] {
+        let attachedSet = Set(attached)
         var found: [WiringInspectorProblem] = []
         for error in errors {
             let parts = classify(error)
-            guard let owner = owner(of: parts.scope, subject: subject, attached: attached) else { continue }
+            guard let owner = owner(of: parts.scope, subject: subject, attached: attachedSet) else { continue }
             found.append(problem(parts, owner: owner, title: title))
         }
         found.sort { $0.stableID.utf8.lexicographicallyPrecedes($1.stableID.utf8) }
@@ -111,7 +113,7 @@ struct WiringInspectorProblem: Hashable, Sendable {
     }
 
     private static func owner(
-        of scope: WiringInspectorScope, subject: WiringInspectorSubject, attached: [EdgeID]
+        of scope: WiringInspectorScope, subject: WiringInspectorSubject, attached: Set<EdgeID>
     ) -> Owner? {
         switch (subject, scope) {
         case (.node(let own), .node(let other)): return own == other ? .node(own.rawValue) : nil
