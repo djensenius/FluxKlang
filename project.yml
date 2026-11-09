@@ -775,6 +775,7 @@ targets:
       - path: FluxKlangTests/ControlFeedbackTests+TouchHold.swift
       - path: FluxKlangTests/DeviceLifecycleTests.swift
       - path: FluxKlangTests/DeviceRegistryPresenceTests.swift
+      - path: FluxKlangTests/DeviceDescriptorProjectionTests.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
