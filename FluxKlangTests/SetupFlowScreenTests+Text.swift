@@ -36,8 +36,8 @@ extension SetupFlowScreenTests {
             Sentence(refusal: .noPresentDevice, text: "No audio interface is present."),
             Sentence(refusal: .rigNotChosen, text: "Choose a rig first."),
             Sentence(refusal: .rolesUndecided(4_096), text: "Some roles still need a decision."),
-            Sentence(refusal: .paneNotReviewed(.home), text: "Confirm the Home pane again."),
-            Sentence(refusal: .paneNotReviewed(.runtimeMap), text: "Confirm the runtime map pane again.")
+            Sentence(refusal: .paneNotReviewed(.home), text: "Confirm the Home pane."),
+            Sentence(refusal: .paneNotReviewed(.runtimeMap), text: "Confirm the runtime map pane.")
         ]
     }
 
@@ -75,7 +75,11 @@ extension SetupFlowScreenTests {
         let manual = try Self.screen(after: [.stayManual], built: good)
         #expect(manual.headline == "Setup ended. Manual and remote control stay available.")
         let applied = try Self.screen(after: Self.path(to: .decide) + [.requestApply], built: good)
-        #expect(applied.headline == "Setup ended with a request to apply the chosen rig.")
+        #expect(applied.headline == "Setup ended with a request to apply the setup.")
+        let offered = try Self.facts(rigs: [Self.rigA])
+        let pickedPath = Self.path(to: .decide, pick: Self.rigA) + [.requestApply]
+        let withRig = try Self.screen(after: pickedPath, built: offered)
+        #expect(withRig.headline == "Setup ended with a request to apply the setup.")
     }
 
     @Test

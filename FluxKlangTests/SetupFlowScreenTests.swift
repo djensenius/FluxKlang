@@ -371,7 +371,7 @@ struct SetupFlowScreenTests {
         let screen = try Self.screen(after: Self.path(to: .decide) + [.requestApply], built: good)
         #expect(screen.manual == .notOffered)
         #expect(screen.manualSentence == "Manual mode is not part of this ending.")
-        #expect(screen.headline == "Setup ended with a request to apply the chosen rig.")
+        #expect(screen.headline == "Setup ended with a request to apply the setup.")
         #expect(Self.rows(screen) == Self.allRefused(.flowEnded))
         let blocker: SetupFlowRefusal? = screen.blocker
         #expect(blocker == nil)
