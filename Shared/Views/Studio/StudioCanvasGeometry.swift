@@ -59,13 +59,85 @@ struct StudioCanvasGeometry: Equatable {
     /// by mutating saved positions. Unobstructed cards retain their exact center.
     static func layoutPositions(for placements: [Placement], cardSize: CGSize = cardSize) -> [CGPoint] {
         let positions = fallbackPositions(for: placements)
+        guard fastPathApplies(positions, cardSize: cardSize) else {
+            return legacyLayout(positions, cardSize: cardSize)
+        }
         var result: [CGPoint] = []
+        result.reserveCapacity(positions.count)
         for (index, position) in positions.enumerated() {
             var candidate = position
             let rect = cardRect(center: candidate, size: cardSize)
             if result.contains(where: { rect.intersects(cardRect(center: $0, size: cardSize)) }) {
                 // Reserve untouched later cards too, rather than displacing an
                 // otherwise unobstructed card to make room for this one.
+                let column = columnObstacles(
+                    of: candidate, earlier: result, later: positions[(index + 1)...], cardSize: cardSize
+                )
+                while let bottom = highestOverlap(in: column, of: candidate, cardSize: cardSize) {
+                    candidate.y = bottom + cardSize.height + 12
+                }
+            }
+            result.append(candidate)
+        }
+        return result
+    }
+
+    /// The sorted-column search is exact only for finite, sane sizes and coordinates; everything else
+    /// (including NaN) keeps the original full rescan.
+    private static func fastPathApplies(_ positions: [CGPoint], cardSize: CGSize) -> Bool {
+        let sizeRange: ClosedRange<CGFloat> = 1...1e6
+        guard sizeRange.contains(cardSize.width), sizeRange.contains(cardSize.height) else { return false }
+        let limit: CGFloat = 1e12
+        return positions.allSatisfy { abs($0.x) <= limit && abs($0.y) <= limit }
+    }
+
+    /// Obstacles whose card shares the candidate's horizontal span, sorted ascending by y. The candidate's x
+    /// never changes while it is displaced, so the list stays valid for every step of that card.
+    private static func columnObstacles(
+        of candidate: CGPoint, earlier: [CGPoint], later: ArraySlice<CGPoint>, cardSize: CGSize
+    ) -> [CGPoint] {
+        var column: [CGPoint] = []
+        for obstacle in earlier where sharesColumn(obstacle, with: candidate, cardSize: cardSize) {
+            column.append(obstacle)
+        }
+        for obstacle in later where sharesColumn(obstacle, with: candidate, cardSize: cardSize) {
+            column.append(obstacle)
+        }
+        column.sort { $0.y < $1.y }
+        return column
+    }
+
+    private static func sharesColumn(_ obstacle: CGPoint, with candidate: CGPoint, cardSize: CGSize) -> Bool {
+        let aligned = CGPoint(x: candidate.x, y: obstacle.y)
+        return cardRect(center: aligned, size: cardSize).intersects(cardRect(center: obstacle, size: cardSize))
+    }
+
+    /// The largest y among column obstacles that overlap the candidate, or nil. Binary search for the last
+    /// obstacle that can reach the candidate, then walk down while one still can; the first exact hit is the largest.
+    private static func highestOverlap(in column: [CGPoint], of candidate: CGPoint, cardSize: CGSize) -> CGFloat? {
+        let rect = cardRect(center: candidate, size: cardSize)
+        let upper = candidate.y + cardSize.height + 1
+        let lower = candidate.y - cardSize.height - 1
+        var low = 0
+        var high = column.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if column[middle].y <= upper { low = middle + 1 } else { high = middle }
+        }
+        var index = low - 1
+        while index >= 0, column[index].y >= lower {
+            if rect.intersects(cardRect(center: column[index], size: cardSize)) { return column[index].y }
+            index -= 1
+        }
+        return nil
+    }
+
+    private static func legacyLayout(_ positions: [CGPoint], cardSize: CGSize) -> [CGPoint] {
+        var result: [CGPoint] = []
+        for (index, position) in positions.enumerated() {
+            var candidate = position
+            let rect = cardRect(center: candidate, size: cardSize)
+            if result.contains(where: { rect.intersects(cardRect(center: $0, size: cardSize)) }) {
                 let obstacles = result + positions.dropFirst(index + 1)
                 while let bottom = obstacles.filter({
                     cardRect(center: candidate, size: cardSize).intersects(cardRect(center: $0, size: cardSize))
