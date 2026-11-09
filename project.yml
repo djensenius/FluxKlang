@@ -386,6 +386,7 @@ targets:
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
       - path: FluxKlangTests/ShowTransitionTests.swift
+      - path: FluxKlangTests/ShowTransitionWalkTests.swift
       - path: FluxKlangTests/ShowFootInputTests.swift
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
       - path: FluxKlangTests/ShowRecoveryTests.swift
