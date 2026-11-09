@@ -17,6 +17,7 @@ struct ControlLocalDispatchTests {
         static let pad70 = ControlSourceID(validated: "midi.ld-pad.1.cc.70")
         static let pad7 = ControlSourceID(validated: "midi.ld-pad.1.cc.7")
         static let pad700 = ControlSourceID(validated: "midi.ld-pad.1.cc.700")
+        static let pair7 = ControlSourceID(validated: "midi.ld-pad.1.cc14.7")
         static let pad71 = ControlSourceID(validated: "midi.ld-pad.1.cc.71")
         static let aJump = BindingID(validated: "bnd.a-jump")
         static let bCatch = BindingID(validated: "bnd.b-catch")

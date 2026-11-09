@@ -181,6 +181,31 @@ extension ControlLocalDispatchTests {
         #expect(large == plain)
     }
 
+    @Test func aPairedFourteenBitUpdateIsHeardOnItsCc14SourceAndSettlesToTheProposalsOfTheWideBindings() throws {
+        let wideAbsolute = try Fx.binding(Fx.aJump, source: Fx.pair7, profile: .absolute(resolution: 16383))
+        let narrow = try Fx.binding(Fx.bCatch, source: Fx.pad7)
+        let wideRelative = try Fx.relative(Fx.dRel, source: Fx.pair7, profile: .binaryOffset(width: .fourteen))
+        let bindings = [narrow, wideRelative, wideAbsolute]
+        let update = MIDI1StateUpdate(channel: 1, effect: .controller14(7, value: 8191))
+        let admission = try Fx.admit(bindings, update: update)
+        #expect(admission.refusals.isEmpty)
+        try #require(admission.candidates.count == 2)
+        let absolute = admission.candidates[0]
+        #expect(absolute.binding.id == Fx.aJump)
+        #expect(absolute.input == .absolute(normalized: 0.5))
+        let relative = admission.candidates[1]
+        #expect(relative.binding.id == Fx.dRel)
+        #expect(relative.input == .relative(delta: -1))
+        let result = try ControlLocalDispatch.settle(admission, echoes: [], truth: Fx.truth(host: 20))
+        #expect(result.refusals.isEmpty)
+        #expect(result.holds.isEmpty)
+        try #require(result.proposals.count == 2)
+        #expect(result.proposals[0].binding == Fx.aJump)
+        #expect(result.proposals[0].operation == .set(Fx.level, Self.percent(50)))
+        #expect(result.proposals[1].binding == Fx.dRel)
+        #expect(result.proposals[1].operation == .set(Fx.level, Self.percent(19)))
+    }
+
     @Test func admitAndSettleGiveEqualResultsOnTwoCallsWithEqualInputs() throws {
         let bindings = try Fx.standardBindings()
         let first = try Fx.admit(bindings)
