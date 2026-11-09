@@ -222,7 +222,7 @@ struct SpatialMotionPlanStepperTests {
                 let plans = try Self.run(Self.request(try Self.quad(), placements), path, step: 25, count: 5)
                 try #require(plans.count == 5)
                 for plan in plans {
-                    #expect(plan.rowSources == rows)
+                    try #require(plan.rowSources == rows)
                     #expect(plan.row(fixedRow) == alone.row(0))
                 }
             }
