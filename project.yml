@@ -700,6 +700,8 @@ targets:
       - path: FluxKlangTests/MIDISourceRegistryTests+Endpoint.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Isolation.swift
       - path: FluxKlangTests/MIDISourceRegistryTests+Reset.swift
+      - path: FluxKlangTests/MIDIInputSessionTests.swift
+      - path: FluxKlangTests/MIDIInputSessionTests+Loss.swift
       - path: FluxKlangTests/ControlLearnTests.swift
       - path: FluxKlangTests/ControlLearnTests+Conflicts.swift
       - path: FluxKlangTests/ControlInputGateTests.swift
