@@ -589,6 +589,8 @@ targets:
       - path: FluxKlangTests/AutomationRenderTests+Tempo.swift
       - path: FluxKlangTests/AutomationRenderTests+Loop.swift
       - path: FluxKlangTests/AutomationRenderTests+Handback.swift
+      - path: FluxKlangTests/AutomationBankTests.swift
+      - path: FluxKlangTests/AutomationBankTests+Limits.swift
       - path: FluxKlangTests/PatchTransitionTests.swift
       - path: FluxKlangTests/PatchTransitionTests+Bounds.swift
       - path: FluxKlangTests/PatchTransitionTests+Lifecycle.swift
