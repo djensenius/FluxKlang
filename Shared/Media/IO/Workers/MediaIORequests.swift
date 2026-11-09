@@ -23,6 +23,10 @@ enum MediaIORequestRefusal: Error, Equatable, Sendable {
     case negativeFrames(Int64)
     /// More frames are durable than were accepted.
     case durableExceedsAccepted(durable: Int64, accepted: Int64)
+    /// A write request's `blockOffset` must lie in `0...maximum - frames` (`maximum` is
+    /// `MediaIOLimits.maximumRequestFrames`), so the offset and the frames stay inside the request limit. The
+    /// request has no block length: a writer must also refuse blockOffset + frames above the block's usedFrames.
+    case blockOffsetOutOfRange(blockOffset: Int, frames: Int, maximum: Int)
 }
 
 /// The shared span checks, in the documented order: frames range, negative start, `Int64` overflow.
@@ -71,28 +75,43 @@ struct MediaReadRequest: Hashable, Sendable {
     }
 }
 
-/// One validated request to write `frames` frames of the leased block at source frame `startFrame`.
-/// Build it with `make`; the stored fields are read-only.
+/// One validated request to write `frames` frames of the leased block, starting at block frame `blockOffset`, at
+/// source frame `startFrame`. Build it with `make`; the stored fields are read-only.
 struct MediaWriteRequest: Hashable, Sendable {
     var lease: MediaBlockLease { storedLease }
+    /// The stream position of block frame `blockOffset`.
     var startFrame: Int64 { storedStartFrame }
     var frames: Int { storedFrames }
+    /// The first frame of the leased block that this request writes: 0 for a whole block, and the number of frames
+    /// already accepted for the block when the request is the remainder after a short accept. The request writes
+    /// block frames `blockOffset ..< blockOffset + frames`. The request cannot know the block's used frames: a
+    /// writer must also refuse blockOffset + frames above the block's usedFrames.
+    var blockOffset: Int { storedBlockOffset }
 
     private let storedLease: MediaBlockLease
     private let storedStartFrame: Int64
     private let storedFrames: Int
+    private let storedBlockOffset: Int
 
-    private init(validatedLease lease: MediaBlockLease, startFrame: Int64, frames: Int) {
+    private init(validatedLease lease: MediaBlockLease, startFrame: Int64, frames: Int, blockOffset: Int) {
         storedLease = lease
         storedStartFrame = startFrame
         storedFrames = frames
+        storedBlockOffset = blockOffset
     }
 
-    /// Order of checks, first failure wins: frames `1...65_536`, non-negative start, `Int64` overflow.
-    static func make(lease: MediaBlockLease, startFrame: Int64,
-                     frames: Int) throws(MediaIORequestRefusal) -> MediaWriteRequest {
+    /// Order of checks, first failure wins: frames `1...65_536`, non-negative start, `Int64` overflow, block offset
+    /// `0...65_536 - frames`. The request cannot know the block's used frames: a writer must also refuse
+    /// blockOffset + frames above the block's usedFrames.
+    static func make(lease: MediaBlockLease, startFrame: Int64, frames: Int,
+                     blockOffset: Int = 0) throws(MediaIORequestRefusal) -> MediaWriteRequest {
         try validateSpan(startFrame: startFrame, frames: frames)
-        return MediaWriteRequest(validatedLease: lease, startFrame: startFrame, frames: frames)
+        let maximum = MediaIOLimits.maximumRequestFrames
+        guard blockOffset >= 0, blockOffset <= maximum - frames else {
+            throw .blockOffsetOutOfRange(blockOffset: blockOffset, frames: frames, maximum: maximum)
+        }
+        return MediaWriteRequest(validatedLease: lease, startFrame: startFrame, frames: frames,
+                                 blockOffset: blockOffset)
     }
 }
 

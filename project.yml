@@ -612,6 +612,10 @@ targets:
       - path: FluxKlangTests/MediaIOWorkerTests+Requests.swift
       - path: FluxKlangTests/MediaIOWorkerTests+Wiring.swift
       - path: FluxKlangTests/MediaIOWorkerTests+Writer.swift
+      - path: FluxKlangTests/CaptureDrainTests.swift
+      - path: FluxKlangTests/CaptureDrainLimitTests.swift
+      - path: FluxKlangTests/CaptureDrainSupport.swift
+      - path: FluxKlangTests/CaptureDrainTests+Edges.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
