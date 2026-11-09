@@ -39,7 +39,7 @@ enum SetupFlowScreenText {
         case .manual:
             return "Setup ended. Manual and remote control stay available."
         case .applyRequested:
-            return "Setup ended with a request to apply the chosen rig."
+            return "Setup ended with a request to apply the setup."
         }
     }
 
@@ -139,9 +139,9 @@ enum SetupFlowScreenText {
     private static func paneSentence(_ refusal: SetupFlowRefusal) -> String? {
         switch refusal {
         case .paneNotReviewed(.home):
-            return "Confirm the Home pane again."
+            return "Confirm the Home pane."
         case .paneNotReviewed(.runtimeMap):
-            return "Confirm the runtime map pane again."
+            return "Confirm the runtime map pane."
         case .tooManyRigs, .factOutOfRange, .duplicateRig, .flowEnded, .suspended, .notSuspended, .noNextStep,
              .noPreviousStep, .wrongStep, .rigNotOffered, .permissionNotGranted, .noPresentDevice, .rigNotChosen,
              .rolesUndecided:
