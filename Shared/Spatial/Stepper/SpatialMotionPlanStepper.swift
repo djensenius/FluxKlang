@@ -41,6 +41,8 @@ enum SpatialMotionPlanStepper {
         guard stepFrames >= 1 else { throw .motion(.stepNotPositive(stepFrames)) }
         let index = try movingIndex(in: request, path: path)
         guard count > 0 else { return [] }
+        // The count is at most 256 and cellsPerPlan at most 8,192 once movingIndex has run, so the product is at most
+        // 2,097,152 and cannot overflow Int.
         let cells = count * cellsPerPlan(of: request)
         guard cells <= maximumCells else { throw .tooManyCells(cells) }
         let positions = try samples(of: path, firstFrame: firstFrame, stepFrames: stepFrames, count: count)
@@ -80,7 +82,11 @@ enum SpatialMotionPlanStepper {
         return index
     }
 
-    /// Rows (the sum of the channel counts) times speakers; at most 128 x 64 once the source count is checked.
+    /// Rows (the sum of the channel counts) times speakers. Every placement has 1 or 2 channels
+    /// (`SpatialSourcePlacement.channelCounts`) and a layout holds at most 64 speakers
+    /// (`SpatialLayout.maximumSpeakers`). The only initializers enforce both limits and decoding checks them again.
+    /// The caller has checked the source count (at most 64), so rows are at most 128 and the result is at most 8,192:
+    /// neither the sum nor the product can overflow `Int`.
     private static func cellsPerPlan(of request: SpatialRenderRequest) -> Int {
         let rows = request.placements.reduce(0) { $0 + $1.channelCount }
         return rows * request.layout.speakers.count
