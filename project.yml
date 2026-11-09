@@ -589,6 +589,8 @@ targets:
       - path: FluxKlangTests/AutomationRenderTests+Tempo.swift
       - path: FluxKlangTests/AutomationRenderTests+Loop.swift
       - path: FluxKlangTests/AutomationRenderTests+Handback.swift
+      - path: FluxKlangTests/AutomationBankTests.swift
+      - path: FluxKlangTests/AutomationBankTests+Limits.swift
       - path: FluxKlangTests/PatchTransitionTests.swift
       - path: FluxKlangTests/PatchTransitionTests+Bounds.swift
       - path: FluxKlangTests/PatchTransitionTests+Lifecycle.swift
@@ -755,6 +757,8 @@ targets:
       - path: FluxKlangTests/RemoteRoleTests+RawInput.swift
       - path: FluxKlangTests/RemoteRoleTests+Transitions.swift
       - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ControlPickupBookTests.swift
+      - path: FluxKlangTests/ControlPickupBookTests+Limits.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
@@ -771,6 +775,7 @@ targets:
       - path: FluxKlangTests/ControlFeedbackTests+TouchHold.swift
       - path: FluxKlangTests/DeviceLifecycleTests.swift
       - path: FluxKlangTests/DeviceRegistryPresenceTests.swift
+      - path: FluxKlangTests/DeviceDescriptorProjectionTests.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Effects.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Invariants.swift
       - path: FluxKlangTests/DeviceLifecycleTests+Replacement.swift
