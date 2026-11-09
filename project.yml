@@ -380,6 +380,8 @@ targets:
       - path: FluxKlangTests/RigReservationTests+Refusals.swift
       - path: FluxKlangTests/RigReservationTests+Release.swift
       - path: FluxKlangTests/RigReservationTests+Restoration.swift
+      - path: FluxKlangTests/RigLibraryTests.swift
+      - path: FluxKlangTests/RigLibraryTests+Limits.swift
       - path: FluxKlangTests/ShowNavigationTests.swift
       - path: FluxKlangTests/ShowNavigationTests+Cursor.swift
       - path: FluxKlangTests/ShowNavigationTests+Links.swift
