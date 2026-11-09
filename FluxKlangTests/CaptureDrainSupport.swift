@@ -153,10 +153,17 @@ func drainStereoBlocks(frameCounts: [Int]) throws -> DrainStereoFixture {
 }
 
 /// What a writer would take from the pool when it accepts `accepted` frames of `request`: block frames
-/// `blockOffset ..< blockOffset + accepted`, converted to interleaved sample indexes (two channels).
+/// `blockOffset ..< blockOffset + accepted`, converted to interleaved sample indexes (two channels). It records a
+/// test failure and throws instead of trapping when the range does not fit the block's used samples.
 func drainWrittenSamples(_ pool: MediaBlockPool, _ request: MediaWriteRequest, accepted: Int) throws -> [Float] {
     let first = request.blockOffset * 2
     let last = first + accepted * 2
+    let usedSamples = try pool.withSamples(of: request.lease) { (view: UnsafeBufferPointer<Float>) -> Int in
+        view.count
+    }
+    let zero = 0
+    try #require(accepted >= zero)
+    try #require(last <= usedSamples)
     let range = first..<last
     return try pool.withSamples(of: request.lease) { (view: UnsafeBufferPointer<Float>) -> [Float] in
         Array(view[range])
