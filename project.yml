@@ -700,6 +700,8 @@ targets:
       - path: FluxKlangTests/SetupFlowTests+Flow.swift
       - path: FluxKlangTests/SetupFlowTests+Manual.swift
       - path: FluxKlangTests/SetupFlowTests+Order.swift
+      - path: FluxKlangTests/SetupFlowScreenTests.swift
+      - path: FluxKlangTests/SetupFlowScreenTests+Text.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
       - path: FluxKlangTests/ActionSetSubmissionTests.swift
@@ -750,6 +752,8 @@ targets:
       - path: FluxKlangTests/ControlTriggerTests+Detector.swift
       - path: FluxKlangTests/ControlTriggerTests+Clear.swift
       - path: FluxKlangTests/ControlFeedbackTests.swift
+      - path: FluxKlangTests/ControlLocalDispatchTests.swift
+      - path: FluxKlangTests/ControlLocalDispatchTests+Composition.swift
       - path: FluxKlangTests/ControlFeedbackMIDI1Tests.swift
       - path: FluxKlangTests/ControlFeedbackMIDI1Tests+RoundTrip.swift
       - path: FluxKlangTests/ControlFeedbackTests+Corrections.swift
@@ -817,6 +821,8 @@ targets:
       - path: FluxKlangTests/WorkspaceStatusTests.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Announcer.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Devices.swift
+      - path: FluxKlangTests/WorkspaceStatusSourcesTests.swift
+      - path: FluxKlangTests/WorkspaceStatusSourcesTests+Limits.swift
       - path: FluxKlangTests/WorkspaceStatusTests+EngineClock.swift
       - path: FluxKlangTests/WorkspaceStatusTests+FocusOrder.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
