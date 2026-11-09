@@ -92,7 +92,8 @@ struct StudioCanvasGeometry: Equatable {
     }
 
     /// Obstacles whose card shares the candidate's horizontal span, sorted ascending by y. The candidate's x
-    /// never changes while it is displaced, so the list stays valid for every step of that card.
+    /// never changes while it is displaced, so the list stays valid for every step of that card. Building it
+    /// costs a pass over all other cards and a sort of the column, once per displaced card.
     private static func columnObstacles(
         of candidate: CGPoint, earlier: [CGPoint], later: ArraySlice<CGPoint>, cardSize: CGSize
     ) -> [CGPoint] {
@@ -114,6 +115,10 @@ struct StudioCanvasGeometry: Equatable {
 
     /// The largest y among column obstacles that overlap the candidate, or nil. Binary search for the last
     /// obstacle that can reach the candidate, then walk down while one still can; the first exact hit is the largest.
+    /// A call costs O(log c + k) for a column of c entries, where k is the number of entries the walk examines. The
+    /// window reaches 1 point past the card height on each side, so an entry in that thin band fails the exact test
+    /// and is examined in vain; k grows to c when all entries lie in the band. A step moves the candidate up by more
+    /// than 11 points, so across the steps of one card an entry fails at most once above it and once below it.
     private static func highestOverlap(in column: [CGPoint], of candidate: CGPoint, cardSize: CGSize) -> CGFloat? {
         let rect = cardRect(center: candidate, size: cardSize)
         let upper = candidate.y + cardSize.height + 1
