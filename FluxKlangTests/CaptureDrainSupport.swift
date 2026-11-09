@@ -121,3 +121,59 @@ func drainGoldenLatched(_ leases: [MediaBlockLease]) throws -> CaptureDrainPump 
     }
     return pump
 }
+
+/// Real stereo pool blocks (round 2): block `b` holds `frameCounts[b]` frames whose interleaved samples count up
+/// from 1 across all blocks, so every sample value is distinct. `samples[b]` is the original content of block `b`.
+struct DrainStereoFixture {
+    let pool: MediaBlockPool
+    let leases: [MediaBlockLease]
+    let samples: [[Float]]
+}
+
+func drainStereoBlocks(frameCounts: [Int]) throws -> DrainStereoFixture {
+    let plan = try PrefetchPlan.make(blockFrames: 64, blockCount: max(frameCounts.count, 2), headFrames: 64)
+    let pool = try MediaBlockPool.make(plan: plan, channelCount: 2)
+    var leases: [MediaBlockLease] = []
+    var samples: [[Float]] = []
+    var next: Float = 1
+    for frames in frameCounts {
+        var block: [Float] = []
+        for _ in 0..<(frames * 2) {
+            block.append(next)
+            next += 1
+        }
+        let lease = try pool.lease()
+        try block.withUnsafeBufferPointer { (view: UnsafeBufferPointer<Float>) throws(MediaBlockPoolRefusal) in
+            try pool.copyIn(view, frames: frames, channels: 2, into: lease)
+        }
+        leases.append(lease)
+        samples.append(block)
+    }
+    return DrainStereoFixture(pool: pool, leases: leases, samples: samples)
+}
+
+/// What a writer would take from the pool when it accepts `accepted` frames of `request`: block frames
+/// `blockOffset ..< blockOffset + accepted`, converted to interleaved sample indexes (two channels).
+func drainWrittenSamples(_ pool: MediaBlockPool, _ request: MediaWriteRequest, accepted: Int) throws -> [Float] {
+    let first = request.blockOffset * 2
+    let last = first + accepted * 2
+    let range = first..<last
+    return try pool.withSamples(of: request.lease) { (view: UnsafeBufferPointer<Float>) -> [Float] in
+        Array(view[range])
+    }
+}
+
+/// The refusal a write request factory produced for these arguments, or nil when it was accepted.
+func drainRequestRefusal(
+    _ lease: MediaBlockLease,
+    startFrame: Int64 = 0,
+    frames: Int,
+    blockOffset: Int
+) -> MediaIORequestRefusal? {
+    do throws(MediaIORequestRefusal) {
+        _ = try MediaWriteRequest.make(lease: lease, startFrame: startFrame, frames: frames, blockOffset: blockOffset)
+        return nil
+    } catch {
+        return error
+    }
+}

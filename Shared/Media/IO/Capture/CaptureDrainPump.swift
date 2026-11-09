@@ -25,7 +25,8 @@ struct CaptureDrainBlock: Equatable, Sendable {
     }
 }
 
-/// One write handed to the worker: `id` in issue order, `request` the remainder of the head block.
+/// One write handed to the worker: `id` in issue order, `request` the remainder of the head block (its
+/// `blockOffset` is the frames already accepted for that block).
 struct CaptureDrainTicket: Equatable, Sendable {
     let id: UInt64
     let request: MediaWriteRequest

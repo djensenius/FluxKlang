@@ -51,11 +51,12 @@ extension CaptureDrainPump {
         }
     }
 
-    /// The remainder of the head block as a validated request.
+    /// The remainder of the head block as a validated request: it names the rest by the stream position and the
+    /// block offset of the frames already accepted.
     func makeRequest(for block: CaptureDrainBlock) throws(CaptureDrainRefusal) -> MediaWriteRequest {
         do throws(MediaIORequestRefusal) {
             return try MediaWriteRequest.make(lease: block.lease, startFrame: block.startFrame + Int64(headWritten),
-                                              frames: block.frames - headWritten)
+                                              frames: block.frames - headWritten, blockOffset: headWritten)
         } catch {
             throw .request(error)
         }

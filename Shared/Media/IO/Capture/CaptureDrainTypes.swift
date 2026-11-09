@@ -62,7 +62,8 @@ enum CaptureDrainPadResult: Equatable, Sendable {
 
 enum CaptureDrainOutcome: Equatable, Sendable {
     case stillPending(polls: UInt64)
-    /// The writer took `accepted` frames; `remaining` of the block are resubmitted by the next `nextWrite`.
+    /// The writer took `accepted` frames; `remaining` of the block are resubmitted by the next `nextWrite` with
+    /// `blockOffset` set to the frames already accepted.
     case partial(accepted: Int, remaining: Int)
     /// The block is fully written; the caller releases its lease.
     case blockWritten(CaptureDrainBlock)
