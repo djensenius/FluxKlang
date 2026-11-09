@@ -423,6 +423,7 @@ targets:
       - path: FluxKlangTests/MIDIClipOwnershipTests+Rebind.swift
       - path: FluxKlangTests/MIDIClipOwnershipTests+Refusals.swift
       - path: FluxKlangTests/MediaTapPlanTests.swift
+      - path: FluxKlangTests/MediaBlockLedgerTests.swift
       - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
       - path: FluxKlangTests/MediaTapPlanTests+Order.swift
       - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
