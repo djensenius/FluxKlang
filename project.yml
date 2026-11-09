@@ -423,6 +423,7 @@ targets:
       - path: FluxKlangTests/MIDIClipOwnershipTests+Rebind.swift
       - path: FluxKlangTests/MIDIClipOwnershipTests+Refusals.swift
       - path: FluxKlangTests/MediaTapPlanTests.swift
+      - path: FluxKlangTests/MediaBlockLedgerTests.swift
       - path: FluxKlangTests/MediaTapPlanTests+Claims.swift
       - path: FluxKlangTests/MediaTapPlanTests+Order.swift
       - path: FluxKlangTests/MediaTapPlanTests+Policies.swift
@@ -514,6 +515,7 @@ targets:
       - path: FluxKlangTests/WiringInspectorTests+Node.swift
       - path: FluxKlangTests/WiringInspectorTests+Edge.swift
       - path: FluxKlangTests/WiringInspectorTests+Problems.swift
+      - path: FluxKlangTests/WiringProblemListTests.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
@@ -587,6 +589,8 @@ targets:
       - path: FluxKlangTests/AutomationRenderTests+Tempo.swift
       - path: FluxKlangTests/AutomationRenderTests+Loop.swift
       - path: FluxKlangTests/AutomationRenderTests+Handback.swift
+      - path: FluxKlangTests/AutomationBankTests.swift
+      - path: FluxKlangTests/AutomationBankTests+Limits.swift
       - path: FluxKlangTests/PatchTransitionTests.swift
       - path: FluxKlangTests/PatchTransitionTests+Bounds.swift
       - path: FluxKlangTests/PatchTransitionTests+Lifecycle.swift
@@ -760,6 +764,7 @@ targets:
       - path: FluxKlangTests/ControlTriggerTests+Clear.swift
       - path: FluxKlangTests/ControlFeedbackTests.swift
       - path: FluxKlangTests/ControlLocalDispatchTests.swift
+      - path: FluxKlangTests/ControlSourceAvailabilityTests.swift
       - path: FluxKlangTests/ControlLocalDispatchTests+Composition.swift
       - path: FluxKlangTests/ControlFeedbackMIDI1Tests.swift
       - path: FluxKlangTests/ControlFeedbackMIDI1Tests+RoundTrip.swift
