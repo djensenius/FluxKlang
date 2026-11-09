@@ -198,3 +198,112 @@ extension RouteLatencyTests {
         #expect(maximum == before)
     }
 }
+
+private struct DeviceIdentityBytesCalibrationMix {
+    var state: UInt64
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var value = state
+        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+        return value ^ (value >> 31)
+    }
+}
+
+extension RouteLatencyTests {
+    private static let identityBytesAlphabet = Array("abcdefghijklmnopqrstuvwxyz0123456789.-_")
+
+    /// Copy of main (CalibrationConfiguration.swift `staleReasons` before DEV2); `self` is `recorded`.
+    private static func identityBytesOldStaleReasons(
+        _ recorded: CalibrationConfiguration, comparedTo current: CalibrationConfiguration
+    ) -> [CalibrationStaleReason] {
+        var reasons: [CalibrationStaleReason] = []
+        if recorded.device.deviceID != current.device.deviceID { reasons.append(.deviceID) }
+        if recorded.device.uid != current.device.uid || recorded.device.evidence != current.device.evidence {
+            reasons.append(.deviceIdentity)
+        }
+        if recorded.stream.sampleRateHz != current.stream.sampleRateHz { reasons.append(.sampleRate) }
+        if recorded.stream.inputBufferFrames != current.stream.inputBufferFrames { reasons.append(.inputBuffer) }
+        if recorded.stream.outputBufferFrames != current.stream.outputBufferFrames { reasons.append(.outputBuffer) }
+        if recorded.routes != current.routes { reasons.append(.routes) }
+        if recorded.generations.device != current.generations.device { reasons.append(.deviceGeneration) }
+        if recorded.generations.calibration != current.generations.calibration {
+            reasons.append(.calibrationGeneration)
+        }
+        return reasons
+    }
+
+    @Test func deviceIdentityBytesCalibrationForAnotherSpellingIsStale() throws {
+        var recorded = Setup()
+        recorded.uid = "\u{E9}"
+        var current = recorded
+        current.uid = "e\u{301}"
+        let record = try Self.record(recorded.configuration(), frames: 480)
+        let otherUnit = try current.configuration()
+        let sameUnit = try recorded.configuration()
+        #expect(record.staleReasons(against: otherUnit) == [.deviceIdentity])
+        #expect(!record.isFresh(for: otherUnit))
+        #expect(record.staleReasons(against: sameUnit) == [])
+        #expect(record.isFresh(for: sameUnit))
+
+        var upper = recorded
+        upper.uid = "Unit.A"
+        var lower = recorded
+        lower.uid = "unit.a"
+        let upperRecord = try Self.record(upper.configuration(), frames: 480)
+        #expect(try upperRecord.staleReasons(against: lower.configuration()) == [.deviceIdentity])
+    }
+
+    @Test func deviceIdentityBytesCalibrationSnapshotsHashApart() throws {
+        var first = Setup()
+        first.uid = "\u{C5}"
+        var second = first
+        second.uid = "A\u{30A}"
+        var third = first
+        third.uid = "\u{212B}"
+        let snapshots = try [first, second, third].map { try $0.configuration().device }
+        #expect(snapshots[0] != snapshots[1])
+        #expect(snapshots[0] != snapshots[2])
+        #expect(snapshots[1] != snapshots[2])
+        #expect(Set(snapshots).count == 3)
+        let rebuilt = try first.configuration().device
+        #expect(snapshots[0] == rebuilt)
+        #expect(snapshots[0].hashValue == rebuilt.hashValue)
+    }
+
+    @Test func deviceIdentityBytesCalibrationASCIIStaleReasonsMatchTheOldCopy() throws {
+        let lengths = [1, 2, 3, 5, 8, 40, 1_024]
+        let alphabetSize = UInt64(Self.identityBytesAlphabet.count)
+        var cases = 0
+        for seed: UInt64 in [1, 0xD3A2, 0x65] {
+            var generator = DeviceIdentityBytesCalibrationMix(state: seed)
+            var setups: [Setup] = []
+            for index in 0..<12 {
+                var uid = ""
+                for _ in 0..<lengths[index % lengths.count] {
+                    uid.append(Self.identityBytesAlphabet[Int(generator.next() % alphabetSize)])
+                }
+                for evidence: Set<IdentityEvidence> in [[.deviceUID], [.endpointUID, .deviceUID]] {
+                    for rate in [48_000, 44_100] {
+                        var setup = Setup()
+                        setup.uid = uid
+                        setup.evidence = evidence
+                        setup.rate = rate
+                        setups.append(setup)
+                    }
+                }
+            }
+            let configurations = try setups.map { try $0.configuration() }
+            for recorded in configurations {
+                for current in configurations {
+                    let old = Self.identityBytesOldStaleReasons(recorded, comparedTo: current)
+                    #expect(recorded.staleReasons(comparedTo: current) == old)
+                    cases += 1
+                }
+            }
+        }
+        let expectedCases = 6_912
+        #expect(cases == expectedCases)
+    }
+}

@@ -4,7 +4,7 @@
 //
 //  The problems one gesture introduces or resolves (#101 WPV1). Each validation error of the draft graph before and
 //  after is classified by the inspector's classifier, keyed by its code, scope and detail, and compared by key. A
-//  problem present on both sides is in neither list, so a gesture never "introduces" a baseline problem.
+//  problem present on both sides is in neither list, so a problem the draft already had is not reported as introduced.
 //
 
 /// One problem a gesture introduces or resolves. Built only by `WiringImpactProblems`.

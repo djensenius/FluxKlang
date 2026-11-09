@@ -49,10 +49,12 @@ struct DeviceCapabilitySet: Hashable, Sendable {
 /// Stable identity key derived only from a device/endpoint UID and its UID source.
 struct DeviceIdentityKey: Hashable, Comparable, Sendable {
     let uid: String
+    private let uidBytes: [UInt8]
     let evidence: [IdentityEvidence]
 
     private init(uid: String, evidence: [IdentityEvidence]) {
         self.uid = uid
+        uidBytes = Array(uid.utf8)
         self.evidence = evidence.sorted { $0.rawValue < $1.rawValue }
     }
 
@@ -69,7 +71,7 @@ struct DeviceIdentityKey: Hashable, Comparable, Sendable {
     }
 
     static func < (lhs: Self, rhs: Self) -> Bool {
-        if lhs.uid != rhs.uid { return lhs.uid < rhs.uid }
+        if lhs.uidBytes != rhs.uidBytes { return lhs.uidBytes.lexicographicallyPrecedes(rhs.uidBytes) }
         return lhs.evidence.map(\.rawValue).joined(separator: ",")
             < rhs.evidence.map(\.rawValue).joined(separator: ",")
     }
