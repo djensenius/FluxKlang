@@ -651,6 +651,7 @@
 		31558E518571C98644774941 /* CopilotAssistantGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF51B8A26B704629FF9267B0 /* CopilotAssistantGenerator.swift */; };
 		3158633F1FC34D92144F7586 /* ProjectStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014737B3FB095D94CC08C597 /* ProjectStagingTests.swift */; };
 		317FA3A222C418084CAC094A /* PrefetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3FB16609F1FC0A9B39235E /* PrefetchTests.swift */; };
+		31B453278BA57996D514C197 /* WorkspaceStatusTests+NameBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81471FD8240ED57AD117C5C0 /* WorkspaceStatusTests+NameBytes.swift */; };
 		31BD7AA5FB361AB0E5359C4C /* ContractFixtureTests+Pressure.swift in Sources */ = {isa = PBXBuildFile; fileRef = A88DB7C0E670CA6064A634E6 /* ContractFixtureTests+Pressure.swift */; };
 		31BFA469C0B71AA4E8178701 /* CacheInvalidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0731D845D2139C6834B3B /* CacheInvalidation.swift */; };
 		31C9B7D55DD957F8C5ED7F11 /* PluginResourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E47C70F828CE13113477D1F /* PluginResourceTests.swift */; };
@@ -980,6 +981,7 @@
 		4B80B797D015877BF7467B1B /* AssistantRoutingPreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984DB5CCEEB0DB400CB0B3ED /* AssistantRoutingPreparationTests.swift */; };
 		4B8E6A7C4E7CE470034D9FB9 /* SPSCRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A83A0959597F4BF58E0F5B /* SPSCRing.swift */; };
 		4B915ACB62DA4F2504C65C71 /* BridgeEventRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A1E6524B00469AEBD0AAAC /* BridgeEventRefusal.swift */; };
+		4B93C8F2ADC61B37D520FC19 /* WorkspaceStatusTests+NameBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81471FD8240ED57AD117C5C0 /* WorkspaceStatusTests+NameBytes.swift */; };
 		4BA01C9CCE6A9FA35A899F9E /* SMFTempoImportTests+Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FCD100F91DFE8AFE5A697B /* SMFTempoImportTests+Fixtures.swift */; };
 		4BF35AE19750BAE5020FDA74 /* MediaIOScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9169952E5B06457F81D7CD78 /* MediaIOScript.swift */; };
 		4C0B67F3E96F14BA692A3C7B /* LegacySpatialModelInputs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 689AC357A8E8A84729D1BF74 /* LegacySpatialModelInputs.swift */; };
@@ -4312,6 +4314,7 @@
 		80C3B0438E365F975A6FE12A /* ReferenceEvaluatorLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceEvaluatorLimits.swift; sourceTree = "<group>"; };
 		80E21B39CB5C9347081C146E /* ShowStageFormat+Resume.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ShowStageFormat+Resume.swift"; sourceTree = "<group>"; };
 		81402B86C879E6F56653D4C9 /* MIDIInternalClockTests+Order.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MIDIInternalClockTests+Order.swift"; sourceTree = "<group>"; };
+		81471FD8240ED57AD117C5C0 /* WorkspaceStatusTests+NameBytes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceStatusTests+NameBytes.swift"; sourceTree = "<group>"; };
 		814B2DDC53E837127CA46ABF /* PeerTrustTests+Vectors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PeerTrustTests+Vectors.swift"; sourceTree = "<group>"; };
 		817916AAB55DBC74CCA14B3A /* ActiveSensingTests+Refusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ActiveSensingTests+Refusal.swift"; sourceTree = "<group>"; };
 		81791E99007AC24A7C4F8720 /* SetupFlowSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupFlowSources.swift; sourceTree = "<group>"; };
@@ -8615,6 +8618,7 @@
 				21F5F643DE0BC6C315126F1C /* WorkspaceStatusTests+Devices.swift */,
 				0F5F3F0E4DC6E164A482DC94 /* WorkspaceStatusTests+EngineClock.swift */,
 				907730D44F768D6A14A9977B /* WorkspaceStatusTests+FocusOrder.swift */,
+				81471FD8240ED57AD117C5C0 /* WorkspaceStatusTests+NameBytes.swift */,
 				C960306E8846C9A0F487B9AD /* WorkspaceStatusTests+Peers.swift */,
 				D479997F00DADFC43B98439F /* WorkspaceStatusTests+Pending.swift */,
 				C8763B3C3F4382F94545C1EE /* WorkspaceStatusTests+Refusals.swift */,
@@ -11479,6 +11483,7 @@
 				3CFC28862CBDDB970C1C7CE8 /* WorkspaceStatusTests+Devices.swift in Sources */,
 				2F6B7D759F01E1296E20AD53 /* WorkspaceStatusTests+EngineClock.swift in Sources */,
 				BE68BBB23DA81BFF8417DBA3 /* WorkspaceStatusTests+FocusOrder.swift in Sources */,
+				31B453278BA57996D514C197 /* WorkspaceStatusTests+NameBytes.swift in Sources */,
 				63D3BEA85736B6D3B4B5993F /* WorkspaceStatusTests+Peers.swift in Sources */,
 				C91514D00513CCC2B78D5EA3 /* WorkspaceStatusTests+Pending.swift in Sources */,
 				2AA39F18315D5577DC30FE24 /* WorkspaceStatusTests+Refusals.swift in Sources */,
@@ -12305,6 +12310,7 @@
 				5754B65C8630744B06C3E36F /* WorkspaceStatusTests+Devices.swift in Sources */,
 				647346832CE020F560EEC621 /* WorkspaceStatusTests+EngineClock.swift in Sources */,
 				0F36C5C75F24430472A78C91 /* WorkspaceStatusTests+FocusOrder.swift in Sources */,
+				4B93C8F2ADC61B37D520FC19 /* WorkspaceStatusTests+NameBytes.swift in Sources */,
 				80CFBBF36DACB5665A022DBD /* WorkspaceStatusTests+Peers.swift in Sources */,
 				3849966817DE3C7E51D65548 /* WorkspaceStatusTests+Pending.swift in Sources */,
 				FE401E08519F87BF363C5707 /* WorkspaceStatusTests+Refusals.swift in Sources */,

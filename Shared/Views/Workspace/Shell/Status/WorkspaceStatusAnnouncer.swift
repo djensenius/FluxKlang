@@ -167,27 +167,33 @@ struct WorkspaceStatusAnnouncer: Hashable, Sendable {
 
     /// Whether some item occurs more often in `items` than in `others`. It counts `others` once, then spends
     /// those counts on `items` one by one: the first item whose count is already used up occurs more often.
-    /// Linear and integer-only, and the dictionary is never iterated, so no hash order reaches the result.
+    /// Linear and integer-only, and the dictionary is never iterated, so no hash order reaches the result. An
+    /// item is its UTF-8 bytes, not a `String`: names that are canonically equivalent but byte-different (a
+    /// composed and a decomposed "é") are two items, as they are two names to the person who typed them.
     private static func occursMoreOften(in items: [String], than others: [String]) -> Bool {
-        var remaining: [String: Int] = [:]
-        for item in others { remaining[item] = (remaining[item] ?? 0) + 1 }
+        var remaining: [[UInt8]: Int] = [:]
+        for item in others {
+            let key = Array(item.utf8)
+            remaining[key] = (remaining[key] ?? 0) + 1
+        }
         for item in items {
-            let left = (remaining[item] ?? 0) - 1
+            let key = Array(item.utf8)
+            let left = (remaining[key] ?? 0) - 1
             if left < 0 { return true }
-            remaining[item] = left
+            remaining[key] = left
         }
         return false
     }
 
     /// Whether `now` says something `announced` did not: other words or other lost items. The lost items are
     /// compared as a MULTISET (see `haveSameItems`), so a reshuffle that keeps every count, such as two hidden
-    /// lost items trading places, is not a change; the label is compared as a string, so a reorder of the
+    /// lost items trading places, is not a change; the label is compared by its UTF-8 bytes, so a reorder of the
     /// VISIBLE rows still is. A different severity with the same words and lost items (`.connected` to
     /// `.synced`) is not a new thing to say.
     fileprivate static func differs(
         _ now: WorkspaceStatusSegment, from announced: WorkspaceStatusSegment
     ) -> Bool {
-        now.label != announced.label || !haveSameItems(now.lostItems, announced.lostItems)
+        !now.label.utf8.elementsEqual(announced.label.utf8) || !haveSameItems(now.lostItems, announced.lostItems)
     }
 
     /// Whether two lists hold the same items the same number of times, in any order: the counts are equal and
