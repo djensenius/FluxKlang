@@ -757,6 +757,8 @@ targets:
       - path: FluxKlangTests/RemoteRoleTests+RawInput.swift
       - path: FluxKlangTests/RemoteRoleTests+Transitions.swift
       - path: FluxKlangTests/ControlPickupTests.swift
+      - path: FluxKlangTests/ControlPickupBookTests.swift
+      - path: FluxKlangTests/ControlPickupBookTests+Limits.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
