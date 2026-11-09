@@ -767,6 +767,7 @@ targets:
       - path: FluxKlangTests/ControlTriggerTests.swift
       - path: FluxKlangTests/ControlTriggerTests+Detector.swift
       - path: FluxKlangTests/ControlTriggerTests+Clear.swift
+      - path: FluxKlangTests/ControlLocalTriggerDispatchTests.swift
       - path: FluxKlangTests/ControlFeedbackTests.swift
       - path: FluxKlangTests/ControlLocalDispatchTests.swift
       - path: FluxKlangTests/ControlSourceAvailabilityTests.swift
