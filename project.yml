@@ -440,6 +440,8 @@ targets:
       - path: FluxKlangTests/PerformPanelLayoutTests+Accessibility.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Flow.swift
       - path: FluxKlangTests/PerformPanelLayoutTests+Groups.swift
+      - path: FluxKlangTests/PerformPanelSurfaceTests.swift
+      - path: FluxKlangTests/PerformPanelSurfaceTests+Limits.swift
       - path: FluxKlangTests/AUEventBridgeTests.swift
       - path: FluxKlangTests/AUEventBridgeTests+Events.swift
       - path: FluxKlangTests/AUEventBridgeTests+Latency.swift
@@ -700,6 +702,8 @@ targets:
       - path: FluxKlangTests/SetupFlowTests+Flow.swift
       - path: FluxKlangTests/SetupFlowTests+Manual.swift
       - path: FluxKlangTests/SetupFlowTests+Order.swift
+      - path: FluxKlangTests/SetupFlowScreenTests.swift
+      - path: FluxKlangTests/SetupFlowScreenTests+Text.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
       - path: FluxKlangTests/DeclarativeActionTests+Triggers.swift
       - path: FluxKlangTests/ActionSetSubmissionTests.swift
