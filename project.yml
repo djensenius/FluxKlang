@@ -781,6 +781,7 @@ targets:
       - path: FluxKlangTests/SpatialMotionTests+Evaluate.swift
       - path: FluxKlangTests/SpatialMotionTests+Order.swift
       - path: FluxKlangTests/SpatialMotionTests+Sampling.swift
+      - path: FluxKlangTests/SpatialMotionPlanStepperTests.swift
       - path: FluxKlangTests/ProjectRecoveryTests+SaveFaults.swift
       - path: FluxKlangTests/ProjectRecoveryTests+TransitionMatrix.swift
       - path: FluxKlangTests/SpatialAdapterTests.swift
