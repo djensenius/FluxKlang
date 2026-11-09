@@ -821,6 +821,7 @@ targets:
       - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Pending.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Refusals.swift
+      - path: FluxKlangTests/WorkspaceStatusTests+NameBytes.swift
       - path: FluxKlangTests/ReviewSheetModelTests.swift
       - path: FluxKlangTests/ReviewSheetModelTests+Rows.swift
       - path: FluxKlangTests/ReviewSheetModelTests+Default.swift
