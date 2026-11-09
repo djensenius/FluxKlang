@@ -430,6 +430,7 @@ targets:
       - path: FluxKlangTests/SpatialRouteStateTests.swift
       - path: FluxKlangTests/SpatialRouteStateTests+Availability.swift
       - path: FluxKlangTests/SpatialRouteStateTests+Identity.swift
+      - path: FluxKlangTests/DevicePresenceRouteAvailabilityTests.swift
       - path: FluxKlangTests/SpatialRouteStateTests+Order.swift
       - path: FluxKlangTests/SpatialRouteStateTests+SpeakerState.swift
       - path: FluxKlangTests/PerformCellModelTests.swift
