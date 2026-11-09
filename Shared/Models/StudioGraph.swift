@@ -248,11 +248,13 @@ enum StudioRoutingPlanner {
                   let endpoint = endpointByID[endpointID] else { continue }
             var visited: Set<StudioNode.ID> = []
             var edgeIDs: Set<StudioEdge.ID> = []
+            var sourceMemo: [StudioNode.ID: Set<StudioNode.ID>] = [:]
             let sourceIDs = sourceNodes(
                 reaching: node.id,
                 context: context,
                 visited: &visited,
                 edgeIDs: &edgeIDs,
+                memo: &sourceMemo,
                 issues: &issues
             )
             endpointPlans.append(StudioEndpointPlan(
@@ -323,45 +325,31 @@ enum StudioRoutingPlanner {
     ) -> Set<StudioNode.ID> {
         let outgoing = Dictionary(grouping: edges, by: \.from.nodeID)
         return Set(nodes.compactMap { node in
-            reaches(
-                node.id,
-                from: node.id,
-                outgoing: outgoing,
-                visited: [],
-                requiresEdge: true
-            ) ? node.id : nil
+            var stack = (outgoing[node.id] ?? []).map(\.to.nodeID)
+            var seen: Set<StudioNode.ID> = []
+            while let current = stack.popLast() {
+                if current == node.id { return node.id }
+                if seen.insert(current).inserted {
+                    stack.append(contentsOf: (outgoing[current] ?? []).map(\.to.nodeID))
+                }
+            }
+            return nil
         })
     }
 
-    private static func reaches(
-        _ target: StudioNode.ID,
-        from current: StudioNode.ID,
-        outgoing: [StudioNode.ID: [StudioEdge]],
-        visited: Set<StudioNode.ID>,
-        requiresEdge: Bool
-    ) -> Bool {
-        if !requiresEdge, current == target { return true }
-        guard !visited.contains(current) else { return false }
-        let nextVisited = visited.union([current])
-        return (outgoing[current] ?? []).contains {
-            reaches(
-                target,
-                from: $0.to.nodeID,
-                outgoing: outgoing,
-                visited: nextVisited,
-                requiresEdge: false
-            )
-        }
-    }
-
+    // swiftlint:disable:next function_parameter_count
     private static func sourceNodes(
         reaching nodeID: StudioNode.ID,
         context: PlannerGraphContext,
         visited: inout Set<StudioNode.ID>,
         edgeIDs: inout Set<StudioEdge.ID>,
+        memo: inout [StudioNode.ID: Set<StudioNode.ID>],
         issues: inout [StudioRoutingIssue]
     ) -> Set<StudioNode.ID> {
         guard let node = context.nodeByID[nodeID], node.kind.isRoutable else { return [] }
+        // Memo is only valid because plan() passes a cycle-free edge set;
+        // a cyclic context would make results depend on visited.
+        if let done = memo[nodeID] { return done }
         guard !visited.contains(nodeID) else {
             issues.append(.error(.cycle(nodeID: nodeID), "\(node.title) is part of an unsupported feedback cycle."))
             return []
@@ -379,10 +367,12 @@ enum StudioRoutingPlanner {
                 context: context,
                 visited: &visited,
                 edgeIDs: &edgeIDs,
+                memo: &memo,
                 issues: &issues
             ))
         }
         visited.remove(nodeID)
+        memo[nodeID] = sources
         return sources
     }
 
