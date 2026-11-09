@@ -295,7 +295,7 @@ struct DeviceRegistryPresenceTests {
         let texts = Self.productionSources()
         #expect(texts.count == 2)
         let banned = ["Ta" + "sk", "Clo" + "ck", "Da" + "te", "defa" + "ult:", "try" + "!", "static " + "var",
-                      "mutat" + "ing", "Code" + "able", "FileMan" + "ager", "Dou" + "ble"]
+                      "mutat" + "ing", "Cod" + "able", "FileMan" + "ager", "Dou" + "ble"]
         for text in texts {
             for token in banned { #expect(!text.contains(token)) }
         }
