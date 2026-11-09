@@ -10,20 +10,25 @@
 //
 
 /// One distinct problem of the graph: its fixed sentence and the stop a view should focus.
+/// Equality and hashing include `keyBytes`, so two entries whose details differ only in Unicode normalisation are
+/// two unequal entries, although `problem` alone calls them equal: `String` equality is canonical equivalence.
 struct WiringProblemEntry: Hashable, Sendable {
     /// The code, the key and the sentence, exactly as `WiringImpactProblems` builds them.
     let problem: WiringImpactProblem
     /// The node or edge to focus; nil for a problem of the whole graph, of an uncheckable graph or of a hand-made
     /// empty cycle. Never a port.
     let target: WiringSelectionTarget?
+    /// The UTF-8 bytes of the key: the identity of the entry, read by the synthesized equality and hashing.
+    let keyBytes: [UInt8]
 
     var code: String { problem.code }
     var stableKey: String { problem.stableKey }
     var sentence: String { problem.sentence }
 
-    fileprivate init(problem: WiringImpactProblem, target: WiringSelectionTarget?) {
+    fileprivate init(problem: WiringImpactProblem, target: WiringSelectionTarget?, keyBytes: [UInt8]) {
         self.problem = problem
         self.target = target
+        self.keyBytes = keyBytes
     }
 }
 
@@ -67,7 +72,8 @@ struct WiringProblemList: Hashable, Sendable {
             let key = Array(problem.stableKey.utf8)
             guard seen.insert(key).inserted else { continue }
             let target = focusTarget(of: classification.scope)
-            kept.append(KeyedEntry(key: key, entry: WiringProblemEntry(problem: problem, target: target)))
+            let entry = WiringProblemEntry(problem: problem, target: target, keyBytes: key)
+            kept.append(KeyedEntry(key: key, entry: entry))
         }
         kept.sort { $0.key.lexicographicallyPrecedes($1.key) }
         let shown = kept.prefix(maximumEntries).map(\.entry)

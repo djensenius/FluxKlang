@@ -156,11 +156,18 @@ struct WiringProblemListTests {
         let expected = [
             Array("unknownFields\0graph\0$.e\u{301}".utf8), Array("unknownFields\0graph\0$.\u{E9}".utf8)
         ]
-        for input in [[composed, decomposed], [decomposed, composed]] {
-            let list = WiringProblemList.make(errors: input)
+        let lists = [[composed, decomposed], [decomposed, composed]].map { WiringProblemList.make(errors: $0) }
+        let alone = [composed, decomposed].map { WiringProblemList.make(errors: [$0]) }
+        // String equality is canonical, so only the key bytes tell the two spellings apart in == and in a Set.
+        #expect(lists.first == lists.last)
+        #expect(alone.first != alone.last)
+        for list in lists {
             let keys = list.entries.map { Array($0.stableKey.utf8) }
+            let distinct = Set(list.entries).count
             #expect(keys == expected)
             #expect(list.distinctCount == 2)
+            #expect(list.entries.first != list.entries.last)
+            #expect(distinct == 2)
         }
     }
 
@@ -397,7 +404,7 @@ private enum ProblemFixtures {
         return ordered.map { .wrongDirection(edge: edge(String(format: "e%05ld", $0))) }
     }
 
-    /// Every error case with the focus it must give, typed by hand: a node, an edge, or nothing.
+    /// Every error case with the focus it must give, typed by hand in three groups: nothing, a node or an edge.
     static func targetRows() -> [Row] {
         let nodeOne = node("n1")
         let nodeTwo = node("n2")
@@ -405,37 +412,27 @@ private enum ProblemFixtures {
         let portOne = port("p1")
         let level = capability("cap.x")
         let address = PortAddress(node: nodeTwo, port: portOne)
-        var rows: [Row] = []
-        rows.append((.bounds(.exceeded(path: "$.nodes", maximum: 4_096)), nil))
-        rows.append((.reviewRequired, nil))
-        rows.append((.invalidRequiredFeatures(["bogus"]), nil))
-        rows.append((.requiredFeaturesCollision, nil))
-        rows.append((.invalidMuteState(nodeOne), .node(nodeOne)))
-        rows.append((.invalidMuteShape(nodeOne), .node(nodeOne)))
-        rows.append((.invalidGainState(nodeOne), .node(nodeOne)))
-        rows.append((.invalidGainValue(nodeOne), .node(nodeOne)))
-        rows.append((.invalidGainShape(nodeOne), .node(nodeOne)))
-        rows.append((.invalidPosition(nodeOne), .node(nodeOne)))
-        rows.append((.duplicateNode(nodeOne), .node(nodeOne)))
-        rows.append((.duplicatePort(nodeOne, portOne), .node(nodeOne)))
-        rows.append((.duplicateEdge(edgeOne), .edge(edgeOne)))
-        rows.append((.duplicateWire(edgeOne), .edge(edgeOne)))
-        rows.append((.duplicateCapability(level), nil))
-        rows.append((.undefinedCapability(node: nodeOne, level), .node(nodeOne)))
-        rows.append((.unsupportedRequiredCapability(node: nodeOne, level), .node(nodeOne)))
-        rows.append((.conflictingCapabilityLevel(node: nodeOne, level), .node(nodeOne)))
-        rows.append((.nonRoutableNodeHasPorts(nodeOne), .node(nodeOne)))
-        rows.append((.missingReference(node: nodeOne, field: "role"), .node(nodeOne)))
-        rows.append((.invalidChannelCount(nodeOne, portOne), .node(nodeOne)))
-        rows.append((.missingNode(edge: edgeOne, nodeTwo), .edge(edgeOne)))
-        rows.append((.missingPort(edge: edgeOne, address), .edge(edgeOne)))
-        rows.append((.wrongDirection(edge: edgeOne), .edge(edgeOne)))
-        rows.append((.signalMismatch(edge: edgeOne, from: .audio, to: .midi), .edge(edgeOne)))
-        rows.append((.channelMismatch(edge: edgeOne, from: 1, to: 2), .edge(edgeOne)))
-        rows.append((.invalidConversion(edge: edgeOne), .edge(edgeOne)))
-        rows.append((.invalidFeedback(edge: edgeOne), .edge(edgeOne)))
-        rows.append((.cycleWithoutFeedback([nodeTwo, nodeOne]), .node(nodeOne)))
-        rows.append((.unknownFields(path: "$"), nil))
+        let atGraph: [GraphValidationError] = [
+            .bounds(.exceeded(path: "$.nodes", maximum: 4_096)), .reviewRequired, .invalidRequiredFeatures(["bogus"]),
+            .requiredFeaturesCollision, .duplicateCapability(level), .unknownFields(path: "$")
+        ]
+        let atNode: [GraphValidationError] = [
+            .invalidMuteState(nodeOne), .invalidMuteShape(nodeOne), .invalidGainState(nodeOne),
+            .invalidGainValue(nodeOne), .invalidGainShape(nodeOne), .invalidPosition(nodeOne), .duplicateNode(nodeOne),
+            .duplicatePort(nodeOne, portOne), .undefinedCapability(node: nodeOne, level),
+            .unsupportedRequiredCapability(node: nodeOne, level), .conflictingCapabilityLevel(node: nodeOne, level),
+            .nonRoutableNodeHasPorts(nodeOne), .missingReference(node: nodeOne, field: "role"),
+            .invalidChannelCount(nodeOne, portOne), .cycleWithoutFeedback([nodeTwo, nodeOne])
+        ]
+        let atEdge: [GraphValidationError] = [
+            .duplicateEdge(edgeOne), .duplicateWire(edgeOne), .missingNode(edge: edgeOne, nodeTwo),
+            .missingPort(edge: edgeOne, address), .wrongDirection(edge: edgeOne),
+            .signalMismatch(edge: edgeOne, from: .audio, to: .midi), .channelMismatch(edge: edgeOne, from: 1, to: 2),
+            .invalidConversion(edge: edgeOne), .invalidFeedback(edge: edgeOne)
+        ]
+        var rows: [Row] = atGraph.map { ($0, nil) }
+        rows += atNode.map { ($0, .node(nodeOne)) }
+        rows += atEdge.map { ($0, .edge(edgeOne)) }
         return rows
     }
 
