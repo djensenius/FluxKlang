@@ -179,6 +179,8 @@ enum CloudKitAssistantHistoryError: Error {
 }
 
 actor AssistantConversationStore {
+    // Count-bound retention; diagnostic text is intentionally kept intact.
+    private static let diagnosticCountLimit = 128
     private let local: any AssistantHistoryBackend
     private let cloud: (any AssistantHistoryBackend)?
     private(set) var diagnostics: [String] = []
@@ -190,7 +192,7 @@ actor AssistantConversationStore {
     ) {
         self.local = local
         self.cloud = cloud
-        diagnostics = initialDiagnostics
+        diagnostics = Array(initialDiagnostics.suffix(Self.diagnosticCountLimit))
     }
 
     static func live() -> AssistantConversationStore {
@@ -237,8 +239,15 @@ actor AssistantConversationStore {
         do {
             return try await backend.loadRecords()
         } catch {
-            diagnostics.append("\(label): \(error.localizedDescription)")
+            recordDiagnostic("\(label): \(error.localizedDescription)")
             return []
+        }
+    }
+
+    private func recordDiagnostic(_ diagnostic: String) {
+        diagnostics.append(diagnostic)
+        if diagnostics.count > Self.diagnosticCountLimit {
+            diagnostics.removeFirst(diagnostics.count - Self.diagnosticCountLimit)
         }
     }
 
@@ -266,7 +275,7 @@ actor AssistantConversationStore {
             do {
                 try await local.save(record)
             } catch {
-                diagnostics.append("Local assistant history: \(error.localizedDescription)")
+                recordDiagnostic("Local assistant history: \(error.localizedDescription)")
             }
         }
         if let cloud {
@@ -274,7 +283,7 @@ actor AssistantConversationStore {
                 do {
                     try await cloud.save(record)
                 } catch {
-                    diagnostics.append("Private iCloud assistant history: \(error.localizedDescription)")
+                    recordDiagnostic("Private iCloud assistant history: \(error.localizedDescription)")
                 }
             }
         }
@@ -292,13 +301,13 @@ actor AssistantConversationStore {
         do {
             try await local.save(record)
         } catch {
-            diagnostics.append("Local assistant history: \(error.localizedDescription)")
+            recordDiagnostic("Local assistant history: \(error.localizedDescription)")
         }
         if let cloud {
             do {
                 try await cloud.save(record)
             } catch {
-                diagnostics.append("Private iCloud assistant history: \(error.localizedDescription)")
+                recordDiagnostic("Private iCloud assistant history: \(error.localizedDescription)")
             }
         }
     }
