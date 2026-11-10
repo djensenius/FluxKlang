@@ -89,7 +89,7 @@ enum BookFx {
 
     static func fullBook(_ count: Int) throws -> ControlPickupBook {
         var book = ControlPickupBook()
-        for number in 0..<count { try book.add(jumping(named("bnd.", number))) }
+        for number in 0..<count { try book.add(jumping(named("bnd.", number, width: 4))) }
         return book
     }
 
@@ -198,27 +198,27 @@ struct ControlPickupBookTests {
         let outcome = BookFx.refusal { try small.add(repeated) }
         #expect(outcome == .duplicateBinding(BookFx.idA))
         #expect(small == smallBefore)
-        var full = try BookFx.fullBook(ControlPickupBook.maximumBindings)
+        var full = try BookFx.fullBook(ControlBindingLimit.maximumBindings)
         let fullBefore = full
-        let again = try BookFx.jumping(BookFx.named("bnd.", 7))
+        let again = try BookFx.jumping(BookFx.named("bnd.", 7, width: 4))
         let both = BookFx.refusal { try full.add(again) }
-        let sevenID = try BookFx.named("bnd.", 7)
+        let sevenID = try BookFx.named("bnd.", 7, width: 4)
         #expect(both == .duplicateBinding(sevenID))
         let fresh = try BookFx.jumping(BookFx.idA)
         let onlyFull = BookFx.refusal { try full.add(fresh) }
         #expect(onlyFull == .bookFull(limit: ControlPickupBook.maximumBindings))
-        #expect(ControlPickupBook.maximumBindings == ControlLocalDispatch.maximumBindings)
+        #expect(ControlPickupBook.maximumBindings == ControlBindingLimit.maximumBindings)
         #expect(full == fullBefore)
     }
 
-    @Test func controlPickupBookAcceptsTheTwoHundredFiftySixthBindingAndRefusesTheNext() throws {
-        let limit = ControlPickupBook.maximumBindings
+    @Test func controlPickupBookAcceptsTheLastBindingOfTheSharedLimitAndRefusesTheNext() throws {
+        let limit = ControlBindingLimit.maximumBindings
         var book = try BookFx.fullBook(limit - 1)
         #expect(book.count == limit - 1)
-        try book.add(BookFx.jumping(BookFx.named("bnd.", limit - 1)))
+        try book.add(BookFx.jumping(BookFx.named("bnd.", limit - 1, width: 4)))
         #expect(book.count == limit)
         let before = book
-        let extra = try BookFx.jumping(BookFx.named("bnd.", limit))
+        let extra = try BookFx.jumping(BookFx.named("bnd.", limit, width: 4))
         let outcome = BookFx.refusal { try book.add(extra) }
         #expect(outcome == .bookFull(limit: limit))
         #expect(book.count == limit)

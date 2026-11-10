@@ -100,7 +100,51 @@ struct ControlLearnConflictTests {
         #expect(throws: LearnRefusal.tooManyBindings(4097)) {
             try session.confirm(descriptor: Learn.sizeDescriptor(), existing: many)
         }
-        #expect(try session.confirm(descriptor: Learn.sizeDescriptor(), existing: atLimit).removing.isEmpty)
+        let shorter = Array(atLimit.dropLast())
+        #expect(try session.confirm(descriptor: Learn.sizeDescriptor(), existing: shorter).removing.isEmpty)
+    }
+
+    @Test
+    func confirmRefusesTheBindingThatWouldExceedTheSharedLimit() throws {
+        let limit = ControlBindingLimit.maximumBindings
+        let bulk = try Self.filler(limit)
+        var full = try Learn.reviewing(Learn.knob5)
+        let fullBefore = full
+        #expect(throws: LearnRefusal.tooManyBindings(limit + 1)) {
+            try full.confirm(descriptor: Learn.sizeDescriptor(), existing: bulk)
+        }
+        #expect(full == fullBefore)
+
+        var room = try Learn.reviewing(Learn.knob5)
+        let below = Array(bulk.dropLast())
+        #expect(try room.confirm(descriptor: Learn.sizeDescriptor(), existing: below).removing.isEmpty)
+
+        let swapped = try Self.binding(Self.sameTarget.rawValue, source: "ctl.fader-1", target: Learn.size)
+        var crowded = try Self.filler(limit - 1)
+        crowded.append(swapped)
+        var replacing = try Learn.reviewing(Learn.knob5)
+        let commit = try replacing.confirm(.replace([Self.sameTarget]), descriptor: Learn.sizeDescriptor(),
+                                           existing: crowded)
+        #expect(commit.removing == [Self.sameTarget])
+
+        var refusing = try Learn.reviewing(Learn.knob5)
+        let conflict = LearnConflict(binding: Self.sameTarget, kind: .sameTarget)
+        #expect(throws: LearnRefusal.conflicted([conflict])) {
+            try refusing.confirm(descriptor: Learn.sizeDescriptor(), existing: crowded)
+        }
+    }
+
+    @Test
+    func confirmReportsAnIdInUseBeforeTheSharedLimit() throws {
+        let limit = ControlBindingLimit.maximumBindings
+        var full = try Self.filler(limit - 1)
+        full.append(try Self.binding(Learn.newID.rawValue, source: "ctl.other", target: Learn.level))
+        var session = try Learn.reviewing(Learn.knob5)
+        let before = session
+        #expect(throws: LearnRefusal.bindingIDInUse(Learn.newID)) {
+            try session.confirm(descriptor: Learn.sizeDescriptor(), existing: full)
+        }
+        #expect(session == before)
     }
 
     @Test
@@ -137,6 +181,11 @@ struct ControlLearnConflictTests {
             binding(sameBoth.rawValue, source: "ctl.knob-5", target: Learn.size),
             binding(sameTarget.rawValue, source: "ctl.fader-1", target: Learn.size)
         ]
+    }
+
+    /// `count` bindings `bnd.f<index>` on sources `ctl.f<index>` that conflict with nothing the Learn fixtures propose.
+    static func filler(_ count: Int) throws -> [ControlBinding] {
+        try (0..<count).map { try binding("bnd.f\($0)", source: "ctl.f\($0)", target: Learn.level) }
     }
 
     static func binding(_ id: String, source: String, target: ParameterID) throws -> ControlBinding {

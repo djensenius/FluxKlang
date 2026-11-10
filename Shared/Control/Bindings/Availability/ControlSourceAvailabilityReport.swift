@@ -79,7 +79,7 @@ struct ControlSourceAvailabilityReport: Hashable, Sendable {
 /// Why `project` refused the whole call. Checked in this order, each over the whole input before the next, and all
 /// before any source id is parsed: `tooManyBindings`, `tooManyLiveOrigins`, `duplicateBinding`. No partial report.
 enum ControlSourceAvailabilityRefusal: Error, Hashable, Sendable {
-    /// More than 256 bindings.
+    /// More than `ControlSourceAvailability.maximumBindings` bindings.
     case tooManyBindings(Int)
     /// More than 128 live origins.
     case tooManyLiveOrigins(Int)

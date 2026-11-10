@@ -3,6 +3,6 @@
 /// endpoint, keeps no state, never changes a pickup state and refuses no single binding. Nothing calls it yet.
 /// `project(bindings:liveOrigins:)` is declared in `ControlSourceAvailabilityReport.swift`, beside the types it builds.
 enum ControlSourceAvailability {
-    static let maximumBindings = 256
+    static let maximumBindings = ControlBindingLimit.maximumBindings
     static let maximumLiveOrigins = 128
 }

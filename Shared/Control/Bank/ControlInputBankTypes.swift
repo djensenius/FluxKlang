@@ -42,7 +42,7 @@ enum ControlInputBankRefusal: Error, Equatable, Sendable {
     case originNotLinked(BindingID, ControlSourceOrigin)
     /// The pickup book refused (a repeated binding id at build).
     case pickup(ControlPickupBookRefusal)
-    /// The detector refused (a repeated binding id at build).
+    /// The detector refused (a repeated binding id at build, or a `clear` of an unknown or momentary binding).
     case trigger(ControlTriggerRefusal)
     /// No link names this input.
     case unknownInput(MIDIInputID)
