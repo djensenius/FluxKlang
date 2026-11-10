@@ -331,4 +331,169 @@ extension ProjectRecoveryTests {
         _ = try session.reduce(.saveConfirmedAfterInterruption(attempt: attempt, version: local))
         #expect(session.state == .clean(version: local))
     }
+
+    @Test func abandoningTheFailedAttemptFreesAFullAttemptListForARetry() throws {
+        let base = try Self.recoveryFaultVersion("abandon-full-base")
+        let earlier = try Self.recoveryFaultVersion("abandon-full-earlier")
+        let local = try Self.recoveryFaultVersion("abandon-full-local")
+        let fault = try SaveFault.make(category: .diskFull)
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: earlier))
+        _ = try session.reduce(.edit(local: local))
+        var last: SaveAttemptID?
+        for _ in 1...SaveSession.maximumUnresolvedAttempts {
+            let attempt = try Self.abandonStartAttempt(&session)
+            _ = try session.reduce(.saveFailed(attempt: attempt, fault: fault))
+            last = attempt
+        }
+        let current = try #require(last)
+        try Self.abandonRefuses(&session, .saveRequested, .attemptLimitExceeded)
+        let copiesBefore = session.retainedCopies
+        #expect(copiesBefore.count == 1)
+        let effects = try session.reduce(.saveAbandoned(attempt: current))
+        #expect(effects.isEmpty)
+        #expect(session.state == .dirty(base: base, local: local))
+        #expect(session.unresolvedAttempts.isEmpty)
+        #expect(session.retainedCopies == copiesBefore)
+        let retry = try session.reduce(.saveRequested)
+        guard case .beginWrite(let version, let retryAttempt) = retry.first else {
+            Issue.record("Expected a fresh write after the abandon")
+            return
+        }
+        #expect(version == local)
+        #expect(retryAttempt.rawValue == 9)
+        #expect(session.unresolvedAttempts.count == 1)
+        _ = try session.reduce(.saveCompleted(attempt: retryAttempt, version: local))
+        #expect(session.state == .clean(version: local))
+    }
+
+    @Test func abandonIsRefusedOutsideTheCurrentFailedAttemptAndLeavesTheSessionUnchanged() throws {
+        for row in try Self.abandonRefusalRows() {
+            var session = row.session
+            let before = session
+            #expect(throws: row.refusal, Comment(rawValue: row.name)) {
+                try session.reduce(.saveAbandoned(attempt: row.attempt))
+            }
+            #expect(session == before, Comment(rawValue: row.name))
+        }
+    }
+
+    @Test func confirmingAnAbandonedAttemptIsStaleAndALandedWriteConvergesByExternalChange() throws {
+        let base = try Self.recoveryFaultVersion("abandon-confirm-base")
+        let earlier = try Self.recoveryFaultVersion("abandon-confirm-earlier")
+        let local = try Self.recoveryFaultVersion("abandon-confirm-local")
+        let fault = try SaveFault.make(category: .permissionDenied)
+        var session = SaveSession.make(initialVersion: base)
+        _ = try session.reduce(.edit(local: local))
+        let abandoned = try Self.abandonStartAttempt(&session)
+        _ = try session.reduce(.saveFailed(attempt: abandoned, fault: fault))
+        _ = try session.reduce(.saveAbandoned(attempt: abandoned))
+        let confirm = SaveSessionEvent.saveConfirmedAfterInterruption(attempt: abandoned, version: local)
+        try Self.abandonRefuses(&session, confirm, .noPendingSave)
+        let retry = try Self.abandonStartAttempt(&session)
+        try Self.abandonRefuses(&session, confirm, .staleCompletion)
+        try Self.abandonRefuses(&session, .saveCompleted(attempt: abandoned, version: local), .staleCompletion)
+        _ = try session.reduce(.saveCompleted(attempt: retry, version: local))
+        #expect(session.state == .clean(version: local))
+        var landed = SaveSession.make(initialVersion: base)
+        _ = try landed.reduce(.edit(local: earlier))
+        _ = try landed.reduce(.edit(local: local))
+        #expect(landed.retainedCopies.count == 1)
+        let landedAttempt = try Self.abandonStartAttempt(&landed)
+        _ = try landed.reduce(.saveFailed(attempt: landedAttempt, fault: fault))
+        _ = try landed.reduce(.saveAbandoned(attempt: landedAttempt))
+        let releases = try landed.reduce(.externalChange(remote: local))
+        #expect(landed.state == .clean(version: local))
+        #expect(releases.count == 1)
+        #expect(landed.retainedCopies.isEmpty)
+        #expect(landed.unresolvedAttempts.isEmpty)
+    }
+
+    @Test func afterAbandoningTheDocumentIsEditableNotReloadableAndConflictsWithAnotherRemote() throws {
+        let base = try Self.recoveryFaultVersion("abandon-after-base")
+        let local = try Self.recoveryFaultVersion("abandon-after-local")
+        let next = try Self.recoveryFaultVersion("abandon-after-next")
+        let other = try Self.recoveryFaultVersion("abandon-after-other")
+        let fault = try SaveFault.make(category: .coordinationDenied)
+        var editable = SaveSession.make(initialVersion: base)
+        _ = try editable.reduce(.edit(local: local))
+        let editableAttempt = try Self.abandonStartAttempt(&editable)
+        _ = try editable.reduce(.saveFailed(attempt: editableAttempt, fault: fault))
+        try Self.abandonRefuses(&editable, .edit(local: next), .savePending)
+        _ = try editable.reduce(.saveAbandoned(attempt: editableAttempt))
+        _ = try editable.reduce(.edit(local: next))
+        #expect(editable.state == .dirty(base: base, local: next))
+        #expect(editable.retainedCopies.count == 1)
+        try Self.abandonRefuses(&editable, .reload(version: other), .reloadWouldDiscardLocal)
+        var conflicting = SaveSession.make(initialVersion: base)
+        _ = try conflicting.reduce(.edit(local: local))
+        let conflictAttempt = try Self.abandonStartAttempt(&conflicting)
+        _ = try conflicting.reduce(.saveFailed(attempt: conflictAttempt, fault: fault))
+        try Self.abandonRefuses(&conflicting, .externalChange(remote: other), .savePending)
+        _ = try conflicting.reduce(.saveAbandoned(attempt: conflictAttempt))
+        let effects = try conflicting.reduce(.externalChange(remote: other))
+        #expect(conflicting.state == .conflicted(base: base, local: local, remote: other))
+        #expect(conflicting.retainedCopies.count == 2)
+        let lastEffect = try #require(effects.last)
+        #expect(lastEffect == .presentConflict(base: base, local: local, remote: other))
+    }
+}
+
+private struct AbandonRefusalRow {
+    let name: String
+    let session: SaveSession
+    let attempt: SaveAttemptID
+    let refusal: SaveSessionRefusal
+}
+
+extension ProjectRecoveryTests {
+    fileprivate static func abandonRefuses(
+        _ session: inout SaveSession,
+        _ event: SaveSessionEvent,
+        _ refusal: SaveSessionRefusal
+    ) throws {
+        let before = session
+        #expect(throws: refusal) { try session.reduce(event) }
+        #expect(session == before)
+    }
+
+    fileprivate static func abandonStartAttempt(_ session: inout SaveSession) throws -> SaveAttemptID {
+        let effects = try session.reduce(.saveRequested)
+        guard case .beginWrite(_, let attempt) = effects.first else {
+            Issue.record("Expected a write attempt")
+            throw SaveSessionRefusal.noPendingSave
+        }
+        return attempt
+    }
+
+    fileprivate static func abandonRefusalRows() throws -> [AbandonRefusalRow] {
+        let base = try recoveryFaultVersion("abandon-rows-base")
+        let local = try recoveryFaultVersion("abandon-rows-local")
+        let remote = try recoveryFaultVersion("abandon-rows-remote")
+        let fault = try SaveFault.make(category: .unknown)
+        let foreign = try thirdAttemptID()
+        let clean = SaveSession.make(initialVersion: base)
+        var dirty = clean
+        _ = try dirty.reduce(.edit(local: local))
+        var conflicted = dirty
+        _ = try conflicted.reduce(.externalChange(remote: remote))
+        var saving = dirty
+        let savingAttempt = try abandonStartAttempt(&saving)
+        var failed = dirty
+        let olderAttempt = try abandonStartAttempt(&failed)
+        _ = try failed.reduce(.saveFailed(attempt: olderAttempt, fault: fault))
+        let currentAttempt = try abandonStartAttempt(&failed)
+        _ = try failed.reduce(.saveFailed(attempt: currentAttempt, fault: fault))
+        var repeated = failed
+        _ = try repeated.reduce(.saveAbandoned(attempt: currentAttempt))
+        return [
+            AbandonRefusalRow(name: "clean", session: clean, attempt: foreign, refusal: .noPendingSave),
+            AbandonRefusalRow(name: "dirty", session: dirty, attempt: foreign, refusal: .noPendingSave),
+            AbandonRefusalRow(name: "conflicted", session: conflicted, attempt: foreign, refusal: .noPendingSave),
+            AbandonRefusalRow(name: "saving", session: saving, attempt: savingAttempt, refusal: .savePending),
+            AbandonRefusalRow(name: "older id", session: failed, attempt: olderAttempt, refusal: .staleCompletion),
+            AbandonRefusalRow(name: "foreign id", session: failed, attempt: foreign, refusal: .staleCompletion),
+            AbandonRefusalRow(name: "repeated", session: repeated, attempt: currentAttempt, refusal: .noPendingSave)
+        ]
+    }
 }

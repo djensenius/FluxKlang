@@ -195,6 +195,8 @@ struct LearnSession: Hashable, Sendable {
         if !removing.contains(binding.id), existing.contains(where: { $0.id == binding.id }) {
             throw .bindingIDInUse(binding.id)
         }
+        let resulting = existing.count - removing.count + 1
+        guard resulting <= ControlBindingLimit.maximumBindings else { throw .tooManyBindings(resulting) }
         let commit = LearnCommit(binding: binding, removing: removing)
         phase = .committed(commit)
         return commit

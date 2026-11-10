@@ -5,10 +5,11 @@ import Synchronization
 // exhausted or lost; `KernelRetirementLoss` is what a retiring cycle dropped. Reference model; not RT-certified.
 
 /// What `KernelCycle.retire()` dropped (round 2i, Copilot round 5): the events still pending in the retired cycle's
-/// block buffer, never emitted, which no replacement sees (it starts with an empty buffer; a bounded carry-over is
-/// E5c). A pending `noteOff` is not a drop: it records its tombstone instead. Each count is at most the retired
-/// cycle's `blockCapacity`. A plain value; `NoteOwnership` keeps its counts as plain memory ordered by its claim
-/// word, for the next claim only (see `releaseCycleClaim(_:loss:)`). Reference model; not RT-certified.
+/// block buffer, never emitted, which no replacement sees (it starts with an empty buffer; the stateful ones are
+/// also recorded in a `KernelRetirementCarry` that travels with this loss). A pending `noteOff` is not a drop: it
+/// records its tombstone instead. Each count is at most the retired cycle's `blockCapacity`. A plain value;
+/// `NoteOwnership` keeps its counts as plain memory ordered by its claim word, for the next claim only (see
+/// `releaseCycleClaim(_:loss:carry:)`). Reference model; not RT-certified.
 struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
     /// `noteOn`s: lost notes, never stuck ones (never emitted or owned). Includes one drained from a lane still
     /// flushing (`KernelBlockEntry.flushed`), which a decide would have discarded anyway.
@@ -52,13 +53,17 @@ struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
 ///
 /// It also owns the scopes' `ReleaseTombstones` (allocated in `init`, same scopes and key space), so every
 /// `KernelCycle` sharing this ownership shares its release history too, exactly when it shares the notes, and the
-/// two can never be passed apart (round 2g). Its cycle claim, and the retirement loss each release leaves for the
-/// next claim, are the only cross-thread state: `KernelCycle.init` (control) claims it and `KernelCycle.retire()`
-/// (render) hands it back; see `claimForCycle(fresh:from:)` and `releaseCycleClaim(_:loss:)`.
+/// two can never be passed apart (round 2g). Its cycle claim, and the retirement loss and carry each release leaves
+/// for the next claim, are the only cross-thread state: `KernelCycle.init` (control) claims it and
+/// `KernelCycle.retire()` (render) hands it back; see `claimForCycle(fresh:from:)` and
+/// `releaseCycleClaim(_:loss:carry:)`.
 ///
-/// Retirement loss (rounds 2i and 2j). The loss is five plain `Int` fields, one per count (so an optimized TSan build
+/// Retirement loss and carry (rounds 2i and 2j, KCW1). The loss is five plain `Int` fields, one per count (so an
+/// optimized TSan build
 /// can report a race on any of them when it observes one; a Debug TSan build was observed not to report the
 /// whole-struct copy, and still does not), ordered by the claim word and never read or written outside a claim.
+/// The carry (a `KernelRetirementCarry`, plain inline memory) rides the same pairing: the same guard, the same
+/// releasing compare-exchange and the same acquire, so a claim's loss and carry are always one retirement's.
 /// `releaseCycleClaim` writes them only while its claim is still held (an odd word only its holder can move), then
 /// hands the claim back with a releasing compare-exchange.
 /// `claimForCycle` reads them only after its acquiring compare-exchange has succeeded, reading the even word that
@@ -117,6 +122,9 @@ final class NoteOwnership: @unchecked Sendable {
         /// What the claim's immediate predecessor dropped at retirement (its `releaseCycleClaim` loss; not
         /// cumulative), read after this claim's acquire; empty when no cycle retired over the ownership before.
         let inherited: KernelRetirementLoss
+        /// The pending stateful events the claim's immediate predecessor recorded at retirement (not cumulative),
+        /// read after this claim's acquire; empty when no cycle retired over the ownership before.
+        let inheritedCarry: KernelRetirementCarry
     }
 
     let scopeCount: Int
@@ -134,6 +142,9 @@ final class NoteOwnership: @unchecked Sendable {
     private var lostPrograms = 0
     private var lostRamps = 0
     private var lostClockPulses = 0
+    /// The latest retirement's pending stateful events (see `KernelRetirementCarry`): plain memory ordered by the
+    /// claim word exactly like the loss; evaluated in `init` (control).
+    private var lostCarry = KernelRetirementCarry()
 
     init(scopes: Int) throws(PreparationError) {
         guard scopes >= 1, scopes <= Self.maximumScopes else { throw .scopeCountOutOfRange(scopes) }
@@ -181,13 +192,20 @@ final class NoteOwnership: @unchecked Sendable {
         guard claimed else { throw Self.refusal(current, fresh: fresh) ?? .claimRaced }
         let inherited = KernelRetirementLoss(noteOns: lostNoteOns, controls: lostControls, programs: lostPrograms,
                                              ramps: lostRamps, clockPulses: lostClockPulses)
-        return CycleClaim(held: state.word &+ 1, inherited: inherited)
+        return CycleClaim(held: state.word &+ 1, inherited: inherited, inheritedCarry: lostCarry)
+    }
+
+    /// Render only: `releaseCycleClaim(_:loss:carry:)` with an empty carry, so it clears the carry as it replaces
+    /// the loss.
+    func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss) {
+        releaseCycleClaim(claim, loss: loss, carry: KernelRetirementCarry())
     }
 
     /// Render only, from `KernelCycle.retire()`, after its tombstone writes: while `claim` is still held, records
-    /// `loss` for the next claim, then hands `claim` back (a stale or repeated release changes neither the claim
-    /// nor the recorded loss). Release publishes those writes and `loss` to the next claim.
-    func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss) {
+    /// `loss` and `carry` for the next claim, then hands `claim` back (a stale or repeated release changes neither
+    /// the claim nor the recorded loss and carry). Release publishes those writes, `loss` and `carry` to the next
+    /// claim.
+    func releaseCycleClaim(_ claim: CycleClaim, loss: KernelRetirementLoss, carry: KernelRetirementCarry) {
         // Only the holder can move an odd word, so a held claim stays held until the compare-exchange below.
         if liveCycle.load(ordering: .relaxed) == claim.held {
             lostNoteOns = loss.noteOns
@@ -195,6 +213,7 @@ final class NoteOwnership: @unchecked Sendable {
             lostPrograms = loss.programs
             lostRamps = loss.ramps
             lostClockPulses = loss.clockPulses
+            lostCarry = carry
         }
         _ = liveCycle.compareExchange(expected: claim.held, desired: claim.held &+ 1, successOrdering: .releasing,
                                       failureOrdering: .relaxed)

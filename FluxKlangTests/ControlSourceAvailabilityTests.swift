@@ -35,10 +35,10 @@ struct ControlSourceAvailabilityTests {
 
     private static func pad(_ number: Int) -> String {
         let digits = String(number)
-        return String(repeating: "0", count: 3 - digits.count) + digits
+        return String(repeating: "0", count: 4 - digits.count) + digits
     }
 
-    /// `count` bindings `bnd.n000...` on one origin; the last one repeats the id of the first when asked.
+    /// `count` bindings `bnd.n0000...` on one origin; the last one repeats the id of the first when asked.
     private static func numbered(_ count: Int, repeatingFirst: Bool = false) throws -> [ControlBinding] {
         var list: [ControlBinding] = []
         for index in 0..<count {
@@ -243,7 +243,7 @@ struct ControlSourceAvailabilityTests {
     }
 
     @Test func controlSourceAvailabilityTheBindingAndOriginCapsAcceptTheLimitAndRefuseOneMore() throws {
-        let maxBindings = ControlSourceAvailability.maximumBindings
+        let maxBindings = ControlBindingLimit.maximumBindings
         let maxOrigins = ControlSourceAvailability.maximumLiveOrigins
         let one = try [Self.binding("bnd.a", source: Self.pad70)]
         let belowBindings = try Self.numbered(maxBindings - 1)
@@ -265,7 +265,7 @@ struct ControlSourceAvailabilityTests {
     }
 
     @Test func controlSourceAvailabilityRefusalsAreCheckedInTheOrderBindingsOriginsDuplicates() throws {
-        let overBindings = ControlSourceAvailability.maximumBindings + 1
+        let overBindings = ControlBindingLimit.maximumBindings + 1
         let overOrigins = ControlSourceAvailability.maximumLiveOrigins + 1
         let manyBindings = try Self.numbered(overBindings)
         let manyAndDuplicated = try Self.numbered(overBindings, repeatingFirst: true)

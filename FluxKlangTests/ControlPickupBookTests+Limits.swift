@@ -10,20 +10,20 @@ extension ControlPickupBookTests {
     // MARK: Limits and host changes
 
     @Test func controlPickupBookRefusesTooManyUpdatesBeforeLookingAnyUp() throws {
-        let limit = ControlPickupBook.maximumBindings
+        let limit = ControlBindingLimit.maximumBindings
         var book = try BookFx.fullBook(limit)
         var inside: [BindingID: PickupState] = [:]
-        for number in 0..<(limit - 1) { inside[try BookFx.named("bnd.", number)] = .engaged(hardware: 0.5) }
+        for number in 0..<(limit - 1) { inside[try BookFx.named("bnd.", number, width: 4)] = .engaged(hardware: 0.5) }
         let below = BookFx.refusal { try book.record(inside) }
         #expect(below == nil)
-        inside[try BookFx.named("bnd.", limit - 1)] = .engaged(hardware: 0.5)
+        inside[try BookFx.named("bnd.", limit - 1, width: 4)] = .engaged(hardware: 0.5)
         let exact = BookFx.refusal { try book.record(inside) }
         #expect(exact == nil)
-        let lastID = try BookFx.named("bnd.", limit - 1)
+        let lastID = try BookFx.named("bnd.", limit - 1, width: 4)
         #expect(book.state(of: lastID) == .engaged(hardware: 0.5))
         let before = book
         var beyond: [BindingID: PickupState] = [:]
-        for number in 0...limit { beyond[try BookFx.named("bnd.x", number)] = .engaged(hardware: 0.5) }
+        for number in 0...limit { beyond[try BookFx.named("bnd.x", number, width: 4)] = .engaged(hardware: 0.5) }
         let outcome = BookFx.refusal { try book.record(beyond) }
         #expect(outcome == .tooManyUpdates(limit + 1))
         #expect(book == before)

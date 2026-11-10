@@ -44,6 +44,13 @@ struct ControlBindingFields: ControlFields {
 }
 typealias ControlBinding = ControlRecord<ControlBindingFields>
 
+/// The one limit on how many bindings a rig, a dispatch call, a pickup book, an availability report and a Learn
+/// commit hold. Each type keeps its own `maximumBindings` name as an alias of this value. Equal to the parameter
+/// catalog's value cap, so a bank with one binding per writable parameter fits.
+enum ControlBindingLimit {
+    static let maximumBindings = 4096
+}
+
 enum ControlBindingRefusal: Error, Hashable, Sendable {
     case descriptorMismatch(expected: ParameterID, found: ParameterID)
     /// Only `.live` parameters may be bound; every other class (structural, hazardous, safety,

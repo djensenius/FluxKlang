@@ -19,7 +19,7 @@ struct ControlPickupBookEntry: Hashable, Sendable {
 /// are commands that a future host sends. It allocates (a Dictionary, a Set), so it belongs to the control thread.
 struct ControlPickupBook: Hashable, Sendable {
     /// The most bindings one book holds: the cap both dispatchers enforce on a binding list.
-    static let maximumBindings = 256
+    static let maximumBindings = ControlBindingLimit.maximumBindings
     /// The most targets one `hostChanged` call may name: the parameter catalog's own value cap.
     static let maximumChangedTargets = 4096
 
