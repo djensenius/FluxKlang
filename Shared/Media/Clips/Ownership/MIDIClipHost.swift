@@ -29,6 +29,8 @@ enum MIDIClipHostRefusal: Error, Equatable, Sendable {
     case inputBoundToClip(MIDIInputID)
     /// A multi-clip render was given no inputs.
     case noInputs
+    /// A multi-clip render listed `count` inputs, exceeding `limit`, before any input was resolved.
+    case inputListTooLarge(count: Int, limit: Int)
     /// A multi-clip render listed this input twice (the first repeated input, in list order).
     case inputListedTwice(MIDIInputID)
     /// The clip's scheduler refused.
@@ -41,7 +43,7 @@ enum MIDIClipHostRefusal: Error, Equatable, Sendable {
 
 /// One note ledger plus the clips (at most `maximumClips`, one per input) that play into it.
 struct MIDIClipHost: Equatable, Sendable {
-    /// The most clips one host binds.
+    /// The most clips one host binds or lists in a render.
     static let maximumClips = 64
 
     /// The shared ledger, read-only: it changes only through the host's operations.
@@ -93,9 +95,9 @@ struct MIDIClipHost: Equatable, Sendable {
     /// clip) and routes it once through the shared ledger, each event under its own clip's input and routing. A
     /// per-event ledger refusal is reported without aborting the rest. All-or-nothing: the ledger and every
     /// scheduler are committed only after the whole batch is known to be accepted. Refusals, in this order: an
-    /// empty list, the first input listed twice, the first unbound input, the first clip (in list order) whose
-    /// scheduler refuses, a merged batch over `MIDIClipOwnershipReport.maximumBatchEvents`. A refusal changes
-    /// nothing.
+    /// empty list, a list over `maximumClips`, the first input listed twice, the first unbound input, the first
+    /// clip (in list order) whose scheduler refuses, a merged batch over `MIDIClipOwnershipReport.maximumBatchEvents`.
+    /// A refusal changes nothing.
     mutating func render(
         inputs: [MIDIInputID], from start: Int64, to end: Int64, clock: MusicalClockMap,
         current: MIDIClipGenerations
@@ -205,9 +207,12 @@ struct MIDIClipHost: Equatable, Sendable {
         return slot
     }
 
-    /// The slots of `inputs`, in list order, after the list checks (empty, repeated, unbound).
+    /// The slots of `inputs`, in list order, after the list checks (empty, oversized, repeated, unbound).
     private func slots(of inputs: [MIDIInputID]) throws(MIDIClipHostRefusal) -> [Int] {
         guard !inputs.isEmpty else { throw .noInputs }
+        guard inputs.count <= Self.maximumClips else {
+            throw .inputListTooLarge(count: inputs.count, limit: Self.maximumClips)
+        }
         var seen: Set<MIDIInputID> = []
         for id in inputs where !seen.insert(id).inserted { throw .inputListedTwice(id) }
         var slots: [Int] = []
