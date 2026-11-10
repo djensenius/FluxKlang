@@ -77,11 +77,11 @@ private enum Fx {
 
     static func names(_ list: [BindingID]) -> [String] { list.map { $0.rawValue } }
 
-    /// `count` momentary bindings `bnd.n000`, `bnd.n001`, ... on `padA`, ascending by id.
+    /// `count` momentary bindings `bnd.n0000`, `bnd.n0001`, ... on `padA`, ascending by id.
     static func bulk(_ count: Int) throws -> [ControlTriggerBinding] {
         try (0..<count).map { index in
             let digits = String(index)
-            return try binding("bnd.n" + String(repeating: "0", count: 3 - digits.count) + digits)
+            return try binding("bnd.n" + String(repeating: "0", count: 4 - digits.count) + digits)
         }
     }
 }
@@ -350,7 +350,7 @@ struct ControlLocalTriggerDispatchTests {
 
     @Test
     func controlLocalTriggerDispatchAcceptsTheBindingCapAndRefusesOneMore() throws {
-        let cap = ControlLocalTriggerDispatch.maximumBindings
+        let cap = ControlBindingLimit.maximumBindings
         for count in [cap - 1, cap] {
             let bindings = try Fx.bulk(count)
             var detector = try ControlTriggerDetector(bindings: bindings)
@@ -362,7 +362,7 @@ struct ControlLocalTriggerDispatchTests {
         }
         let over = cap + 1
         let crowded = try Fx.bulk(over)
-        var detector = try ControlTriggerDetector(bindings: crowded)
+        var detector = try ControlTriggerDetector(bindings: Array(crowded.dropLast()))
         let before = detector
         let refused = try Fx.run(&detector, crowded)
         #expect(refused.refusals == [.tooManyBindings(over)])
@@ -404,7 +404,7 @@ struct ControlLocalTriggerDispatchTests {
 
     @Test
     func controlLocalTriggerDispatchRefusalsAreCheckedInTheOrderLearnIntakeCapDuplicates() throws {
-        let cap = ControlLocalTriggerDispatch.maximumBindings
+        let cap = ControlBindingLimit.maximumBindings
         let bindings = try [Fx.binding("bnd.a")]
         var detector = try ControlTriggerDetector(bindings: bindings)
         let before = detector

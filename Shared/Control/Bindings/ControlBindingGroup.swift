@@ -11,7 +11,7 @@ struct ControlBindingGroupFields: ControlFields {
     static let knownKeys: Set<String> = ["id", "members"]
     static let maximumMembers = 64
     /// The most bindings a caller may supply to look members up in.
-    static let maximumBindings = 4096
+    static let maximumBindings = ControlBindingLimit.maximumBindings
     let id: BindingGroupID
     let members: [BindingID]
 

@@ -72,7 +72,7 @@ struct ControlTriggerState: Hashable, Sendable {
 /// while a control is held or an output is on must end those actions itself. Use it on the control thread, never
 /// the audio thread.
 struct ControlTriggerDetector: Hashable, Sendable {
-    static let maximumBindings = 4096
+    static let maximumBindings = ControlBindingLimit.maximumBindings
 
     private struct Entry: Hashable, Sendable {
         let binding: ControlTriggerBinding
