@@ -765,6 +765,8 @@ targets:
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlPickupBookTests.swift
       - path: FluxKlangTests/ControlPickupBookTests+Limits.swift
+      - path: FluxKlangTests/ControlInputBankTests.swift
+      - path: FluxKlangTests/ControlInputBankTests+Lifecycle.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
