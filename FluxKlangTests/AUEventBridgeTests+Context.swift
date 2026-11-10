@@ -12,6 +12,34 @@ private struct HostGolden {
     let rest: Int64
 }
 
+/// Builds the real accepted ledger and timeline of the host context tests from the contract constructors, so the file
+/// needs no other test file: 48,000 Hz nominal rate, timebase 125 over 3, one tempo map.
+private struct HostTimelineSource {
+    let primary = ClockID(validated: "sample.foundation")
+    let musical = ClockID(validated: "musical.foundation")
+
+    func timeline(
+        loop: LoopRange?, running: Bool, frame: Int64, ticks: Int64, segments: [(Int64, Int64)]
+    ) throws -> MusicalTimeline {
+        let ledger = try GenerationLedger(primaryClock: primary, musicalClock: musical, nominalRate: 48_000)
+        let transport = try #require(ledger.generation(GenerationKey(.transport, musical)))
+        let revision = try #require(ledger.generation(GenerationKey(.musicalMap, musical)))
+        let sample = SampleStamp(
+            clock: primary, generation: try #require(ledger.generation(ledger.primaryClock)), frame: frame)
+        let sampleAnchor = ClockAnchor(sample: sample, host: .init(ticks: 0), musical: nil)
+        let musicalAnchor = ClockAnchor(
+            sample: sample, host: .init(ticks: 0),
+            musical: .init(transport: transport, musicalMap: revision, ticks: ticks, loopIteration: 0))
+        let map = try MusicalMap(
+            clock: musical, revision: revision,
+            segments: segments.map { try TempoSegment(atTicks: $0.0, microsPerQuarter: $0.1) })
+        return try MusicalTimeline(
+            sample: SampleClockMap(anchor: sampleAnchor, nominalRate: 48_000, timebase: .init(numer: 125, denom: 3)),
+            anchor: musicalAnchor, map: map, loop: loop, running: running, historyLimit: 8, pinLimit: 4,
+            ledger: ledger)
+    }
+}
+
 /// AU host musical context for one render block (#73, slice BRC1a). Golden numbers are typed by hand: 120 BPM
 /// (500,000 us per quarter) at 48,000 Hz is 24,000 frames per quarter, so 0.64 tick per frame; 250,000 us per quarter
 /// is 1.28 ticks per frame.
@@ -20,10 +48,8 @@ extension AUEventBridgeTests {
         running: Bool = true, loop: LoopRange? = nil, frame: Int64 = 0, ticks: Int64 = 0,
         segments: [(Int64, Int64)] = [(0, 500_000)]
     ) throws -> SchedulerMusicalSummary {
-        let fixture = MusicalFoundationFixture()
-        let ledger = try fixture.ledger()
-        let timeline = try fixture.timeline(
-            ledger, loop: loop, running: running, frame: frame, ticks: ticks, segments: segments)
+        let timeline = try HostTimelineSource().timeline(
+            loop: loop, running: running, frame: frame, ticks: ticks, segments: segments)
         return SchedulerMusicalSummary(timeline)
     }
 
