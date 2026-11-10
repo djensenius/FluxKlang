@@ -714,6 +714,7 @@ targets:
       - path: FluxKlangTests/SetupFlowTests+Flow.swift
       - path: FluxKlangTests/SetupFlowTests+Manual.swift
       - path: FluxKlangTests/SetupFlowTests+Order.swift
+      - path: FluxKlangTests/SetupApplyGuardTests.swift
       - path: FluxKlangTests/SetupFlowScreenTests.swift
       - path: FluxKlangTests/SetupFlowScreenTests+Text.swift
       - path: FluxKlangTests/DeclarativeActionTests.swift
