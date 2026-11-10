@@ -389,6 +389,7 @@ targets:
       - path: FluxKlangTests/ShowTransitionWalkTests.swift
       - path: FluxKlangTests/ShowFootInputTests.swift
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
+      - path: FluxKlangTests/ShowFootSessionTests.swift
       - path: FluxKlangTests/ShowRecoveryTests.swift
       - path: FluxKlangTests/ShowRecoveryTests+Batch.swift
       - path: FluxKlangTests/ShowResumePlannerTests.swift
