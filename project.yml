@@ -312,6 +312,7 @@ targets:
       - path: FluxKlangTests/RecordingTakeTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeTests+Recovery.swift
       - path: FluxKlangTests/RecordingTakeTests+BackwardJumps.swift
+      - path: FluxKlangTests/RecordingTakeV1GateTests.swift
       - path: FluxKlangTests/DraftHistoryTests.swift
       - path: FluxKlangTests/DraftHistoryTests+Undo.swift
       - path: FluxKlangTests/SpatialEditingTests.swift
@@ -389,6 +390,7 @@ targets:
       - path: FluxKlangTests/ShowTransitionWalkTests.swift
       - path: FluxKlangTests/ShowFootInputTests.swift
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
+      - path: FluxKlangTests/ShowFootSessionTests.swift
       - path: FluxKlangTests/ShowRecoveryTests.swift
       - path: FluxKlangTests/ShowRecoveryTests+Batch.swift
       - path: FluxKlangTests/ShowResumePlannerTests.swift
@@ -622,6 +624,7 @@ targets:
       - path: FluxKlangTests/CaptureDrainLimitTests.swift
       - path: FluxKlangTests/CaptureDrainSupport.swift
       - path: FluxKlangTests/CaptureDrainTests+Edges.swift
+      - path: FluxKlangTests/CaptureOverflowCoalescerTests.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
@@ -763,6 +766,8 @@ targets:
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlPickupBookTests.swift
       - path: FluxKlangTests/ControlPickupBookTests+Limits.swift
+      - path: FluxKlangTests/ControlInputBankTests.swift
+      - path: FluxKlangTests/ControlInputBankTests+Lifecycle.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
@@ -844,6 +849,7 @@ targets:
       - path: FluxKlangTests/WorkspaceStatusTests+Devices.swift
       - path: FluxKlangTests/WorkspaceStatusSourcesTests.swift
       - path: FluxKlangTests/WorkspaceStatusSourcesTests+Limits.swift
+      - path: FluxKlangTests/DiagnosticsListTests.swift
       - path: FluxKlangTests/WorkspaceStatusTests+EngineClock.swift
       - path: FluxKlangTests/WorkspaceStatusTests+FocusOrder.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
