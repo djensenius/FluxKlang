@@ -389,6 +389,7 @@ targets:
       - path: FluxKlangTests/ShowTransitionWalkTests.swift
       - path: FluxKlangTests/ShowFootInputTests.swift
       - path: FluxKlangTests/ShowFootInputTests+Refusals.swift
+      - path: FluxKlangTests/ShowFootSessionTests.swift
       - path: FluxKlangTests/ShowRecoveryTests.swift
       - path: FluxKlangTests/ShowRecoveryTests+Batch.swift
       - path: FluxKlangTests/ShowResumePlannerTests.swift
@@ -622,6 +623,7 @@ targets:
       - path: FluxKlangTests/CaptureDrainLimitTests.swift
       - path: FluxKlangTests/CaptureDrainSupport.swift
       - path: FluxKlangTests/CaptureDrainTests+Edges.swift
+      - path: FluxKlangTests/CaptureOverflowCoalescerTests.swift
       - path: FluxKlangTests/SpatialMappingTests.swift
       - path: FluxKlangTests/SpatialMappingTests+Goldens.swift
       - path: FluxKlangTests/SpatialMappingTests+GoldensRing.swift
@@ -763,6 +765,8 @@ targets:
       - path: FluxKlangTests/ControlPickupTests.swift
       - path: FluxKlangTests/ControlPickupBookTests.swift
       - path: FluxKlangTests/ControlPickupBookTests+Limits.swift
+      - path: FluxKlangTests/ControlInputBankTests.swift
+      - path: FluxKlangTests/ControlInputBankTests+Lifecycle.swift
       - path: FluxKlangTests/ControlHostTruthTests.swift
       - path: FluxKlangTests/ControlBindingGroupTests.swift
       - path: FluxKlangTests/ControlTriggerTests.swift
