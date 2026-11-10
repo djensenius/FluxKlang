@@ -849,6 +849,7 @@ targets:
       - path: FluxKlangTests/WorkspaceStatusTests+Devices.swift
       - path: FluxKlangTests/WorkspaceStatusSourcesTests.swift
       - path: FluxKlangTests/WorkspaceStatusSourcesTests+Limits.swift
+      - path: FluxKlangTests/DiagnosticsListTests.swift
       - path: FluxKlangTests/WorkspaceStatusTests+EngineClock.swift
       - path: FluxKlangTests/WorkspaceStatusTests+FocusOrder.swift
       - path: FluxKlangTests/WorkspaceStatusTests+Peers.swift
