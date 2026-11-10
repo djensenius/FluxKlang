@@ -153,6 +153,21 @@ final class EnginePlanLedger {
 
     var count: Int { records.reduce(0) { $0 + $1.entries.count } }
 
+    /// Exact instance/attempt observation, including a retained prior instance.
+    /// Nil means absent or already bound; false means pending and not reclaimed.
+    /// Reads canonical storage without constructing diagnostic snapshot arrays.
+    func pendingReclaim(instance: EngineInstanceID, attempt: PrepareAttemptID) -> Bool? {
+        guard let (record, entry) = try? entryIndex(instance: instance, attempt: attempt),
+              case .pending(let reclaim) = records[record].entries[entry].state else { return nil }
+        return reclaim
+    }
+
+    /// Full binding equality, not raw prepared-ID or current-instance authority.
+    /// Inert phase only: no binding, resident, resource or ownership transfer.
+    func phase(of binding: PlanBinding) -> EnginePlanPhase? {
+        (try? boundIndex(binding))?.phase
+    }
+
     func snapshot() -> EnginePlanLedgerSnapshot {
         EnginePlanLedgerSnapshot(capacity: capacity, currentInstance: currentInstance, records: records.map { record in
             EnginePlanLedgerSnapshot.Record(

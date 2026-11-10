@@ -8,12 +8,7 @@
 
 extension HostAuthorityBook {
     func phase(of binding: PlanBinding) -> EnginePlanPhase? {
-        for record in plans.snapshot().records where record.instance == binding.instance {
-            for entry in record.entries where entry.attempt == binding.attempt {
-                if case .bound(let actual, let phase) = entry.state, actual == binding { return phase }
-            }
-        }
-        return nil
+        plans.phase(of: binding)
     }
 
     /// Only call on a real transition into retiring, after all fallible work.
