@@ -1,5 +1,5 @@
 // #364 E5c kernel cycle component: a fixed-capacity carry of the stateful events a retiring cycle would drop.
-// Inline storage, no allocation, no lock; wiring into `KernelCycle.retire()` is a later slice.
+// Inline storage, no allocation, no lock; `KernelCycle.retire()` fills it (KCW1); re-admission is a later slice.
 // Reference model; not RT-certified.
 
 /// Up to `capacity` stateful events (`control`, `program`, `rampTo`) recorded by a retiring cycle, in recorded order,
