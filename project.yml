@@ -312,6 +312,7 @@ targets:
       - path: FluxKlangTests/RecordingTakeTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeTests+Recovery.swift
       - path: FluxKlangTests/RecordingTakeTests+BackwardJumps.swift
+      - path: FluxKlangTests/RecordingTakeV1GateTests.swift
       - path: FluxKlangTests/DraftHistoryTests.swift
       - path: FluxKlangTests/DraftHistoryTests+Undo.swift
       - path: FluxKlangTests/SpatialEditingTests.swift
