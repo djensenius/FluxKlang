@@ -31,7 +31,7 @@ struct ControlLocalTriggerResult: Hashable, Sendable {
 /// not used (owner question b).
 enum ControlLocalTriggerDispatch {
     /// The most bindings one call evaluates.
-    static let maximumBindings = 256
+    static let maximumBindings = ControlBindingLimit.maximumBindings
 
     /// Checks, first failure wins and refuses the whole call before any detector call: (1) no Learn session is
     /// listening or awaiting review, (2) the update names a control source (the intake admits what it admits: notes

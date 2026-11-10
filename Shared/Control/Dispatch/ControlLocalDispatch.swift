@@ -115,7 +115,7 @@ struct ControlLocalDispatchResult: Hashable, Sendable {
 /// nor the echo check and keeps no state.
 enum ControlLocalDispatch {
     /// The most bindings one call evaluates.
-    static let maximumBindings = 256
+    static let maximumBindings = ControlBindingLimit.maximumBindings
 
     /// Checks, first failure wins and refuses the whole call: (1) no Learn session is listening or awaiting
     /// review, (2) the update names a control source, (3) at most `maximumBindings` bindings, (4) no binding id

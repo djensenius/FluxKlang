@@ -188,25 +188,54 @@ struct ControlLocalDispatchTests {
         #expect(admission.refusals == [.duplicateBinding(twin)])
     }
 
-    @Test func admitAcceptsTwoHundredFiftySixMatchingBindingsAndRefusesTwoHundredFiftySeven() throws {
-        let full = try Fx.bulk(ControlLocalDispatch.maximumBindings)
+    @Test func admitAcceptsTheSharedLimitOfMatchingBindingsAndRefusesOneMore() throws {
+        let limit = ControlBindingLimit.maximumBindings
+        let full = try Fx.bulk(limit)
         let accepted = try Fx.admit(full)
-        #expect(accepted.candidates.count == 256)
+        #expect(accepted.candidates.count == limit)
         #expect(accepted.refusals.isEmpty)
-        let over = try Fx.bulk(ControlLocalDispatch.maximumBindings + 1)
+        let over = try Fx.bulk(limit + 1)
         let refused = try Fx.admit(over)
-        #expect(refused.refusals == [.tooManyBindings(257)])
+        #expect(refused.refusals == [.tooManyBindings(limit + 1)])
         #expect(refused.candidates.isEmpty)
     }
 
     @Test func admitCountsBindingsOfOtherSourcesTowardTheCap() throws {
-        let full = try Fx.bulk(256, source: Fx.pad71)
+        let limit = ControlBindingLimit.maximumBindings
+        let full = try Fx.bulk(limit, source: Fx.pad71)
         let accepted = try Fx.admit(full)
         #expect(accepted.candidates.isEmpty)
         #expect(accepted.refusals.isEmpty)
-        let over = try Fx.bulk(257, source: Fx.pad71)
+        let over = try Fx.bulk(limit + 1, source: Fx.pad71)
         let refused = try Fx.admit(over)
-        #expect(refused.refusals == [.tooManyBindings(257)])
+        #expect(refused.refusals == [.tooManyBindings(limit + 1)])
+    }
+
+    @Test func controlBindingLimitIsOneValueAcrossTheControlTypes() {
+        let golden = 4096
+        let limit = ControlBindingLimit.maximumBindings
+        #expect(limit == golden)
+        #expect(ControlLocalDispatch.maximumBindings == limit)
+        #expect(ControlLocalTriggerDispatch.maximumBindings == limit)
+        #expect(ControlPickupBook.maximumBindings == limit)
+        #expect(ControlSourceAvailability.maximumBindings == limit)
+        #expect(ControlBindingGroupFields.maximumBindings == limit)
+        #expect(ControlTriggerDetector.maximumBindings == limit)
+        #expect(LearnConflicts.maximumExistingBindings == limit)
+        #expect(ControlHostTruth.maximumValues == limit)
+        #expect(ControlPickupBook.maximumChangedTargets == golden)
+        let originGolden = 128
+        #expect(ControlSourceAvailability.maximumLiveOrigins == originGolden)
+    }
+
+    @Test func admitHearsARigAboveTwoHundredFiftySixBindingsThatThePickupBookHolds() throws {
+        let rig = try Fx.bulk(257)
+        var book = ControlPickupBook()
+        for binding in rig { try book.add(binding) }
+        #expect(book.count == 257)
+        let admission = try Fx.admit(rig, pickup: book.states)
+        #expect(admission.candidates.count == 257)
+        #expect(admission.refusals.isEmpty)
     }
 
     @Test func admitWithNoBindingsHearsNothingAndRefusesNothing() throws {
@@ -250,16 +279,18 @@ struct ControlLocalDispatchTests {
     }
 
     @Test func admitReportsTheUpdateBeforeTooManyBindings() throws {
-        let admission = try Fx.admit(Fx.bulk(257), update: Fx.noteOn)
+        let over = try Fx.bulk(ControlBindingLimit.maximumBindings + 1)
+        let admission = try Fx.admit(over, update: Fx.noteOn)
         #expect(admission.refusals == [.intake(.notControlInput)])
     }
 
     @Test func admitReportsTooManyBindingsBeforeARepeatedId() throws {
-        var bindings = try Fx.bulk(256)
+        let limit = ControlBindingLimit.maximumBindings
+        var bindings = try Fx.bulk(limit)
         bindings.append(try Fx.binding(BindingID("bnd.n0")))
-        #expect(bindings.count == 257)
+        #expect(bindings.count == limit + 1)
         let admission = try Fx.admit(bindings)
-        #expect(admission.refusals == [.tooManyBindings(257)])
+        #expect(admission.refusals == [.tooManyBindings(limit + 1)])
     }
 
     // MARK: Per binding

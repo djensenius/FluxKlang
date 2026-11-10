@@ -17,7 +17,7 @@ enum LearnConflictResolution: Hashable, Sendable {
 }
 
 enum LearnConflicts {
-    static let maximumExistingBindings = 4096
+    static let maximumExistingBindings = ControlBindingLimit.maximumBindings
 
     /// Every existing binding on the same source or target, sorted by binding ID. L1 policy: any
     /// binding already on the target conflicts, even from another source, so the caller must refuse
