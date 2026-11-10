@@ -463,6 +463,9 @@ extension RealtimeHandoffTests {
             let replacement = try #require(replaced.get(0))
             let inherited = replacement.inheritedRetirementLoss
             #expect(inherited.programs == 1 && inherited.stateful == 1 && inherited.receiverStateMayBeStale)
+            let inheritedCarry = replacement.inheritedRetirementCarry
+            #expect(inheritedCarry.count == 1 && inheritedCarry.droppedForCapacity == 0)
+            #expect(inheritedCarry.event(at: 0) == cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)))
             #expect(replacement.run(blockStart: 1_064, frames: 64) { _, _ in }.status == .ok)
             #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
             var emitted = 0
