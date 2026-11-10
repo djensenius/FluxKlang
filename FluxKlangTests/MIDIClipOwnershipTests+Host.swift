@@ -261,6 +261,58 @@ extension MIDIClipOwnershipTests {
     }
 
     @Test
+    func aRenderOfSixtyFourClipsKeepsListOrderAndAdvancesEveryCursor() throws {
+        var host = try Self.fullHost()
+        let inputs = Array(host.boundInputs.reversed())
+        let started = try Self.together(&host, inputs, to: 6_000)
+        #expect(started.routedEventCount == 64 && started.refusals.isEmpty)
+        #expect(host.ledger.notes.map(\.input) == inputs)
+        for input in inputs { #expect(try host.cursor(of: input) == 6_000) }
+        let finished = try Self.together(&host, inputs, from: 6_000, to: 30_000)
+        #expect(finished.routedEventCount == 64 && finished.refusals.isEmpty)
+        #expect(finished.outputs == [MIDIRoutedOutput(route: Self.route1, message: Self.off(60))])
+        #expect(host.ledger.notes.isEmpty)
+        for input in inputs { #expect(try host.cursor(of: input) == 30_000) }
+    }
+
+    @Test
+    func anOversizedRenderRefusesBeforeRepeatedOrUnboundInputsWithoutChangingAnActiveHost() throws {
+        var host = try Self.host(Self.idle())
+        try Self.play(Self.on(72), input: Self.otherID, in: &host)
+        _ = try Self.render(&host, to: 6_000)
+        let before = host
+        let repeated = Array(repeating: Self.clipID, count: MIDIClipHost.maximumClips)
+        #expect(Self.refusal { try Self.together(&host, repeated, from: 6_000, to: 12_000) }
+            == .inputListedTwice(Self.clipID))
+        for inputs in [repeated + [Self.clipID], [Self.thirdID] + repeated, repeated + [Self.thirdID]] {
+            let refusal = try #require(Self.refusal {
+                try Self.together(&host, inputs, from: 6_000, to: 12_000)
+            })
+            #expect(refusal != .inputListedTwice(Self.clipID))
+            #expect(refusal != .inputNotBound(Self.thirdID))
+            #expect(refusal == .inputListTooLarge(count: inputs.count, limit: MIDIClipHost.maximumClips))
+            #expect(host == before)
+        }
+    }
+
+    @Test
+    func anOversizedRenderRefusesBeforeResolvingDistinctInputsEvenOnAnEmptyHost() throws {
+        var host = MIDIClipHost()
+        let before = host
+        let inputs = (0...MIDIClipHost.maximumClips).map { MIDIInputID(UInt32(100 + $0)) }
+        let first = try #require(inputs.first)
+        #expect(Self.refusal { try Self.together(&host, Array(inputs.dropLast()), to: 6_000) }
+            == .inputNotBound(first))
+        for order in [inputs, Array(inputs.reversed())] {
+            let unbound = try #require(order.first)
+            let refusal = try #require(Self.refusal { try Self.together(&host, order, to: 6_000) })
+            #expect(refusal != .inputNotBound(unbound))
+            #expect(refusal == .inputListTooLarge(count: order.count, limit: MIDIClipHost.maximumClips))
+            #expect(host == before)
+        }
+    }
+
+    @Test
     func aRepeatedInputIsRefusedBeforeAnUnboundOneAndTheFirstRepeatedInListOrderIsNamed() throws {
         var host = try Self.pairHost([Self.note(0, Self.quarter)], [Self.note(0, Self.quarter, pitch: 62)])
         let before = host
