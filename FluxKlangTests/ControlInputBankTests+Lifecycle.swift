@@ -21,6 +21,26 @@ extension ControlInputBankTests.Fx {
             try ControlInputBankLink(input: MIDIInputID(UInt32(index)), origin: origin("ib-link-\(index)"))
         }
     }
+
+    /// A jump fader `bnd.a`, a momentary trigger `bnd.t` on cc80, a latch `bnd.l` on cc82 and a toggle `bnd.g` on the
+    /// other input's cc81.
+    static func clearBank() throws -> ControlInputBank {
+        try ControlInputBank(
+            links: links(), faders: [fader("bnd.a")],
+            triggers: [trigger("bnd.t"), trigger("bnd.l", source: pad82, mode: .latch),
+                       trigger("bnd.g", source: slider81, mode: .toggle)]
+        )
+    }
+
+    static func clearRefusal(_ bank: inout ControlInputBank, _ id: String) throws -> ControlInputBankRefusal? {
+        let binding = try BindingID(id)
+        do throws(ControlInputBankRefusal) {
+            _ = try bank.clear(binding)
+            return nil
+        } catch {
+            return error
+        }
+    }
 }
 
 extension ControlInputBankTests {
@@ -175,10 +195,10 @@ extension ControlInputBankTests {
         #expect(spare.lostInputs == [Fx.spareInput])
         #expect(spare.pickup == before.pickup)
 
+        let beforeUnknown = spare
         let unknown = Fx.lostRefusal(&spare, Fx.nineInput)
-        let afterSpare = spare
         #expect(unknown == .unknownInput(Fx.nineInput))
-        #expect(spare == afterSpare)
+        #expect(spare == beforeUnknown)
     }
 
     @Test
@@ -249,5 +269,96 @@ extension ControlInputBankTests {
         let same = try Fx.trigger("bnd.t")
         let attachBeforeDetector = Fx.buildRefusal(links: links, triggers: [badTrigger, same, same])
         #expect(attachBeforeDetector == .originNotLinked(badTrigger.id, ghost))
+    }
+
+    @Test
+    func controlInputBankClearSwitchesALatchOffOnceAndLeavesTheBankEqualWhenAlreadyOff() throws {
+        var bank = try Fx.clearBank()
+        let press = try Fx.hear(&bank, 82)
+        let switchedOn = try #require(press.triggers.commands.first)
+        #expect(switchedOn.binding.rawValue == "bnd.l")
+        #expect(switchedOn.action == .switchedOn)
+        #expect(switchedOn.sequence == 1)
+
+        let off = try #require(try bank.clear(BindingID("bnd.l")))
+        #expect(off.binding.rawValue == "bnd.l")
+        #expect(off.target == Fx.fire)
+        #expect(off.source == Fx.pad82)
+        #expect(off.action == .switchedOff)
+        #expect(off.cause == .clear)
+        #expect(off.sequence == 2)
+        #expect(bank.detector.lastSequence == 2)
+
+        let snapshot = bank
+        let again = try bank.clear(BindingID("bnd.l"))
+        #expect(again == nil)
+        #expect(bank == snapshot)
+        #expect(bank.detector.lastSequence == 2)
+    }
+
+    @Test
+    func controlInputBankClearRefusesMomentaryUnknownAndFaderIDsAsTriggerRefusals() throws {
+        var bank = try Fx.clearBank()
+        _ = try Fx.hear(&bank, 82)
+        let cases: [(String, ControlTriggerRefusal)] = try [
+            ("bnd.t", .notClearable(.momentary)),
+            ("bnd.zz", .unknownBinding(BindingID("bnd.zz"))),
+            ("bnd.a", .unknownBinding(BindingID("bnd.a")))
+        ]
+        for (id, detail) in cases {
+            let snapshot = bank
+            let refusal = try Fx.clearRefusal(&bank, id)
+            #expect(refusal == .trigger(detail))
+            #expect(bank == snapshot)
+        }
+    }
+
+    @Test
+    func controlInputBankClearStillSwitchesALatchOffAfterItsOriginIsLost() throws {
+        var bank = try Fx.clearBank()
+        _ = try Fx.hear(&bank, 82)
+        let loss = try bank.inputLost(Fx.padInput)
+        #expect(loss.releases.isEmpty)
+        #expect(bank.detector.lastSequence == 1)
+        #expect(bank.lostInputs == [Fx.padInput])
+
+        let off = try #require(try bank.clear(BindingID("bnd.l")))
+        #expect(off.action == .switchedOff)
+        #expect(off.cause == .clear)
+        #expect(off.sequence == 2)
+        #expect(bank.lostInputs == [Fx.padInput])
+    }
+
+    @Test
+    func controlInputBankClearKeepsTheHeldFlagSoThePressAfterItNeedsARelease() throws {
+        var bank = try Fx.clearBank()
+        _ = try Fx.hear(&bank, 82)
+        _ = try bank.clear(BindingID("bnd.l"))
+        let stillHeld = try Fx.hear(&bank, 82)
+        #expect(stillHeld.triggers.commands.isEmpty)
+        let released = try Fx.hear(&bank, 82, 0)
+        #expect(released.triggers.commands.isEmpty)
+        let pressed = try Fx.hear(&bank, 82)
+        let command = try #require(pressed.triggers.commands.first)
+        #expect(command.action == .switchedOn)
+        #expect(command.sequence == 3)
+    }
+
+    @Test
+    func controlInputBankClearSwitchesAToggleOffAndTheNextPressSwitchesItOn() throws {
+        var bank = try Fx.clearBank()
+        let press = try Fx.hear(&bank, 81, origin: "ib-fader")
+        let switchedOn = try #require(press.triggers.commands.first)
+        #expect(switchedOn.action == .switchedOn)
+        let off = try #require(try bank.clear(BindingID("bnd.g")))
+        #expect(off.action == .switchedOff)
+        #expect(off.cause == .clear)
+        #expect(off.source == Fx.slider81)
+        #expect(off.sequence == 2)
+        _ = try Fx.hear(&bank, 81, 0, origin: "ib-fader")
+        let again = try Fx.hear(&bank, 81, origin: "ib-fader")
+        let command = try #require(again.triggers.commands.first)
+        #expect(command.action == .switchedOn)
+        #expect(command.sequence == 3)
     }
 }

@@ -6,7 +6,7 @@
 //  bindings (#87, CPR1). `receive` runs the merged dispatchers in a pinned order; `inputLost` and `inputSeen` are the
 //  only join to a MIDI input, and the host makes those calls itself. Nothing calls this yet. It reads no port,
 //  registry, session, notice or time source, sends nothing and writes no parameter: proposals and commands are
-//  returned, never submitted.
+//  returned, never submitted. `clear` is the host's explicit switch-off for toggles and latches.
 //
 
 /// What one `receive` produced. The pickup updates in `faders` are already stored in the bank's book.
@@ -161,6 +161,15 @@ struct ControlInputBank: Hashable, Sendable {
         var seen: [BindingID] = []
         for source in slots[place].sources { seen += pickup.sourceSeen(source) }
         return Self.sorted(seen)
+    }
+
+    /// The host's explicit switch-off for a toggle or latch. Input never switches a latch off, and `inputLost` keeps
+    /// toggle and latch outputs. Forwards to `ControlTriggerDetector.clear`: a `switchedOff` command (cause `.clear`)
+    /// when the output is on, `nil` when it is already off. A lost origin does not block it, and no slot, link or book
+    /// is read. A refusal (`.trigger` with the detector's payload: unknown id, momentary binding, exhausted sequence)
+    /// leaves the bank equal.
+    mutating func clear(_ id: BindingID) throws(ControlInputBankRefusal) -> ControlTriggerCommand? {
+        do throws(ControlTriggerRefusal) { return try detector.clear(id) } catch { throw .trigger(error) }
     }
 
     private func slotIndex(of input: MIDIInputID) throws(ControlInputBankRefusal) -> Int {
