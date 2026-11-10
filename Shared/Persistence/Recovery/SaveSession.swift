@@ -95,7 +95,9 @@ enum SaveSessionState: Equatable, Sendable {
 /// The caller must serialize writes and may report `saveFailed` or start a retry only
 /// after that attempt can no longer land. Dropping older unresolved attempts after a
 /// current completion relies on that obligation; later landing of an older write is
-/// outside the reducer's knowledge.
+/// outside the reducer's knowledge. `saveAbandoned` states that obligation for all unresolved
+/// attempts at once; the caller issues it, nothing here does, and it must re-deliver any external
+/// change it saw while the save was failed.
 struct SaveSession: Equatable, Sendable {
     static let maximumRetainedCopies = 8
     static let maximumUnresolvedAttempts = 8
@@ -148,6 +150,8 @@ struct SaveSession: Equatable, Sendable {
             return try complete(attempt, version: version, interruptionConfirmation: true)
         case .reload(let version):
             return try reload(version)
+        case .saveAbandoned(let attempt):
+            return try abandon(attempt)
         }
     }
 
@@ -230,6 +234,22 @@ struct SaveSession: Equatable, Sendable {
             throw .noPendingSave
         }
     }
+
+    private mutating func abandon(_ attempt: SaveAttemptID) throws(SaveSessionRefusal) -> [SaveEffect] {
+        switch state {
+        case .failed(let base, let local, let current, _) where current == attempt:
+            state = .dirty(base: base, local: local)
+            unresolvedAttempts.removeAll()
+            return []
+        case .failed:
+            throw .staleCompletion
+        case .saving:
+            throw .savePending
+        case .clean, .dirty, .conflicted:
+            throw .noPendingSave
+        }
+    }
+
     private mutating func complete(
         _ attempt: SaveAttemptID,
         version: SaveContentVersion,

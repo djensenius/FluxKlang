@@ -38,4 +38,7 @@ enum SaveSessionEvent: Equatable, Sendable {
     case conflictResolved(choice: SaveConflictChoice)
     case saveConfirmedAfterInterruption(attempt: SaveAttemptID, version: SaveContentVersion)
     case reload(version: SaveContentVersion)
+    /// The caller's statement that no unresolved attempt can still land; frees a failed save.
+    /// The caller must re-deliver any external change it saw while the save was failed.
+    case saveAbandoned(attempt: SaveAttemptID)
 }
