@@ -36,7 +36,8 @@ extension MIDICIMessage {
     ///     because step 2 runs first);
     ///  4. fewer than 5 bytes: `truncated(5)`;
     ///  5. sub-id 2 (byte 3) not 0x70, 0x71, 0x7D, 0x7E or 0x7F: `unknownSubID` (this includes valid MIDI-CI
-    ///     sub-ids that this slice does not decode, such as 0x72, 0x73 and the profile and property exchange);
+    ///     sub-ids that this type does not decode, such as 0x72, 0x73 and the property exchange; Profile Inquiry
+    ///     0x20 and its Reply 0x21 are decoded by `MIDICIProfileMessage.decode(payload:limits:)` instead);
     ///  6. format (byte 4) not 1 or 2: `unsupportedFormat`; an ACK in CI 1.1 is `unsupportedFormat(1)` too, because
     ///     no source reviewed defines it;
     ///  7. fewer than 13 bytes: `truncated(13)`;
@@ -74,7 +75,8 @@ extension MIDICIMessage {
     }
 
     /// Unreachable by inspection (the decoder has already refused every byte of 0x80 or more); no test reaches it.
-    private static func wrapDevice(_ byte: UInt8) throws(MIDICIRefusal) -> SysExDeviceID {
+    /// Shared with `MIDICIProfileMessage.decode`.
+    static func wrapDevice(_ byte: UInt8) throws(MIDICIRefusal) -> SysExDeviceID {
         do {
             return try SysExDeviceID(byte)
         } catch {
@@ -82,8 +84,9 @@ extension MIDICIMessage {
         }
     }
 
-    /// Size, notCI and 7-bit checks that need only the first bytes. Afterwards `payload.count >= 5`.
-    private static func checkEnvelope(_ payload: [UInt8], limits: MIDICILimits) throws(MIDICIRefusal) {
+    /// Size, notCI and 7-bit checks that need only the first bytes (steps 1 to 4). Afterwards `payload.count >= 5`.
+    /// Shared with `MIDICIProfileMessage.decode`.
+    static func checkEnvelope(_ payload: [UInt8], limits: MIDICILimits) throws(MIDICIRefusal) {
         guard payload.count <= limits.maximumPayloadBytes else { throw .payloadTooLarge(payload.count) }
         guard let first = payload.first else { throw .truncated(need: 1, have: 0) }
         guard first == MIDICILayout.universalNonRealTime else { throw .notCI }

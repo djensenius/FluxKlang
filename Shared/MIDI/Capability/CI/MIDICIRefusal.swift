@@ -59,6 +59,10 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// A NAK carries a status report in CI 1.2 only (the CI 1.1 NAK is the 13-byte header).
     case statusReportNotAllowed
     case statusReportRequired
+    /// A Reply to Profile Inquiry list (enabled or disabled) declares or holds `count` profiles, more than `limit`
+    /// (`MIDICIProfileMessage.maximumProfilesPerList`). On decode this is checked against the declared 14-bit
+    /// count before any profile id is read.
+    case tooManyProfiles(count: Int, limit: Int)
 }
 
 /// Caller-chosen bounds for decoding and encoding. Built only through `make`, so a value is always within the
