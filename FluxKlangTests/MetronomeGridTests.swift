@@ -9,7 +9,7 @@ import Testing
 struct MetronomeGridTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
-    static let live = MetronomeGenerations(sample: .initial, transport: .initial, musicalMap: .initial)
+    static let live = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: .initial)
     static let quarter = MusicalTime.ticksPerQuarter
 
     static func meter(_ numerator: Int, _ denominator: Int) throws -> MusicalMeter {
@@ -181,10 +181,11 @@ struct MetronomeGridTests {
         let grid = try Self.configuration()
         let clock = try Self.clock()
         let stale = [
-            (MetronomeGenerations(sample: second, transport: .initial, musicalMap: .initial),
+            (ClockGenerationSnapshot(sample: second, transport: .initial, musicalMap: .initial),
              MetronomeRefusal.clock(.staleSampleGeneration)),
-            (MetronomeGenerations(sample: .initial, transport: second, musicalMap: .initial), .clock(.staleTransport)),
-            (MetronomeGenerations(sample: .initial, transport: .initial, musicalMap: second), .staleMusicalMap)
+            (ClockGenerationSnapshot(sample: .initial, transport: second, musicalMap: .initial),
+             .clock(.staleTransport)),
+            (ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: second), .staleMusicalMap)
         ]
         for (current, refusal) in stale {
             #expect(Self.refusal {

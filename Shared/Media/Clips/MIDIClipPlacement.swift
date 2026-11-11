@@ -43,8 +43,8 @@ struct MIDIClipEvent: Equatable, Sendable {
     let message: MIDI1Semantic
 }
 
-/// The live generations a clock map must match before it is used. Mirrors `MetronomeGenerations` (#111) on
-/// purpose, so neither lane depends on the other; unifying both onto one neutral contract type is a follow-up.
+/// The live generations a clock map must match before it is used. Mirrors `ClockGenerationSnapshot`, which the
+/// metronome takes directly since #108 GU1b-1; replacing this mirror with it is a follow-up (GU1b-2).
 struct MIDIClipGenerations: Hashable, Sendable {
     let sample: Generation
     let transport: Generation

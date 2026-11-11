@@ -8,19 +8,12 @@
 //  `MusicalClockMap.frame(atTicks:)`. Nothing is rendered.
 //
 
-/// The live generations a clock map must match before it is used.
-struct MetronomeGenerations: Hashable, Sendable {
-    let sample: Generation
-    let transport: Generation
-    let musicalMap: Generation
-}
-
 enum MetronomeGrid {
     /// The most clicks one query returns; a fuller window is refused, never truncated.
     static let maximumClicks = 4096
 
     /// Refuses a clock map whose sample, transport or tempo map generation is not live.
-    static func validate(_ clock: MusicalClockMap, current: MetronomeGenerations) throws(MetronomeRefusal) {
+    static func validate(_ clock: MusicalClockMap, current: ClockGenerationSnapshot) throws(MetronomeRefusal) {
         guard clock.anchor.sample.generation == current.sample else { throw .clock(.staleSampleGeneration) }
         guard clock.musical.transport == current.transport else { throw .clock(.staleTransport) }
         guard clock.map.revision == current.musicalMap else { throw .staleMusicalMap }
@@ -34,7 +27,7 @@ enum MetronomeGrid {
     /// Fail-closed: if any tick or frame visited before the end of the window is found does not fit
     /// in `Int64`, the whole window is refused with `.clock(.overflow)` and no clicks are returned.
     static func clicks(from start: Int64, to end: Int64, configuration: MetronomeConfiguration,
-                       clock: MusicalClockMap, current: MetronomeGenerations) throws(MetronomeRefusal)
+                       clock: MusicalClockMap, current: ClockGenerationSnapshot) throws(MetronomeRefusal)
         -> [MetronomeClick] {
         guard start <= end else { throw .invalidWindow(start: start, end: end) }
         try validate(clock, current: current)
