@@ -6,8 +6,10 @@
 /// (a carried one first on a tie), as one cycle would have applied them, so a carried event stamped after an own event
 /// for the same target is still delivered, and an own event supersedes only carried ones at or before its frame. At
 /// its own `retire()` a replacement records its own pending events first, then each still pending carried event no
-/// pending own event covers (same target, own frame at or after it); covered ones are superseded, not lost. The slots
-/// hold at most `carryReadmissionCapacity` (`min(256, blockCapacity)`) events; the rest of the carry is cut (lost).
+/// pending own event covers (same target, own frame at or after it); covered ones are superseded, not lost. RPN/NRPN
+/// data-entry controls and Reset All Controllers (`KernelEventPayload.isCoalescible`) are never coalesced, superseded
+/// or covered. The slots hold at most `carryReadmissionCapacity` (`min(256, blockCapacity)`) events; the rest of the
+/// carry is cut (lost).
 extension KernelCycle {
     /// Any thread: `inheritedRetirementLoss` less the carried stateful events this cycle has since delivered, or found
     /// replaced by its own later state (each with the carried events of its key it superseded). Its

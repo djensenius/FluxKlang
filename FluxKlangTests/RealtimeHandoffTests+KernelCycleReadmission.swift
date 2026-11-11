@@ -210,9 +210,10 @@ extension RealtimeHandoffTests {
         }
 
         /// Overflow at the replacement's `retire()`: 200 own pending `control`s and 256 pending carried ones exceed
-        /// the 256-event carry. Own (newer) events are recorded first; the 10 carried ones an own event covers are
-        /// superseded; of the other 246, 56 fit and 190 are dropped at record. All 446 are counted in the loss.
-        /// Kills: carried events crowding out own ones; a covered slot counted as loss; an unrecorded event uncounted.
+        /// the 256-event carry. Own (newer) events are recorded first; 9 of the 10 carried ones an own event targets
+        /// are covered and superseded (CC6, data entry, is never covered); of the other 247, 56 fit and 191 are
+        /// dropped at record. All 447 are counted in the loss. Kills: carried events crowding out own ones; a covered
+        /// slot counted as loss; an unrecorded event uncounted.
         @Test func readmissionRetireOverflowRecordsOwnFirstAndCountsTheRest() throws {
             let rig = try CycleRig(laneCapacity: 320, blockCapacity: 300, perLaneQuota: 300)
             let token = try #require(rig.events.claimProducer())
@@ -229,16 +230,16 @@ extension RealtimeHandoffTests {
                 #expect(rig.push(event, token) == .ok)
             }
             #expect(block(next, 64).0.pending == 200)
-            #expect(next.retire().controls == 446)
+            #expect(next.retire().controls == 447)
             let report = next.carryReadmissionReport
-            #expect(report.supersededByReplacement == 10 && report.recarried == 246 && report.pendingCarriedEvents == 0)
+            #expect(report.supersededByReplacement == 9 && report.recarried == 247 && report.pendingCarriedEvents == 0)
             let third = try replacement(of: rig, blockCapacity: 300, perLaneQuota: 300)
             let inherited = third.inheritedRetirementCarry
-            #expect(inherited.count == 256 && inherited.droppedForCapacity == 190)
+            #expect(inherited.count == 256 && inherited.droppedForCapacity == 191)
             let events = inherited.events
             try #require(events.count == 256)
-            #expect(events[0].frame == 20_000 && events[199].frame == 20_199 && events[200].frame == 10_010)
-            #expect(third.inheritedRetirementLoss.controls == 446)
+            #expect(events[0].frame == 20_000 && events[199].frame == 20_199 && events[200].frame == 10_006)
+            #expect(third.inheritedRetirementLoss.controls == 447)
         }
 
         /// A `.freshFanIn` cycle inherits nothing and re-admits nothing.

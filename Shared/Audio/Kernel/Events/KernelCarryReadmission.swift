@@ -56,8 +56,10 @@ struct KernelCarryResolution: Sendable, Equatable {
 /// select still precedes an own `program` of the same frame and channel. Frames are never re-timed here (not even
 /// negative ones): only the dispatch frame is clamped, per block, by the deadline policy, as for own events. Per key
 /// ((scope, channel, controller) for a control, (scope, channel) for a program, (scope, parameter) for a ramp) the
-/// last event in delivery order survives; a surviving ramp whose completion overflows `Int64` refuses the whole plan
-/// (`.frameOverflow`, checked before the cut); the earliest `capacity = min(KernelRetirementCarry.capacity,
+/// last event in delivery order survives, except that a data-entry control (6, 38, 96–101, and 121, which deselects
+/// the parameter: `KernelEventPayload.isCoalescible` is `false`) never coalesces, since its effect depends on order and
+/// count: each keeps its own slot, place and weight. A surviving ramp whose completion overflows `Int64` refuses the
+/// whole plan (`.frameOverflow`, checked before the cut); the earliest `capacity = min(KernelRetirementCarry.capacity,
 /// blockCapacity)` survivors fill preallocated slots (so a block never re-admits more events than its block buffer
 /// holds) and the rest are `cut`. Each slot keeps its weight: itself plus the carried events of its key it superseded.
 ///
@@ -71,7 +73,8 @@ struct KernelCarryResolution: Sendable, Equatable {
 /// scopes) whose frame is at or before its own; a carried event stamped later is later state and is still delivered.
 /// Within `decide` the merge already delivers every such slot first, so `supersede(by:)` is a guard there; it matters
 /// at `retire(coveredBy:_:)`, where a pending slot covered by a pending own event (same target, own frame at or after
-/// the slot's) is superseded instead of carried again, and the rest are carried after the own events.
+/// the slot's) is superseded instead of carried again, and the rest are carried after the own events. A data-entry
+/// control slot has no target here (`sameTarget`), so it is never superseded or covered: it is delivered or carried.
 ///
 /// Accounting: a delivered slot, or one superseded by the replacement, resolves its weight; `resolved()` feeds
 /// `KernelCycle.unresolvedRetirementLoss`. A refused slot, a re-carried one and everything the plan dropped stay lost.
@@ -263,7 +266,8 @@ final class KernelCarryReadmission: @unchecked Sendable {
         let ownKinds = pendingTotal.load(ordering: .relaxed) > 0 ? Self.statefulKinds(in: block) : 0
         while let event = next {
             let index = head.pointee
-            if let kind = Self.kind(event.payload), ownKinds & (1 << kind) != 0, Self.covered(event, by: block) {
+            if event.payload.isCoalescible, let kind = Self.kind(event.payload), ownKinds & (1 << kind) != 0,
+               Self.covered(event, by: block) {
                 discard(index)
                 continue
             }
@@ -332,8 +336,10 @@ final class KernelCarryReadmission: @unchecked Sendable {
     }
 
     /// The re-admission target: (scope, channel, controller), (scope, channel) or the ramp parameter of any scope.
+    /// A carried data-entry control (`isCoalescible` is `false`) has none, so no own event supersedes or covers it.
     private static func sameTarget(_ carried: KernelEvent, _ own: KernelEvent) -> Bool {
-        switch (carried.payload, own.payload) {
+        guard carried.payload.isCoalescible else { return false }
+        return switch (carried.payload, own.payload) {
         case let (.control(channel, controller, _), .control(ownChannel, ownController, _)):
             carried.scope == own.scope && channel == ownChannel && controller == ownController
         case let (.program(channel, _, _), .program(ownChannel, _, _)):
@@ -345,9 +351,11 @@ final class KernelCarryReadmission: @unchecked Sendable {
         }
     }
 
-    /// The supersede key within the carry: (scope, channel, controller), (scope, channel) or (scope, parameter).
+    /// The supersede key within the carry: (scope, channel, controller), (scope, channel) or (scope, parameter); `nil`
+    /// when `isCoalescible` is `false` (a data-entry control keeps its own slot and weight).
     private static func planKey(_ event: KernelEvent) -> PlanKey? {
-        switch event.payload {
+        guard event.payload.isCoalescible else { return nil }
+        return switch event.payload {
         case let .control(channel, controller, _): .control(event.scope, channel, controller)
         case let .program(channel, _, _): .program(event.scope, channel)
         case let .rampTo(parameter, _, _): .ramp(event.scope, parameter)

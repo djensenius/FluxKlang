@@ -8,7 +8,8 @@ import Testing
 @testable import FluxKlang
 #endif
 
-// #364 E5c, slice KCR1: render-side bounds (allocations, locks) and a Thread Sanitizer stress of the re-admission.
+// #364 E5c, slice KCR1: render-side bounds (allocations, locks) and a Thread Sanitizer stress of the re-admission,
+// and the RPN/NRPN data-entry controls the re-admission never coalesces (`KernelEventPayload.isCoalescible`).
 
 private let programFive = KernelEventPayload.program(channel: 0, program: 5, bank: 0)
 
@@ -39,7 +40,192 @@ private func at(_ frame: Int64, _ payload: KernelEventPayload) -> CycleEmission 
     CycleEmission(event: cycleEvent(frame, payload), frame: frame)
 }
 
+/// Every emission of one block of `cycle` over `[start, start + frames)`.
+private func block(_ cycle: KernelCycle, _ start: Int64, frames: Int64 = 64) -> [CycleEmission] {
+    var emitted: [CycleEmission] = []
+    _ = cycle.run(blockStart: start, frames: frames) { emitted.append(CycleEmission(event: $0, frame: $1)) }
+    return emitted
+}
+
 extension RealtimeHandoffTests {
+    /// Data-entry controls (6, 38, 96–101, and 121, which deselects the parameter), whose effect depends on order and
+    /// count, are never coalesced by the re-admission: each keeps its own slot, order and weight, and no own event
+    /// supersedes or covers one.
+    struct CycleCarryReadmissionCommands {
+        /// The predicate: the RPN/NRPN data-entry family and Reset All Controllers are not coalescible; other controls
+        /// (the other channel-mode messages included), programs and ramps are; notes and clock pulses never are.
+        /// Kills: a family member coalesced; CC7 kept.
+        @Test func readmissionCoalescesAllButDataEntryControls() {
+            for controller: UInt8 in [6, 38, 96, 97, 98, 99, 100, 101, 121] {
+                #expect(!control(controller).isCoalescible, "CC\(controller)")
+            }
+            for controller: UInt8 in [0, 5, 7, 37, 39, 64, 95, 102, 120, 122, 123, 127] {
+                #expect(control(controller).isCoalescible, "CC\(controller)")
+            }
+            #expect(programFive.isCoalescible && ramp(1, 1, 64).isCoalescible)
+            let others: [KernelEventPayload] = [.noteOn(channel: 0, note: 60, velocity: 100),
+                                                .noteOff(channel: 0, note: 60), .clockPulse]
+            #expect(others.allSatisfy { !$0.isCoalescible })
+        }
+
+        /// Two carried Data Increments (CC96) on one key, at 100 and 200, are both re-admitted, in order, each with
+        /// its own weight: one stays unresolved until the second is delivered. Kills: last-writer coalescing (one
+        /// increment that resolves both).
+        @Test func readmissionKeepsRepeatedDataIncrementsWithTheirOwnWeights() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(100, control(96, 1)), (200, control(96, 2))])
+            let next = try replacement(of: rig)
+            #expect(next.carryReadmissionReport.planned == 2 && next.carryReadmissionReport.superseded == 0)
+            #expect(block(next, 64) == [at(100, control(96, 1))])
+            #expect(next.unresolvedRetirementLoss.controls == 1)
+            #expect(block(next, 192) == [at(200, control(96, 2))])
+            #expect(next.carryReadmissionReport.delivered == 2)
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// At the replacement's `retire()`, a pending own CC96 at 5,010 does not cover the carried CC96 at 5,000:
+        /// both are carried (own first) and the third cycle emits both, in frame order. Kills: a carried command
+        /// discarded as covered.
+        @Test func readmissionRetireDoesNotCoverACarriedDataIncrement() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(5_000, control(96, 1))])
+            let next = try replacement(of: rig)
+            #expect(rig.push(cycleEvent(5_010, control(96, 2)), token) == .ok)
+            #expect(block(next, 64).isEmpty)
+            #expect(next.retire().controls == 2)
+            let report = next.carryReadmissionReport
+            #expect(report.supersededByReplacement == 0 && report.recarried == 1 && report.pendingCarriedEvents == 0)
+            let third = try replacement(of: rig)
+            let carry = third.inheritedRetirementCarry
+            #expect(carry.events == [cycleEvent(5_010, control(96, 2)), cycleEvent(5_000, control(96, 1))])
+            #expect(carry.ownCount == 1)
+            #expect(block(third, 4_992) == [at(5_000, control(96, 1)), at(5_010, control(96, 2))])
+            #expect(third.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// Across two hops: repeated Data Increments and Decrements (CC96, CC97, same-frame pairs included) the
+        /// replacement never reaches are all carried again, in order, and the third cycle emits all five in order.
+        /// Kills: commands coalesced at either hop; same-frame commands reordered.
+        @Test func readmissionKeepsRepeatedDataStepsAcrossTwoHops() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            let pending: [(Int64, KernelEventPayload)] = [(5_000, control(96, 1)), (5_000, control(96, 2)),
+                                                          (5_010, control(97, 3)), (5_010, control(97, 4)),
+                                                          (5_020, control(96, 5))]
+            retire(rig, token, pending: pending)
+            let next = try replacement(of: rig)
+            #expect(next.carryReadmissionReport.planned == 5 && next.carryReadmissionReport.superseded == 0)
+            #expect(block(next, 64).isEmpty)
+            #expect(next.retire().controls == 5 && next.carryReadmissionReport.recarried == 5)
+            let third = try replacement(of: rig)
+            #expect(third.inheritedRetirementCarry.events == pending.map { cycleEvent($0.0, $0.1) })
+            #expect(third.inheritedRetirementCarry.ownCount == 0)
+            #expect(third.carryReadmissionReport.planned == 5 && third.carryReadmissionReport.superseded == 0)
+            #expect(block(third, 4_992) == pending.map { at($0.0, $0.1) })
+            #expect(third.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// An RPN (101, 100) and an NRPN (99, 98) sequence, each selecting a parameter and writing it with Data Entry
+        /// MSB (6) and LSB (38) twice with different values, are replayed in full and in order. Kills: a parameter
+        /// number or data entry coalesced (the first write lost or applied to the wrong parameter).
+        @Test func readmissionReplaysParameterNumberSequencesInFull() throws {
+            for (msb, lsb) in [(UInt8(101), UInt8(100)), (99, 98)] {
+                let rig = try CycleRig(laneCapacity: 32)
+                let token = try #require(rig.events.claimProducer())
+                let values: [(UInt8, UInt32)] = [(msb, 0), (lsb, 0), (6, 2), (38, 1),
+                                                 (msb, 0), (lsb, 1), (6, 64), (38, 2)]
+                let pending = values.enumerated().map { index, value in
+                    (100 + Int64(index) * 10, control(value.0, value.1))
+                }
+                retire(rig, token, pending: pending)
+                let next = try replacement(of: rig)
+                let report = next.carryReadmissionReport
+                #expect(report.planned == 8 && report.superseded == 0, "CC\(msb)")
+                #expect(block(next, 64) + block(next, 128) == pending.map { at($0.0, $0.1) }, "CC\(msb)")
+                #expect(next.unresolvedRetirementLoss == KernelRetirementLoss(), "CC\(msb)")
+            }
+        }
+
+        /// Reset All Controllers (CC121) deselects the parameter (RP-015), so its place among data-entry commands
+        /// matters: an RPN select (101, 100) at 100 and 110, CC121 at 120, Data Entry at 130 (no parameter selected)
+        /// and CC121 at 140 are all re-admitted, in order. Kills: the first CC121 coalesced into the last, which would
+        /// let the Data Entry write RPN 0.
+        @Test func readmissionKeepsResetAllControllersInPlace() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            let pending: [(Int64, KernelEventPayload)] = [(100, control(101, 0)), (110, control(100, 0)),
+                                                          (120, control(121, 0)), (130, control(6, 5)),
+                                                          (140, control(121, 0))]
+            retire(rig, token, pending: pending)
+            let next = try replacement(of: rig)
+            #expect(next.carryReadmissionReport.planned == 5 && next.carryReadmissionReport.superseded == 0)
+            #expect(block(next, 64) + block(next, 128) == pending.map { at($0.0, $0.1) })
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// At the replacement's `retire()`, a pending own CC121 at 5,040 does not cover the carried CC121 at 5,020
+        /// between an RPN select and a Data Entry: the four carried events are carried again after the own one and the
+        /// third cycle emits all five in frame order. Kills: a carried reset discarded as covered.
+        @Test func readmissionRetireDoesNotCoverACarriedReset() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            let carried: [(Int64, KernelEventPayload)] = [(5_000, control(101, 0)), (5_010, control(100, 0)),
+                                                          (5_020, control(121, 0)), (5_030, control(6, 5))]
+            retire(rig, token, pending: carried)
+            let next = try replacement(of: rig)
+            let reset: (Int64, KernelEventPayload) = (5_040, control(121, 0))
+            #expect(rig.push(cycleEvent(reset.0, reset.1), token) == .ok)
+            #expect(block(next, 64).isEmpty)
+            #expect(next.retire().controls == 5)
+            let report = next.carryReadmissionReport
+            #expect(report.supersededByReplacement == 0 && report.recarried == 4)
+            let third = try replacement(of: rig)
+            #expect(third.inheritedRetirementCarry.events == ([reset] + carried).map { cycleEvent($0.0, $0.1) })
+            #expect(third.inheritedRetirementCarry.ownCount == 1)
+            #expect(block(third, 4_992) == (carried + [reset]).map { at($0.0, $0.1) })
+            #expect(third.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// A mixed sequence on one channel: carried CC7 at 100 and 120 coalesce into the survivor at 120 (weight 2),
+        /// while the CC96 at 110 between them keeps its own slot and place. Delivered in two blocks, the CC96 resolves
+        /// 1 of the 3 lost controls and the CC7 survivor the other 2. Kills: the first CC7 kept instead of the last;
+        /// a weight lost or double-counted.
+        @Test func readmissionCoalescesAroundADataIncrement() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(100, control(7, 1)), (110, control(96, 1)), (120, control(7, 2))])
+            let next = try replacement(of: rig)
+            #expect(next.carryReadmissionReport.planned == 2 && next.carryReadmissionReport.superseded == 1)
+            #expect(next.unresolvedRetirementLoss.controls == 3)
+            #expect(block(next, 64, frames: 50) == [at(110, control(96, 1))])
+            #expect(next.unresolvedRetirementLoss.controls == 2)
+            #expect(block(next, 114) == [at(120, control(7, 2))])
+            #expect(next.carryReadmissionReport.delivered == 2)
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// A coalescible control still coalesces as before: three carried CC7 writers re-admit as the last (weight
+        /// 3), which a pending own CC7 at the replacement's `retire()` covers, resolving all three. Kills: the
+        /// data-entry exception applied to every control.
+        @Test func readmissionStillCoalescesVolume() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(100, control(7, 1)), (110, control(7, 2)), (5_000, control(7, 3))])
+            let next = try replacement(of: rig)
+            #expect(next.carryReadmissionReport.planned == 1 && next.carryReadmissionReport.superseded == 2)
+            #expect(rig.push(cycleEvent(5_010, control(7, 4)), token) == .ok)
+            #expect(block(next, 64).isEmpty)
+            #expect(next.retire().controls == 1)
+            let report = next.carryReadmissionReport
+            #expect(report.supersededByReplacement == 1 && report.recarried == 0)
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
+            let third = try replacement(of: rig)
+            #expect(third.inheritedRetirementCarry.events == [cycleEvent(5_010, control(7, 4))])
+        }
+    }
+
     /// Render-side bounds of the re-admission: a machine count of heap allocations and a source scan for locks.
     struct CycleCarryReadmissionBounds {
         /// Issue #364 acceptance (b), allocation half: with libmalloc's `malloc_logger` hook counting this thread's
