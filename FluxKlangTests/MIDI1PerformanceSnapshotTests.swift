@@ -88,6 +88,9 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
     }
 }
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct MIDI1PerformanceSnapshotTests {
     typealias Fixture = MIDI1StateFixture
 

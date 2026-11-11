@@ -57,12 +57,14 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `WiringConnectionListTests`, `MIDIClockArbitrationTests`,
 `MIDIClockArbitrationSteadyRunTests`, `MIDIInternalClockTests`,
 `MTCFollowerTests`, `MetronomeGridTests`, `MIDIClipTimingTests`,
-`MIDIClipLoopTests`, `MIDIClipContinuityTests`, `MIDIClipContinuityTempoTests`
-and `SMFTempoImportTests` use the canonical suite trait; this is partial source
-adoption only. The iOS owners of those thirty-one macOS-guarded suites remain
-unadopted. Other owners' annotation obligations remain unsatisfied: inventory
-intentionally exits 0 with `enforcementSatisfied: false`, while default
-enforcement exits 1. Inventory success is not coverage or isolation.
+`MIDIClipLoopTests`, `MIDIClipContinuityTests`, `MIDIClipContinuityTempoTests`,
+`SMFTempoImportTests`, `MIDIProtocolTests`, `MIDIControlChangeDecodeTests`,
+`MIDI1ChannelStateTests`, `MIDI1ParameterStateTests` and
+`MIDI1PerformanceSnapshotTests` use the canonical suite trait; this is partial
+source adoption only. The iOS owners of those thirty-six macOS-guarded suites
+remain unadopted. Other owners' annotation obligations remain unsatisfied:
+inventory intentionally exits 0 with `enforcementSatisfied: false`, while
+default enforcement exits 1. Inventory success is not coverage or isolation.
 
 The trait observes cumulative suite-exit state with nonrecursive scope, not
 per-test evidence or exclusive attribution. Missing/invalid
@@ -483,6 +485,65 @@ operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
 issue recorded. These runs add no process-identity, argv or bootstrap evidence
 and do not cover the iOS owners; the remaining #60 gates above still apply and
 #60 remains open.
+
+## MIDI 1 parser, control change decode and channel state source adoption
+
+`MIDIProtocolTests`, `MIDIControlChangeDecodeTests`, `MIDI1ChannelStateTests`,
+`MIDI1ParameterStateTests` and `MIDI1PerformanceSnapshotTests` now use the
+canonical trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. None of the five had a `@Suite`, so each gains
+`@Suite(.productionAccessAudit)` in a macOS-only branch with no `#else`. The
+three `MIDIControlChangeDecodeTests+` extension files stay unannotated, as do
+the `MIDI1StateFixture` and `MIDI1SnapshotCorruption` helper enums, which are
+not suites. The suites feed hand-built byte arrays and `MIDI1Event` and
+`MIDI1Semantic` values to `MIDI1Parser`, `MIDIControlChange.decode` and
+`MIDI1PerformanceState`; their fixtures are immutable file-scope or static
+`let` values. The production closure is the ten `Shared/MIDI/Protocol/MIDI1`
+value sources plus `MIDIControlChange`, whose `decode` only drives
+`MIDI1Parser`. `MIDIControlChange` shares
+`Shared/Models/LaunchControlXLConfiguration.swift` with a bundle-loading
+`LaunchControlXLConfiguration.bundled()`, which these suites never call. None
+of the five touches the file system, bundles, wall clock, sleep, dispatch,
+defaults, global mutable state, MIDI hardware or audio.
+`MIDIInputSessionTests`, `MIDICapabilityNegotiationTests` and
+`ControlFeedbackMIDI1Tests` stay unadopted because they or their extension
+files read repository sources from disk through `#filePath` and
+`FileManager`. The UMP codec and translation suites were not reviewed for this
+batch and stay unadopted. `MIDITimecodeTests` and
+`MIDIClockArbitrationDropoutTests` still stay unadopted for the
+`file_length` reasons above. Only this change was run through the checker; the
+UARG8 tree was not re-run, and the comparison below uses its recorded totals
+(4,888 registrations, 328 satisfied rows, 6,896 diagnostics). The complete
+source inventory of this change retains all 4,888 registrations and has 368
+satisfied rows, 40 more than the UARG8 tree. The five suites' 40
+`FluxKlangMacTests` root rows (eight per suite) are now satisfied, which
+accounts for the whole increase. The iOS `FluxKlangTests` root rows for all
+five suites stay unsatisfied. Diagnostics fall by 80, from 6,896 to 6,816
+(16 removed per suite, as none had a `@Suite`; none added). Inventory
+still exits 0 and default enforcement still exits 1. The two trees were
+compared by totals only; the per-suite counts come from this change's output,
+not from a row-level diff.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 21 repository sources from this change. Nine are test sources: the
+five suites' root files, the three `MIDIControlChangeDecodeTests+` extension
+files and `ProductionAccessScope.swift`. The other 12 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: the ten `Shared/MIDI/Protocol/MIDI1` sources and
+`Shared/Models/LaunchControlXLConfiguration.swift`. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the five suites each
+passed 71 tests (437 case invocations) in five suites. Each run, under its own
+fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of `FluxKlangTests/MIDIProtocolTests`,
+`FluxKlangTests/MIDIControlChangeDecodeTests`,
+`FluxKlangTests/MIDI1ChannelStateTests`,
+`FluxKlangTests/MIDI1ParameterStateTests` and
+`FluxKlangTests/MIDI1PerformanceSnapshotTests`, carrying that run ID, with all
+14 operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no
+audit issue recorded. These runs add no process-identity, argv or bootstrap
+evidence and do not cover the iOS owners; the remaining #60 gates above still
+apply and #60 remains open.
 
 ## Headless fixtures
 
