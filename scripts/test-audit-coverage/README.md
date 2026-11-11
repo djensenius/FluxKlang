@@ -44,9 +44,10 @@ human-readable report; JSON is the default. Modes and exit codes are:
 Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
 manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `CloudKitHistoryIsolationTests`, `PerformanceProjectSessionTests`,
-`PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`
-use the canonical suite trait; this is partial source adoption only.
-The iOS `RoutingDSPTests` owner remains unadopted. Other owners'
+`PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`,
+`GraphCompilerTests` and `RoutingBoundaryTests` use the canonical suite trait;
+this is partial source adoption only. The iOS owners of those three macOS-guarded
+suites remain unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
 success is not coverage or isolation.
@@ -131,7 +132,7 @@ Source registration rows are not runtime receipt expectations; #60 remains open.
 The existing MIDI clip ownership and CloudKit history isolation roots now use
 the canonical `.productionAccessAudit` trait without changing their test bodies,
 guards or target memberships. The complete source-inventory comparison retains
-all 4,808 registrations and adds 24 satisfied owner rows (16 MIDI, eight history):
+all 4,808 registrations (at that time) and adds 24 satisfied owner rows (16 MIDI, eight history):
 40 satisfied rows instead of 16. All other owner obligations remain unchanged.
 The unchanged checker fixture suite passes all 311 checks; inventory remains
 non-enforcing and default enforcement still reports unsatisfied obligations.
@@ -163,6 +164,33 @@ thread usage was not observed.
 This is not a new supported execution workflow, earliest-bootstrap proof,
 exclusive per-test attribution, native host isolation or permission to access
 CloudKit. The remaining #60 gates still apply.
+
+## Graph compiler and routing boundary source adoption
+
+`GraphCompilerTests` and `RoutingBoundaryTests` now use the canonical trait
+under `#if os(macOS)`, matching `RoutingDSPTests`, without semantic test-body,
+target-membership or registration changes. To stay within `file_length`, five
+wrapped closures in `collectionAndMapPreflightPrecedesValidation` were reflowed
+(whitespace only). Against the unmodified base, the complete
+source inventory retains all 4,840 registrations and moves 16 `FluxKlangMacTests`
+owner rows (eight per suite) to satisfied: 88 satisfied rows instead of 72. The
+iOS `FluxKlangTests` rows for both suites stay unsatisfied and no other row
+changes. Diagnostics fall from 7,240 to 7,208 (16 removed per suite, none
+added). Inventory still exits 0 and default enforcement still exits 1.
+
+The RoutingDSP pure fixture's 151 repository source paths were byte-copied from
+this change into a fresh SwiftPM package (default build system), without the
+private witness or observer. The checker and fixture runs used the trait change
+before the whitespace-only reflow above. Debug and
+Release (`-c release -Xswiftc -enable-testing`) runs with the original filter each
+passed 39 tests (50 case invocations) in three suites. Each run, under its own
+fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of `FluxKlangTests/GraphCompilerTests`,
+`FluxKlangTests/RoutingBoundaryTests` and `FluxKlangTests/RoutingDSPTests`,
+carrying that run ID, with all 14 operation IDs reporting zero `apiEntered` and
+`factoryEvaluated` and no audit issue recorded. Without the witness, these runs
+add no process-identity, argv or bootstrap evidence; the limitations and
+remaining #60 gates above still apply.
 
 ## Headless fixtures
 

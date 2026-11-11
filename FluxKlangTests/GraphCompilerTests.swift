@@ -5,6 +5,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct GraphCompilerTests {
     private typealias Fixtures = AudioRoutingTestFixtures
     private typealias Mutation = (inout Fixtures.Documents) -> Void
@@ -447,22 +450,17 @@ extension GraphCompilerTests {
             { $0.graph.nodes = Array(repeating: $0.graph.nodes[0], count: ProjectGraphLimits.nodes + 1) },
             { $0.graph.edges = Array(repeating: $0.graph.edges[0], count: ProjectGraphLimits.edges + 1) },
             { $0.project.graphs = Array(
-                repeating: $0.project.graphs[0], count: ProjectGraphLimits.projectRecords + 1
-            ) },
+                repeating: $0.project.graphs[0], count: ProjectGraphLimits.projectRecords + 1) },
             { $0.project.roles = Array(repeating: $0.project.roles[0], count: ProjectGraphLimits.projectRecords + 1) },
             { $0.graph.nodes[0].ports = Array(
-                repeating: $0.graph.nodes[0].ports[0], count: ProjectGraphLimits.portsPerNode + 1
-            ) },
+                repeating: $0.graph.nodes[0].ports[0], count: ProjectGraphLimits.portsPerNode + 1) },
             { $0.graph.nodes[0].requiredCapabilities = Array(
-                repeating: CapabilityID(validated: "cap.none"), count: ProjectGraphLimits.capabilities + 1
-            ) },
+                repeating: CapabilityID(validated: "cap.none"), count: ProjectGraphLimits.capabilities + 1) },
             { $0.graph.nodes[0].advisoryCapabilities = Array(
-                repeating: CapabilityID(validated: "cap.none"), count: ProjectGraphLimits.capabilities + 1
-            ) },
+                repeating: CapabilityID(validated: "cap.none"), count: ProjectGraphLimits.capabilities + 1) },
             { $0.graph.capabilities = Array(
                 repeating: CapabilityDefinition(id: CapabilityID(validated: "cap.none"), label: "Unused"),
-                count: ProjectGraphLimits.capabilities + 1
-            ) }
+                count: ProjectGraphLimits.capabilities + 1) }
         ]
         for mutate in mutations {
             var documents = Fixtures.documents()
