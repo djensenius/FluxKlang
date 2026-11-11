@@ -177,23 +177,19 @@ extension WiringSelectionOrder {
             return nil
         case .node(let id):
             for node in graph.nodes where node.id == id {
-                return title(of: node)
+                return node.wiringTitle
             }
             return nil
         case .port(let owner, let portID):
             for node in graph.nodes where node.id == owner {
                 for port in node.ports where port.id == portID {
                     let direction = port.direction == .input ? "input" : "output"
-                    return "\(title(of: node)), \(portID.rawValue), \(direction), \(port.signal.rawValue)"
+                    return "\(node.wiringTitle), \(portID.rawValue), \(direction), \(port.signal.rawValue)"
                 }
                 return nil
             }
             return nil
         }
-    }
-
-    private static func title(of node: GraphNode) -> String {
-        node.label.utf8.isEmpty ? node.id.rawValue : node.label
     }
 }
 
