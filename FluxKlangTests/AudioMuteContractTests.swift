@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct AudioMuteContractTests {
     private static let token = GraphDocument.constantMuteFeature
     private static let values: [(String, JSONValue)] = [
