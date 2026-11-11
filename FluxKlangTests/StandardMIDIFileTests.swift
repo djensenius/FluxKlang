@@ -217,3 +217,96 @@ struct StandardMIDIFileTests {
         #expect(try messages(original) == messages(reordered))
     }
 }
+
+/// #112 MLC1: per-capture SMF export losses, pinned to check_media_contract.py `midi2_losses` and `on_export`.
+extension StandardMIDIFileTests {
+    static func captureLosses(_ words: [UInt32], endpoint: MIDIEndpointProtocol = .midi2,
+                              port: MIDIPortProtocol = .midi2) throws -> [SMFExportLoss: Int] {
+        let packet = try UMPPacket(words: words)
+        let stamp = try MIDIProtocolStamp.classify(packet, endpoint: endpoint, port: port)
+        return SMFCaptureLossClassifier.losses(of: packet, stamp: stamp)
+    }
+
+    @Test
+    func genuineMIDI2NoteLossesFollowTheChecker() throws {
+        #expect(try Self.captureLosses([0x4090_3C00, 0xC924_0000]).isEmpty)
+        #expect(try Self.captureLosses([0x4090_3C00, 0x0100_0000])
+            == [.noteOnVelocityRemapped: 1, .velocityDownscaled: 1])
+        #expect(try Self.captureLosses([0x4090_3C00, 0x0000_0000]) == [.noteOnVelocityRemapped: 1])
+        #expect(try Self.captureLosses([0x4080_3C00, 0x0100_0000]) == [.velocityDownscaled: 1])
+        #expect(try Self.captureLosses([0x4080_3C00, 0x0000_0000]).isEmpty)
+        #expect(try Self.captureLosses([0x4090_3C03, 0xC924_1E00]) == [.attributeDropped: 1])
+        #expect(try Self.captureLosses([0x4080_3C01, 0xC925_0000]) == [.velocityDownscaled: 1, .attributeDropped: 1])
+    }
+
+    @Test
+    func genuineMIDI2ValueLossesFollowTheChecker() throws {
+        for opcode: UInt32 in [0xA, 0xB, 0xD, 0x2, 0x3, 0xE] {
+            let first = 0x4000_0000 | opcode << 20
+            #expect(try Self.captureLosses([first, 0x8000_0000]).isEmpty)
+            #expect(try Self.captureLosses([first, 0xFFFF_FFFF]).isEmpty)
+            #expect(try Self.captureLosses([first, 0x8000_0001]) == [.valueDownscaled: 1])
+        }
+        // Above the centre, below the maximum: scaleUp(100, 7→32) and scaleUp(10000, 14→32) repeat the low bits.
+        #expect(try Self.captureLosses([0x40B0_0700, 0xC924_9249]).isEmpty)
+        #expect(try Self.captureLosses([0x40E0_0000, 0x9C40_E207]).isEmpty)
+        #expect(try Self.captureLosses([0x40B0_0700, 0xFE00_0000]) == [.valueDownscaled: 1])
+        #expect(try Self.captureLosses([0x40E0_0000, 0xFFFC_0000]) == [.valueDownscaled: 1])
+        #expect(try Self.captureLosses([0x40E0_0000, 0xFFFF_FFFE]) == [.valueDownscaled: 1])
+    }
+
+    @Test
+    func genuineMIDI2OtherOpcodesFollowTheChecker() throws {
+        for opcode: UInt32 in [0x0, 0x1, 0x6, 0xF] {
+            #expect(try Self.captureLosses([0x4000_0000 | opcode << 20, 0x1234_5678]) == [.perNoteDropped: 1])
+        }
+        for opcode: UInt32 in [0x4, 0x5, 0x7] {
+            #expect(try Self.captureLosses([0x4000_0000 | opcode << 20, 0x8000_0000]) == [.umpOnlyDropped: 1])
+        }
+        #expect(try Self.captureLosses([0x40C0_0001, 0x1234_5678]).isEmpty)
+    }
+
+    @Test
+    func onlyGenuineMIDI2IsCheckedAndUnknownEndpointsAreUnverified() throws {
+        let lossy: [UInt32] = [0x4090_3C03, 0x0100_0000]
+        #expect(try Self.captureLosses(lossy, endpoint: .unknown) == [.fidelityUnverified: 1])
+        #expect(try Self.captureLosses([0x4090_3C00, 0xC924_0000], endpoint: .unknown) == [.fidelityUnverified: 1])
+        #expect(try Self.captureLosses(lossy, endpoint: .midi1).isEmpty)
+        for endpoint in MIDIEndpointProtocol.allCases {
+            #expect(try Self.captureLosses([0x2090_3C64], endpoint: endpoint, port: .midi1).isEmpty)
+            #expect(try Self.captureLosses([0x2090_3C00], endpoint: endpoint, port: .midi1).isEmpty)
+        }
+    }
+
+    @Test
+    func messageTypesOtherThanChannelVoiceAndData64AreUMPOnly() throws {
+        let data64: [UInt32] = [0x3001_0203, 0x0405_0600]
+        let others: [[UInt32]] = [[0x0020_1F40], [0x10F8_0000], [0x5000_0000, 0, 0, 0], [0xD000_0000, 0, 0, 0],
+                                  [0xF000_0000, 0, 0, 0], [0x6000_0000], [0x8000_0000, 0], [0xE000_0000, 0, 0, 0]]
+        for endpoint in MIDIEndpointProtocol.allCases {
+            for port in MIDIPortProtocol.allCases {
+                #expect(try Self.captureLosses(data64, endpoint: endpoint, port: port).isEmpty)
+                for words in others {
+                    #expect(try Self.captureLosses(words, endpoint: endpoint, port: port) == [.umpOnlyDropped: 1])
+                }
+            }
+        }
+    }
+
+    /// Example 10's nine captures (seq 2...10) sum to its SMF export's losses (seq 12) without `timingQuantized: 1`,
+    /// which depends on the export's division, not on one capture.
+    @Test
+    func example10CapturesSumToTheSMFExportLossesBesidesTiming() throws {
+        let log = try MIDICaptureFixture.example10()
+        try #require(log.records.count == 9)
+        let perCapture = log.records.map { SMFCaptureLossClassifier.losses(of: $0.packet, stamp: $0.protocolStamp) }
+        #expect(perCapture == [
+            [.velocityDownscaled: 1, .attributeDropped: 1], [.perNoteDropped: 1], [.valueDownscaled: 1],
+            [.noteOnVelocityRemapped: 1, .velocityDownscaled: 1], [:], [:], [:], [.fidelityUnverified: 1],
+            [.umpOnlyDropped: 1]
+        ])
+        let total = perCapture.reduce(into: [SMFExportLoss: Int]()) { $0.merge($1, uniquingKeysWith: +) }
+        #expect(total == [.velocityDownscaled: 2, .attributeDropped: 1, .perNoteDropped: 1, .valueDownscaled: 1,
+                          .noteOnVelocityRemapped: 1, .fidelityUnverified: 1, .umpOnlyDropped: 1])
+    }
+}
