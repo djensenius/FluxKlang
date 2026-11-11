@@ -21,7 +21,7 @@ extension RecordingTakeV1GateTests {
             + #""reason":"diskFull","sampleClock":"smp.main","seq":7,"stream":"str.take-in","type":"captureStopped"}"#
     ]
 
-    private func json(_ records: [RecordingTakeV1DiscontinuityRecord]) throws -> [String] {
+    private func json(_ records: [DiscontinuityV1Record]) throws -> [String] {
         var lines: [String] = []
         for record in records {
             lines.append(try #require(String(data: record.encodedJSON(), encoding: .utf8)))
@@ -60,9 +60,10 @@ extension RecordingTakeV1GateTests {
         #expect(RecordingTakeV1Discontinuities.count(of: clearance) == 3)
         let note = "Writer finalised the partial file."
         let records = try RecordingTakeV1Discontinuities.make(clearance, seqs: [2, 6, 7], notes: [7: note])
-        #expect(records.map(\.type) == [.overflow, .overflow, .captureStopped])
+        #expect(records.map(\.event.type) == ["overflow", "overflow", "captureStopped"])
         let stop = try #require(records.last)
-        #expect(stop.generation.value == 2 && stop.frame == 480_000 && stop.reason == "diskFull")
+        #expect(stop.generation.value == 2 && stop.frame == 480_000
+            && stop.event == .captureStopped(StreamID(validated: "str.take-in"), reason: .diskFull))
         #expect(try json(records) == Self.example08TakeOneDiscontinuityJSON)
 
         let again = try RecordingTakeV1Discontinuities.make(clearance, seqs: [2, 6, 7], notes: [7: note])
@@ -100,7 +101,8 @@ extension RecordingTakeV1GateTests {
         #expect(RecordingTakeV1Discontinuities.count(of: clearance) == 1)
         let records = try RecordingTakeV1Discontinuities.make(clearance, seqs: [4])
         let only = try #require(records.first)
-        #expect(records.count == 1 && only.type == .overflow && only.frame == 1_000 && only.frames == 16)
+        #expect(records.count == 1 && only.frame == 1_000
+            && only.event == .overflow(StreamID(validated: "str.take-in"), frames: 16))
 
         var quiet = try Fixture.ledger()
         try quiet.advance(Fixture.take1, to: Fixture.stamp(1, 100))
@@ -112,7 +114,7 @@ extension RecordingTakeV1GateTests {
     @Test
     func recordingTakeV1DiscontinuitiesReportTheFirstRefusalInFixedOrder() throws {
         let one = try OverflowInterval(startFrame: 10, frames: 5)
-        let huge = try OverflowInterval(startFrame: 0, frames: RecordingTakeV1DiscontinuityRecord.maximumFrames + 1)
+        let huge = try OverflowInterval(startFrame: 0, frames: DiscontinuityV1Record.maximumFrames + 1)
         let allBad = try overflowTake(stream: "str_in", clock: "smp:main", overflows: [[one]])
         #expect(try discontinuityRefusal(allBad, seqs: []) == DiscontinuityRefusal.seqCount(expected: 1, actual: 0))
         #expect(try discontinuityRefusal(allBad, seqs: [1, 2]) == DiscontinuityRefusal.seqCount(expected: 1, actual: 2))
@@ -148,7 +150,7 @@ extension RecordingTakeV1GateTests {
 
     @Test
     func recordingTakeV1DiscontinuitiesKeepTheSchemaFramesMaximumAndOrderEverySegment() throws {
-        let maximum = RecordingTakeV1DiscontinuityRecord.maximumFrames
+        let maximum = DiscontinuityV1Record.maximumFrames
         #expect(maximum == 4_294_967_295)
         let first = try OverflowInterval(startFrame: 0, frames: 10)
         let second = try OverflowInterval(startFrame: 20, frames: maximum)
@@ -158,7 +160,9 @@ extension RecordingTakeV1GateTests {
         let records = try RecordingTakeV1Discontinuities.make(clearance, seqs: [1, 5, 9], notes: [5: "Long drop."])
         #expect(records.map(\.generation.value) == [1, 1, 3])
         #expect(records.map(\.frame) == [0, 20, 0])
-        #expect(records.map(\.frames) == [10, maximum, 10])
+        let stream = StreamID(validated: "str.take-in")
+        let events = [10, maximum, 10].map { DiscontinuityV1Record.Event.overflow(stream, frames: $0) }
+        #expect(records.map(\.event) == events)
         let long = try #require(json(records).dropFirst().first)
         #expect(long.hasPrefix(#"{"frame":20,"frames":4294967295,"generation":1,"kind":"discontinuity","#))
         #expect(long.contains(#""note":"Long drop.","sampleClock":"smp.main","seq":5,"#))
