@@ -63,7 +63,7 @@ struct DiscontinuityV1Record: Hashable, Sendable {
     /// The schema's `frames` maximum, 2^32 − 1.
     static let maximumFrames: Int64 = 4_294_967_295
     /// The same bound as `RecordingTakeV1Record.maximumNoteBytes`; the schema needs only a non-empty note.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let event: Event
@@ -88,7 +88,7 @@ struct DiscontinuityV1Record: Hashable, Sendable {
         }
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }
