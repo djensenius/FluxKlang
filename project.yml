@@ -521,6 +521,8 @@ targets:
       - path: FluxKlangTests/WiringInspectorTests+Edge.swift
       - path: FluxKlangTests/WiringInspectorTests+Problems.swift
       - path: FluxKlangTests/WiringProblemListTests.swift
+      - path: FluxKlangTests/WiringConnectionListTests.swift
+      - path: FluxKlangTests/WiringConnectionListTests+Refusals.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
