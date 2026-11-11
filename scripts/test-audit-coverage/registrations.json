@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "813a48853feb5d6465d1c8d39856b3f81482135ab54374d7d7ff4ce7e9cd4658",
+    "sha256": "50ecd2ea05c525f38d09270cf3c6221040df9458527c0934f8782c19a50b4446",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -247,6 +247,7 @@
         "FluxKlangTests/MIDICaptureExportTests+Protocol.swift",
         "FluxKlangTests/MIDICaptureExportTests+Restart.swift",
         "FluxKlangTests/MIDICaptureExportTests+Clock.swift",
+        "FluxKlangTests/MIDICaptureExportTests+V1Capture.swift",
         "FluxKlangTests/WiringComposeTests.swift",
         "FluxKlangTests/WiringComposeTests+Destinations.swift",
         "FluxKlangTests/WiringComposeTests+Bulk.swift",

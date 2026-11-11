@@ -349,6 +349,7 @@ targets:
       - path: FluxKlangTests/MIDICaptureExportTests+Protocol.swift
       - path: FluxKlangTests/MIDICaptureExportTests+Restart.swift
       - path: FluxKlangTests/MIDICaptureExportTests+Clock.swift
+      - path: FluxKlangTests/MIDICaptureExportTests+V1Capture.swift
       - path: FluxKlangTests/WiringComposeTests.swift
       - path: FluxKlangTests/WiringComposeTests+Destinations.swift
       - path: FluxKlangTests/WiringComposeTests+Bulk.swift
