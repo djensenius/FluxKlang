@@ -61,8 +61,7 @@ extension HostAuthorityBook {
         if let project = outstanding.first(where: { $0.value == preparation })?.key {
             return route(result, preparation: preparation, project: project)
         }
-        guard let record = plans.snapshot().records.first(where: { $0.instance == instance }),
-              record.entries.contains(where: { $0.attempt == attempt && $0.state == .pending(reclaim: true) }) else {
+        guard plans.pendingReclaim(instance: instance, attempt: attempt) == true else {
             return .failure(.activation(.stalePrepareResponse))
         }
         let completion: EnginePlanCompletion
@@ -122,10 +121,9 @@ extension HostAuthorityBook {
         guard var state = projects[project] else { return .failure(.activation(.stalePrepareResponse)) }
         // Defensive: abandonPrepare removes outstanding before a reclaiming answer can route here.
         // Refuse inconsistent ownership before advancing the transaction or mutating the ledger.
-        guard let record = plans.snapshot().records.first(where: { $0.instance == preparation.instance }),
-              record.entries.contains(where: {
-                  $0.attempt == preparation.attempt && $0.state == .pending(reclaim: false)
-              }) else { return .failure(.unboundPlan) }
+        guard plans.pendingReclaim(instance: preparation.instance, attempt: preparation.attempt) == false else {
+            return .failure(.unboundPlan)
+        }
         if case .failure(let refusal) = state.transaction.prepared(result, attempt: preparation.attempt) {
             guard case .success(let prepared) = result else { return .failure(.activation(refusal)) }
             if case .failure(let abandoned) = state.transaction.abandonPrepare(preparation.attempt) {

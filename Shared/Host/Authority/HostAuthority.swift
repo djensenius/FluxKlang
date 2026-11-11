@@ -106,10 +106,7 @@ actor HostAuthority {
             return .failure(refusal)
         case .success:
             guard let identity = book.outstanding[project],
-                  book.plans.snapshot().records.first(where: { $0.instance == identity.instance })?
-                    .entries.contains(where: {
-                        $0.attempt == identity.attempt && $0.state == .pending(reclaim: false)
-                    }) == true,
+                  book.plans.pendingReclaim(instance: identity.instance, attempt: identity.attempt) == false,
                   book.queue.pending.contains(where: {
                       if case .prepare(_, let document, let instance, let attempt) = $0 {
                           return document.id == project && instance == identity.instance &&
@@ -233,9 +230,7 @@ actor HostAuthority {
         guard identity.instance == instance, identity.attempt == attempt else {
             return latchConstructionFault(.unexpectedDelivery(identity))
         }
-        guard let entry = book.plans.snapshot().records.first(where: { $0.instance == instance })?
-            .entries.first(where: { $0.attempt == attempt }),
-              case .pending(let reclaim) = entry.state else {
+        guard let reclaim = book.plans.pendingReclaim(instance: instance, attempt: attempt) else {
             return latchConstructionFault(.missingAdmission(identity))
         }
         // The admitted lifetime remains charged throughout this nonsuspending turn.
@@ -263,9 +258,7 @@ actor HostAuthority {
         guard preparationLimits != nil else { return .refused(.legacyMode) }
         guard preparationLifetime.fault == nil else { return .refused(.faulted) }
         guard let identity = preparation?.identity else { return .empty }
-        guard let entry = book.plans.snapshot().records.first(where: { $0.instance == identity.instance })?
-            .entries.first(where: { $0.attempt == identity.attempt }),
-              case .pending(let reclaim) = entry.state else {
+        guard let reclaim = book.plans.pendingReclaim(instance: identity.instance, attempt: identity.attempt) else {
             return latchConstructionFault(.missingAdmission(identity))
         }
         let wanted = book.outstanding.values.contains(identity)

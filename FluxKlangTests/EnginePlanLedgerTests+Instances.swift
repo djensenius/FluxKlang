@@ -62,7 +62,10 @@ extension EnginePlanLedgerTests {
             let first = ledger.currentInstance
             let prepared = PreparedActivationID(validated: "prep.recycled")
             try ledger.dispatch(instance: first, attempt: attempt)
+            #expect(ledger.pendingReclaim(instance: first, attempt: attempt) == false)
             let second = try ledger.supersede()
+            #expect(ledger.pendingReclaim(instance: first, attempt: attempt) == true)
+            #expect(ledger.pendingReclaim(instance: second, attempt: attempt) == nil)
             // Same attempt in another instance is a distinct explicit key. G2
             // must still enforce lifetime at-most-once dispatch for each key.
             let current = try ledgerBinding(ledger, attempt: attempt, prepared: prepared)
@@ -75,6 +78,11 @@ extension EnginePlanLedgerTests {
             }
             #expect(old.instance == first && current.instance == second && old != current)
             #expect(old.attempt == current.attempt && old.prepared == current.prepared)
+            let beforeQueries = ledger.snapshot()
+            #expect(ledger.phase(of: old) == .retiring && ledger.phase(of: current) == .committed)
+            #expect(ledger.pendingReclaim(instance: first, attempt: attempt) == nil)
+            #expect(ledger.pendingReclaim(instance: second, attempt: attempt) == nil)
+            #expect(ledger.snapshot() == beforeQueries)
             #expect(ledger.snapshot().records[1] == currentRecord)
             #expect(ledger.pendingRetirements() == [old])
             #expect(ledger.attestCommitted(current)?.binding == current)
@@ -83,6 +91,8 @@ extension EnginePlanLedgerTests {
             ledgerRefusal(.priorInstanceRetained, in: ledger) { try ledger.supersede() }
             try ledger.acknowledgeRetired(old)
             #expect(ledger.snapshot().records == [currentRecord])
+            #expect(ledger.phase(of: old) == nil && ledger.phase(of: current) == .committed)
+            #expect(ledger.pendingReclaim(instance: first, attempt: attempt) == nil)
             ledgerRefusal(.unknownInstance, in: ledger) {
                 try ledger.complete(instance: first, attempt: attempt, result: .failure(.cancelled))
             }
@@ -139,7 +149,12 @@ extension EnginePlanLedgerTests {
             try ledger.dispatch(instance: first, attempt: attempts[0])
             let second = try ledger.supersede()
             try ledger.dispatch(instance: second, attempt: attempts[1])
+            let beforeQueries = ledger.snapshot()
+            #expect(ledger.pendingReclaim(instance: first, attempt: attempts[0]) == true)
+            #expect(ledger.pendingReclaim(instance: second, attempt: attempts[1]) == false)
             for (instance, attempt) in [(first, attempts[1]), (second, attempts[0])] {
+                #expect(ledger.pendingReclaim(instance: instance, attempt: attempt) == nil)
+                #expect(ledger.snapshot() == beforeQueries)
                 ledgerRefusal(.unknownAttempt, in: ledger) {
                     try ledger.complete(instance: instance, attempt: attempt, result: .failure(.cancelled))
                 }

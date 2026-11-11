@@ -277,6 +277,7 @@ struct EnginePlanLedgerTests {
         let old = try ledgerBinding(ledger, attempt: attempt)
         try ledger.release(old)
         try ledger.acknowledgeRetired(old)
+        #expect(ledger.phase(of: old) == nil)
         // INTENTIONAL out-of-contract defensive probe: reusing this retired
         // attempt violates the lifetime at-most-once dispatch premise. This is
         // NOT supported retired-attempt replay and adds no replay guarantee.
@@ -285,6 +286,10 @@ struct EnginePlanLedgerTests {
         )
         #expect(replacement.instance == old.instance && replacement.attempt == old.attempt)
         #expect(replacement.prepared != old.prepared)
+        let beforeQueries = ledger.snapshot()
+        #expect(ledger.phase(of: old) == nil && ledger.phase(of: replacement) == .held)
+        #expect(ledger.pendingReclaim(instance: replacement.instance, attempt: attempt) == nil)
+        #expect(ledger.snapshot() == beforeQueries)
         ledgerRefusal(.bindingMismatch, in: ledger) { try ledger.release(old) }
         #expect(ledger.snapshot().records[0].entries == [
             .init(attempt: attempt, state: .bound(replacement, .held))
@@ -300,6 +305,10 @@ struct EnginePlanLedgerTests {
         let other = try ledgerBinding(foreign, attempt: attempt)
         #expect(own != other && own.attempt == other.attempt && own.prepared == other.prepared)
         #expect(Set([own.instance, other.instance]).count == 2)
+        let beforeQueries = ledger.snapshot()
+        #expect(ledger.phase(of: other) == nil && ledger.phase(of: own) == .held)
+        #expect(ledger.pendingReclaim(instance: other.instance, attempt: attempt) == nil)
+        #expect(ledger.snapshot() == beforeQueries)
         ledgerRefusal(.unknownInstance, in: ledger) { try ledger.release(other) }
         ledgerRefusal(.unknownInstance, in: ledger) { try ledger.committed(other, outcome: .succeeded) }
         ledgerRefusal(.unknownInstance, in: ledger) { try ledger.acknowledgeRetired(other) }
