@@ -4,6 +4,8 @@
 /// Why a hot-path operation declined to accept or deliver a value.
 enum KernelRefusal: UInt8, Sendable, BitwiseCopyable, CaseIterable {
     case full, criticalExhausted, notOwner, slotOutOfRange, beyondLookahead, nonMonotonic, invalidLength
+    /// A value that must be finite was NaN or ±infinity. Appended last so earlier raw values do not change.
+    case nonFinite
 }
 
 /// Why a render cycle produced silence rather than its prepared output.
