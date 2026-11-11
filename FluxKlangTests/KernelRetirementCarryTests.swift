@@ -6,12 +6,9 @@ import Testing
 #endif
 
 /// #364 E5c: the bounded carry of stateful events across cycle retirement (slice a). Pure values: no clock, no
-/// threads, no wiring. The record and capacity tests are in `+Capacity`, re-timing and lane budgets in `+Retiming`,
-/// supersede, delivery order and refusals in `+Order`.
+/// threads, no wiring. The record, capacity and equality tests are in `+Capacity`; how a replacement plans and
+/// re-admits the carry is tested with the cycle in `RealtimeHandoffTests+KernelCycleReadmission*`.
 struct KernelRetirementCarryTests {
-    /// Roomy lane budgets: every lane fits the whole carry.
-    static let roomy = KernelCarryLaneCapacity(state: 256, content: 256)
-
     static func control(
         frame: Int64 = 0, channel: UInt8 = 0, controller: UInt8 = 1, value: UInt32 = 2, sequence: UInt64 = 0
     ) -> KernelEvent {
@@ -37,11 +34,6 @@ struct KernelRetirementCarryTests {
             frame: frame, scope: 3, sequence: sequence,
             payload: .rampTo(parameter: parameter, value: value, durationFrames: duration)
         )
-    }
-
-    /// `event` as another scope's.
-    static func scoped(_ event: KernelEvent, _ scope: UInt32) -> KernelEvent {
-        KernelEvent(frame: event.frame, scope: scope, sequence: event.sequence, payload: event.payload)
     }
 
     static func noteOn(frame: Int64 = 0) -> KernelEvent {
@@ -71,38 +63,4 @@ struct KernelRetirementCarryTests {
             )
         }
     }
-
-    static func plan(
-        _ carry: KernelRetirementCarry,
-        blockCapacity: Int = 64,
-        firstFrame: Int64 = 0,
-        lanes: KernelCarryLaneCapacity = roomy
-    ) throws -> KernelCarryPlan {
-        try KernelCarryRetiming.plan(
-            carry: carry, replacementBlockCapacity: blockCapacity, replacementFirstFrame: firstFrame,
-            replacementLaneCapacity: lanes
-        )
-    }
-
-    /// The refusal `work` throws, or `nil` when it does not throw `KernelCarryRefusal`.
-    static func refusal(of work: () throws -> Void) -> KernelCarryRefusal? {
-        do {
-            try work()
-            return nil
-        } catch let refusal as KernelCarryRefusal {
-            return refusal
-        } catch {
-            return nil
-        }
-    }
-
-    static func refusal(
-        _ carry: KernelRetirementCarry, blockCapacity: Int = 64, firstFrame: Int64 = 0
-    ) -> KernelCarryRefusal? {
-        refusal { _ = try plan(carry, blockCapacity: blockCapacity, firstFrame: firstFrame) }
-    }
-
-    static func frames(_ plan: KernelCarryPlan) -> [Int64] { plan.emissions.map(\.event.frame) }
-
-    static func sequences(_ plan: KernelCarryPlan) -> [UInt64] { plan.emissions.map(\.event.sequence) }
 }
