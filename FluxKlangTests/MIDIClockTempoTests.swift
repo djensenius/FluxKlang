@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct MIDIClockTempoTests {
     static let nanos = HostTimebase(numer: 1, denom: 1)
 
