@@ -14,11 +14,32 @@ enum EventLane: UInt8, Sendable, BitwiseCopyable, Comparable {
 enum KernelEventPayload: Sendable, BitwiseCopyable, Equatable {
     case noteOn(channel: UInt8, note: UInt8, velocity: UInt16)
     case noteOff(channel: UInt8, note: UInt8)
-    /// Stateful: never coalesced.
+    /// Stateful: never coalesced on dispatch (carry re-admission coalesces only what `isCoalescible` allows).
+    /// `controller` is a MIDI Control Change number.
     case control(channel: UInt8, controller: UInt8, value: UInt32)
     case program(channel: UInt8, program: UInt8, bank: UInt16)
     case clockPulse
     case rampTo(parameter: UInt32, value: Float, durationFrames: Int64)
+
+    /// Whether a later event for the same target makes this one redundant, so carry re-admission
+    /// (`KernelCarryReadmission`) may keep only the last writer. `true` for `program`, `rampTo` and a `control` whose
+    /// last write, at its own position, determines the resulting state (a set value, or a command that repeats
+    /// harmlessly, such as the other channel-mode messages 120 and 122–127). `false` for the RPN/NRPN data-entry
+    /// family, whose effect depends on order and count: 6 and 38 (Data Entry MSB/LSB) write the selected parameter, 96
+    /// and 97 (Data Increment/Decrement) step it, 98–101 (NRPN/RPN parameter number LSB/MSB) select it, and 121 (Reset
+    /// All Controllers) deselects it (RP-015: 98–101 back to 127, so later data entry has no parameter); and for
+    /// `noteOn`, `noteOff` and `clockPulse`, never coalesced. Render-safe: a pure switch, no allocation or lock.
+    var isCoalescible: Bool {
+        switch self {
+        case let .control(_, controller, _):
+            switch controller {
+            case 6, 38, 96...101, 121: false
+            default: true
+            }
+        case .program, .rampTo: true
+        case .noteOn, .noteOff, .clockPulse: false
+        }
+    }
 }
 
 /// A scheduled kernel event. Reference model; not RT-certified.

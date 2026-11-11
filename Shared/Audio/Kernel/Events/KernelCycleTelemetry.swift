@@ -109,10 +109,11 @@ enum KernelCycleStart: Sendable, Equatable {
     /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
     /// It must also pass that cycle's `admissionRefusals` (see `admissionRefusals`), else `.admissionRefusalsRequired`.
     /// If it loses the claim to a preparation that has since retired, it is refused `.ownershipClaim(.claimRaced)`.
-    /// Pending stateful events are also recorded in a carry that `inheritedRetirementCarry` exposes (nothing
-    /// re-admits it yet); the loss counts are unchanged: this cycle's `inheritedRetirementLoss` counts what its
-    /// immediate predecessor dropped (that one retirement only, never cumulative), so control checks it on every
-    /// replacement and reconciles receiver state first whenever it `receiverStateMayBeStale`.
+    /// Pending stateful events are also recorded in a carry that `inheritedRetirementCarry` exposes and this cycle
+    /// re-admits (#364 KCR1). `inheritedRetirementLoss` still counts what its immediate predecessor dropped (that one
+    /// retirement only, never cumulative); `unresolvedRetirementLoss` counts what this cycle has not yet delivered or
+    /// superseded, so control checks it on every replacement (per hop) and reconciles receiver state first whenever it
+    /// `receiverStateMayBeStale`.
     /// Ramp values (round 2l): given the retired cycle's `RampSlots`, it reports and ramps from the last known values
     /// the slots keep (`RampSlots.lastValue`), not from 0. Happens-before: the retired cycle's last slot writes are
     /// sequenced before its `retire()`'s releasing claim CAS, which this cycle's acquiring claim CAS in `init` reads,

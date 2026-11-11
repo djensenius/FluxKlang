@@ -1,4 +1,5 @@
-// #364 E5c kernel cycle component: re-times a retiring cycle's carried stateful events into a replacement cycle.
+// #364 E5c kernel cycle component: a reference planner that re-times a retiring cycle's carried stateful events.
+// No longer used by re-admission (`KernelCarryReadmission` plans the carry itself); its removal is tracked by #522.
 // Pure; control side (it allocates). Reference model; not RT-certified.
 
 /// How many carried events each lane of the replacement may take. Only `state` (`control`, `program`) and `content`
@@ -46,6 +47,12 @@ struct KernelCarryPlan: Sendable, Equatable {
 
 /// Plans how a `KernelRetirementCarry` enters a replacement cycle. Pure: no clock, no threads, no state; the carry is
 /// taken by value.
+///
+/// Not used by re-admission: `KernelCarryReadmission` plans the carry itself, because this planner re-times carried
+/// frames to `max(frame, replacementFirstFrame)` (clamping negative frames, which reorders them against the
+/// replacement's own events) and breaks same-frame ties lane → sequence → recorded index, not in the retiring block
+/// buffer's lane → producer lane → sequence order (the recorded order). Kept as a reference model; its removal is
+/// tracked by #522.
 /// O(n) passes over the n <= `KernelRetirementCarry.capacity` carried events plus one O(n log n) sort.
 ///
 /// Rules:

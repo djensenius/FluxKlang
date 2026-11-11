@@ -12,6 +12,34 @@ struct KernelCyclePreparation {
 }
 
 extension KernelCycle {
+    /// Why `KernelCycle.init` refused (moved here from `KernelCycle.swift`, which is at the file-length cap).
+    enum PreparationError: Error, Equatable, Sendable {
+        /// The fan-in is not `.events` consumed on `.render`.
+        case notRenderEvents
+        /// The fan-in's policy does not give a deadline policy.
+        case deadline(DeadlinePolicy.PreparationError)
+        /// `blockCapacity` is outside `1...maximumBlockCapacity`.
+        case blockCapacityOutOfRange(Int)
+        /// `perLaneQuota` is outside `1...KernelLimits.maximumCapacity`.
+        case perLaneQuotaOutOfRange(Int)
+        /// `ownership` and `safety` do not cover the same scopes.
+        case scopeCountMismatch(ownership: Int, safety: Int)
+        /// The telemetry output's `slot` is outside its slots.
+        case telemetrySlotOutOfRange(Int)
+        /// Every `KernelAckRequests` identity was issued.
+        case ackIdentitiesExhausted
+        /// `parts.admissionRefusals` belongs to another fan-in (identity or lane count differ).
+        case admissionRefusalsMismatch
+        /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked after the wiring checks and
+        /// before `.admissionRefusalsRequired`. A refusal from the final claim (only when another preparation raced
+        /// this one) has used one `KernelAckRequests` identity.
+        case ownershipClaim(NoteOwnership.CycleClaimRefusal)
+        /// `parts.admissionRefusals` is `nil` over an ownership an earlier cycle used and retired (claim word
+        /// nonzero and even): a new table would leave producers admitted earlier counting elsewhere. Checked
+        /// after `.ownershipClaim`; refuses with nothing claimed. A first cycle may omit it.
+        case admissionRefusalsRequired
+    }
+
     /// Checks, in this order: the shape (`.notRenderEvents`, `.deadline`, `.blockCapacityOutOfRange`,
     /// `.perLaneQuotaOutOfRange`), the wiring (`.scopeCountMismatch`, `.telemetrySlotOutOfRange`,
     /// `.admissionRefusalsMismatch`), then the ownership (`.ownershipClaim`, `.admissionRefusalsRequired`). `init`

@@ -466,7 +466,15 @@ extension RealtimeHandoffTests {
             let inheritedCarry = replacement.inheritedRetirementCarry
             #expect(inheritedCarry.count == 1 && inheritedCarry.droppedForCapacity == 0)
             #expect(inheritedCarry.event(at: 0) == cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)))
-            #expect(replacement.run(blockStart: 1_064, frames: 64) { _, _ in }.status == .ok)
+            var readmitted: [CycleEmission] = []
+            let firstRun = replacement.run(blockStart: 1_064, frames: 64) {
+                readmitted.append(CycleEmission(event: $0, frame: $1))
+            }
+            #expect(firstRun.status == .ok && firstRun.dispatched == 0)
+            // KCR1: the carried `program` is re-admitted at its own frame and is no longer unresolved.
+            #expect(readmitted == [CycleEmission(event: cycleEvent(1_110, .program(channel: 0, program: 5, bank: 0)),
+                                                 frame: 1_110)])
+            #expect(!replacement.unresolvedRetirementLoss.receiverStateMayBeStale)
             #expect(rig.push(cycleEvent(1_050, .noteOn(channel: 0, note: 60, velocity: 90)), first) == .ok)
             var emitted = 0
             let late = replacement.run(blockStart: 1_128, frames: 64) { _, _ in emitted += 1 }
