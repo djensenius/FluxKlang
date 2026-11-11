@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("MIDI clip continuity: tempo, re-anchor and loops", .productionAccessAudit)
+#else
 @Suite("MIDI clip continuity: tempo, re-anchor and loops")
+#endif
 struct MIDIClipContinuityTempoTests {
     typealias Base = MIDIClipTimingTests
     typealias Continuity = MIDIClipContinuityTests
