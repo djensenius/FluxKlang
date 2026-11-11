@@ -72,7 +72,7 @@ struct AutomationBankTests {
 
     /// The step a caller would build: it carries the tempo map and the generations, which the bank does not name.
     static func stepper(rate: Int = 48_000, revision: Generation = .initial,
-                        current: AutomationRenderGenerations = Fixture.live) throws -> AutomationBank.Step {
+                        current: ClockGenerationSnapshot = Fixture.live) throws -> AutomationBank.Step {
         let map = try Fixture.clock(rate: rate, revision: revision)
         return { renderer, start, end throws(AutomationRenderRefusal) in
             try renderer.render(from: start, to: end, clock: map, current: current)
@@ -398,7 +398,7 @@ struct AutomationBankTests {
         _ = try bank.render(from: 0, to: 512, using: Self.stepper())
         let before = bank
         let newer = try Generation(2)
-        let staleSample = AutomationRenderGenerations(sample: newer, transport: .initial, musicalMap: .initial)
+        let staleSample = ClockGenerationSnapshot(sample: newer, transport: .initial, musicalMap: .initial)
         let stale = try Self.stepper(current: staleSample)
         let refused = AutomationRenderRefusal.clock(.staleSampleGeneration)
         #expect(throws: AutomationBankRefusal.lane(parameter: Self.parA, refusal: refused)) {
@@ -406,7 +406,7 @@ struct AutomationBankTests {
         }
         #expect(bank == before)
         bank.reset()
-        let current = AutomationRenderGenerations(sample: .initial, transport: .initial, musicalMap: newer)
+        let current = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: newer)
         let fresh = try Self.stepper(revision: newer, current: current)
         _ = try bank.render(from: 9_000, to: 9_100, using: fresh)
         #expect(bank.renderers.map(\.cursor) == [9_100, 9_100])

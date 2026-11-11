@@ -36,15 +36,6 @@ struct AutomationRampEvent: Hashable, Sendable {
     let reason: Reason
 }
 
-/// The live generations a clock map must match before it is used. A local mirror of `ClockGenerationSnapshot`
-/// (which the metronome and MIDI clips take directly since #108 GU1b-1 and GU1b-2), kept here so no lane
-/// depends on another; replacing it with `ClockGenerationSnapshot` is a follow-up (GU1b-3).
-struct AutomationRenderGenerations: Hashable, Sendable {
-    let sample: Generation
-    let transport: Generation
-    let musicalMap: Generation
-}
-
 /// A performer gesture forwarded to the renderer's arbiter. Gestures arrive between blocks and are stamped at
 /// the arbiter's current position, the end of the last rendered block.
 enum AutomationRenderGesture: Hashable, Sendable {

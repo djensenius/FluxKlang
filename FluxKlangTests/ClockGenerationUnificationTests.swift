@@ -6,9 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// One clock-generation snapshot behind the local mirror that remains (#108 GU1, slice a; the metronome takes the
-/// snapshot itself since GU1b-1, MIDI clips since GU1b-2). This file holds the fixtures, the checks on the snapshot
-/// value and the scan of the new sources; the ledger, staleness and adapter tests are in the extensions beside it.
+/// One clock-generation snapshot for the metronome, MIDI clips and automation, which take it directly since #108
+/// GU1b-1, GU1b-2 and GU1b-3 (GU1, slice a, added it). This file holds the fixtures, the checks on the snapshot value
+/// and the scan of the new sources; the ledger, staleness and drift guard tests are in the extensions beside it.
 struct ClockGenerationUnificationTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
@@ -163,7 +163,7 @@ struct ClockGenerationUnificationTests {
     }
 }
 
-/// Reads the three new production files from disk, next to this test file, and scans their code (line comments
+/// Reads the two new production files from disk, next to this test file, and scans their code (line comments
 /// removed) for what the equality-only and no-state rules forbid: the word `Comparable`, any `.value` access, a spaced
 /// `<`, `>`, `<=` or `>=`, a `Generation(` construction, a line that starts an import, `static var`, `mutating`,
 /// `inout`, `bump`, `declare`, `class`, `actor`, `async`, `await`, `Task`, `Date`, `UUID`, `ContinuousClock`,
@@ -176,8 +176,7 @@ struct ClockGenerationUnificationTests {
 extension ClockGenerationUnificationTests {
     private static let sources: [(name: String, declaration: String)] = [
         ("ClockGenerationSnapshot.swift", "struct ClockGenerationSnapshot"),
-        ("ClockGenerationStaleness.swift", "struct ClockGenerationStaleness"),
-        ("ClockGenerationAdapters.swift", "extension ClockGenerationSnapshot")
+        ("ClockGenerationStaleness.swift", "struct ClockGenerationStaleness")
     ]
 
     private static let differentDomainTypes = [
@@ -294,8 +293,8 @@ extension ClockGenerationUnificationTests {
     }
 
     @Test(.enabled(if: Self.sourcesAreReachable, "the snapshot sources are not next to the tests"))
-    func theAdaptersFileNamesEachOtherDomainGenerationTypeInALineComment() throws {
-        let comments = Self.comments(in: try Self.sourceText("ClockGenerationAdapters.swift"))
+    func theSnapshotFileNamesEachOtherDomainGenerationTypeInALineComment() throws {
+        let comments = Self.comments(in: try Self.sourceText("ClockGenerationSnapshot.swift"))
         for name in Self.differentDomainTypes {
             #expect(comments.contains(name), "\(name)")
         }
