@@ -289,3 +289,194 @@ extension ControlContractTests {
         }
     }
 }
+
+private typealias GenerationRefusal = GenerationV1RecordRefusal
+
+private func generationRefusal(_ counter: GenerationKey, _ reason: GenerationBumpReason, _ from: Int = 1,
+                               _ to: Int = 2, map: MusicalMap? = nil, meter: MusicalMeter? = nil,
+                               seq: Int = 1, note: String? = nil) throws -> GenerationRefusal? {
+    let (from, to) = try (Generation(from), Generation(to))
+    do {
+        _ = try GenerationV1Record.make(counter: counter, from: from, to: to, reason: reason,
+                                        musicalMap: map, meter: meter, seq: seq, note: note)
+        return nil
+    } catch {
+        return error
+    }
+}
+
+/// A golden `generationRecord` from a media contract example (`<example> seq <n>`), keys sorted, compact;
+/// the table pins all 11 example generation records.
+private struct GoldenGeneration {
+    let label: String
+    let counter: GenerationKey
+    let from: Int
+    let reason: GenerationBumpReason
+    let seq: Int
+    let json: String
+}
+
+private func goldenGenerationRecords() -> [GoldenGeneration] {
+    let sample = GenerationKey(.sampleClock, primary), map = GenerationKey(.musicalMap, musicalClock)
+    let source = GenerationKey(.source, GenerationSubject(validated: "src.backing"))
+    let scope = GenerationKey(.cancelScope, GenerationSubject(validated: "set.verse"))
+    let context = GenerationKey(.context, GenerationSubject(validated: "ctx.main"))
+    func golden(_ label: String, _ counter: GenerationKey, _ reason: GenerationBumpReason, _ seq: Int,
+                from: Int = 1, _ json: String) -> GoldenGeneration {
+        GoldenGeneration(label: label, counter: counter, from: from, reason: reason, seq: seq, json: json)
+    }
+    return [
+        golden("01 seq 4", sample, .rateChange(nominalRate: 96_000), 4, #"{"counter":"sampleClock/smp.main","#
+               + #""from":1,"kind":"generation","nominalRate":96000,"reason":"rateChange","seq":4,"to":2}"#),
+        golden("01 seq 6", transportKey, .clockRestart, 6, #"{"counter":"transport/mus.main","from":1,"#
+               + #""kind":"generation","reason":"clockRestart","seq":6,"to":2}"#),
+        golden("03 seq 12", transportKey, .locate(ticks: 61_440), 12, #"{"counter":"transport/mus.main","#
+               + #""from":1,"kind":"generation","reason":"locate","seq":12,"to":2}"#),
+        golden("04 seq 5", map, .tempoEdit, 5, #"{"counter":"musicalMap/mus.main","from":1,"kind":"generation","#
+               + #""meter":{"denominator":4,"numerator":3},"musicalMap":[{"atTicks":0,"microsPerQuarter":500000},"#
+               + #"{"atTicks":122880,"microsPerQuarter":400000}],"reason":"tempoEdit","seq":5,"to":2}"#),
+        golden("05 seq 6", source, .sourceLost, 6, #"{"counter":"source/src.backing","from":1,"#
+               + #""kind":"generation","reason":"sourceLost","seq":6,"to":2}"#),
+        golden("05 seq 10", source, .sourceReacquired, 10, from: 2, #"{"counter":"source/src.backing","from":2,"#
+               + #""kind":"generation","reason":"sourceReacquired","seq":10,"to":3}"#),
+        golden("06 seq 4", scope, .userCancel, 4, #"{"counter":"cancelScope/set.verse","from":1,"#
+               + #""kind":"generation","reason":"userCancel","seq":4,"to":2}"#),
+        golden("06 seq 7", context, .contextChange, 7, #"{"counter":"context/ctx.main","from":1,"#
+               + #""kind":"generation","reason":"contextChange","seq":7,"to":2}"#),
+        golden("08 seq 3", sample, .rateChange(nominalRate: 96_000), 3, #"{"counter":"sampleClock/smp.main","#
+               + #""from":1,"kind":"generation","nominalRate":96000,"reason":"rateChange","seq":3,"to":2}"#),
+        golden("09 seq 7", sample, .deviceRestart, 7, #"{"counter":"sampleClock/smp.main","from":1,"#
+               + #""kind":"generation","reason":"deviceRestart","seq":7,"to":2}"#),
+        golden("09 seq 9", transportKey, .clockRestart, 9, #"{"counter":"transport/mus.main","from":1,"#
+               + #""kind":"generation","reason":"clockRestart","seq":9,"to":2}"#)
+    ]
+}
+
+extension ControlContractTests.Generations {
+    @Test func generationV1RecordEncodesTheGoldenGenerationRecordsExactly() throws {
+        let revised = try MusicalMap(clock: musicalClock, revision: Generation(2), segments: [
+            TempoSegment(atTicks: 0, microsPerQuarter: 500_000),
+            TempoSegment(atTicks: 122_880, microsPerQuarter: 400_000)
+        ])
+        let threeFour = try MusicalMeter(MeterFields(numerator: 3, denominator: 4))
+        for golden in goldenGenerationRecords() {
+            let isMap = golden.counter.kind == .musicalMap
+            func build() throws -> GenerationV1Record {
+                try GenerationV1Record.make(counter: golden.counter, from: Generation(golden.from),
+                                            to: Generation(golden.from + 1), reason: golden.reason,
+                                            musicalMap: isMap ? revised : nil, meter: isMap ? threeFour : nil,
+                                            seq: golden.seq)
+            }
+            let record = try build()
+            let json = try #require(String(data: record.encodedJSON(), encoding: .utf8))
+            #expect(json == golden.json, "\(golden.label)")
+            let again = try build()
+            #expect(again == record, "\(golden.label)")
+            #expect(try again.encodedJSON() == record.encodedJSON(), "\(golden.label)")
+        }
+        // Not an example: an inherited meter is omitted, and a note keeps `/` unescaped.
+        let inherited = try GenerationV1Record.make(
+            counter: GenerationKey(.musicalMap, musicalClock), from: .initial, to: Generation(2),
+            reason: .externalTempo, musicalMap: revised, seq: 1, note: "a/b")
+        #expect(try String(data: inherited.encodedJSON(), encoding: .utf8) == #"{"counter":"musicalMap/mus.main","#
+                + #""from":1,"kind":"generation","musicalMap":[{"atTicks":0,"microsPerQuarter":500000},"#
+                + #"{"atTicks":122880,"microsPerQuarter":400000}],"note":"a/b","reason":"externalTempo","#
+                + #""seq":1,"to":2}"#)
+    }
+
+    @Test func generationV1RecordNamesEveryReasonAsTheSchemaDoes() throws {
+        let reasons: [(GenerationBumpReason, String)] = [
+            (.deviceRestart, "deviceRestart"), (.rateChange(nominalRate: 48_000), "rateChange"),
+            (.configurationChange, "configurationChange"), (.wake, "wake"), (.locate(ticks: 0), "locate"),
+            (.clockRestart, "clockRestart"), (.transportRestart, "transportRestart"), (.tempoEdit, "tempoEdit"),
+            (.externalTempo, "externalTempo"), (.sourceLost, "sourceLost"),
+            (.sourceReacquired, "sourceReacquired"), (.contextChange, "contextChange"), (.userCancel, "userCancel")
+        ]
+        #expect(Set(reasons.map(\.1)).count == 13)
+        for (reason, name) in reasons {
+            #expect(reason.contractV1Name == name)
+        }
+    }
+
+    @Test func generationV1RecordRefusesInOrderWithoutClampingOrRemapping() throws {
+        let sample = GenerationKey(.sampleClock, primary), mapKey = GenerationKey(.musicalMap, musicalClock)
+        let badKey = GenerationKey(.sampleClock, GenerationSubject(validated: "Smp.main"))
+        let revised = try MusicalMap(clock: musicalClock, revision: Generation(2),
+                                     segments: [TempoSegment(atTicks: 0, microsPerQuarter: 500_000)])
+        let meter = try MusicalMeter(MeterFields(numerator: 3, denominator: 4))
+        #expect(try generationRefusal(badKey, .tempoEdit, 1, 3, seq: 0, note: "") == .invalidSeq(0))
+        #expect(try generationRefusal(sample, .wake, seq: -1) == .invalidSeq(-1))
+        #expect(try generationRefusal(badKey, .tempoEdit, 1, 3, note: "") == .invalidCounterSubject(badKey))
+        for raw: StaticString in ["smp_main", "smp", "smp.", "1smp.a", "smp:1.a"] {
+            let key = GenerationKey(.source, GenerationSubject(validated: raw))
+            #expect(try generationRefusal(key, .sourceLost) == .invalidCounterSubject(key))
+        }
+        #expect(try generationRefusal(sample, .tempoEdit, 1, 3) == .reasonDoesNotMatchKind(sample, .tempoEdit))
+        #expect(try generationRefusal(transportKey, .wake) == .reasonDoesNotMatchKind(transportKey, .wake))
+        for (from, to) in [(1, 3), (2, 2), (2, 1), (1, 1)] {
+            #expect(try generationRefusal(sample, .rateChange(nominalRate: 1), from, to) ==
+                    .notConsecutive(from: Generation(from), to: Generation(to)))
+        }
+        for rate in [0, 47_999, 48_001, 22_050, 384_000] {
+            #expect(try generationRefusal(sample, .rateChange(nominalRate: rate), map: revised) == .invalidRate(rate))
+        }
+        #expect(try generationRefusal(mapKey, .tempoEdit, meter: meter, note: "") == .musicalMapRequired)
+        #expect(try generationRefusal(sample, .wake, map: revised, note: "") == .musicalMapNotAllowed)
+        #expect(try generationRefusal(transportKey, .locate(ticks: 0), meter: meter) == .musicalMapNotAllowed)
+        #expect(try generationRefusal(mapKey, .tempoEdit, 1, 2, map: tempoMap(), note: "") == .musicalMapMismatch)
+        let foreign = try MusicalMap(clock: ClockID(validated: "mus.other"), revision: Generation(2),
+                                     segments: revised.segments)
+        #expect(try generationRefusal(mapKey, .externalTempo, map: foreign) == .musicalMapMismatch)
+        let extended = try MusicalMap(clock: musicalClock, revision: Generation(2), segments: [
+            TempoSegment(TempoSegmentFields(atTicks: 0, microsPerQuarter: 500_000), unknownFields: ["x": .bool(true)])
+        ])
+        #expect(try generationRefusal(mapKey, .tempoEdit, map: extended, note: "") == .musicalMapExtensionFields)
+        let extendedMeter = try MusicalMeter(MeterFields(numerator: 3, denominator: 4), unknownFields: ["x": .null])
+        #expect(try generationRefusal(mapKey, .tempoEdit, map: revised, meter: extendedMeter) ==
+                .musicalMapExtensionFields)
+        #expect(try generationRefusal(mapKey, .tempoEdit, map: revised, meter: meter, note: "") ==
+                .invalidNote(bytes: 0))
+        #expect(try generationRefusal(sample, .wake, note: " \n\t") == .invalidNote(bytes: 3))
+        let limit = GenerationV1Record.maximumNoteBytes
+        #expect(limit == RecordingTakeV1Record.maximumNoteBytes && limit == 256)
+        #expect(try generationRefusal(sample, .wake, note: String(repeating: "a", count: limit + 1)) ==
+                .invalidNote(bytes: 257))
+        #expect(try generationRefusal(sample, .wake, note: String(repeating: "é", count: 129)) ==
+                .invalidNote(bytes: 258))
+        #expect(try generationRefusal(sample, .wake, note: String(repeating: "a", count: limit)) == nil)
+        #expect(try generationRefusal(sample, .wake, note: String(repeating: "é", count: 128)) == nil)
+        let top = Generation.maximumValue
+        #expect(try generationRefusal(sample, .wake, top - 1, top) == nil)
+        #expect(try generationRefusal(sample, .wake, top, top) ==
+                .notConsecutive(from: Generation(top), to: Generation(top)))
+    }
+
+    @Test func generationV1RecordWritesTheRateOnlyForARateChangeAndDropsLocateTicks() throws {
+        let sample = GenerationKey(.sampleClock, primary)
+        for reason: GenerationBumpReason in [.deviceRestart, .configurationChange, .wake] {
+            let record = try GenerationV1Record.make(counter: sample, from: .initial, to: Generation(2),
+                                                     reason: reason, seq: 1)
+            #expect(record.nominalRate == nil && record.musicalMap == nil && record.meter == nil)
+        }
+        for rate in [44_100, 48_000, 88_200, 96_000, 176_400, 192_000] {
+            let record = try GenerationV1Record.make(counter: sample, from: .initial, to: Generation(2),
+                                                     reason: .rateChange(nominalRate: rate), seq: 1)
+            #expect(record.nominalRate == rate)
+        }
+        let near = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                               reason: .locate(ticks: 0), seq: 12)
+        let far = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                              reason: .locate(ticks: 61_440), seq: 12)
+        #expect(try near.encodedJSON() == far.encodedJSON())
+    }
+
+    @Test func generationV1RecordNeverNormalizesNoteText() throws {
+        // Canonically equal notes give equal records but different bytes.
+        let composed = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                                   reason: .transportRestart, seq: 1, note: "\u{00E9}")
+        let decomposed = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                                     reason: .transportRestart, seq: 1, note: "e\u{0301}")
+        #expect(composed == decomposed)
+        #expect(try composed.encodedJSON() != decomposed.encodedJSON())
+    }
+}
