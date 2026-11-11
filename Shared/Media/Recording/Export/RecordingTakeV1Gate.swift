@@ -2,9 +2,9 @@
 //  RecordingTakeV1Gate.swift
 //  FluxKlang
 //
-//  A fail-closed precondition for a future contract v1 take exporter (#109, not written):
-//  the three shapes the #352 ruling says must be refused with a typed error, never remapped.
-//  Nothing calls it yet.
+//  A fail-closed precondition for the contract v1 take exporter (#109): the three shapes the
+//  #352 ruling says must be refused with a typed error, never remapped. Its clearance is the
+//  input of `RecordingTakeV1Record.make` (#110 TKX1), which builds the `takeRecord`.
 //
 
 /// Proof that `RecordingTakeV1Gate.clear` accepted `take`. Only the gate builds it.

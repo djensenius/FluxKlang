@@ -3,6 +3,7 @@
 #else
 @testable import FluxKlang
 #endif
+import Foundation
 import Testing
 
 struct RecordingTakeV1GateTests {
@@ -232,5 +233,187 @@ struct RecordingTakeV1GateTests {
         #expect(refusal(skipped) == Refusal.notRestartSplit(after: 1_022))
         let unplaced = try chain(count: count, lastGeneration: count, lastPlaced: false)
         #expect(refusal(unplaced) == Refusal.unplacedSegment(1_023))
+    }
+
+    // MARK: - RecordingTakeV1Record (#110 TKX1)
+
+    typealias RecordRefusal = RecordingTakeV1RecordRefusal
+
+    /// Example 08's `tk.1` record (seq 8), keys sorted, compact.
+    static let example08TakeOneJSON = #"{"droppedFrames":1536,"#
+        + #""inputLatency":{"measuredFrames":null,"reportedFrames":312},"kind":"take","#
+        + #""note":"Reported latency is not measured latency; no loopback measurement was made.","#
+        + #""segments":[{"fileFrameStart":0,"frames":960000,"generation":1,"paddedFrames":1024,"#
+        + #""sampleClock":"smp.main","startFrame":0,"startOffsetNs":0},{"fileFrameStart":960000,"frames":480000,"#
+        + #""generation":2,"paddedFrames":512,"sampleClock":"smp.main","startFrame":0,"startOffsetNs":20833333333}],"#
+        + #""seq":8,"stopReason":"diskFull","stream":"str.take-in","takeId":"tk.1"}"#
+
+    private func json(_ record: RecordingTakeV1Record) throws -> String {
+        try #require(String(data: record.encodedJSON(), encoding: .utf8))
+    }
+
+    private func recordRefusal(_ take: RecordingTake, seq: Int = 1, note: String? = nil) throws -> RecordRefusal? {
+        let clearance = try RecordingTakeV1Gate.clear(take)
+        do {
+            _ = try RecordingTakeV1Record.make(clearance, seq: seq, note: note)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    /// A one-segment `user` take of 100 frames with the given IDs and latency.
+    private func idTake(take: String = "tk.1", stream: String = "str.take-in", clock: String = "smp.main",
+                        latency: InputLatency? = nil) throws -> RecordingTake {
+        let segment = try RecordingSegment(
+            clock: ClockID(clock), generation: Generation(1), nominalRate: 48_000, startFrame: 0,
+            placement: .placed(startOffsetNs: 0), fileFrameStart: 0, frames: 100, overflows: [], openedBy: nil)
+        return try RecordingTake(take: TakeID(take), stream: StreamID(stream),
+                                 inputLatency: latency ?? Fixture.latency(), segments: [segment], boundaries: [],
+                                 stopReason: .user, stopMark: nil)
+    }
+
+    @Test
+    func recordingTakeV1RecordEncodesExample08TakeOneExactly() throws {
+        var example = try Fixture.example08Take1()
+        let take = try example.finish(Fixture.take1, reason: .diskFull)
+        let note = "Reported latency is not measured latency; no loopback measurement was made."
+        let record = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(take), seq: 8, note: note)
+        #expect(record.segments.count == 2)
+        let second = try #require(record.segments.last)
+        #expect(second.startOffsetNs == 20_833_333_333)
+        #expect(second.fileFrameStart == 960_000)
+        #expect(record.droppedFrames == 1_536)
+        #expect(try json(record) == Self.example08TakeOneJSON)
+
+        let again = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(take), seq: 8, note: note)
+        #expect(again == record)
+        #expect(try again.encodedJSON() == record.encodedJSON())
+    }
+
+    @Test
+    func recordingTakeV1RecordEncodesExample08TakeTwoExactly() throws {
+        var ledger = try Fixture.example08Take1()
+        _ = try ledger.finish(Fixture.take1, reason: .diskFull)
+        try ledger.open(Fixture.opening(Fixture.take2, 2, 600_000))
+        try ledger.advance(Fixture.take2, to: Fixture.stamp(2, 720_000))
+        #expect(try ledger.ingest(Fixture.stop(2, 720_000, .deviceLost)) == [.recorded(Fixture.take2)])
+        let take = try ledger.finish(Fixture.take2, reason: .deviceLost)
+        let record = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(take), seq: 10)
+        let only = try #require(record.segments.first)
+        #expect(record.segments.count == 1 && only.generation.value == 2 && only.startFrame == 600_000)
+        // Example 08 seq 10, keys sorted, compact; it has no note.
+        let expected = #"{"droppedFrames":0,"inputLatency":{"measuredFrames":null,"reportedFrames":312},"kind":"take","#
+            + #""segments":[{"fileFrameStart":0,"frames":120000,"generation":2,"paddedFrames":0,"#
+            + #""sampleClock":"smp.main","startFrame":600000,"startOffsetNs":0}],"seq":10,"stopReason":"deviceLost","#
+            + #""stream":"str.take-in","takeId":"tk.2"}"#
+        #expect(try json(record) == expected)
+    }
+
+    @Test
+    func recordingTakeV1RecordMapsEveryContractV1StopReasonAndOmitsAnAbsentNote() throws {
+        var user = try Fixture.ledger()
+        try user.advance(Fixture.take1, to: Fixture.stamp(1, 100))
+        let userRecord = try RecordingTakeV1Record.make(
+            RecordingTakeV1Gate.clear(user.finish(Fixture.take1, reason: .user)), seq: 1)
+        #expect(userRecord.stopReason == "user")
+        #expect(userRecord.note == nil)
+        let userJSON = #"{"droppedFrames":0,"inputLatency":{"measuredFrames":null,"reportedFrames":312},"kind":"take","#
+            + #""segments":[{"fileFrameStart":0,"frames":100,"generation":1,"paddedFrames":0,"sampleClock":"smp.main","#
+            + #""startFrame":0,"startOffsetNs":0}],"seq":1,"stopReason":"user","stream":"str.take-in","takeId":"tk.1"}"#
+        #expect(try json(userRecord) == userJSON)
+
+        for reason in [RuntimeCaptureStopReason.diskFull, .deviceLost] {
+            var ledger = try Fixture.ledger()
+            try ledger.advance(Fixture.take1, to: Fixture.stamp(1, 100))
+            #expect(try ledger.ingest(Fixture.stop(1, 100, reason)) == [.recorded(Fixture.take1)])
+            let take = try ledger.finish(Fixture.take1, reason: TakeStopReason(reason))
+            let record = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(take), seq: 2)
+            let expected = reason == .diskFull ? "diskFull" : "deviceLost"
+            #expect(record.stopReason == expected)
+            #expect(try json(record).contains(#""stopReason":"\#(expected)","#))
+            #expect(try !json(record).contains(#""note""#))
+        }
+    }
+
+    @Test
+    func recordingTakeV1RecordWritesMeasuredLatencyOnlyWhenMeasured() throws {
+        let unmeasured = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(idTake()), seq: 3)
+        #expect(unmeasured.inputLatency.measuredFrames == nil)
+        #expect(try json(unmeasured).contains(#""inputLatency":{"measuredFrames":null,"reportedFrames":312}"#))
+
+        let measured = try InputLatency(reportedFrames: 312,
+                                        measured: MeasuredLatency(frames: 296, evidence: "loopback run 1/3"))
+        let record = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(idTake(latency: measured)), seq: 3)
+        #expect(record.inputLatency.measuredFrames == 296)
+        #expect(record.inputLatency.reportedFrames == 312)
+        let expected = #""inputLatency":{"evidence":"loopback run 1/3","measuredFrames":296,"reportedFrames":312}"#
+        #expect(try json(record).contains(expected))
+
+        let zero = try InputLatency(reportedFrames: 0, measured: MeasuredLatency(frames: 0, evidence: "loopback"))
+        let zeroRecord = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(idTake(latency: zero)), seq: 3)
+        #expect(try json(zeroRecord).contains(#"{"evidence":"loopback","measuredFrames":0,"reportedFrames":0}"#))
+    }
+
+    @Test
+    func recordingTakeV1RecordReportsTheFirstRefusalInFixedOrder() throws {
+        let allBad = try idTake(take: "TK.1", stream: "str_in", clock: "smp:main")
+        #expect(try recordRefusal(allBad, seq: 0, note: "") == RecordRefusal.invalidSeq(0))
+        #expect(try recordRefusal(allBad, seq: Int.min) == RecordRefusal.invalidSeq(Int.min))
+        #expect(try recordRefusal(allBad, note: "") == RecordRefusal.invalidTakeID(TakeID("TK.1")))
+        let badStream = try idTake(stream: "str_in", clock: "smp:main")
+        #expect(try recordRefusal(badStream, note: "") == RecordRefusal.invalidStream(StreamID("str_in")))
+        let badClock = try idTake(clock: "smp:main")
+        #expect(try recordRefusal(badClock, note: "") == RecordRefusal.invalidSampleClock(segment: 0))
+
+        let good = try idTake()
+        #expect(try recordRefusal(good, note: "") == RecordRefusal.invalidNote(bytes: 0))
+        #expect(try recordRefusal(good, note: " \n\t") == RecordRefusal.invalidNote(bytes: 3))
+        let limit = RecordingTakeV1Record.maximumNoteBytes
+        #expect(limit == 256)
+        #expect(try recordRefusal(good, note: String(repeating: "a", count: limit + 1))
+            == RecordRefusal.invalidNote(bytes: 257))
+        #expect(try recordRefusal(good, note: String(repeating: "é", count: 129))
+            == RecordRefusal.invalidNote(bytes: 258))
+        #expect(try recordRefusal(good, note: String(repeating: "a", count: limit)) == nil)
+        #expect(try recordRefusal(good, note: String(repeating: "é", count: 128)) == nil)
+        #expect(try recordRefusal(good, seq: 1, note: nil) == nil)
+
+        // Zero frames never reach the record: the segment itself refuses them.
+        Fixture.refusal(.inconsistentRecord(.frames)) { () throws(TakeLedgerError) in
+            _ = try RecordingSegment(
+                clock: Fixture.clock, generation: Generation.initial, nominalRate: 48_000, startFrame: 0,
+                placement: .placed(startOffsetNs: 0), fileFrameStart: 0, frames: 0, overflows: [], openedBy: nil)
+        }
+    }
+
+    @Test
+    func recordingTakeV1RecordMatchesTheMediaContractIDPatternExactly() {
+        for valid in ["tk.1", "a.b", "a-b.c.d-e", "str.take-in", "a..b", "a.-", "z9-.0"] {
+            #expect(MediaContractV1ID.matches(valid), "\(valid)")
+        }
+        for invalid in ["", "tk", "tk.", ".tk", "1k.a", "-a.b", "Tk.1", "tk.A", "tk_1.a", "tk.a_b", "tk:1.a", "tk.1\n",
+                        "tk.é"] {
+            #expect(!MediaContractV1ID.matches(invalid), "\(invalid)")
+        }
+    }
+
+    @Test
+    func recordingTakeV1RecordKeepsEverySegmentAtTheLedgerLimitAndRefusesOneMore() throws {
+        let count = TakeLedger.maximumSegmentsPerTake
+        let take = try chain(count: count, lastGeneration: count, lastPlaced: true)
+        let record = try RecordingTakeV1Record.make(RecordingTakeV1Gate.clear(take), seq: 1)
+        #expect(record.segments.count == count)
+        let last = try #require(record.segments.last)
+        #expect(last.generation.value == count)
+        #expect(last.fileFrameStart == Int64(count - 1) * 10)
+        #expect(last.startOffsetNs == Int64(count - 1) * 1_000)
+        #expect(try record.encodedJSON() == record.encodedJSON())
+
+        // The gate sets no count limit, so a hand-built take one past the ledger limit clears and is refused here.
+        let over = try chain(count: count + 1, lastGeneration: count + 1, lastPlaced: true)
+        #expect(refusal(over) == nil)
+        #expect(try recordRefusal(over) == RecordRefusal.tooManySegments(count: count + 1, limit: count))
+        #expect(try recordRefusal(over, seq: 0) == RecordRefusal.invalidSeq(0))
     }
 }
