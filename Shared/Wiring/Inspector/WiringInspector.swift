@@ -173,14 +173,10 @@ struct WiringInspector: Hashable, Sendable {
         }
     }
 
-    private static func title(of node: GraphNode) -> String {
-        node.label.utf8.isEmpty ? node.id.rawValue : node.label
-    }
-
     private static func nodeInspector(
         _ node: GraphNode, in graph: GraphDocument, errors: [GraphValidationError], marker: WiringInspectorMarker
     ) -> WiringInspector {
-        let title = title(of: node)
+        let title = node.wiringTitle
         let attached = graph.edges.filter { $0.from.node == node.id || $0.to.node == node.id }
         let attachedIDs = attached.map(\.id).sorted { $0.rawValue.utf8.lexicographicallyPrecedes($1.rawValue.utf8) }
         let ports = node.ports.map { port in
@@ -225,7 +221,7 @@ struct WiringInspector: Hashable, Sendable {
                 node: address.node, port: address.port, title: address.node.rawValue, state: .missingNode
             )
         }
-        let title = title(of: node)
+        let title = node.wiringTitle
         guard node.kind.isRoutable else {
             return WiringInspectorEnd(node: address.node, port: address.port, title: title, state: .notRoutable)
         }

@@ -4,9 +4,8 @@
 // Reference model; not RT-certified.
 
 /// Up to `capacity` stateful events (`control`, `program`, `rampTo`) recorded by a retiring cycle, in recorded order,
-/// for the replacement cycle's `KernelCarryReadmission` to plan and re-admit (`KernelCarryRetiming.plan` is a
-/// reference model only, not used by re-admission). Other payloads are never carried: a `noteOn` is
-/// lost (never stuck), a `noteOff` keeps its tombstone and a `clockPulse` is timing.
+/// for the replacement cycle's `KernelCarryReadmission` to plan and re-admit. Other payloads are never carried: a
+/// `noteOn` is lost (never stuck), a `noteOff` keeps its tombstone and a `clockPulse` is timing.
 ///
 /// Storage is an `InlineArray` inside the value: `init`, `record` and `beginRecarried` allocate nothing, take no lock
 /// and never touch an `Array`; each is O(1). A full carry never overwrites: the event is counted in

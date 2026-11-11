@@ -95,12 +95,6 @@ enum WiringConnectionListText {
     static let customShort = "map"
     static let customLabel = "Custom channel map"
 
-    /// The node's label, or its raw ID when the label is empty: the rule `PerformanceWiringText.nodeTitle` uses and
-    /// that `WiringInspector` and `WiringSelectionOrder` each keep a private copy of.
-    static func title(_ node: GraphNode) -> String {
-        node.label.utf8.isEmpty ? node.id.rawValue : node.label
-    }
-
     /// `2ch`, `audio` (no channel count), `MIDI`, `control` or `clock`.
     static func signalText(_ port: GraphPort) -> String {
         switch port.signal {

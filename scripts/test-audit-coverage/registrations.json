@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "721443f8bc58b34fc175cb8541a4bc740bfa0201b365517f6d5976294e7ae71d",
+    "sha256": "203273c92a720507b4cb85e776a6c5dd4d508379ce85629011af6089162b2ce9",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -432,8 +432,6 @@
         "FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift",
         "FluxKlangTests/KernelRetirementCarryTests.swift",
         "FluxKlangTests/KernelRetirementCarryTests+Capacity.swift",
-        "FluxKlangTests/KernelRetirementCarryTests+Order.swift",
-        "FluxKlangTests/KernelRetirementCarryTests+Retiming.swift",
         "FluxKlangTests/MPEZoneTests.swift",
         "FluxKlangTests/MPEZoneTests+Config.swift",
         "FluxKlangTests/MPEZoneTests+Allocator.swift",
@@ -743,6 +741,7 @@
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift",
         "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift",
+        "FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift",
         "FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift",
         "FluxKlangTests/RealtimeHandoffTests+Catalog.swift",
         "FluxKlangTests/PerformanceProjectSessionTests.swift",
