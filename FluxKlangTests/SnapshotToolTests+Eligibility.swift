@@ -98,3 +98,57 @@ extension SnapshotToolTests {
         #expect(AssistantEligibility.evaluate(busy) == .off)
     }
 }
+
+// MARK: - Presentation (status-diagnostics.md, "Assistant eligibility")
+
+extension SnapshotToolTests {
+    @Test func eachEligibilityPresentsAsTheStatusDocDescribes() {
+        let eligible = AssistantEligibilityPresentation(.eligible)
+        #expect(eligible.showsExplainButtons && eligible.message == nil && !eligible.showsCancel)
+
+        for reason in [AssistantEligibility.Reason.modelUnavailable, .cloudProvider] {
+            let unavailable = AssistantEligibilityPresentation(.notEligible(reason))
+            #expect(!unavailable.showsExplainButtons && !unavailable.showsCancel, "\(reason)")
+            #expect(unavailable.message == "Assistant unavailable on this device", "\(reason)")
+        }
+
+        let off = AssistantEligibilityPresentation(.off)
+        #expect(!off.showsExplainButtons && off.message == nil && !off.showsCancel)
+
+        let busy = AssistantEligibilityPresentation(.busy)
+        #expect(!busy.showsExplainButtons && busy.showsCancel)
+        #expect(busy.message == "Explaining...")
+    }
+
+    @Test func aCloudProviderPresentsExactlyLikeAnUnreadyModel() {
+        #expect(AssistantEligibilityPresentation(.notEligible(.cloudProvider))
+            == AssistantEligibilityPresentation(.notEligible(.modelUnavailable)))
+    }
+
+    @Test func aDisabledAssistantShowsNoButtonsWhateverTheOtherFlagsAre() {
+        let rows = Self.eligibilityTable.filter { !$0.userEnabled }
+        #expect(rows.count == 8)
+        for row in rows {
+            let presentation = AssistantEligibilityPresentation(AssistantEligibility.evaluate(row.facts))
+            #expect(presentation == AssistantEligibilityPresentation(.off), "\(row.facts)")
+            #expect(!presentation.showsExplainButtons && !presentation.showsCancel && presentation.message == nil)
+        }
+    }
+
+    @Test func evaluatedFactsPresentThroughTheirEligibility() throws {
+        let ready = try #require(Self.eligibilityTable.first { $0.expected == .eligible })
+        #expect(AssistantEligibilityPresentation(AssistantEligibility.evaluate(ready.facts)).showsExplainButtons)
+
+        let busyCloud = AssistantFacts(userEnabled: true, modelReady: true, busy: true, providerIsCloud: true)
+        let cloud = AssistantEligibilityPresentation(AssistantEligibility.evaluate(busyCloud))
+        #expect(cloud.message == "Assistant unavailable on this device" && !cloud.showsCancel)
+
+        let working = AssistantFacts(userEnabled: true, modelReady: true, busy: true, providerIsCloud: false)
+        let busy = AssistantEligibilityPresentation(AssistantEligibility.evaluate(working))
+        #expect(busy.message == "Explaining..." && busy.showsCancel && !busy.showsExplainButtons)
+
+        let unready = AssistantFacts(userEnabled: true, modelReady: false, busy: true, providerIsCloud: false)
+        #expect(AssistantEligibilityPresentation(AssistantEligibility.evaluate(unready)).message
+            == "Assistant unavailable on this device")
+    }
+}

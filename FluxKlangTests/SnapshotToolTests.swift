@@ -247,13 +247,13 @@ struct SnapshotToolTests {
     }
 
     @Test(.enabled(if: Self.sourcesAreReachable, "the tool sources are not next to the tests"))
-    func theFiveToolSourceFilesNameNoForbiddenWordAndImportOnlyFoundation() throws {
+    func theToolSourceFilesNameNoForbiddenWordAndImportOnlyFoundation() throws {
         let directory = try #require(Self.toolSourceDirectory())
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".swift") }.sorted()
         #expect(files == [
-            "AssistantEligibility.swift", "SnapshotToolCatalog.swift", "SnapshotToolRefusal.swift",
-            "SnapshotToolRequest.swift", "SnapshotToolResult.swift"
+            "AssistantEligibility.swift", "AssistantEligibilityPresentation.swift", "SnapshotToolCatalog.swift",
+            "SnapshotToolRefusal.swift", "SnapshotToolRequest.swift", "SnapshotToolResult.swift"
         ])
         for file in files {
             let text = try String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8)
