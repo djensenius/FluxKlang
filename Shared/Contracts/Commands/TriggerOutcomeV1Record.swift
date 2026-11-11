@@ -19,7 +19,7 @@ import Foundation
 struct TriggerOutcomeV1Record: Hashable, Sendable {
     static let kind = "outcome"
     /// The same bound as `RecordingTakeV1Record.maximumNoteBytes`; the schema needs only a non-empty note.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let triggerID: TriggerID
@@ -57,7 +57,7 @@ struct TriggerOutcomeV1Record: Hashable, Sendable {
         }
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }
@@ -81,7 +81,10 @@ struct TriggerOutcomeV1Record: Hashable, Sendable {
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields; every optional field is omitted when absent. Equal records encode to equal bytes.
+    /// schema's fields; every optional field is omitted when absent. Records built from the same inputs, with
+    /// byte-identical `note` text, encode to identical bytes. Swift `String` equality is canonical, so records
+    /// whose notes differ only in Unicode normalization compare equal but encode differently; text is never
+    /// normalized.
     /// The output is bounded: a trigger ID of at most `ContractID.maximumLength` (128) bytes and a note of
     /// at most `maximumNoteBytes`.
     func encodedJSON() throws -> Data {

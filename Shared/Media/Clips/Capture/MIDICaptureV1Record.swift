@@ -19,7 +19,7 @@ import Foundation
 struct MIDICaptureV1Record: Hashable, Sendable {
     static let kind = "midiCapture"
     /// A bound of this exporter, not of the schema (which needs only a non-empty note): the TKX1 note bound.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let stream: StreamID
@@ -48,7 +48,7 @@ struct MIDICaptureV1Record: Hashable, Sendable {
         if let ticks = capture.musicalTicks, ticks < 0 { throw .negativeMusicalTicks(ticks) }
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }

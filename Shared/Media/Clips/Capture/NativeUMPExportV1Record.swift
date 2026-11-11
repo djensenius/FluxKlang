@@ -26,7 +26,7 @@ struct NativeUMPExportV1Record: Hashable, Sendable {
     static let kind = "export"
     static let format = "nativeUmp"
     /// A bound of this exporter, not of the schema (which needs only a non-empty note): the TKX1 note bound.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let exportID: ExportID
@@ -58,7 +58,7 @@ struct NativeUMPExportV1Record: Hashable, Sendable {
         }
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }
@@ -79,7 +79,10 @@ struct NativeUMPExportV1Record: Hashable, Sendable {
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields for `nativeUmp`; `note` is omitted when absent. Equal records encode to equal bytes.
+    /// schema's fields for `nativeUmp`; `note` is omitted when absent. Records built from the same inputs, with
+    /// byte-identical `note` text, encode to identical bytes. Swift `String` equality is canonical, so records
+    /// whose notes differ only in Unicode normalization compare equal but encode differently; text is never
+    /// normalized.
     /// The output is bounded: at most `MIDICaptureLog.maximumStreams` streams and `MIDICaptureLog.maximumCaptures`
     /// offsets, IDs of at most `ContractID.maximumLength` (128) bytes, and a note of at most `maximumNoteBytes`.
     func encodedJSON() throws -> Data {
