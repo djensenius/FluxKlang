@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct MIDIClockPulseScheduleTests {
     private static func map(rate: Int = 48_000, tempos: [(Int64, Int64)] = [(0, 500_000)],
                             anchorFrame: Int64 = 0, anchorTicks: Int64 = 0) throws -> MusicalClockMap {
