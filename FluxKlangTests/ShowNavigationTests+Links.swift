@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ShowNavigationLinkTests {
     typealias Fix = ShowNavigationTestFixture
     static let patch = PatchID(validated: "pat.keys")

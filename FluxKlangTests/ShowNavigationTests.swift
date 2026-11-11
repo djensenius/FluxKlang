@@ -48,6 +48,9 @@ enum ShowNavigationTestFixture {
     }
 }
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ShowNavigationTests {
     typealias Fix = ShowNavigationTestFixture
 

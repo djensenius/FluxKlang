@@ -110,7 +110,11 @@ private func makeCursor(_ sources: [ShowInputSourceID]) throws -> ShowCursor {
     try ShowCursor.make(setlist: SessionFix.main, bounceTicks: 0, sources: sources, in: SessionFix.library())
 }
 
+#if os(macOS)
+@Suite("Show foot session", .productionAccessAudit)
+#else
 @Suite("Show foot session")
+#endif
 struct ShowFootSessionTests {
     @Test
     func showFootSessionGoldenWalkMovesThroughNineFootPresses() throws {

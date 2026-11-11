@@ -8,7 +8,11 @@ import Testing
 
 /// The neutral OSC namespace `/fk/v1`: closed address grammar, validated route table, atomic mapping
 /// to live-only command operations, and the exhaustive live guard (#89, slice O2a).
+#if os(macOS)
+@Suite("OSC neutral namespace mapping", .productionAccessAudit)
+#else
 @Suite("OSC neutral namespace mapping")
+#endif
 struct OSCNamespaceTests {
     typealias Fixture = OSCNamespaceFixture
     typealias OSC = OpenSoundControl

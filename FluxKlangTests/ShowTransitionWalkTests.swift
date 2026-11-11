@@ -175,6 +175,9 @@ private enum ShowTransitionWalkFixture {
     }
 }
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ShowTransitionWalkTests {
     private typealias Fix = ShowTransitionWalkFixture
 
