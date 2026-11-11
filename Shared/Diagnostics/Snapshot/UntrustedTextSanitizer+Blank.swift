@@ -80,12 +80,21 @@ extension UntrustedTextSanitizer {
         return true
     }
 
-    /// Scalars that render as nothing although they are neither default-ignorable nor
-    /// format characters, so `filterScalars` removes them by value: the Hangul fillers
-    /// (U+115F, U+1160, U+3164) and the halfwidth one (U+FFA0), the blank Braille pattern
-    /// (U+2800), the Khitan small script filler (U+16FE4, a combining mark), the Egyptian
-    /// hieroglyph full and half blanks (U+13441, U+13442), the Duployan thick letter
-    /// selector (U+1BC9D, a mark) and the musical null notehead (U+1D159, So).
+    /// Scalars that render as nothing and that `filterScalars` removes by value. The Hangul
+    /// fillers (U+115F, U+1160, U+3164) and the halfwidth one (U+FFA0) are also
+    /// default-ignorable, so they are removed either way and are listed so the set is
+    /// pinned. The rest are neither default-ignorable nor format characters: the blank
+    /// Braille pattern (U+2800), the Khitan small script filler (U+16FE4, a combining mark),
+    /// the Egyptian hieroglyph full and half blanks (U+13441, U+13442), the Duployan thick
+    /// letter selector (U+1BC9D, a mark) and the musical null notehead (U+1D159, So).
+    ///
+    /// No Unicode property marks a glyph as blank, so the list cannot be derived.
+    /// `everyBlankNamedScalarIsRemovedOrReviewedAsDrawn` scans every assigned scalar whose
+    /// name says blank, filler, null, space, invisible or zero width. It fails when one is
+    /// kept that was not reviewed as drawn, or when a reviewed one stops being kept, so
+    /// newer Unicode tables surface new candidates. A blank glyph whose name says nothing
+    /// of it (U+1BC9D is one), or one that only a particular font draws as nothing, is not
+    /// caught.
     static let blankLookalikes: Set<UInt32> = [
         0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x16FE4, 0x13441, 0x13442, 0x1BC9D, 0x1D159
     ]
