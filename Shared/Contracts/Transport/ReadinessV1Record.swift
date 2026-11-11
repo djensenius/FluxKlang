@@ -63,7 +63,10 @@ struct ReadinessV1Record: Hashable, Sendable {
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields; `reason` and `note` are omitted when absent. Equal records encode to equal bytes.
+    /// schema's fields; `reason` and `note` are omitted when absent. Records built from the same inputs, with
+    /// byte-identical `reason` and `note` text, encode to identical bytes. Swift `String` equality is canonical,
+    /// so records whose text differs only in Unicode normalization (`"\u{00E9}"` vs `"e\u{0301}"`) compare
+    /// equal but encode differently; text is never normalized.
     /// The output is bounded: an action ID of at most `ContractID.maximumLength` (128) bytes and a reason
     /// and note of at most `maximumNoteBytes` each.
     func encodedJSON() throws -> Data {

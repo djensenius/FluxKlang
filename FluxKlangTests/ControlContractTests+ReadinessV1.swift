@@ -200,6 +200,13 @@ extension ControlContractTests {
             let object = try #require(decoded)
             #expect(object["reason"] as? String == " x " && object["note"] as? String == accented)
             #expect(Set(object.keys) == ["seq", "kind", "actionId", "from", "to", "reason", "note"])
+            // Text is never normalized: canonically equal reasons give equal records but different bytes.
+            let composed = try ReadinessV1Record.make(backing, from: .ready, to: .invalidated, seq: 3,
+                                                      reason: "\u{00E9}")
+            let decomposed = try ReadinessV1Record.make(backing, from: .ready, to: .invalidated, seq: 3,
+                                                        reason: "e\u{0301}")
+            #expect(composed == decomposed)
+            #expect(try composed.encodedJSON() != decomposed.encodedJSON())
         }
     }
 }
