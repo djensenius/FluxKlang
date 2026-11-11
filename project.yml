@@ -435,6 +435,7 @@ targets:
       - path: FluxKlangTests/DevicePresenceRouteAvailabilityTests.swift
       - path: FluxKlangTests/SpatialRouteStateTests+Order.swift
       - path: FluxKlangTests/SpatialRouteStateTests+SpeakerState.swift
+      - path: FluxKlangTests/PerformBindingListTests.swift
       - path: FluxKlangTests/PerformCellModelTests.swift
       - path: FluxKlangTests/PerformCellModelTests+Accessibility.swift
       - path: FluxKlangTests/PerformCellModelTests+Entry.swift
