@@ -56,12 +56,13 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `ProjectPackageAdmissionTests`, `PerformBindingListTests`,
 `WiringConnectionListTests`, `MIDIClockArbitrationTests`,
 `MIDIClockArbitrationSteadyRunTests`, `MIDIInternalClockTests`,
-`MTCFollowerTests` and `MetronomeGridTests` use the canonical suite trait; this
-is partial source adoption only. The iOS owners of those twenty-six
-macOS-guarded suites remain unadopted. Other owners'
-annotation obligations remain unsatisfied: inventory intentionally exits 0 with
-`enforcementSatisfied: false`, while default enforcement exits 1. Inventory
-success is not coverage or isolation.
+`MTCFollowerTests`, `MetronomeGridTests`, `MIDIClipTimingTests`,
+`MIDIClipLoopTests`, `MIDIClipContinuityTests`, `MIDIClipContinuityTempoTests`
+and `SMFTempoImportTests` use the canonical suite trait; this is partial source
+adoption only. The iOS owners of those thirty-one macOS-guarded suites remain
+unadopted. Other owners' annotation obligations remain unsatisfied: inventory
+intentionally exits 0 with `enforcementSatisfied: false`, while default
+enforcement exits 1. Inventory success is not coverage or isolation.
 
 The trait observes cumulative suite-exit state with nonrecursive scope, not
 per-test evidence or exclusive attribution. Missing/invalid
@@ -421,6 +422,63 @@ fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 `FluxKlangTests/MIDIClockArbitrationSteadyRunTests`,
 `FluxKlangTests/MIDIInternalClockTests`, `FluxKlangTests/MTCFollowerTests` and
 `FluxKlangTests/MetronomeGridTests`, carrying that run ID, with all 14
+operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
+issue recorded. These runs add no process-identity, argv or bootstrap evidence
+and do not cover the iOS owners; the remaining #60 gates above still apply and
+#60 remains open.
+
+## MIDI clip timing, loop, continuity and SMF tempo import source adoption
+
+`MIDIClipTimingTests`, `MIDIClipLoopTests`, `MIDIClipContinuityTests`,
+`MIDIClipContinuityTempoTests` and `SMFTempoImportTests` now use the canonical
+trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. All five keep their display names: the trait is added to
+each existing `@Suite` in the macOS branch and the `#else` branch keeps that
+`@Suite` unchanged. `MIDIClipLoopTests` and `MIDIClipContinuityTempoTests` are
+separate root suites declared in `MIDIClipTimingTests+Loop.swift` and
+`MIDIClipContinuityTests+Tempo.swift`; the nine `SMFTempoImportTests+`
+extension files stay unannotated. The clip suites build `MIDIClip`,
+`MIDIClipPlacement` and `MIDIClipScheduler` values over synthetic
+`MusicalClockMap`, `ClockAnchor` and `HostStamp` fixtures, with the seeded
+`MIDIClipSplitMix64` value generator for randomized cases. `SMFTempoImportTests`
+feeds hand-built Standard MIDI File bytes to `SMFTempoScan` and
+`StandardMIDIFile`. None of the five touches the file system, bundles, wall
+clock, sleep, dispatch, defaults, global state, MIDI hardware or audio.
+`MediaTapPlanTests`, `MediaBlockLedgerTests`, `MediaBlockPoolTests` and
+`MediaIOWorkerTests` stay unadopted: they drive reference types rather than
+value types (the `FanOutHandoff` fan-out, or a real `MediaBlockPool`, a class
+over an unsafe sample buffer, and its leases). `MIDITimecodeTests` stays
+unadopted because its 498-line root file would exceed SwiftLint's 500-line
+`file_length` limit with the guard. Only this change was run through the
+checker; the UARG7 tree was not re-run, and the comparison below uses its
+recorded totals (4,888 registrations, 288 satisfied rows, 6,936 diagnostics).
+The complete source inventory of this change retains all 4,888 registrations
+and has 328 satisfied rows, 40 more than the UARG7 tree. The five suites' 40
+`FluxKlangMacTests` root rows (eight per suite) are now satisfied, which
+accounts for the whole increase. The iOS `FluxKlangTests` root rows for all
+five suites stay unsatisfied, each with one annotation diagnostic. Diagnostics
+fall by 40, from 6,936 to 6,896, which is consistent with one diagnostic
+removed for each newly satisfied row. No `FluxKlangMacTests` diagnostic remains
+for the five suites. Inventory still exits 0 and default enforcement still
+exits 1. The two trees were compared by totals only; the per-suite counts come
+from this change's output, not from a row-level diff.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 86 repository sources from this change. Fifteen are test sources:
+the four MIDI clip suite files, the root and nine extension files of
+`SMFTempoImportTests`, and `ProductionAccessScope.swift`. The other 71 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: all 45 `Shared/Contracts` sources, the ten
+`Shared/MIDI/Protocol/MIDI1` sources, 14 `Shared/Media/Clips` sources (the
+five root files, `SMF` and `Tempo`), and `Shared/WING/FaderMath.swift`. Debug
+and Release (`-c release -Xswiftc -enable-testing`) runs filtered to the five
+suites each passed 135 tests (145 case invocations) in five suites. Each run,
+under its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment
+to `--attachments-path` for each of `FluxKlangTests/MIDIClipTimingTests`,
+`FluxKlangTests/MIDIClipLoopTests`, `FluxKlangTests/MIDIClipContinuityTests`,
+`FluxKlangTests/MIDIClipContinuityTempoTests` and
+`FluxKlangTests/SMFTempoImportTests`, carrying that run ID, with all 14
 operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
 issue recorded. These runs add no process-identity, argv or bootstrap evidence
 and do not cover the iOS owners; the remaining #60 gates above still apply and

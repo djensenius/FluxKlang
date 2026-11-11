@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("MIDI clip continuity across a clock re-anchor", .productionAccessAudit)
+#else
 @Suite("MIDI clip continuity across a clock re-anchor")
+#endif
 struct MIDIClipContinuityTests {
     typealias Base = MIDIClipTimingTests
     static let quarter = MusicalTime.ticksPerQuarter
