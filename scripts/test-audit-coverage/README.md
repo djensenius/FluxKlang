@@ -331,11 +331,12 @@ without test-body, helper, target-membership or registration changes.
 trait is added to its existing `@Suite` in the macOS branch, the `#else`
 branch keeps that `@Suite` unchanged, and its `+Limits` extension stays
 unannotated. The `BookFx` and `ProjectPackageTestSupport` helper enums are not
-suites and stay unannotated. Against the unmodified base, the complete source
-inventory retains all 4,856 registrations and moves 32 `FluxKlangMacTests`
-owner rows (eight per suite) to satisfied: 232 satisfied rows instead of 200.
-The iOS `FluxKlangTests` rows for all four suites stay unsatisfied and no
-other row changes. Diagnostics fall from 7,016 to 6,960 (16 removed for each
+suites and stay unannotated. Against the unmodified base (main `2d23cd7f`),
+the complete source inventory retains all 4,872 registrations and moves 32
+`FluxKlangMacTests` owner rows (eight per suite) to satisfied: 240 satisfied
+rows instead of 208. The iOS `FluxKlangTests` rows for all four suites stay
+unsatisfied and no other row changes. Diagnostics fall from 7,032 to 6,976
+(16 removed for each
 of the three suites that had no `@Suite`, and 8 for `ControlPickupBookTests`,
 whose existing `@Suite` already met the single-macro requirement; none added).
 Inventory still exits 0 and default enforcement still exits 1.
