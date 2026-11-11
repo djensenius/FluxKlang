@@ -304,6 +304,7 @@ targets:
       - path: FluxKlangTests/ExplainGroundingTests+Order.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Unicode.swift
       - path: FluxKlangTests/NeutralSnapshotTests+UnicodeScan.swift
+      - path: FluxKlangTests/NeutralSnapshotTests+UnicodeHardening.swift
       - path: FluxKlangTests/SnapshotToolTests.swift
       - path: FluxKlangTests/SnapshotToolTests+Requests.swift
       - path: FluxKlangTests/SnapshotToolTests+Results.swift
