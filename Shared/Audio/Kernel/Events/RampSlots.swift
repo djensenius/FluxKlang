@@ -62,12 +62,11 @@ final class RampSlots: @unchecked Sendable {
 
     /// Starts a ramp from `current` to `target` over `durationFrames`, replacing any active ramp on `parameter`.
     /// A `durationFrames <= 0` ramp jumps: the next `advance` returns `target` and the slot goes idle.
-    /// Returns `.refused(.slotOutOfRange)` for an out-of-range parameter, or `.refused(.invalidLength)` when
+    /// Returns `.refused(.slotOutOfRange)` for an out-of-range parameter, or `.refused(.nonFinite)` when
     /// `target` or `current` is NaN or infinite. A refusal leaves the slot and `activeCount` unchanged.
     func set(parameter: UInt32, target: Float, durationFrames: Int64, current: Float) -> KernelStatus {
         guard let index = index(parameter) else { return .refused(.slotOutOfRange) }
-        // Follow-up (#64): a dedicated `.nonFinite` refusal; `.invalidLength` is the closest existing case.
-        guard target.isFinite, current.isFinite else { return .refused(.invalidLength) }
+        guard target.isFinite, current.isFinite else { return .refused(.nonFinite) }
         if !slots[index].active { activeCount &+= 1 }
         slots[index] = Ramp(start: current, target: target, duration: max(durationFrames, 0), elapsed: 0,
                             active: true)

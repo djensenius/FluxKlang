@@ -326,12 +326,22 @@ extension RealtimeHandoffTests {
             let hostile: [Float] = [.nan, .signalingNaN, .infinity, -.infinity]
             for value in hostile {
                 #expect(slots.set(parameter: 0, target: value, durationFrames: 4, current: 0)
-                    == .refused(.invalidLength))
+                    == .refused(.nonFinite))
                 #expect(slots.set(parameter: 0, target: 0, durationFrames: 4, current: value)
-                    == .refused(.invalidLength))
+                    == .refused(.nonFinite))
                 #expect(slots.set(parameter: 1, target: value, durationFrames: 0, current: value)
-                    == .refused(.invalidLength))
+                    == .refused(.nonFinite))
+                #expect(slots.set(parameter: 1, target: value, durationFrames: 4, current: 1)
+                    == .refused(.nonFinite))
+                #expect(slots.set(parameter: 1, target: 1, durationFrames: 4, current: value)
+                    == .refused(.nonFinite))
+                // Each refusal leaves both slots exactly as they were.
+                #expect(slots.activeCount == 1)
+                #expect(slots.value(parameter: 0) == 0 && slots.value(parameter: 1) == nil)
+                #expect(slots.lastValue(parameter: 0) == 0 && slots.lastValue(parameter: 1) == 0)
             }
+            // A range check still wins over the value check.
+            #expect(slots.set(parameter: 2, target: .nan, durationFrames: 4, current: 0) == .refused(.slotOutOfRange))
             // Refusals leave the existing ramp and the count untouched.
             #expect(slots.activeCount == 1)
             #expect(slots.advance(parameter: 0, frames: 1) == 1)

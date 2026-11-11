@@ -232,7 +232,10 @@ extension RealtimeHandoffTests {
             #expect(MemoryLayout<KernelStatus>.size <= 2)
             let statuses: [KernelStatus] = [.ok, .empty] + KernelRefusal.allCases.map { .refused($0) }
                 + SilenceReason.allCases.map { .silenced($0) }
-            #expect(statuses.count == 2 + 7 + 4)
+            #expect(statuses.count == 2 + 8 + 4)
+            // `.nonFinite` was appended, so the earlier refusal raw values stay put.
+            #expect(KernelRefusal.invalidLength.rawValue == 6 && KernelRefusal.nonFinite.rawValue == 7)
+            #expect(KernelRefusal.allCases.last == .nonFinite)
             for (index, status) in statuses.enumerated() {
                 #expect(statuses.indices.filter { statuses[$0] == status } == [index])
             }
