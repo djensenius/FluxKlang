@@ -45,9 +45,10 @@ Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
 manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `CloudKitHistoryIsolationTests`, `PerformanceProjectSessionTests`,
 `PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`,
-`GraphCompilerTests`, `RoutingBoundaryTests`, `GraphCompilerPlanTests` and
-`GraphReferenceEvaluatorTests` use the canonical suite trait; this is partial
-source adoption only. The iOS owners of those five macOS-guarded suites remain
+`GraphCompilerTests`, `RoutingBoundaryTests`, `GraphCompilerPlanTests`,
+`GraphReferenceEvaluatorTests`, `AudioGainContractTests` and
+`AudioMuteContractTests` use the canonical suite trait; this is partial
+source adoption only. The iOS owners of those seven macOS-guarded suites remain
 unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
@@ -218,6 +219,34 @@ fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 audit issue recorded. These runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the remaining #60 gates above still
 apply and #60 remains open.
+
+## Gain and mute graph contract source adoption
+
+`AudioGainContractTests` and `AudioMuteContractTests` now use the canonical
+trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, target-membership or registration
+changes. Against the unmodified base, the complete source inventory retains
+all 4,856 registrations and moves 16 `FluxKlangMacTests` owner rows (eight per
+suite) to satisfied: 136 satisfied rows instead of 120. The iOS
+`FluxKlangTests` rows for both suites stay unsatisfied and no other row
+changes. Diagnostics fall from 7,176 to 7,144 (16 removed per suite, none
+added). Inventory still exits 0 and default enforcement still exits 1.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 189 repository sources from this change: the 180 paths of the
+routing schedule fixture above, both suite files, the shared
+`ManifestTestSupport` helper's file `ProjectPackageManifestCodecTests.swift`
+and six in-memory `Shared/Persistence/Projects` manifest, limit and path
+sources. Debug and Release (`-c release -Xswiftc -enable-testing`) runs
+filtered to the two suites each passed 32 tests (82 case invocations) in two
+suites. Each run, under its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one
+`suiteExit` attachment to `--attachments-path` for each of
+`FluxKlangTests/AudioGainContractTests` and
+`FluxKlangTests/AudioMuteContractTests`, carrying that run ID, with all 14
+operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
+issue recorded. These runs add no process-identity, argv or bootstrap evidence
+and do not cover the iOS owners; the remaining #60 gates above still apply and
+#60 remains open.
 
 ## Headless fixtures
 
