@@ -229,4 +229,119 @@ struct MIDICaptureExportTests {
         #expect(make([Fixture.keysA], foreign) == .originAnchorUnknown(clock: foreign.clock, generation: .initial))
         #expect(make([Fixture.keysA, Fixture.idle], origin) == nil)
     }
+
+    // MARK: - NativeUMPExportV1Record (#112 NXR1)
+
+    typealias RecordRefusal = NativeUMPExportV1RecordRefusal
+
+    /// Example 09's `exp.ump` record (seq 12), keys sorted, compact.
+    static let example09NativeJSON = #"{"exportId":"exp.ump","format":"nativeUmp","kind":"export","losses":{},"#
+        + #""lossless":true,"offsetsNs":[500000000,1000000000,1500000000,1750000000,3000000000],"#
+        + #""origin":{"frame":0,"generation":1,"sampleClock":"smp.main"},"seq":12,"#
+        + #""streams":["str.keys-a","str.keys-b"]}"#
+
+    static func json(_ record: NativeUMPExportV1Record) throws -> String {
+        try #require(String(data: record.encodedJSON(), encoding: .utf8))
+    }
+
+    private func recordRefusal(_ export: NativeUMPExport, seq: Int = 1, note: String? = nil) -> RecordRefusal? {
+        do {
+            _ = try NativeUMPExportV1Record.make(export, seq: seq, note: note)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    /// A one-capture export with the given IDs, which `ContractID` admits but v1 may not. The capture is at frame
+    /// 24 000, so its offset is 500 ms from the default origin and negative from an origin after it.
+    private func idExport(id: String = "exp.ump", streams: [String] = ["str.keys-a"], clock: String = "smp.main",
+                          originFrame: Int64 = 0) throws -> NativeUMPExport {
+        let streamIDs = try streams.map { try StreamID($0) }
+        let start = SampleStamp(clock: try ClockID(clock), generation: .initial, frame: 0)
+        var log = try MIDICaptureLog(streams: streamIDs, clock: start.clock, timebase: Fixture.timebase,
+                                     nominalRate: 48_000)
+        try log.observe(anchor: ClockAnchor(sample: start, host: HostStamp(ticks: 2_400_000_000), musical: nil))
+        let first = try #require(streamIDs.first)
+        try Fixture.capture(&log, first, [0x2090_3C64], host: 2_412_000_000)
+        let origin = SampleStamp(clock: start.clock, generation: .initial, frame: originFrame)
+        return try NativeUMPExport.make(from: log, id: ExportID(id), streams: streamIDs, origin: origin)
+    }
+
+    @Test func nativeUMPExportV1RecordEncodesExample09Exactly() throws {
+        var log = try Fixture.example09Captures()
+        try Fixture.restartExample09(&log)
+        let export = try NativeUMPExport.make(from: log, id: Fixture.umpExport, streams: [Fixture.keysA, Fixture.keysB],
+                                              origin: Fixture.origin(1, frame: 0))
+        let record = try NativeUMPExportV1Record.make(export, seq: 12)
+        #expect(record.offsetsNs == Fixture.example09Offsets)
+        #expect(record.lossless && record.losses.isEmpty && record.note == nil)
+        let text = try Self.json(record)
+        #expect(text == Self.example09NativeJSON)
+        #expect(!text.contains(#""division""#) && !text.contains(#""smfFormat""#) && !text.contains(#""note""#))
+
+        let again = try NativeUMPExportV1Record.make(export, seq: 12)
+        #expect(again == record)
+        #expect(try again.encodedJSON() == record.encodedJSON())
+    }
+
+    @Test func nativeUMPExportV1RecordIsLosslessExactlyWhenItHasNoLosses() throws {
+        let record = try NativeUMPExportV1Record.make(idExport(), seq: 1, note: "Take start.")
+        #expect(record.lossless == record.losses.isEmpty)
+        #expect(record.lossless)
+        let text = try Self.json(record)
+        #expect(text.contains(#""losses":{},"lossless":true,"#))
+        #expect(text.contains(#""note":"Take start.","#))
+    }
+
+    @Test func nativeUMPExportV1RecordReportsTheFirstRefusalInFixedOrder() throws {
+        let allBad = try idExport(id: "EXP.ump", streams: ["str.ok", "str_a", "STR.b"], clock: "smp:main")
+        #expect(recordRefusal(allBad, seq: 0, note: "") == RecordRefusal.invalidSeq(0))
+        #expect(recordRefusal(allBad, seq: Int.min) == RecordRefusal.invalidSeq(Int.min))
+        #expect(recordRefusal(allBad, note: "") == RecordRefusal.invalidExportID(try ExportID("EXP.ump")))
+        let badStreams = try idExport(streams: ["str.ok", "str_a", "STR.b"], clock: "smp:main")
+        #expect(recordRefusal(badStreams, note: "") == RecordRefusal.invalidStream(try StreamID("str_a")))
+        let badClock = try idExport(clock: "smp:main")
+        #expect(recordRefusal(badClock, note: "") == RecordRefusal.invalidOriginClock(try ClockID("smp:main")))
+        let badClockNegative = try idExport(clock: "smp:main", originFrame: 48_000)
+        #expect(badClockNegative.offsetsNs == [-500_000_000])
+        #expect(recordRefusal(badClockNegative, note: "")
+            == RecordRefusal.invalidOriginClock(try ClockID("smp:main")))
+        let negative = try idExport(originFrame: 48_000)
+        #expect(recordRefusal(negative, note: "") == RecordRefusal.negativeOffset(index: 0, offsetNs: -500_000_000))
+
+        var restarted = try Fixture.example09Captures()
+        try Fixture.restartExample09(&restarted)
+        let later = try NativeUMPExport.make(from: restarted, id: Fixture.umpExport, streams: [Fixture.keysA],
+                                             origin: Fixture.origin(2, frame: 0))
+        #expect(recordRefusal(later, note: "") == RecordRefusal.negativeOffset(index: 0, offsetNs: -3_250_000_000))
+
+        let good = try idExport()
+        #expect(recordRefusal(good, note: "") == RecordRefusal.invalidNote(bytes: 0))
+        #expect(recordRefusal(good, note: " \n\t") == RecordRefusal.invalidNote(bytes: 3))
+        let limit = NativeUMPExportV1Record.maximumNoteBytes
+        #expect(limit == 256)
+        #expect(recordRefusal(good, note: String(repeating: "a", count: limit + 1))
+            == RecordRefusal.invalidNote(bytes: 257))
+        #expect(recordRefusal(good, note: String(repeating: "é", count: 129))
+            == RecordRefusal.invalidNote(bytes: 258))
+        #expect(recordRefusal(good, note: String(repeating: "a", count: limit)) == nil)
+        #expect(recordRefusal(good, seq: 1, note: nil) == nil)
+    }
+
+    @Test func nativeUMPExportV1RecordNamesTheFirstNegativeOffsetInCaptureOrder() throws {
+        var log = try Fixture.log([Fixture.keysA])
+        try log.observe(anchor: Fixture.anchor(1, frame: 0, host: 2_400_000_000))
+        for host: UInt64 in [2_436_000_000, 2_412_000_000, 2_424_000_000, 2_400_000_000] {
+            try Fixture.capture(&log, Fixture.keysA, [0x2090_3C64], host: host)
+        }
+        let export = try NativeUMPExport.make(from: log, id: Fixture.umpExport, streams: [Fixture.keysA],
+                                              origin: Fixture.origin(1, frame: 48_000))
+        #expect(export.offsetsNs == [500_000_000, -500_000_000, 0, -1_000_000_000])
+        #expect(recordRefusal(export) == RecordRefusal.negativeOffset(index: 1, offsetNs: -500_000_000))
+        let atZero = try NativeUMPExport.make(from: log, id: Fixture.umpExport, streams: [Fixture.keysA],
+                                              origin: Fixture.origin(1, frame: 0))
+        let record = try NativeUMPExportV1Record.make(atZero, seq: 3)
+        #expect(record.offsetsNs == [1_500_000_000, 500_000_000, 1_000_000_000, 0])
+    }
 }
