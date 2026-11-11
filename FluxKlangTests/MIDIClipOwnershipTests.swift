@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("MIDI clip note ownership")
+@Suite("MIDI clip note ownership", .productionAccessAudit)
 struct MIDIClipOwnershipTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
