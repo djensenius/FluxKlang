@@ -105,6 +105,7 @@ private extension AssistantScreen {
     init(_ section: AppSection) {
         switch section {
         case .studio: self = .studio
+        case .workspace: self = .workspace
         case .assistant: self = .assistant
         case .mix: self = .mix
         case .patchbay: self = .routing

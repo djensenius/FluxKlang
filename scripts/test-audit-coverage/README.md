@@ -43,7 +43,8 @@ human-readable report; JSON is the default. Modes and exit codes are:
 
 Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
 manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
-`CloudKitHistoryIsolationTests` and, under `#if os(macOS)`, `RoutingDSPTests`
+`CloudKitHistoryIsolationTests`, `PerformanceProjectSessionTests`,
+`PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`
 use the canonical suite trait; this is partial source adoption only.
 The iOS `RoutingDSPTests` owner remains unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with

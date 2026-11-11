@@ -7,6 +7,8 @@ FluxKlang gives you:
 
 - A **Studio-first patch workflow** — start with an instrument, branch it to dry,
   effect and space controls, and let FluxKlang turn that into WING routing.
+- A **document-only performance Workspace** for an unsaved stereo-routing draft,
+  with connection editing, undo/redo and complete draft review. It does not run audio.
 - **Configurable volume faders** bound to WING channels/buses/mains with live,
   two-way sync, mute and a visual fader-position indicator (not an audio meter).
   On Mac they feel native — scroll-wheel to
@@ -33,6 +35,23 @@ The Mac build is a **first-class native Mac app** (menu-bar commands, a Settings
 window, source-list sidebar + inspector, native canvas interactions and a
 menu-bar quick-mixer) — not an iPad port. Written in **Swift 6** with full
 async/await.
+
+## Performance Workspace
+
+Open **Workspace** in the sidebar, or **More > Workspace** on a compact iPhone,
+then choose **New Project**. The starter project describes a stereo Source and
+Output role, with the connection staged as a draft against an unchanged empty
+base. Toggle that connection, undo or redo edits, and inspect the complete draft
+diff and canonical records.
+
+There is one unsaved project per app-model lifetime. Returning to Workspace or
+opening another window preserves its document and edit history; requesting New
+Project again reuses it instead of discarding it. **There is no save or restore:
+quitting the app loses this draft.**
+
+Workspace remains **Draft / Not active**. It does not instantiate instruments or
+plugins, activate an audio route, control WING, or load a project package. Existing
+Studio, console controls and the Mac New Preset shortcut are unchanged.
 
 ## Architecture
 
