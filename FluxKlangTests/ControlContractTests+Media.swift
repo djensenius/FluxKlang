@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import FluxKlang
 
@@ -172,6 +173,9 @@ extension ControlContractTests {
             #expect(outcome.stale == nil && outcome.musicalMap == nil)
             #expect(outcome.frame.map { $0 >= 1_100 } ?? true)
             try outcome.validateMediaShape()
+            let record = try TriggerOutcomeV1Record.make(outcome, seq: 1)
+            #expect(record.startOffsetFrames == (item.offset == 0 ? nil : item.offset) && record.frame == item.frame)
+            #expect(record.assignedFrame == item.assigned && record.reason == (item.result == .dropped ? "late" : nil))
         }
 
         @Test func horizonProgressUsesThePrimaryGenerationOnly() throws {
@@ -325,5 +329,163 @@ extension ControlContractTests.Triggers {
         #expect(queued.map(\.handle) == [staleHandle])
         #expect(queued.first?.outcome.result == .rejectedStale)
         #expect(queued.first?.outcome.stale == .generation(SchedulerFixture.context))
+    }
+}
+
+private typealias OutcomeRefusal = TriggerOutcomeV1RecordRefusal
+
+private func outcomeRefusal(_ outcome: TriggerOutcome, seq: Int = 1, note: String? = nil) -> OutcomeRefusal? {
+    do {
+        _ = try TriggerOutcomeV1Record.make(outcome, seq: seq, note: note)
+        return nil
+    } catch {
+        return error
+    }
+}
+
+private func staleOutcome(_ id: StaticString, _ result: OutcomeResult, _ kind: GenerationKind) -> TriggerOutcome {
+    TriggerOutcome(trigger: TriggerID(validated: id), result: result,
+                   stale: .generation(GenerationKey(kind, GenerationSubject(validated: "subject.example"))))
+}
+
+/// A golden `outcomeRecord` from a media contract example (`<example> seq <n>`), keys sorted, compact;
+/// the table pins all 25 example outcome records.
+private struct GoldenOutcome {
+    let label: String
+    let outcome: TriggerOutcome
+    let seq: Int
+    let note: String?
+    let json: String
+
+    init(_ label: String, _ outcome: TriggerOutcome, _ seq: Int, _ note: String?, _ json: String) {
+        (self.label, self.outcome, self.seq, self.note, self.json) = (label, outcome, seq, note, json)
+    }
+}
+
+private func goldenOutcomeRecords() throws -> [GoldenOutcome] {
+    let map1 = Generation.initial, map2 = try Generation(2)
+    func dispatched(_ id: StaticString, _ result: OutcomeResult, _ assigned: Int64, _ frame: Int64,
+                    offset: Int64 = 0, map: Generation) -> TriggerOutcome {
+        TriggerOutcome(trigger: TriggerID(validated: id), result: result, assignedFrame: assigned, frame: frame,
+                       startOffsetFrames: offset, musicalMap: map)
+    }
+    func fired(_ id: StaticString, _ frame: Int64, map: Generation = .initial) -> TriggerOutcome {
+        dispatched(id, .fired, frame, frame, map: map)
+    }
+    let late = TriggerOutcome(trigger: TriggerID(validated: "trg.4"), result: .dropped, reason: .late,
+                              assignedFrame: 336_000)
+    var held = staleOutcome("trg.1", .cancelled, .source)
+    (held.assignedFrame, held.musicalMap) = (5, map1)
+    func notReady(_ id: StaticString) -> TriggerOutcome {
+        TriggerOutcome(trigger: TriggerID(validated: id), result: .dropped, reason: .notReady)
+    }
+    return [
+        .init("01 seq 5", staleOutcome("trg.1", .cancelled, .sampleClock), 5, "Never re-targeted onto the new clock.",
+         #"{"kind":"outcome","note":"Never re-targeted onto the new clock.","reason":"sampleClock","#
+            + #""result":"cancelled","seq":5,"triggerId":"trg.1"}"#),
+        .init("01 seq 11", staleOutcome("trg.2", .rejectedStale, .sampleClock), 11, nil,
+         #"{"kind":"outcome","reason":"sampleClock","result":"rejectedStale","seq":11,"triggerId":"trg.2"}"#),
+        .init("01 seq 13", fired("trg.3", 96_000), 13, nil, #"{"assignedFrame":96000,"frame":96000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":13,"triggerId":"trg.3"}"#),
+        .init("02 seq 3", dispatched("trg.1", .joined, 96_000, 96_736, offset: 736, map: map1), 3, nil,
+         #"{"assignedFrame":96000,"frame":96736,"kind":"outcome","musicalMap":1,"result":"joined","seq":3,"#
+            + #""startOffsetFrames":736,"triggerId":"trg.1"}"#),
+        .init("02 seq 5", fired("trg.2", 288_000), 5, nil, #"{"assignedFrame":288000,"frame":288000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":5,"triggerId":"trg.2"}"#),
+        .init("02 seq 7", dispatched("trg.3", .firedLate, 312_000, 312_160, map: map1), 7, nil,
+         #"{"assignedFrame":312000,"frame":312160,"kind":"outcome","musicalMap":1,"result":"firedLate","seq":7,"#
+            + #""triggerId":"trg.3"}"#),
+        .init("02 seq 9", late, 9, nil,
+         #"{"assignedFrame":336000,"kind":"outcome","reason":"late","result":"dropped","seq":9,"triggerId":"trg.4"}"#),
+        .init("02 seq 11", fired("trg.5", 384_000), 11, nil, #"{"assignedFrame":384000,"frame":384000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":11,"triggerId":"trg.5"}"#),
+        .init("03 seq 8", fired("trg.1", 288_000), 8,
+              "The wrap does not move the resolved target; nextBoundary advances it to bar 2 of iteration 1.",
+         #"{"assignedFrame":288000,"frame":288000,"kind":"outcome","musicalMap":1,"note":"The wrap does not "#
+            + #"move the resolved target; nextBoundary advances it to bar 2 of iteration 1.","result":"fired","#
+            + #""seq":8,"triggerId":"trg.1"}"#),
+        .init("03 seq 14", staleOutcome("trg.2", .cancelled, .transport), 14, nil,
+         #"{"kind":"outcome","reason":"transport","result":"cancelled","seq":14,"triggerId":"trg.2"}"#),
+        .init("03 seq 21", fired("trg.3", 306_000), 21, nil, #"{"assignedFrame":306000,"frame":306000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":21,"triggerId":"trg.3"}"#),
+        .init("04 seq 3", fired("trg.1", 96_000), 3, nil, #"{"assignedFrame":96000,"frame":96000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":3,"triggerId":"trg.1"}"#),
+        .init("04 seq 7", fired("trg.2", 268_800, map: map2), 7, nil, #"{"assignedFrame":268800,"frame":268800,"#
+            + #""kind":"outcome","musicalMap":2,"result":"fired","seq":7,"triggerId":"trg.2"}"#),
+        .init("04 seq 11", notReady("trg.3"), 11, "No silent fallback to fixed rate.",
+         #"{"kind":"outcome","note":"No silent fallback to fixed rate.","reason":"notReady","result":"dropped","#
+            + #""seq":11,"triggerId":"trg.3"}"#),
+        .init("05 seq 3", fired("trg.1", 96_000), 3, nil, #"{"assignedFrame":96000,"frame":96000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":3,"triggerId":"trg.1"}"#),
+        .init("05 seq 9", staleOutcome("trg.2", .cancelled, .source), 9, nil,
+         #"{"kind":"outcome","reason":"source","result":"cancelled","seq":9,"triggerId":"trg.2"}"#),
+        .init("05 seq 15", staleOutcome("trg.3", .rejectedStale, .source), 15, nil,
+         #"{"kind":"outcome","reason":"source","result":"rejectedStale","seq":15,"triggerId":"trg.3"}"#),
+        .init("05 seq 17", fired("trg.4", 288_000), 17, nil, #"{"assignedFrame":288000,"frame":288000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":17,"triggerId":"trg.4"}"#),
+        .init("06 seq 5", staleOutcome("trg.1", .cancelled, .cancelScope), 5, nil,
+         #"{"kind":"outcome","reason":"cancelScope","result":"cancelled","seq":5,"triggerId":"trg.1"}"#),
+        .init("06 seq 6", staleOutcome("trg.2", .cancelled, .cancelScope), 6, nil,
+         #"{"kind":"outcome","reason":"cancelScope","result":"cancelled","seq":6,"triggerId":"trg.2"}"#),
+        .init("06 seq 9", staleOutcome("trg.3", .rejectedStale, .context), 9, nil,
+         #"{"kind":"outcome","reason":"context","result":"rejectedStale","seq":9,"triggerId":"trg.3"}"#),
+        .init("06 seq 11", fired("trg.4", 96_000), 11, nil, #"{"assignedFrame":96000,"frame":96000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":11,"triggerId":"trg.4"}"#),
+        .init("07 seq 3", notReady("trg.1"), 3, nil,
+         #"{"kind":"outcome","reason":"notReady","result":"dropped","seq":3,"triggerId":"trg.1"}"#),
+        .init("07 seq 7", fired("trg.2", 96_000), 7, nil, #"{"assignedFrame":96000,"frame":96000,"#
+            + #""kind":"outcome","musicalMap":1,"result":"fired","seq":7,"triggerId":"trg.2"}"#),
+        .init("07 seq 10", notReady("trg.3"), 10, nil,
+         #"{"kind":"outcome","reason":"notReady","result":"dropped","seq":10,"triggerId":"trg.3"}"#),
+        // Not an example: a non-dispatch result writes the frames and map revision it holds; `/` stays unescaped.
+        .init("held", held, 1, "a/b",
+         #"{"assignedFrame":5,"kind":"outcome","musicalMap":1,"note":"a/b","reason":"source","result":"cancelled","#
+            + #""seq":1,"triggerId":"trg.1"}"#)
+    ]
+}
+
+extension ControlContractTests.Triggers {
+    @Test func triggerOutcomeV1RecordEncodesTheGoldenOutcomeRecordsExactly() throws {
+        for golden in try goldenOutcomeRecords() {
+            let record = try TriggerOutcomeV1Record.make(golden.outcome, seq: golden.seq, note: golden.note)
+            let json = try #require(String(data: record.encodedJSON(), encoding: .utf8))
+            #expect(json == golden.json, "\(golden.label)")
+            let again = try TriggerOutcomeV1Record.make(golden.outcome, seq: golden.seq, note: golden.note)
+            #expect(again == record, "\(golden.label)")
+            #expect(try again.encodedJSON() == record.encodedJSON(), "\(golden.label)")
+        }
+    }
+
+    @Test func triggerOutcomeV1RecordRefusesInOrderWithoutClampingOrRemapping() throws {
+        let good = staleOutcome("trg.1", .cancelled, .source)
+        var badShape = good
+        badShape.frame = 1
+        let musicalMap = staleOutcome("trg.1", .rejectedStale, .musicalMap)
+        let outsideLoop = TriggerOutcome(trigger: good.trigger, result: .dropped, reason: .outsideLoop)
+        let epoch = TriggerOutcome(trigger: good.trigger, result: .rejectedStale, stale: .hostEpoch)
+        let joined = TriggerOutcome(trigger: good.trigger, result: .joined, assignedFrame: 10, frame: 12,
+                                    startOffsetFrames: 1)
+        for shape in [badShape, musicalMap, outsideLoop, epoch, joined] {
+            #expect(outcomeRefusal(shape) == .invalidShape(.invalidShape))
+        }
+        let allBad = TriggerOutcome(trigger: TriggerID(validated: "Trg.1"), result: good.result, stale: good.stale,
+                                    frame: 1)
+        #expect(outcomeRefusal(allBad, seq: 0, note: "") == .invalidSeq(0))
+        #expect(outcomeRefusal(good, seq: -1) == .invalidSeq(-1))
+        #expect(outcomeRefusal(allBad, note: "") == .invalidTriggerID(TriggerID(validated: "Trg.1")))
+        for raw: StaticString in ["trg_1", "trg", "trg.", "1trg.a", "trg:1.a"] {
+            let outcome = TriggerOutcome(trigger: TriggerID(validated: raw), result: good.result, stale: good.stale)
+            #expect(outcomeRefusal(outcome) == .invalidTriggerID(outcome.trigger))
+        }
+        #expect(outcomeRefusal(badShape, note: "") == .invalidShape(.invalidShape))
+        #expect(outcomeRefusal(good, note: "") == .invalidNote(bytes: 0))
+        #expect(outcomeRefusal(good, note: " \n\t") == .invalidNote(bytes: 3))
+        let limit = TriggerOutcomeV1Record.maximumNoteBytes
+        #expect(limit == RecordingTakeV1Record.maximumNoteBytes && limit == 256)
+        #expect(outcomeRefusal(good, note: String(repeating: "a", count: limit + 1)) == .invalidNote(bytes: 257))
+        #expect(outcomeRefusal(good, note: String(repeating: "é", count: 129)) == .invalidNote(bytes: 258))
+        #expect(outcomeRefusal(good, note: String(repeating: "a", count: limit)) == nil)
+        #expect(outcomeRefusal(good, note: String(repeating: "é", count: 128)) == nil)
+        #expect(outcomeRefusal(good, seq: 1, note: nil) == nil)
     }
 }
