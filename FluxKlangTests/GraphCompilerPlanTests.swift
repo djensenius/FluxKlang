@@ -5,6 +5,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct GraphCompilerPlanTests {
     static let graphID = GraphID(validated: "plan.graph")
     static let inputID = NodeID(validated: "plan.input")
