@@ -111,6 +111,41 @@ extension KernelRetirementCarryTests {
         #expect(Self.carry([Self.ramp(parameter: 1)]) != Self.carry([Self.ramp(parameter: 2)]))
     }
 
+    /// `==` compares the re-carried boundary: the same events split differently by `beginRecarried()` differ, and a
+    /// boundary marked after the last record (`ownCount == count`) equals no boundary at all. Kills: `ownCount` left
+    /// out of `==`; an unmarked carry's `ownCount` not tracking `count`.
+    @Test func carryEqualityComparesTheRecarriedBoundary() {
+        let own = Self.control(sequence: 1)
+        let carried = Self.program(sequence: 2)
+        let unmarked = Self.carry([own, carried])
+        var split = KernelRetirementCarry()
+        split.record(own)
+        split.beginRecarried()
+        split.record(carried)
+        var allRecarried = KernelRetirementCarry()
+        allRecarried.beginRecarried()
+        allRecarried.record(own)
+        allRecarried.record(carried)
+        #expect(split.events == unmarked.events && allRecarried.events == unmarked.events)
+        #expect(unmarked.ownCount == 2 && split.ownCount == 1 && allRecarried.ownCount == 0)
+        #expect(split != unmarked && split != allRecarried && allRecarried != unmarked)
+        var markedLast = Self.carry([own, carried])
+        markedLast.beginRecarried()
+        #expect(markedLast.ownCount == markedLast.count && markedLast == unmarked)
+    }
+
+    /// Only the first `beginRecarried()` counts: a second call after another record leaves the boundary at 1. Kills:
+    /// a later call moving the boundary (and so re-classing re-carried events as own).
+    @Test func carryBeginRecarriedOnlyTheFirstCallCounts() {
+        var carry = KernelRetirementCarry()
+        #expect(carry.ownCount == 0)
+        carry.record(Self.control(sequence: 1))
+        carry.beginRecarried()
+        carry.record(Self.program(sequence: 2))
+        carry.beginRecarried()
+        #expect(carry.count == 2 && carry.ownCount == 1)
+    }
+
     @Test func carryRecordsAnInvalidRampWithoutRefusingAtRecordTime() {
         var carry = KernelRetirementCarry()
         #expect(carry.record(Self.ramp(value: .nan, duration: -1)) == .stored)

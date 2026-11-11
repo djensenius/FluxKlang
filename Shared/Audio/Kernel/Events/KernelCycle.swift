@@ -376,8 +376,9 @@ final class KernelCycle: @unchecked Sendable {
     /// Render only, once, after this cycle's last `run` and before its replacement is prepared (see the type's
     /// Retirement): records the tombstone of every `noteOff` still pending in the block buffer at its own frame,
     /// unclamped, in the shared `ownership.tombstones`, drops and counts every other pending event and records the
-    /// stateful ones in a carry, then does the same for the re-admitted events still pending that no pending own event
-    /// covers (`KernelCarryReadmission.retire(coveredBy:_:)`); stores that loss and carry in the ownership, then hands
+    /// stateful ones in a carry, then (as re-carried, `KernelRetirementCarry.beginRecarried()`) does the same for the
+    /// re-admitted events still pending that no pending own event covers
+    /// (`KernelCarryReadmission.retire(coveredBy:_:)`); stores that loss and carry in the ownership, then hands
     /// the cycle claim back (release). No allocation, lock, emission or telemetry. A repeated call does nothing and
     /// returns no loss; a later `run` does nothing, reporting `retired`.
     @discardableResult
@@ -392,6 +393,7 @@ final class KernelCycle: @unchecked Sendable {
             loss.drop(event.payload)
             carry.record(event)
         }
+        carry.beginRecarried()
         carryReadmission.retire(coveredBy: block) { loss.drop($0.payload); carry.record($0) }
         ownership.releaseCycleClaim(ownershipClaim, loss: loss, carry: carry)
         return loss

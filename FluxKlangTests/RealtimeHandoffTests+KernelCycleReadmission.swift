@@ -169,7 +169,7 @@ extension RealtimeHandoffTests {
         }
 
         /// Two carried ramps on parameter 2, scope 0 at 100 (to 1) and scope 1 at 110 (to 0.25), are both re-admitted
-        /// in frame order (the planner keys ramps per scope), so the later one is the parameter's state. Kills: a
+        /// in frame order (the carry keys ramps per scope), so the later one is the parameter's state. Kills: a
         /// cross-scope ramp superseded inside the carry; frame order lost.
         @Test func readmissionCrossScopeRampsOnOneParameterApplyInFrameOrder() throws {
             let rig = try CycleRig(laneCapacity: 32)
@@ -296,7 +296,7 @@ extension RealtimeHandoffTests {
             #expect(block(third, 4_992).1 == [at(5_000, programFive)])
         }
 
-        /// Ramps the planner refuses (a NaN value, a negative duration) are removed before planning, so the carried
+        /// Invalid ramps (a NaN value, a negative duration) are removed before planning, so the carried
         /// `program` is still re-admitted; the two ramps stay unresolved. Kills: one invalid ramp refusing the plan.
         @Test func readmissionSkipsInvalidRampsAndKeepsTheRest() throws {
             let rig = try CycleRig()
@@ -335,7 +335,7 @@ extension RealtimeHandoffTests {
             #expect(stateful(next.unresolvedRetirementLoss) == [0, 0, 1])
         }
 
-        /// A carried ramp whose completion overflows `Int64` makes the planner refuse `.frameOverflow`: nothing is
+        /// A carried ramp whose completion overflows `Int64` makes the plan refuse `.frameOverflow`: nothing is
         /// re-admitted and the whole carry stays unresolved. Kills: a partial plan after a refusal.
         @Test func readmissionPlanRefusalReadmitsNothing() throws {
             let rig = try CycleRig()
@@ -346,6 +346,150 @@ extension RealtimeHandoffTests {
             #expect(report.planRefusal == .frameOverflow && report.planned == 0 && report.pendingCarriedEvents == 0)
             #expect(block(next, 64).1.isEmpty)
             #expect(stateful(next.unresolvedRetirementLoss) == [0, 1, 1])
+        }
+
+        /// Negative frames keep their original value through planning: during a replacement block over [-128, -64)
+        /// a carried `control` at -100, the later of two carried `program`s on channel 0 (-90) and a carried ramp at
+        /// -70 are emitted at their own frames, before an own same-channel `program` at -80 where earlier, and the
+        /// carried `program` at -110 is superseded inside the carry. Kills: carried frames clamped to 0 (emitted late,
+        /// after newer own state); the carry's own supersession done on clamped frames.
+        @Test func readmissionKeepsNegativeFramesThroughPlanning() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            let programSix = KernelEventPayload.program(channel: 0, program: 6, bank: 0)
+            let carried: [(Int64, KernelEventPayload)] = [(-110, programFive), (-100, control(7)), (-90, programSix),
+                                                          (-70, ramp(1, 1))]
+            for (frame, payload) in carried { #expect(rig.push(cycleEvent(frame, payload), token) == .ok) }
+            #expect(rig.cycle.run(blockStart: -256, frames: 64) { _, _ in }.pending == 4)
+            #expect(rig.cycle.retire().stateful == 4)
+            let next = try replacement(of: rig)
+            let programNine = KernelEventPayload.program(channel: 0, program: 9, bank: 0)
+            #expect(rig.push(cycleEvent(-80, programNine), token) == .ok)
+            #expect(block(next, -128).1 == [at(-100, control(7)), at(-90, programSix), at(-80, programNine),
+                                            at(-70, ramp(1, 1))])
+            let report = next.carryReadmissionReport
+            #expect(report.planned == 3 && report.superseded == 1 && report.delivered == 3)
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss() && next.parameterValue(1) == 1)
+        }
+
+        /// Negative frames at the replacement's `retire()`: an own pending `program` at -80 covers the carried one at
+        /// -100 (superseded, not carried again). Kills: a carried frame clamped to 0, so no longer covered.
+        @Test func readmissionRetireCoversNegativeCarriedFrames() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let token = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(-100, programFive), token) == .ok)
+            #expect(rig.cycle.run(blockStart: -256, frames: 64) { _, _ in }.pending == 1)
+            _ = rig.cycle.retire()
+            let next = try replacement(of: rig)
+            #expect(rig.push(cycleEvent(-80, .program(channel: 0, program: 9, bank: 0)), token) == .ok)
+            #expect(block(next, -256).1.isEmpty)
+            #expect(next.retire().programs == 1)
+            let report = next.carryReadmissionReport
+            #expect(report.supersededByReplacement == 1 && report.recarried == 0)
+            #expect(try replacement(of: rig).inheritedRetirementCarry.count == 1)
+        }
+
+        /// Same-frame carried ramps on parameter 2 from producer 0 (scope 0, sequence 9, to 1) and producer 1
+        /// (scope 1, sequence 0, to 0.25) re-admit in the retiring buffer's order (producer lane before sequence), so
+        /// 0.25 is the parameter's state. Kills: ties re-ordered by sequence during planning.
+        @Test func readmissionKeepsTheRetiringBuffersTieOrderAcrossProducers() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let first = try #require(rig.events.claimProducer())
+            let second = try #require(rig.events.claimProducer())
+            let early = cycleEvent(100, ramp(2, 1), sequence: 9)
+            let late = cycleEvent(100, ramp(2, 0.25), scope: 1, sequence: 0)
+            #expect(rig.push(early, first) == .ok && rig.push(late, second) == .ok)
+            #expect(rig.run(0, 64).0.pending == 2)
+            #expect(rig.cycle.retire().ramps == 2)
+            let next = try replacement(of: rig)
+            #expect(next.inheritedRetirementCarry.events == [early, late])
+            let emitted = [CycleEmission(event: early, frame: 100), CycleEmission(event: late, frame: 100)]
+            #expect(block(next, 64).1 == emitted)
+            #expect(next.parameterValue(2) == 0.25)
+        }
+
+        /// Capacity selection keeps the retiring buffer's tie order: with `blockCapacity` 1, of two frame-100
+        /// `control`s from producer 0 (sequence 9) and producer 1 (sequence 0), producer 0's is kept and producer 1's
+        /// is `cut`. Kills: the cut chosen by sequence.
+        @Test func readmissionCapacityCutKeepsTheFirstInBufferOrder() throws {
+            let rig = try CycleRig(laneCapacity: 32)
+            let first = try #require(rig.events.claimProducer())
+            let second = try #require(rig.events.claimProducer())
+            let kept = cycleEvent(100, control(7), sequence: 9)
+            #expect(rig.push(kept, first) == .ok && rig.push(cycleEvent(100, control(8), scope: 1), second) == .ok)
+            #expect(rig.run(0, 64).0.pending == 2)
+            _ = rig.cycle.retire()
+            let next = try replacement(of: rig, blockCapacity: 1, perLaneQuota: 1)
+            #expect(block(next, 64).1 == [CycleEmission(event: kept, frame: 100)])
+            let report = next.carryReadmissionReport
+            #expect(report.planned == 1 && report.cut.controls == 1)
+            #expect(stateful(next.unresolvedRetirementLoss) == [1, 0, 0])
+        }
+
+        /// A ramp whose completion would overflow `Int64` but is superseded inside the carry (a later ramp on the
+        /// same scope and parameter) does not refuse the plan. Kills: the overflow checked before supersession.
+        @Test func readmissionSupersededOverflowingRampDoesNotRefuse() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(Int64.max - 10, ramp(1, 1, 100)), (Int64.max - 5, ramp(1, 0.5))])
+            let report = try replacement(of: rig).carryReadmissionReport
+            #expect(report.planRefusal == nil && report.planned == 1 && report.superseded == 1)
+        }
+
+        /// The overflow check runs before the cut: with `blockCapacity` 2, a ramp whose completion overflows `Int64`
+        /// survives supersession inside the carry (it replaces an earlier ramp on parameter 1) and, last in delivery
+        /// order, would be cut; the whole plan is still refused (`.frameOverflow`) and nothing is planned or cut.
+        /// Kills: the overflow checked only on the kept survivors.
+        @Test func readmissionOverflowingRampRefusesThePlanEvenWhenItWouldBeCut() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            retire(rig, token, pending: [(100, control(7)), (110, programFive), (120, ramp(1, 0.5)),
+                                         (Int64.max - 10, ramp(1, 1, 100))])
+            let next = try replacement(of: rig, blockCapacity: 2, perLaneQuota: 2)
+            let report = next.carryReadmissionReport
+            #expect(report.planRefusal == .frameOverflow && report.planned == 0 && report.cut == KernelRetirementLoss())
+            #expect(block(next, 64).1.isEmpty)
+            #expect(stateful(next.unresolvedRetirementLoss) == [1, 1, 2])
+        }
+
+        /// Negative frames across two hops: a carried `program` at -100 the replacement (no own events) never reaches
+        /// is carried again at -100, as re-carried (`ownCount` 0), and the third cycle emits it there, in a block over
+        /// [-128, -64). Kills: a re-carried frame clamped or shifted.
+        @Test func readmissionKeepsNegativeFramesAcrossTwoHops() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            #expect(rig.push(cycleEvent(-100, programFive), token) == .ok)
+            #expect(rig.cycle.run(blockStart: -256, frames: 64) { _, _ in }.pending == 1)
+            _ = rig.cycle.retire()
+            let next = try replacement(of: rig)
+            #expect(block(next, -256).1.isEmpty)
+            #expect(next.retire().programs == 1 && next.carryReadmissionReport.recarried == 1)
+            let third = try replacement(of: rig)
+            #expect(third.inheritedRetirementCarry.events == [cycleEvent(-100, programFive)])
+            #expect(third.inheritedRetirementCarry.ownCount == 0)
+            #expect(block(third, -128).1 == [at(-100, programFive)])
+            #expect(third.unresolvedRetirementLoss == KernelRetirementLoss())
+        }
+
+        /// Cross-hop tie order: a carried CC0 bank select and an own `program` on channel 0, both at 5,000 (different
+        /// targets, so neither covers the other), are pending at the replacement's `retire()`, which records the own
+        /// one first; the third cycle still emits the bank select first, as the replacement's merge would have
+        /// (carried before own on a tie). Kills: re-carried events ordered after own ones by recorded index.
+        @Test func readmissionKeepsCarriedBeforeOwnOnATieAcrossTwoHops() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            let bankSelect = control(0, 1)
+            retire(rig, token, pending: [(5_000, bankSelect)])
+            let next = try replacement(of: rig)
+            #expect(rig.push(cycleEvent(5_000, programFive), token) == .ok)
+            #expect(block(next, 64).1.isEmpty)
+            #expect(next.retire().stateful == 2 && next.carryReadmissionReport.recarried == 1)
+            let third = try replacement(of: rig)
+            let carry = third.inheritedRetirementCarry
+            #expect(carry.events == [cycleEvent(5_000, programFive), cycleEvent(5_000, bankSelect)])
+            #expect(carry.ownCount == 1)
+            #expect(block(third, 4_992).1 == [at(5_000, bankSelect), at(5_000, programFive)])
+            #expect(third.unresolvedRetirementLoss == KernelRetirementLoss())
         }
     }
 }

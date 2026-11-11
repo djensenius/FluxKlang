@@ -7,18 +7,20 @@ import Synchronization
 /// What a replacement's re-admission has done so far. The plan fields are fixed at preparation; the render counts
 /// are each read once (acquire) and only grow, so one report may mix two moments of render. Lost: `invalidRamps`,
 /// `cut`, `droppedAtRecord`, `refused` and, once the cycle retired, `recarried` (counted again in that retirement's
-/// loss). Not lost: `superseded`, `delivered`, `supersededByReplacement`. `pendingCarriedEvents` are neither yet.
+/// loss). Not lost: `delivered`, `supersededByReplacement` and `superseded` (resolved with its key's survivor, so
+/// lost with it while that is cut, refused or re-carried). `pendingCarriedEvents` are neither yet.
 /// Reference model; not RT-certified.
 struct KernelCarryReadmissionReport: Sendable, Equatable {
-    /// The planner refused the carry (only `.frameOverflow` can remain); nothing is re-admitted.
+    /// The plan refused the carry (only `.frameOverflow`: a carried ramp's completion overflows `Int64`); nothing
+    /// is re-admitted.
     let planRefusal: KernelCarryRefusal?
     /// Carried events placed in the re-admission slots, in delivery order.
     let planned: Int
-    /// Carried ramps the planner refuses (negative duration or non-finite value), removed before planning.
+    /// Carried ramps with a negative duration or a non-finite value, removed before planning.
     let invalidRamps: Int
-    /// Survivors cut by the replacement's capacity, by kind (`KernelCarryPlan.dropped`).
+    /// Survivors cut by the replacement's capacity (the latest in delivery order), by kind.
     let cut: KernelRetirementLoss
-    /// Earlier carried events of a key a later carried event replaced (`KernelCarryPlan.superseded`).
+    /// Earlier carried events of a key a later carried event (in delivery order) replaced.
     let superseded: Int
     /// Events the retired cycle could not record (`KernelRetirementCarry.droppedForCapacity`; kind unknown).
     let droppedAtRecord: Int
@@ -45,11 +47,19 @@ struct KernelCarryResolution: Sendable, Equatable {
 
 /// The re-admission slots of one `KernelCycle`. Reference model; not RT-certified.
 ///
-/// Preparation (`init`, control): ramps the planner refuses are removed, then `KernelCarryRetiming.plan` runs with
-/// `replacementFirstFrame` 0 (the replacement's timeline is only known per block) and room for
-/// `capacity = min(KernelRetirementCarry.capacity, blockCapacity)` events, so a block never re-admits more events than
-/// its block buffer holds. Its emissions, in (frame, lane, sequence, recorded index) order, fill preallocated slots;
-/// each slot also keeps its weight: itself plus the carried events of its key it superseded.
+/// Preparation (`init`, control): invalid ramps (negative duration, non-finite value) are removed; the rest are put
+/// in delivery order, (original frame, re-carried before own, recorded index). Among a retiring cycle's own events
+/// that is its block buffer's (frame, lane, producer lane, sequence) tie order. A replacement's `retire()` records its
+/// own pending events first (so a full carry keeps them) and the re-carried ones after them
+/// (`KernelRetirementCarry.ownCount` marks the boundary); ordering re-carried events first on a tie gives the next hop
+/// the replacement's own merge order (a carried slot before a buffered event of the same frame), so a carried CC0 bank
+/// select still precedes an own `program` of the same frame and channel. Frames are never re-timed here (not even
+/// negative ones): only the dispatch frame is clamped, per block, by the deadline policy, as for own events. Per key
+/// ((scope, channel, controller) for a control, (scope, channel) for a program, (scope, parameter) for a ramp) the
+/// last event in delivery order survives; a surviving ramp whose completion overflows `Int64` refuses the whole plan
+/// (`.frameOverflow`, checked before the cut); the earliest `capacity = min(KernelRetirementCarry.capacity,
+/// blockCapacity)` survivors fill preallocated slots (so a block never re-admits more events than its block buffer
+/// holds) and the rest are `cut`. Each slot keeps its weight: itself plus the carried events of its key it superseded.
 ///
 /// Render (`KernelBlockDecider.decide`): due slots are merged with the block buffer by original frame, a slot before
 /// a buffered event of the same frame; each is decided by the deadline policy (an already-due event dispatches at
@@ -79,6 +89,14 @@ final class KernelCarryReadmission: @unchecked Sendable {
         let event: KernelEvent
         let weight: Int
         var superseded = false
+    }
+
+    /// The control-side plan: the slots' events in delivery order and what planning dropped or refused.
+    private struct Plan {
+        let events: [KernelEvent]
+        let cut: KernelRetirementLoss
+        let superseded: Int
+        let refusal: KernelCarryRefusal?
     }
 
     private enum PlanKey: Hashable {
@@ -112,38 +130,28 @@ final class KernelCarryReadmission: @unchecked Sendable {
     /// Control only (allocates): plans `carry` for a cycle of `blockCapacity` (`1...KernelCycle.maximumBlockCapacity`).
     init(carry: KernelRetirementCarry, blockCapacity: Int) {
         capacity = min(KernelRetirementCarry.capacity, max(1, blockCapacity))
-        var valid = KernelRetirementCarry()
+        var valid: [(index: Int, event: KernelEvent)] = []
         var invalid = 0
-        for event in carry.events {
+        for (index, event) in carry.events.enumerated() {
             if case let .rampTo(_, value, duration) = event.payload, duration < 0 || !value.isFinite {
                 invalid += 1
             } else {
-                valid.record(event)
+                valid.append((index, event))
             }
         }
-        var emissions: [KernelCarryEmission] = []
-        var refusal: KernelCarryRefusal?
-        var plan: KernelCarryPlan?
-        do {
-            plan = try KernelCarryRetiming.plan(
-                carry: valid, replacementBlockCapacity: capacity, replacementFirstFrame: 0,
-                replacementLaneCapacity: KernelCarryLaneCapacity(state: capacity, content: capacity))
-            emissions = plan?.emissions ?? []
-        } catch {
-            refusal = error
-        }
-        planRefusal = refusal
+        let plan = Self.plan(valid, ownCount: carry.ownCount, capacity: capacity)
+        planRefusal = plan.refusal
         invalidRamps = invalid
-        cut = plan?.dropped ?? KernelRetirementLoss()
-        plannerSuperseded = plan?.superseded ?? 0
+        cut = plan.cut
+        plannerSuperseded = plan.superseded
         droppedAtRecord = carry.droppedForCapacity
         var weights: [PlanKey: Int] = [:]
-        for event in valid.events { if let key = Self.planKey(event) { weights[key, default: 0] += 1 } }
-        planned = emissions.count
-        slots = .allocate(capacity: max(1, emissions.count))
-        for (index, emission) in emissions.enumerated() {
-            let weight = Self.planKey(emission.event).flatMap { weights[$0] } ?? 1
-            (slots + index).initialize(to: Slot(event: emission.event, weight: weight))
+        for (_, event) in valid { if let key = Self.planKey(event) { weights[key, default: 0] += 1 } }
+        planned = plan.events.count
+        slots = .allocate(capacity: max(1, planned))
+        for (index, event) in plan.events.enumerated() {
+            let weight = Self.planKey(event).flatMap { weights[$0] } ?? 1
+            (slots + index).initialize(to: Slot(event: event, weight: weight))
         }
         head = .allocate(capacity: 1)
         head.initialize(to: 0)
@@ -151,6 +159,36 @@ final class KernelCarryReadmission: @unchecked Sendable {
         pendingByKind.initialize(repeating: 0, count: 3)
         for index in 0..<planned { if let kind = Self.kind(slots[index].event.payload) { pendingByKind[kind] += 1 } }
         pendingTotal = Atomic(planned)
+    }
+
+    /// Control only (allocates): the plan of `valid` (each with its recorded index; indexes from `ownCount` on were
+    /// re-carried) for `capacity` slots, as the type documents: delivery order (original frame, re-carried before
+    /// own, recorded index), last survivor per key, overflow check, cut.
+    private static func plan(_ valid: [(index: Int, event: KernelEvent)], ownCount: Int, capacity: Int) -> Plan {
+        let ordered = valid.sorted { lhs, rhs in
+            if lhs.event.frame != rhs.event.frame { return lhs.event.frame < rhs.event.frame }
+            let leftOwn = lhs.index < ownCount
+            if leftOwn != (rhs.index < ownCount) { return !leftOwn }
+            return lhs.index < rhs.index
+        }
+        var seen = Set<PlanKey>()
+        var survivors: [KernelEvent] = []
+        var superseded = 0
+        for (_, event) in ordered.reversed() {
+            if let key = planKey(event), !seen.insert(key).inserted {
+                superseded += 1
+                continue
+            }
+            if case let .rampTo(_, _, duration) = event.payload,
+               event.frame.addingReportingOverflow(duration).overflow {
+                return Plan(events: [], cut: KernelRetirementLoss(), superseded: 0, refusal: .frameOverflow)
+            }
+            survivors.append(event)
+        }
+        survivors.reverse()
+        var cut = KernelRetirementLoss()
+        for event in survivors.dropFirst(capacity) { cut.drop(event.payload) }
+        return Plan(events: Array(survivors.prefix(capacity)), cut: cut, superseded: superseded, refusal: nil)
     }
 
     /// Control-side teardown only.
@@ -307,7 +345,7 @@ final class KernelCarryReadmission: @unchecked Sendable {
         }
     }
 
-    /// `KernelCarryRetiming`'s supersede key.
+    /// The supersede key within the carry: (scope, channel, controller), (scope, channel) or (scope, parameter).
     private static func planKey(_ event: KernelEvent) -> PlanKey? {
         switch event.payload {
         case let .control(channel, controller, _): .control(event.scope, channel, controller)
