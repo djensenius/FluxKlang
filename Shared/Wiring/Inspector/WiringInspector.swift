@@ -101,19 +101,65 @@ struct WiringInspector: Hashable, Sendable {
     static func make(
         _ subject: WiringInspectorSubject, draft: DraftEdits, active: GraphDocument
     ) throws(WiringInspectorRefusal) -> WiringInspector {
-        let graph = try draftGraph(active: active, draft: draft)
-        let errors = graph.validationErrors()
-        if let blocking = errors.first(where: { WiringInspectorProblem.classify($0).scope == .uncheckable }) {
-            throw .uncheckableGraph(blocking)
-        }
-        let marker = marker(of: subject, in: draft)
+        let context = try Context(draft: draft, active: active)
         switch subject {
         case .node(let id):
-            guard let node = graph.node(id) else { throw .subjectAbsent(subject) }
-            return nodeInspector(node, in: graph, errors: errors, marker: marker)
+            guard let node = context.graph.node(id) else { throw .subjectAbsent(subject) }
+            return context.inspector(node)
         case .edge(let id):
-            guard let edge = graph.edges.first(where: { $0.id == id }) else { throw .subjectAbsent(subject) }
-            return edgeInspector(edge, in: graph, errors: errors, marker: marker)
+            guard let edge = context.graph.edges.first(where: { $0.id == id }) else { throw .subjectAbsent(subject) }
+            return context.inspector(edge)
+        }
+    }
+
+    /// Describes every node and then every edge of the draft graph, in graph order, folding and validating the
+    /// draft ONCE (`make` per item would replay the whole draft for each). Each inspector equals
+    /// `make(subject, draft:, active:)` for its subject; refuses as `make` does for a graph-wide reason. A repeated
+    /// node ID yields one inspector, for the first such node, as `make` does.
+    static func makeAll(draft: DraftEdits, active: GraphDocument) throws(WiringInspectorRefusal) -> [WiringInspector] {
+        let context = try Context(draft: draft, active: active)
+        var seenNodes: Set<NodeID> = []
+        var seenEdges: Set<EdgeID> = []
+        let nodes = context.graph.nodes.filter { seenNodes.insert($0.id).inserted }.map { context.inspector($0) }
+        let edges = context.graph.edges.filter { seenEdges.insert($0.id).inserted }.map { context.inspector($0) }
+        return nodes + edges
+    }
+
+    /// The draft graph, its validation and the IDs the draft introduced, computed once and shared by `make` and
+    /// `makeAll` so a single inspector and a batch one cannot diverge.
+    private struct Context {
+        let graph: GraphDocument
+        let errors: [GraphValidationError]
+        let addedNodes: Set<NodeID>
+        let connectedEdges: Set<EdgeID>
+
+        init(draft: DraftEdits, active: GraphDocument) throws(WiringInspectorRefusal) {
+            graph = try WiringInspector.draftGraph(active: active, draft: draft)
+            errors = graph.validationErrors()
+            if let blocking = errors.first(where: { WiringInspectorProblem.classify($0).scope == .uncheckable }) {
+                throw .uncheckableGraph(blocking)
+            }
+            var nodes: Set<NodeID> = []
+            var edges: Set<EdgeID> = []
+            for edit in draft.edits {
+                switch edit {
+                case .addNode(let node): nodes.insert(node.id)
+                case .connect(let edge): edges.insert(edge.id)
+                case .disconnect, .removeNode, .moveNode: break
+                }
+            }
+            addedNodes = nodes
+            connectedEdges = edges
+        }
+
+        func inspector(_ node: GraphNode) -> WiringInspector {
+            let marker: WiringInspectorMarker = addedNodes.contains(node.id) ? .draft : .active
+            return WiringInspector.nodeInspector(node, in: graph, errors: errors, marker: marker)
+        }
+
+        func inspector(_ edge: GraphEdge) -> WiringInspector {
+            let marker: WiringInspectorMarker = connectedEdges.contains(edge.id) ? .draft : .active
+            return WiringInspector.edgeInspector(edge, in: graph, errors: errors, marker: marker)
         }
     }
 
@@ -125,19 +171,6 @@ struct WiringInspector: Hashable, Sendable {
         } catch {
             throw .preview(error)
         }
-    }
-
-    private static func marker(of subject: WiringInspectorSubject, in draft: DraftEdits) -> WiringInspectorMarker {
-        let introduced = draft.edits.contains { edit in
-            switch (subject, edit) {
-            case (.node(let id), .addNode(let node)): return node.id == id
-            case (.edge(let id), .connect(let edge)): return edge.id == id
-            case (.node, .connect), (.node, .disconnect), (.node, .removeNode), (.node, .moveNode),
-                 (.edge, .addNode), (.edge, .disconnect), (.edge, .removeNode), (.edge, .moveNode):
-                return false
-            }
-        }
-        return introduced ? .draft : .active
     }
 
     private static func title(of node: GraphNode) -> String {

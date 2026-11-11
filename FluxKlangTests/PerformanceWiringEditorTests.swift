@@ -266,6 +266,34 @@ struct PerformanceWiringEditorTests {
         #expect(labels[.node(session.stereoEdge.from.node)] == source.label)
     }
 
+    @Test func batchInspectorsEqualPerSubjectInspectors() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let role = try #require(session.project.roles.first { $0.direction == .output })
+        let node = try session.addRoleNode(role: role.id, id: NodeID(uuid: UUID()), label: "Output 2")
+        let port = try #require(node.ports.first)
+        try session.connect(WiringConnectRequest(
+            edge: EdgeID(uuid: UUID()), from: session.stereoEdge.from, to: PortAddress(node: node.id, port: port.id)
+        ))
+        try session.removeConnection(session.stereoEdge.id)
+        let draft = session.snapshot.history.draft
+        let committed = session.snapshot.candidate
+        let settled = DraftEdits(id: draft.id, graph: committed.id, baseRevision: committed.revision, edits: [])
+        let cases = [(draft, session.base, WiringInspectorMarker.draft), (settled, committed, .active)]
+        for (draft, active, marker) in cases {
+            let batch = try WiringInspector.makeAll(draft: draft, active: active)
+            let graph = try WiringDraftGraph.make(active: active, draft: draft).graph
+            let subjects = graph.nodes.map { WiringInspectorSubject.node($0.id) } + graph.edges.map { .edge($0.id) }
+            #expect(batch.map(\.subject) == subjects)
+            #expect(batch.allSatisfy { $0.marker == marker })
+            for inspector in batch {
+                #expect(try WiringInspector.make(inspector.subject, draft: draft, active: active) == inspector)
+            }
+        }
+        let labels = session.inspectorLabels()
+        #expect(labels.count == 4)
+        for (subject, label) in labels { #expect(try session.inspector(subject).label == label) }
+    }
+
     @Test func undoRedoRoundTripOfEveryListEdit() throws {
         let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
         let role = try #require(session.project.roles.first { $0.direction == .output })
@@ -323,6 +351,14 @@ struct PerformanceWiringEditorTests {
         )) == "The starter connection's endpoints and metadata are fixed")
         #expect(WiringDestinationClass.allCases.filter(PerformanceWiringText.isListed)
                 == [.valid, .needsConversion, .feedbackOnly, .existing, .disabled, .uncheckable])
+        let full = ProjectGraphLimitError.exceeded(path: "$.edits", maximum: ProjectGraphLimits.edits)
+        let fullText = "The draft is full. Remove some changes before adding more"
+        #expect(PerformanceWiringText.failure(WiringComposeRefusal.preview(.bounds(full))) == fullText)
+        #expect(PerformanceWiringText.failure(WiringNodeRefusal.preview(.bounds(full))) == fullText)
+        #expect(PerformanceWiringText.failure(DraftHistoryRefusal.bounds(full)) == fullText)
+        #expect(PerformanceWiringText.failure(WiringNodeRefusal.tooManyEdits) == fullText)
+        let gone = WiringComposeRefusal.preview(.unknownNode(NodeID(validated: "node.gone")))
+        #expect(PerformanceWiringText.failure(gone) == "The draft changed. Choose the source again")
         #expect(PerformanceWiringText.failure(WiringEditRefusal.unknownEdge(edgeID))
                 == "That connection is no longer in the draft")
         #expect(PerformanceWiringText.failure(DraftHistoryRefusal.nothingToUndo)

@@ -112,6 +112,8 @@ enum PerformanceWiringText {
         case let refusal as WiringComposeRefusal: composeFailure(refusal)
         case WiringEditRefusal.unknownEdge, WiringEditRefusal.notInDraftOrActive:
             "That connection is no longer in the draft"
+        case WiringNodeRefusal.preview(let preview): previewFailure(preview)
+        case DraftHistoryRefusal.bounds, WiringNodeRefusal.tooManyNodes, WiringNodeRefusal.tooManyEdits: draftFull
         case WiringNodeRefusal.nodeAlreadyPresent: "A node with that ID is already in the draft"
         case WiringNodeRefusal.unknownNode: "That node is no longer in the draft"
         case PerformanceProjectSession.WiringRefusal.unknownRole: "That role is not in this project"
@@ -120,6 +122,17 @@ enum PerformanceWiringText {
         case PerformanceProjectSession.EditRefusal.reservedStereoRouteReplacement:
             "The starter connection's endpoints and metadata are fixed"
         default: String(describing: error)
+        }
+    }
+
+    static let draftFull = "The draft is full. Remove some changes before adding more"
+
+    /// Only a vanished endpoint means the picked source is stale; a limit means the draft is full.
+    private static func previewFailure(_ refusal: WiringPreviewRefusal) -> String {
+        switch refusal {
+        case .unknownNode, .unknownPort: "The draft changed. Choose the source again"
+        case .bounds: draftFull
+        default: "The draft cannot be checked: \(String(describing: refusal))"
         }
     }
 
@@ -132,7 +145,7 @@ enum PerformanceWiringText {
         case .conversionRequired(let source, let destination):
             reason(.needsConversion(sourceChannels: source, destinationChannels: destination))
         case .feedbackRequired: reason(.feedbackOnly)
-        case .preview: "The draft changed. Choose the source again"
+        case .preview(let preview): previewFailure(preview)
         case .conversionNotNeeded, .feedbackNotNeeded, .batchInvalid, .connectDoesNotApply:
             String(describing: refusal)
         }

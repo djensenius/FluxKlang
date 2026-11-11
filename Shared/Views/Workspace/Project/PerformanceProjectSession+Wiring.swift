@@ -88,16 +88,13 @@ extension PerformanceProjectSession {
         try apply(plan.gesture)
     }
 
-    /// The inspector label of every node and connection of the draft graph, built once per snapshot. Items the
-    /// inspector refuses are left out (the view falls back to their title).
+    /// The inspector label of every node and connection of the draft graph, folding the draft once
+    /// (`WiringInspector.makeAll`). Empty when the inspector refuses the graph (the view falls back to titles).
     func inspectorLabels() -> [WiringInspectorSubject: String] {
-        let graph = snapshot.candidate
-        let subjects = graph.nodes.map { WiringInspectorSubject.node($0.id) } + graph.edges.map { .edge($0.id) }
-        var labels: [WiringInspectorSubject: String] = [:]
-        for subject in subjects {
-            if let inspector = try? inspector(subject) { labels[subject] = inspector.label }
+        guard let inspectors = try? WiringInspector.makeAll(draft: snapshot.history.draft, active: base) else {
+            return [:]
         }
-        return labels
+        return Dictionary(inspectors.map { ($0.subject, $0.label) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// The inspector (facts and accessible label) of one draft node or connection.
