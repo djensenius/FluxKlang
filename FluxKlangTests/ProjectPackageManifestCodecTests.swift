@@ -60,6 +60,9 @@ enum ManifestTestSupport {
     }
 }
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ProjectPackageManifestCodecTests {
     @Test func roundTripsUnknownFieldsAndExtensionsAtEveryRecordLevel() throws {
         let extras: [String: JSONValue] = ["future": .array([.null, .bool(true), .object(["n": .int(42)])])]
