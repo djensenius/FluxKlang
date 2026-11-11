@@ -5,6 +5,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ProjectPackagePathTests {
     @Test func acceptsRelativeNestedAndUnicodeNames() throws {
         let limits = try ProjectPackageTestSupport.limits()

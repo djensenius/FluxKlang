@@ -46,9 +46,11 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `CloudKitHistoryIsolationTests`, `PerformanceProjectSessionTests`,
 `PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`,
 `GraphCompilerTests`, `RoutingBoundaryTests`, `GraphCompilerPlanTests`,
-`GraphReferenceEvaluatorTests`, `AudioGainContractTests` and
-`AudioMuteContractTests` use the canonical suite trait; this is partial
-source adoption only. The iOS owners of those seven macOS-guarded suites remain
+`GraphReferenceEvaluatorTests`, `AudioGainContractTests`,
+`AudioMuteContractTests`, `ProjectPackageManifestCodecTests`,
+`ProjectPackageManifestValidationTests`, `ProjectPackageManifestReferenceTests`
+and `ProjectPackagePathTests` use the canonical suite trait; this is partial
+source adoption only. The iOS owners of those eleven macOS-guarded suites remain
 unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
@@ -243,6 +245,41 @@ suites. Each run, under its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one
 `suiteExit` attachment to `--attachments-path` for each of
 `FluxKlangTests/AudioGainContractTests` and
 `FluxKlangTests/AudioMuteContractTests`, carrying that run ID, with all 14
+operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
+issue recorded. These runs add no process-identity, argv or bootstrap evidence
+and do not cover the iOS owners; the remaining #60 gates above still apply and
+#60 remains open.
+
+## Project package manifest and path source adoption
+
+`ProjectPackageManifestCodecTests`, `ProjectPackageManifestValidationTests`,
+`ProjectPackageManifestReferenceTests` and `ProjectPackagePathTests` now use
+the canonical trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. The `ManifestTestSupport` helper enum in the codec suite's
+file is not a suite and stays unannotated. Against the unmodified base, the
+complete source inventory retains all 4,856 registrations and moves 32
+`FluxKlangMacTests` owner rows (eight per suite) to satisfied: 168 satisfied
+rows instead of 136. The iOS `FluxKlangTests` rows for all four suites stay
+unsatisfied and no other row changes. Diagnostics fall from 7,144 to 7,080 (16
+removed per suite, none added). Inventory still exits 0 and default enforcement
+still exits 1.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 194 repository sources from this change: the 189 paths of the gain
+and mute fixture above, which already include the codec suite's file and six
+`Shared/Persistence/Projects` sources, plus the other three suite files, the
+shared `ProjectPackageTestSupport` helper's file
+`ProjectPackageAdmissionTests.swift` and the in-memory
+`ProjectPackageAdmission.swift` source. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the four suites each
+passed 39 tests (no parameterized cases) in four suites. Each run, under its
+own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of
+`FluxKlangTests/ProjectPackageManifestCodecTests`,
+`FluxKlangTests/ProjectPackageManifestValidationTests`,
+`FluxKlangTests/ProjectPackageManifestReferenceTests` and
+`FluxKlangTests/ProjectPackagePathTests`, carrying that run ID, with all 14
 operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
 issue recorded. These runs add no process-identity, argv or bootstrap evidence
 and do not cover the iOS owners; the remaining #60 gates above still apply and

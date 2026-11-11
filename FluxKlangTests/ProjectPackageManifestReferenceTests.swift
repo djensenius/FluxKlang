@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ProjectPackageManifestReferenceTests {
     private func project(_ manifest: ProjectPackageManifest) -> ProjectDocument {
         ProjectDocument(
