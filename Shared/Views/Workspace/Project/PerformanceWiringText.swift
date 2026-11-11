@@ -51,10 +51,9 @@ enum PerformanceWiringText {
         }
     }
 
-    /// The node's label, or its raw ID when the label is empty or the node is missing (as `WiringInspector` titles).
+    /// The node's `wiringTitle`, or its raw ID when the node is missing.
     static func nodeTitle(_ id: NodeID, in graph: GraphDocument) -> String {
-        guard let node = graph.node(id), !node.label.utf8.isEmpty else { return id.rawValue }
-        return node.label
+        graph.node(id)?.wiringTitle ?? id.rawValue
     }
 
     /// `Source: audio output, 2 channels`.

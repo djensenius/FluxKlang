@@ -147,6 +147,7 @@
 		08D98142B2BF3FE790DFF21E /* AssistantInferenceBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC0961F61CB65E6309E17A80 /* AssistantInferenceBudget.swift */; };
 		08F3062877A4855C6E191D66 /* ControlFeedbackMIDI1Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64354146F22CBCD02BC93537 /* ControlFeedbackMIDI1Tests.swift */; };
 		08F6B78C4A669FFC6412DA8D /* SaveSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 874C276BA24ACBE2CCC17CA6 /* SaveSession.swift */; };
+		090383117585BFF29FED077D /* GraphNode+WiringTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBE4DE59A901D359B4E7E32 /* GraphNode+WiringTitle.swift */; };
 		090989CD8815DD739A3FFEC7 /* MIDIPerformanceRecoveryTests+ReleaseMarkers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88F77DA502653132E9BD67B3 /* MIDIPerformanceRecoveryTests+ReleaseMarkers.swift */; };
 		090CFEB36FAE3D297955B3DE /* SetupFlowTests+Manual.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC81A7926FF587DA92706CA0 /* SetupFlowTests+Manual.swift */; };
 		0911DBD745013A9F4F0233C9 /* GraphEdge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96BD89A407AC6D00A9502EC3 /* GraphEdge.swift */; };
@@ -2637,6 +2638,7 @@
 		BBCD17F0E4E5156B5169412B /* OpenSoundControl+WallClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C99B4200F72F5204028AEF2 /* OpenSoundControl+WallClock.swift */; };
 		BBCF571D280C247E6CB913D1 /* studio-connections.defaults.json in Resources */ = {isa = PBXBuildFile; fileRef = E106E3AEA76FD7B958335256 /* studio-connections.defaults.json */; };
 		BBDC7AB4EFEA6E7DC5515E8A /* OSCTransportTests+Equality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56F44DDF75D679F9001D7F93 /* OSCTransportTests+Equality.swift */; };
+		BBE47F09CA6B01E6EDBBF6F6 /* GraphNode+WiringTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBE4DE59A901D359B4E7E32 /* GraphNode+WiringTitle.swift */; };
 		BBE4820302462CB8E166E31C /* MIDI1Semantic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57EA2BA49D1B20E5078D1C9F /* MIDI1Semantic.swift */; };
 		BBF5FE474DDE45C5D43312A9 /* OpenSoundControl+Route.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F193832A0D515DD77BC96EB /* OpenSoundControl+Route.swift */; };
 		BBF6185A57F0DC756E672D9C /* ContractFixtureTests+EventSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504C63C3CCF8DBBFBD583B37 /* ContractFixtureTests+EventSources.swift */; };
@@ -4826,6 +4828,7 @@
 		9F2F9E789905FFA834B0E643 /* OSCTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSCTransportTests.swift; sourceTree = "<group>"; };
 		9F6B94DB89270287F9C5F216 /* PeerStatusEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerStatusEntry.swift; sourceTree = "<group>"; };
 		9FBD40A7ECFD94E062D995CD /* DemoWingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoWingTransport.swift; sourceTree = "<group>"; };
+		9FBE4DE59A901D359B4E7E32 /* GraphNode+WiringTitle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GraphNode+WiringTitle.swift"; sourceTree = "<group>"; };
 		9FC1BBDF9AE0524FDD1D4A03 /* ChainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChainTests.swift; sourceTree = "<group>"; };
 		9FF956D713E5F156E8A2ED8A /* SpatialRouteStateTests+Availability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpatialRouteStateTests+Availability.swift"; sourceTree = "<group>"; };
 		A0511A072895D3F049AFB02A /* ShowRecoveryDecision.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowRecoveryDecision.swift; sourceTree = "<group>"; };
@@ -6581,6 +6584,7 @@
 		5680EB776DF27B94205DEC7C /* Wiring */ = {
 			isa = PBXGroup;
 			children = (
+				9FBE4DE59A901D359B4E7E32 /* GraphNode+WiringTitle.swift */,
 				96107210D7495204923ED0E1 /* Compose */,
 				92978A1B4C8091A46D86CF96 /* Connections */,
 				0B359663398AE79DB7943D8B /* Edit */,
@@ -9812,6 +9816,7 @@
 				0911DBD745013A9F4F0233C9 /* GraphEdge.swift in Sources */,
 				DAF79C746F3A2EBFE41BEE1E /* GraphEdits.swift in Sources */,
 				808E5D176C48BBEF2496969F /* GraphIDs.swift in Sources */,
+				BBE47F09CA6B01E6EDBBF6F6 /* GraphNode+WiringTitle.swift in Sources */,
 				DA5B82E62582FEA1A194812C /* GraphNode.swift in Sources */,
 				28B59E036F52226B5BBBE6D8 /* GraphReferenceEvaluator+Block.swift in Sources */,
 				657DDEBCC483E51F41698577 /* GraphReferenceEvaluator+Run.swift in Sources */,
@@ -10851,6 +10856,7 @@
 				DEC5E99ADD669638198D373F /* GraphEdge.swift in Sources */,
 				8236FDA3CF2DB4FE986D33FF /* GraphEdits.swift in Sources */,
 				DA40A16CDBE303677B77FBE4 /* GraphIDs.swift in Sources */,
+				090383117585BFF29FED077D /* GraphNode+WiringTitle.swift in Sources */,
 				D5E80485029650D64A2C44DD /* GraphNode.swift in Sources */,
 				223858AC8FC41A7B4BCEDF1C /* GraphReferenceEvaluator+Block.swift in Sources */,
 				125FE54EDF130D6CED2A023E /* GraphReferenceEvaluator+Run.swift in Sources */,

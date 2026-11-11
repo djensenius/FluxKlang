@@ -245,6 +245,12 @@ struct WiringConnectionListTests {
         #expect(keys.rows[0].accessibilityLabel == "Vocal to Keys, audio, 1 channel, active.")
     }
 
+    @Test func wiringTitleFallsBackToTheRawIDOnlyForAnEmptyLabel() {
+        #expect(GraphNode(id: Fixture.node("blank"), kind: .plugin, label: "").wiringTitle == "nod.blank")
+        #expect(GraphNode(id: Fixture.node("named"), kind: .plugin, label: "Echo").wiringTitle == "Echo")
+        #expect(GraphNode(id: Fixture.node("space"), kind: .plugin, label: " ").wiringTitle == " ")
+    }
+
     static func refusal(
         _ body: () throws(WiringConnectionListRefusal) -> WiringConnectionList
     ) -> WiringConnectionListRefusal? {

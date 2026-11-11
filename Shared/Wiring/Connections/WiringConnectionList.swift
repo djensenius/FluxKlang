@@ -50,8 +50,8 @@ struct WiringConnectionRow: Hashable, Sendable {
         let port = source?.port(edge.from.port)
         let texts = edge.conversion.map { WiringConnectionListText.conversion($0, sourceChannels: port?.channels) }
         self.edge = edge.id
-        sourceText = source.map(WiringConnectionListText.title) ?? edge.from.node.rawValue
-        destinationText = nodes[edge.to.node].map(WiringConnectionListText.title) ?? edge.to.node.rawValue
+        sourceText = source.map(\.wiringTitle) ?? edge.from.node.rawValue
+        destinationText = nodes[edge.to.node].map(\.wiringTitle) ?? edge.to.node.rawValue
         conversionText = texts?.short
         conversionLabel = texts?.label
         feedbackText = edge.feedback == nil ? nil : WiringConnectionListText.feedback
@@ -89,7 +89,7 @@ struct WiringConnectionSection: Hashable, Sendable {
 
     fileprivate init(node: GraphNode, presence: WiringNodePresence, rows: [WiringConnectionRow]) {
         self.node = node.id
-        title = WiringConnectionListText.title(node)
+        title = node.wiringTitle
         signalText = WiringConnectionListText.inputs(node, WiringConnectionListText.signalText)
         self.presence = presence
         self.rows = rows
@@ -159,7 +159,7 @@ struct WiringConnectionList: Hashable, Sendable {
 
     /// Title bytes, then node ID bytes. IDs are unique, so the order is total.
     private static func precedes(_ lhs: GraphNode, _ rhs: GraphNode) -> Bool {
-        let left = WiringConnectionListText.title(lhs), right = WiringConnectionListText.title(rhs)
+        let left = lhs.wiringTitle, right = rhs.wiringTitle
         if !left.utf8.elementsEqual(right.utf8) { return left.utf8.lexicographicallyPrecedes(right.utf8) }
         return lhs.id.rawValue.utf8.lexicographicallyPrecedes(rhs.id.rawValue.utf8)
     }
