@@ -5,20 +5,6 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// What these tests need of the local mirror the snapshot still replaces (the automation one until GU1b-3).
-private protocol GenerationMirror: Equatable {
-    init(sample: Generation, transport: Generation, musicalMap: Generation)
-    init(_ snapshot: ClockGenerationSnapshot)
-    var sample: Generation { get }
-    var transport: Generation { get }
-    var musicalMap: Generation { get }
-    var snapshot: ClockGenerationSnapshot { get }
-}
-
-extension AutomationRenderGenerations: GenerationMirror {
-    fileprivate var snapshot: ClockGenerationSnapshot { ClockGenerationSnapshot(self) }
-}
-
 /// The refusals the three real validators share for a clock map of another generation.
 private protocol StaleClockRefusal: Error, Equatable {
     static func clock(_ error: ClockMapError) -> Self
@@ -29,37 +15,15 @@ extension MetronomeRefusal: StaleClockRefusal {}
 extension MIDIClipRefusal: StaleClockRefusal {}
 extension AutomationRenderRefusal: StaleClockRefusal {}
 
-/// The adapters between the snapshot and the mirror it still replaces, in both directions, and the drift guard: the
-/// snapshot and the automation mirror mean the same thing, and the three real validators (the metronome's takes the
-/// snapshot itself since GU1b-1, the MIDI clip's since GU1b-2) refuse a clock map of another generation on the axis
-/// the snapshot reports as stale first.
+/// The drift guard: the three real validators, which take the snapshot itself (the metronome's since #108 GU1b-1, the
+/// MIDI clip's since GU1b-2, the automation renderer's since GU1b-3), refuse a clock map of another generation on the
+/// axis the snapshot reports as stale first. The file name is kept from GU1 slice a, when it also tested the adapters
+/// to the local mirrors; GU1b-1 to GU1b-3 deleted those mirrors, their adapters and the adapter tests.
 extension ClockGenerationUnificationTests {
     private struct Verdicts: Equatable {
         let metronome: MetronomeRefusal?
         let clip: MIDIClipRefusal?
         let automation: AutomationRenderRefusal?
-    }
-
-    private static func expectRoundTrips<Local: GenerationMirror>(_ type: Local.Type) throws {
-        for snapshot in try triples() {
-            #expect(Local(snapshot).snapshot == snapshot, "\(Local.self) \(snapshot)")
-            let mirror = Local(sample: snapshot.sample, transport: snapshot.transport, musicalMap: snapshot.musicalMap)
-            #expect(Local(mirror.snapshot) == mirror, "\(Local.self) \(mirror)")
-        }
-    }
-
-    private static func expectFieldsAreCarriedByName<Local: GenerationMirror>(_ type: Local.Type) throws {
-        for snapshot in try triples() {
-            let fromSnapshot = Local(snapshot)
-            #expect(fromSnapshot.sample == snapshot.sample, "\(Local.self) sample from the snapshot")
-            #expect(fromSnapshot.transport == snapshot.transport, "\(Local.self) transport from the snapshot")
-            #expect(fromSnapshot.musicalMap == snapshot.musicalMap, "\(Local.self) musicalMap from the snapshot")
-            let mirror = Local(sample: snapshot.sample, transport: snapshot.transport, musicalMap: snapshot.musicalMap)
-            let toSnapshot = mirror.snapshot
-            #expect(toSnapshot.sample == mirror.sample, "\(Local.self) sample to the snapshot")
-            #expect(toSnapshot.transport == mirror.transport, "\(Local.self) transport to the snapshot")
-            #expect(toSnapshot.musicalMap == mirror.musicalMap, "\(Local.self) musicalMap to the snapshot")
-        }
     }
 
     /// A clock map whose anchor, transport and tempo map are at the generations of `observed`.
@@ -96,8 +60,7 @@ extension ClockGenerationUnificationTests {
         }
     }
 
-    /// What each real validator says about `clock` when `live` is the live snapshot, which the metronome and the MIDI
-    /// clip take as it is and the automation renderer turns into its own mirror.
+    /// What each real validator says about `clock` when `live` is the live snapshot, which each of them takes as it is.
     private static func verdicts(of clock: MusicalClockMap, against live: ClockGenerationSnapshot) throws -> Verdicts {
         var renderer = try automationRenderer()
         return Verdicts(
@@ -108,7 +71,7 @@ extension ClockGenerationUnificationTests {
                 try MIDIClipPlacement.validate(clock, current: live)
             },
             automation: verdict { () throws(AutomationRenderRefusal) in
-                _ = try renderer.render(from: 0, to: 64, clock: clock, current: AutomationRenderGenerations(live))
+                _ = try renderer.render(from: 0, to: 64, clock: clock, current: live)
             }
         )
     }
@@ -127,29 +90,11 @@ extension ClockGenerationUnificationTests {
                  automation: refusal(firstStale: axis))
     }
 
-    @Test func theAutomationMirrorRoundTripsThroughTheSnapshotInBothDirections() throws {
-        try Self.expectRoundTrips(AutomationRenderGenerations.self)
-    }
-
-    @Test func eachAutomationMirrorFieldIsTheSnapshotFieldOfTheSameNameInBothDirections() throws {
-        try Self.expectFieldsAreCarriedByName(AutomationRenderGenerations.self)
-    }
-
-    /// The metronome's and the MIDI clip's side is the snapshot itself since GU1b-1 and GU1b-2; the automation side
-    /// goes through its mirror.
-    @Test func theAutomationMirrorAndTheSnapshotCompareEqualForTheSameInputs() throws {
-        var seen: [ClockGenerationSnapshot] = []
-        for input in try Self.triples() {
-            let snapshot = ClockGenerationSnapshot(
-                sample: input.sample, transport: input.transport, musicalMap: input.musicalMap
-            )
-            let automation = AutomationRenderGenerations(
-                sample: input.sample, transport: input.transport, musicalMap: input.musicalMap
-            )
-            #expect(snapshot == ClockGenerationSnapshot(automation), "\(input)")
-            seen.append(snapshot)
-        }
-        #expect(Set(seen).count == seen.count)
+    /// The drift guard below runs on these: eight live snapshots, no two alike.
+    @Test func theDriftGuardRunsOnEightDistinctLiveSnapshots() throws {
+        let lives = try Self.triples()
+        #expect(lives.count == 8)
+        #expect(Set(lives).count == lives.count)
     }
 
     @Test func theThreeRealValidatorsRefuseAClockMapOnTheAxisTheSnapshotReportsFirst() throws {

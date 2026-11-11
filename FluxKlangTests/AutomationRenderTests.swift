@@ -11,7 +11,7 @@ struct AutomationRenderTests {
     static let musical = ClockID(validated: "mus.main")
     static let level = ParameterID(validated: "ch.01.fdr")
     static let fader = ControlSourceID(validated: "ctl.fader")
-    static let live = AutomationRenderGenerations(sample: .initial, transport: .initial, musicalMap: .initial)
+    static let live = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: .initial)
     static let quarter = MusicalTime.ticksPerQuarter
 
     /// A clock whose anchor puts `ticks` on `frame`; 120 BPM at 48 kHz by default.
@@ -283,15 +283,15 @@ struct AutomationRenderTests {
             try renderer.render(from: 513, to: 600, clock: clock, current: Self.live)
         }
         let newer = try Generation(2)
-        let staleSample = AutomationRenderGenerations(sample: newer, transport: .initial, musicalMap: .initial)
+        let staleSample = ClockGenerationSnapshot(sample: newer, transport: .initial, musicalMap: .initial)
         #expect(throws: AutomationRenderRefusal.clock(.staleSampleGeneration)) {
             try renderer.render(from: 512, to: 600, clock: clock, current: staleSample)
         }
-        let staleTransport = AutomationRenderGenerations(sample: .initial, transport: newer, musicalMap: .initial)
+        let staleTransport = ClockGenerationSnapshot(sample: .initial, transport: newer, musicalMap: .initial)
         #expect(throws: AutomationRenderRefusal.clock(.staleTransport)) {
             try renderer.render(from: 512, to: 600, clock: clock, current: staleTransport)
         }
-        let staleMap = AutomationRenderGenerations(sample: .initial, transport: .initial, musicalMap: newer)
+        let staleMap = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: newer)
         #expect(throws: AutomationRenderRefusal.staleMusicalMap) {
             try renderer.render(from: 512, to: 600, clock: clock, current: staleMap)
         }
@@ -313,7 +313,7 @@ struct AutomationRenderTests {
         renderer.reset()
         #expect(renderer.cursor == nil && renderer.binding == nil && !renderer.isRenderingLane)
         let newer = try Generation(2)
-        let current = AutomationRenderGenerations(sample: .initial, transport: .initial, musicalMap: newer)
+        let current = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: newer)
         let events = try renderer.render(from: 9_000, to: 9_100, clock: Self.clock(revision: newer), current: current)
         #expect(events.first?.reason == .start)
         #expect(renderer.binding == current)

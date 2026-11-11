@@ -73,7 +73,7 @@ struct AutomationBlockRenderer: Hashable, Sendable {
     /// The end of the last rendered block; the next render must start here.
     private(set) var cursor: Int64?
     /// The generations of the first render since creation or `reset()`; later renders must match them.
-    private(set) var binding: AutomationRenderGenerations?
+    private(set) var binding: ClockGenerationSnapshot?
     /// Whether automation owned the parameter at the last advance point and no gesture has taken it since, so lane
     /// events are being emitted.
     private(set) var isRenderingLane = false
@@ -118,7 +118,7 @@ struct AutomationBlockRenderer: Hashable, Sendable {
     /// Renders the block `[start, end)`. The first render since creation or `reset()` may start anywhere: it
     /// relocates the arbiter to the start position, binds to `current` and emits the value there.
     mutating func render(from start: Int64, to end: Int64, clock: MusicalClockMap,
-                         current: AutomationRenderGenerations) throws(AutomationRenderRefusal)
+                         current: ClockGenerationSnapshot) throws(AutomationRenderRefusal)
         -> [AutomationRampEvent] {
         guard start < end else { throw .invalidWindow(start: start, end: end) }
         let (span, overflow) = end.subtractingReportingOverflow(start)

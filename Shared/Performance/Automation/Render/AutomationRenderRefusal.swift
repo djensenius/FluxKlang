@@ -23,7 +23,7 @@ enum AutomationRenderRefusal: Error, Equatable, Sendable {
     case nonContiguousWindow(expected: Int64, start: Int64)
     /// The render's generations differ from those the renderer is bound to. Nothing is re-anchored silently:
     /// call `reset()`, then render on the new map.
-    case clockRevisionChanged(expected: AutomationRenderGenerations, got: AutomationRenderGenerations)
+    case clockRevisionChanged(expected: ClockGenerationSnapshot, got: ClockGenerationSnapshot)
     /// The clock places the block start at another musical position than the previous render ended at, so the
     /// map was re-anchored without a generation change; `reset()` first.
     case positionMismatch(frame: Int64)

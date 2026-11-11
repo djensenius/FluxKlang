@@ -3,12 +3,18 @@
 //  FluxKlang
 //
 //  One contract type for the three clock generations a stamp must match before
-//  it is used (#108 GU1, slice a). The metronome (GU1b-1) and MIDI clips
-//  (GU1b-2) take it directly; `AutomationRenderGenerations` holds the same
-//  three numbers and names this type as its follow-up (GU1b-3).
+//  it is used (#108 GU1, slice a). The metronome (GU1b-1), MIDI clips (GU1b-2)
+//  and the automation renderer (GU1b-3) take it directly; the local mirrors
+//  they held before are deleted.
 //  Generations compare by equality only (media contract rule M2): a stamp is
 //  current when its generation equals the live one, never because it is
 //  "newer".
+//
+//  Not covered, on purpose: `CalibrationGenerations` (device and calibration
+//  latency epochs), `GenerationSlot` and `GenerationAnchor` (recording take
+//  bookkeeping) and `RuntimeGenerationKey` (the fixed-size kernel vocabulary).
+//  Their generations belong to other domains and are not the (sample clock,
+//  transport, musical map) triple, so this type does not stand for them.
 //
 
 /// The sample clock, transport and musical map generations of one clock set, read from a ledger or carried by a
