@@ -7,6 +7,9 @@ import Foundation
 #endif
 
 /// GC3 (#66): reference evaluator, kernels and delay line. Fixtures live in `+Fixtures`.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct GraphReferenceEvaluatorTests {
     static func bits(_ values: [Float]) -> [UInt32] {
         values.map(\.bitPattern)
