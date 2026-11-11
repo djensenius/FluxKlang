@@ -67,15 +67,19 @@ struct PerformanceWorkspaceView: View {
         }
         Text("Undo: \(session.snapshot.history.undoCount) • Redo: \(session.snapshot.history.redoCount)")
             .font(.caption)
+        PerformanceWiringListView(session: session, edit: edit)
         PerformanceDraftReviewView(diff: session.snapshot.diff, baseRevision: session.base.revision)
     }
 
-    private func edit(_ operation: () throws -> Void) {
+    @discardableResult
+    private func edit(_ operation: () throws -> Void) -> Bool {
         do {
             try operation()
             editFailure = nil
+            return true
         } catch {
-            editFailure = String(describing: error)
+            editFailure = PerformanceWiringText.failure(error)
+            return false
         }
     }
 }

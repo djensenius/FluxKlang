@@ -23,7 +23,8 @@ final class PerformanceProjectSession {
     private(set) var snapshot: Snapshot
     private(set) var navigation = WorkspaceNavigationState()
     private let stereoNodes: [GraphNode]
-    private let stereoEdge: GraphEdge
+    /// Read by the wiring list so the starter pair reuses this exact record.
+    let stereoEdge: GraphEdge
 
     /// Explicit New/Open only. Reconcile navigation without replacing an existing document.
     static func openOrCreate(

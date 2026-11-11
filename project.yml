@@ -846,6 +846,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Catalog.swift
       - path: FluxKlangTests/PerformanceProjectSessionTests.swift
       - path: FluxKlangTests/PerformanceDraftReviewTests.swift
+      - path: FluxKlangTests/PerformanceWiringEditorTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Adaptation.swift
       - path: FluxKlangTests/WorkspaceNavigationTests+Projects.swift
