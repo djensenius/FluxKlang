@@ -19,7 +19,7 @@ enum MetronomeCountIn {
     /// `bars` bars of clicks ending just before the anchor, earliest first. At most
     /// 4 bars × 64 beats × 8 subdivisions = 2,048 clicks, so no click cap is needed.
     static func clicks(bars: Int, configuration: MetronomeConfiguration, clock: MusicalClockMap,
-                       current: MetronomeGenerations) throws(MetronomeRefusal) -> [MetronomeCountInClick] {
+                       current: ClockGenerationSnapshot) throws(MetronomeRefusal) -> [MetronomeCountInClick] {
         guard (0...maximumBars).contains(bars) else { throw .countInBarsOutOfRange(bars) }
         try MetronomeGrid.validate(clock, current: current)
         guard let first = clock.map.segments.first else { throw .clock(.invalidMap) }

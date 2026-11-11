@@ -3,11 +3,12 @@
 //  FluxKlang
 //
 //  One contract type for the three clock generations a stamp must match before
-//  it is used (#108 GU1, slice a). `MetronomeGenerations`, `MIDIClipGenerations`
-//  and `AutomationRenderGenerations` hold the same three numbers and name this
-//  type as their follow-up. Generations compare by equality only (media
-//  contract rule M2): a stamp is current when its generation equals the live
-//  one, never because it is "newer".
+//  it is used (#108 GU1, slice a). The metronome takes it directly (GU1b-1);
+//  `MIDIClipGenerations` and `AutomationRenderGenerations` hold the same three
+//  numbers and name this type as their follow-up (GU1b-2 and GU1b-3).
+//  Generations compare by equality only (media contract rule M2): a stamp is
+//  current when its generation equals the live one, never because it is
+//  "newer".
 //
 
 /// The sample clock, transport and musical map generations of one clock set, read from a ledger or carried by a
