@@ -42,9 +42,10 @@ human-readable report; JSON is the default. Modes and exit codes are:
 | 2 | Invalid inputs or unsupported/incomplete structural analysis |
 
 Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
-manifest is complete. `MacPureModelSmokeTests` and, under `#if os(macOS)`,
-`RoutingDSPTests` use `@Suite(.productionAccessAudit)`; this is partial source
-adoption only. The iOS `RoutingDSPTests` owner remains unadopted. Other owners'
+manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
+`CloudKitHistoryIsolationTests` and, under `#if os(macOS)`, `RoutingDSPTests`
+use the canonical suite trait; this is partial source adoption only.
+The iOS `RoutingDSPTests` owner remains unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
 success is not coverage or isolation.
@@ -75,8 +76,9 @@ authorized `FLUXKLANG_AUDIT_RUN_ID`. The observed `Test.ID` was
 `apiEntered` and `factoryEvaluated` counters, and no audit issue was recorded.
 The Release run is optimized with `-enable-testing`, which `@testable` imports
 require; it does not establish shipping-build equivalence. Best-effort
-`Attachment.record` alone does not establish persistence. MIDI adoption and
-the broader storage selection are deferred.
+`Attachment.record` alone does not establish persistence. These RoutingDSP
+receipts do not qualify the separate MIDI/history adoption described below;
+the broader storage selection remains deferred.
 
 The private witness records ordered `CommandLine.arguments`, self executable
 paths and POSIX process IDs in a separately named genuine attachment. The
@@ -122,6 +124,44 @@ native/hosted runtime qualification: exact runner argv, earliest bootstrap,
 fresh-host isolation, actual UUID delivery and runtime `Test.ID`/result
 identity, attachment persistence, descendant closure and artifact sealing.
 Source registration rows are not runtime receipt expectations; #60 remains open.
+
+## MIDI and history source adoption
+
+The existing MIDI clip ownership and CloudKit history isolation roots now use
+the canonical `.productionAccessAudit` trait without changing their test bodies,
+guards or target memberships. The complete source-inventory comparison retains
+all 4,808 registrations and adds 24 satisfied owner rows (16 MIDI, eight history):
+40 satisfied rows instead of 16. All other owner obligations remain unchanged.
+The unchanged checker fixture suite passes all 311 checks; inventory remains
+non-enforcing and default enforcement still reports unsatisfied obligations.
+
+Those source results are separate from the newly qualified pure fixture:
+126 exact repository Swift inputs plus one private witness, retaining all nine
+committed dependency pins. The baseline and separately authorized Debug and
+Release candidates each passed 71 MIDI cases, eight history cases and the
+witness. The unchanged baseline retained no selected canonical receipts; that
+was the expected missing-adoption RED, not a test failure.
+
+Each candidate persisted exactly two genuine schema-1 `suiteExit` receipts,
+with observed `Test.ID` values `FluxKlangTests/MIDIClipOwnershipTests` and
+`FluxKlangTests/CloudKitHistoryIsolationTests`, plus the private witness.
+All 14 operation IDs had integer-zero `factoryEvaluated` and `apiEntered`
+counters, without audit issues. The three run UUIDs differ; the candidates'
+process-instance and invocation UUIDs also differ. Baseline receipt-internal
+identities were not observed.
+
+The private witness and independent process observations correlate receipts by
+run UUID and host PID, subject to the argument, origin and nonrecursive-scope
+limitations above. All 127 owned inputs explicitly select Swift 6; the
+generated SwiftPM runner has no explicit language selection, so its Swift 6
+language mode is not established. Release uses `-O` and `-enable-testing`, not
+shipping-build equivalence. Driver jobs were limited to two, but Release
+whole-module compiler invocations requested ten threads; actual concurrent
+thread usage was not observed.
+
+This is not a new supported execution workflow, earliest-bootstrap proof,
+exclusive per-test attribution, native host isolation or permission to access
+CloudKit. The remaining #60 gates still apply.
 
 ## Headless fixtures
 
