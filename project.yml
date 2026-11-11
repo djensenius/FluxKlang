@@ -658,6 +658,7 @@ targets:
       - path: FluxKlangTests/OSCTransportTests+Scripts.swift
       - path: FluxKlangTests/SetupFlowSourcesTests.swift
       - path: FluxKlangTests/MIDITimecodeTests.swift
+      - path: FluxKlangTests/MIDITimecodeTests+NibbleJoin.swift
       - path: FluxKlangTests/MIDITimecodeTests+MMC.swift
       - path: FluxKlangTests/TimecodeMachineTests.swift
       - path: FluxKlangTests/TimecodeMachineTests+Authorization.swift
@@ -695,6 +696,7 @@ targets:
       - path: FluxKlangTests/MIDIClockTempoEstimatorTests.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift
+      - path: FluxKlangTests/MIDIClockArbitrationTests+DropoutEdgeCases.swift
       - path: FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift
       - path: FluxKlangTests/MIDISourceRegistryTests.swift
       - path: FluxKlangTests/MIDIControlIntakeTests.swift
