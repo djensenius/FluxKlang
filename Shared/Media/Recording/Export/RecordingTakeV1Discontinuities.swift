@@ -87,9 +87,12 @@ struct RecordingTakeV1DiscontinuityRecord: Hashable, Sendable {
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields; `frames`, `reason` and `note` are omitted when absent. Equal records encode to equal
-    /// bytes. The output is bounded: IDs of at most `ContractID.maximumLength` (128) bytes and a note of at
-    /// most `RecordingTakeV1Record.maximumNoteBytes`.
+    /// schema's fields; `frames`, `reason` and `note` are omitted when absent. Records built from the same
+    /// inputs, with byte-identical `note` text, encode to identical bytes. Swift `String` equality is canonical,
+    /// so records whose notes differ only in Unicode normalization compare equal but encode differently; text is
+    /// never normalized.
+    /// The output is bounded: IDs of at most `ContractID.maximumLength` (128) bytes and a note of at most
+    /// `RecordingTakeV1Record.maximumNoteBytes`.
     func encodedJSON() throws -> Data {
         try ContractCoding.makeEncoder().encode(self)
     }
@@ -186,7 +189,7 @@ enum RecordingTakeV1Discontinuities {
         for (seq, note) in notes.sorted(by: { $0.key < $1.key }) {
             guard numbered.contains(seq) else { throw .noteWithoutRecord(seq: seq) }
             let bytes = note.utf8.count
-            guard bytes <= RecordingTakeV1Record.maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(seq: seq, bytes: bytes)
             }
         }

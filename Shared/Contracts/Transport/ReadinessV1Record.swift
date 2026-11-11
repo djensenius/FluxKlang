@@ -18,7 +18,7 @@ struct ReadinessV1Record: Hashable, Sendable {
     static let kind = "readiness"
     /// The same bound as `RecordingTakeV1Record.maximumNoteBytes`; the schema needs only a non-empty note.
     /// It bounds both `reason` and `note`.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let actionID: ActionID
@@ -37,19 +37,14 @@ struct ReadinessV1Record: Hashable, Sendable {
         guard MediaContractV1ID.matches(action.rawValue) else { throw .invalidActionID(action) }
         guard from.allowedNext.contains(to) else { throw .illegalTransition(from: from, to: to) }
         if let reason {
-            guard isValidNote(reason) else { throw .invalidReason(bytes: reason.utf8.count) }
+            guard MediaContractV1Note.isValid(reason) else { throw .invalidReason(bytes: reason.utf8.count) }
         } else if to == .failed || to == .invalidated {
             throw .missingReason(to: to)
         }
         if let note {
-            guard isValidNote(note) else { throw .invalidNote(bytes: note.utf8.count) }
+            guard MediaContractV1Note.isValid(note) else { throw .invalidNote(bytes: note.utf8.count) }
         }
         return ReadinessV1Record(seq: seq, actionID: action, from: from, to: to, reason: reason, note: note)
-    }
-
-    /// The TKX1 note rules: something other than whitespace, and at most `maximumNoteBytes` UTF-8 bytes.
-    private static func isValidNote(_ text: String) -> Bool {
-        text.utf8.count <= maximumNoteBytes && text.contains(where: { !$0.isWhitespace })
     }
 
     private init(seq: Int, actionID: ActionID, from: ReadinessState, to: ReadinessState, reason: String?,

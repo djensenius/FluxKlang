@@ -399,6 +399,20 @@ struct RecordingTakeV1GateTests {
     }
 
     @Test
+    func mediaContractV1NoteNeedsNonWhitespaceTextWithinTheSharedByteBound() {
+        let limit = MediaContractV1Note.maximumBytes
+        #expect(limit == 256 && RecordingTakeV1Record.maximumNoteBytes == limit)
+        #expect(MeasuredLatency.maximumEvidenceBytes == limit)
+        for valid in ["x", " x\n", String(repeating: "a", count: limit), String(repeating: "é", count: 128)] {
+            #expect(MediaContractV1Note.isValid(valid), "\(valid)")
+        }
+        for invalid in ["", " ", " \n\t", "\r\n", "\u{00A0}\u{2003}", String(repeating: "a", count: limit + 1),
+                        String(repeating: "é", count: 129)] {
+            #expect(!MediaContractV1Note.isValid(invalid), "\(invalid)")
+        }
+    }
+
+    @Test
     func recordingTakeV1RecordKeepsEverySegmentAtTheLedgerLimitAndRefusesOneMore() throws {
         let count = TakeLedger.maximumSegmentsPerTake
         let take = try chain(count: count, lastGeneration: count, lastPlaced: true)

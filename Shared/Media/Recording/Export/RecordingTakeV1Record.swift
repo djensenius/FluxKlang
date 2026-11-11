@@ -37,7 +37,7 @@ struct RecordingTakeV1Record: Hashable, Sendable {
 
     static let kind = "take"
     /// A bound of this exporter, not of the schema (which needs only a non-empty note): the evidence bound.
-    static let maximumNoteBytes = MeasuredLatency.maximumEvidenceBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let takeID: TakeID
@@ -77,7 +77,7 @@ struct RecordingTakeV1Record: Hashable, Sendable {
         }
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }
@@ -102,7 +102,10 @@ struct RecordingTakeV1Record: Hashable, Sendable {
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields; `note` and `evidence` are omitted when absent. Equal records encode to equal bytes.
+    /// schema's fields; `note` and `evidence` are omitted when absent. Records built from the same inputs, with
+    /// byte-identical `note` and `evidence` text, encode to identical bytes. Swift `String` equality is canonical,
+    /// so records whose text differs only in Unicode normalization compare equal but encode differently; text is
+    /// never normalized.
     /// The output is bounded: at most `TakeLedger.maximumSegmentsPerTake` segments, IDs of at most
     /// `ContractID.maximumLength` (128) bytes, and a note and evidence of at most `maximumNoteBytes` each.
     func encodedJSON() throws -> Data {
@@ -144,28 +147,5 @@ extension RecordingTakeV1Record.InputLatencyRecord: Encodable {
             try container.encodeNil(forKey: .measuredFrames)
         }
         try container.encodeIfPresent(evidence, forKey: .evidence)
-    }
-}
-
-/// The media contract v1 `$defs.id` pattern, `^[a-z][a-z0-9-]*\.[a-z0-9.-]+$`, matched byte by byte.
-/// Stricter than `ContractID`, which also admits upper case, `_` and `:`.
-enum MediaContractV1ID {
-    static func matches(_ raw: String) -> Bool {
-        let bytes = Array(raw.utf8)
-        guard let first = bytes.first, isLower(first),
-              let dot = bytes.firstIndex(of: UInt8(ascii: ".")), dot + 1 < bytes.count else { return false }
-        let head = bytes[1..<dot].allSatisfy { isLower($0) || isDigit($0) || $0 == UInt8(ascii: "-") }
-        let tail = bytes[(dot + 1)...].allSatisfy {
-            isLower($0) || isDigit($0) || $0 == UInt8(ascii: "-") || $0 == UInt8(ascii: ".")
-        }
-        return head && tail
-    }
-
-    private static func isLower(_ byte: UInt8) -> Bool {
-        (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
-    }
-
-    private static func isDigit(_ byte: UInt8) -> Bool {
-        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
     }
 }

@@ -8,7 +8,8 @@
 //
 
 struct MeasuredLatency: Hashable, Sendable {
-    static let maximumEvidenceBytes = 256
+    /// The media contract v1 note bound: a `takeRecord` writes the evidence verbatim.
+    static let maximumEvidenceBytes = MediaContractV1Note.maximumBytes
 
     let frames: Int64
     /// What the measurement was, for example the loopback run that produced it.

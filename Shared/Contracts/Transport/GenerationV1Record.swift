@@ -35,7 +35,7 @@ struct GenerationV1Record: Hashable, Sendable {
 
     static let kind = "generation"
     /// The same bound as `RecordingTakeV1Record.maximumNoteBytes`; the schema needs only a non-empty note.
-    static let maximumNoteBytes = RecordingTakeV1Record.maximumNoteBytes
+    static let maximumNoteBytes = MediaContractV1Note.maximumBytes
 
     let seq: Int
     let counter: GenerationKey
@@ -74,7 +74,7 @@ struct GenerationV1Record: Hashable, Sendable {
                                                          musicalMap: musicalMap, meter: meter)
         if let note {
             let bytes = note.utf8.count
-            guard bytes <= maximumNoteBytes, note.contains(where: { !$0.isWhitespace }) else {
+            guard MediaContractV1Note.isValid(note) else {
                 throw .invalidNote(bytes: bytes)
             }
         }
