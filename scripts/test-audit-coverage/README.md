@@ -44,14 +44,17 @@ human-readable report; JSON is the default. Modes and exit codes are:
 Always inspect `analysisComplete` and `enforcementSatisfied`. The registration
 manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `CloudKitHistoryIsolationTests`, `PerformanceProjectSessionTests`,
-`PerformanceDraftReviewTests` and, under `#if os(macOS)`, `RoutingDSPTests`,
+`PerformanceDraftReviewTests`, `PerformanceWiringEditorTests` and, under
+`#if os(macOS)`, `RoutingDSPTests`,
 `GraphCompilerTests`, `RoutingBoundaryTests`, `GraphCompilerPlanTests`,
 `GraphReferenceEvaluatorTests`, `AudioGainContractTests`,
 `AudioMuteContractTests`, `ProjectPackageManifestCodecTests`,
 `ProjectPackageManifestValidationTests`, `ProjectPackageManifestReferenceTests`,
 `ProjectPackagePathTests`, `MIDIClockFollowerTests`, `MIDIClockMathTests`,
-`MIDIClockPulseScheduleTests` and `MIDIClockTempoTests` use the canonical suite
-trait; this is partial source adoption only. The iOS owners of those fifteen
+`MIDIClockPulseScheduleTests`, `MIDIClockTempoTests`,
+`MIDIClockTempoEstimatorTests`, `ControlPickupTests`, `ControlPickupBookTests`
+and `ProjectPackageAdmissionTests` use the canonical suite trait; this is
+partial source adoption only. The iOS owners of those nineteen
 macOS-guarded suites remain unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
@@ -317,6 +320,51 @@ operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
 issue recorded. These runs add no process-identity, argv or bootstrap evidence
 and do not cover the iOS owners; the remaining #60 gates above still apply and
 #60 remains open.
+
+## MIDI clock tempo estimator, control pickup and package admission source adoption
+
+`MIDIClockTempoEstimatorTests`, `ControlPickupTests`, `ControlPickupBookTests`
+and `ProjectPackageAdmissionTests` now use the canonical trait under
+`#if os(macOS)` on their root declarations, matching `GraphCompilerTests`,
+without test-body, helper, target-membership or registration changes.
+`ControlPickupBookTests` keeps its `"Control pickup book"` display name: the
+trait is added to its existing `@Suite` in the macOS branch, the `#else`
+branch keeps that `@Suite` unchanged, and its `+Limits` extension stays
+unannotated. The `BookFx` and `ProjectPackageTestSupport` helper enums are not
+suites and stay unannotated. Against the unmodified base, the complete source
+inventory retains all 4,856 registrations and moves 32 `FluxKlangMacTests`
+owner rows (eight per suite) to satisfied: 232 satisfied rows instead of 200.
+The iOS `FluxKlangTests` rows for all four suites stay unsatisfied and no
+other row changes. Diagnostics fall from 7,016 to 6,960 (16 removed for each
+of the three suites that had no `@Suite`, and 8 for `ControlPickupBookTests`,
+whose existing `@Suite` already met the single-macro requirement; none added).
+Inventory still exits 0 and default enforcement still exits 1.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 113 repository sources from this change instead of extending the
+MIDI clock fixture above. Seven are test sources: the four suites' five files,
+`ControlBindingTests.swift` for the `ControlBindingTests` helpers that
+`ControlPickupTests` uses, and `ProductionAccessScope.swift`. The other 106
+are `Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: 43 `Shared/Contracts` sources (all but the two
+`Transport/Snapshot` sources, `ClockGenerationSnapshot.swift` and
+`ClockGenerationStaleness.swift`), 41 `Shared/Control` binding, pickup,
+intake, availability, dispatch, Learn, trigger and feedback message and
+encoding sources, the seven `Shared/MIDI/Clock` sources, the ten
+`Shared/MIDI/Protocol/MIDI1` event, parser, semantic and state sources,
+`Shared/WING/FaderMath.swift` and the `ProjectPackageAdmission`, limits and
+path sources. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the four suites each
+passed 59 tests (63 case invocations) in four suites. Each run, under its own
+fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of
+`FluxKlangTests/MIDIClockTempoEstimatorTests`,
+`FluxKlangTests/ControlPickupTests`, `FluxKlangTests/ControlPickupBookTests`
+and `FluxKlangTests/ProjectPackageAdmissionTests`, carrying that run ID, with
+all 14 operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no
+audit issue recorded. These runs add no process-identity, argv or bootstrap
+evidence and do not cover the iOS owners; the remaining #60 gates above still
+apply and #60 remains open.
 
 ## Headless fixtures
 

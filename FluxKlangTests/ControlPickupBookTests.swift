@@ -145,7 +145,11 @@ enum BookFx {
     }
 }
 
+#if os(macOS)
+@Suite("Control pickup book", .productionAccessAudit)
+#else
 @Suite("Control pickup book")
+#endif
 struct ControlPickupBookTests {
     // MARK: Adding and ordering
 
