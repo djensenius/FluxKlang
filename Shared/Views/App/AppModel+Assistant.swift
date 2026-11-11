@@ -108,6 +108,7 @@ private extension AssistantScreen {
         case .workspace: self = .workspace
         case .assistant: self = .assistant
         case .mix: self = .mix
+        case .more: self = .more
         case .patchbay: self = .routing
         case .connection: self = .connection
         case .tutorial: self = .learn

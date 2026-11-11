@@ -193,8 +193,8 @@ private struct SplitRoot: View {
     var body: some View {
         @Bindable var appModel = appModel
         let selection = Binding<AppSection?>(
-            get: { appModel.section },
-            set: { appModel.section = $0 ?? .studio }
+            get: { appModel.section == .more ? nil : appModel.section },
+            set: { appModel.section = $0 ?? (appModel.section == .more ? .more : .studio) }
         )
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -281,6 +281,13 @@ struct SectionDetail: View {
             AssistantView()
         case .mix:
             MixView()
+        case .more:
+            ContentUnavailableView(
+                "Choose a destination",
+                systemImage: "sidebar.leading",
+                description: Text("Select a destination in the sidebar.")
+            )
+            .navigationTitle(AppSection.more.rawValue)
         case .patchbay:
             PatchbayView()
         case .connection:

@@ -87,10 +87,10 @@ struct CompactTabRoot: View {
         .onChange(of: appModel.section) { _, section in
             synchronizeSelection(section)
         }
-        .onChange(of: morePath) { _, path in
-            if path.last == .workspace {
-                appModel.section = .workspace
-            }
+        .onChange(of: morePath) { previous, path in
+            appModel.section = appModel.section.updatingCompactMorePath(
+                from: previous, to: path, isSelected: selectedTab == .more
+            )
         }
         .onChange(of: selectedTab) { _, tab in
             switch tab {
@@ -101,9 +101,7 @@ struct CompactTabRoot: View {
             case .mix:
                 appModel.section = .mix
             case .more:
-                if morePath.last == .workspace {
-                    appModel.section = .workspace
-                }
+                appModel.section = appModel.section.selectingCompactMore(path: morePath)
             }
         }
     }
@@ -112,10 +110,8 @@ struct CompactTabRoot: View {
         let tab = compactTab(for: section)
         selectedTab = tab
         // Selecting More alone cannot restore a destination after an adaptive-width change.
-        if section == .workspace {
-            if morePath.last != .workspace { morePath = [.workspace] }
-        } else if tab == .more && morePath.last == .workspace {
-            morePath = []
+        if section == .workspace || section == .more || (tab == .more && morePath.last == .workspace) {
+            morePath = section.compactMorePath
         }
     }
 
@@ -127,7 +123,7 @@ struct CompactTabRoot: View {
             return .assistant
         case .mix:
             return .mix
-        case .workspace, .patchbay, .connection, .tutorial, .advanced:
+        case .workspace, .more, .patchbay, .connection, .tutorial, .advanced:
             return .more
         }
     }

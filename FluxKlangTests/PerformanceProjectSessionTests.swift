@@ -342,6 +342,35 @@ struct PerformanceProjectSessionTests {
         #expect(reopened.snapshot.candidate.edges.isEmpty)
     }
 
+    @Test func workspaceBackKeepsMoreRootWhenCompactNavigationIsRecreated() {
+        var section = AppSection.studio.selectingCompactMore(path: [])
+        #expect(section == .more)
+        section = section.updatingCompactMorePath(from: [], to: [.workspace], isSelected: true)
+        let openedPath = section.compactMorePath
+        #expect(section == .workspace && openedPath == [.workspace])
+        section = section.updatingCompactMorePath(from: openedPath, to: [], isSelected: true)
+        #expect(section == .more)
+        let restoredPath = section.compactMorePath
+        #expect(restoredPath.isEmpty)
+        #expect(section.selectingCompactMore(path: restoredPath) == .more)
+    }
+
+    @Test func programmaticConsoleSelectionSurvivesClearingTheCompactWorkspacePath() {
+        let section = AppSection.patchbay.updatingCompactMorePath(
+            from: [.workspace], to: [], isSelected: true
+        )
+        #expect(section == .patchbay)
+        #expect(section.selectingCompactMore(path: section.compactMorePath) == .patchbay)
+    }
+
+    @Test func inactiveMoreStackWaitsForItsTabBeforeRestoringWorkspace() {
+        let section = AppSection.assistant.updatingCompactMorePath(
+            from: [], to: [.workspace], isSelected: false
+        )
+        #expect(section == .assistant)
+        #expect(section.selectingCompactMore(path: [.workspace]) == .workspace)
+    }
+
     /// Establish that the replacement is a valid contract edit, then assert the narrower session refusal.
     private func expectReservedRouteRefusal(
         _ gesture: [GraphEdit], session: PerformanceProjectSession, edge: EdgeID
