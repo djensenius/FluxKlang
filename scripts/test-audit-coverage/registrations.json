@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "50ecd2ea05c525f38d09270cf3c6221040df9458527c0934f8782c19a50b4446",
+    "sha256": "1d9cc2ae298e1b5f49c20978672cd67c201546a717c0f3313e2be303d99f6952",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -556,6 +556,7 @@
         "FluxKlangTests/OSCTransportTests+Scripts.swift",
         "FluxKlangTests/SetupFlowSourcesTests.swift",
         "FluxKlangTests/MIDITimecodeTests.swift",
+        "FluxKlangTests/MIDITimecodeTests+NibbleJoin.swift",
         "FluxKlangTests/MIDITimecodeTests+MMC.swift",
         "FluxKlangTests/TimecodeMachineTests.swift",
         "FluxKlangTests/TimecodeMachineTests+Authorization.swift",
@@ -593,6 +594,7 @@
         "FluxKlangTests/MIDIClockTempoEstimatorTests.swift",
         "FluxKlangTests/MIDIClockArbitrationTests.swift",
         "FluxKlangTests/MIDIClockArbitrationTests+Dropout.swift",
+        "FluxKlangTests/MIDIClockArbitrationTests+DropoutEdgeCases.swift",
         "FluxKlangTests/MIDIClockArbitrationTests+SteadyRun.swift",
         "FluxKlangTests/MIDISourceRegistryTests.swift",
         "FluxKlangTests/MIDIControlIntakeTests.swift",
