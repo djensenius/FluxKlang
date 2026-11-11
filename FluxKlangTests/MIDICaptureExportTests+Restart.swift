@@ -26,6 +26,16 @@ struct MIDICaptureRestartTests {
         #expect(all.offsetsNs.count == 9 && all.offsetsNs[6...] == [1_500_000_000, 1_750_000_000, 2_000_000_000])
     }
 
+    @Test func example10NativeV1RecordEncodesExactly() throws {
+        let export = try Self.export(Fixture.example10(), [Fixture.synth], frame: 24_000)
+        let record = try NativeUMPExportV1Record.make(export, seq: 11)
+        // Example 10 seq 11, keys sorted, compact.
+        let expected = #"{"exportId":"exp.ump","format":"nativeUmp","kind":"export","losses":{},"lossless":true,"#
+            + #""offsetsNs":[104167,250000000,500000000,750000000,1000000000,1250000000,2000000000],"#
+            + #""origin":{"frame":24000,"generation":1,"sampleClock":"smp.main"},"seq":11,"streams":["str.synth"]}"#
+        #expect(try MIDICaptureExportTests.json(record) == expected)
+    }
+
     @Test func captureStampedOneTickBeforeTheRestartIsUnsupported() throws {
         var log = try Fixture.example09Captures()
         try Fixture.restartExample09(&log)
