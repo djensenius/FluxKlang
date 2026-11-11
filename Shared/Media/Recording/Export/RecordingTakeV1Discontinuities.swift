@@ -3,8 +3,8 @@
 //  FluxKlang
 //
 //  A cleared take's own media contract v1 `discontinuityRecord`s (#110 TKX2): one `overflow` per
-//  padded interval and the `captureStopped` of a non-`user` stop, validated fail-closed and encoded
-//  deterministically. Pure: it writes no file and numbers nothing itself; the caller passes the seqs.
+//  padded interval and the `captureStopped` of a non-`user` stop, as `DiscontinuityV1Record`s (#110 DUN1),
+//  validated fail-closed. Pure: it writes no file and numbers nothing itself; the caller passes the seqs.
 //
 
 import Foundation
@@ -15,7 +15,8 @@ import Foundation
 /// before), the stream, the segment count, then per segment (lowest index first) its `sampleClock` and its
 /// overflows' frame counts, then the notes in ascending seq order. Seqs, stream, segment count and clock
 /// follow `RecordingTakeV1RecordRefusal`'s relative order, so a take whose `takeRecord` is refused for one of
-/// them yields no discontinuity record either.
+/// them yields no discontinuity record either. Every record is then built by `DiscontinuityV1Record.make`,
+/// whose refusals these checks already cover; were one still thrown, it maps to the matching case here.
 enum RecordingTakeV1DiscontinuityRefusal: Error, Hashable, Sendable {
     /// `seqs` does not hold exactly one seq per record (`RecordingTakeV1Discontinuities.count(of:)`).
     case seqCount(expected: Int, actual: Int)
@@ -33,8 +34,9 @@ enum RecordingTakeV1DiscontinuityRefusal: Error, Hashable, Sendable {
     /// segment 0.
     case invalidSampleClock(segment: Int)
     /// An overflow of this segment pads more frames than the schema's `frames` maximum
-    /// (`RecordingTakeV1DiscontinuityRecord.maximumFrames`). The ledger reads overflow counts as `UInt32`,
-    /// so only a hand-built segment reaches this.
+    /// (`DiscontinuityV1Record.maximumFrames`), or, defensively, a count outside 1...maximum. The ledger reads
+    /// overflow counts as `UInt32` and `OverflowInterval` holds at least one frame, so only a hand-built segment
+    /// reaches this.
     case overflowFramesOutOfRange(segment: Int, frames: Int64)
     /// The note for this seq is empty, all whitespace, or longer than `RecordingTakeV1Record.maximumNoteBytes`
     /// UTF-8 bytes.
@@ -43,85 +45,11 @@ enum RecordingTakeV1DiscontinuityRefusal: Error, Hashable, Sendable {
     case noteWithoutRecord(seq: Int)
 }
 
-/// One contract v1 `discontinuityRecord` a take owns (media-contract.md §8.3-8.4). Built only by
-/// `RecordingTakeV1Discontinuities.make`.
-///
-/// The take's types already guarantee the schema's other bounds, so they have no refusal here: `frame`
-/// is an `Int64`, `generation` is in range (`Generation`), an overflow pads at least one frame and lies
-/// wholly inside its segment (`OverflowInterval`, `RecordingSegment`), and a stop mark sits at the end
-/// of the last segment with the take's stop reason (`RecordingTake`).
-struct RecordingTakeV1DiscontinuityRecord: Hashable, Sendable {
-    /// The two discontinuity types a take owns.
-    enum DiscontinuityType: String, Hashable, Sendable, Encodable {
-        case overflow, captureStopped
-    }
-
-    static let kind = "discontinuity"
-    /// The schema's `frames` maximum, 2^32 − 1.
-    static let maximumFrames: Int64 = 4_294_967_295
-
-    let seq: Int
-    let type: DiscontinuityType
-    let sampleClock: ClockID
-    let generation: Generation
-    /// An overflow's first padded frame, or the stop's frame (the end of the last segment).
-    let frame: Int64
-    /// The padded frame count of an `overflow`; nil for `captureStopped`.
-    let frames: Int64?
-    let stream: StreamID
-    /// `diskFull` or `deviceLost` for `captureStopped`; nil for `overflow`.
-    let reason: String?
-    let note: String?
-
-    fileprivate init(seq: Int, type: DiscontinuityType, sampleClock: ClockID, generation: Generation, frame: Int64,
-                     frames: Int64?, stream: StreamID, reason: String?, note: String?) {
-        self.seq = seq
-        self.type = type
-        self.sampleClock = sampleClock
-        self.generation = generation
-        self.frame = frame
-        self.frames = frames
-        self.stream = stream
-        self.reason = reason
-        self.note = note
-    }
-
-    /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
-    /// schema's fields; `frames`, `reason` and `note` are omitted when absent. Records built from the same
-    /// inputs, with byte-identical `note` text, encode to identical bytes. Swift `String` equality is canonical,
-    /// so records whose notes differ only in Unicode normalization compare equal but encode differently; text is
-    /// never normalized.
-    /// The output is bounded: IDs of at most `ContractID.maximumLength` (128) bytes and a note of at most
-    /// `RecordingTakeV1Record.maximumNoteBytes`.
-    func encodedJSON() throws -> Data {
-        try ContractCoding.makeEncoder().encode(self)
-    }
-}
-
-extension RecordingTakeV1DiscontinuityRecord: Encodable {
-    private enum CodingKeys: String, CodingKey {
-        case seq, kind, type, sampleClock, generation, frame, frames, stream, reason, note
-    }
-
-    func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(seq, forKey: .seq)
-        try container.encode(Self.kind, forKey: .kind)
-        try container.encode(type, forKey: .type)
-        try container.encode(sampleClock, forKey: .sampleClock)
-        try container.encode(generation, forKey: .generation)
-        try container.encode(frame, forKey: .frame)
-        try container.encodeIfPresent(frames, forKey: .frames)
-        try container.encode(stream, forKey: .stream)
-        try container.encodeIfPresent(reason, forKey: .reason)
-        try container.encodeIfPresent(note, forKey: .note)
-    }
-}
-
-/// Builds a cleared take's own discontinuity records. Their order is fixed: every segment in order, each
-/// one's overflows in ascending frame order, then the `captureStopped` (none for a `user` stop). A trace
-/// interleaves them with other records, so they are not numbered consecutively: the caller asks
-/// `count(of:)`, picks that many strictly increasing seqs, and passes them to `make` in that order.
+/// Builds a cleared take's own `overflow` and `captureStopped` records as `DiscontinuityV1Record`s, so they
+/// encode exactly as that type documents: identical input gives identical bytes. Their order is fixed: every
+/// segment in order, each one's overflows in ascending frame order, then the `captureStopped` (none for a
+/// `user` stop). A trace interleaves them with other records, so they are not numbered consecutively: the
+/// caller asks `count(of:)`, picks that many strictly increasing seqs, and passes them to `make` in that order.
 enum RecordingTakeV1Discontinuities {
     /// How many records `make` builds for `clearance`, and so how many seqs it needs.
     static func count(of clearance: RecordingTakeV1Clearance) -> Int {
@@ -133,30 +61,35 @@ enum RecordingTakeV1Discontinuities {
     /// the record numbered `seq`. Throws the first refusal in the order `RecordingTakeV1DiscontinuityRefusal`
     /// documents. Never clamps or remaps a value.
     static func make(_ clearance: RecordingTakeV1Clearance, seqs: [Int], notes: [Int: String] = [:])
-        throws(RecordingTakeV1DiscontinuityRefusal) -> [RecordingTakeV1DiscontinuityRecord] {
+        throws(RecordingTakeV1DiscontinuityRefusal) -> [DiscontinuityV1Record] {
         let take = clearance.take
         let expected = count(of: clearance)
         try validate(seqs: seqs, expected: expected)
         try validate(take)
         try validate(notes: notes, seqs: seqs)
-        var records: [RecordingTakeV1DiscontinuityRecord] = []
+        var records: [DiscontinuityV1Record] = []
         records.reserveCapacity(expected)
-        for segment in take.segments {
+        func append(_ event: DiscontinuityV1Record.Event, segment: Int, sampleClock: ClockID, generation: Generation,
+                    frame: Int64) throws(Refusal) {
+            let index = records.count
+            let seq = seqs[index]
+            do {
+                records.append(try DiscontinuityV1Record.make(event, sampleClock: sampleClock, generation: generation,
+                                                              frame: frame, seq: seq, note: notes[seq]))
+            } catch {
+                throw refusal(error, index: index, seq: seq, segment: segment)
+            }
+        }
+        for (index, segment) in take.segments.enumerated() {
             for interval in segment.overflows {
-                let seq = seqs[records.count]
-                records.append(RecordingTakeV1DiscontinuityRecord(
-                    seq: seq, type: .overflow, sampleClock: segment.clock, generation: segment.generation,
-                    frame: interval.startFrame, frames: interval.frames, stream: take.stream, reason: nil,
-                    note: notes[seq]))
+                try append(.overflow(take.stream, frames: interval.frames), segment: index,
+                           sampleClock: segment.clock, generation: segment.generation, frame: interval.startFrame)
             }
         }
         // `captureStopped` holds only a mark whose stop has a capture reason, and a take is never empty.
         if let mark = take.captureStopped, let reason = mark.reason.captureReason, let last = take.segments.last {
-            let seq = seqs[records.count]
-            records.append(RecordingTakeV1DiscontinuityRecord(
-                seq: seq, type: .captureStopped, sampleClock: last.clock, generation: mark.generation,
-                frame: mark.frame, frames: nil, stream: take.stream, reason: contractV1Reason(reason),
-                note: notes[seq]))
+            try append(.captureStopped(take.stream, reason: reason), segment: take.segments.count - 1,
+                       sampleClock: last.clock, generation: mark.generation, frame: mark.frame)
         }
         return records
     }
@@ -177,7 +110,7 @@ enum RecordingTakeV1Discontinuities {
         guard take.segments.count <= limit else { throw .tooManySegments(count: take.segments.count, limit: limit) }
         for (index, segment) in take.segments.enumerated() {
             guard MediaContractV1ID.matches(segment.clock.rawValue) else { throw .invalidSampleClock(segment: index) }
-            for interval in segment.overflows where interval.frames > RecordingTakeV1DiscontinuityRecord.maximumFrames {
+            for interval in segment.overflows where interval.frames > DiscontinuityV1Record.maximumFrames {
                 throw .overflowFramesOutOfRange(segment: index, frames: interval.frames)
             }
         }
@@ -195,10 +128,17 @@ enum RecordingTakeV1Discontinuities {
         }
     }
 
-    private static func contractV1Reason(_ reason: RuntimeCaptureStopReason) -> String {
-        switch reason {
-        case .diskFull: "diskFull"
-        case .deviceLost: "deviceLost"
+    /// The take's case for the offence `DiscontinuityV1Record.make` found in the `index`-th record, numbered
+    /// `seq`, of `segment`. The take checks above run first and cover every such offence, so through `make`
+    /// this is never reached.
+    private static func refusal(_ error: DiscontinuityV1RecordRefusal, index: Int, seq: Int,
+                                segment: Int) -> Refusal {
+        switch error {
+        case .invalidSeq: .invalidSeq(index: index, seq: seq)
+        case .invalidSampleClock: .invalidSampleClock(segment: segment)
+        case .invalidStream(let stream): .invalidStream(stream)
+        case .framesOutOfRange(let frames): .overflowFramesOutOfRange(segment: segment, frames: frames)
+        case .invalidNote(let bytes): .invalidNote(seq: seq, bytes: bytes)
         }
     }
 }

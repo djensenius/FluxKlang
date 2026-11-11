@@ -214,5 +214,45 @@ extension ControlContractTests {
             #expect(composed == decomposed)
             #expect(try composed.encodedJSON() != decomposed.encodedJSON())
         }
+
+        /// A take's `overflow` and `captureStopped` built directly encode example 08's records (seqs 2, 7, 9).
+        @Test func discontinuityV1RecordEncodesTheTakeEventsAsExample08() throws {
+            let takeIn = StreamID(validated: "str.take-in")
+            let goldens: [GoldenDiscontinuity] = [
+                .init("08 seq 2", .overflow(takeIn, frames: 1_024), generation: 1, frame: 480_000, seq: 2,
+                      #"{"frame":480000,"frames":1024,"generation":1,"kind":"discontinuity","#
+                        + #""sampleClock":"smp.main","seq":2,"stream":"str.take-in","type":"overflow"}"#),
+                .init("08 seq 7", .captureStopped(takeIn, reason: .diskFull), generation: 2, frame: 480_000, seq: 7,
+                      note: "Writer finalised the partial file.",
+                      #"{"frame":480000,"generation":2,"kind":"discontinuity","#
+                        + #""note":"Writer finalised the partial file.","reason":"diskFull","sampleClock":"smp.main","#
+                        + #""seq":7,"stream":"str.take-in","type":"captureStopped"}"#),
+                .init("08 seq 9", .captureStopped(takeIn, reason: .deviceLost), generation: 2, frame: 720_000, seq: 9,
+                      #"{"frame":720000,"generation":2,"kind":"discontinuity","reason":"deviceLost","#
+                        + #""sampleClock":"smp.main","seq":9,"stream":"str.take-in","type":"captureStopped"}"#)
+            ]
+            for golden in goldens {
+                let record = try DiscontinuityV1Record.make(golden.event, sampleClock: smpMain,
+                                                            generation: Generation(golden.generation),
+                                                            frame: golden.frame, seq: golden.seq, note: golden.note)
+                #expect(try String(data: record.encodedJSON(), encoding: .utf8) == golden.json, "\(golden.label)")
+            }
+            #expect(goldens.map(\.event.type) == ["overflow", "captureStopped", "captureStopped"])
+        }
+
+        /// The take events share `underrun`'s stream and `frames` refusals; a `captureStopped` has no `frames`.
+        @Test func discontinuityV1RecordRefusesTheTakeEventsStreamAndOverflowFrames() throws {
+            let stream = StreamID(validated: "Str.take-in")
+            #expect(discontinuityRefusal(.overflow(stream, frames: 0)) == .invalidStream(stream))
+            #expect(discontinuityRefusal(.captureStopped(stream, reason: .deviceLost)) == .invalidStream(stream))
+            let limit = DiscontinuityV1Record.maximumFrames
+            for frames in [0, -1, Int64.min, limit + 1, Int64.max] {
+                #expect(discontinuityRefusal(.overflow(backing, frames: frames)) == .framesOutOfRange(frames))
+            }
+            #expect(discontinuityRefusal(.overflow(backing, frames: 1)) == nil)
+            #expect(discontinuityRefusal(.overflow(backing, frames: limit), note: "") == .invalidNote(bytes: 0))
+            #expect(discontinuityRefusal(.captureStopped(backing, reason: .diskFull), note: " ")
+                        == .invalidNote(bytes: 1))
+        }
     }
 }

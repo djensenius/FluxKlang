@@ -2,7 +2,7 @@
 //  DiscontinuityV1RecordRefusal.swift
 //  FluxKlang
 //
-//  Why a clock, transport or stream event cannot become a contract v1 `discontinuityRecord` (#109 DXR1).
+//  Why a clock, transport, stream or take event cannot become a contract v1 `discontinuityRecord` (#109 DXR1).
 //  In memory only; nothing is clamped, remapped or serialized in its place.
 //
 
@@ -15,7 +15,8 @@ enum DiscontinuityV1RecordRefusal: Error, Hashable, Sendable {
     case invalidSampleClock(ClockID)
     /// The event's stream ID does not match the media contract ID pattern.
     case invalidStream(StreamID)
-    /// An `underrun`'s frame count is outside the schema's `frames` range, 1...`DiscontinuityV1Record.maximumFrames`.
+    /// An `underrun`'s or `overflow`'s frame count is outside the schema's `frames` range,
+    /// 1...`DiscontinuityV1Record.maximumFrames`.
     case framesOutOfRange(Int64)
     /// The note is empty, all whitespace, or longer than `DiscontinuityV1Record.maximumNoteBytes` UTF-8 bytes.
     case invalidNote(bytes: Int)
