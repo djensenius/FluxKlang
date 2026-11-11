@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("MIDI 1↔2 translation", .productionAccessAudit)
+#else
 @Suite("MIDI 1↔2 translation")
+#endif
 struct UMPTranslationTests {
     static func mt2(_ group: UInt8, _ status: UInt8, _ data1: UInt8, _ data2: UInt8?) throws -> UMPMIDI1ChannelVoice {
         try UMPMIDI1ChannelVoice(group: UMPGroup(group), event: .channel(status: status, data1: data1, data2: data2))
