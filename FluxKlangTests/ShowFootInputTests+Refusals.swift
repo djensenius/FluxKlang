@@ -6,7 +6,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Show footswitch input refusals", .productionAccessAudit)
+#else
 @Suite("Show footswitch input refusals")
+#endif
 struct ShowFootInputRefusalTests {
     typealias Fix = ShowFootInputFixture
 

@@ -62,12 +62,17 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `MIDI1ChannelStateTests`, `MIDI1ParameterStateTests`,
 `MIDI1PerformanceSnapshotTests`, `UMPPacketFramingTests`,
 `UMPChannelVoiceTests`, `UMPScalingTests`, `UMPTranslationTests`,
-`UMPTranslationStateTests` and `UMPTranslationDataEntryTests` use the
-canonical suite trait; this is partial source adoption only. The iOS owners of
-those forty-two macOS-guarded suites remain unadopted. Other owners'
-annotation obligations remain unsatisfied: inventory intentionally exits 0
-with `enforcementSatisfied: false`, while default enforcement exits 1.
-Inventory success is not coverage or isolation.
+`UMPTranslationStateTests`, `UMPTranslationDataEntryTests`,
+`ShowNavigationTests`, `ShowNavigationCursorTests`, `ShowNavigationLinkTests`,
+`ShowTransitionTests`, `ShowTransitionWalkTests`, `ShowFootInputTests`,
+`ShowFootInputRefusalTests`, `ShowFootSessionTests`, `MPEZoneTests`,
+`TunerPitchTests`, `TunerSmootherTests`, `OpenSoundControlCodecTests`,
+`OpenSoundControlFramingTests` and `OSCNamespaceTests` use the canonical suite
+trait; this is partial source adoption only. The iOS owners of those fifty-six
+macOS-guarded suites remain unadopted. Other owners' annotation obligations
+remain unsatisfied: inventory intentionally exits 0 with
+`enforcementSatisfied: false`, while default enforcement exits 1. Inventory
+success is not coverage or isolation.
 
 The trait observes cumulative suite-exit state with nonrecursive scope, not
 per-test evidence or exclusive attribution. Missing/invalid
@@ -612,6 +617,84 @@ fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 audit issue recorded. These runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the remaining #60 gates above still
 apply and #60 remains open.
+
+## Show, MPE, tuner and OSC source adoption
+
+`ShowNavigationTests`, `ShowNavigationCursorTests`, `ShowNavigationLinkTests`,
+`ShowTransitionTests`, `ShowTransitionWalkTests`, `ShowFootInputTests`,
+`ShowFootInputRefusalTests`, `ShowFootSessionTests`, `MPEZoneTests`,
+`TunerPitchTests`, `TunerSmootherTests`, `OpenSoundControlCodecTests`,
+`OpenSoundControlFramingTests` and `OSCNamespaceTests` now use the canonical
+trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. `ShowNavigationTests`, `ShowNavigationCursorTests`,
+`ShowNavigationLinkTests`, `ShowTransitionTests`, `ShowTransitionWalkTests` and
+`MPEZoneTests` had no `@Suite` and gain a bare `@Suite(.productionAccessAudit)`
+inside `#if os(macOS)`. The other eight keep their display names: the trait is
+added to each existing `@Suite` in the macOS branch and the `#else` branch keeps
+that `@Suite` unchanged. None of the fourteen has other suite traits. Each is a
+separate root `struct` in its own file (`ShowNavigationTests.swift`,
+`ShowNavigationTests+Cursor.swift`, `ShowNavigationTests+Links.swift`,
+`ShowTransitionTests.swift`, `ShowTransitionWalkTests.swift`,
+`ShowFootInputTests.swift`, `ShowFootInputTests+Refusals.swift`,
+`ShowFootSessionTests.swift`, `MPEZoneTests.swift`, `TunerPitchTests.swift`,
+`TunerPitchTests+Smoother.swift`, `OpenSoundControlCodecTests.swift`,
+`OpenSoundControlCodecTests+Framing.swift` and `OSCNamespaceTests.swift`). Their
+extensions stay unannotated: `MPEZoneTests+Allocator.swift`, `+Expression.swift`
+and `+Config.swift`; `TunerPitchTests+Fixtures.swift`; the five
+`OSCNamespaceTests+*.swift` files (`Arguments`, `Grammar`, `Liveness`,
+`Precedence`, `Routes`); and the in-file extensions of
+`ShowNavigationCursorTests` and `OpenSoundControlCodecTests`. The fixture enums,
+rigs and seeded SplitMix generators (`ShowNavigationTestFixture`,
+`ShowTransitionTestFixture`, `ShowFootInputFixture`, `ShowFootInputRig`,
+`OpenSoundControlFixture`, `OSCNamespaceFixture` and the like) are not suites
+and stay unannotated. The suites build show libraries, setlists, cursors,
+footswitch maps, MPE zones, synthetic sample buffers and OSC packets from
+literals and seeded generators, and drive the `Shared/Performance/Shows`
+planners, cursor, walk and foot-input session, the `Shared/Control/Triggers`
+detector, the `Shared/MIDI/Performance/MPE` model, the
+`Shared/Media/Utilities/Tuner` estimator and smoother, and the `Shared/OSC`
+codec, framer and namespace mapper. The production closure the fixture needed
+also takes in value types from `Shared/Contracts`, `Shared/Control/Bindings`,
+`Shared/Host/Authority`, `Shared/Performance/Actions`,
+`Shared/Performance/Patches`, two `Shared/MIDI/Protocol/MIDI1` sources and
+`Shared/WING/FaderMath.swift`. No source in it imports anything but Foundation;
+its only `static var` members are computed, and its only classes are three
+stateless `fileprivate final class Identity` tokens in `Shared/Host/Authority`.
+`OpenSoundControl+WallClock.swift` maps injected instants and reads no clock.
+None of the fourteen suites touches the file system, bundles, wall clock, sleep,
+dispatch, defaults, global mutable state, MIDI hardware, network or audio. Only
+this change was run through the checker; the UARG10 tree was not re-run, and the
+comparison below uses its recorded totals (4,888 registrations, 416 satisfied
+rows, 6,768 diagnostics). The complete source inventory of this change retains
+all 4,888 registrations and has 528 satisfied rows, 112 more than the UARG10
+tree. The fourteen suites' 112 `FluxKlangMacTests` root rows (eight per suite)
+are now satisfied, which accounts for the whole increase. The iOS
+`FluxKlangTests` root rows for all fourteen suites stay unsatisfied. Diagnostics
+fall by 160, from 6,768 to 6,608: sixteen removed for each of the six suites
+that had no `@Suite` and eight for each of the eight named suites; none added.
+Inventory still exits 0 and default enforcement still exits 1. The two trees
+were compared by totals only; the per-suite counts come from this change's
+output, not from a row-level diff.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 145 repository sources from this change. 24 are test sources: the
+fourteen suites' files, their nine extension files and
+`ProductionAccessScope.swift`. The other 121 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production closure:
+all of `Shared/Performance/Shows` (28 sources), `Shared/OSC` (26),
+`Shared/Control/Triggers` (3), `Shared/MIDI/Performance/MPE` (5) and
+`Shared/Media/Utilities/Tuner` (5), plus the 53 further sources from the other
+directories named above that the build required. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the fourteen suites
+each passed 309 tests (five parameterized, 56 cases) in fourteen suites. Each
+run, under its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit`
+attachment to `--attachments-path` for each of the fourteen suites
+(`FluxKlangTests/` plus the suite name), carrying that run ID, with all 14
+operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
+issue recorded. These runs add no process-identity, argv or bootstrap evidence
+and do not cover the iOS owners; the remaining #60 gates above still apply and
+#60 remains open.
 
 ## Headless fixtures
 
