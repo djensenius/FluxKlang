@@ -534,8 +534,6 @@ targets:
       - path: FluxKlangTests/KernelCycleFollowUpTests+WearOut.swift
       - path: FluxKlangTests/KernelRetirementCarryTests.swift
       - path: FluxKlangTests/KernelRetirementCarryTests+Capacity.swift
-      - path: FluxKlangTests/KernelRetirementCarryTests+Order.swift
-      - path: FluxKlangTests/KernelRetirementCarryTests+Retiming.swift
       - path: FluxKlangTests/MPEZoneTests.swift
       - path: FluxKlangTests/MPEZoneTests+Config.swift
       - path: FluxKlangTests/MPEZoneTests+Allocator.swift
@@ -845,6 +843,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Catalog.swift
       - path: FluxKlangTests/PerformanceProjectSessionTests.swift
