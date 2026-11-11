@@ -469,4 +469,14 @@ extension ControlContractTests.Generations {
                                               reason: .locate(ticks: 61_440), seq: 12)
         #expect(try near.encodedJSON() == far.encodedJSON())
     }
+
+    @Test func generationV1RecordNeverNormalizesNoteText() throws {
+        // Canonically equal notes give equal records but different bytes.
+        let composed = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                                   reason: .transportRestart, seq: 1, note: "\u{00E9}")
+        let decomposed = try GenerationV1Record.make(counter: transportKey, from: .initial, to: Generation(2),
+                                                     reason: .transportRestart, seq: 1, note: "e\u{0301}")
+        #expect(composed == decomposed)
+        #expect(try composed.encodedJSON() != decomposed.encodedJSON())
+    }
 }

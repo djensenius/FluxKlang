@@ -119,8 +119,11 @@ struct GenerationV1Record: Hashable, Sendable {
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the
     /// schema's fields; every optional field is omitted when absent. `counter` is written `kind/subject`.
-    /// Equal records encode to equal bytes. The output is bounded: a subject of at most
-    /// `ContractID.maximumLength` (128) bytes, at most 4096 tempo segments and a note of at most `maximumNoteBytes`.
+    /// Records built from the same inputs, with byte-identical `note` text, encode to identical bytes. Swift
+    /// `String` equality is canonical, so records whose notes differ only in Unicode normalization (`"\u{00E9}"`
+    /// vs `"e\u{0301}"`) compare equal but encode differently; text is never normalized.
+    /// The output is bounded: a subject of at most `ContractID.maximumLength` (128) bytes, at most 4096 tempo
+    /// segments and a note of at most `maximumNoteBytes`.
     func encodedJSON() throws -> Data {
         try ContractCoding.makeEncoder().encode(self)
     }
