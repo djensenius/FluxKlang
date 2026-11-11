@@ -10,6 +10,11 @@ import SwiftUI
 
 struct AppRootView: View {
     @Environment(AppModel.self) private var appModel
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+    @State private var workspaceWindow = WindowID(uuid: UUID())
+    @State private var workspaceFailure: String?
     #if DEBUG
     private let constructionObservation = AcceptanceLaunchConfiguration.isUITesting
         ? AppModel.captureUIConstructionObservation() : nil
@@ -20,10 +25,25 @@ struct AppRootView: View {
         @Bindable var assistant = appModel.assistant
         Group {
             #if os(macOS)
-            SplitRoot()
+            SplitRoot(window: workspaceWindow, newProject: newWorkspaceProject)
             #else
-            AdaptiveRoot()
+            AdaptiveRoot(window: workspaceWindow, widthClass: workspaceWidthClass, newProject: newWorkspaceProject)
             #endif
+        }
+        .onAppear { reconcileWorkspaceWindow() }
+        .onChange(of: workspaceWidthClass) { _, _ in reconcileWorkspaceWindow() }
+        .onChange(of: appModel.performanceProjectSession?.project.id) { _, _ in reconcileWorkspaceWindow() }
+        // Navigation belongs to this outer root, not a destination or adaptive-width branch.
+        .onDisappear {
+            workspaceOperation { try appModel.closePerformanceProjectWindow(workspaceWindow) }
+        }
+        .alert("Workspace unavailable", isPresented: Binding(
+            get: { workspaceFailure != nil },
+            set: { if !$0 { workspaceFailure = nil } }
+        )) {
+            Button("OK", role: .cancel) { workspaceFailure = nil }
+        } message: {
+            Text(workspaceFailure ?? "")
         }
         .task {
             await appModel.loadStores()
@@ -76,6 +96,35 @@ struct AppRootView: View {
         }
     }
 
+    private var workspaceWidthClass: WorkspaceWidthClass {
+        #if os(macOS)
+        .regular
+        #else
+        horizontalSizeClass == .compact ? .compact : .regular
+        #endif
+    }
+
+    private func newWorkspaceProject() {
+        workspaceOperation {
+            try appModel.newPerformanceProject(window: workspaceWindow, widthClass: workspaceWidthClass)
+        }
+    }
+
+    private func reconcileWorkspaceWindow() {
+        workspaceOperation {
+            try appModel.reconcilePerformanceProjectWindow(workspaceWindow, widthClass: workspaceWidthClass)
+        }
+    }
+
+    private func workspaceOperation(_ operation: () throws -> Void) {
+        do {
+            try operation()
+            workspaceFailure = nil
+        } catch {
+            workspaceFailure = String(describing: error)
+        }
+    }
+
     private var helpPresented: Binding<Bool> {
         Binding(
             get: {
@@ -120,39 +169,17 @@ private struct StartupIsolationAccessibility: ViewModifier {
 }
 #endif
 
-enum AppSection: String, CaseIterable, Identifiable {
-    case studio = "Studio"
-    case assistant = "Assistant"
-    case mix = "Mix"
-    case patchbay = "Routing"
-    case connection = "Connection"
-    case tutorial = "Learn"
-    case advanced = "Compatibility"
-
-    var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .studio: return "square.stack.3d.up"
-        case .assistant: return "sparkles"
-        case .mix: return "slider.vertical.3"
-        case .patchbay: return "point.topleft.down.to.point.bottomright.curvepath"
-        case .connection: return "antenna.radiowaves.left.and.right"
-        case .tutorial: return "graduationcap"
-        case .advanced: return "wrench.and.screwdriver"
-        }
-    }
-}
-
 #if !os(macOS)
 private struct AdaptiveRoot: View {
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    let window: WindowID
+    let widthClass: WorkspaceWidthClass
+    let newProject: () -> Void
 
     var body: some View {
-        if horizontalSizeClass == .compact {
-            CompactTabRoot()
+        if widthClass == .compact {
+            CompactTabRoot(window: window, newProject: newProject)
         } else {
-            SplitRoot()
+            SplitRoot(window: window, newProject: newProject)
         }
     }
 }
@@ -160,12 +187,14 @@ private struct AdaptiveRoot: View {
 
 private struct SplitRoot: View {
     @Environment(AppModel.self) private var appModel
+    let window: WindowID
+    let newProject: () -> Void
 
     var body: some View {
         @Bindable var appModel = appModel
         let selection = Binding<AppSection?>(
-            get: { appModel.section },
-            set: { appModel.section = $0 ?? .studio }
+            get: { appModel.section == .more ? nil : appModel.section },
+            set: { appModel.section = $0 ?? (appModel.section == .more ? .more : .studio) }
         )
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -173,7 +202,7 @@ private struct SplitRoot: View {
                     .padding()
                 Divider()
                 List(selection: selection) {
-                    sidebarSection("Create", sections: [.studio, .assistant, .mix])
+                    sidebarSection("Create", sections: [.studio, .workspace, .assistant, .mix])
                     sidebarSection("Console", sections: [.patchbay, .connection])
                     sidebarSection("Help", sections: [.tutorial])
                     sidebarSection("Advanced", sections: [.advanced])
@@ -201,13 +230,17 @@ private struct SplitRoot: View {
     private var detail: some View {
         @Bindable var appModel = appModel
         #if os(macOS)
-        SectionDetail(section: appModel.section)
+        if appModel.section == .workspace {
+            SectionDetail(section: .workspace, window: window, newProject: newProject)
+        } else {
+            SectionDetail(section: appModel.section, window: window, newProject: newProject)
             .inspector(isPresented: $appModel.isInspectorPresented) {
                 InspectorView()
                     .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
             }
+        }
         #else
-        SectionDetail(section: appModel.section)
+        SectionDetail(section: appModel.section, window: window, newProject: newProject)
         #endif
     }
 }
@@ -215,11 +248,13 @@ private struct SplitRoot: View {
 struct SectionDetail: View {
     @Environment(AppModel.self) private var appModel
     let section: AppSection
+    let window: WindowID
+    let newProject: () -> Void
 
     var body: some View {
         content
             .toolbar {
-                if section != .assistant {
+                if section != .assistant && section != .workspace {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             appModel.isAssistantPresented = true
@@ -238,10 +273,21 @@ struct SectionDetail: View {
         switch section {
         case .studio:
             StudioView()
+        case .workspace:
+            PerformanceWorkspaceView(
+                session: appModel.performanceProjectSession, window: window, newProject: newProject
+            )
         case .assistant:
             AssistantView()
         case .mix:
             MixView()
+        case .more:
+            ContentUnavailableView(
+                "Choose a destination",
+                systemImage: "sidebar.leading",
+                description: Text("Select a destination in the sidebar.")
+            )
+            .navigationTitle(AppSection.more.rawValue)
         case .patchbay:
             PatchbayView()
         case .connection:
@@ -277,104 +323,6 @@ struct MixView: View {
         }
     }
 }
-
-#if !os(macOS)
-struct MoreView: View {
-    @Environment(\.openURL) private var openURL
-
-    var body: some View {
-        List {
-            Section("Console") {
-                destination(
-                    "Routing",
-                    "Patch inputs, outputs and routing snapshots",
-                    AppSection.patchbay.systemImage,
-                    identifier: "more.routing"
-                ) {
-                    PatchbayView()
-                }
-                destination(
-                    "Connection",
-                    "Find a WING, reconnect or enter Demo Mode",
-                    AppSection.connection.systemImage,
-                    identifier: "more.connection"
-                ) {
-                    ConnectionView()
-                }
-            }
-
-            Section("Help & Settings") {
-                destination(
-                    "Learn FluxKlang",
-                    "Understand signal flow, scenes and patching",
-                    AppSection.tutorial.systemImage,
-                    identifier: "more.learn"
-                ) {
-                    TutorialView()
-                }
-                destination(
-                    "Settings",
-                    "Mixer layout, connection details and appearance",
-                    "gearshape",
-                    identifier: "more.settings"
-                ) {
-                    SettingsContentView()
-                }
-                Button {
-                    CoPilotHandoff.open(using: openURL)
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Open WING Co-Pilot")
-                            Text("Continue into full EQ, dynamics and effects")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "arrow.up.forward.app")
-                    }
-                }
-            }
-
-            Section("Compatibility") {
-                destination(
-                    "Advanced Tools",
-                    "Raw routing and legacy editors",
-                    AppSection.advanced.systemImage,
-                    identifier: "more.advanced"
-                ) {
-                    AdvancedView()
-                }
-            }
-        }
-        .navigationTitle("More")
-    }
-
-    private func destination<Destination: View>(
-        _ title: String,
-        _ detail: String,
-        _ systemImage: String,
-        identifier: String,
-        @ViewBuilder destination: () -> Destination
-    ) -> some View {
-        NavigationLink {
-            destination()
-        } label: {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } icon: {
-                Image(systemName: systemImage)
-            }
-        }
-        .accessibilityIdentifier(identifier)
-    }
-}
-#endif
 
 struct ConnectionStatusButton: View {
     @Environment(AppModel.self) private var appModel

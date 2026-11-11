@@ -4,7 +4,10 @@ import UIKit
 
 struct CompactTabRoot: View {
     @Environment(AppModel.self) private var appModel
+    let window: WindowID
+    let newProject: () -> Void
     @State private var selectedTab = CompactTab.studio
+    @State private var morePath: [AppSection] = []
     @State private var isShowingConnection = false
     @State private var isKeyboardVisible = false
     @State private var composerIsFocused = false
@@ -13,14 +16,14 @@ struct CompactTabRoot: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                SectionDetail(section: .studio)
+                SectionDetail(section: .studio, window: window, newProject: newProject)
             }
             .toolbar(showsKeyboardNavigation ? .hidden : .automatic, for: .tabBar)
             .tabItem { Label("Studio", systemImage: AppSection.studio.systemImage) }
             .tag(CompactTab.studio)
 
             NavigationStack {
-                SectionDetail(section: .assistant)
+                SectionDetail(section: .assistant, window: window, newProject: newProject)
             }
             .toolbar(showsKeyboardNavigation ? .hidden : .automatic, for: .tabBar)
             .tabItem { Label("Assistant", systemImage: AppSection.assistant.systemImage) }
@@ -33,8 +36,8 @@ struct CompactTabRoot: View {
             .tabItem { Label("Mix", systemImage: AppSection.mix.systemImage) }
             .tag(CompactTab.mix)
 
-            NavigationStack {
-                MoreView()
+            NavigationStack(path: $morePath) {
+                MoreView(window: window, newProject: newProject)
             }
             .toolbar(showsKeyboardNavigation ? .hidden : .automatic, for: .tabBar)
             .tabItem { Label("More", systemImage: "ellipsis.circle") }
@@ -80,9 +83,14 @@ struct CompactTabRoot: View {
                     }
             }
         }
-        .onAppear { selectedTab = compactTab(for: appModel.section) }
+        .onAppear { synchronizeSelection(appModel.section) }
         .onChange(of: appModel.section) { _, section in
-            selectedTab = compactTab(for: section)
+            synchronizeSelection(section)
+        }
+        .onChange(of: morePath) { previous, path in
+            appModel.section = appModel.section.updatingCompactMorePath(
+                from: previous, to: path, isSelected: selectedTab == .more
+            )
         }
         .onChange(of: selectedTab) { _, tab in
             switch tab {
@@ -93,8 +101,17 @@ struct CompactTabRoot: View {
             case .mix:
                 appModel.section = .mix
             case .more:
-                break
+                appModel.section = appModel.section.selectingCompactMore(path: morePath)
             }
+        }
+    }
+
+    private func synchronizeSelection(_ section: AppSection) {
+        let tab = compactTab(for: section)
+        selectedTab = tab
+        // Selecting More alone cannot restore a destination after an adaptive-width change.
+        if section == .workspace || section == .more || (tab == .more && morePath.last == .workspace) {
+            morePath = section.compactMorePath
         }
     }
 
@@ -106,7 +123,7 @@ struct CompactTabRoot: View {
             return .assistant
         case .mix:
             return .mix
-        case .patchbay, .connection, .tutorial, .advanced:
+        case .workspace, .more, .patchbay, .connection, .tutorial, .advanced:
             return .more
         }
     }

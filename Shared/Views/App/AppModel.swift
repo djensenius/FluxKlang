@@ -51,6 +51,9 @@ final class AppModel {
     /// Speaker layout and spatially-placed instruments for surround mixing.
     let spatial: SpatialStore
 
+    /// Created explicitly and retained while its unsaved document has no open window.
+    private(set) var performanceProjectSession: PerformanceProjectSession?
+
     /// Shared read-only assistant domain plus local pending Studio drafts.
     let assistant: AssistantCoordinator
 
@@ -155,6 +158,13 @@ final class AppModel {
 
     var isConnected: Bool { wing.connection.isConnected }
     var isDemo: Bool { wing.isDemo }
+
+    func newPerformanceProject(window: WindowID, widthClass: WorkspaceWidthClass) throws {
+        performanceProjectSession = try PerformanceProjectSession.openOrCreate(
+            existing: performanceProjectSession, window: window, widthClass: widthClass
+        )
+        section = .workspace
+    }
 
     /// Loads all persisted stores. Call once when the app launches.
     func loadStores() async {
