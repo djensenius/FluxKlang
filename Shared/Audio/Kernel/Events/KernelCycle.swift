@@ -135,25 +135,25 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// emit one redundant, harmless `noteOff` for a key its predecessor's takeover released). `.freshFanIn` takes nothing
 /// over. No other event still pending in the retired cycle's buffer reaches the replacement (but see Retirement).
 ///
-/// Retirement. Render calls `retire()` on the old cycle after its last `run` and before the replacement's first:
-/// every `noteOff` still pending in the old block buffer records its tombstone (its own frame, unclamped, as a
-/// silenced cycle does), so a same-key `noteOn` stamped before it, arriving later at the replacement, is superseded
-/// instead of sounding with its release lost. Every other pending event is dropped and counted by kind in a
-/// `KernelRetirementLoss` that the ownership holds from the claim's release to the replacement's acquire (its
-/// `inheritedRetirementLoss`). Dropped `noteOn`s are lost, never stuck (never emitted or owned); dropped stateful
-/// events (`control`, `program`, `rampTo`) set `receiverStateMayBeStale`, and control must then reconcile receiver
-/// state (re-send the current program, controllers and ramp targets) before relying on it. Pending stateful events
-/// are also recorded, up to `KernelRetirementCarry.capacity`, into a carry the next claim inherits
-/// (`inheritedRetirementCarry`); nothing re-admits it yet, so the loss counts and `receiverStateMayBeStale` are
-/// unchanged. A `.replacingCycle` cycle cannot be prepared over an ownership whose
-/// last cycle has not retired (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one
-/// any cycle has used (`.ownershipClaim(.alreadyUsed)`); a replacement over a retired cycle must also pass the
-/// fan-in's `admissionRefusals` (`.admissionRefusalsRequired`, nothing claimed). The check and the claim are one
+/// Retirement. Render calls `retire()` on the old cycle after its last `run` and before the replacement's first: every
+/// `noteOff` still pending in the old block buffer records its tombstone (its own frame, unclamped, as a silenced cycle
+/// does), so a same-key `noteOn` stamped before it, arriving later at the replacement, is superseded instead of
+/// sounding with its release lost. Every other pending event is dropped and counted by kind in a `KernelRetirementLoss`
+/// that the ownership holds from the claim's release to the replacement's acquire (its `inheritedRetirementLoss`).
+/// Dropped `noteOn`s are lost, never stuck (never emitted or owned); dropped stateful events (`control`, `program`,
+/// `rampTo`) set `receiverStateMayBeStale`, and control must then reconcile receiver state (re-send the current
+/// program, controllers and ramp targets) before relying on it. Pending stateful events are also recorded, up to
+/// `KernelRetirementCarry.capacity`, into a carry the next claim inherits (`inheritedRetirementCarry`) and a
+/// replacement re-admits (rules, accounting, per-hop stale signal: `KernelCycle+Readmission.swift`). A
+/// `.replacingCycle` cycle cannot be prepared over an ownership whose last cycle has not retired
+/// (`PreparationError.ownershipClaim(.predecessorNotRetired)`), and `.freshFanIn` over one any cycle has used
+/// (`.ownershipClaim(.alreadyUsed)`); a replacement over a retired cycle must also pass the fan-in's
+/// `admissionRefusals` (`.admissionRefusalsRequired`, nothing claimed). The check and the claim are one
 /// compare-exchange on the ownership's claim word, so a racing preparation cannot pass the check, wait out another
-/// cycle's claim and retire, then claim fresh; a replacement that loses it to a cycle that has since retired is
-/// refused `.ownershipClaim(.claimRaced)`. So a replacement is prepared after the retire, and render runs no cycle
-/// in between (at least one block without event work). A `run` after `retire()` does nothing
-/// (`KernelCycleResult.retired`), and a second `retire()` too (it returns no loss).
+/// cycle's claim and retire, then claim fresh; a replacement that loses it to a cycle that has since retired is refused
+/// `.ownershipClaim(.claimRaced)`. So a replacement is prepared after the retire, and render runs no cycle in between
+/// (at least one block without event work). A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a
+/// second `retire()` too (it returns no loss).
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
@@ -184,13 +184,14 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 ///
 /// Bounds. All storage (block and scratch buffers, telemetry, flush bits, admission refusal counters, takeover bits,
 /// gate, ramp words) is allocated in `init`, inside the private components; tombstones live in the shared
-/// `NoteOwnership` (its `init`). `retire()` passes the block buffer once. A cycle drains at most the
-/// free room, sorts in O(n log n) moves, passes the buffer once more, visits each owned-note word at most twice (a
-/// pending takeover adds at most two passes over each scope it reaches), each ramp parameter once and each lane at most
-/// three times (drain, then the two refusal totals); a buffer full of future (or, while silenced, non-note) events
-/// stops draining (M4/M5 backpressure; the lanes are decided later). Takeover worst case per cycle: one cycle can
-/// sweep every remaining empty scope, up to 256, each with `ownedCount` and `releaseFirst` (32 words each, so about
-/// 64 word reads per scope, about 16 Ki words in all). A `run` after `retire()` is O(1).
+/// `NoteOwnership` (its `init`); re-admission: see `KernelCarryReadmission` Bounds. `retire()` passes the block buffer
+/// once. A cycle drains at most the free room, sorts in O(n log n) moves, passes the buffer once more, visits each
+/// owned-note word at most twice (a pending takeover adds at most two passes over each scope it reaches), each ramp
+/// parameter once and each lane at most three times (drain, then the two refusal totals); a buffer full of future (or,
+/// while silenced, non-note) events stops draining (M4/M5 backpressure; the lanes are decided later). Takeover worst
+/// case per cycle: one cycle can sweep every remaining empty scope, up to 256, each with `ownedCount` and
+/// `releaseFirst` (32 words each, so about 64 word reads per scope, about 16 Ki words in all). A `run` after `retire()`
+/// is O(1).
 ///
 /// Contracts. `run`, `retire`, `parameterValue`, `pulses`, `telemetry` and `bufferedCount` are the render consumer's
 /// only (the fan-in's single consumer), with a distinct, advancing `blockStart` per non-empty cycle; `emit` must not
@@ -205,33 +206,6 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// `@unchecked Sendable`: all other mutable state is render-only, in storage preallocated in `init`; the refusal
 /// counters, the acknowledgement epoch, `lastFaultedAckEpoch` and the ownership's cycle claim are atomic.
 final class KernelCycle: @unchecked Sendable {
-    enum PreparationError: Error, Equatable, Sendable {
-        /// The fan-in is not `.events` consumed on `.render`.
-        case notRenderEvents
-        /// The fan-in's policy does not give a deadline policy.
-        case deadline(DeadlinePolicy.PreparationError)
-        /// `blockCapacity` is outside `1...maximumBlockCapacity`.
-        case blockCapacityOutOfRange(Int)
-        /// `perLaneQuota` is outside `1...KernelLimits.maximumCapacity`.
-        case perLaneQuotaOutOfRange(Int)
-        /// `ownership` and `safety` do not cover the same scopes.
-        case scopeCountMismatch(ownership: Int, safety: Int)
-        /// The telemetry output's `slot` is outside its slots.
-        case telemetrySlotOutOfRange(Int)
-        /// Every `KernelAckRequests` identity was issued.
-        case ackIdentitiesExhausted
-        /// `parts.admissionRefusals` belongs to another fan-in (identity or lane count differ).
-        case admissionRefusalsMismatch
-        /// `ownership` cannot be claimed for this start (see `KernelCycleStart`); checked after the wiring checks and
-        /// before `.admissionRefusalsRequired`. A refusal from the final claim (only when another preparation raced
-        /// this one) has used one `KernelAckRequests` identity.
-        case ownershipClaim(NoteOwnership.CycleClaimRefusal)
-        /// `parts.admissionRefusals` is `nil` over an ownership an earlier cycle used and retired (claim word
-        /// nonzero and even): a new table would leave producers admitted earlier counting elsewhere. Checked
-        /// after `.ownershipClaim`; refuses with nothing claimed. A first cycle may omit it.
-        case admissionRefusalsRequired
-    }
-
     /// Why `acknowledgeCritical` refused, checked in this order. Every refusal leaves the latch, the epoch and the
     /// cycle unchanged (`.notApproved` and `.latchRefused` have read the telemetry slot, which only moves the
     /// consumer to its latest sample); the ticket is consumed, so control observes, requests and waits again.
@@ -275,6 +249,10 @@ final class KernelCycle: @unchecked Sendable {
     /// Any thread, immutable: the pending stateful events the immediate predecessor recorded at retirement (a
     /// snapshot, not cumulative, never consumed by a read; see Retirement).
     var inheritedRetirementCarry: KernelRetirementCarry { ownershipClaim.inheritedCarry }
+    /// Any thread: the inherited carry's re-admission report, slot capacity and resolved stateful events by kind.
+    var carryReadmissionReport: KernelCarryReadmissionReport { carryReadmission.report }
+    var carryReadmissionCapacity: Int { carryReadmission.capacity }
+    var carryResolution: KernelCarryResolution { carryReadmission.resolved() }
 
     // Render-owned components and parts; private, so only this file can reach them.
     private let events: FanInHandoff<KernelEvent>
@@ -286,6 +264,8 @@ final class KernelCycle: @unchecked Sendable {
     private let block: KernelBlockBuffer
     private let watermark: KernelFlushWatermark
     private let decider: KernelBlockDecider
+    /// The inherited carry, planned in `init`; render drains it in step 4 and re-carries what is left in `retire()`.
+    private let carryReadmission: KernelCarryReadmission
     /// The cumulative telemetry counters.
     private let counters: UnsafeMutablePointer<KernelCycleTelemetry>
     /// The epoch loaded by this cycle's latest `.scopeFaulted` run; 0 before any. Render stores it (release) once per
@@ -318,9 +298,11 @@ final class KernelCycle: @unchecked Sendable {
         criticalScope = parts.events.criticalScope
         telemetryOutput = parts.telemetry
         block = KernelBlockBuffer(capacity: blockCapacity)
+        carryReadmission = KernelCarryReadmission(carry: ownershipClaim.inheritedCarry, blockCapacity: blockCapacity)
         watermark = KernelFlushWatermark(laneCount: parts.events.laneCount, armed: parts.start == .replacingCycle)
         decider = KernelBlockDecider(deadline: deadline, ownership: parts.ownership, ramps: parts.ramps,
-                                     pulses: pulses, takeover: parts.start == .replacingCycle)
+                                     pulses: pulses, takeover: parts.start == .replacingCycle,
+                                     readmission: carryReadmission)
         admissionRefusals = parts.admissionRefusals ?? KernelAdmissionRefusals(laneCount: parts.events.laneCount,
                                                                                handoff: parts.events.identity)
         counters = .allocate(capacity: 1)
@@ -393,10 +375,11 @@ final class KernelCycle: @unchecked Sendable {
 
     /// Render only, once, after this cycle's last `run` and before its replacement is prepared (see the type's
     /// Retirement): records the tombstone of every `noteOff` still pending in the block buffer at its own frame,
-    /// unclamped, in the shared `ownership.tombstones`, drops and counts every other pending event, records the
-    /// stateful ones in a carry, stores that loss and carry in the ownership, then hands the cycle claim back
-    /// (release). O(`blockCapacity`); no allocation, lock, emission
-    /// or telemetry. A repeated call does nothing and returns no loss; a later `run` does nothing, reporting `retired`.
+    /// unclamped, in the shared `ownership.tombstones`, drops and counts every other pending event and records the
+    /// stateful ones in a carry, then does the same for the re-admitted events still pending that no pending own event
+    /// covers (`KernelCarryReadmission.retire(coveredBy:_:)`); stores that loss and carry in the ownership, then hands
+    /// the cycle claim back (release). No allocation, lock, emission or telemetry. A repeated call does nothing and
+    /// returns no loss; a later `run` does nothing, reporting `retired`.
     @discardableResult
     func retire() -> KernelRetirementLoss {
         guard !retired else { return KernelRetirementLoss() }
@@ -409,6 +392,7 @@ final class KernelCycle: @unchecked Sendable {
             loss.drop(event.payload)
             carry.record(event)
         }
+        carryReadmission.retire(coveredBy: block) { loss.drop($0.payload); carry.record($0) }
         ownership.releaseCycleClaim(ownershipClaim, loss: loss, carry: carry)
         return loss
     }

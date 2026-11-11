@@ -5,9 +5,12 @@ import Synchronization
 // exhausted or lost; `KernelRetirementLoss` is what a retiring cycle dropped. Reference model; not RT-certified.
 
 /// What `KernelCycle.retire()` dropped (round 2i, Copilot round 5): the events still pending in the retired cycle's
-/// block buffer, never emitted, which no replacement sees (it starts with an empty buffer; the stateful ones are
-/// also recorded in a `KernelRetirementCarry` that travels with this loss). A pending `noteOff` is not a drop: it
-/// records its tombstone instead. Each count is at most the retired cycle's `blockCapacity`. A plain value;
+/// block buffer, never emitted, plus the re-admitted carried events it still had pending and no own event covered
+/// (#364 KCR1). The replacement starts with an empty buffer; it sees only the stateful ones, recorded in a
+/// `KernelRetirementCarry` that travels with this loss, re-admits them and reports what stays unresolved in
+/// `KernelCycle.unresolvedRetirementLoss`. A pending `noteOff` is not a drop: it records its tombstone instead. Each
+/// count is at most the retired cycle's `blockCapacity` plus its re-admission capacity (`min(256, blockCapacity)`),
+/// so at most twice its `blockCapacity`; only `controls`, `programs` and `ramps` gain the second term. A plain value;
 /// `NoteOwnership` keeps its counts as plain memory ordered by its claim word, for the next claim only (see
 /// `releaseCycleClaim(_:loss:carry:)`). Reference model; not RT-certified.
 struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
@@ -41,6 +44,17 @@ struct KernelRetirementLoss: Sendable, BitwiseCopyable, Equatable {
         case .rampTo: ramps &+= 1
         case .clockPulse: clockPulses &+= 1
         }
+    }
+
+    /// This loss less stateful events since resolved (#364 KCR1: re-admitted by the replacement); each count stays at
+    /// least 0 and the other counts are unchanged.
+    func resolving(controls resolvedControls: Int, programs resolvedPrograms: Int,
+                   ramps resolvedRamps: Int) -> KernelRetirementLoss {
+        var rest = self
+        rest.controls = max(0, controls &- max(0, resolvedControls))
+        rest.programs = max(0, programs &- max(0, resolvedPrograms))
+        rest.ramps = max(0, ramps &- max(0, resolvedRamps))
+        return rest
     }
 }
 

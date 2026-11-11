@@ -840,6 +840,8 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingAcknowledge.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingTakeover.swift
       - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
       - path: FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Catalog.swift
       - path: FluxKlangTests/PerformanceProjectSessionTests.swift

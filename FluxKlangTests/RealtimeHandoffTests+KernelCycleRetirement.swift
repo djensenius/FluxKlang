@@ -45,27 +45,18 @@ private func emissions(_ cycle: KernelCycle, _ blockStart: Int64) -> (KernelCycl
     return (result, emitted)
 }
 
-/// What a control-side caller would do with `replacement.inheritedRetirementCarry`: plan it for a 64-event
-/// replacement starting at `firstFrame` and push each planned event into the shared fan-in.
-private func witness(_ rig: CycleRig, _ replacement: KernelCycle, firstFrame: Int64,
-                     token: ProducerToken) throws -> [KernelCarryEmission] {
-    let plan = try KernelCarryRetiming.plan(
-        carry: replacement.inheritedRetirementCarry, replacementBlockCapacity: 64, replacementFirstFrame: firstFrame,
-        replacementLaneCapacity: KernelCarryLaneCapacity(state: 64, content: 64))
-    for emission in plan.emissions { #expect(rig.push(emission.event, token) == .ok) }
-    return plan.emissions
-}
-
 extension RealtimeHandoffTests {
     /// Round 2i (Copilot round 5, thread PRRT_kwDOS3CuTM60X042): `retire()` drops every pending event but a
     /// `noteOff` (which records its tombstone) and counts it by kind in a `KernelRetirementLoss`, which the
     /// replacement's preparation inherits through the ownership's claim word, so control can reconcile receiver
-    /// state. Pending stateful events are carried; see `CycleRetirementCarryHandoff`.
+    /// state. Pending stateful events are carried and re-admitted by the replacement (#364 KCR1); see
+    /// `CycleRetirementCarryHandoff` and `CycleCarryReadmission`.
     struct CycleRetirementLoss {
-        /// Copilot's case: a `program` change at 128, drained during [0, 64), is never emitted when the cycle retires.
+        /// Copilot's case: a `program` change at 128, drained during [0, 64), is pending when the cycle retires.
         /// The retiring cycle reports one stateful (program) drop and stale receiver state; a `.replacingCycle`
-        /// replacement over the same ownership inherits the same loss and emits nothing for it. Kills: stateful drops
-        /// not counted; the stale flag never set; the loss not handed to the replacement.
+        /// replacement over the same ownership inherits the same loss and (KCR1) re-admits the program at 128, after
+        /// which its unresolved loss is empty. Kills: stateful drops not counted; the stale flag never set; the loss
+        /// not handed to the replacement.
         @Test func pendingProgramChangeDroppedAtRetirementIsCountedAndInherited() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -75,15 +66,16 @@ extension RealtimeHandoffTests {
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [0, 0, 1, 0, 0] && loss.stateful == 1 && loss.receiverStateMayBeStale)
             let replacement = try successor(of: rig)
+            #expect(replacement.inheritedRetirementLoss == loss && replacement.unresolvedRetirementLoss == loss)
+            #expect(runBlock(replacement, 64).1.isEmpty)
+            let (result, emitted) = emissions(replacement, 128)
+            #expect(emitted == [CycleEmission(event: cycleEvent(128, programFive), frame: 128)] && result.pending == 0)
             #expect(replacement.inheritedRetirementLoss == loss)
-            for blockStart in [Int64(64), 128] {
-                let (result, emitted) = runBlock(replacement, blockStart)
-                #expect(emitted.isEmpty && result.pending == 0)
-            }
+            #expect(!replacement.unresolvedRetirementLoss.receiverStateMayBeStale)
         }
 
         /// A `control` change at 100 and a `rampTo` at 110 pending at retirement are stateful drops too; the
-        /// replacement inherits them and never emits or applies them. Kills: stateful drops not counted.
+        /// replacement inherits them and (KCR1) re-admits both in its first block. Kills: stateful drops not counted.
         @Test func pendingControlAndRampDroppedAtRetirementAreStateful() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -94,8 +86,10 @@ extension RealtimeHandoffTests {
             #expect(counts(loss) == [0, 1, 0, 1, 0] && loss.stateful == 2 && loss.receiverStateMayBeStale)
             let replacement = try successor(of: rig)
             #expect(replacement.inheritedRetirementLoss == loss)
-            #expect(runBlock(replacement, 64).1.isEmpty && runBlock(replacement, 128).1.isEmpty)
-            #expect(replacement.parameterValue(1) == 0)
+            let rampOne = KernelEventPayload.rampTo(parameter: 1, value: 1, durationFrames: 0)
+            #expect(runBlock(replacement, 64).1 == [.control(channel: 0, controller: 7, value: 9), rampOne])
+            #expect(replacement.parameterValue(1) == 1)
+            #expect(replacement.unresolvedRetirementLoss == KernelRetirementLoss())
         }
 
         /// A mix pending at retirement: `noteOn(61)` at 100, `noteOff(60)` 110, `noteOn(62)` 115, `control` 120,
@@ -115,16 +109,17 @@ extension RealtimeHandoffTests {
             let loss = rig.cycle.retire()
             #expect(counts(loss) == [2, 1, 1, 1, 1] && loss.stateful == 3 && loss.receiverStateMayBeStale)
             let replacement = try successor(of: rig)
-            #expect(replacement.inheritedRetirementLoss == loss && runBlock(replacement, 64).1.isEmpty)
+            #expect(replacement.inheritedRetirementLoss == loss)
+            #expect(runBlock(replacement, 64).1 == [.control(channel: 0, controller: 1, value: 3), programFive])
             #expect(rig.push(cycleEvent(105, noteOn(60)), first) == .ok)
             let (late, emitted) = runBlock(replacement, 128)
-            #expect(emitted.isEmpty && late.discardedSuperseded == 1)
+            #expect(emitted == [.rampTo(parameter: 2, value: 1, durationFrames: 64)] && late.discardedSuperseded == 1)
             for note in UInt8(60)...62 { #expect(!rig.ownership.isOwned(scope: 0, channel: 0, note: note)) }
         }
 
         /// A retirement with nothing pending loses nothing: its loss is zero, the receiver state is not stale, and
-        /// the next replacement inherits zero, not the earlier retirement's `program` drop. Kills: a zero loss not
-        /// handed over (an earlier loss inherited again).
+        /// the next replacement inherits zero, not the earlier retirement's `program` drop (which the middle cycle
+        /// re-admitted at 128). Kills: a zero loss not handed over (an earlier loss inherited again).
         @Test func retirementWithNothingPendingHandsOverAZeroLoss() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -133,7 +128,7 @@ extension RealtimeHandoffTests {
             rig.cycle.retire()
             let middle = try successor(of: rig)
             #expect(middle.inheritedRetirementLoss.programs == 1)
-            #expect(runBlock(middle, 64).0.pending == 0)
+            #expect(runBlock(middle, 64).0.pending == 0 && runBlock(middle, 128).1 == [programFive])
             let loss = middle.retire()
             #expect(loss == KernelRetirementLoss() && counts(loss) == [0, 0, 0, 0, 0] && !loss.receiverStateMayBeStale)
             let last = try successor(of: rig)
@@ -244,12 +239,12 @@ extension RealtimeHandoffTests {
     }
 
     /// #364 E5c, slice KCW1: `retire()` records the stateful events still pending in the retired block buffer into a
-    /// `KernelRetirementCarry` that the next claim inherits with the loss (`inheritedRetirementCarry`). Nothing
-    /// re-admits it: the first two tests do that on the control side (plan, push) the way a later slice would.
+    /// `KernelRetirementCarry` that the next claim inherits with the loss (`inheritedRetirementCarry`); since KCR1
+    /// the replacement re-admits it itself (see `CycleCarryReadmission`).
     struct CycleRetirementCarryHandoff {
-        /// The #364 example: a `program` at 128 drained during [0, 64) and pending at retirement is inherited and,
-        /// planned and pushed by control, emitted by the replacement at frame 128; the loss is unchanged. Kills:
-        /// no event recorded; the carry not handed over; the loss changed.
+        /// The #364 example: a `program` at 128 drained during [0, 64) and pending at retirement is inherited and
+        /// re-admitted by the replacement at frame 128; the inherited loss is unchanged. Kills: no event recorded;
+        /// the carry not handed over; the loss changed.
         @Test func retirementCarryHandoffProgramPendingAtRetirementIsEmittedByTheReplacementAtItsFrame() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -262,18 +257,14 @@ extension RealtimeHandoffTests {
             let carry = replacement.inheritedRetirementCarry
             #expect(carry.count == 1 && carry.droppedForCapacity == 0)
             #expect(carry.event(at: 0) == cycleEvent(128, programFive))
-            let planned = try witness(rig, replacement, firstFrame: 64, token: token)
-            let first = try #require(planned.first)
-            #expect(planned.count == 1 && first.originalFrame == 128 && first.event.frame == 128)
             #expect(runBlock(replacement, 64).1.isEmpty)
             let (result, emitted) = emissions(replacement, 128)
             #expect(emitted == [CycleEmission(event: cycleEvent(128, programFive), frame: 128)])
-            #expect(result.pending == 0)
+            #expect(result.pending == 0 && replacement.inheritedRetirementLoss == loss)
         }
 
         /// An event already due when the replacement starts (a `control` stamped 100, replacement first frame 192
-        /// after a one-block gap) is re-timed to 192 and dispatched there, not at 100. Kills: no re-timing input
-        /// (the carried frame kept); the event not carried.
+        /// after a one-block gap) is dispatched at 192, not at 100. Kills: the event not carried.
         @Test func retirementCarryHandoffAlreadyDueEventIsEmittedAtTheReplacementsFirstFrame() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -281,11 +272,8 @@ extension RealtimeHandoffTests {
             #expect(rig.run(0, 64).0.pending == 1)
             _ = rig.cycle.retire()
             let replacement = try successor(of: rig)
-            let planned = try witness(rig, replacement, firstFrame: 192, token: token)
-            let first = try #require(planned.first)
-            #expect(planned.count == 1 && first.originalFrame == 100 && first.event.frame == 192)
             let (result, emitted) = emissions(replacement, 192)
-            #expect(emitted == [CycleEmission(event: cycleEvent(192, controlNine), frame: 192)])
+            #expect(emitted == [CycleEmission(event: cycleEvent(100, controlNine), frame: 192)])
             #expect(result.pending == 0)
         }
 
@@ -310,15 +298,16 @@ extension RealtimeHandoffTests {
             let carry = replacement.inheritedRetirementCarry
             let expected = [cycleEvent(125, programFive), cycleEvent(130, ramp), cycleEvent(150, stateChange)]
             #expect(carry.count == 3 && carry.events == expected)
-            #expect(runBlock(replacement, 64).1.isEmpty)
+            #expect(runBlock(replacement, 64).1 == [programFive])
             #expect(rig.push(cycleEvent(105, noteOn(60)), first) == .ok)
             let (late, emitted) = runBlock(replacement, 128)
-            #expect(emitted.isEmpty && late.discardedSuperseded == 1)
+            #expect(emitted == [ramp, stateChange] && late.discardedSuperseded == 1)
         }
 
-        /// Retirement overwrites: A leaves a program, B inherits it and retires empty, so C inherits an empty carry
-        /// and loss. A second `retire()` of A returns no loss and changes nothing B inherited. A `.freshFanIn` cycle
-        /// inherits an empty carry. Kills: the carry not overwritten when empty; a repeated `retire()` recording.
+        /// Retirement overwrites: A leaves a program, B inherits it, re-admits it and retires empty, so C inherits an
+        /// empty carry and loss. A second `retire()` of A returns no loss and changes nothing B inherited. A
+        /// `.freshFanIn` cycle inherits an empty carry. Kills: the carry not overwritten when empty; a repeated
+        /// `retire()` recording.
         @Test func retirementCarryHandoffAnEmptyRetirementOverwritesAnEarlierCarry() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
@@ -328,7 +317,7 @@ extension RealtimeHandoffTests {
             let middle = try successor(of: rig)
             let inherited = middle.inheritedRetirementCarry
             #expect(inherited.count == 1)
-            #expect(runBlock(middle, 64).0.pending == 0)
+            #expect(runBlock(middle, 64).0.pending == 0 && runBlock(middle, 128).1 == [programFive])
             #expect(rig.cycle.retire() == KernelRetirementLoss())
             #expect(middle.inheritedRetirementCarry == inherited)
             _ = middle.retire()

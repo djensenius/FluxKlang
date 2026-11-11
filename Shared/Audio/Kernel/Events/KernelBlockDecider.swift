@@ -40,12 +40,15 @@ final class KernelBlockDecider {
     /// never emits a second `noteOff` for that release. An owned (re-struck) note's `noteOff` releases it as usual
     /// and keeps the bit. Per cycle: a later replacement starts with no bits.
     private let takenOver: UnsafeMutablePointer<UInt64>
+    /// The inherited carry's prepared slots (#364 KCR1), merged into `decide`; empty unless a carry was inherited.
+    private let readmission: KernelCarryReadmission
 
     /// `takeover`: a `.replacingCycle` start, so the notes `ownership` marks sounding are released (see
     /// `releaseTakeover`).
     init(deadline: DeadlinePolicy, ownership: NoteOwnership, ramps: RampSlots, pulses: ClockPulseGate,
-         takeover: Bool) {
+         takeover: Bool, readmission: KernelCarryReadmission) {
         self.deadline = deadline
+        self.readmission = readmission
         self.ownership = ownership
         self.ramps = ramps
         tombstones = ownership.tombstones
@@ -129,6 +132,8 @@ final class KernelBlockDecider {
     /// Step 4: decides and applies `block`'s entries in order; keeps the first `notYet` and everything after it.
     /// `flushing`: a lane's flush bit is set, so every decided `noteOn` is discarded (`discardedWhileSilenced`);
     /// otherwise a `noteOn` in a scope the takeover still holds is discarded (`discardedDuringTakeover`).
+    /// Re-admitted carried events (`KernelCarryReadmission`) are merged in by original frame, each before a buffered
+    /// event of the same frame; they are not counted in `tally`.
     func decide(_ block: KernelBlockBuffer, flushing: Bool, _ window: (start: Int64, frames: Int64),
                 _ tally: inout KernelCycleTally, _ emit: (KernelEvent, Int64) -> Void) {
         let (blockStart, frames) = window
@@ -136,9 +141,11 @@ final class KernelBlockDecider {
         while index < block.count {
             let entry = block[index]
             let event = entry.event
+            readmit(through: event.frame, window, emit)
             switch deadline.decide(event, blockStart: blockStart, blockFrames: frames) {
             case .notYet:
                 block.removeFirst(index)
+                readmit(through: Int64.max, window, emit)
                 tally.resync = gate.pointee.takeResync()
                 return
             case .dropLate:
@@ -149,13 +156,35 @@ final class KernelBlockDecider {
                 } else if case .noteOn = event.payload, heldByTakeover(event.scope) {
                     tally.discardedDuringTakeover &+= 1
                 } else {
+                    let before = tally.dispatched
                     apply(event, at: frame, blockStart, &tally, emit)
+                    if tally.dispatched != before { readmission.supersede(by: event) }
                 }
             }
             index &+= 1
         }
         block.removeFirst(index)
+        readmit(through: Int64.max, window, emit)
         tally.resync = gate.pointee.takeResync()
+    }
+
+    /// Applies and emits, in order, the pending re-admitted events with an original frame at or before `limit` that
+    /// are due in `window`; stops at the first one not yet due. A carried event is never dropped late (only
+    /// `noteOn`s are), so an already-due one dispatches at `blockStart`.
+    private func readmit(through limit: Int64, _ window: (start: Int64, frames: Int64),
+                         _ emit: (KernelEvent, Int64) -> Void) {
+        while let event = readmission.next, event.frame <= limit {
+            var counted = KernelCycleTally()
+            switch deadline.decide(event, blockStart: window.start, blockFrames: window.frames) {
+            case .notYet:
+                return
+            case .dropLate:
+                break
+            case .dispatch(let frame), .dispatchLate(let frame):
+                apply(event, at: frame, window.start, &counted, emit)
+            }
+            readmission.consumeNext(delivered: counted.dispatched == 1)
+        }
     }
 
     /// Step 5: a silenced cycle discards buffered `noteOn`s, applies buffered `noteOff`s to ownership (emitting
