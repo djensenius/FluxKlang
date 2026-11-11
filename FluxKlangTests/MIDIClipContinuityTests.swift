@@ -12,13 +12,13 @@ struct MIDIClipContinuityTests {
     static let live = Base.live
 
     /// Generations with the given counters (1 is `.initial`).
-    static func generations(sample: Int = 1, transport: Int = 1, map: Int = 1) throws -> MIDIClipGenerations {
-        MIDIClipGenerations(sample: try Generation(sample), transport: try Generation(transport),
-                            musicalMap: try Generation(map))
+    static func generations(sample: Int = 1, transport: Int = 1, map: Int = 1) throws -> ClockGenerationSnapshot {
+        ClockGenerationSnapshot(sample: try Generation(sample), transport: try Generation(transport),
+                                musicalMap: try Generation(map))
     }
 
     /// A clock for `current` whose anchor puts `ticks` on `frame`; 120 BPM at 48 kHz by default.
-    static func clock(_ current: MIDIClipGenerations, frame: Int64 = 0, ticks: Int64 = 0, rate: Int = 48_000,
+    static func clock(_ current: ClockGenerationSnapshot, frame: Int64 = 0, ticks: Int64 = 0, rate: Int = 48_000,
                       segments: [(Int64, Int64)] = [(0, 500_000)],
                       loopIteration: UInt32 = 0) throws -> MusicalClockMap {
         let anchor = ClockAnchor(
@@ -213,7 +213,7 @@ struct MIDIClipContinuityTests {
         #expect(Base.refusal { try scheduler.rebind(clock: locatedClock, current: located, atFrame: 20_001) }
             == .transportChangedRequiresStop(expected: .initial, got: located.transport))
         // A stale clock is stale, in `rebind` and in `render`.
-        let stale: [(MIDIClipGenerations, MIDIClipRefusal)] = [
+        let stale: [(ClockGenerationSnapshot, MIDIClipRefusal)] = [
             (try Self.generations(map: 2), .staleMusicalMap),
             (try Self.generations(sample: 2, map: 2), .clock(.staleSampleGeneration))
         ]

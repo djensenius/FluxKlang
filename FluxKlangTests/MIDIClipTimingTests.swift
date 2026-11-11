@@ -9,7 +9,7 @@ import Testing
 struct MIDIClipTimingTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
-    static let live = MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: .initial)
+    static let live = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: .initial)
     static let quarter = MusicalTime.ticksPerQuarter
 
     /// A clock whose anchor puts `ticks` on `frame`; 120 BPM at 48 kHz by default.
@@ -303,10 +303,11 @@ struct MIDIClipTimingTests {
         let placement = try Self.placement([Self.note(0, Self.quarter)])
         let second = try Generation(2)
         let stale = [
-            (MIDIClipGenerations(sample: second, transport: .initial, musicalMap: .initial),
+            (ClockGenerationSnapshot(sample: second, transport: .initial, musicalMap: .initial),
              MIDIClipRefusal.clock(.staleSampleGeneration)),
-            (MIDIClipGenerations(sample: .initial, transport: second, musicalMap: .initial), .clock(.staleTransport)),
-            (MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: second), .staleMusicalMap)
+            (ClockGenerationSnapshot(sample: .initial, transport: second, musicalMap: .initial),
+             .clock(.staleTransport)),
+            (ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: second), .staleMusicalMap)
         ]
         for (current, expected) in stale {
             #expect(Self.refusal { try placement.events(from: 0, to: 10, clock: Self.clock(), current: current) }

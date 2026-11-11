@@ -6,9 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// One clock-generation snapshot behind the local mirrors (#108 GU1, slice a; the metronome takes the snapshot
-/// itself since GU1b-1). This file holds the fixtures, the checks on the snapshot value and the scan of the new
-/// sources; the ledger, staleness and adapter tests are in the extensions beside it.
+/// One clock-generation snapshot behind the local mirror that remains (#108 GU1, slice a; the metronome takes the
+/// snapshot itself since GU1b-1, MIDI clips since GU1b-2). This file holds the fixtures, the checks on the snapshot
+/// value and the scan of the new sources; the ledger, staleness and adapter tests are in the extensions beside it.
 struct ClockGenerationUnificationTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")

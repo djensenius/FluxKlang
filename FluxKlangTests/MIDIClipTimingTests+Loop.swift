@@ -184,7 +184,7 @@ struct MIDIClipLoopTests {
             == .nonContiguousWindow(expected: 1, start: 2))
         #expect(Base.refusal { try scheduler.render(from: 1, to: 6403, clock: clock, current: Self.live) }
             == .tooManyEvents(limit: 4096))
-        let stale = MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: try Generation(2))
+        let stale = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: try Generation(2))
         #expect(Base.refusal { try scheduler.render(from: 1, to: 10, clock: clock, current: stale) }
             == .staleMusicalMap)
         #expect(Base.refusal { try scheduler.render(from: 1, to: 0, clock: clock, current: Self.live) }
@@ -203,7 +203,7 @@ struct MIDIClipLoopTests {
         #expect(scheduler.binding == Self.live)
         let before = scheduler
         let revised = try Base.clock(revision: Generation(2), segments: [(0, 250_000)])
-        let current = MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: try Generation(2))
+        let current = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: try Generation(2))
         #expect(Base.refusal { try scheduler.render(from: 20_000, to: 60_000, clock: revised, current: current) }
             == .clockRevisionChanged(expected: Self.live, got: current))
         #expect(scheduler == before)
@@ -223,7 +223,7 @@ struct MIDIClipLoopTests {
         #expect(try scheduler.render(from: 0, to: 10, clock: Base.clock(), current: Self.live).count == 1)
         #expect(scheduler.soundingCount == 0)
         let before = scheduler
-        let current = MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: try Generation(2))
+        let current = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: try Generation(2))
         let revised = try Base.clock(revision: Generation(2))
         #expect(Base.refusal { try scheduler.render(from: 10, to: 20, clock: revised, current: current) }
             == .clockRevisionChanged(expected: Self.live, got: current))

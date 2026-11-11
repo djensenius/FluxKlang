@@ -17,7 +17,7 @@ extension MIDIClipOwnershipTests {
         return host
     }
 
-    private static func slower() throws -> (next: MIDIClipGenerations, clock: MusicalClockMap) {
+    private static func slower() throws -> (next: ClockGenerationSnapshot, clock: MusicalClockMap) {
         let next = try Self.generations(sample: 2, map: 2)
         return (next, try Self.clock(next, frame: 36_000, ticks: 23_040, segments: [(0, 1_000_000)]))
     }

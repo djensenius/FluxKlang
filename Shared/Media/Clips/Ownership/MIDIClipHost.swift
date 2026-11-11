@@ -85,7 +85,7 @@ struct MIDIClipHost: Equatable, Sendable {
     /// TOGETHER in one `render(inputs:)` call: separate calls route one clip's whole window before the next one's,
     /// so a shared note's release decision would depend on call order instead of scheduled frames.
     mutating func render(
-        input: MIDIInputID, from start: Int64, to end: Int64, clock: MusicalClockMap, current: MIDIClipGenerations
+        input: MIDIInputID, from start: Int64, to end: Int64, clock: MusicalClockMap, current: ClockGenerationSnapshot
     ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
         try render(inputs: [input], from: start, to: end, clock: clock, current: current)
     }
@@ -100,7 +100,7 @@ struct MIDIClipHost: Equatable, Sendable {
     /// A refusal changes nothing.
     mutating func render(
         inputs: [MIDIInputID], from start: Int64, to end: Int64, clock: MusicalClockMap,
-        current: MIDIClipGenerations
+        current: ClockGenerationSnapshot
     ) throws(MIDIClipHostRefusal) -> MIDIClipOwnershipReport {
         let slots = try slots(of: inputs)
         var schedulers: [MIDIClipScheduler] = []
@@ -153,7 +153,7 @@ struct MIDIClipHost: Equatable, Sendable {
     /// never touched. The cursor may MOVE: the next render must start at `cursor(of:)`, which can differ from
     /// `frame`, or it is refused as `.nonContiguousWindow`.
     mutating func rebind(
-        input: MIDIInputID, clock: MusicalClockMap, current: MIDIClipGenerations, atFrame frame: Int64
+        input: MIDIInputID, clock: MusicalClockMap, current: ClockGenerationSnapshot, atFrame frame: Int64
     ) throws(MIDIClipHostRefusal) {
         let slot = try slot(of: input)
         var scheduler = clips[slot].scheduler
