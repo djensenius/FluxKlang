@@ -33,8 +33,8 @@ struct TakeOpening: Hashable, Sendable {
     }
 }
 
-/// A finished take. In memory only: G1 has no v1 serialiser. A future contract v1 exporter (#109)
-/// must refuse with typed errors, never by remapping: a ledger stop (#336, via
+/// A finished take. It reaches contract v1 only through `RecordingTakeV1Gate` → `RecordingTakeV1Record.make`
+/// (#109, #110), which refuse with typed errors, never by remapping: a ledger stop (#336, via
 /// `contractV1StopReason()`); any two consecutive stored segments that are not
 /// `(clock, gen) → (clock, gen + 1)`, split at a restart, which covers same-generation `sampleJump`
 /// splits and generation skips left by a dropped empty restart segment (#352); and any `.unplaced`
