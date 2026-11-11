@@ -67,8 +67,11 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `ShowTransitionTests`, `ShowTransitionWalkTests`, `ShowFootInputTests`,
 `ShowFootInputRefusalTests`, `ShowFootSessionTests`, `MPEZoneTests`,
 `TunerPitchTests`, `TunerSmootherTests`, `OpenSoundControlCodecTests`,
-`OpenSoundControlFramingTests` and `OSCNamespaceTests` use the canonical suite
-trait; this is partial source adoption only. The iOS owners of those fifty-six
+`OpenSoundControlFramingTests`, `OSCNamespaceTests`, `WiringNodeEditTests`,
+`WiringPreviewTests`, `WiringReviewDiffTests`, `WiringEditPathTests`,
+`WiringEditPathEquivalenceTests`, `WiringComposeTests`,
+`WiringDestinationListTests` and `WiringMatrixTests` use the canonical suite
+trait; this is partial source adoption only. The iOS owners of those sixty-four
 macOS-guarded suites remain unadopted. Other owners' annotation obligations
 remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
@@ -695,6 +698,82 @@ operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
 issue recorded. These runs add no process-identity, argv or bootstrap evidence
 and do not cover the iOS owners; the remaining #60 gates above still apply and
 #60 remains open.
+
+## Wiring editor source adoption
+
+`WiringNodeEditTests`, `WiringPreviewTests`, `WiringReviewDiffTests`,
+`WiringEditPathTests`, `WiringEditPathEquivalenceTests`, `WiringComposeTests`,
+`WiringDestinationListTests` and `WiringMatrixTests` now use the canonical
+trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. All eight keep their display names: the trait is added
+to each existing `@Suite` in the macOS branch and the `#else` branch keeps that
+`@Suite` unchanged. None of the eight has other suite traits. Each is a
+separate root `struct` (`WiringNodeEditTests.swift`,
+`WiringPreviewTests.swift`, `WiringPreviewTests+Diff.swift`,
+`WiringEditPathTests.swift`, `WiringEditPathTests+Equivalence.swift`,
+`WiringComposeTests.swift`, `WiringComposeTests+Destinations.swift` and
+`WiringMatrixTests.swift`); the longest root file,
+`WiringEditPathTests.swift`, grows from 487 to 491 lines, under the 500-line
+`file_length` limit. Their extensions stay unannotated:
+`WiringNodeEditTests+Add.swift`, `+Remove.swift` and `+Order.swift`;
+`WiringEditPathTests+Quantization.swift`; `WiringMatrixTests+EdgeBound.swift`;
+and the `WiringDestinationListTests` extensions in
+`WiringComposeTests+Bulk.swift` and at the end of
+`WiringComposeTests+Destinations.swift`. The fixture enums
+(`WiringPreviewFixture`, `WiringEditFixture`, `WiringComposeFixture` and the
+file-private bound, seed and graph fixtures) and the seeded SplitMix
+generators are not suites and stay unannotated. The suites build graph
+documents, drafts and edits from literals and seeded generators and drive the
+`Shared/Wiring` composers, candidate classifier, review diff, destination
+list and matrix. Their only `static var` members are computed (such as
+`WiringPreviewFixture.graph` and `WiringComposeFixture.monoLoop`); their only
+class is a local `ValidationCount: @unchecked Sendable` counter guarded by an
+`NSLock`, created per test in `WiringMatrixTests+EdgeBound.swift`. The
+production closure the fixture needed is all of `Shared/Wiring` plus value
+types from `Shared/Contracts/Graph`, `Shared/Contracts/Core`,
+`Shared/Contracts/Devices`, `Shared/Contracts/Project` and
+`Shared/Drafts/History`. No source in it imports anything but Foundation, and
+it declares no classes. Its only stored `static var` is
+`@TaskLocal static var observer` on `WiringCandidateValidationObserver` in
+`Shared/Wiring/Preview/WiringCandidateClassifier.swift`: a task-local,
+test-only validation-count hook that is `nil` unless a test binds it with
+`withValue`, so it is not shared mutable state. None of the eight suites
+touches the file system, bundles, wall clock, sleep, dispatch, defaults,
+global mutable state, MIDI hardware, network or audio. `WiringInspectorTests`,
+`WiringSelectionTests`, `WiringProblemListTests` and `WiringImpactTests` stay
+unadopted because they read repository sources through `#filePath` or
+`FileManager`; `WiringConnectionListTests` already had the trait.
+
+Only this change was run through the checker; the UARG11 tree was not re-run,
+and the comparison below uses its recorded totals (4,888 registrations, 528
+satisfied rows, 6,608 diagnostics). The complete source inventory of this
+change retains all 4,888 registrations and has 592 satisfied rows (552
+`FluxKlangMacTests`, 40 `FluxKlangTests`), 64 more than the UARG11 tree. The
+eight suites' 64 `FluxKlangMacTests` root rows (eight per suite) are now
+satisfied, which accounts for the whole increase. The iOS `FluxKlangTests`
+root rows for all eight suites stay unsatisfied, each with one annotation
+diagnostic. Diagnostics fall by 64, from 6,608 to 6,544 (eight removed per
+suite, as each had a named `@Suite`; none added). Inventory still exits 0 and
+default enforcement still exits 1. The two trees were compared by totals
+only; the per-suite counts come from this change's output, not from a
+row-level diff.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 73 repository sources from this change. 15 are test sources: the
+eight suites' files, their six extension-only files and
+`ProductionAccessScope.swift`. The other 58 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: all of `Shared/Wiring` (39 sources) plus the 18 further sources from
+the other directories named above that the build required. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the eight suites each
+passed 167 tests (none parameterized) in eight suites. Each run, under its own
+fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the eight suites (`FluxKlangTests/` plus the
+suite name), carrying that run ID, with all 14 operation IDs reporting zero
+`apiEntered` and `factoryEvaluated` and no audit issue recorded. These runs
+add no process-identity, argv or bootstrap evidence and do not cover the iOS
+owners; the remaining #60 gates above still apply and #60 remains open.
 
 ## Headless fixtures
 

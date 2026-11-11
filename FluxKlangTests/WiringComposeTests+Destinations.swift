@@ -21,7 +21,11 @@ private typealias Compose = WiringComposeFixture
 private typealias Offers = WiringConnectionOffers
 private typealias OfferRefusal = WiringConnectionOfferRefusal
 
+#if os(macOS)
+@Suite("Wiring destination list", .productionAccessAudit)
+#else
 @Suite("Wiring destination list")
+#endif
 struct WiringDestinationListTests {
     static func list(
         _ node: String, _ port: String, in graph: GraphDocument = Fixture.graph

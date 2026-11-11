@@ -133,7 +133,11 @@ private struct EditPathContext {
     var lists: [PortAddress: Result<WiringDestinationList, WiringComposeRefusal>] = [:]
 }
 
+#if os(macOS)
+@Suite("Wiring edit path equivalence", .productionAccessAudit)
+#else
 @Suite("Wiring edit path equivalence")
+#endif
 struct WiringEditPathEquivalenceTests {
     private typealias Outcome = Result<DraftEdits, WiringEditRefusal>
 
