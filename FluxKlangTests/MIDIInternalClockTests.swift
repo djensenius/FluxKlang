@@ -11,6 +11,9 @@ import Testing
 /// Fixture A (the default map): 48 kHz, 500,000 microseconds per quarter (120 BPM), anchored at frame 0 and tick 0.
 /// One 24-PPQN pulse falls every 1,000 frames and one Song Position unit every 6,000 frames. Fixture C is 192 kHz at
 /// 60,000 microseconds per quarter: one pulse every 480 frames, the fastest pulse rate the schedule allows.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct MIDIInternalClockTests {
     /// The sample clock every fixture map is anchored on.
     static let sampleClock = ClockID(validated: "clock.sample")

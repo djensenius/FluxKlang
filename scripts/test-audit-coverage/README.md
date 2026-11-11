@@ -52,9 +52,12 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `ProjectPackageManifestValidationTests`, `ProjectPackageManifestReferenceTests`,
 `ProjectPackagePathTests`, `MIDIClockFollowerTests`, `MIDIClockMathTests`,
 `MIDIClockPulseScheduleTests`, `MIDIClockTempoTests`,
-`MIDIClockTempoEstimatorTests`, `ControlPickupTests`, `ControlPickupBookTests`
-and `ProjectPackageAdmissionTests` use the canonical suite trait; this is
-partial source adoption only. The iOS owners of those nineteen
+`MIDIClockTempoEstimatorTests`, `ControlPickupTests`, `ControlPickupBookTests`,
+`ProjectPackageAdmissionTests`, `PerformBindingListTests`,
+`WiringConnectionListTests`, `MIDIClockArbitrationTests`,
+`MIDIClockArbitrationSteadyRunTests`, `MIDIInternalClockTests`,
+`MTCFollowerTests` and `MetronomeGridTests` use the canonical suite trait; this
+is partial source adoption only. The iOS owners of those twenty-six
 macOS-guarded suites remain unadopted. Other owners'
 annotation obligations remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
@@ -366,6 +369,62 @@ all 14 operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no
 audit issue recorded. These runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the remaining #60 gates above still
 apply and #60 remains open.
+
+## MIDI clock arbitration, internal clock, MTC follower and metronome grid source adoption
+
+`MIDIClockArbitrationTests`, `MIDIClockArbitrationSteadyRunTests`,
+`MIDIInternalClockTests`, `MTCFollowerTests` and `MetronomeGridTests` now use
+the canonical trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. The two arbitration suites and `MTCFollowerTests` keep
+their display names: the trait is added to each existing `@Suite` in the macOS
+branch and the `#else` branch keeps that `@Suite` unchanged. Their `+`
+extension files, `MIDIClockArbitrationTests+Jitter.swift`, the five
+`MIDIInternalClockTests+` files, the seven `MTCFollowerTests+` files and the
+two `MetronomeGridTests+` files, stay unannotated. The suites drive value types
+with in-memory inputs and synthetic `HostStamp`, `HostTimebase` and clock map
+fixtures: no file system, wall clock, sleep, dispatch, defaults, global state,
+MIDI hardware or audio. `MetronomeGridTests` imports Foundation but uses only
+standard library and repository value types. `MIDIClockArbitrationDropoutTests`
+is equally pure but stays unadopted: its file is at SwiftLint's 500-line
+`file_length` limit, so the guard would need a file split first.
+`MIDIClockJitterTests`, `MTCEmitTests` and `ClockGenerationUnificationTests`
+read repository sources from disk and stay unadopted. Against the unmodified
+base (main `5702231c`), the complete source inventory retains all 4,888
+registrations and moves 40 `FluxKlangMacTests` owner rows (eight per suite) to
+satisfied: 288 satisfied rows instead of 248. The iOS `FluxKlangTests` rows for
+all five suites stay unsatisfied and no other row changes. Diagnostics fall
+from 6,992 to 6,936 (16 removed for each of `MIDIInternalClockTests` and
+`MetronomeGridTests`, which had no `@Suite`, and 8 for each of the three suites
+whose existing named `@Suite` already met the single-macro requirement; none
+added). Inventory still exits 0 and default enforcement still exits 1. The
+full base-versus-change checker diff ran on an earlier six-suite draft that
+also annotated `MIDIClockArbitrationDropoutTests`; the final five-suite tree
+was compared with the base by totals and per-suite counts only.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 132 repository sources from this change. Twenty-one are test
+sources: the five suites' 20 root and extension files and
+`ProductionAccessScope.swift`. The other 111 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: all 45 `Shared/Contracts` sources (including the two
+`Transport/Snapshot` sources for `ClockGenerationSnapshot`), the 26
+`Shared/MIDI/Clock` sources including `Arbitration`, `Internal` and `Jitter`,
+the ten `Shared/MIDI/Protocol/MIDI1` sources, the 22 `Shared/MIDI/Timecode`
+sources, the five `Shared/Media/Metronome` sources,
+`Shared/MIDI/Performance/MIDIPerformanceIDs.swift` for `MIDIInputID` and
+`Shared/WING/FaderMath.swift`. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the five suites each
+passed 258 tests (263 case invocations) in five suites. Each run, under its own
+fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of `FluxKlangTests/MIDIClockArbitrationTests`,
+`FluxKlangTests/MIDIClockArbitrationSteadyRunTests`,
+`FluxKlangTests/MIDIInternalClockTests`, `FluxKlangTests/MTCFollowerTests` and
+`FluxKlangTests/MetronomeGridTests`, carrying that run ID, with all 14
+operation IDs reporting zero `apiEntered` and `factoryEvaluated` and no audit
+issue recorded. These runs add no process-identity, argv or bootstrap evidence
+and do not cover the iOS owners; the remaining #60 gates above still apply and
+#60 remains open.
 
 ## Headless fixtures
 
