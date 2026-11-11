@@ -20,7 +20,7 @@ extension MIDIClipScheduler {
     /// The checks of `rebind` in order: a cursor, the cursor frame, the transport generation, the clock against
     /// `current`, the transport loop iteration, then the kept tick and its new cursor frame. Pure; `rebind`
     /// applies the result.
-    func rebindTarget(clock: MusicalClockMap, current: MIDIClipGenerations,
+    func rebindTarget(clock: MusicalClockMap, current: ClockGenerationSnapshot,
                       atFrame frame: Int64) throws(MIDIClipRefusal) -> (ticks: Int64, frame: Int64) {
         guard let cursor, let binding, let cursorTicks else { throw .rebindWithoutRender }
         guard frame == cursor else { throw .rebindCursorMismatch(expected: cursor, frame: frame) }

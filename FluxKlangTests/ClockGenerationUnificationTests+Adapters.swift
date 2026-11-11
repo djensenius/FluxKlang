@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// What these tests need of the local mirrors the snapshot still replaces, so one generic check covers each of them.
+/// What these tests need of the local mirror the snapshot still replaces (the automation one until GU1b-3).
 private protocol GenerationMirror: Equatable {
     init(sample: Generation, transport: Generation, musicalMap: Generation)
     init(_ snapshot: ClockGenerationSnapshot)
@@ -13,10 +13,6 @@ private protocol GenerationMirror: Equatable {
     var transport: Generation { get }
     var musicalMap: Generation { get }
     var snapshot: ClockGenerationSnapshot { get }
-}
-
-extension MIDIClipGenerations: GenerationMirror {
-    fileprivate var snapshot: ClockGenerationSnapshot { ClockGenerationSnapshot(self) }
 }
 
 extension AutomationRenderGenerations: GenerationMirror {
@@ -33,10 +29,10 @@ extension MetronomeRefusal: StaleClockRefusal {}
 extension MIDIClipRefusal: StaleClockRefusal {}
 extension AutomationRenderRefusal: StaleClockRefusal {}
 
-/// The adapters between the snapshot and the mirrors it still replaces, in both directions, and the drift guard: the
-/// metronome's snapshot and the two mirrors mean the same thing, and the three real validators (the metronome's takes
-/// the snapshot itself since GU1b-1) refuse a clock map of another generation on the axis the snapshot reports as
-/// stale first.
+/// The adapters between the snapshot and the mirror it still replaces, in both directions, and the drift guard: the
+/// snapshot and the automation mirror mean the same thing, and the three real validators (the metronome's takes the
+/// snapshot itself since GU1b-1, the MIDI clip's since GU1b-2) refuse a clock map of another generation on the axis
+/// the snapshot reports as stale first.
 extension ClockGenerationUnificationTests {
     private struct Verdicts: Equatable {
         let metronome: MetronomeRefusal?
@@ -100,8 +96,8 @@ extension ClockGenerationUnificationTests {
         }
     }
 
-    /// What each real validator says about `clock` when `live` is the live snapshot, which the metronome takes as it is
-    /// and the other two turn into their own mirror.
+    /// What each real validator says about `clock` when `live` is the live snapshot, which the metronome and the MIDI
+    /// clip take as it is and the automation renderer turns into its own mirror.
     private static func verdicts(of clock: MusicalClockMap, against live: ClockGenerationSnapshot) throws -> Verdicts {
         var renderer = try automationRenderer()
         return Verdicts(
@@ -109,7 +105,7 @@ extension ClockGenerationUnificationTests {
                 try MetronomeGrid.validate(clock, current: live)
             },
             clip: verdict { () throws(MIDIClipRefusal) in
-                try MIDIClipPlacement.validate(clock, current: MIDIClipGenerations(live))
+                try MIDIClipPlacement.validate(clock, current: live)
             },
             automation: verdict { () throws(AutomationRenderRefusal) in
                 _ = try renderer.render(from: 0, to: 64, clock: clock, current: AutomationRenderGenerations(live))
@@ -131,33 +127,27 @@ extension ClockGenerationUnificationTests {
                  automation: refusal(firstStale: axis))
     }
 
-    @Test func everyMirrorRoundTripsThroughTheSnapshotInBothDirections() throws {
-        try Self.expectRoundTrips(MIDIClipGenerations.self)
+    @Test func theAutomationMirrorRoundTripsThroughTheSnapshotInBothDirections() throws {
         try Self.expectRoundTrips(AutomationRenderGenerations.self)
     }
 
-    @Test func eachMirrorFieldIsTheSnapshotFieldOfTheSameNameInBothDirections() throws {
-        try Self.expectFieldsAreCarriedByName(MIDIClipGenerations.self)
+    @Test func eachAutomationMirrorFieldIsTheSnapshotFieldOfTheSameNameInBothDirections() throws {
         try Self.expectFieldsAreCarriedByName(AutomationRenderGenerations.self)
     }
 
-    /// The metronome's side is the snapshot itself since GU1b-1; the clip and automation sides go through their
-    /// mirrors.
-    @Test func theMirrorsAndTheMetronomeSnapshotCompareEqualForTheSameInputs() throws {
+    /// The metronome's and the MIDI clip's side is the snapshot itself since GU1b-1 and GU1b-2; the automation side
+    /// goes through its mirror.
+    @Test func theAutomationMirrorAndTheSnapshotCompareEqualForTheSameInputs() throws {
         var seen: [ClockGenerationSnapshot] = []
         for input in try Self.triples() {
-            let metronome = ClockGenerationSnapshot(
-                sample: input.sample, transport: input.transport, musicalMap: input.musicalMap
-            )
-            let clip = MIDIClipGenerations(
+            let snapshot = ClockGenerationSnapshot(
                 sample: input.sample, transport: input.transport, musicalMap: input.musicalMap
             )
             let automation = AutomationRenderGenerations(
                 sample: input.sample, transport: input.transport, musicalMap: input.musicalMap
             )
-            #expect(metronome == ClockGenerationSnapshot(clip), "\(input)")
-            #expect(metronome == ClockGenerationSnapshot(automation), "\(input)")
-            seen.append(metronome)
+            #expect(snapshot == ClockGenerationSnapshot(automation), "\(input)")
+            seen.append(snapshot)
         }
         #expect(Set(seen).count == seen.count)
     }

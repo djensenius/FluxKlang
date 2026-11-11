@@ -41,7 +41,7 @@ struct MIDIClipScheduler: Equatable, Sendable {
     private(set) var cursor: Int64?
     /// The generations of the first render since creation or `stop()`, or of the last `rebind`; later renders
     /// must match them.
-    private(set) var binding: MIDIClipGenerations?
+    private(set) var binding: ClockGenerationSnapshot?
     /// The transport loop iteration of the bound clock; a clock with another one is a loop wrap. Cleared by `stop()`.
     private(set) var loopIteration: UInt32?
     /// The first timeline tick not yet passed: every tick below it lies before the cursor. Kept across `rebind`.
@@ -66,7 +66,7 @@ struct MIDIClipScheduler: Equatable, Sendable {
     /// be refused with `.clock(.overflow)` when its end tick is not representable, at frames where any nonempty
     /// render would be refused too. A refusal leaves the scheduler unchanged.
     mutating func render(from start: Int64, to end: Int64, clock: MusicalClockMap,
-                         current: MIDIClipGenerations) throws(MIDIClipRefusal) -> [MIDIClipEvent] {
+                         current: ClockGenerationSnapshot) throws(MIDIClipRefusal) -> [MIDIClipEvent] {
         if let cursor, cursor != start { throw .nonContiguousWindow(expected: cursor, start: start) }
         try MIDIClipPlacement.validate(clock, current: current)
         if let binding, binding != current { throw .clockRevisionChanged(expected: binding, got: current) }
@@ -130,7 +130,7 @@ struct MIDIClipScheduler: Equatable, Sendable {
     /// not put the cursor tick boundary at `frame` (on the same sample clock, a revision anchored off that tick's
     /// frame), the cursor moves: backward means the next events come later than the frames already output (late),
     /// forward leaves a gap of frames with no events.
-    mutating func rebind(clock: MusicalClockMap, current: MIDIClipGenerations,
+    mutating func rebind(clock: MusicalClockMap, current: ClockGenerationSnapshot,
                          atFrame frame: Int64) throws(MIDIClipRefusal) {
         let target = try rebindTarget(clock: clock, current: current, atFrame: frame)
         cursor = target.frame

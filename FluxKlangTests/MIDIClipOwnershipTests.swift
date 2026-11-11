@@ -9,7 +9,7 @@ import Testing
 struct MIDIClipOwnershipTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
-    static let live = MIDIClipGenerations(sample: .initial, transport: .initial, musicalMap: .initial)
+    static let live = ClockGenerationSnapshot(sample: .initial, transport: .initial, musicalMap: .initial)
     static let quarter = MusicalTime.ticksPerQuarter
     static let clipID = MIDIInputID(1)
     static let otherID = MIDIInputID(2)
@@ -18,14 +18,14 @@ struct MIDIClipOwnershipTests {
     static let route2 = MIDIRouteID(11)
 
     /// Generations with the given counters (1 is `.initial`).
-    static func generations(sample: Int = 1, transport: Int = 1, map: Int = 1) throws -> MIDIClipGenerations {
-        MIDIClipGenerations(sample: try Generation(sample), transport: try Generation(transport),
-                            musicalMap: try Generation(map))
+    static func generations(sample: Int = 1, transport: Int = 1, map: Int = 1) throws -> ClockGenerationSnapshot {
+        ClockGenerationSnapshot(sample: try Generation(sample), transport: try Generation(transport),
+                                musicalMap: try Generation(map))
     }
 
     /// A clock for `current` whose anchor puts `ticks` on `frame`; 120 BPM at 48 kHz by default (a quarter is
     /// 24_000 frames).
-    static func clock(_ current: MIDIClipGenerations = live, frame: Int64 = 0, ticks: Int64 = 0,
+    static func clock(_ current: ClockGenerationSnapshot = live, frame: Int64 = 0, ticks: Int64 = 0,
                       segments: [(Int64, Int64)] = [(0, 500_000)],
                       loopIteration: UInt32 = 0) throws -> MusicalClockMap {
         let anchor = ClockAnchor(
@@ -118,7 +118,7 @@ struct MIDIClipOwnershipTests {
 
     static func render(_ host: inout MIDIClipHost, _ id: MIDIInputID = clipID, from start: Int64 = 0,
                        to end: Int64, clock: MusicalClockMap? = nil,
-                       current: MIDIClipGenerations = live) throws -> MIDIClipOwnershipReport {
+                       current: ClockGenerationSnapshot = live) throws -> MIDIClipOwnershipReport {
         try host.render(input: id, from: start, to: end, clock: try clock ?? Self.clock(), current: current)
     }
 

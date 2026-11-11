@@ -29,7 +29,7 @@ struct MIDIClipContinuityTempoTests {
 
     /// Renders `[start, end)` in up to four contiguous pieces cut by `generator`.
     private static func play(_ scheduler: inout MIDIClipScheduler, from start: Int64, to end: Int64,
-                             on map: (clock: MusicalClockMap, current: MIDIClipGenerations),
+                             on map: (clock: MusicalClockMap, current: ClockGenerationSnapshot),
                              generator: inout MIDIClipSplitMix64) throws -> [MIDIClipEvent] {
         var cuts = [start, end]
         for _ in 0..<Int(generator.next() % 4) where end > start {

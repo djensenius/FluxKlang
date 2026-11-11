@@ -49,7 +49,7 @@ enum MIDIClipRefusal: Error, Equatable, Sendable {
     /// A render must start where the previous one ended.
     case nonContiguousWindow(expected: Int64, start: Int64)
     /// The render's generations differ from those the scheduler is bound to; `stop()` first, then render.
-    case clockRevisionChanged(expected: MIDIClipGenerations, got: MIDIClipGenerations)
+    case clockRevisionChanged(expected: ClockGenerationSnapshot, got: ClockGenerationSnapshot)
     /// `rebind` needs a cursor: the scheduler has not rendered since creation or `stop()`.
     case rebindWithoutRender
     /// `rebind` must happen at the cursor, where the last render ended.

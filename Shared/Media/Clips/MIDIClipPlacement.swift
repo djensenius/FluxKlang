@@ -43,14 +43,6 @@ struct MIDIClipEvent: Equatable, Sendable {
     let message: MIDI1Semantic
 }
 
-/// The live generations a clock map must match before it is used. Mirrors `ClockGenerationSnapshot`, which the
-/// metronome takes directly since #108 GU1b-1; replacing this mirror with it is a follow-up (GU1b-2).
-struct MIDIClipGenerations: Hashable, Sendable {
-    let sample: Generation
-    let transport: Generation
-    let musicalMap: Generation
-}
-
 struct MIDIClipPlacement: Equatable, Sendable {
     /// The longest window one query covers, in frames.
     static let maximumWindowFrames: Int64 = 1 << 20
@@ -111,7 +103,7 @@ struct MIDIClipPlacement: Equatable, Sendable {
     }
 
     /// Refuses a clock map whose sample, transport or tempo map generation is not live.
-    static func validate(_ clock: MusicalClockMap, current: MIDIClipGenerations) throws(MIDIClipRefusal) {
+    static func validate(_ clock: MusicalClockMap, current: ClockGenerationSnapshot) throws(MIDIClipRefusal) {
         guard clock.anchor.sample.generation == current.sample else { throw .clock(.staleSampleGeneration) }
         guard clock.musical.transport == current.transport else { throw .clock(.staleTransport) }
         guard clock.map.revision == current.musicalMap else { throw .staleMusicalMap }
@@ -123,7 +115,7 @@ struct MIDIClipPlacement: Equatable, Sendable {
     /// windows on one map split the events exactly. Nothing is cached. With a `floor`, events of timeline ticks
     /// below it are left out before the event limit is checked (a rebound scheduler's already-played ticks, #112
     /// CL3); the default `nil` leaves out nothing.
-    func events(from start: Int64, to end: Int64, clock: MusicalClockMap, current: MIDIClipGenerations,
+    func events(from start: Int64, to end: Int64, clock: MusicalClockMap, current: ClockGenerationSnapshot,
                 floor: Int64? = nil) throws(MIDIClipRefusal) -> [MIDIClipEvent] {
         guard start <= end else { throw .invalidWindow(start: start, end: end) }
         let (span, overflow) = end.subtractingReportingOverflow(start)

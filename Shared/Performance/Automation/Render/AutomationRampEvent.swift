@@ -36,8 +36,8 @@ struct AutomationRampEvent: Hashable, Sendable {
     let reason: Reason
 }
 
-/// The live generations a clock map must match before it is used. A local mirror of `MIDIClipGenerations`
-/// and `ClockGenerationSnapshot` (which the metronome takes directly since #108 GU1b-1), kept here so no lane
+/// The live generations a clock map must match before it is used. A local mirror of `ClockGenerationSnapshot`
+/// (which the metronome and MIDI clips take directly since #108 GU1b-1 and GU1b-2), kept here so no lane
 /// depends on another; replacing it with `ClockGenerationSnapshot` is a follow-up (GU1b-3).
 struct AutomationRenderGenerations: Hashable, Sendable {
     let sample: Generation
