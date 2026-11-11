@@ -5,6 +5,8 @@
 //  The destination list (#101 WP2): every other port of the graph, classified
 //  bare, grouped by connection class in `WiringDestinationClass` order with
 //  empty groups omitted, sorted by (node ID, port ID) whatever the graph order.
+//  The conversion step's offers for those destinations (#101 WCO1): named channel
+//  maps for 1 → 2 and 2 → 1, one fixed feedback choice for a cycle, no default.
 //
 
 import Testing
@@ -16,6 +18,8 @@ import Testing
 
 private typealias Fixture = WiringPreviewFixture
 private typealias Compose = WiringComposeFixture
+private typealias Offers = WiringConnectionOffers
+private typealias OfferRefusal = WiringConnectionOfferRefusal
 
 @Suite("Wiring destination list")
 struct WiringDestinationListTests {
@@ -231,6 +235,182 @@ struct WiringDestinationListTests {
         #expect(throws: WiringComposeRefusal.preview(.draftGraphMismatch(draft: Fixture.id("gph.other"),
                                                                            active: Fixture.graphID))) {
             try WiringDraftComposer.destinations(from: source, active: Fixture.graph, draft: foreign)
+        }
+    }
+}
+
+// MARK: - Conversion-step offers (#101 WCO1)
+
+extension WiringDestinationListTests {
+    static let expectedFeedback = EdgeFeedback(delayBlocks: 1, gainCeilingDb: -6)
+
+    /// Composes `request` onto an empty draft of `graph`; returns the new edge and the draft graph's errors.
+    static func composeOffer(
+        _ request: WiringConnectRequest, in graph: GraphDocument
+    ) throws -> (edge: GraphEdge, errors: [GraphValidationError]) {
+        let composed = try WiringDraftComposer.compose(request, into: Compose.draft(on: graph), active: graph)
+        let edge = try #require(WiringComposeTests.lastEdge(composed))
+        return (edge, try graph.applying(composed.edits).validationErrors())
+    }
+
+    @Test func monoToStereoOffersThreeNamedMapsInOrder() throws {
+        let offers = try Offers.conversions(sourceChannels: 1, destinationChannels: 2)
+        try #require(offers.count == 3)
+        #expect(offers.map(\.label) == ["Mono to both sides", "Left only", "Right only"])
+        // One row per destination channel, listing the source channels summed into it; [] is silent.
+        #expect(offers.map(\.conversion) == [
+            EdgeConversion(map: [[0], [0]], label: "Mono to both sides"),
+            EdgeConversion(map: [[0], []], label: "Left only"),
+            EdgeConversion(map: [[], [0]], label: "Right only")
+        ])
+        #expect(offers[0].conversion == Fixture.upmix)
+        // A mono → stereo destination's class gives the same list: nothing is picked out of it.
+        let bare = try Fixture.classify(("nod.mic", "out"), ("nod.mains", "in"))
+        #expect(bare == .needsConversion(sourceChannels: 1, destinationChannels: 2))
+        #expect(try Offers.conversions(for: bare) == offers)
+    }
+
+    @Test func stereoToMonoOffersThreeNamedMapsInOrder() throws {
+        let offers = try Offers.conversions(sourceChannels: 2, destinationChannels: 1)
+        try #require(offers.count == 3)
+        #expect(offers.map(\.label) == ["Left only", "Right only", "Both sides summed"])
+        #expect(offers.map(\.conversion) == [
+            EdgeConversion(map: [[0]], label: "Left only"),
+            EdgeConversion(map: [[1]], label: "Right only"),
+            EdgeConversion(map: [[0, 1]], label: "Both sides summed")
+        ])
+        let bare = try Fixture.classify(("nod.keys", "out"), ("nod.mono", "in"), in: Compose.monoLoop)
+        #expect(bare == .needsConversion(sourceChannels: 2, destinationChannels: 1))
+        #expect(try Offers.conversions(for: bare) == offers)
+    }
+
+    @Test func equalOutOfRangeAndUnnamedChannelCountsAreRefused() {
+        for channels in [1, 2, 6, 64] {
+            #expect(throws: OfferRefusal.channelCountsMatch(channels: channels)) {
+                try Offers.conversions(sourceChannels: channels, destinationChannels: channels)
+            }
+        }
+        for (source, destination) in [(2, 6), (6, 2), (1, 6), (2, 4), (4, 2), (1, 3), (1, 64), (64, 1)] {
+            #expect(throws: OfferRefusal.unsupportedChannelCounts(source: source, destination: destination)) {
+                try Offers.conversions(sourceChannels: source, destinationChannels: destination)
+            }
+        }
+        // The range is checked first: 0 → 0 and 65 → 65 are out of range, not matching counts.
+        for (source, destination) in [(0, 2), (2, 0), (0, 1), (0, 0), (-1, 2), (1, 65), (65, 2), (65, 65)] {
+            #expect(throws: OfferRefusal.channelCountOutOfRange(source: source, destination: destination)) {
+                try Offers.conversions(sourceChannels: source, destinationChannels: destination)
+            }
+        }
+        // The class entry point passes the count refusal through unchanged.
+        #expect(throws: OfferRefusal.unsupportedChannelCounts(source: 2, destination: 6)) {
+            try Offers.conversions(for: .needsConversion(sourceChannels: 2, destinationChannels: 6))
+        }
+    }
+
+    @Test func conversionsAndFeedbackAreOfferedOnlyForTheirClass() throws {
+        var offered: [WiringDestinationClass] = []
+        for row in Fixture.documented {
+            let connectionClass = WiringDestinationClass(row.expected)
+            if connectionClass == .needsConversion {
+                #expect(try Offers.conversions(for: row.expected).count == 3)
+                offered.append(connectionClass)
+            } else {
+                #expect(throws: OfferRefusal.conversionNotNeeded(connectionClass)) {
+                    try Offers.conversions(for: row.expected)
+                }
+            }
+            if connectionClass == .feedbackOnly {
+                #expect(try Offers.feedback(for: row.expected).feedback == Self.expectedFeedback)
+                offered.append(connectionClass)
+            } else {
+                #expect(throws: OfferRefusal.feedbackNotNeeded(connectionClass)) {
+                    try Offers.feedback(for: row.expected)
+                }
+            }
+        }
+        #expect(offered == [.needsConversion, .feedbackOnly])
+    }
+
+    @Test func everyConversionOfferPassesTheContract() throws {
+        // mic (1) feeds three stereo inputs; keys (2) feeds the mono node of `monoLoop`.
+        let sources = [
+            (Fixture.graph, Fixture.address("nod.mic", "out")), (Compose.monoLoop, Fixture.address("nod.keys", "out"))
+        ]
+        var composed = 0
+        for (graph, source) in sources {
+            let group = try #require(try WiringDestinationList.make(from: source, in: graph).group(.needsConversion))
+            for candidate in group.candidates {
+                let offers = try Offers.conversions(for: candidate.connection)
+                try #require(offers.count == 3)
+                for offer in offers {
+                    let chosen = try WiringCandidate.classify(
+                        from: candidate.from, to: candidate.to, in: graph, conversion: offer.conversion
+                    )
+                    #expect(chosen.connection == .valid)
+                    let request = WiringConnectRequest(
+                        edge: Fixture.id("edg.offer"), from: candidate.from, to: candidate.to,
+                        conversion: offer.conversion
+                    )
+                    let result = try Self.composeOffer(request, in: graph)
+                    #expect(result.edge.conversion == offer.conversion)
+                    #expect(result.edge.feedback == nil)
+                    #expect(result.errors.isEmpty)
+                    composed += 1
+                }
+            }
+        }
+        #expect(composed == 12)
+    }
+
+    @Test func feedbackIsOneFixedChoiceThatPassesTheContract() throws {
+        let from = Fixture.address("nod.verb", "out"), to = Fixture.address("nod.echo", "in")
+        let bare = try WiringCandidate.classify(from: from, to: to, in: Fixture.graph).connection
+        #expect(bare == .feedbackOnly(cycle: WiringComposeTests.verbEchoCycle))
+        let offer = try Offers.feedback(for: bare)
+        #expect(offer.label == "Feedback (1-block delay, ceiling −6 dB)")
+        #expect(offer.feedback.delayBlocks == 1)
+        #expect(offer.feedback.gainCeilingDb == -6)
+        #expect(offer.feedback == Self.expectedFeedback)
+        #expect(offer.feedback.isValid)
+        // The same single choice whatever the cycle; a cycle never takes a conversion.
+        #expect(try Offers.feedback(for: .feedbackOnly(cycle: [])) == offer)
+        #expect(throws: OfferRefusal.conversionNotNeeded(.feedbackOnly)) { try Offers.conversions(for: bare) }
+        let chosen = try WiringCandidate.classify(from: from, to: to, in: Fixture.graph, feedback: offer.feedback)
+        #expect(chosen.connection == .valid)
+        let request = WiringConnectRequest(
+            edge: Fixture.id("edg.verb-echo-fb"), from: from, to: to, feedback: offer.feedback
+        )
+        let result = try Self.composeOffer(request, in: Fixture.graph)
+        #expect(result.edge.feedback == offer.feedback)
+        #expect(result.edge.conversion == nil)
+        #expect(result.errors.isEmpty)
+    }
+
+    @Test func aConvertedCycleIsOfferedFeedbackOnceItsConversionIsChosen() throws {
+        // mono (1) → verb (2) needs a conversion and closes verb → mono → verb.
+        let graph = Compose.monoLoop
+        let from = Fixture.address("nod.mono", "out"), to = Fixture.address("nod.verb", "in")
+        let bare = try WiringCandidate.classify(from: from, to: to, in: graph).connection
+        #expect(bare == .needsConversion(sourceChannels: 1, destinationChannels: 2))
+        #expect(throws: OfferRefusal.feedbackNotNeeded(.needsConversion)) { try Offers.feedback(for: bare) }
+        let offers = try Offers.conversions(for: bare)
+        try #require(offers.count == 3)
+        for offer in offers {
+            let converted = try WiringCandidate.classify(from: from, to: to, in: graph, conversion: offer.conversion)
+            #expect(WiringDestinationClass(converted.connection) == .feedbackOnly)
+            let feedback = try Offers.feedback(for: converted.connection)
+            let both = try WiringCandidate.classify(
+                from: from, to: to, in: graph, conversion: offer.conversion, feedback: feedback.feedback
+            )
+            #expect(both.connection == .valid)
+            let request = WiringConnectRequest(
+                edge: Fixture.id("edg.mono-verb-fb"), from: from, to: to,
+                conversion: offer.conversion, feedback: feedback.feedback
+            )
+            let result = try Self.composeOffer(request, in: graph)
+            #expect(result.edge.conversion == offer.conversion)
+            #expect(result.edge.feedback == Self.expectedFeedback)
+            #expect(result.errors.isEmpty)
         }
     }
 }
