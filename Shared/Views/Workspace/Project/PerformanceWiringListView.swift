@@ -45,39 +45,51 @@ struct PerformanceWiringListView: View {
 
     @ViewBuilder private var connections: some View {
         Text(PerformanceWiringText.connectionsHeading).font(.headline)
-        if graph.edges.isEmpty { Text(PerformanceWiringText.noConnections) }
-        ForEach(destinationNodes, id: \.self) { node in
-            Text(PerformanceWiringText.destinationHeading(node, in: graph)).font(.subheadline.bold())
-            ForEach(graph.edges.filter { $0.to.node == node }, id: \.id) { edge in
-                connectionRow(edge)
-            }
+        switch connectionList() {
+        case .success(let list):
+            if list.sections.isEmpty { Text(PerformanceWiringText.noConnections) }
+            ForEach(list.sections, id: \.node) { section in connectionSection(section) }
+        case .failure(let refusal):
+            Text(PerformanceWiringText.connectionsUnavailable(refusal))
         }
     }
 
-    /// Destination nodes of the draft's connections, by raw ID bytes.
-    private var destinationNodes: [NodeID] {
-        Set(graph.edges.map(\.to.node)).sorted { $0.rawValue.utf8.lexicographicallyPrecedes($1.rawValue.utf8) }
+    private func connectionList() -> Result<WiringConnectionList, WiringConnectionListRefusal> {
+        do { return .success(try session.connectionList()) } catch { return .failure(error) }
     }
 
-    private func connectionRow(_ edge: GraphEdge) -> some View {
-        let title = PerformanceWiringText.connectionTitle(edge, in: graph)
-        let ports = "\(PerformanceWiringText.portTitle(edge.from, in: graph)) → "
-            + PerformanceWiringText.portTitle(edge.to, in: graph)
-        let remove = { _ = edit { try session.removeConnection(edge.id) } }
+    /// The model's heading (VoiceOver heading rotor), its "No connections" line when it has no rows, then its rows.
+    @ViewBuilder
+    private func connectionSection(_ section: WiringConnectionSection) -> some View {
+        Text(section.heading)
+            .font(.subheadline.bold())
+            .accessibilityLabel(section.accessibilityLabel)
+            .accessibilityAddTraits(.isHeader)
+        if let empty = section.emptyText { Text(empty).foregroundStyle(.secondary) }
+        ForEach(section.rows, id: \.self) { row in connectionRow(row) }
+    }
+
+    private func connectionRow(_ row: WiringConnectionRow) -> some View {
+        let remove = { _ = edit { try session.removeConnection(row.edge) } }
+        let removable = PerformanceWiringText.isRemovable(row.badge)
         return HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text(ports)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(row.text).strikethrough(row.badge.isStruckThrough)
+                    if let badge = row.badge.text { Text(badge).font(.caption).foregroundStyle(.secondary) }
+                }
+                if let detail = row.detailText { Text(detail).font(.caption).foregroundStyle(.secondary) }
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(label(.edge(edge.id), fallback: title))
-            .accessibilityHint(ports)
-            .accessibilityAction(named: PerformanceWiringText.removeFromDraft, remove)
+            .accessibilityLabel(row.accessibilityLabel)
+            .accessibilityActions {
+                if removable { Button(PerformanceWiringText.removeFromDraft, action: remove) }
+            }
             Spacer()
-            Button("Remove", action: remove)
-                .accessibilityLabel("Remove \(title) from draft")
+            if removable {
+                Button("Remove", action: remove)
+                    .accessibilityLabel(PerformanceWiringText.removeLabel(row))
+            }
         }
     }
 

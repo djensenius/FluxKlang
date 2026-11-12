@@ -3,7 +3,7 @@
 //  FluxKlang
 //
 //  Why the compact Connections list cannot be made (#101 WCL1). A refusal lists nothing: no row, section or
-//  presence is clamped, dropped or assumed. Nothing calls this yet.
+//  presence is clamped, dropped or assumed. `PerformanceWiringListView` shows a refusal as one line (#101 WCL2).
 //
 
 /// Why `WiringConnectionList.make(active:review:presence:)` is refused. The checks run in the order the cases are
