@@ -5,7 +5,8 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// The peer identity, the MUID rule, the NAK and the function block MIDI 1.0 downgrade of `MIDICapabilityDiscovery`.
+/// The peer identity, the MUID rule, the NAK, the function block MIDI 1.0 downgrade, the destination rule and the
+/// transport (UMP group or legacy port) of Profile Replies in `MIDICapabilityDiscovery`.
 extension MIDICapabilityDiscoveryTests {
     static let losses = MIDICapabilityResolver.midi2ToMIDI1Losses
 
@@ -60,10 +61,12 @@ extension MIDICapabilityDiscoveryTests {
             let outcome = try discovery.collect(Self.reply(source: Self.otherRaw, model: model))
             #expect(outcome == .ignored(.otherMUID(other)))
         }
-        #expect(try discovery.collect(Self.profileReply(source: Self.otherRaw, enabled: 1, disabled: 0))
+        #expect(try discovery.collect(
+            Self.profileReply(source: Self.otherRaw, enabled: 1, disabled: 0), on: .legacyPort)
             == .ignored(.otherMUID(other)))
         // The over-limit check is not reached for a message that is not the peer's.
-        #expect(try discovery.collect(Self.profileReply(source: Self.otherRaw, enabled: 64, disabled: 1))
+        #expect(try discovery.collect(
+            Self.profileReply(source: Self.otherRaw, enabled: 64, disabled: 1), on: .legacyPort)
             == .ignored(.otherMUID(other)))
         #expect(discovery == before)
         #expect(discovery.peer.muid == (try Self.muid(Self.deviceRaw)))
@@ -201,7 +204,7 @@ extension MIDICapabilityDiscoveryTests {
         try silent.collect(UMPStreamMessage.functionBlockInfo(Self.block(0, mode: .restricted)))
         try silent.collect(MIDICIMessage.discoveryReply(
             try Self.header(), try Self.info(category: 0x0A), functionBlock: 0))
-        try silent.collect(Self.profileReply(enabled: 1, disabled: 0))
+        try silent.collect(Self.profileReply(enabled: 1, disabled: 0), on: .legacyPort)
         let quiet = try MIDICapabilityResolver.negotiate(silent.facts)
         #expect(quiet.level == .umpMIDI2)
         #expect(quiet.downgrades == [
@@ -246,11 +249,11 @@ extension MIDICapabilityDiscoveryTests {
         #expect(try discovery.collect(broadcastReply) == .repeated)
         let elsewhere = MIDICIProfileMessage.inquiryReply(
             try Self.header(destination: Self.otherRaw), enabled: [try Self.profile(1)], disabled: [])
-        #expect(try discovery.collect(elsewhere) == .ignored(.otherDestination(stranger)))
+        #expect(try discovery.collect(elsewhere, on: .legacyPort) == .ignored(.otherDestination(stranger)))
         #expect(discovery == afterReply)
         let broadcastProfiles = MIDICIProfileMessage.inquiryReply(
             try Self.header(destination: MIDICIMUID.broadcast.rawValue), enabled: [try Self.profile(1)], disabled: [])
-        #expect(try discovery.collect(broadcastProfiles) == .recorded)
+        #expect(try discovery.collect(broadcastProfiles, on: .legacyPort) == .recorded)
     }
 
     @Test func withoutAHostMUIDNoDestinationIsChecked() throws {
@@ -259,5 +262,119 @@ extension MIDICapabilityDiscoveryTests {
             try Self.header(destination: Self.otherRaw), try Self.info(), functionBlock: 0)
         #expect(try discovery.collect(misaddressed) == .recorded)
         #expect(discovery.host == nil)
+    }
+
+    // MARK: - Transport
+
+    typealias Transport = MIDICapabilityCITransport
+
+    static func group(_ value: UInt8) throws -> Transport {
+        .group(try UMPGroup(value))
+    }
+
+    @Test func differentListsAtOneAddressOnTwoGroupsAreBothRecorded() throws {
+        // Channel 0 and the group address (0x7E) are relative to the UMP group that carried the Reply.
+        for device: UInt8 in [0x00, 0x7E] {
+            var discovery = Discovery()
+            try discovery.collect(Self.reply())
+            let second = try Self.profileReply(device: device, enabled: 2, disabled: 0)
+            let first = try Self.profileReply(device: device, enabled: 1, disabled: 1, from: 10)
+            #expect(try discovery.collect(second, on: Self.group(1)) == .recorded, "device \(device)")
+            #expect(try discovery.collect(first, on: Self.group(0)) == .recorded, "device \(device)")
+            #expect(discovery.profileReplies.map(\.transport) == [try Self.group(0), try Self.group(1)])
+            #expect(discovery.profileReplies.map(\.address.rawValue) == [device, device])
+            let expected = try [10, 11, 0, 1].map(Self.profile)
+            #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: expected))
+        }
+    }
+
+    @Test func repliesAreOrderedByAddressKindThenTransportThenChannel() throws {
+        var discovery = Discovery()
+        try discovery.collect(Self.reply())
+        let legacy = Transport.legacyPort
+        // Arrival order is scrambled; each Reply carries one id of its own.
+        let groups = try (UInt8(0)..<3).map(Self.group)
+        let arrivals: [(UInt8, Transport)] = [
+            (0x01, groups[0]), (0x00, groups[1]), (0x7E, groups[1]), (0x7E, legacy), (0x7F, groups[2]),
+            (0x00, legacy), (0x00, groups[0])
+        ]
+        for ((device, transport), id) in zip(arrivals, [6, 7, 3, 2, 1, 4, 5]) {
+            let message = try Self.profileReply(device: device, enabled: 1, disabled: 0, from: id)
+            #expect(try discovery.collect(message, on: transport) == .recorded)
+        }
+        #expect(discovery.profileReplies.map(\.address.rawValue) == [0x7F, 0x7E, 0x7E, 0x00, 0x00, 0x01, 0x00])
+        #expect(discovery.profileReplies.map(\.transport) == [
+            groups[2], legacy, groups[1], legacy, groups[0], groups[0], groups[1]
+        ])
+        let expected = try (1...7).map(Self.profile)
+        #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: expected))
+    }
+
+    @Test func oneGroupAndAddressRepeatsIdempotentlyAndRefusesADifferentList() throws {
+        var discovery = Discovery()
+        try discovery.collect(Self.reply())
+        let groupOne = try Self.group(1)
+        let channel = try SysExDeviceID(0x00)
+        #expect(try discovery.collect(Self.profileReply(device: 0x00, enabled: 2, disabled: 1), on: groupOne)
+            == .recorded)
+        let once = discovery
+        #expect(try discovery.collect(Self.profileReply(device: 0x00, enabled: 2, disabled: 1), on: groupOne)
+            == .repeated)
+        #expect(discovery == once)
+        let changed = try Self.profileReply(device: 0x00, enabled: 1, disabled: 2)
+        let refused = Self.refusal { () throws(Refusal) in try discovery.collect(changed, on: groupOne) }
+        let muid = try Self.muid(Self.deviceRaw)
+        #expect(refused == .conflictingProfileReply(muid, address: channel, transport: groupOne))
+        #expect(discovery == once)
+        // The same different list on another group is another address.
+        #expect(try discovery.collect(changed, on: Self.group(2)) == .recorded)
+    }
+
+    @Test func aLegacyPortAndGroupZeroAreDistinctTransports() throws {
+        var discovery = Discovery()
+        try discovery.collect(Self.reply())
+        let onGroup = try Self.profileReply(device: 0x00, enabled: 1, disabled: 0, from: 20)
+        let onPort = try Self.profileReply(device: 0x00, enabled: 1, disabled: 0, from: 10)
+        #expect(try discovery.collect(onGroup, on: Self.group(0)) == .recorded)
+        #expect(try discovery.collect(onPort, on: .legacyPort) == .recorded)
+        #expect(discovery.profileReplies.map(\.transport) == [.legacyPort, try Self.group(0)])
+        #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: try [10, 20].map(Self.profile)))
+    }
+
+    @Test func theFunctionBlockIsOneAddressWhateverTheTransport() throws {
+        var discovery = Discovery()
+        try discovery.collect(Self.reply())
+        let block = try Self.profileReply(device: 0x7F, enabled: 2, disabled: 0)
+        #expect(try discovery.collect(block, on: Self.group(0)) == .recorded)
+        let once = discovery
+        // A block may span groups: the same Reply on another group or a legacy port is a repeat.
+        #expect(try discovery.collect(block, on: Self.group(1)) == .repeated)
+        #expect(try discovery.collect(block, on: .legacyPort) == .repeated)
+        #expect(discovery == once)
+        #expect(discovery.profileReplies.map(\.transport) == [try Self.group(0)])
+        let changed = try Self.profileReply(device: 0x7F, enabled: 1, disabled: 0)
+        let groupOne = try Self.group(1)
+        let refused = Self.refusal { () throws(Refusal) in try discovery.collect(changed, on: groupOne) }
+        let muid = try Self.muid(Self.deviceRaw)
+        #expect(refused == .conflictingProfileReply(muid, address: .allCall, transport: groupOne))
+        #expect(discovery == once)
+    }
+
+    @Test func theProfileCapCountsEveryCopyOnEveryGroup() throws {
+        let limit = MIDICapabilityLimits.maximumProfiles
+        var discovery = Discovery()
+        try discovery.collect(Self.reply())
+        // The same 4 ids on channel 0 of all 16 groups: 64 stored copies, 4 advertised ids.
+        for value in UInt8(0)..<16 {
+            let message = try Self.profileReply(device: 0x00, enabled: 4, disabled: 0)
+            #expect(try discovery.collect(message, on: Self.group(value)) == .recorded)
+        }
+        #expect(discovery.storedProfileCount == limit)
+        #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: try (0..<4).map(Self.profile)))
+        let before = discovery
+        let more = try Self.profileReply(device: 0x00, enabled: 1, disabled: 0)
+        let refused = Self.refusal { () throws(Refusal) in try discovery.collect(more, on: .legacyPort) }
+        #expect(refused == .tooManyProfiles(count: limit + 1))
+        #expect(discovery == before)
     }
 }

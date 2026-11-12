@@ -10,6 +10,18 @@ struct MIDICapabilityPeer: Equatable, Sendable {
     let streamIdentity: UMPStreamDeviceIdentity?
 }
 
+/// Where a MIDI-CI message arrived. Over UMP, the channel (0x00 to 0x0F) and group (0x7E) device ids of a MIDI-CI
+/// message are relative to the UMP group whose SysEx7 packets carried it, so the same device id on two groups names
+/// two different destinations (JUCE `midi_ci::ChannelAddress` pairs a group with a channel; AM_MIDI2.0Lib passes
+/// `umpGroup` with every message). A MIDI 1.0 byte-stream port has no group: `legacyPort` says so explicitly rather
+/// than borrowing group 0.
+enum MIDICapabilityCITransport: Equatable, Hashable, Sendable {
+    /// A MIDI 1.0 byte-stream port: no UMP group.
+    case legacyPort
+    /// A UMP endpoint: the group of the SysEx7 packets that carried the message.
+    case group(UMPGroup)
+}
+
 /// Every refusal from `MIDICapabilityDiscovery.collect`. A refusal leaves the discovery exactly as it was: the
 /// caller decides whether to keep it, start again or give up. Nothing is repaired, merged or truncated.
 enum MIDICapabilityDiscoveryRefusal: Error, Equatable, Sendable {
@@ -30,12 +42,12 @@ enum MIDICapabilityDiscoveryRefusal: Error, Equatable, Sendable {
     /// A Reply to Profile Inquiry at a new address would bring the ids stored over every address (enabled and
     /// disabled together) above `MIDICapabilityLimits.maximumProfiles`; `count` is that would-be total.
     case tooManyProfiles(count: Int)
-    /// A Reply to Profile Inquiry from the peer's MUID at an address that already has one, with a different enabled
-    /// list, disabled list or split between them.
-    case conflictingProfileReply(MIDICIMUID, address: SysExDeviceID)
-    /// A Reply to Profile Inquiry from the peer at this address that lists one id more than once over its enabled and
-    /// disabled lists together.
-    case duplicateProfileInReply(device: SysExDeviceID)
+    /// A Reply to Profile Inquiry from the peer's MUID, arriving on `transport` at an address that already has one,
+    /// with a different enabled list, disabled list or split between them.
+    case conflictingProfileReply(MIDICIMUID, address: SysExDeviceID, transport: MIDICapabilityCITransport)
+    /// A Reply to Profile Inquiry from the peer, arriving on `transport` at this address, that lists one id more than
+    /// once over its enabled and disabled lists together.
+    case duplicateProfileInReply(device: SysExDeviceID, transport: MIDICapabilityCITransport)
 }
 
 /// Why `collect` kept nothing from a message.
@@ -63,8 +75,9 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 
 /// The production adapter from decoded UMP Stream and MIDI-CI messages to `MIDICapabilityFacts`. A pure value: it
 /// never talks to a device, keeps no clock and holds at most one Endpoint Info, one Device Identity,
-/// `MIDICapabilityLimits.maximumFunctionBlocks` blocks, one Discovery Reply, one Profile Reply per address (128 at
-/// most, one per 7-bit device id) and `MIDICapabilityLimits.maximumProfiles` profile ids over all of them. The caller
+/// `MIDICapabilityLimits.maximumFunctionBlocks` blocks, one Discovery Reply, one Profile Reply per address (one at
+/// the function block, and at most one per other 7-bit device id on each of the 17 transports) and
+/// `MIDICapabilityLimits.maximumProfiles` profile ids over all of them. The caller
 /// feeds it the messages of one connection (the UMP endpoint and the MIDI-CI exchange on it) in arrival order;
 /// decoding and timeouts stay with the caller.
 ///
@@ -84,11 +97,17 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 ///   and only the first is described. A repeat from the peer is `.repeated` when identical (body and function block
 ///   byte) and `conflictingDiscoveryReply` otherwise.
 /// - Reply to Profile Inquiry: from the peer only (`beforeDiscoveryReply` and `otherMUID` otherwise), keyed by its
-///   address (the header's device id: 0x7F function block or whole port, 0x7E group, 0x00 to 0x0F a channel). A
-///   MIDI-CI 1.2 inquiry to the function block is answered with one Reply per address, so each address is kept on
-///   its own, with its enabled and disabled lists as received. A Reply that lists an id more than once (enabled and
-///   disabled together) is refused with `duplicateProfileInReply` before anything is stored. At an address that
-///   already has a Reply, an identical one is `.repeated` and any other (other ids, other order or another
+///   address (the header's device id: 0x7F function block or whole port, 0x7E group, 0x00 to 0x0F a channel) and,
+///   below the function block, by the `MIDICapabilityCITransport` it arrived on: channel 0 on group 0 and channel 0
+///   on group 1 (or on a legacy port) are distinct addresses. The function block address 0x7F is one address per
+///   peer whatever transport carried it: in MIDI-CI 1.2 a MUID is one function block (its Discovery Reply names the
+///   block) and a block may span several groups, so a 0x7F Reply on another group describes the same block (JUCE
+///   `midi_ci::BlockProfileStates` keeps one `blockState` and ignores the group for a whole-block address). The first
+///   0x7F Reply's transport is recorded; an identical one on any transport is `.repeated`, a different one is a
+///   conflict. A MIDI-CI 1.2 inquiry to the function block is answered with one Reply per address, so each address
+///   is kept on its own, with its enabled and disabled lists as received. A Reply that lists an id more than once
+///   (enabled and disabled together) is refused with `duplicateProfileInReply` before anything is stored. At an
+///   address that already has a Reply, an identical one is `.repeated` and any other (other ids, other order or another
 ///   enabled/disabled split) is `conflictingProfileReply`. At a new address, the would-be total of ids over every
 ///   address is checked before anything is stored (`tooManyProfiles`).
 /// - NAK, and no reply at all: both leave the answer `.missing` (the documented `MIDICapabilityCIAnswer` rule). A NAK
@@ -98,8 +117,10 @@ enum MIDICapabilityDiscoveryOutcome: Equatable, Sendable {
 /// MUID checked, then duplicates inside it, then the address repeat or conflict check, then the count. A refusal
 /// stores nothing.
 ///
-/// The facts' profile list is the union over addresses in address order (`addressRank`: function block first, then
-/// group, then channels ascending), each Reply contributing its enabled then its disabled ids. An id already given by
+/// The facts' profile list is the union over addresses in address order (`order`): the function block first, then
+/// the group addresses (0x7E) by transport, then the channels by transport and, within one transport, ascending
+/// (0x00 to 0x0F), then any other device id the same way. Transports go `legacyPort` first, then groups 0 to 15.
+/// Each Reply contributes its enabled then its disabled ids. An id already given by
 /// an earlier address is dropped (first occurrence wins): a profile supported on several addresses is one profile to
 /// the resolver, which looks only at which ids are advertised and never at enabled versus disabled, so an id enabled
 /// on one address and disabled on another is simply advertised. A Reply with a duplicate inside it is refused when
@@ -112,8 +133,10 @@ struct MIDICapabilityDiscovery: Equatable, Sendable {
         let functionBlock: UInt8?
     }
 
-    /// One Reply to Profile Inquiry, as received at one address.
+    /// One Reply to Profile Inquiry, as received at one address on one transport.
     struct ProfileReply: Equatable, Sendable {
+        /// The transport it arrived on; for the function block (0x7F), the first transport it arrived on.
+        let transport: MIDICapabilityCITransport
         let address: SysExDeviceID
         let enabled: [MIDICapabilityProfileID]
         let disabled: [MIDICapabilityProfileID]
@@ -126,21 +149,37 @@ struct MIDICapabilityDiscovery: Equatable, Sendable {
     /// Sorted by ascending index, one block per index.
     private(set) var blocks: [UMPStreamFunctionBlockInfo] = []
     private(set) var reply: Reply?
-    /// The peer's Profile Replies, one per address, sorted by `addressRank`.
+    /// The peer's Profile Replies, one per address (see the type doc), sorted by `order`.
     private(set) var profileReplies: [ProfileReply] = []
 
     init(host: MIDICIMUID? = nil) {
         self.host = host
     }
 
-    /// 0 for the function block or whole port (0x7F), 1 for the group (0x7E), then 2 plus the raw value: the channels
-    /// 0x00 to 0x0F ascending, followed by any other device id ascending.
-    static func addressRank(_ address: SysExDeviceID) -> Int {
+    /// The sort key of an address on a transport, ordering by the kind (0 the function block 0x7F, 1 the group 0x7E,
+    /// 2 a channel 0x00 to 0x0F, 3 any other device id), then the transport (0 `legacyPort`, then 1 plus the group),
+    /// then the raw device id. The function block ignores the transport: it is one address per peer.
+    static func order(_ transport: MIDICapabilityCITransport, _ address: SysExDeviceID) -> Int {
+        let lane: Int
+        switch transport {
+        case .legacyPort: lane = 0
+        case .group(let group): lane = 1 + Int(group.value)
+        }
+        let kind: Int
         switch address.rawValue {
         case 0x7F: return 0
-        case 0x7E: return 1
-        case let raw: return 2 + Int(raw)
+        case 0x7E: kind = 1
+        case 0x00..<0x10: kind = 2
+        case _: kind = 3
         }
+        return (kind * 17 + lane) * 128 + Int(address.rawValue)
+    }
+
+    /// Whether `stored` holds the address `address` on `transport`: the function block matches on any transport.
+    static func holds(
+        _ stored: ProfileReply, _ transport: MIDICapabilityCITransport, _ address: SysExDeviceID
+    ) -> Bool {
+        stored.address == address && (address == .allCall || stored.transport == transport)
     }
 
     /// The ids stored over every address, enabled and disabled together: every stored copy counts, before the
@@ -201,7 +240,10 @@ extension MIDICapabilityDiscovery {
     }
 
     /// Collects a Discovery Reply; Discovery, Invalidate MUID, ACK and NAK are `.ignored(.notCollected)` (a NAK
-    /// leaves the answer as it is, so `.missing` when no reply came).
+    /// leaves the answer as it is, so `.missing` when no reply came). No transport is taken: a Discovery Reply is
+    /// always at the function block address 0x7F, which is one address per peer whatever group carried it (see the
+    /// type doc; JUCE `midi_ci::Device` sends Discovery on the function block's first group and keys the reply by
+    /// MUID alone).
     @discardableResult
     mutating func collect(
         _ message: MIDICIMessage
@@ -218,16 +260,16 @@ extension MIDICapabilityDiscovery {
         }
     }
 
-    /// Collects a Reply to Profile Inquiry from the peer; the Inquiry and the four reports are
-    /// `.ignored(.notCollected)`.
+    /// Collects a Reply to Profile Inquiry from the peer, which arrived on `transport` (required: a legacy port says
+    /// so with `.legacyPort`); the Inquiry and the four reports are `.ignored(.notCollected)`.
     @discardableResult
     mutating func collect(
-        _ message: MIDICIProfileMessage
+        _ message: MIDICIProfileMessage, on transport: MIDICapabilityCITransport
     ) throws(MIDICapabilityDiscoveryRefusal) -> MIDICapabilityDiscoveryOutcome {
         switch message {
         case let .inquiryReply(header, enabled, disabled):
             if let ignored = ignoredDestination(header) { return .ignored(ignored) }
-            return try collectProfiles(header, enabled: enabled, disabled: disabled)
+            return try collectProfiles(header, on: transport, enabled: enabled, disabled: disabled)
         case .inquiry, .enabledReport, .disabledReport, .addedReport, .removedReport:
             return .ignored(.notCollected)
         }
@@ -287,24 +329,27 @@ extension MIDICapabilityDiscovery {
     }
 
     private mutating func collectProfiles(
-        _ header: MIDICIHeader, enabled: [MIDICapabilityProfileID], disabled: [MIDICapabilityProfileID]
+        _ header: MIDICIHeader, on transport: MIDICapabilityCITransport,
+        enabled: [MIDICapabilityProfileID], disabled: [MIDICapabilityProfileID]
     ) throws(MIDICapabilityDiscoveryRefusal) -> MIDICapabilityDiscoveryOutcome {
         guard let peerMUID = reply?.muid else { return .ignored(.beforeDiscoveryReply) }
         guard header.source == peerMUID else { return .ignored(.otherMUID(header.source)) }
         let address = header.device
         let ids = enabled + disabled
-        guard Set(ids).count == ids.count else { throw .duplicateProfileInReply(device: address) }
-        if let kept = profileReplies.first(where: { $0.address == address }) {
+        guard Set(ids).count == ids.count else { throw .duplicateProfileInReply(device: address, transport: transport) }
+        if let kept = profileReplies.first(where: { Self.holds($0, transport, address) }) {
             guard kept.enabled == enabled, kept.disabled == disabled else {
-                throw .conflictingProfileReply(peerMUID, address: address)
+                throw .conflictingProfileReply(peerMUID, address: address, transport: transport)
             }
             return .repeated
         }
         let total = storedProfileCount + enabled.count + disabled.count
         guard total <= MIDICapabilityLimits.maximumProfiles else { throw .tooManyProfiles(count: total) }
-        let rank = Self.addressRank(address)
-        let position = profileReplies.firstIndex { Self.addressRank($0.address) > rank } ?? profileReplies.endIndex
-        profileReplies.insert(ProfileReply(address: address, enabled: enabled, disabled: disabled), at: position)
+        let key = Self.order(transport, address)
+        let position = profileReplies.firstIndex { Self.order($0.transport, $0.address) > key }
+            ?? profileReplies.endIndex
+        profileReplies.insert(
+            ProfileReply(transport: transport, address: address, enabled: enabled, disabled: disabled), at: position)
         return .recorded
     }
 }

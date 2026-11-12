@@ -27,7 +27,7 @@ struct MIDICapabilityProfileID: Equatable, Hashable, Sendable {
 /// What the MIDI-CI Discovery exchange produced. `.missing` means no answer arrived (or none was asked for, or the
 /// Discovery was answered with a NAK): the device is then treated as a plain MIDI 1.0 byte-stream device. The
 /// `profiles` of `.answered` are the advertised ids, enabled and disabled together (see `MIDICapabilityLimits` for the
-/// bound). `MIDICapabilityDiscovery` builds this from decoded messages, one Profile Reply per address.
+/// bound). `MIDICapabilityDiscovery` builds this from decoded messages, one Profile Reply per address and transport.
 enum MIDICapabilityCIAnswer: Equatable, Sendable {
     case missing
     case answered(MIDICIDiscoveryInfo, profiles: [MIDICapabilityProfileID])

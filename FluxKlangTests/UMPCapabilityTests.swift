@@ -121,10 +121,12 @@ struct UMPCapabilityTests {
         try UMPStreamMessage.decode(UMPPacket(words: words), limits: limits())
     }
 
-    /// Decodes a MIDI-CI payload with the decoder its sub-id 2 selects (0x20 to 0x27: the profile messages).
+    /// Decodes a MIDI-CI payload with the decoder its sub-id 2 selects (0x20 to 0x27: the profile messages). Profile
+    /// messages arrive on UMP group 0, the group these single-group fixtures use.
     static func collect(ci payload: [UInt8], into discovery: inout MIDICapabilityDiscovery) throws {
         if payload.count > 3, (0x20...0x27).contains(payload[3]) {
-            try discovery.collect(MIDICIProfileMessage.decode(payload: payload, limits: .standard))
+            let message = try MIDICIProfileMessage.decode(payload: payload, limits: .standard)
+            try discovery.collect(message, on: .group(UMPGroup(0)))
         } else {
             try discovery.collect(MIDICIMessage.decode(payload: payload, limits: .standard))
         }

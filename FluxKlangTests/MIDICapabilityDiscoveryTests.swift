@@ -201,7 +201,7 @@ struct MIDICapabilityDiscoveryTests {
         var discovery = Discovery()
         try discovery.collect(Self.reply())
         let reply = MIDICIProfileMessage.inquiryReply(try Self.header(), enabled: [first, second], disabled: [third])
-        #expect(try discovery.collect(reply) == .recorded)
+        #expect(try discovery.collect(reply, on: .legacyPort) == .recorded)
         #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: [first, second, third]))
         // The resolver then sorts by value.
         let result = try MIDICapabilityResolver.negotiate(discovery.facts)
@@ -214,7 +214,8 @@ struct MIDICapabilityDiscoveryTests {
         for (enabled, disabled) in [(limit, 0), (0, limit), (limit / 2, limit / 2), (1, limit - 1)] {
             var discovery = Discovery()
             try discovery.collect(Self.reply())
-            #expect(try discovery.collect(Self.profileReply(enabled: enabled, disabled: disabled)) == .recorded)
+            #expect(try discovery.collect(
+                Self.profileReply(enabled: enabled, disabled: disabled), on: .legacyPort) == .recorded)
             let result = try MIDICapabilityResolver.negotiate(discovery.facts)
             #expect(result.profiles.count == limit, "\(enabled) + \(disabled)")
         }
@@ -224,7 +225,7 @@ struct MIDICapabilityDiscoveryTests {
             try discovery.collect(Self.reply())
             let before = discovery
             let message = try Self.profileReply(enabled: enabled, disabled: disabled)
-            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message) }
+            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message, on: .legacyPort) }
             #expect(refused == .tooManyProfiles(count: limit + 1), "\(enabled) + \(disabled)")
             #expect(discovery == before)
             #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: []))
@@ -234,9 +235,9 @@ struct MIDICapabilityDiscoveryTests {
     @Test func aProfileReplyRepeatIsIdempotentAndADifferentOneIsRefused() throws {
         var discovery = Discovery()
         try discovery.collect(Self.reply())
-        #expect(try discovery.collect(Self.profileReply(enabled: 2, disabled: 1)) == .recorded)
+        #expect(try discovery.collect(Self.profileReply(enabled: 2, disabled: 1), on: .legacyPort) == .recorded)
         let once = discovery
-        #expect(try discovery.collect(Self.profileReply(enabled: 2, disabled: 1)) == .repeated)
+        #expect(try discovery.collect(Self.profileReply(enabled: 2, disabled: 1), on: .legacyPort) == .repeated)
         #expect(discovery == once)
         // The same ids split differently, other ids, one more id, or the same ids in another order: a different reply.
         let changes = [
@@ -246,8 +247,9 @@ struct MIDICapabilityDiscoveryTests {
                 try Self.header(), enabled: [try Self.profile(1), try Self.profile(0)], disabled: [try Self.profile(2)])
         ]
         for changed in changes {
-            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(changed) }
-            #expect(refused == .conflictingProfileReply(try Self.muid(Self.deviceRaw), address: .allCall))
+            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(changed, on: .legacyPort) }
+            let muid = try Self.muid(Self.deviceRaw)
+            #expect(refused == .conflictingProfileReply(muid, address: .allCall, transport: .legacyPort))
             #expect(discovery == once)
         }
     }
@@ -264,7 +266,7 @@ struct MIDICapabilityDiscoveryTests {
             (0x7E, try Self.profileReply(device: 0x7E, enabled: 1, disabled: 0, from: 30))
         ]
         for (device, message) in arrivals {
-            #expect(try discovery.collect(message) == .recorded, "address \(device)")
+            #expect(try discovery.collect(message, on: .legacyPort) == .recorded, "address \(device)")
         }
         #expect(discovery.profileReplies.map(\.address.rawValue) == [0x7F, 0x7E, 0x00, 0x02])
         let expected = try [10, 11, 12, 30, 20, 0, 1].map(Self.profile)
@@ -281,8 +283,8 @@ struct MIDICapabilityDiscoveryTests {
         let channel = MIDICIProfileMessage.inquiryReply(
             try Self.header(device: 0x00), enabled: [only], disabled: [shared])
         let block = MIDICIProfileMessage.inquiryReply(try Self.header(), enabled: [shared], disabled: [])
-        try discovery.collect(channel)
-        try discovery.collect(block)
+        try discovery.collect(channel, on: .legacyPort)
+        try discovery.collect(block, on: .legacyPort)
         #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: [shared, only]))
         #expect(try MIDICapabilityResolver.negotiate(discovery.facts).profiles == [shared, only])
     }
@@ -299,21 +301,22 @@ struct MIDICapabilityDiscoveryTests {
             try discovery.collect(Self.reply())
             let before = discovery
             let reply = MIDICIProfileMessage.inquiryReply(try Self.header(), enabled: enabled, disabled: disabled)
-            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(reply) }
-            #expect(refused == .duplicateProfileInReply(device: .allCall))
+            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(reply, on: .legacyPort) }
+            #expect(refused == .duplicateProfileInReply(device: .allCall, transport: .legacyPort))
             #expect(discovery == before)
         }
         // Two addresses: the cross-address union would drop both copies at channel 0, so the Reply is refused rather
         // than hidden.
         var discovery = Discovery()
         try discovery.collect(Self.reply())
-        try discovery.collect(MIDICIProfileMessage.inquiryReply(try Self.header(), enabled: [twice], disabled: []))
+        try discovery.collect(
+            MIDICIProfileMessage.inquiryReply(try Self.header(), enabled: [twice], disabled: []), on: .legacyPort)
         let before = discovery
         let channel = try SysExDeviceID(0x00)
         let malformed = MIDICIProfileMessage.inquiryReply(
             try Self.header(device: 0x00), enabled: [twice], disabled: [twice])
-        let refused = Self.refusal { () throws(Refusal) in try discovery.collect(malformed) }
-        #expect(refused == .duplicateProfileInReply(device: channel))
+        let refused = Self.refusal { () throws(Refusal) in try discovery.collect(malformed, on: .legacyPort) }
+        #expect(refused == .duplicateProfileInReply(device: channel, transport: .legacyPort))
         #expect(discovery == before)
         #expect(discovery.facts.ciAnswer == .answered(try Self.info(), profiles: [twice]))
     }
@@ -321,20 +324,22 @@ struct MIDICapabilityDiscoveryTests {
     @Test func eachAddressHasItsOwnRepeatAndConflictRule() throws {
         var discovery = Discovery()
         try discovery.collect(Self.reply())
-        try discovery.collect(Self.profileReply(device: 0x7F, enabled: 1, disabled: 1))
-        #expect(try discovery.collect(Self.profileReply(device: 0x03, enabled: 2, disabled: 0, from: 5)) == .recorded)
+        try discovery.collect(Self.profileReply(device: 0x7F, enabled: 1, disabled: 1), on: .legacyPort)
+        #expect(try discovery.collect(
+            Self.profileReply(device: 0x03, enabled: 2, disabled: 0, from: 5), on: .legacyPort) == .recorded)
         let both = discovery
-        #expect(try discovery.collect(Self.profileReply(device: 0x03, enabled: 2, disabled: 0, from: 5)) == .repeated)
+        #expect(try discovery.collect(
+            Self.profileReply(device: 0x03, enabled: 2, disabled: 0, from: 5), on: .legacyPort) == .repeated)
         #expect(discovery == both)
         let device = try Self.muid(Self.deviceRaw)
         let changes: [(MIDICIProfileMessage, MIDICapabilityDiscoveryRefusal)] = [
             (try Self.profileReply(device: 0x03, enabled: 1, disabled: 1, from: 5),
-             .conflictingProfileReply(device, address: try SysExDeviceID(0x03))),
+             .conflictingProfileReply(device, address: try SysExDeviceID(0x03), transport: .legacyPort)),
             (try Self.profileReply(device: 0x7F, enabled: 0, disabled: 0),
-             .conflictingProfileReply(device, address: .allCall))
+             .conflictingProfileReply(device, address: .allCall, transport: .legacyPort))
         ]
         for (message, expected) in changes {
-            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message) }
+            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message, on: .legacyPort) }
             #expect(refused == expected)
             #expect(discovery == both)
         }
@@ -344,9 +349,9 @@ struct MIDICapabilityDiscoveryTests {
         let limit = MIDICapabilityLimits.maximumProfiles
         var discovery = Discovery()
         try discovery.collect(Self.reply())
-        try discovery.collect(Self.profileReply(device: 0x7F, enabled: 30, disabled: 10))
+        try discovery.collect(Self.profileReply(device: 0x7F, enabled: 30, disabled: 10), on: .legacyPort)
         let channel = try Self.profileReply(device: 0x00, enabled: 20, disabled: 3, from: 100)
-        #expect(try discovery.collect(channel) == .recorded)
+        #expect(try discovery.collect(channel, on: .legacyPort) == .recorded)
         #expect(discovery.storedProfileCount == limit - 1)
         let before = discovery
         // A new address that would bring the total to 65, even with an id already stored elsewhere, is refused.
@@ -354,19 +359,21 @@ struct MIDICapabilityDiscoveryTests {
             try Self.profileReply(device: 0x01, enabled: 1, disabled: 1, from: 200),
             try Self.profileReply(device: 0x7E, enabled: 2, disabled: 0)
         ] {
-            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message) }
+            let refused = Self.refusal { () throws(Refusal) in try discovery.collect(message, on: .legacyPort) }
             #expect(refused == .tooManyProfiles(count: limit + 1))
             #expect(discovery == before)
         }
         // One more id fills the bound exactly.
-        #expect(try discovery.collect(Self.profileReply(device: 0x01, enabled: 1, disabled: 0, from: 200)) == .recorded)
+        #expect(try discovery.collect(
+            Self.profileReply(device: 0x01, enabled: 1, disabled: 0, from: 200), on: .legacyPort) == .recorded)
         #expect(discovery.storedProfileCount == limit)
         #expect(try MIDICapabilityResolver.negotiate(discovery.facts).profiles.count == limit)
     }
 
     @Test func aProfileReplyBeforeAnyDiscoveryReplyIsIgnored() throws {
         var discovery = Discovery()
-        #expect(try discovery.collect(Self.profileReply(enabled: 1, disabled: 0)) == .ignored(.beforeDiscoveryReply))
+        #expect(try discovery.collect(
+            Self.profileReply(enabled: 1, disabled: 0), on: .legacyPort) == .ignored(.beforeDiscoveryReply))
         #expect(discovery == Discovery())
         #expect(discovery.facts.ciAnswer == .missing)
     }
@@ -395,7 +402,7 @@ struct MIDICapabilityDiscoveryTests {
             .addedReport(try Self.header(), profile: try Self.profile(1))
         ]
         for message in profileMessages {
-            #expect(try discovery.collect(message) == .ignored(.notCollected), "\(message)")
+            #expect(try discovery.collect(message, on: .legacyPort) == .ignored(.notCollected), "\(message)")
         }
         #expect(discovery == before)
     }

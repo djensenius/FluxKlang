@@ -94,7 +94,9 @@ extension UMPCapabilityTests {
         let both = Self.prefix(0x21) + Self.deviceMUID + Self.hostMUID
             + [0x01, 0x00] + Self.profileA + [0x01, 0x00] + Self.profileA
         // The adapter refuses a Reply that repeats an id inside itself before any facts are built.
-        #expect(throws: MIDICapabilityDiscoveryRefusal.duplicateProfileInReply(device: .allCall)) {
+        let refusal = MIDICapabilityDiscoveryRefusal.duplicateProfileInReply(
+            device: .allCall, transport: .group(try UMPGroup(0)))
+        #expect(throws: refusal) {
             try Self.facts(Self.midi2Packets, ci: [Self.reply, both])
         }
     }
