@@ -10,11 +10,11 @@
 /// defect found is the one reported: streams empty, too many streams, duplicate stream, undeclared stream, tainted
 /// stream (those four in list order, wrapped in `.capture`), missing musical ticks, no captures, length out of range,
 /// an undecodable MIDI 1 or SysEx7 packet (the first of either in capture order), nothing exportable, ticks out of
-/// range (a SysEx event first, then the other messages), a Note On while sounding, too many items (notes, events
-/// and SysEx events together), then the clip's own refusal. A selection whose captures are all untimed holds both a
-/// missing-ticks and a no-captures defect, and the missing ticks are reported. The length check covers a requested
-/// length and, when none is requested, the default length taken from the selected MIDI 1 channel-voice and SysEx7
-/// captures (decodable or not, delivered or not): both are checked before any capture is decoded, so an
+/// range (a SysEx event first, then the other messages), a Note On at the tick its note began, too many items (notes,
+/// events and SysEx events together), then the clip's own refusal. A selection whose captures are all untimed holds
+/// both a missing-ticks and a no-captures defect, and the missing ticks are reported. The length check covers a
+/// requested length and, when none is requested, the default length taken from the selected MIDI 1 channel-voice and
+/// SysEx7 captures (decodable or not, delivered or not): both are checked before any capture is decoded, so an
 /// out-of-range default length wins over an undecodable packet.
 enum CaptureClipExportRefusal: Error, Equatable, Sendable {
     /// The log's own export refusal (`exportStreamsEmpty`, `exportStreamsDuplicate`, `undeclaredStream`,
@@ -41,7 +41,8 @@ enum CaptureClipExportRefusal: Error, Equatable, Sendable {
     case nothingExportable(dropped: Int)
     /// A message lies outside `0...lengthTicks`, or a SysEx event at or after `lengthTicks`.
     case ticksOutOfRange(ticks: Int64, lengthTicks: Int64)
-    /// A Note On arrived for a channel and note that was sounding since `sinceTicks`.
+    /// A Note On arrived at the very tick (`ticks == sinceTicks`) its channel and note began sounding. A Note On at
+    /// a later tick retriggers the note instead (`CaptureClipExport.retriggeredNotes`).
     case noteOnWhileSounding(channel: UInt8, note: UInt8, ticks: Int64, sinceTicks: Int64)
     /// The export would hold `count` items, clip items and SysEx events together, more than `limit`.
     case tooManyItems(count: Int, limit: Int)

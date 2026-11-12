@@ -161,13 +161,17 @@ extension CaptureSMFExportTests {
                                endTicks: 200))])
     }
 
-    @Test func aNoteOnOfAnEarlierStreamAtTheSameTickAsALaterStreamsOffIsRefusedNotReordered() throws {
+    @Test func aNoteOnOfAnEarlierStreamAtTheSameTickAsALaterStreamsOffIsRetriggeredNotReordered() throws {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
         try feed.add(Fixture.streamB, Fixture.noteOff(1, 60, 20), tick: 100)
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 65), tick: 100)
-        #expect(Fixture.refusal(feed.log, [Fixture.streamA, Fixture.streamB])
-            == .noteOnWhileSounding(channel: 1, note: 60, ticks: 100, sinceTicks: 0))
+        let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
+        #expect(export.clip.items == [
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 64, releaseVelocity: 64, startTicks: 0, endTicks: 100)),
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 65, releaseVelocity: 20, startTicks: 100,
+                               endTicks: 101))])
+        #expect(export.retriggeredNotes == 1 && export.widenedNotes == 1 && export.unpairedOffs == 0)
     }
 
     @Test func aNoteEndingWhereTheNextBeginsIsWrittenWithTheOffBeforeTheOn() throws {

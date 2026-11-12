@@ -67,12 +67,25 @@ extension CaptureSMFExportTests {
         #expect(Fixture.refusal(feed.log, [Fixture.streamA]) == .clip(.overlappingNotes(first: 0, second: 1)))
     }
 
-    @Test func aDoubleNoteOnInTheLogIsRefusedWithItsChannelNoteAndTicks() throws {
+    @Test func aDoubleNoteOnAtOneTickInTheLogIsRefusedWithItsChannelNoteAndTicks() throws {
+        var feed = try Fixture.Feed([Fixture.streamA])
+        try feed.add(Fixture.streamA, Fixture.noteOn(7, 33, 64), tick: 40)
+        try feed.add(Fixture.streamA, Fixture.noteOn(7, 33, 65), tick: 40)
+        #expect(Fixture.refusal(feed.log, [Fixture.streamA])
+            == .noteOnWhileSounding(channel: 7, note: 33, ticks: 40, sinceTicks: 40))
+    }
+
+    @Test func aDoubleNoteOnAtALaterTickInTheLogRetriggersTheNote() throws {
         var feed = try Fixture.Feed([Fixture.streamA])
         try feed.add(Fixture.streamA, Fixture.noteOn(7, 33, 64), tick: 40)
         try feed.add(Fixture.streamA, Fixture.noteOn(7, 33, 65), tick: 90)
-        #expect(Fixture.refusal(feed.log, [Fixture.streamA])
-            == .noteOnWhileSounding(channel: 7, note: 33, ticks: 90, sinceTicks: 40))
+        let export = try Fixture.export(feed.log, [Fixture.streamA])
+        #expect(export.clip.items == [
+            .note(MIDIClipNote(channel: 7, note: 33, velocity: 64, releaseVelocity: 64, startTicks: 40, endTicks: 90)),
+            .note(MIDIClipNote(channel: 7, note: 33, velocity: 65, releaseVelocity: 64, startTicks: 90,
+                               endTicks: 15_360))])
+        #expect(export.retriggeredNotes == 1 && export.openNotesClosed == 1)
+        #expect(export.smf().losses.losses == [:])
     }
 
     @Test func exportItemBoundsAre16384AndOneMore() throws {

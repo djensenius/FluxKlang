@@ -219,9 +219,9 @@ extension CaptureSMFExportTests {
         #expect(Fixture.refusal(feed.log, [Fixture.streamA]) == .tooManyItems(count: 16_386, limit: 16_384))
         // The SysEx count changes the count of the refusal, not which refusal comes first.
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 20_000)
-        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 65), tick: 20_001)
+        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 65), tick: 20_000)
         #expect(Fixture.refusal(feed.log, [Fixture.streamA], length: 30_000)
-            == .noteOnWhileSounding(channel: 1, note: 60, ticks: 20_001, sinceTicks: 20_000))
+            == .noteOnWhileSounding(channel: 1, note: 60, ticks: 20_000, sinceTicks: 20_000))
     }
 
     @Test func theDefaultLengthCoversTheLastSysExCaptureDeliveredOrNot() throws {
