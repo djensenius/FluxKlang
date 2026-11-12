@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Automation block rendering: loops", .productionAccessAudit)
+#else
 @Suite("Automation block rendering: loops")
+#endif
 struct AutomationRenderLoopTests {
     typealias Fixture = AutomationRenderTests
     typealias Hand = AutomationRenderHandbackTests
