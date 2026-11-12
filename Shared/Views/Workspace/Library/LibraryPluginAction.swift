@@ -4,7 +4,7 @@
 //
 //  The actions of a Library plugin row (#99 LIB1; library-inspector.md "Library" plugin table and "Non-drag, keyboard
 //  and VoiceOver paths"), named as the doc names them. An action is a value: the model starts nothing, scans nothing
-//  and never edits a draft. Nothing calls it yet.
+//  and never edits a draft. Used by `LibrarySectionView`.
 //
 
 enum LibraryPluginActionKind: Hashable, Sendable, CaseIterable {

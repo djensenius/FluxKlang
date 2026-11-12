@@ -4,7 +4,7 @@
 //
 //  Whether a patch's variations can be listed (#99 LIB2). Decided only by `PatchVariationExtension.content(of:)`:
 //  an absent key or a valid current set is `ready`; a set from a newer version is `newerVersion` and anything the
-//  reader throws is `unreadable`, carrying the typed error. Nothing calls it yet.
+//  reader throws is `unreadable`, carrying the typed error. Used by `LibrarySectionView`.
 //
 
 enum LibraryPatchStatus: Hashable, Sendable {

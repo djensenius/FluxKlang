@@ -4,7 +4,7 @@
 //
 //  The actions of a Library patch or variation row (#99 LIB2; library-inspector.md "Library" mock: [Recall] [Open]
 //  on a patch, [Recall] on a variation), named as the doc names them. An action is a value: what Open and Recall do
-//  is not defined anywhere yet, so the model starts nothing. Nothing calls it yet.
+//  is not defined anywhere yet, so the model starts nothing. Used by `LibrarySectionView`.
 //
 
 enum LibraryPatchActionKind: Hashable, Sendable, CaseIterable {

@@ -150,6 +150,11 @@ struct LibraryPatchListTests {
         }
     }
 
+    @Test func theRefusalLineNamesTheRepeatedPatchID() {
+        let line = LibrarySectionText.patchesUnavailable(.duplicatePatch(Fixture.patchID("patch.b")))
+        #expect(line == "Patches unavailable: the patch id patch.b appears more than once.")
+    }
+
     @Test func aNewerVersionSetListsNoVariationsAndDisablesRecall() throws {
         let hidden = JSONValue.object(["id": .string("v.hidden"), "label": .string("Hidden"), "deltas": .array([])])
         let stored = JSONValue.object(["version": .int(2), "variations": .array([hidden])])
