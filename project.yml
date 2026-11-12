@@ -849,6 +849,8 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests.swift
       - path: FluxKlangTests/PluginCatalogTests+Service.swift
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
+      - path: FluxKlangTests/LibraryPatchListTests.swift
+      - path: FluxKlangTests/LibraryPatchListTests+Search.swift
       - path: FluxKlangTests/LibraryPluginListTests.swift
       - path: FluxKlangTests/LibraryPluginListTests+Search.swift
       - path: FluxKlangTests/PluginCatalogCacheTests.swift
