@@ -54,7 +54,7 @@ enum RecordingTakeV1Discontinuities {
     /// How many records `make` builds for `clearance`, and so how many seqs it needs.
     static func count(of clearance: RecordingTakeV1Clearance) -> Int {
         let take = clearance.take
-        return take.segments.reduce(0) { $0 + $1.overflows.count } + (take.captureStopped == nil ? 0 : 1)
+        return take.segments.reduce(0) { $0 + $1.overflows.count } + (take.stopMark == nil ? 0 : 1)
     }
 
     /// The records for `clearance`'s take, `seqs[i]` numbering the i-th, with `notes[seq]` as the note of
@@ -86,8 +86,10 @@ enum RecordingTakeV1Discontinuities {
                            sampleClock: segment.clock, generation: segment.generation, frame: interval.startFrame)
             }
         }
-        // `captureStopped` holds only a mark whose stop has a capture reason, and a take is never empty.
-        if let mark = take.captureStopped, let reason = mark.reason.captureReason, let last = take.segments.last {
+        // A non-`user` stop always has a mark (`RecordingTake` checks it, at the end of the last segment), and a
+        // take is never empty.
+        if let mark = take.stopMark, let reason = take.stopReason.contractV1CaptureStoppedReason,
+           let last = take.segments.last {
             try append(.captureStopped(take.stream, reason: reason), segment: take.segments.count - 1,
                        sampleClock: last.clock, generation: mark.generation, frame: mark.frame)
         }

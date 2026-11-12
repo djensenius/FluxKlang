@@ -17,13 +17,30 @@ import Foundation
 /// and `hostTicks` appear only on `clockRestart`, `frames` only on `underrun` and `overflow`, `reason` only on
 /// `captureStopped`, and a stream only where §8.4 names one. The types already guarantee the schema's other
 /// bounds, so they have no refusal here: `frame` and `previousFrame` are `Int64`, `hostTicks` is a `UInt64`,
-/// `generation` is in range (`Generation`), and a `captureStopped` reason is `diskFull` or `deviceLost`
-/// (`RuntimeCaptureStopReason`). That the generation is current, that a `clockRestart` follows
+/// `generation` is in range (`Generation`), and a `captureStopped` reason is one of the schema's three
+/// (`CaptureStoppedReason`). That the generation is current, that a `clockRestart` follows
 /// its sample clock bump, that a `loopWrap` falls at the loop end and that a stream is declared with the right
 /// direction are properties of the whole trace and stay the caller's responsibility. So are a take's: that an
 /// `overflow` lies inside its segment and the overflows sum to the take's `paddedFrames` and `droppedFrames`,
 /// and that a `captureStopped` sits at the take's last frame with its `stopReason`.
 struct DiscontinuityV1Record: Hashable, Sendable {
+    /// The schema's `captureStopped` `reason` (media-contract.md §8.3): the same values as a take's non-`user`
+    /// `stopReason`. `diskFull` and `deviceLost` are the device stops capture reports (`RuntimeCaptureStopReason`).
+    /// `discontinuity` is the recorder ending the take itself (#336); capture never reports it, so it has no
+    /// runtime value.
+    enum CaptureStoppedReason: Hashable, Sendable {
+        case diskFull, deviceLost, discontinuity
+
+        /// The schema's `reason` value, and the `stopReason` of the take that owns the stop.
+        var contractV1Name: String {
+            switch self {
+            case .diskFull: "diskFull"
+            case .deviceLost: "deviceLost"
+            case .discontinuity: "discontinuity"
+            }
+        }
+    }
+
     /// The event and its type-specific data.
     enum Event: Hashable, Sendable {
         /// A new sample clock generation begins at `hostTicks`; the old one ended at `previousFrame`.
@@ -40,8 +57,9 @@ struct DiscontinuityV1Record: Hashable, Sendable {
         case formatChange(StreamID)
         /// A take's capture dropped `frames` frames, padded in its file from the record's `frame`.
         case overflow(StreamID, frames: Int64)
-        /// A take's capture stopped on its own at the record's `frame`, the end of its last segment.
-        case captureStopped(StreamID, reason: RuntimeCaptureStopReason)
+        /// A take ended for a non-user reason at the record's `frame`, the end of its last segment: capture
+        /// stopped on its own (`diskFull`, `deviceLost`) or the recorder ended the take (`discontinuity`).
+        case captureStopped(StreamID, reason: CaptureStoppedReason)
 
         /// The schema's `type` value.
         var type: String {
@@ -154,16 +172,8 @@ extension DiscontinuityV1Record: Encodable {
         }
         try container.encodeIfPresent(event.stream, forKey: .stream)
         if case .captureStopped(_, let reason) = event {
-            try container.encode(Self.contractV1Name(reason), forKey: .reason)
+            try container.encode(reason.contractV1Name, forKey: .reason)
         }
         try container.encodeIfPresent(note, forKey: .note)
-    }
-
-    /// The schema's `reason` value.
-    private static func contractV1Name(_ reason: RuntimeCaptureStopReason) -> String {
-        switch reason {
-        case .diskFull: "diskFull"
-        case .deviceLost: "deviceLost"
-        }
     }
 }

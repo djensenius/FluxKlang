@@ -34,8 +34,8 @@ struct TakeOpening: Hashable, Sendable {
 }
 
 /// A finished take. It reaches contract v1 only through `RecordingTakeV1Gate` → `RecordingTakeV1Record.make`
-/// (#109, #110), which refuse with typed errors, never by remapping: a ledger stop (#336, via
-/// `contractV1StopReason()`); any two consecutive stored segments that are not
+/// (#109, #110). A ledger stop exports as the contract's `discontinuity` stop reason (#336). The gate refuses
+/// with typed errors, never by remapping: any two consecutive stored segments that are not
 /// `(clock, gen) → (clock, gen + 1)`, split at a restart, which covers same-generation `sampleJump`
 /// splits and generation skips left by a dropped empty restart segment (#352); and any `.unplaced`
 /// segment (v1 requires `startOffsetNs`).
@@ -88,7 +88,9 @@ struct RecordingTake: Hashable, Sendable {
         self.stopMark = stopMark
     }
 
-    /// The owned `captureStopped`, if the take ended on one.
+    /// The device's `captureStopped` the take ended on, if any: nil for `user` and for a ledger stop, which
+    /// capture never reports. The exported `captureStopped` (§8.3) comes from `stopMark`, which every non-`user`
+    /// stop has.
     var captureStopped: TakeStopMark? {
         stopMark.flatMap { $0.reason.captureReason == nil ? nil : $0 }
     }
