@@ -339,4 +339,72 @@ extension MIDICIMessageTests {
             Issue.record("unexpected encode refusal \(error)")
         }
     }
+
+    // MARK: Size before copying
+
+    @Test func specificDataAtTheExactPayloadLimitEncodesAndOneByteMoreIsTooLarge() throws {
+        let atLimit = try Self.detailsSpecificMessage(data: [UInt8](repeating: 0x01, count: 4_074))
+        let bytes = try atLimit.encode(limits: .standard)
+        #expect(bytes.count == 4_096)
+        let over = try Self.detailsSpecificMessage(data: [UInt8](repeating: 0x01, count: 4_075))
+        #expect(Self.detailsEncodeRefusal(over) == .payloadTooLarge(4_097))
+    }
+
+    @Test func aReplyAtTheExactPayloadLimitEncodesAndOneByteMoreIsTooLarge() throws {
+        let atLimit = try Self.detailsReplyMessage(data: [UInt8](repeating: 0x01, count: 4_075))
+        let bytes = try atLimit.encode(limits: .standard)
+        #expect(bytes.count == 4_096)
+        let over = try Self.detailsReplyMessage(data: [UInt8](repeating: 0x01, count: 4_076))
+        #expect(Self.detailsEncodeRefusal(over) == .payloadTooLarge(4_097))
+    }
+
+    @Test func aVeryLargeSpecificDataIsRefusedWithTheExactTotal() throws {
+        let huge = try Self.detailsSpecificMessage(data: [UInt8](repeating: 0, count: 1_000_000))
+        #expect(Self.detailsEncodeRefusal(huge) == .payloadTooLarge(22 + 1_000_000))
+        let small = try Self.limits(payload: 100, text: 0)
+        let medium = try Self.detailsSpecificMessage(data: [UInt8](repeating: 0, count: 79))
+        #expect(Self.detailsEncodeRefusal(medium, limits: small) == .payloadTooLarge(101))
+        #expect(Self.detailsEncodeRefusal(try Self.detailsSpecificMessage(data: [UInt8](repeating: 0, count: 78)),
+                                          limits: small) == nil)
+    }
+
+    @Test func anOversizedSpecificDataWithAHighByteReportsTheByteNotTheSize() throws {
+        var data = [UInt8](repeating: 0, count: 5_000)
+        try #require(data.count == 5_000)
+        data[4_999] = 0x80
+        let message = try Self.detailsSpecificMessage(data: data)
+        #expect(Self.detailsEncodeRefusal(message) == .fieldOutOfRange(.profileSpecificData, value: 0x80))
+    }
+
+    @Test func anOversizedReplyReportsTheLengthTheByteAndTheTargetBeforeTheSize() throws {
+        let id = try Self.profile(Self.detailsProfileBytes)
+        let header = try Self.header(.ci12, device: 0x10, destination: 0x0FFF_FEFF)
+        let tooLong = [UInt8](repeating: 0, count: 0x4000)
+        #expect(Self.detailsEncodeRefusal(.detailsReply(header, profile: id, target: 0x01, data: tooLong)) ==
+            .fieldOutOfRange(.inquiryTargetDataLength, value: 0x4000))
+        let sized = [UInt8](repeating: 0, count: 5_000) + [0x90]
+        #expect(Self.detailsEncodeRefusal(.detailsReply(header, profile: id, target: 0x01, data: sized)) ==
+            .fieldOutOfRange(.inquiryTargetData, value: 0x90))
+        let oversized = [UInt8](repeating: 0, count: 5_000)
+        #expect(Self.detailsEncodeRefusal(.detailsReply(header, profile: id, target: 0x80, data: oversized)) ==
+            .fieldOutOfRange(.inquiryTarget, value: 0x80))
+        #expect(Self.detailsEncodeRefusal(.detailsReply(header, profile: id, target: 0x01, data: oversized)) ==
+            .payloadTooLarge(21 + 5_000))
+    }
+
+    @Test func aBroadcastAddressStillWinsOverAnOversizedPayload() throws {
+        let id = try Self.profile(Self.detailsProfileBytes)
+        let oversized = [UInt8](repeating: 0, count: 5_000)
+        let source = try Self.header(.ci12, source: 0x0FFF_FFFF, destination: 0x0FFF_FEFF)
+        #expect(Self.detailsEncodeRefusal(.specificData(source, profile: id, data: oversized)) ==
+            .sourceIsBroadcast)
+        #expect(Self.detailsEncodeRefusal(.detailsReply(source, profile: id, target: 0x01, data: oversized)) ==
+            .sourceIsBroadcast)
+        let destination = try Self.header(.ci12, destination: 0x0FFF_FFFF)
+        #expect(Self.detailsEncodeRefusal(.detailsReply(destination, profile: id, target: 0x01, data: oversized)) ==
+            .destinationIsBroadcast)
+        let ci11 = try Self.header(.ci11, destination: 0x0FFF_FEFF)
+        #expect(Self.detailsEncodeRefusal(.detailsReply(ci11, profile: id, target: 0x01, data: oversized)) ==
+            .unsupportedFormat(1))
+    }
 }
