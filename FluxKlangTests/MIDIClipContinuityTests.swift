@@ -201,8 +201,9 @@ struct MIDIClipContinuityTests {
 
     @Test
     func aLoopWrapIsCheckedAfterTheTransportAndTheClock() throws {
-        // The refusal order (DESIGN.md): `rebind` checks the transport generation, then the clock against `current`,
-        // then the loop iteration; `render` checks the clock and the bound generations before the loop iteration.
+        // The refusal order, as in `rebindTarget` and `render`: `rebind` checks the transport generation, then the
+        // clock against `current`, then the loop iteration; `render` checks the clock and the bound generations
+        // before the loop iteration.
         var scheduler = MIDIClipScheduler(placement: try Base.placement([Base.note(0, Self.quarter)]))
         _ = try scheduler.render(from: 0, to: 20_000, clock: Base.clock(), current: Self.live)
         _ = scheduler.stop()

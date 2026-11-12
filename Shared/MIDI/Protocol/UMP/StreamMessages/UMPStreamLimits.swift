@@ -21,7 +21,7 @@ enum UMPStreamTextKind: Equatable, Sendable {
         }
     }
 
-    /// Packets one text may use (M2-104-UM, from memory; see DESIGN.md section 1).
+    /// Packets one text may use (M2-104-UM; not checked against the specification text).
     var maximumPackets: Int {
         switch self {
         case .endpointName: return 7

@@ -127,8 +127,8 @@ extension TriggerV1Record: Encodable {
     }
 }
 
-/// The schema's `$defs.target`: each case writes only its own fields.
-private struct TargetShape: Encodable {
+/// The schema's `$defs.target`: each case writes only its own fields. `ActionV1Record` shares it.
+struct TargetShape: Encodable {
     let target: TriggerTarget
 
     private enum CodingKeys: String, CodingKey {

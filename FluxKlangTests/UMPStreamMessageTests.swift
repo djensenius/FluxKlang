@@ -6,8 +6,8 @@ import Testing
 #endif
 
 /// UMP Stream messages (MT 0xF): golden words, limits and round trips. Refusals are in `+Decode`, text assembly in
-/// `+Text`, seeded hostile input in `+Hostile`. Every golden word below was written by hand from the layout in
-/// DESIGN.md section 2, not computed by the production code.
+/// `+Text`, seeded hostile input in `+Hostile`. Every golden word below was written by hand from the UMP Stream
+/// message layouts in M2-104-UM, not computed by the production code.
 #if os(macOS)
 @Suite("UMP Stream messages", .productionAccessAudit)
 #else
