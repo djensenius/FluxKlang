@@ -7,6 +7,9 @@ import Testing
 #endif
 
 /// #363: the host clear for toggles, and the incremental owed-release count.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ControlTriggerClearTests {
     typealias Fixture = ControlTriggerTests
     static let id = BindingID(validated: "bnd.trigger")

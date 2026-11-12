@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ControlTriggerTests {
     static let pedal = ControlSourceID(validated: "ctl.pedal-1")
     static let button = ControlSourceID(validated: "ctl.button-2")

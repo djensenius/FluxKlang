@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ControlBindingGroupTests {
     typealias Fixture = ControlBindingTests
     typealias Truth = ControlHostTruthTests
