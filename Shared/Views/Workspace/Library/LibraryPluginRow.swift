@@ -4,7 +4,7 @@
 //
 //  One row of the Library "Plugins" section (#99 LIB1; library-inspector.md "Library"): a name, a kind, a status
 //  word and the actions, plus the list's "(scan)" row for a catalog that was never scanned. Built only by
-//  `LibraryPluginList.make`; storage is `let`. Nothing calls it yet.
+//  `LibraryPluginList.make`; storage is `let`. Used by `LibrarySectionView`.
 //
 
 /// One plugin as the list shows it.

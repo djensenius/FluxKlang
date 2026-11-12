@@ -5,7 +5,7 @@
 //  The Library "Plugins" section as a value (#99 LIB1; library-inspector.md "Library", "Non-drag, keyboard and
 //  VoiceOver paths" and "States"), built from the plugin catalog (#70): one row per entry, ordered by name, with a
 //  "Not scanned" row and its explicit Scan... action when the catalog was never scanned, and search by name, kind
-//  and status. No view, scan, command, I/O or clock; nothing calls it yet.
+//  and status. No view, scan, command, I/O or clock; used by `LibrarySectionView`.
 //
 //  Not modelled, because there is no data source or no doc rule yet: the Stale state ("Last seen previous session");
 //  the remote-host Add refusal ("Hosts edit structure"); the Patches, Rigs, Templates and Charts sections, which

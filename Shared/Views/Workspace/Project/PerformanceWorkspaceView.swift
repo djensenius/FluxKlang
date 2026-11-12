@@ -69,6 +69,8 @@ struct PerformanceWorkspaceView: View {
             .font(.caption)
         PerformanceWiringListView(session: session, edit: edit)
         PerformanceDraftReviewView(diff: session.snapshot.diff, baseRevision: session.base.revision)
+        // No plug-in scanner is connected yet, so the catalog is the honest never-scanned one.
+        LibrarySectionView(patches: session.project.patches, catalog: PluginCatalog())
     }
 
     @discardableResult

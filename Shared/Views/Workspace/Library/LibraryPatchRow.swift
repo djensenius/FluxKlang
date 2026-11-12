@@ -5,8 +5,8 @@
 //  One patch of the Library "Patches & Variations" section (#99 LIB2; library-inspector.md "Library" mock): its
 //  stored label, a status, a variation count and the variations nested under it, in their stored order (the user's
 //  order is the data). Variations are read only through `PatchVariationExtension.content(of:)`; a newer or unreadable
-//  set lists none and is never looked into. Built only by `LibraryPatchList.make`; storage is `let`. Nothing calls it
-//  yet.
+//  set lists none and is never looked into. Built only by `LibraryPatchList.make`; storage is `let`. Used by
+//  `LibrarySectionView`.
 //
 
 struct LibraryPatchRow: Hashable, Sendable, Identifiable {

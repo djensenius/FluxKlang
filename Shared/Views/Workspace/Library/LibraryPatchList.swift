@@ -5,7 +5,7 @@
 //  The Library "Patches & Variations" section as a value (#99 LIB2; library-inspector.md "Library" mock and "Search
 //  filters by name, kind and status"), built from the project's patches: one row per patch, ordered by title, with
 //  its variations nested in their STORED order (the user's order is the data), and search by name, kind and detail.
-//  No view, command, scan, I/O or clock; nothing calls it yet.
+//  No view, command, scan, I/O or clock; used by `LibrarySectionView`.
 //
 //  Not modelled, because there is no data source or no doc rule yet: which patch or variation is active; any source
 //  of prepared-ness other than the caller's set; editing, repair, discard and delete actions; what Open or Recall

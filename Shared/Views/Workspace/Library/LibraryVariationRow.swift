@@ -3,8 +3,8 @@
 //  FluxKlang
 //
 //  One variation under a Library patch row (#99 LIB2; library-inspector.md "Library" mock): its stored label, a delta
-//  count and whether the caller has it prepared. Built only by `LibraryPatchRow`; storage is `let`. Nothing calls it
-//  yet.
+//  count and whether the caller has it prepared. Built only by `LibraryPatchRow`; storage is `let`. Used by
+//  `LibrarySectionView`.
 //
 
 /// A variation id is unique only within its patch, so a row is identified by both.

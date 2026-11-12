@@ -4,7 +4,7 @@
 //
 //  The status of one Library plugin row (#99 LIB1; library-inspector.md "Library" plugin table): installed, missing,
 //  incompatible, failed, needs rescan or quarantined. The list's "Not scanned" state is not a row status; it is the
-//  list's scan row. Pure values: no view, no scan, no I/O. Nothing calls it yet.
+//  list's scan row. Pure values: no view, no scan, no I/O. Used by `LibrarySectionView`.
 //
 
 /// Why the caller judged an installed plugin unusable for its target. The list is context free: it never infers this.

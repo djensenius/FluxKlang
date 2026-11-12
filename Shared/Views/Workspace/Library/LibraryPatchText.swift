@@ -4,7 +4,7 @@
 //
 //  The fixed English of the Library patch list (#99 LIB2): kind text, detail text, the two reasons, the title of a
 //  patch with a blank label and the VoiceOver labels. Pure string builders: no localisation, truncation or
-//  escaping. Nothing calls it yet.
+//  escaping. Used by `LibrarySectionView`.
 //
 
 enum LibraryPatchText {

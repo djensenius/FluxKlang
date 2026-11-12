@@ -4,7 +4,7 @@
 //
 //  The fixed English of the Library plugin list (#99 LIB1; library-inspector.md "Library": status words are always
 //  text): kind, status and reason text, the title of a row with no name and the VoiceOver labels. Pure string
-//  builders: no localisation, truncation or escaping. Nothing calls it yet.
+//  builders: no localisation, truncation or escaping. Used by `LibrarySectionView`.
 //
 
 enum LibraryPluginText {
