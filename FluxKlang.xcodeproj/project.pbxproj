@@ -2552,7 +2552,6 @@
 		B11D18032F6F44D74EDF6028 /* MIDIResponseCurveTests+Transform.swift in Sources */ = {isa = PBXBuildFile; fileRef = E644B5432DD9351853EBA9C8 /* MIDIResponseCurveTests+Transform.swift */; };
 		B11E94A116DF25939C48791B /* StagedPackageImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BFA2BE2750647CA444DC7B7 /* StagedPackageImport.swift */; };
 		B120960EE6CF884DE2C31992 /* OpenSoundControl+IntakeBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9AD00BF0EB8C931B6761CB8 /* OpenSoundControl+IntakeBudget.swift */; };
-		B14D4306D60206E6B9222857 /* UMPFlexDataMessage+Decode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 690C166E38AAAEBAE0F664E1 /* UMPFlexDataMessage+Decode.swift */; };
 		B15B4F6DBC49FC4A642B8CEC /* ControlLoopConvergenceTests+Refresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 260C111749D2C2DE4B372500 /* ControlLoopConvergenceTests+Refresh.swift */; };
 		B161B3582049F207D4BE15A3 /* ControlTriggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7EEFF93AFBD980D5079566 /* ControlTriggerTests.swift */; };
 		B16FF940E5808D6602EC3B79 /* DeferredRelease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE2DF94F41575E1E49AB60F /* DeferredRelease.swift */; };
@@ -2609,7 +2608,6 @@
 		B4979B38919664C4A26CE259 /* PerformPanelLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFF440049B79625A8182AFC6 /* PerformPanelLayout.swift */; };
 		B4A7BEDE2D109197CAD29052 /* AudioRoutingTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95BCDED2F3250EDE802724CB /* AudioRoutingTypes.swift */; };
 		B4A918A73CB13BA6FFD371D0 /* HardwareServiceFactories.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22EF50295E4CDE232D1A10A /* HardwareServiceFactories.swift */; };
-		B4B1A4AC498022EB7260A255 /* UMPFlexDataMessage+Decode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 690C166E38AAAEBAE0F664E1 /* UMPFlexDataMessage+Decode.swift */; };
 		B4CAEF203F1DEB74773EEFFC /* RigToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01501C31011DA10CE13D73D8 /* RigToken.swift */; };
 		B4EA469B8DC20A75B7FA5D64 /* SpatialEditingTests+Calibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29491787948CF2F8ACBDA614 /* SpatialEditingTests+Calibration.swift */; };
 		B4EBAEA705F587AFF68A9D80 /* AssistantRoutingIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B82A5FA2B80B4DA09054B9 /* AssistantRoutingIntent.swift */; };
@@ -4519,7 +4517,6 @@
 		68F60DCA6E7C966A5E5C4102 /* EnvironmentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentsView.swift; sourceTree = "<group>"; };
 		68F76D4B8D7106C23851E758 /* CaptureDrainLimitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureDrainLimitTests.swift; sourceTree = "<group>"; };
 		68F911F0B048780DDB352678 /* ClockGenerationUnificationTests+Ledger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ClockGenerationUnificationTests+Ledger.swift"; sourceTree = "<group>"; };
-		690C166E38AAAEBAE0F664E1 /* UMPFlexDataMessage+Decode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UMPFlexDataMessage+Decode.swift"; sourceTree = "<group>"; };
 		6949840EA8E8305E0BC00A80 /* AssistantCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCardView.swift; sourceTree = "<group>"; };
 		697B479E4370347FD799E4AE /* PluginEditorStateTests+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PluginEditorStateTests+Restore.swift"; sourceTree = "<group>"; };
 		69980E9DA9FA3836E0EC22C8 /* GraphReferenceEvaluator+Run.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GraphReferenceEvaluator+Run.swift"; sourceTree = "<group>"; };
@@ -7831,7 +7828,6 @@
 			isa = PBXGroup;
 			children = (
 				0DFC166F34AD94CA3B1F53B4 /* UMPFlexDataMessage.swift */,
-				690C166E38AAAEBAE0F664E1 /* UMPFlexDataMessage+Decode.swift */,
 				ED17888BA84243C48AFF0445 /* UMPFlexDataRefusal.swift */,
 			);
 			path = FlexData;
@@ -10695,7 +10691,6 @@
 				A8AB5D433ECC43D58C3C3180 /* UIAuditCaptureWindow.swift in Sources */,
 				B097A6152B77EC9F4CF10B02 /* UMPChannelVoice.swift in Sources */,
 				492177F065071BEBCA4998E5 /* UMPData128Message.swift in Sources */,
-				B14D4306D60206E6B9222857 /* UMPFlexDataMessage+Decode.swift in Sources */,
 				46D2F8EE946B58DD93EAA2EC /* UMPFlexDataMessage.swift in Sources */,
 				9A0880D0AD17C9B68DF365C3 /* UMPFlexDataRefusal.swift in Sources */,
 				2BB5F084718AB0D33AB390C9 /* UMPMessageType.swift in Sources */,
@@ -11765,7 +11760,6 @@
 				823ACF654CCF5C0BD4E8FAF5 /* UIAuditCaptureWindow.swift in Sources */,
 				75BCFC562E45D6798F67AEFA /* UMPChannelVoice.swift in Sources */,
 				375B00D909BCAE3733A111B9 /* UMPData128Message.swift in Sources */,
-				B4B1A4AC498022EB7260A255 /* UMPFlexDataMessage+Decode.swift in Sources */,
 				7C91E257B16C87C5C7D06870 /* UMPFlexDataMessage.swift in Sources */,
 				9546A35EF22A373197DEE193 /* UMPFlexDataRefusal.swift in Sources */,
 				F73384AEFF3BE72C5EA9019B /* UMPMessageType.swift in Sources */,

@@ -2,7 +2,7 @@
 enum UMPFlexDataAddress: Equatable, Sendable {
     /// Address 0: one channel of the group.
     case channel(UMPChannel)
-    /// Address 1: the whole group. The channel nibble is reserved and must be 0.
+    /// Address 1: the whole group. The channel nibble is ignored on decode and encoded as 0.
     case group
 }
 
@@ -92,10 +92,12 @@ enum UMPFlexDataContent: Equatable, Sendable {
     /// The bank 0x00 statuses this codec decodes; every other status is `unknownStatus`.
     static let decodedStatuses: Set<UInt8> = [tempoStatus, timeSignatureStatus, keySignatureStatus]
 
-    /// Only Set Key Signature may be addressed to one channel. Set Tempo and Set Time Signature must be
-    /// group-addressed, following bl-midi2-rs (`NoChannelProperty` refuses address 0 on read and writes address 1).
-    /// The MIDI 2.0 Workbench shares one Flex Data header with no per-message address rule. This is stricter than
-    /// some readers (ni-midi2, AM_MIDI2.0Lib) and not checked against M2-104-UM.
+    /// Whether a message of this status may be BUILT with a channel address: only Set Key Signature. Building Set
+    /// Tempo or Set Time Signature requires the group address, following bl-midi2-rs (`NoChannelProperty` writes
+    /// address 1). Decoding does not apply this rule: ni-midi2, AM_MIDI2.0Lib, midi2.0lib and the MIDI 2.0 Workbench
+    /// accept any address on read (only bl-midi2-rs refuses address 0 there). A decoded channel-addressed Set Tempo or
+    /// Set Time Signature re-encodes with address 0: forwarding it unchanged does not normalise the address. Not
+    /// checked against M2-104-UM.
     static func allowsChannelAddress(status: UInt8) -> Bool {
         status == keySignatureStatus
     }
@@ -112,8 +114,10 @@ enum UMPFlexDataContent: Equatable, Sendable {
 
 /// One complete Flex Data packet (MT 0xD) of status bank 0x00: Set Tempo, Set Time Signature or Set Key Signature.
 ///
-/// Word 0: `[0xD | group][form:2 address:2 channel:4][status bank][status]`; words 1...3 carry the data. Decoding
-/// refuses every non-zero reserved bit, so `packet` always re-encodes the received words exactly.
+/// Word 0: `[0xD | group][form:2 address:2 channel:4][status bank][status]`; words 1...3 carry the data. `packet` is
+/// the canonical encoding of (group, address, content). Decoding refuses every non-zero reserved bit except the channel
+/// nibble of a group-addressed message, which is ignored; so `packet` re-encodes the received words exactly, except
+/// that an ignored channel nibble comes back as 0.
 struct UMPFlexDataMessage: Equatable, Sendable {
     /// Status bank 0x00, Setup and Performance.
     static let setupAndPerformanceBank: UInt8 = 0x00
@@ -123,11 +127,19 @@ struct UMPFlexDataMessage: Equatable, Sendable {
     let content: UMPFlexDataContent
     private let storedPacket: UMPPacket
 
-    /// Refuses a channel address for Set Tempo and Set Time Signature.
+    /// Builds a message to send. Refuses a channel address for Set Tempo and Set Time Signature
+    /// (`UMPFlexDataContent.allowsChannelAddress(status:)`).
     init(group: UMPGroup, address: UMPFlexDataAddress, content: UMPFlexDataContent) throws(UMPFlexDataRefusal) {
         if case .channel = address, !UMPFlexDataContent.allowsChannelAddress(status: content.status) {
             throw .channelAddressNotAllowed(status: content.status)
         }
+        try self.init(receivedGroup: group, address: address, content: content)
+    }
+
+    /// Builds a message without the send-only address rule, so a decoded channel-addressed Set Tempo or Set Time
+    /// Signature is representable. Throws only `.ump`, which checked fields never reach.
+    private init(receivedGroup group: UMPGroup, address: UMPFlexDataAddress, content: UMPFlexDataContent)
+        throws(UMPFlexDataRefusal) {
         do {
             storedPacket = try UMPPacket(words: Self.words(group: group, address: address, content: content))
         } catch {
@@ -138,7 +150,8 @@ struct UMPFlexDataMessage: Equatable, Sendable {
         self.content = content
     }
 
-    /// The four words, form 0 (complete) and status bank 0x00; every reserved bit is 0.
+    /// The four words, form 0 (complete) and status bank 0x00; every reserved bit is 0, including the channel nibble
+    /// of a group-addressed message.
     var packet: UMPPacket { storedPacket }
 
     private static func words(group: UMPGroup, address: UMPFlexDataAddress, content: UMPFlexDataContent) -> [UInt32] {
@@ -158,5 +171,71 @@ struct UMPFlexDataMessage: Equatable, Sendable {
         case .setKeySignature(let key):
             return [first, key.word1, 0, 0]
         }
+    }
+}
+
+extension UMPFlexDataMessage {
+    /// Decodes one received Flex Data packet. Order of refusals: not MT 0xD, unknown status bank or status, form other
+    /// than complete, reserved address, reserved bits, tonic 8...15. Receiving is lenient about addressing: every
+    /// status accepts a channel address, and the channel nibble of a group-addressed message is ignored.
+    init(decoding packet: UMPPacket) throws(UMPFlexDataRefusal) {
+        guard packet.messageType == .flexData else { throw .notFlexData(actual: packet.messageType) }
+        let words = packet.words
+        let first = words[0]
+        let bank = UInt8((first >> 8) & 0xFF)
+        let status = UInt8(first & 0xFF)
+        guard bank == Self.setupAndPerformanceBank, UMPFlexDataContent.decodedStatuses.contains(status) else {
+            throw .unknownStatus(bank: bank, status: status)
+        }
+        let format = UInt8((first >> 22) & 0x3)
+        guard format == 0 else { throw .wrongFormat(status: status, format: format) }
+        let address = try Self.decodeAddress(first, status: status)
+        let content: UMPFlexDataContent
+        switch status {
+        case UMPFlexDataContent.tempoStatus:
+            try Self.requireZero(words[2] != 0 || words[3] != 0, status)
+            content = .setTempo(tenNanosecondsPerQuarterNote: words[1])
+        case UMPFlexDataContent.timeSignatureStatus:
+            try Self.requireZero(words[1] & 0xFF != 0 || words[2] != 0 || words[3] != 0, status)
+            content = .setTimeSignature(UMPFlexDataTimeSignature(
+                numerator: UInt8(words[1] >> 24),
+                denominatorExponent: UInt8((words[1] >> 16) & 0xFF),
+                thirtySecondNotes: UInt8((words[1] >> 8) & 0xFF)
+            ))
+        default:
+            try Self.requireZero(words[2] != 0 || words[3] != 0, status)
+            content = .setKeySignature(try UMPFlexDataKeySignature(word1: words[1]))
+        }
+        let group: UMPGroup
+        do {
+            group = try UMPGroup(UInt8((first >> 24) & 0x0F))
+        } catch {
+            throw .ump(error)
+        }
+        try self.init(receivedGroup: group, address: address, content: content)
+    }
+
+    private static func decodeAddress(_ first: UInt32, status: UInt8) throws(UMPFlexDataRefusal) -> UMPFlexDataAddress {
+        let addressBits = UInt8((first >> 20) & 0x3)
+        let channelBits = UInt8((first >> 16) & 0x0F)
+        switch addressBits {
+        case 0:
+            // Every status, including Set Tempo and Set Time Signature: only bl-midi2-rs refuses this on read.
+            do {
+                return .channel(try UMPChannel(channelBits))
+            } catch {
+                throw .ump(error)
+            }
+        case 1:
+            // The channel nibble is ignored, as in ni-midi2, bl-midi2-rs, AM_MIDI2.0Lib and midi2.0lib; `packet`
+            // encodes it as 0. M2-104-UM was not checked. Capture keeps raw MT 0xD words, so nothing is lost.
+            return .group
+        default:
+            throw .reservedAddress(status: status, address: addressBits)
+        }
+    }
+
+    private static func requireZero(_ reserved: Bool, _ status: UInt8) throws(UMPFlexDataRefusal) {
+        if reserved { throw .reservedBitsSet(status: status) }
     }
 }

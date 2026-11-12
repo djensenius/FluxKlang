@@ -215,31 +215,65 @@ struct UMPFlexDataTests {
         }
     }
 
-    @Test func refusesChannelAddressForTempoAndTimeSignature() throws {
-        for status in [UInt32(0), 1] {
-            for channel in UInt32(0)...15 {
-                let words: [UInt32] = [0xD000_0000 | channel << 16 | status, 0x0402_0800 * status, 0, 0]
-                #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: UInt8(status))) {
-                    try Self.decode(words)
+    @Test func decodesChannelAddressForTempoAndTimeSignature() throws {
+        // Lenient receive: ni-midi2, AM_MIDI2.0Lib, midi2.0lib and the Workbench accept address 0 for every status.
+        // Status to (word 1, content).
+        let cases: [UInt32: (UInt32, UMPFlexDataContent)] = [
+            0: (0x02FA_F080, .setTempo(tenNanosecondsPerQuarterNote: 50_000_000)),
+            1: (0x0402_0800, Self.time(4, 2, 8))
+        ]
+        for (status, (data, content)) in cases {
+            for group in [UInt32(0), 9] {
+                for channel in [UInt32(0), 1, 7, 15] {
+                    let words: [UInt32] = [0xD000_0000 | group << 24 | channel << 16 | status, data, 0, 0]
+                    let decoded = try Self.decode(words)
+                    #expect(decoded.group.value == UInt8(group))
+                    #expect(decoded.address == .channel(try UMPChannel(UInt8(channel))))
+                    #expect(decoded.content == content)
+                    #expect(decoded.packet.words == words)
+                    // The address is part of equality: the group-addressed decode of the same data differs.
+                    let grouped = try Self.decode([0xD010_0000 | group << 24 | status, data, 0, 0])
+                    #expect(grouped.content == content)
+                    #expect(decoded != grouped)
                 }
             }
         }
-        let channel = UMPFlexDataAddress.channel(try UMPChannel(0))
-        #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: 0)) {
-            try UMPFlexDataMessage(
-                group: try UMPGroup(0), address: channel, content: .setTempo(tenNanosecondsPerQuarterNote: 1)
-            )
-        }
-        #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: 1)) {
-            try UMPFlexDataMessage(group: try UMPGroup(0), address: channel, content: Self.time(4, 2, 8))
+    }
+
+    @Test func refusesBuildingChannelAddressForTempoAndTimeSignature() throws {
+        // Strict send: bl-midi2-rs writes address 1 for these.
+        for group in [UInt8(0), 9] {
+            for channel in [UInt8(0), 1, 7, 15] {
+                let address = UMPFlexDataAddress.channel(try UMPChannel(channel))
+                #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: 0)) {
+                    try UMPFlexDataMessage(
+                        group: try UMPGroup(group), address: address,
+                        content: .setTempo(tenNanosecondsPerQuarterNote: 50_000_000)
+                    )
+                }
+                #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: 1)) {
+                    try UMPFlexDataMessage(group: try UMPGroup(group), address: address, content: Self.time(4, 2, 8))
+                }
+            }
         }
     }
 
-    @Test func refusesChannelNibbleWhenGroupAddressed() throws {
-        for status in [UInt32(0), 1, 5] {
+    @Test func ignoresChannelNibbleWhenGroupAddressed() throws {
+        // Status to (word 1, content).
+        let cases: [UInt32: (UInt32, UMPFlexDataContent)] = [
+            0: (0x02FA_F080, .setTempo(tenNanosecondsPerQuarterNote: 50_000_000)),
+            1: (0x0402_0800, Self.time(4, 2, 8)),
+            5: (0xB300_0000, try Self.key(-5, .noteC))
+        ]
+        for (status, (data, content)) in cases {
             for channel in UInt32(1)...15 {
-                let words: [UInt32] = [0xD010_0000 | channel << 16 | status, 0, 0, 0]
-                #expect(throws: UMPFlexDataRefusal.reservedBitsSet(status: UInt8(status))) { try Self.decode(words) }
+                let words: [UInt32] = [0xD610_0000 | channel << 16 | status, data, 0, 0]
+                let decoded = try Self.decode(words)
+                #expect(decoded.group.value == 6)
+                #expect(decoded.address == .group)
+                #expect(decoded.content == content)
+                #expect(decoded.packet.words == [0xD610_0000 | status, data, 0, 0])
+                #expect(decoded == (try Self.decode([0xD610_0000 | status, data, 0, 0])))
             }
         }
     }
@@ -301,7 +335,8 @@ struct UMPFlexDataTests {
     }
 
     @Test func refusalOrderFollowsTheDocumentedSequence() throws {
-        // Unknown status beats form; form beats address; address beats channel rule; data bits beat the tonic.
+        // Unknown status beats form; form beats address; address beats data bits; data bits beat the tonic. A
+        // channel address or an ignored channel nibble never pre-empts the data-bit refusal.
         #expect(throws: UMPFlexDataRefusal.unknownStatus(bank: 0, status: 2)) {
             try Self.decode([0xD0F0_0002, 0xFFFF_FFFF, 1, 1])
         }
@@ -311,8 +346,11 @@ struct UMPFlexDataTests {
         #expect(throws: UMPFlexDataRefusal.reservedAddress(status: 1, address: 3)) {
             try Self.decode([0xD03F_0001, 0xFF, 1, 1])
         }
-        #expect(throws: UMPFlexDataRefusal.channelAddressNotAllowed(status: 0)) {
+        #expect(throws: UMPFlexDataRefusal.reservedBitsSet(status: 0)) {
             try Self.decode([0xD00F_0000, 0, 1, 1])
+        }
+        #expect(throws: UMPFlexDataRefusal.reservedBitsSet(status: 1)) {
+            try Self.decode([0xD01F_0001, 0xFF, 0, 0])
         }
         #expect(throws: UMPFlexDataRefusal.reservedBitsSet(status: 5)) {
             try Self.decode([0xD010_0005, 0x0F00_0001, 0, 0])
