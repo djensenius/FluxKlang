@@ -1334,6 +1334,26 @@ computed or protocol requirements, and its only class is the stateless
 the nine suites touches the file system, bundles, wall clock, sleep,
 dispatch, defaults, global mutable state, MIDI hardware, network or audio.
 
+Against the unmodified tree at `28086dc9` (the `main` this change was built
+on), both checker modes report 4,936 registrations. Satisfied rows rise from
+984 (944 `FluxKlangMacTests`, 40 `FluxKlangTests`) to 1,056 (1,016
+`FluxKlangMacTests`, 40 `FluxKlangTests`). The nine suites' 72
+`FluxKlangMacTests` root rows (eight per suite) are now satisfied, which
+accounts for the whole increase; no row is removed. Diagnostics fall by 88,
+from 6,080 to 5,992, and none is added. The seven suites that already had a
+named `@Suite` lose eight each (the missing trait). The two suites that had no
+`@Suite` lose sixteen each: per Mac row, both the missing-trait diagnostic and
+the "requires a single @Suite" one. The iOS `FluxKlangTests` root rows for all
+nine suites stay unsatisfied, with the same diagnostics as before (eight per
+named suite, sixteen per bare one). Apart from the Mac rows' status, the only
+row change, in both modules, is that test line numbers in the root files
+shift by three (`PeerEndpointPolicyTests`, the one bare suite with tests in
+its root file) or four (the seven named suites); tests in extension files
+keep their lines, and `PeerControlMessageTests`, whose tests are all in
+extension files, has none to shift. Inventory still exits 0 and default
+enforcement still exits 1. This comparison is a row-level diff of both trees'
+output.
+
 A fresh SwiftPM package (default build system, no private witness or
 observer) byte-copied those sources and the nine suites' test files, their
 extension files and `ProductionAccessScope.swift`. Debug and Release
@@ -1342,7 +1362,7 @@ suites with no warnings, and collected no `suiteExit`, xUnit or event-stream
 receipts. The runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the iOS `FluxKlangTests` rows for
 these suites stay unsatisfied, the remaining #60 gates above still apply and
-#60 remains open. Checker totals are in the pull request.
+#60 remains open.
 
 ## Headless fixtures
 
