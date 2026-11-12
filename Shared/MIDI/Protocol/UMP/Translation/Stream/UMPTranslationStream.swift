@@ -15,16 +15,40 @@
 /// - Teardown or reset: `reset()`, or `reset(group:channel:)` for one group and channel.
 ///
 /// The translator sends a held CC 6 before every message except the CC 38 that completes it, so a CC 6 still held
-/// after `receive` is always the one just received: its hold time is that call's time.
+/// after `receive(_:at:)` is always the one just received: its hold time is that call's time.
+///
+/// System Common and System Real Time messages (MT 0x1, `UMPSystemCommonRealTime`) go through
+/// `receive(system:at:)`, which passes each one through unchanged (group kept) after any CC 6 it sends. Project
+/// decision, following the MIDI 1.0 rule that Real Time messages may be inserted anywhere, even between the bytes
+/// of another message, and do not cancel running status, while System Common messages cancel it (MIDI 1.0
+/// Detailed Specification, Running Status and System Real Time Messages):
+///
+/// - System Real Time (0xF8 Timing Clock, 0xFA Start, 0xFB Continue, 0xFC Stop, 0xFE Active Sensing, 0xFF Reset)
+///   is sent at once. It neither sends a held CC 6 nor breaks a CC 6 / CC 38 pair, so a clock between the two
+///   still yields one completed controller, and the deadline stays that of the CC 6.
+/// - System Common (0xF1 MTC Quarter Frame, 0xF2 Song Position Pointer, 0xF3 Song Select, 0xF6 Tune Request) is
+///   a message other than the completing CC 38, so a held CC 6 is sent first, as before any channel voice message.
+///   That flush is the translator's own, like a Note On's, and is not counted in the flush telemetry.
+/// - Either kind received at or after the deadline first sends the held CC 6 as an idle flush (counted in
+///   `idleFlushes`), as `receive(_:at:)` does.
+/// - The held CC 6 is one slot across all groups and channels, so these rules apply whatever the MT 0x1 group.
+/// - 0xFF System Reset is passed through and does not reset this stream: it is addressed to the receiver, and the
+///   I/O layer decides whether to call `reset()`.
+///
+/// The reference translators (ALSA `ump_convert.c` `do_convert_to_ump`, JUCE `Midi1ToMidi2DefaultTranslator`,
+/// AM_MIDI2.0Lib `bytestreamToUMP`) send every system message straight through as MT 0x1 without touching their
+/// per-channel Data Entry state, and none resets that state on 0xFF. They hold Data Entry per channel and never
+/// flush it on another message, so the System Common flush follows from this translator's single ordered slot
+/// rather than from them.
 ///
 /// A late CC 38 (one that arrives after its CC 6 was flushed) is translated as the translator translates any further
 /// CC 38: the Data Entry MSB survives a flush, so the controller is sent again with the last MSB and the new LSB, and
 /// no loss is declared. The receiver sees the value with LSB 0, then the completed value.
 ///
 /// Time is supplied by the caller in monotonic nanoseconds (the I/O layer converts host ticks); this type reads no
-/// clock and arms no timer. `receive` and `poll` refuse a time earlier than the last one this stream accepted; equal
-/// times are accepted. `endOfStream()` and `reset()` clear that baseline, so the next segment or stream may start at
-/// any time.
+/// clock and arms no timer. `receive(_:at:)`, `receive(system:at:)` and `poll` refuse a time earlier than the last
+/// one this stream accepted; equal times are accepted. `endOfStream()` and `reset()` clear that baseline, so the
+/// next segment or stream may start at any time.
 /// The deadline never wraps: a CC 6 whose deadline would pass `UInt64.max` is refused (`deadlineOverflow`). Refusing
 /// drops a valid CC 6, whereas capping the deadline at `UInt64.max` would flush it at most one timeout early; both
 /// happen only with a broken clock.
@@ -44,11 +68,13 @@ struct UMPTranslationStream: Equatable, Sendable {
     private(set) var translator = UMPMIDI1ToMIDI2Translator()
     /// When the held CC 6 is sent by `poll(at:)`; nil when nothing is held.
     private(set) var deadline: UInt64?
-    /// The last time `receive` or `poll` accepted; nil for a new stream and after `endOfStream()` or `reset()`.
+    /// The last time `receive(_:at:)`, `receive(system:at:)` or `poll(at:)` accepted; nil for a new stream and after
+    /// `endOfStream()` or `reset()`.
     private(set) var lastAcceptedTime: UInt64?
     /// Every loss the translator declared through this stream, across `reset()`.
     private(set) var losses = UMPTranslationLossCounts()
-    /// Held CC 6s sent because their deadline was reached (by `poll(at:)` or `receive(_:at:)`).
+    /// Held CC 6s sent because their deadline was reached (by `poll(at:)`, `receive(_:at:)` or
+    /// `receive(system:at:)`).
     private(set) var idleFlushes = 0
     /// Held CC 6s sent by `endOfStream()`.
     private(set) var endOfStreamFlushes = 0
@@ -86,6 +112,27 @@ struct UMPTranslationStream: Equatable, Sendable {
         next.lastAcceptedTime = time
         self = next
         return UMPTranslationOutput(messages: idle + output.messages, losses: output.losses)
+    }
+
+    /// Passes one System Common or System Real Time message received at `time` through, after any held CC 6 it sends
+    /// (see the type's ordering rules): the idle flush if `time` has reached the deadline, else for System Common
+    /// the held CC 6; then the message. Project decision: a separate entry point returning ordered items keeps
+    /// `receive(_:at:)` and its callers unchanged and makes the interleaving of MT 0x4 and MT 0x1 output explicit.
+    /// The time rules and the advice on timestamp 0 are those of `receive(_:at:)`.
+    mutating func receive(
+        system: UMPSystemCommonRealTime, at time: UInt64
+    ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
+        try admit(time)
+        // Built on a copy and assigned last, as in `receive(_:at:)`, so a refusal can never leave a partial change.
+        var next = self
+        var flushed = next.flushIfIdle(at: time)
+        if case .systemCommon = system.event {
+            flushed += next.translator.flushAll()
+            next.deadline = nil
+        }
+        next.lastAcceptedTime = time
+        self = next
+        return flushed.map(UMPTranslationStreamItem.voice) + [.system(system)]
     }
 
     /// Sends the held CC 6 if `time` has reached its deadline; otherwise returns `[]`.
