@@ -271,6 +271,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+UMPSysEx.swift
       - path: FluxKlangTests/NeutralSnapshotTests.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Fixtures.swift
       - path: FluxKlangTests/AssistantInferenceGovernorTests.swift
