@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "6da489308e7cb543f64f915e754541b1a951a904dccb90ca54ddb3daa2cf9319",
+    "sha256": "a79d423c8e567d01cb31064301461c97daa86b68fa15c4f5469f44f02c5cd5a5",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -480,6 +480,7 @@
         "FluxKlangTests/UMPCodecTests.swift",
         "FluxKlangTests/UMPCodecTests+ChannelVoice.swift",
         "FluxKlangTests/UMPCodecTests+Scaling.swift",
+        "FluxKlangTests/UMPCodecTests+SysEx7.swift",
         "FluxKlangTests/UMPTranslationTests.swift",
         "FluxKlangTests/UMPTranslationTests+State.swift",
         "FluxKlangTests/UMPTranslationTests+DataEntry.swift",

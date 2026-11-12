@@ -8,6 +8,8 @@ enum UMPField: Equatable, Sendable {
     case twentyBit
     case scaledValue
     case batchLimit
+    /// The MT 0x3 SysEx7 number of bytes, 0...6.
+    case sysEx7ByteCount
 }
 
 // `mt` is the coordinator-ruled label for the Message Type in refusals.

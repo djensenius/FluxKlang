@@ -58,6 +58,11 @@ struct UMPPacket: Equatable, Sendable {
         UMPPacket(validatedWords: [(word & 0x0FFF_FFFF) | 0x2000_0000])
     }
 
+    /// An MT 0x3 packet; the top nibble is forced to 0x3, so the result is always well formed.
+    static func data64(_ first: UInt32, _ second: UInt32) -> UMPPacket {
+        UMPPacket(validatedWords: [(first & 0x0FFF_FFFF) | 0x3000_0000, second])
+    }
+
     /// An MT 0x4 packet; the top nibble is forced to 0x4, so the result is always well formed.
     static func midi2ChannelVoice(_ first: UInt32, _ second: UInt32) -> UMPPacket {
         UMPPacket(validatedWords: [(first & 0x0FFF_FFFF) | 0x4000_0000, second])
