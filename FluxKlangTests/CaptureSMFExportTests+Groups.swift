@@ -23,7 +23,7 @@ extension CaptureSMFExportTests {
         let feed = try Self.controlChanges(in: [4, 4, 4])
         let export = try Fixture.export(feed.log, [Fixture.streamA])
         #expect(export.groupsFlattened == 0)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1])
+        #expect(export.smf().losses.losses == [:])
     }
 
     @Test func twoGroupsCountExactlyTheCapturesOutsideTheLowestGroup() throws {
@@ -61,7 +61,7 @@ extension CaptureSMFExportTests {
     @Test func theFlattenedCountReachesTheSMFLossReport() throws {
         let feed = try Self.controlChanges(in: [0, 2, 2])
         let losses = try Fixture.export(feed.log, [Fixture.streamA]).smf().losses
-        #expect(losses.losses == [.syntheticTempoMap: 1, .groupsFlattened: 2])
+        #expect(losses.losses == [.groupsFlattened: 2])
     }
 
     @Test func aNoteOffOfAnotherGroupClosesTheNoteOnOfTheFirstGroup() throws {
