@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("MIDI capture clock observations", .productionAccessAudit)
+#else
 @Suite("MIDI capture clock observations")
+#endif
 struct MIDICaptureClockTests {
     typealias Fixture = MIDICaptureFixture
 

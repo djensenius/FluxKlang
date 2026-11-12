@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Standard MIDI File reader", .productionAccessAudit)
+#else
 @Suite("Standard MIDI File reader")
+#endif
 struct StandardMIDIFileReaderTests {
     typealias SMF = StandardMIDIFileTests
     typealias Clip = MIDIClipTimingTests
