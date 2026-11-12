@@ -4,10 +4,10 @@
 //
 //  A per-stream MIDI capture log (#112 CL4, media-contract.md §5.2, §9.1–§9.2). It
 //  stores UMP words verbatim with the frame derived through the current anchor,
-//  musical ticks exactly when a transport is anchored, and the protocol fields.
-//  It keeps the first anchor of every sample clock generation, so a native UMP
-//  export's origin never moves when the clock restarts later. Pure values only:
-//  no CoreMIDI, threads or files.
+//  musical ticks and their pass (§9.3) exactly when a transport is anchored, and
+//  the protocol fields. It keeps the first anchor of every sample clock generation,
+//  so a native UMP export's origin never moves when the clock restarts later. Pure
+//  values only: no CoreMIDI, threads or files.
 //
 
 /// The capture log of one sample clock. Records keep delivery order within and across streams.
@@ -73,6 +73,9 @@ struct MIDICaptureLog: Equatable, Sendable {
     private var firstMusicalAnchorSuccessorFrame: Int64?
     private(set) var latestRestart: HostStamp?
     private(set) var latestLocate: HostStamp?
+    /// The pass before the loop iteration of a capture's own anchor is added (§9.3): a locate or transport restart
+    /// begins the next span, and a clock restart carries the loop iteration the transport anchor ended in.
+    private var passBase = MIDICapturePass.initial
     private var pins: [StreamID: ProtocolPin] = [:]
     private let slots: RuntimeSlots?
 
@@ -148,9 +151,12 @@ struct MIDICaptureLog: Equatable, Sendable {
         guard (anchor.musical?.ticks ?? 0) >= 0 else { throw .negativeMusicalTicks }
     }
 
-    /// Makes `musical` the anchored transport and remembers its anchor for musical maps.
+    /// Makes `musical` the anchored transport and remembers its anchor for musical maps. A transport generation other
+    /// than the anchored one is a transport restart, which begins the next pass; the first anchor of a log, of a
+    /// restart (which continues its pass) and after a locate (which has begun it) is not.
     private mutating func remember(_ anchor: ClockAnchor, _ musical: MusicalStamp) {
         if transport?.transport != musical.transport {
+            if transport != nil { passBase = passBase.nextSpan }
             musicalAnchors = []
             firstMusicalAnchor = anchor
             firstMusicalAnchorSuccessorFrame = nil
@@ -168,9 +174,10 @@ struct MIDICaptureLog: Equatable, Sendable {
     }
 
     /// Applies a discontinuity of this clock. `clockRestart` starts the next generation at `nominalRate`, which only
-    /// a restart carries and a restart needs; `locate` ends the transport anchor. Both need host ticks at or after
-    /// the latest restart, locate and current anchor, which later captures are checked against. `formatChange` names
-    /// its stream and re-pins that stream's protocols on its next capture. Other kinds do not affect MIDI capture.
+    /// a restart carries and a restart needs; `locate` ends the transport anchor and begins the next pass. Both need
+    /// host ticks at or after the latest restart, locate and current anchor, which later captures are checked
+    /// against. `formatChange` names its stream and re-pins that stream's protocols on its next capture. Other kinds
+    /// do not affect MIDI capture.
     mutating func observe(_ discontinuity: RuntimeDiscontinuity, stream: StreamID?,
                           nominalRate rate: Int? = nil) throws(MIDICaptureRefusal) {
         if let stream, !streams.contains(stream) { throw .undeclaredStream(stream) }
@@ -188,6 +195,7 @@ struct MIDICaptureLog: Equatable, Sendable {
             guard let host = discontinuity.host else { throw .discontinuityNeedsHost }
             try requireNotBackwards(host)
             transport = nil
+            passBase = passBase.nextSpan
             musicalAnchors = []
             firstMusicalAnchor = nil
             firstMusicalAnchorSuccessorFrame = nil
@@ -200,7 +208,9 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
     }
 
-    /// A restart starts the next generation (generations step by one and are never ordered, M2) at its own rate.
+    /// A restart starts the next generation (generations step by one and are never ordered, M2) at its own rate. It
+    /// continues its pass (§9.3), carrying the loop iteration of the latest transport anchor; the loop's own bounds,
+    /// which the checker also reads for a restart in mid-loop, are not known to the log.
     private mutating func restart(_ discontinuity: RuntimeDiscontinuity, rate: Int?) throws(MIDICaptureRefusal) {
         guard let host = discontinuity.host else { throw .discontinuityNeedsHost }
         guard let raw = Int(exactly: discontinuity.sample.generation), let generation = try? Generation(raw),
@@ -210,6 +220,7 @@ struct MIDICaptureLog: Equatable, Sendable {
         guard MediaNominalRate.isValid(rate) else { throw .invalidRate(rate) }
         currentGeneration = generation
         currentAnchor = nil
+        passBase = passBase.advanced(byLoops: transport?.loopIteration ?? 0)
         transport = nil
         musicalAnchors = []
         firstMusicalAnchor = nil
@@ -281,6 +292,7 @@ struct MIDICaptureLog: Equatable, Sendable {
         let record = MIDICaptureRecord(Admission(), stream: stream, packet: packet, host: host,
                                        sample: SampleStamp(clock: clock, generation: current, frame: frame),
                                        musicalTicks: musical?.ticks, musicalRoundTripFrame: musical?.roundTrip,
+                                       pass: musical.map { passBase.advanced(byLoops: $0.loopIteration) },
                                        protocolStamp: stamp)
         records.append(record)
         pins[stream] = pin
@@ -309,10 +321,12 @@ struct MIDICaptureLog: Equatable, Sendable {
         }
     }
 
-    /// The musical ticks of a capture and the frame they map back to through the same map, nil when it overflowed.
+    /// The musical ticks of a capture, the frame they map back to through the same map (nil when it overflowed) and the
+    /// loop iteration of the anchor they derive through.
     private struct MusicalDerivation {
         let ticks: Int64
         let roundTrip: Int64?
+        let loopIteration: UInt32
     }
 
     private func musicalDerivation(atFrame frame: Int64,
@@ -334,7 +348,8 @@ struct MIDICaptureLog: Equatable, Sendable {
             throw .overflow
         }
         guard ticks >= 0 else { throw .negativeMusicalTicks }
-        return MusicalDerivation(ticks: ticks, roundTrip: try? map.frame(atTicks: ticks))
+        return MusicalDerivation(ticks: ticks, roundTrip: try? map.frame(atTicks: ticks),
+                                 loopIteration: map.musical.loopIteration)
     }
 
     /// Resolves the latest retained anchor, or the genuine first anchor only before its successor's frame.

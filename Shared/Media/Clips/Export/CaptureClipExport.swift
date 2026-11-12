@@ -12,7 +12,8 @@
 /// The clip's tick scale is the log's musical ticks (`MusicalTime.ticksPerQuarter`, 15,360 per quarter) and the
 /// file carries no tempo event, so a position needs no tempo map and §9.3's `syntheticTempoMap` (an event without a
 /// musical stamp) cannot occur: `make` refuses such captures. Rounding capture positions to ticks is declared as
-/// `.timingQuantized` with its count.
+/// `.timingQuantized` with its count, and captures of later passes, which the file lays on the same tick line as the
+/// earliest pass, as `.passesOverlaid`.
 struct CaptureClipExport: Equatable, Sendable {
     private(set) var clip: MIDIClip
     /// Every selected capture the file does not contain: all that are not MIDI 1 channel voice (MT 0x2), MIDI 2
@@ -33,9 +34,13 @@ struct CaptureClipExport: Equatable, Sendable {
     /// Selected captures, UMP-only ones included, whose musical ticks map back to another frame than the one they
     /// were captured at (or whose map-back is unknown): the export's positions are rounded to ticks.
     private(set) var timingQuantized: Int
+    /// Selected captures, UMP-only ones included, in a later pass than the earliest selected capture's (§9.3): a pass
+    /// is a loop iteration or the span after a locate or transport restart, and a clock restart continues its pass.
+    /// Each such capture counts, not each pass; the file puts all of them on one tick line.
+    private(set) var passesOverlaid: Int
 
     private init(clip: MIDIClip, droppedUMPOnly: Int, pairing: CaptureNotePairing, groupsFlattened: Int,
-                 timingQuantized: Int) {
+                 timingQuantized: Int, passesOverlaid: Int) {
         self.clip = clip
         self.droppedUMPOnly = droppedUMPOnly
         unpairedOffs = pairing.unpairedOffs
@@ -43,6 +48,7 @@ struct CaptureClipExport: Equatable, Sendable {
         widenedNotes = pairing.widenedNotes
         self.timingQuantized = timingQuantized
         self.groupsFlattened = groupsFlattened
+        self.passesOverlaid = passesOverlaid
     }
 
     /// One selected capture with its musical ticks.
@@ -111,7 +117,8 @@ struct CaptureClipExport: Equatable, Sendable {
         }
         return CaptureClipExport(clip: clip, droppedUMPOnly: conversion.dropped, pairing: pairing,
                                  groupsFlattened: groupsFlattened(in: records),
-                                 timingQuantized: timingQuantized(in: records))
+                                 timingQuantized: timingQuantized(in: records),
+                                 passesOverlaid: passesOverlaid(in: records))
     }
 
     /// The explicit length, checked; or, when nil, the default length of the selected MT 0x2 captures (decodable or
@@ -131,6 +138,14 @@ struct CaptureClipExport: Equatable, Sendable {
     /// overflowed) can never equal the frame, so it counts.
     private static func timingQuantized(in records: [Selected]) -> Int {
         records.count { $0.record.musicalRoundTripFrame != $0.record.sample.frame }
+    }
+
+    /// The captures in a pass above the lowest pass of the selection, as the media contract's checker counts
+    /// `passesOverlaid`: all selected captures, whether or not the file holds them, each one counted.
+    private static func passesOverlaid(in records: [Selected]) -> Int {
+        let passes = records.compactMap(\.record.pass)
+        guard let lowest = passes.min() else { return 0 }
+        return passes.count { $0 > lowest }
     }
 
     /// The group count of the media contract's `groupsFlattened`: the selected captures whose type carries a group
@@ -163,16 +178,18 @@ struct CaptureClipExport: Equatable, Sendable {
     }
 
     /// The file for `clip`, written by `StandardMIDIFile.write`, with the losses of this export: `umpOnlyDropped`
-    /// for every selected capture the file lacks, `groupsFlattened` when the selection spans groups and
-    /// `timingQuantized` (added to whatever the writer reported) when capture positions were rounded to ticks. No
-    /// tempo event is written, so `syntheticTempoMap` is never reported, and `fidelityUnverified` is not either: it
-    /// qualifies converted MT 0x4 events and none are converted. Unpaired Note Offs, closed open notes and widened
-    /// notes are counted on this value, not as §9.3 categories.
+    /// for every selected capture the file lacks, `groupsFlattened` when the selection spans groups,
+    /// `passesOverlaid` for the captures of later passes and `timingQuantized` (added to whatever the writer
+    /// reported) when capture positions were rounded to ticks. No tempo event is written, so `syntheticTempoMap` is
+    /// never reported, and `fidelityUnverified` is not either: it qualifies converted MT 0x4 events and none are
+    /// converted. Unpaired Note Offs, closed open notes and widened notes are counted on this value, not as §9.3
+    /// categories.
     func smf() -> SMFWriteResult {
         let written = StandardMIDIFile.write(clip)
         var losses = written.losses.losses
         if droppedUMPOnly > 0 { losses[.umpOnlyDropped] = droppedUMPOnly }
         if groupsFlattened > 0 { losses[.groupsFlattened] = groupsFlattened }
+        if passesOverlaid > 0 { losses[.passesOverlaid] = passesOverlaid }
         if timingQuantized > 0 { losses[.timingQuantized, default: 0] += timingQuantized }
         return SMFWriteResult(bytes: written.bytes, losses: SMFExportLossReport(losses: losses),
                               reorderedItems: written.reorderedItems)
