@@ -63,19 +63,20 @@ extension UMPCapabilityTests {
     @Test func midi2EndpointWithBlocksNegotiatesUMPMIDI2() throws {
         // Wire order: block 1 before block 0, then a name. The result lists the blocks sorted by index.
         let packets = [Self.endpointMIDI2, Self.block1, Self.block0, Self.block0Name]
-        let result = try Self.negotiate(packets, answer: Self.ciAnswer(reply: Self.reply))
+        let result = try Self.negotiate(packets, ci: [Self.reply])
         #expect(result.level == .umpMIDI2)
         #expect(result.features == [.umpTransport, .midi2Protocol, .jitterReduction, .functionBlocks, .ciDiscovery])
         #expect(result.functionBlocks == [Self.expectedBlock0, Self.expectedBlock1])
         #expect(result.profiles.isEmpty)
-        #expect(result.downgrades.isEmpty)
+        // Block 1 is a MIDI 1.0 block on this MIDI 2.0 endpoint (#572 gap 3): recorded, the level is unchanged.
+        #expect(result.downgrades == [Self.block1MIDI1Only])
     }
 
     @Test func inactiveBlocksAreListedButGrantNoFunctionBlockFeature() throws {
         // Endpoint with one block (MIDI 2.0 only), block 0 with the active bit (word 0 bit 15) clear.
         let endpoint: [UInt32] = [0xF001_0101, 0x8100_0200, 0, 0]
         let inactive: [UInt32] = [0xF011_0033, 0x0002_0201, 0, 0]
-        let result = try Self.negotiate([endpoint, inactive], answer: Self.ciAnswer(reply: Self.reply))
+        let result = try Self.negotiate([endpoint, inactive], ci: [Self.reply])
         #expect(result.level == .umpMIDI2)
         #expect(result.features == [.umpTransport, .midi2Protocol, .ciDiscovery])
         let block = try #require(result.functionBlocks.first)
@@ -86,8 +87,8 @@ extension UMPCapabilityTests {
     @Test func hostileStreamWordsAreRefusedAndContributeNothing() throws {
         let limits = try Self.limits()
         let good = [Self.endpointMIDI2, Self.block0, Self.block1]
-        let answer = try Self.ciAnswer(reply: Self.reply)
-        let baseline = try Self.negotiate(good, answer: answer)
+        let answer = [Self.reply]
+        let baseline = try Self.negotiate(good, ci: answer)
         #expect(baseline.level == .umpMIDI2)
         #expect(baseline.functionBlocks == [Self.expectedBlock0, Self.expectedBlock1])
         for fixture in Self.hostile {
@@ -97,25 +98,31 @@ extension UMPCapabilityTests {
             for position in 0...good.count {
                 var packets = good
                 packets.insert(fixture.words, at: position)
-                #expect(throws: fixture.refusal, "\(fixture.name)") { try Self.facts(packets, answer: answer) }
+                #expect(throws: fixture.refusal, "\(fixture.name)") { try Self.facts(packets, ci: answer) }
             }
             // ...and the good packets alone still negotiate exactly as before.
-            #expect(try Self.negotiate(good, answer: answer) == baseline, "\(fixture.name)")
+            #expect(try Self.negotiate(good, ci: answer) == baseline, "\(fixture.name)")
         }
     }
 
     @Test func inconsistentWireFactsAreRefusedByTheResolver() throws {
-        let answer = try Self.ciAnswer(reply: Self.reply)
+        let answer = [Self.reply]
         // Block 1 moved to first group 1: it overlaps block 0 (groups 0-1).
         let overlapping: [UInt32] = [0xF011_8115, 0x0101_0100, 0, 0]
+        // The adapter keys blocks by index, so an identical repeat of block 0 is one block: the count is short.
         let cases: [([[UInt32]], MIDICapabilityRefusal)] = [
             ([Self.endpointMIDI2, Self.block0], .functionBlockCountMismatch(declared: 2, supplied: 1)),
             ([Self.block0], .functionBlocksWithoutEndpoint(count: 1)),
-            ([Self.endpointMIDI2, Self.block0, Self.block0], .duplicateFunctionBlockIndex(0)),
+            ([Self.endpointMIDI2, Self.block0, Self.block0], .functionBlockCountMismatch(declared: 2, supplied: 1)),
             ([Self.endpointMIDI2, overlapping, Self.block0], .overlappingFunctionBlockGroups(first: 0, second: 1))
         ]
         for (packets, expected) in cases {
-            #expect(Self.refusal(try Self.facts(packets, answer: answer)) == expected)
+            #expect(Self.refusal(try Self.facts(packets, ci: answer)) == expected)
+        }
+        // Two different blocks with index 0 never reach the resolver: the adapter refuses the second one.
+        let otherBlock0: [UInt32] = [0xF011_8033, 0x0202_0201, 0, 0]
+        #expect(throws: MIDICapabilityDiscoveryRefusal.conflictingFunctionBlock(index: 0)) {
+            try Self.facts([Self.endpointMIDI2, Self.block0, otherBlock0], ci: answer)
         }
     }
 }

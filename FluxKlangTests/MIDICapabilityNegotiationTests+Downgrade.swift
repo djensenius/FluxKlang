@@ -138,7 +138,8 @@ extension MIDICapabilityNegotiationTests {
 
     @Test func theDowngradeReasonsAreDeclaredInTheCanonicalOrder() {
         let expected: [MIDICapabilityDowngradeReason] = [
-            .noUMPEndpoint, .endpointSupportsNoProtocol, .ciAnswerMissing, .endpointLacksMIDI2, .profilesNotAdvertised
+            .noUMPEndpoint, .endpointSupportsNoProtocol, .ciAnswerMissing, .endpointLacksMIDI2, .functionBlockMIDI1Only,
+            .profilesNotAdvertised
         ]
         #expect(MIDICapabilityDowngradeReason.allCases == expected)
     }
