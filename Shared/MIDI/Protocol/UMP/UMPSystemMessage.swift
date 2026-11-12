@@ -39,7 +39,8 @@ enum UMPSystemMessage: Equatable, Sendable {
 /// define (`reservedStatus`): below 0xF0, SysEx 0xF0/0xF7 (SysEx is MT 0x3), and the undefined 0xF4, 0xF5, 0xF9,
 /// 0xFD; then any non-zero reserved bit (`reservedBitsSet`): bit 7 of a used data byte, or any bit of an unused
 /// data byte. So a decoded message always re-encodes to the received word.
-/// This type is a codec only: translation between UMP and MIDI 1.0 byte streams does not use it yet.
+/// MIDI 1.0 → MIDI 2.0 translation passes it through with `UMPTranslationStream.receive(system:at:)`; the
+/// MIDI 2.0 → MIDI 1.0 direction and the byte-stream I/O do not use it yet.
 struct UMPSystemCommonRealTime: Equatable, Sendable {
     let group: UMPGroup
     let message: UMPSystemMessage

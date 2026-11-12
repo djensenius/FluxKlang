@@ -17,7 +17,8 @@
 /// - RPN (CC 101/100) and NRPN (CC 99/98) selections are absorbed. CC 6 is held, not sent: CC 38 completes it into
 ///   one Registered/Assignable Controller with the 14-bit value `msb << 7 | lsb`. A held CC 6 is sent with LSB 0
 ///   (a Data Entry MSB resets the LSB, the MIDI 1.0 convention) before any message that is not the CC 38 on its
-///   own group and channel (a second CC 6, a selection byte, or any message on any group or channel), or by
+///   own group and channel (a second CC 6, a selection byte, or any message on any group or channel; MT 0x1 System
+///   Real Time is the stream-level exception, see `UMPTranslationStream`), or by
 ///   `flush(group:channel:)` / `flushAll()`. The translator has no clock: the I/O layer must call `flushAll()` on
 ///   timeout, at end of stream and at teardown (see #362). A further CC 38 re-sends the controller with the last
 ///   MSB and the new LSB. The null RPN (127/127) deselects; Data Entry then declares a loss.
@@ -32,7 +33,8 @@
 ///
 /// The output is one stream, so order holds across every group and channel: a held CC 6 is sent before the next
 /// message on any group or channel, unless that message is the CC 38 completing it. So at most one CC 6 is ever
-/// held; a single slot (`heldDataEntry`) enforces that.
+/// held; a single slot (`heldDataEntry`) enforces that. This translator takes channel voice only; at the stream
+/// level, MT 0x1 System Real Time passes a held CC 6 without sending it (see `UMPTranslationStream`).
 ///
 /// Not real-time safe: `translate` copies its state and allocates its output, so call the translator on the
 /// control or I/O thread, never on the audio render thread.
