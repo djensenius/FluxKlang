@@ -18,8 +18,8 @@ import Testing
 ///   profile bound; how identity is keyed ("bounded profile discovery", "Unique ID alone is not universal identity").
 /// API availability and property exchange are not covered: no production API for either exists yet.
 ///
-/// No production adapter turns decoded messages into `MIDICapabilityFacts`; `facts(_:answer:)` and `ciAnswer(reply:
-/// profiles:)` below are the only glue, and they are kept minimal. Every word and byte below was written by hand
+/// Decoded messages become `MIDICapabilityFacts` through the production adapter, `MIDICapabilityDiscovery` (#572);
+/// `discovery(_:ci:)` below only decodes and feeds it, in order. Every word and byte below was written by hand
 /// from the layouts documented in `UMPStreamMessage+Decode.swift`, `MIDICIMessage.swift` and
 /// `MIDICIProfileMessage.swift`, never produced by an encoder.
 #if os(macOS)
@@ -53,6 +53,10 @@ struct UMPCapabilityTests {
     static let expectedBlock1 = Block(
         index: 1, isActive: true, uiHint: .receiver, midi1Mode: .unrestricted, direction: .input,
         firstGroup: 2, groupCount: 1, midiCIVersion: 1, maximumSysEx8Streams: 0)
+    /// The downgrade block 1 (MIDI 1.0 unrestricted) records on a MIDI 2.0 endpoint.
+    static let block1MIDI1Only = MIDICapabilityDowngrade(
+        reason: .functionBlockMIDI1Only, lost: [],
+        possibleTranslationLosses: MIDICapabilityResolver.midi2ToMIDI1Losses, functionBlockIndices: [1])
 
     // MARK: - MIDI-CI bytes (payload without F0 and F7)
 
@@ -117,41 +121,39 @@ struct UMPCapabilityTests {
         try UMPStreamMessage.decode(UMPPacket(words: words), limits: limits())
     }
 
-    /// Test glue: decodes every packet in order and keeps the Endpoint Info and every Function Block Info as
-    /// received (names and other messages are dropped: the facts have no slot for them). The first refused packet
-    /// is thrown, so a refusal yields no facts at all.
-    static func facts(_ packets: [[UInt32]], answer: CIAnswer) throws -> Facts {
-        var endpoint: UMPStreamEndpointInfo?
-        var blocks: [Block] = []
+    /// Decodes a MIDI-CI payload with the decoder its sub-id 2 selects (0x20 to 0x27: the profile messages).
+    static func collect(ci payload: [UInt8], into discovery: inout MIDICapabilityDiscovery) throws {
+        if payload.count > 3, (0x20...0x27).contains(payload[3]) {
+            try discovery.collect(MIDICIProfileMessage.decode(payload: payload, limits: .standard))
+        } else {
+            try discovery.collect(MIDICIMessage.decode(payload: payload, limits: .standard))
+        }
+    }
+
+    /// Decodes every Stream packet, then every MIDI-CI payload, in order, and collects each one in a fresh
+    /// `MIDICapabilityDiscovery`. The first decode or collect refusal is thrown, so a refusal yields no facts at all.
+    static func discovery(_ packets: [[UInt32]], ci payloads: [[UInt8]] = []) throws -> MIDICapabilityDiscovery {
+        var discovery = MIDICapabilityDiscovery()
         for words in packets {
-            switch try stream(words) {
-            case .endpointInfo(let info): endpoint = info
-            case .functionBlockInfo(let block): blocks.append(block)
-            default: break
-            }
+            try discovery.collect(stream(words))
         }
-        return Facts(endpoint: endpoint, functionBlocks: blocks, ciAnswer: answer)
+        for payload in payloads {
+            try collect(ci: payload, into: &discovery)
+        }
+        return discovery
     }
 
-    /// Test glue: a Discovery Reply, plus the same device's Reply to Profile Inquiry when given, becomes `.answered`
-    /// with the enabled then the disabled ids. No reply, or any other management message (a NAK), is `.missing`:
-    /// `MIDICapabilityCIAnswer` has no other case.
+    static func facts(_ packets: [[UInt32]], ci payloads: [[UInt8]] = []) throws -> Facts {
+        try discovery(packets, ci: payloads).facts
+    }
+
+    /// The adapter's answer for a Discovery Reply (or a NAK, or nothing) and, when given, a Reply to Profile Inquiry.
     static func ciAnswer(reply: [UInt8]?, profiles: [UInt8]? = nil) throws -> CIAnswer {
-        guard let reply else { return .missing }
-        guard case let .discoveryReply(header, info, _) = try MIDICIMessage.decode(payload: reply, limits: .standard)
-        else { return .missing }
-        guard let profiles else { return .answered(info, profiles: []) }
-        let decoded = try MIDICIProfileMessage.decode(payload: profiles, limits: .standard)
-        guard case let .inquiryReply(profileHeader, enabled, disabled) = decoded else {
-            Issue.record("not a Reply to Profile Inquiry: \(decoded)")
-            return .missing
-        }
-        #expect(profileHeader.source == header.source)
-        return .answered(info, profiles: enabled + disabled)
+        try facts([], ci: [reply, profiles].compactMap { $0 }).ciAnswer
     }
 
-    static func negotiate(_ packets: [[UInt32]], answer: CIAnswer) throws -> MIDINegotiatedCapability {
-        try MIDICapabilityResolver.negotiate(facts(packets, answer: answer))
+    static func negotiate(_ packets: [[UInt32]], ci payloads: [[UInt8]] = []) throws -> MIDINegotiatedCapability {
+        try MIDICapabilityResolver.negotiate(facts(packets, ci: payloads))
     }
 
     /// The resolver refusal for these facts, or nil when negotiation succeeds.
