@@ -6,6 +6,9 @@ import Testing
 #endif
 
 /// The control message codec (#95, slice S2): golden bytes, hostile bytes, round trips and the command sections.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct PeerControlMessageTests {
     typealias Outcome<Value> = Result<Value, PeerControlMessageError>
 
