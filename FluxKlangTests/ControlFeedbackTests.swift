@@ -8,7 +8,11 @@ import Testing
 
 /// Controller feedback: host truth in, neutral correction messages out. The suite is split across `+Echo`,
 /// `+TouchHold` and `+Corrections`; every fixture is nested here so no name leaves the suite.
+#if os(macOS)
+@Suite("Control feedback", .productionAccessAudit)
+#else
 @Suite("Control feedback")
+#endif
 struct ControlFeedbackTests {
     static let level = ParameterID(validated: "par.level")
     static let other = ParameterID(validated: "par.other")

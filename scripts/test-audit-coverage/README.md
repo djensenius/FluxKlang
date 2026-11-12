@@ -76,9 +76,12 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `MIDIClockArbitrationDropoutTests`, `ControlBindingTests`,
 `ControlBindingGroupTests`, `ControlHostTruthTests`, `ControlTriggerTests`,
 `ControlTriggerClearTests`, `ControlTriggerDetectorTests`,
-`ControlLearnTests`, `ControlLearnConflictTests` and `ControlInputGateTests`
+`ControlLearnTests`, `ControlLearnConflictTests`, `ControlInputGateTests`,
+`ControlInputBankTests`, `ControlSourceAvailabilityTests`,
+`ControlLocalTriggerDispatchTests`, `ControlFeedbackTests`,
+`MIDIControlIntakeTests`, `ActiveSensingTests` and `MIDISourceRegistryTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those seventy-nine macOS-guarded suites remain unadopted. Other
+owners of those eighty-six macOS-guarded suites remain unadopted. Other
 owners' annotation obligations remain unsatisfied: inventory intentionally
 exits 0 with `enforcementSatisfied: false`, while default enforcement
 exits 1. Inventory success is not coverage or isolation.
@@ -925,6 +928,95 @@ A first Release run's console log dropped most per-test lines, so Release
 was re-run with `--xunit-output` and `--event-stream-output-path`: its
 xUnit report lists 136 test cases with no failures or skips, and its event
 stream ends all 136 test functions and nine suites with no issue events.
+These runs add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the remaining #60 gates above still apply and #60
+remains open.
+
+## Control bank, dispatch, feedback and MIDI intake source adoption
+
+`ControlInputBankTests`, `ControlSourceAvailabilityTests`,
+`ControlLocalTriggerDispatchTests`, `ControlFeedbackTests`,
+`MIDIControlIntakeTests`, `ActiveSensingTests` and `MIDISourceRegistryTests`
+now use the canonical trait under `#if os(macOS)` on their root
+declarations, matching `GraphCompilerTests`, without test-body, helper,
+target-membership or registration changes. All seven keep their display
+names: the trait is added to each existing `@Suite` in the macOS branch and
+the `#else` branch keeps that `@Suite` unchanged. None of the seven has
+other suite traits. Each is a separate root `struct` in its own file
+(`ControlInputBankTests.swift`, `ControlSourceAvailabilityTests.swift`,
+`ControlLocalTriggerDispatchTests.swift`, `ControlFeedbackTests.swift`,
+`MIDIControlIntakeTests.swift`, `ActiveSensingTests.swift` and
+`MIDISourceRegistryTests.swift`); the longest root file,
+`ControlLocalTriggerDispatchTests.swift`, grows from 487 to 491 lines,
+under the 500-line `file_length` limit. Their extensions stay unannotated:
+`ControlInputBankTests+Lifecycle.swift`; the three `ControlFeedbackTests+`
+files (`Corrections`, `Echo` and `TouchHold`) and the in-file extensions of
+`ControlFeedbackTests`; the six `MIDIControlIntakeTests+` files (`Bounds`,
+`Determinism`, `Goldens`, `Keys`, `Precedence` and `Widths`); the three
+`ActiveSensingTests+` files (`Arming`, `Refusal` and `Timeout`); and the
+four `MIDISourceRegistryTests+` files (`Bounds`, `Endpoint`, `Isolation`
+and `Reset`). The nested `ControlInputBankTests.Fx` and
+`MIDIControlIntakeTests.LaunchControl` fixtures and the file-private `Fx`
+and `Seen` helpers of `ControlLocalTriggerDispatchTests` are not suites and
+stay unannotated. Each suite uses only its own fixtures; none borrows a
+helper from another test file. The suites build bindings, links, host
+truth, MIDI 1 state updates and byte streams from literals, static `let`
+identifiers, injected integer ticks or `HostStamp` values and a seeded
+integer stream, and drive the `Shared/Control` `Bank`, `Availability`,
+`Dispatch`, `Feedback` and `Intake` value types,
+`ActiveSensingObserver` and `MIDISourceRegistry`. They declare no
+`static var` members. `ControlFeedbackTests` and `MIDIControlIntakeTests`
+import Foundation; the only Foundation API either uses is
+`String(format:)` in one feedback fixture. The production closure the
+fixture copied is all of `Shared/Contracts`, the ten
+`Shared/MIDI/Protocol/MIDI1` sources, the `Shared/Control` sources except
+`ProgramRecall`, the six `Shared/MIDI/IO/Registry` sources, the three
+`Shared/MIDI/Performance/Sensing` and three `Curves` sources,
+`MIDIPerformanceIDs.swift`, `MIDIRouting.swift`,
+`MIDI1Semantic+Routing.swift`,
+`Shared/Performance/Automation/AutomationArbitration.swift` and
+`Shared/WING/FaderMath.swift`. No source in it imports anything but
+Foundation; its only `static var` members are computed or protocol
+requirements, and its only class is the stateless
+`fileprivate final class Identity` token in `TriggerSession.swift`. None
+of the seven suites touches the file system, bundles, wall clock, sleep,
+dispatch, defaults, global mutable state, MIDI hardware, network or audio.
+`ControlFeedbackMIDI1Tests` and `ControlLocalDispatchTests` stay unadopted
+because their `+RoundTrip` and `+Composition` extension files read
+repository sources through `#filePath`.
+
+Against the unmodified UARG14 tree, both checker modes report 4,888
+registrations. Satisfied rows rise from 712 (672 `FluxKlangMacTests`, 40
+`FluxKlangTests`) to 768 (728 `FluxKlangMacTests`, 40 `FluxKlangTests`).
+The seven suites' 56 `FluxKlangMacTests` root rows (eight per suite) are
+now satisfied, which accounts for the whole increase; no row is removed.
+Diagnostics fall by 56, from 6,352 to 6,296: eight removed per suite, as
+each had a named `@Suite`, and none added. The iOS `FluxKlangTests` root
+rows for all seven suites stay unsatisfied, with one diagnostic per row
+(eight per suite). Apart from the Mac rows' status, the only row change,
+in both modules, is that test line numbers in the six root files that
+declare tests shift by four; `MIDISourceRegistryTests.swift` declares
+none. Inventory still exits 0 and default enforcement still exits 1. This
+comparison is a row-level diff of both trees' output.
+
+A fresh SwiftPM package (default build system, no private witness or
+observer) byte-copied 156 repository sources from this change. 25 are test
+sources: the seven suites' files, their 17 extension-only files and
+`ProductionAccessScope.swift`. The other 131 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: the 58 `Shared/Contracts`, 45 `Shared/Control`, ten
+`Shared/MIDI/Protocol/MIDI1`, six `Shared/MIDI/IO/Registry` and nine
+`Shared/MIDI/Performance` sources, `AutomationArbitration.swift` and
+`FaderMath.swift`. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the seven suites
+each passed 317 tests (none parameterized) in seven suites, with
+`--xunit-output` and `--event-stream-output-path`. Each xUnit report lists
+317 test cases with no failures or skips, and each event stream ends all
+317 test functions and seven suites with no issue events. Each run, under
+its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the seven suites (`FluxKlangTests/` plus
+the suite name), carrying that run ID, with all 14 operation IDs reporting
+zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
 These runs add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the remaining #60 gates above still apply and #60
 remains open.
