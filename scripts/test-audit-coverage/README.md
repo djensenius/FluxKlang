@@ -96,9 +96,11 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `PatchTransitionSustainTests`, `PeerStatusProjectionTests`,
 `PeerBackpressureTests`, `PeerEndpointPolicyTests`,
 `PeerControlMessageTests`, `PeerSyncTests`, `PeerSyncCommandTests`,
-`PeerReconnectTests` and `PeerReconnectEpochTests`
+`PeerReconnectTests`, `PeerReconnectEpochTests`, `PeerTrustVectorTests`,
+`PeerTrustStorageTests`, `PeerTrustTests`, `PeerTransportTests` and
+`PeerRetryClassTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those one hundred and twenty-three macOS-guarded suites remain
+owners of those one hundred and twenty-eight macOS-guarded suites remain
 unadopted.
 Other owners' annotation obligations remain unsatisfied: inventory
 intentionally exits 0 with `enforcementSatisfied: false`, while default
@@ -1429,6 +1431,63 @@ test line numbers of these four suites shift by four (every test of a suite
 is in the file that declares its root). Inventory still exits 0 and default
 enforcement still exits 1. This comparison is a row-level diff of both trees'
 output.
+
+## Peer trust, transport and retry source adoption
+
+`PeerTrustVectorTests`, `PeerTrustStorageTests`, `PeerTrustTests`,
+`PeerTransportTests` and `PeerRetryClassTests` now use the canonical trait
+under `#if os(macOS)` on their root declarations, without test-body, helper,
+target-membership or registration changes. Four already had a named `@Suite`
+and keep its display name: the trait is added in the macOS branch and the
+`#else` branch keeps the original. `PeerRetryClassTests` had no `@Suite`, so
+it takes the bare form, with its doc comment above the `#if`. None has other
+suite traits. `PeerTrustVectorTests` and `PeerTrustStorageTests` are root
+structs in `PeerTrustTests+Vectors.swift` and `PeerTrustTests+Storage.swift`;
+the retry suite's `+Classes`, `+Revalidate` and `+Order` files are extensions
+and stay unannotated. The longest touched file, `PeerTrustTests+Storage.swift`
+at 239 lines, is far below the 500-line `file_length` limit.
+
+The suites drive the trust store and fingerprints, the wire frame decoder, the
+retry classes and the intent revalidator from literals and injected values.
+They declare no actors and no `static var`, and read no file, bundle, date or
+clock. The one `ContinuousClock` hit is not in an adopted suite. The
+`HeldReadCounter` class in `PeerRetryClassTests+Revalidate.swift` is a
+`private final class` with a `var`, created fresh inside one test's local
+value, so no state is shared between tests. `PeerTrustTests+Storage.swift`
+imports Foundation only for an in-memory `JSONEncoder`.
+
+The production closure the mirror copied is 156 sources: `Shared/Contracts`
+(62 files), the patch and transition values, `Shared/Peer` (commands, pairing,
+reliability, sync, telemetry, transport, trust and wire), seven
+`Shared/Host/Authority` sources that `PeerAuthorizedSession` reaches through
+`HostCommandDecision` and `EngineLifecycle`, `Shared/MIDI/Performance` and
+`Shared/MIDI/Protocol/MIDI1`, `Shared/WING/FaderMath.swift` and
+`ProductionAccessAudit.swift`. They have no `async` or `await`, actor, file,
+bundle, date or `.now`; `ContinuousClock.Instant` and `Duration` appear only
+as types and parameters of the pairing and reconnect values, and `CryptoKit`
+only in `PeerIdentity.swift` (one-shot SHA-256 over in-memory bytes). `UUID()`
+appears only in `Shared/Contracts/Commands/MusicalTimeline.swift`, which none
+of the five suites uses. The only classes are `ProductionAccessAudit` and
+stateless `fileprivate final class Identity` tokens.
+
+Not adopted: `PeerTrustPairingTests` reads the clock (`private let start =
+ContinuousClock.now`, `PeerTrustTests+Pairing.swift:14`);
+`PeerTransportNegotiationTests` declares an actor and awaits it
+(`PeerTransportTests+Negotiation.swift:11`); `PeerPairingInitiatorTests` scans
+files (`PeerPairingInitiatorTests+Status.swift:22-31`, `#filePath` and
+`FileManager`). `DiagnosticsListTests` and `SetupApplyGuardTests` are
+deferred: their closures reach the workspace status inputs, the workspace
+navigation model and the rig setup flow tests, which this slice did not
+review.
+
+A fresh SwiftPM package byte-copied those sources and the five suites' test
+files plus `ProductionAccessScope.swift`. Debug and Release (`-c release
+-Xswiftc -enable-testing`) runs each passed 100 tests in five suites with no
+warnings. They add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the iOS `FluxKlangTests` rows for these suites stay
+unsatisfied, the remaining #60 gates above still apply and #60 remains open.
+
+Checker totals are in the pull request.
 
 ## Headless fixtures
 

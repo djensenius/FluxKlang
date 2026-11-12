@@ -17,7 +17,11 @@ private func isDecodable<T: Decodable>(_: T.Type) -> Bool { true }
 
 private func runtimeCodable(_ type: Any.Type) -> Bool { type is any Encodable.Type || type is any Decodable.Type }
 
+#if os(macOS)
+@Suite("PeerTrustTests+Storage", .productionAccessAudit)
+#else
 @Suite("PeerTrustTests+Storage")
+#endif
 struct PeerTrustStorageTests {
     private let peer = Support.identity(1)
 

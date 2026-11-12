@@ -7,6 +7,9 @@ import Testing
 
 /// Retry classes and held-intent revalidation (#97, slice RT1). The suite is split over
 /// `PeerRetryClassTests+Classes`, `+Revalidate` and `+Order`; every fixture lives in `Fixture` and `Call`.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct PeerRetryClassTests {
     enum Outcome: Equatable {
         case report(PeerRevalidationReport)
