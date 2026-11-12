@@ -2,7 +2,7 @@ import Testing
 @testable import FluxKlang
 
 /// Everything an event may change, so a refusal can be shown to change nothing. Private
-/// state is captured through behaviour, each probe on its own copy (see HANDOFF.md audit).
+/// state is captured through behaviour, each probe on its own copy.
 private struct EventSourceSnapshot: Equatable {
     let primaryClock: GenerationKey
     let musicalClock: ClockID?
