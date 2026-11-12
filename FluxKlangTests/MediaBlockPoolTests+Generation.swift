@@ -106,9 +106,12 @@ extension MediaBlockPoolTests {
         for (index, lease) in leases.enumerated() {
             let exhausted = MediaBlockPoolRefusal.poolExhausted(leased: 3 - index, retired: index)
             #expect(Self.refusal { try pool.lease() } == exhausted)
+            #expect(pool.statistics.leasesRefusedExhausted == UInt64(index + 1))
             #expect(try pool.release(lease) == .retired)
         }
         #expect(Self.refusal { try pool.lease() } == .poolExhausted(leased: 0, retired: 3))
+        // An all-retired pool is exhausted too, and none of these refusals was a busy one.
+        #expect(pool.statistics.leasesRefusedExhausted == 4 && pool.statistics.leasesRefusedBusy == 0)
         #expect(pool.statistics.blockCount == 3)
         #expect(pool.statistics.retiredCount == 3 && pool.statistics.freeCount == 0)
         #expect(pool.freeSlotsInLeaseOrder().isEmpty)
