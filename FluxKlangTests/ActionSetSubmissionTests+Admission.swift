@@ -7,7 +7,11 @@ import Testing
 #endif
 
 /// What changed between `decide` and `submit`: readiness, transport, an undeclared counter (#107 A2).
+#if os(macOS)
+@Suite("Action-set submit-time readiness and requirement checks", .productionAccessAudit)
+#else
 @Suite("Action-set submit-time readiness and requirement checks")
+#endif
 struct ActionSetSubmissionAdmissionTests {
     private typealias Harness = ActionSetSubmissionHarness
 
