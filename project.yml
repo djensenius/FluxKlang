@@ -555,6 +555,8 @@ targets:
       - path: FluxKlangTests/LibraryMediaListTests+Search.swift
       - path: FluxKlangTests/RemoteRolePresentationTests.swift
       - path: FluxKlangTests/RemoteRolePresentationTests+Notice.swift
+      - path: FluxKlangTests/LibraryReplacementPlanTests.swift
+      - path: FluxKlangTests/LibraryReplacementPlanTests+Refusals.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
