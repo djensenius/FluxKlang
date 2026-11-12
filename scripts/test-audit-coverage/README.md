@@ -1540,12 +1540,12 @@ in the `FluxKlangMacTests` list and pure by the same search: `PrefetchFixture`
 (`ProjectPackageAdmissionTests.swift`, a suite that already carries the trait)
 and `ProjectPreparationContextTests.sample()`, itself adopted here.
 
-The production closure the mirror copied is 147 sources: `Shared/Contracts`
+The production closure the mirror copied is 149 sources: `Shared/Contracts`
 (70 files), `Shared/Media/Prefetch` (4), `Shared/Persistence/Projects`
 (`ProjectPackageAdmission`, `ProjectPackageLimits` and `ProjectPackagePath`),
 `Shared/Rig` identity, library, mapping and review (17), the registry,
 descriptor and presence sources of `Shared/Audio/Devices/Registry` (8),
-`Shared/Spatial` adapter, render and routing (14), `Shared/MIDI/Performance`
+`Shared/Spatial` adapter, render and routing (16), `Shared/MIDI/Performance`
 (19) and `Shared/MIDI/Protocol/MIDI1` (10), `Shared/WING/FaderMath.swift` and
 `ProductionAccessAudit.swift`. They have no `async` or `await`, actor,
 file, bundle, date, `URL`, clock or `.now`. `import Foundation` is for value
@@ -1570,7 +1570,25 @@ warnings. They add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the iOS `FluxKlangTests` rows for these suites stay
 unsatisfied, the remaining #60 gates above still apply and #60 remains open.
 
-Checker totals are in the pull request.
+Against the tree at `439b6dbf` (the `main` this was measured on; this change
+is built on `e60bafdb`, and the two differ only by one documentation file that
+the checker does not read), both checker modes report 4,936 registrations.
+Satisfied rows rise from 1,128 (1,088 `FluxKlangMacTests`, 40
+`FluxKlangTests`) to 1,192 (1,152 `FluxKlangMacTests`, 40 `FluxKlangTests`).
+The eight suites' 64 `FluxKlangMacTests` root rows (eight per suite) are now
+satisfied, which accounts for the whole increase; no row is removed or added.
+Diagnostics fall by 104, from 5,912 to 5,808, and none is added: each Mac row
+of the three suites that already had a named `@Suite` (`PrefetchPlanTests`,
+`PrefetchPlayheadTests` and `RigMappingReviewOverlapTests`) loses its
+missing-trait diagnostic (24), and each Mac row of the five suites that had no
+`@Suite` loses that and the missing-`@Suite` diagnostic (80). The iOS
+`FluxKlangTests` root rows for the eight suites stay unsatisfied, with the same
+diagnostics as before. Apart from the Mac rows' status, the only row change, in
+both modules, is that listed test line numbers shift: by four for every test of
+the three suites that already had a named `@Suite`, and by three for every test
+of the five that had none (every test of the eight suites is in the file that
+declares its root). Inventory still exits 0 and default enforcement still exits
+1. This comparison is a row-level diff of both trees' output.
 
 ## Headless fixtures
 
