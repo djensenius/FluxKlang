@@ -70,9 +70,12 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `OpenSoundControlFramingTests`, `OSCNamespaceTests`, `WiringNodeEditTests`,
 `WiringPreviewTests`, `WiringReviewDiffTests`, `WiringEditPathTests`,
 `WiringEditPathEquivalenceTests`, `WiringComposeTests`,
-`WiringDestinationListTests` and `WiringMatrixTests` use the canonical suite
-trait; this is partial source adoption only. The iOS owners of those sixty-four
-macOS-guarded suites remain unadopted. Other owners' annotation obligations
+`WiringDestinationListTests`, `WiringMatrixTests`, `UMPStreamMessageTests`,
+`UMPTranslationStreamTests`, `UMPTranslationStreamPropertyTests`,
+`MIDIMachineControlTests`, `MIDITimecodeTests` and
+`MIDIClockArbitrationDropoutTests` use the canonical suite trait; this is
+partial source adoption only. The iOS owners of those seventy macOS-guarded
+suites remain unadopted. Other owners' annotation obligations
 remain unsatisfied: inventory intentionally exits 0 with
 `enforcementSatisfied: false`, while default enforcement exits 1. Inventory
 success is not coverage or isolation.
@@ -770,6 +773,81 @@ the other directories named above that the build required. Debug and Release
 passed 167 tests (none parameterized) in eight suites. Each run, under its own
 fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 `--attachments-path` for each of the eight suites (`FluxKlangTests/` plus the
+suite name), carrying that run ID, with all 14 operation IDs reporting zero
+`apiEntered` and `factoryEvaluated` and no audit issue recorded. These runs
+add no process-identity, argv or bootstrap evidence and do not cover the iOS
+owners; the remaining #60 gates above still apply and #60 remains open.
+
+## UMP stream, MIDI machine control, timecode and clock dropout source adoption
+
+`UMPStreamMessageTests`, `UMPTranslationStreamTests`,
+`UMPTranslationStreamPropertyTests`, `MIDIMachineControlTests`,
+`MIDITimecodeTests` and `MIDIClockArbitrationDropoutTests` now use the
+canonical trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. All six keep their display names: the trait is added
+to each existing `@Suite` in the macOS branch and the `#else` branch keeps
+that `@Suite` unchanged. None of the six has other suite traits. Each is a
+separate root `struct` (`UMPStreamMessageTests.swift`,
+`UMPTranslationStreamTests.swift`, `UMPTranslationStreamTests+Property.swift`,
+`MIDITimecodeTests+MMC.swift`, `MIDITimecodeTests.swift` and
+`MIDIClockArbitrationTests+Dropout.swift`). This supersedes the earlier
+sections' notes that these suites stay unadopted. UPREP1 (#556) has since
+split the two files the UARG7 and UARG8 sections held back for
+`file_length`: `MIDITimecodeTests.swift` grows from 415 to 419 lines and
+`MIDIClockArbitrationTests+Dropout.swift` from 424 to 428, both under the
+500-line limit. Their extensions stay unannotated:
+`UMPStreamMessageTests+Decode.swift`, `+Hostile.swift`, `+ProductID.swift`
+and `+Text.swift`; `MIDITimecodeTests+NibbleJoin.swift`; and
+`MIDIClockArbitrationTests+DropoutEdgeCases.swift`. The file-private seeded
+SplitMix generators (`UMPStreamHostileGenerator` and
+`StreamPropertyGenerator`), the `GroupProbe` decode helper, the stream
+property script and the timecode `Label`, `ByteFault` and `ExpectedPosition`
+helpers are not suites and stay unannotated. The suites feed hand-built
+words, bytes, `MIDI1Event` values and synthetic nanosecond or `HostStamp`
+times to the `UMP/StreamMessages` codec and text assembler,
+`UMPTranslationStream`, the `MMCMessage` codec, `MTCAssembler`,
+`MTCQuarterFrame` and `SMPTETime`, and
+`MIDIClockLeaderArbiter`. Their only `static var` member is the computed
+`UMPStreamMessageTests.samples`; their file-scope values are `private let`.
+The production closure the fixture needed is all of `Shared/Contracts`,
+`Shared/MIDI/Clock`, `Shared/MIDI/Timecode` and `Shared/MIDI/Protocol` (the
+`MIDI1` and `UMP` sources), plus
+`Shared/MIDI/Performance/MIDIPerformanceIDs.swift` and
+`Shared/WING/FaderMath.swift`. No source in it imports anything but
+Foundation; its only `static var` members are computed or protocol
+requirements, and its only class is the stateless
+`fileprivate final class Identity` token in `TriggerSession.swift`. None of
+the six suites touches the file system, bundles, wall clock, sleep,
+dispatch, defaults, global mutable state, MIDI hardware, network or audio.
+
+Only this change was run through the checker; the UARG12 tree was not re-run,
+and the comparison below uses its recorded totals (4,888 registrations, 592
+satisfied rows, 6,544 diagnostics). The complete source inventory of this
+change retains all 4,888 registrations and has 640 satisfied rows (600
+`FluxKlangMacTests`, 40 `FluxKlangTests`), 48 more than the UARG12 tree. The
+six suites' 48 `FluxKlangMacTests` root rows (eight per suite) are now
+satisfied, which accounts for the whole increase. The iOS `FluxKlangTests`
+root rows for all six suites stay unsatisfied, each with one annotation
+diagnostic. Diagnostics fall by 48, from 6,544 to 6,496 (eight removed per
+suite, as each had a named `@Suite`; none added). Inventory still exits 0
+and default enforcement still exits 1. The two trees were compared by totals
+only; the per-suite counts come from this change's output, not from a
+row-level diff.
+
+A fresh SwiftPM package (default build system, no private witness or observer)
+byte-copied 151 repository sources from this change. 13 are test sources: the
+six suites' files, their six extension-only files and
+`ProductionAccessScope.swift`. The other 138 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: the 58 `Shared/Contracts`, 26 `Shared/MIDI/Clock`, 22
+`Shared/MIDI/Timecode`, 19 `Shared/MIDI/Protocol/UMP` and ten
+`Shared/MIDI/Protocol/MIDI1` sources, `MIDIPerformanceIDs.swift` and
+`FaderMath.swift`. Debug and Release (`-c release -Xswiftc -enable-testing`)
+runs filtered to the six suites each passed 147 tests (seven parameterized,
+23 cases) in six suites. Each run, under its own fresh
+`FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the six suites (`FluxKlangTests/` plus the
 suite name), carrying that run ID, with all 14 operation IDs reporting zero
 `apiEntered` and `factoryEvaluated` and no audit issue recorded. These runs
 add no process-identity, argv or bootstrap evidence and do not cover the iOS

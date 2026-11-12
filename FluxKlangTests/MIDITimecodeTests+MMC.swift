@@ -14,7 +14,11 @@ private func locate(_ fields: [UInt8], device: UInt8 = 0x7F) -> [UInt8] {
     [0x7F, device, 0x06, 0x44, 0x06, 0x01] + fields
 }
 
+#if os(macOS)
+@Suite("MIDI machine control", .productionAccessAudit)
+#else
 @Suite("MIDI machine control")
+#endif
 struct MIDIMachineControlTests {
     @Test func simpleCommandCodesEncodeAndDecode() throws {
         let device = try SysExDeviceID(0x10)
