@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("MIDI capture restart and bounds", .productionAccessAudit)
+#else
 @Suite("MIDI capture restart and bounds")
+#endif
 struct MIDICaptureRestartTests {
     typealias Fixture = MIDICaptureFixture
 

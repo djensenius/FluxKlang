@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Standard MIDI File writer", .productionAccessAudit)
+#else
 @Suite("Standard MIDI File writer")
+#endif
 struct StandardMIDIFileTests {
     typealias Clip = MIDIClipTimingTests
     static let quarter = MusicalTime.ticksPerQuarter
