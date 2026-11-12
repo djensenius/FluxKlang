@@ -1487,7 +1487,24 @@ warnings. They add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the iOS `FluxKlangTests` rows for these suites stay
 unsatisfied, the remaining #60 gates above still apply and #60 remains open.
 
-Checker totals are in the pull request.
+Against the unmodified tree at `60470eff` (the `main` this change was built
+on), both checker modes report 4,936 registrations. Satisfied rows rise from
+1,088 (1,048 `FluxKlangMacTests`, 40 `FluxKlangTests`) to 1,128 (1,088
+`FluxKlangMacTests`, 40 `FluxKlangTests`). The five suites' 40
+`FluxKlangMacTests` root rows (eight per suite) are now satisfied, which
+accounts for the whole increase; no row is removed. Diagnostics fall by 48,
+from 5,960 to 5,912, and none is added: each Mac row of the four suites that
+already had a named `@Suite` loses its missing-trait diagnostic (32), and each
+Mac row of `PeerRetryClassTests`, which had no `@Suite`, loses that and the
+missing-`@Suite` diagnostic (16). The iOS `FluxKlangTests` root rows for the
+five suites stay unsatisfied, with the same diagnostics as before. Apart from
+the Mac rows' status, the only row change, in both modules, is that listed
+test line numbers shift: by four for every test of the four suites that
+already had a named `@Suite` (each is in the file that declares its root), and
+by three for the one test of `PeerRetryClassTests` in its root file (its other
+59 tests are in the three extension files and do not move). Inventory still
+exits 0 and default enforcement still exits 1. This comparison is a row-level
+diff of both trees' output.
 
 ## Headless fixtures
 
