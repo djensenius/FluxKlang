@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "a647455d605f560765854e654a87a3aa58e7e6bf550290458396b0930f5c74f6",
+    "sha256": "a7ec07dfe07593999d33148632c8d77f8b548c48e63b6edee3c0f6c7875827d6",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -468,6 +468,11 @@
         "FluxKlangTests/CaptureSMFExportTests+Fixture.swift",
         "FluxKlangTests/CaptureSMFExportTests+Groups.swift",
         "FluxKlangTests/CaptureSMFExportTests+Losses.swift",
+        "FluxKlangTests/CaptureSMFExportTests+Midi2.swift",
+        "FluxKlangTests/CaptureSMFExportTests+Midi2Examples.swift",
+        "FluxKlangTests/CaptureSMFExportTests+Midi2Fixture.swift",
+        "FluxKlangTests/CaptureSMFExportTests+Midi2Silent.swift",
+        "FluxKlangTests/CaptureSMFExportTests+Midi2State.swift",
         "FluxKlangTests/CaptureSMFExportTests+Order.swift",
         "FluxKlangTests/CaptureSMFExportTests+Pairing.swift",
         "FluxKlangTests/CaptureSMFExportTests+SysEx.swift",
