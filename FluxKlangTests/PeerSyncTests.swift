@@ -67,7 +67,11 @@ private extension PeerSyncPublisher {
     }
 }
 
+#if os(macOS)
+@Suite("PeerSyncTests", .productionAccessAudit)
+#else
 @Suite("PeerSyncTests")
+#endif
 struct PeerSyncTests {
     @Test func snapshotThenContiguousDeltasConverge() throws {
         var host = try publisher()

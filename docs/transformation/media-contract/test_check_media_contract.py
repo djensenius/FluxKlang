@@ -206,6 +206,90 @@ class MediaContractRegressionTests(unittest.TestCase):
         self.assertEqual(len(errors), 2, errors)
         self.assertTrue(all('"jumpBeforeTakeStart" not in enum' in error for error in errors), errors)
 
+    def sample_jump(self):
+        doc, name = self.example("12")
+        return doc, name, doc["timeline"][2], doc["timeline"][3]
+
+    def jump_then_restart(self, previous_frame=336000):
+        doc, name, _, take = self.sample_jump()
+        restart = [
+            {"seq": 4, "kind": "generation", "counter": "sampleClock/smp.main", "from": 1, "to": 2, "reason": "wake"},
+            {"seq": 5, "kind": "discontinuity", "type": "clockRestart", "sampleClock": "smp.main", "generation": 2,
+             "frame": 0, "hostTicks": 2900000000, "previousFrame": previous_frame},
+            {"seq": 6, "kind": "anchor", "sampleClock": "smp.main", "generation": 2, "frame": 48000,
+             "hostTicks": 2924000000}]
+        doc["timeline"][3:3] = restart
+        take["seq"] = 7
+        take["segments"].append({"sampleClock": "smp.main", "generation": 2, "startFrame": 0,
+                                 "startOffsetNs": 20833333333, "fileFrameStart": 192000, "frames": 48000,
+                                 "paddedFrames": 0})
+        return doc, name, take
+
+    def test_sample_jump_example_states_the_gap_it_covers(self):
+        doc, name, jump, take = self.sample_jump()
+        first, second = take["segments"]
+
+        self.assertEqual(self.errors(doc, name), [])
+        self.assertEqual(doc["covers"], ["capture"])
+        self.assertEqual(jump["type"], "sampleJump")
+        self.assertEqual((jump["sampleClock"], jump["generation"], jump["frame"]), ("smp.main", 1, 240000))
+        self.assertEqual(second["startFrame"], first["startFrame"] + first["frames"] + second["gapFrames"])
+        self.assertEqual(second["fileFrameStart"], first["frames"])  # the file stays contiguous: no padding
+        self.assertEqual(take["droppedFrames"], 512)  # the gap is not dropped capture
+        self.assertNotIn("gapFrames", first)
+
+    def test_gap_frames_is_additive_and_fails_closed_for_a_reader_that_predates_it(self):
+        old = copy.deepcopy(self.schema)
+        del old["$defs"]["takeRecord"]["properties"]["segments"]["items"]["properties"]["gapFrames"]
+
+        for number in range(1, 12):
+            doc, name = self.example("%02d" % number)
+            with self.subTest(example=name):
+                self.assertEqual(checker.check_example(doc, name, old)[0], [])
+
+        doc, name = self.example("12")
+        errors = checker.check_example(doc, name, old)[0]
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("$.timeline[3].segments[1]: unknown property gapFrames", errors[0])
+
+    def test_a_jump_then_a_restart_splits_twice_and_only_the_jump_pair_has_a_gap(self):
+        doc, name, take = self.jump_then_restart()
+
+        self.assertEqual(self.errors(doc, name), [])
+        self.assertEqual(["gapFrames" in segment for segment in take["segments"]], [False, True, False])
+
+    def test_a_restart_after_a_jump_must_resume_at_the_end_of_the_last_segment(self):
+        for previous_frame in (335999, 336001):
+            with self.subTest(previousFrame=previous_frame):
+                doc, name, _ = self.jump_then_restart(previous_frame)
+                self.assert_rejected(doc, name, "segments split at each clock restart")
+
+    def test_a_same_generation_pair_that_is_not_a_forward_gap_fails(self):
+        cases = (
+            ("backward, with a positive gap", {"startFrame": 90000, "gapFrames": 1}, "starts gapFrames after"),
+            ("backward, with a negative gap", {"startFrame": 90000, "gapFrames": -6000}, "out of range"),
+            ("zero gap", {"startFrame": 96000, "gapFrames": 0}, "out of range"),
+            ("no gapFrames at the jump", {"gapFrames": None}, "gapFrames is required exactly"),
+        )
+        for label, changes, message in cases:
+            with self.subTest(label):
+                doc, name, _, take = self.sample_jump()
+                for key, value in changes.items():
+                    if value is None:
+                        del take["segments"][1][key]
+                    else:
+                        take["segments"][1][key] = value
+                self.assert_rejected(doc, name, message)
+
+    def test_a_generation_skip_still_fails_with_the_restart_message(self):
+        doc, name, _ = self.jump_then_restart()
+        doc["timeline"][3]["to"] = 3
+        doc["timeline"][4]["generation"] = 3
+        doc["timeline"][5]["generation"] = 3
+        doc["timeline"][6]["segments"][2]["generation"] = 3
+
+        self.assert_rejected(doc, name, "segments split at each clock restart")
+
 
 if __name__ == "__main__":
     unittest.main()
