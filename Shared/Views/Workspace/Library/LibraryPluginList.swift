@@ -47,7 +47,7 @@ struct LibraryPluginList: Hashable, Sendable {
     /// Rows (and the scan row) where every whitespace-separated term is a case-insensitive substring of the title,
     /// kind text or status text. A blank query returns the list unchanged. The generation and order are kept.
     func filtered(by query: String) -> Self {
-        let terms = query.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
+        let terms = LibrarySearchTerms.terms(query)
         guard !terms.isEmpty else { return self }
         return Self(
             generation: generation,

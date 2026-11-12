@@ -41,7 +41,7 @@ struct LibraryMediaList: Hashable, Sendable {
     /// Rows where every whitespace-separated term is a case-insensitive substring of the title, kind text or status
     /// text. A blank query returns the list unchanged.
     func filtered(by query: String) -> Self {
-        let terms = query.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
+        let terms = LibrarySearchTerms.terms(query)
         guard !terms.isEmpty else { return self }
         return Self(rows: rows.filter { $0.matches(terms: terms) })
     }
