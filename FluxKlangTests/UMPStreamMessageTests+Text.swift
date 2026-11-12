@@ -310,9 +310,13 @@ extension UMPStreamMessageTests {
         var assembler = try Self.fresh()
         #expect(try Self.feed(&assembler, Self.piece(.endpointName, .start, Array("ABCDEFGHIJKLMN".utf8))) == .partial)
         let held = assembler
-        for status in [UInt16(0x000), 0x001, 0x002, 0x005, 0x006, 0x010, 0x011] {
+        for status in [UInt16(0x000), 0x001, 0x002, 0x005, 0x006, 0x010, 0x011, 0x020, 0x021] {
             let words: [UInt32] = [0xF000_0000 | UInt32(status) << 16, 0, 0, 0]
             #expect(try Self.feedRefusal(&assembler, words) == .notTextStatus(status))
+        }
+        for (first, status) in [(UInt32(0xF420_0000), UInt16(0x020)), (0xFC20_0000, 0x020), (0xF421_0000, 0x021),
+                                (0xFC21_0000, 0x021)] {
+            #expect(try Self.feedRefusal(&assembler, [first, 0, 0, 0]) == .notTextStatus(status))
         }
         #expect(try Self.feedRefusal(&assembler, [0xF007_0000, 0, 0, 0]) == .unknownStatus(7))
         let flex = try UMPPacket(words: [0xD000_0000, 0, 0, 0])
