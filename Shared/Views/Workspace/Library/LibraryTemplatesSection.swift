@@ -19,7 +19,7 @@ struct LibraryTemplatesSection: Hashable, Sendable {
     /// True for a blank query, or when every whitespace-separated term is a case-insensitive substring of the
     /// placeholder text.
     func matches(query: String) -> Bool {
-        let terms = query.split(whereSeparator: \.isWhitespace).map { $0.lowercased() }
+        let terms = LibrarySearchTerms.terms(query)
         let field = placeholderText.lowercased()
         return terms.allSatisfy { field.contains($0) }
     }

@@ -53,6 +53,13 @@ extension LibraryPluginListTests {
         #expect(unscanned.filtered(by: " ") == unscanned)
     }
 
+    @Test func theSharedSearchTermsSplitOnWhitespaceAndLowercase() {
+        #expect(LibrarySearchTerms.terms("  Foo\tBAR\n baz ") == ["foo", "bar", "baz"])
+        #expect(LibrarySearchTerms.terms("").isEmpty)
+        #expect(LibrarySearchTerms.terms("   ").isEmpty)
+        #expect(LibrarySearchTerms.terms("É") == ["é"])
+    }
+
     @Test func searchNeverMatchesTheIdOrTheReason() throws {
         let all = try Fixture.everyStatus()
         let list = LibraryPluginList.make(catalog: all.catalog, incompatible: all.judgment)
