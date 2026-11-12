@@ -39,8 +39,9 @@ extension MIDICIMessage {
     ///     sub-ids that no decoder here handles, such as the property data messages 0x34 to 0x3F; the profile
     ///     messages 0x20 to 0x27 (Profile Inquiry and its Reply, Set Profile On and Off, and the four profile
     ///     reports) are decoded by `MIDICIProfileMessage.decode(payload:limits:)` instead, the Property Exchange
-    ///     Capabilities Inquiry 0x30 and Reply 0x31 by `MIDICIPropertyCapabilityMessage.decode(payload:limits:)`, and
-    ///     the Endpoint Information Inquiry 0x72 and Reply 0x73 by `MIDICIEndpointMessage.decode(payload:limits:)`);
+    ///     Capabilities Inquiry 0x30 and Reply 0x31 by `MIDICIPropertyCapabilityMessage.decode(payload:limits:)`, the
+    ///     Process Inquiry messages 0x40 to 0x44 by `MIDICIProcessInquiryMessage.decode(payload:limits:)`, and the
+    ///     Endpoint Information Inquiry 0x72 and Reply 0x73 by `MIDICIEndpointMessage.decode(payload:limits:)`);
     ///  6. format (byte 4) not 1 or 2: `unsupportedFormat`; an ACK in CI 1.1 is `unsupportedFormat(1)` too, because
     ///     no source reviewed defines it;
     ///  7. fewer than 13 bytes: `truncated(13)`;
@@ -78,8 +79,8 @@ extension MIDICIMessage {
     }
 
     /// Unreachable by inspection (the decoder has already refused every byte of 0x80 or more); no test reaches it.
-    /// Shared with `MIDICIProfileMessage.decode`, `MIDICIPropertyCapabilityMessage.decode` and
-    /// `MIDICIEndpointMessage.decode`.
+    /// Shared with `MIDICIProfileMessage.decode`, `MIDICIPropertyCapabilityMessage.decode`,
+    /// `MIDICIEndpointMessage.decode` and `MIDICIProcessInquiryMessage.decode`.
     static func wrapDevice(_ byte: UInt8) throws(MIDICIRefusal) -> SysExDeviceID {
         do {
             return try SysExDeviceID(byte)
@@ -89,8 +90,8 @@ extension MIDICIMessage {
     }
 
     /// Size, notCI and 7-bit checks that need only the first bytes (steps 1 to 4). Afterwards `payload.count >= 5`.
-    /// Shared with `MIDICIProfileMessage.decode`, `MIDICIPropertyCapabilityMessage.decode` and
-    /// `MIDICIEndpointMessage.decode`.
+    /// Shared with `MIDICIProfileMessage.decode`, `MIDICIPropertyCapabilityMessage.decode`,
+    /// `MIDICIEndpointMessage.decode` and `MIDICIProcessInquiryMessage.decode`.
     static func checkEnvelope(_ payload: [UInt8], limits: MIDICILimits) throws(MIDICIRefusal) {
         guard payload.count <= limits.maximumPayloadBytes else { throw .payloadTooLarge(payload.count) }
         guard let first = payload.first else { throw .truncated(need: 1, have: 0) }

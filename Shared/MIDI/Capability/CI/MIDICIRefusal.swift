@@ -22,19 +22,21 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
         case propertyExchangeMinorVersion
         case endpointStatus
         case endpointInformation
+        case dataControl
     }
 
     /// Not a MIDI-CI payload: the first byte is not 0x7E or the third byte is not 0x0D.
     case notCI
-    /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK) or on an
-    /// Endpoint Information Inquiry or Reply (0x72 and 0x73 exist from CI 1.2 on).
+    /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK), on an
+    /// Endpoint Information Inquiry or Reply (0x72 and 0x73 exist from CI 1.2 on) or on a Process Inquiry message
+    /// (0x40 to 0x44, which exist from CI 1.2 on too).
     case unsupportedFormat(UInt8)
     /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
     /// `MIDICIProfileMessage`: 0x20-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
     /// Capabilities Inquiry and Reply 0x30 and 0x31; `MIDICIEndpointMessage`: the Endpoint Information Inquiry and
-    /// Reply 0x72 and 0x73). This also covers valid MIDI-CI sub-ids none decodes (for example the Profile Details
-    /// Inquiry and Reply 0x28 and 0x29, Profile Specific Data 0x2F, and the property data, subscription and notify
-    /// messages 0x34 to 0x3F).
+    /// Reply 0x72 and 0x73; `MIDICIProcessInquiryMessage`: the Process Inquiry messages 0x40-0x44). This also covers
+    /// valid MIDI-CI sub-ids none decodes (for example the Profile Details Inquiry and Reply 0x28 and 0x29, Profile
+    /// Specific Data 0x2F, and the property data, subscription and notify messages 0x34 to 0x3F).
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -47,7 +49,8 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     case sourceIsBroadcast
     /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
-    /// ACK, NAK, the Endpoint Information Inquiry and Reply, and Set Profile On and Off must be addressed to one MUID.
+    /// ACK, NAK, the Endpoint Information Inquiry and Reply, Set Profile On and Off, and the Process Inquiry messages
+    /// (0x40 to 0x44) must be addressed to one MUID.
     case destinationIsBroadcast
     case targetIsBroadcast
     /// The text has this many utf8 bytes (encode) or declares this length (decode).
@@ -90,6 +93,14 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// (`MIDICIEndpointMessage.maximumInformationBytes`). On decode this is checked against the declared 14-bit
     /// length before any information byte is read.
     case informationTooLong(count: Int, limit: Int)
+    /// An Inquiry: Process Inquiry Capabilities or its Reply (0x40, 0x41) is for the whole Function Block, so its
+    /// device id must be 0x7F; this is the device id it carried. Raised by `encode` only: decode keeps the device id
+    /// as received.
+    case deviceNotFunctionBlock(UInt8)
+    /// An Inquiry: MIDI Message Report (0x42) that asks for System Messages must have the device id 0x7F (the
+    /// Function Block); this is the device id it carried. Raised by `encode` only: decode keeps the device id as
+    /// received.
+    case systemReportNeedsFunctionBlock(UInt8)
 }
 
 /// Caller-chosen bounds for decoding and encoding. Built only through `make`, so a value is always within the
