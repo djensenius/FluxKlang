@@ -37,7 +37,8 @@ extension MIDICIMessage {
     ///  4. fewer than 5 bytes: `truncated(5)`;
     ///  5. sub-id 2 (byte 3) not 0x70, 0x71, 0x7D, 0x7E or 0x7F: `unknownSubID` (this includes valid MIDI-CI
     ///     sub-ids that this type does not decode, such as 0x72, 0x73 and the property exchange; Profile Inquiry
-    ///     0x20 and its Reply 0x21 are decoded by `MIDICIProfileMessage.decode(payload:limits:)` instead);
+    ///     0x20, its Reply 0x21 and the profile reports 0x24 to 0x27 are decoded by
+    ///     `MIDICIProfileMessage.decode(payload:limits:)` instead);
     ///  6. format (byte 4) not 1 or 2: `unsupportedFormat`; an ACK in CI 1.1 is `unsupportedFormat(1)` too, because
     ///     no source reviewed defines it;
     ///  7. fewer than 13 bytes: `truncated(13)`;
