@@ -154,8 +154,8 @@ change that.
 | Kind | `.criticalExhausted` (`:238`) |
 | Calling role | "Producer only" (`:156`, `:228`); inside a handoff, "The token's producer only" (`FanInHandoff.swift:388`). Which thread: not established |
 | One chain is | One producer's sequence of critical `tryPush` calls on its lane. Under `FanInHandoff`, each lane has its own producer, so the chain count follows the producer contexts over the latch's life. A stale or foreign token holder is refused by the token check before it reaches the ring (`FanInHandoff.swift:395` to `:398`), so it adds no S4 chain |
-| Chains over the latch's lifetime | **none** established by code. The lane count does not bound it (`FanInHandoff.swift:195` to `:196`) |
-| Edge, completed raise to next admission | **none** established. The `refuse` path returns `.refused(.criticalExhausted)` after the raise; the order to the producer's next push is the producer's own |
+| Chains over the latch's lifetime | **none** established by code. The warning at `FanInHandoff.swift:195` to `:196` is about the refusal counters' callers; it does not cover these valid-token pushes. Candidate bound for one fixed handoff: one chain per lane (the handoff's lane count), because the lane handover (next row) lets successive holders of a lane continue one chain. It holds only if every holder stops pushing before it releases its token and no copy of the token is used concurrently (`FanInHandoff.swift:230` to `:233`). The code states that as a caller contract: a push that starts after the release is refused by the token check (`:395` to `:398`), but a push already past that check, or a concurrent copy of the token, is not stopped. A bound across several handoffs, or other raise sites, on one latch is not established |
+| Edge, completed raise to next admission | Within one token: **none** established. The `refuse` path returns `.refused(.criticalExhausted)` after the raise; the order to the producer's next push is the producer's own. Between successive holders of one lane the code has a handover edge (`FanInHandoff.swift:207` to `:213`): A's pushes happen before its releasing compare-exchange `claimed` to `retiring`, the consumer's acquiring load sees `retiring` before it pops, and its releasing store of `free` is read by B's acquiring claim, so A's producer-side writes happen before B's first push. That orders A's last raise before B's first push only if A stopped pushing before it released the token (`:230` to `:233`). A push that starts after the release is refused (`:395` to `:398`), but a push already past the token check is not stopped |
 | Can the scope be unprepared | Yes (`:103` to `:104`, `:236`) |
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | The set of producers that can ever hold a lane, over the latch's life, with ordering between a token's successive pushes and between successive holders of one lane |
@@ -294,8 +294,11 @@ Which of these production code constructs or feeds today:
 
 Callback cardinality, thread stability and serialization for these APIs have NOT
 been established from authoritative evidence in this document. Nothing here
-asserts what Apple documents. The evidence to gather, each from platform
-documentation or a runtime test on the target, and cited by source:
+asserts what Apple documents. The evidence to gather is authoritative: platform
+documentation or an explicit platform contract, cited by source, and the caller
+and lifecycle proofs built on it. A runtime test on the target is supplemental
+only. It can look for a counterexample, but a finite run is not evidence of
+serialization, of thread stability or of a chain bound. For each API:
 
 1. Whether one `AURenderBlock` (or the engine's render callback) can be called
    concurrently with itself, and whether successive calls can come from different
@@ -333,7 +336,9 @@ section 4):
   `RetiringExchange` and `PreparedPlanSlot.beginCycle`) shown to be one chain or
   a bounded set, and its ordering.
 - [ ] S4: the set of producers that can hold a lane over the latch's life,
-  their pushes ordered, and a hand-over ordering for successive holders of a lane.
+  their pushes ordered, and a hand-over ordering for successive holders of a lane
+  (the code's edge at `FanInHandoff.swift:207` to `:213` holds only if each holder
+  stops pushing before it releases its token).
 - [ ] Global: the sum over every raiser that shares one latch, including raisers
   on unprepared scopes (`unknownScopeFaults`), is below 2^39.
 - [ ] C: the same bound for each `FanInRefusalCounter` user (`refusedClaims`,
@@ -342,7 +347,8 @@ section 4):
 - [ ] A real caller for each of the above, identified from authoritative
   evidence (section 7), not assumed.
 - [ ] A check, test or model that fails if the bound or an edge is broken, on the
-  real caller, not only a reduced-width model.
+  real caller, not only a reduced-width model. It supplements the proofs above and
+  never replaces them.
 
 The rule: callers that have not proved the contract stay out of hot-path
 integration. If the bound cannot be established for a real caller, the counter or
