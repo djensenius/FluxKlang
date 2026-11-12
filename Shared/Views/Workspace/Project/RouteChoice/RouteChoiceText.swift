@@ -34,10 +34,11 @@ enum RouteChoiceText {
         }
     }
 
+    /// `omitted` counts compatible blocks (one picker row each), so the unit is the picker's own word, "choice".
     static func truncation(omitted: Int) -> String {
         omitted == 1
-            ? "1 more compatible channel is not listed"
-            : "\(omitted) more compatible channels are not listed"
+            ? "1 more compatible choice is not listed"
+            : "\(omitted) more compatible choices are not listed"
     }
 
     /// "<name>, <channels>, <state>", plus ", not selectable" for a disabled row.

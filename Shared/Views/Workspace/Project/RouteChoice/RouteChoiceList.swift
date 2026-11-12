@@ -64,7 +64,8 @@ struct RouteChoiceList: Equatable, Sendable {
         }
         try checkDeviceNames(of: blocks, in: deviceNames)
 
-        let claimants = blocks.map { claimants(of: $0, role: role, in: existingRoutes) }
+        var operations = 0
+        let claimants = claimants(of: blocks, role: role, in: existingRoutes, operations: &operations)
         var claimantLabels: [RoleID: String] = [:]
         for claimant in Set(claimants.joined()).sorted(by: { bytesPrecede($0, $1) }) {
             claimantLabels[claimant] = try label(of: claimant, in: roleLabels)
@@ -103,21 +104,45 @@ struct RouteChoiceList: Equatable, Sendable {
         }
     }
 
-    /// The distinct roles, in RoleID byte order, of the live routes that use the candidate's channels. Mirrors the
-    /// policy in `RigChannelOverlap.swift`: only `.proposed` and `.confirmed` routes claim, per device and
-    /// direction. The target role's own route is the one a choice replaces, so it never claims.
+    /// Test-only: for each block, in order, the distinct roles in RoleID byte order that claim it, and the work done:
+    /// `operations` counts every route visited plus every channel of a route that passed the filter and shares a
+    /// (device, direction) with a block (one lookup each).
+    static func claimantsForTesting(
+        of blocks: [RigRouteCandidate], role: RoleID, in routes: [AudioRoute]
+    ) -> (claimants: [[RoleID]], operations: Int) {
+        var operations = 0
+        let claimants = claimants(of: blocks, role: role, in: routes, operations: &operations)
+        return (claimants, operations)
+    }
+
+    private struct ClaimKey: Hashable {
+        let device: DeviceID
+        let direction: RouteDirection
+    }
+
+    /// For each block, the distinct roles, in RoleID byte order, of the live routes that use its channels. Mirrors
+    /// the policy in `RigChannelOverlap.swift`: only `.proposed` and `.confirmed` routes claim, per device and
+    /// direction. The target role's own route is the one a choice replaces, so it never claims. One pass over the
+    /// routes, linear in routes plus route channels plus block channels.
     private static func claimants(
-        of candidate: RigRouteCandidate, role: RoleID, in routes: [AudioRoute]
-    ) -> [RoleID] {
-        let block = Set(candidate.channels)
-        let roles = routes.filter { route in
-            (route.binding == .proposed || route.binding == .confirmed)
-                && route.device == candidate.device
-                && route.direction == candidate.direction
-                && route.role != role
-                && route.channels.contains(where: block.contains)
-        }.map(\.role)
-        return Set(roles).sorted(by: { bytesPrecede($0, $1) })
+        of blocks: [RigRouteCandidate], role: RoleID, in routes: [AudioRoute], operations: inout Int
+    ) -> [[RoleID]] {
+        var wanted: [ClaimKey: [Int: [Int]]] = [:]
+        for index in blocks.indices {
+            let key = ClaimKey(device: blocks[index].device, direction: blocks[index].direction)
+            for channel in blocks[index].channels { wanted[key, default: [:]][channel, default: []].append(index) }
+        }
+        var found = [Set<RoleID>](repeating: [], count: blocks.count)
+        for route in routes {
+            operations += 1
+            guard route.binding == .proposed || route.binding == .confirmed, route.role != role,
+                  let channels = wanted[ClaimKey(device: route.device, direction: route.direction)] else { continue }
+            for channel in route.channels {
+                operations += 1
+                for index in channels[channel] ?? [] { found[index].insert(route.role) }
+            }
+        }
+        return found.map { $0.sorted(by: { bytesPrecede($0, $1) }) }
     }
 
     private static func makeRow(

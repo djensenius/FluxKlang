@@ -243,13 +243,13 @@ struct RouteChoiceListTests {
         let capped = try Fixture.make(width: 1, on: three)
         #expect(capped.rows.count == 64)
         #expect(capped.isTruncated)
-        #expect(capped.truncationText == "80 more compatible channels are not listed")
+        #expect(capped.truncationText == "80 more compatible choices are not listed")
         #expect(capped.emptyText == nil)
 
         let single = try Fixture.make(width: 1, on: [Fixture.device("dev.p", outputs: 65)])
         #expect(single.rows.count == 64)
         #expect(single.isTruncated)
-        #expect(single.truncationText == "1 more compatible channel is not listed")
+        #expect(single.truncationText == "1 more compatible choice is not listed")
 
         let exact = try Fixture.make(width: 1, on: [Fixture.device("dev.p", outputs: 64)])
         #expect(exact.rows.count == 64)
