@@ -143,7 +143,7 @@ extension MIDICIMessageTests {
         #expect(Self.decodeRefusal(Self.inquiry11) == .unknownSubID(0x20))
         #expect(Self.decodeRefusal(Self.profileReply23) == .unknownSubID(0x21))
         #expect(Self.profileDecodeRefusal(Self.discovery11) == .unknownSubID(0x70))
-        #expect(Self.profileDecodeRefusal(Self.replacing(Self.inquiry11, at: 3, with: 0x22)) == .unknownSubID(0x22))
+        #expect(Self.profileDecodeRefusal(Self.replacing(Self.inquiry11, at: 3, with: 0x28)) == .unknownSubID(0x28))
     }
 
     @Test func everyProfileMessageSurvivesTheRoundTripInBothDirections() throws {
@@ -172,7 +172,7 @@ extension MIDICIMessageTests {
         #expect(Self.profileDecodeRefusal(Self.replacing(Self.inquiry11, at: 2, with: 0x80)) == .notCI)
         #expect(Self.profileDecodeRefusal([0x7E, 0x90, 0x0D, 0x20, 0x01]) == .dataByteHigh(offset: 1))
         #expect(Self.profileDecodeRefusal([0x7E, 0x10, 0x0D, 0x20]) == .truncated(need: 5, have: 4))
-        #expect(Self.profileDecodeRefusal([0x7E, 0x10, 0x0D, 0x22, 0x09, 0x00]) == .unknownSubID(0x22))
+        #expect(Self.profileDecodeRefusal([0x7E, 0x10, 0x0D, 0x28, 0x09, 0x00]) == .unknownSubID(0x28))
         #expect(Self.profileDecodeRefusal([0x7E, 0x10, 0x0D, 0x21, 0x03, 0x00]) == .unsupportedFormat(0x03))
         #expect(Self.profileDecodeRefusal([0x7E, 0x10, 0x0D, 0x21, 0x01, 0x00]) == .truncated(need: 13, have: 6))
         let highAndShort = Self.replacing(Array(Self.profileReply10.dropLast()), at: 17, with: 0x80)
