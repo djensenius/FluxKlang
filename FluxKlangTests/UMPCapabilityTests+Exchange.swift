@@ -35,8 +35,7 @@ extension UMPCapabilityTests {
         #expect(info.maximumSysExSize == 512)
         #expect(info.outputPathID == 0)
 
-        let result = try Self.negotiate(
-            Self.midi2Packets, answer: Self.ciAnswer(reply: Self.reply, profiles: Self.profileReply))
+        let result = try Self.negotiate(Self.midi2Packets, ci: [Self.reply, Self.profileReply])
         #expect(result.level == .umpMIDI2)
         #expect(result.features == [
             .umpTransport, .midi2Protocol, .jitterReduction, .functionBlocks, .ciDiscovery, .profileConfiguration
@@ -44,17 +43,18 @@ extension UMPCapabilityTests {
         // Enabled [B, A] and disabled [C] arrive in wire order; the result is sorted by value.
         let expected = try [Self.profileB, Self.profileC, Self.profileA].map(MIDICapabilityProfileID.make(bytes:))
         #expect(result.profiles == expected)
-        #expect(result.downgrades.isEmpty)
+        // Block 1 is a MIDI 1.0 block on this MIDI 2.0 endpoint (#572 gap 3).
+        #expect(result.downgrades == [Self.block1MIDI1Only])
     }
 
     @Test func profilesWithoutTheCategoryBitAreIgnoredExplicitly() throws {
         let reply = Self.prefix(0x71) + Self.deviceMUID + Self.hostMUID + Self.silentBody + [0x00, 0x00]
-        let result = try Self.negotiate(
-            Self.midi2Packets, answer: Self.ciAnswer(reply: reply, profiles: Self.profileReply))
+        let result = try Self.negotiate(Self.midi2Packets, ci: [reply, Self.profileReply])
         #expect(result.level == .umpMIDI2)
         #expect(!result.features.contains(.profileConfiguration))
         #expect(result.profiles.isEmpty)
         #expect(result.downgrades == [
+            Self.block1MIDI1Only,
             MIDICapabilityDowngrade(reason: .profilesNotAdvertised, lost: [.profileConfiguration],
                                     possibleTranslationLosses: [])
         ])
@@ -66,9 +66,8 @@ extension UMPCapabilityTests {
         #expect(MIDICIProfileMessage.maximumProfilesPerList == limit)
         // At the limit, in either list: decoded and negotiated, nothing truncated.
         for (enabled, disabled) in [(limit, 0), (0, limit), (limit / 2, limit / 2)] {
-            let answer = try Self.ciAnswer(
-                reply: Self.reply, profiles: Self.profileReply(enabled: enabled, disabled: disabled))
-            #expect(try Self.negotiate(Self.midi2Packets, answer: answer).profiles.count == limit)
+            let payloads = [Self.reply, Self.profileReply(enabled: enabled, disabled: disabled)]
+            #expect(try Self.negotiate(Self.midi2Packets, ci: payloads).profiles.count == limit)
         }
         // One over in a single list: refused by the decoder from the declared count.
         for (enabled, disabled) in [(limit + 1, 0), (0, limit + 1)] {
@@ -82,22 +81,29 @@ extension UMPCapabilityTests {
         #expect(throws: MIDICIRefusal.tooManyProfiles(count: 0x3FFF, limit: limit)) {
             try MIDICIProfileMessage.decode(payload: hostile, limits: .standard)
         }
-        // Each list within its bound but the two together over it: the decoder accepts, the resolver refuses.
-        let split = try Self.ciAnswer(reply: Self.reply, profiles: Self.profileReply(enabled: limit, disabled: 1))
-        let facts = try Self.facts(Self.midi2Packets, answer: split)
-        #expect(Self.refusal(facts) == .tooManyProfiles(count: limit + 1))
+        // Each list within its bound but the two together over it: the decoder accepts, the adapter refuses the
+        // combined count before building any facts (#572 gap 2).
+        let split = Self.profileReply(enabled: limit, disabled: 1)
+        _ = try MIDICIProfileMessage.decode(payload: split, limits: .standard)
+        #expect(throws: MIDICapabilityDiscoveryRefusal.tooManyProfiles(count: limit + 1)) {
+            try Self.facts(Self.midi2Packets, ci: [Self.reply, split])
+        }
     }
 
     @Test func aProfileInBothListsIsRefusedAsADuplicate() throws {
         let both = Self.prefix(0x21) + Self.deviceMUID + Self.hostMUID
             + [0x01, 0x00] + Self.profileA + [0x01, 0x00] + Self.profileA
-        let facts = try Self.facts(Self.midi2Packets, answer: Self.ciAnswer(reply: Self.reply, profiles: both))
-        #expect(Self.refusal(facts) == .duplicateProfile(try MIDICapabilityProfileID.make(bytes: Self.profileA)))
+        // The adapter refuses a Reply that repeats an id inside itself before any facts are built.
+        let refusal = MIDICapabilityDiscoveryRefusal.duplicateProfileInReply(
+            device: .allCall, transport: .group(try UMPGroup(0)))
+        #expect(throws: refusal) {
+            try Self.facts(Self.midi2Packets, ci: [Self.reply, both])
+        }
     }
 
-    /// How identity is keyed today, without changing it: the MUID lives only in `MIDICIHeader`, and
-    /// `MIDICapabilityCIAnswer.answered` keeps the `MIDICIDiscoveryInfo` (with its device identity) but no MUID. The
-    /// negotiated result carries neither: it is keyed by nothing and describes one set of facts. Endpoint identity
+    /// How identity is keyed: `MIDICapabilityCIAnswer.answered` keeps the `MIDICIDiscoveryInfo` (with its device
+    /// identity) but no MUID, and the negotiated result carries neither: it describes one set of facts. The adapter's
+    /// `MIDICapabilityPeer`, next to the facts, keeps the MUID and the device identity together. Endpoint identity
     /// is `MIDIEndpointKey` (`Shared/MIDI/IO/Registry/MIDIEndpointKey.swift`), an adapter-supplied fingerprint.
     @Test func sameMUIDWithAnotherDeviceIdentityIsNotConflated() throws {
         let other = Self.prefix(0x71) + Self.deviceMUID + Self.hostMUID + Self.otherBody + [0x00, 0x00]
@@ -116,10 +122,17 @@ extension UMPCapabilityTests {
         let firstAnswer = try Self.ciAnswer(reply: Self.reply)
         let secondAnswer = try Self.ciAnswer(reply: other)
         #expect(firstAnswer != secondAnswer)
-        #expect(try Self.facts(Self.midi2Packets, answer: firstAnswer)
-            != Self.facts(Self.midi2Packets, answer: secondAnswer))
+        #expect(try Self.facts(Self.midi2Packets, ci: [Self.reply])
+            != Self.facts(Self.midi2Packets, ci: [other]))
         // Equal capabilities negotiate equally: the result names no device, so it cannot merge two of them.
-        #expect(try Self.negotiate(Self.midi2Packets, answer: firstAnswer)
-            == Self.negotiate(Self.midi2Packets, answer: secondAnswer))
+        #expect(try Self.negotiate(Self.midi2Packets, ci: [Self.reply])
+            == Self.negotiate(Self.midi2Packets, ci: [other]))
+        // The peers share the MUID and differ by device identity.
+        let firstPeer = try Self.discovery(Self.midi2Packets, ci: [Self.reply]).peer
+        let secondPeer = try Self.discovery(Self.midi2Packets, ci: [other]).peer
+        #expect(firstPeer.muid == secondPeer.muid)
+        #expect(firstPeer.ciIdentity == firstInfo.identity)
+        #expect(secondPeer.ciIdentity == secondInfo.identity)
+        #expect(firstPeer != secondPeer)
     }
 }

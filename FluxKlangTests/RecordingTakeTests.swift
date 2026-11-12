@@ -93,6 +93,9 @@ enum TakeLedgerTestFixture {
     }
 }
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct RecordingTakeTests {
     typealias Fixture = TakeLedgerTestFixture
 

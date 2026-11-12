@@ -6,6 +6,9 @@
 import Foundation
 import Testing
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct RecordingTakeV1GateTests {
     typealias Fixture = TakeLedgerTestFixture
     typealias Refusal = RecordingTakeV1Refusal

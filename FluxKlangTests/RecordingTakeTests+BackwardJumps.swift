@@ -10,6 +10,9 @@ import Testing
 /// generation's `previousFrame`, in any take on the restarting clock: capturing, stopped, ended by
 /// the ledger, finished or discarded. A segment closed before a backward jump can, so the restart is
 /// refused, never trimmed: its frames already sit in the file ahead of the later segments.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct RecordingTakeBackwardJumpTests {
     typealias Fixture = TakeLedgerTestFixture
 

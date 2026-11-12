@@ -80,7 +80,7 @@ extension UMPCapabilityTests {
             ])
         ]
         for (packets, downgrades) in cases {
-            let result = try Self.negotiate(packets, answer: Self.ciAnswer(reply: nil))
+            let result = try Self.negotiate(packets, ci: [])
             #expect(result.level == .legacyByteStream)
             #expect(result.features.isEmpty)
             #expect(result.functionBlocks.isEmpty)
@@ -103,21 +103,21 @@ extension UMPCapabilityTests {
             Issue.record("not a CI 1.1 NAK: \(decoded11)")
             return
         }
-        // Production decodes the NAK; mapping it to `.missing` is this suite's glue (`ciAnswer(reply:profiles:)`),
-        // because `MIDICapabilityCIAnswer` has no "refused" or "timed out" case. The resolver then gives legacy.
+        // Production decodes the NAK and `MIDICapabilityDiscovery` maps it to `.missing`, because
+        // `MIDICapabilityCIAnswer` has no "refused" or "timed out" case. The resolver then gives legacy.
         let packets = [Self.endpointMIDI2, Self.block0, Self.block1]
-        let silent = try Self.negotiate(packets, answer: Self.ciAnswer(reply: nil))
+        let silent = try Self.negotiate(packets, ci: [])
         for payload in [Self.nak, Self.nak11] {
             let answer = try Self.ciAnswer(reply: payload)
             #expect(answer == .missing)
-            #expect(try Self.negotiate(packets, answer: answer) == silent)
+            #expect(try Self.negotiate(packets, ci: [payload]) == silent)
         }
         #expect(silent.level == .legacyByteStream)
     }
 
     @Test func midi1OnlyPeerRecordsTheDowngradeAndItsLosses() throws {
         let result = try Self.negotiate(
-            [Self.endpointMIDI1, Self.midi1Block0], answer: Self.ciAnswer(reply: Self.reply))
+            [Self.endpointMIDI1, Self.midi1Block0], ci: [Self.reply])
         #expect(result.level == .umpMIDI1)
         #expect(result.features == [.umpTransport, .functionBlocks, .ciDiscovery])
         #expect(result.functionBlocks.map(\.midi1Mode) == [.unrestricted])
@@ -130,9 +130,9 @@ extension UMPCapabilityTests {
 
     @Test func possibleTranslationLossesAreExactlyWhatTheTranslatorDeclares() throws {
         let observed = try Self.observedDownLosses()
-        let peer = try Self.negotiate([Self.endpointMIDI1, Self.midi1Block0], answer: Self.ciAnswer(reply: Self.reply))
+        let peer = try Self.negotiate([Self.endpointMIDI1, Self.midi1Block0], ci: [Self.reply])
         let silent = try Self.negotiate(
-            [Self.endpointMIDI2, Self.block0, Self.block1], answer: Self.ciAnswer(reply: nil))
+            [Self.endpointMIDI2, Self.block0, Self.block1], ci: [])
         let downgrades = peer.downgrades + silent.downgrades
         #expect(downgrades.map(\.reason) == [.endpointLacksMIDI2, .ciAnswerMissing])
         for downgrade in downgrades {
@@ -149,13 +149,13 @@ extension UMPCapabilityTests {
         #expect(Set(UMPTranslationLossReason.allCases).subtracting(upward) == Set(observed))
     }
 
-    @Test func blockMIDI1ModeIsCarriedButDoesNotLowerTheLevel() throws {
-        // Current behaviour: the level follows the endpoint only. Block 1 is a MIDI 1.0 block on a MIDI 2.0
-        // endpoint; it is listed with its mode, and no downgrade is recorded for it.
-        let result = try Self.negotiate(
-            [Self.endpointMIDI2, Self.block0, Self.block1], answer: Self.ciAnswer(reply: Self.reply))
+    @Test func blockMIDI1ModeRecordsADowngradeButDoesNotLowerTheLevel() throws {
+        // The endpoint level stays `umpMIDI2`. Block 1 is a MIDI 1.0 block on a MIDI 2.0 endpoint; it is listed with
+        // its mode, and `functionBlockMIDI1Only` names it with the MIDI 2.0 → 1.0 losses (#572 gap 3).
+        let result = try Self.negotiate([Self.endpointMIDI2, Self.block0, Self.block1], ci: [Self.reply])
         #expect(result.level == .umpMIDI2)
         #expect(result.functionBlocks.map(\.midi1Mode) == [.notMIDI1, .unrestricted])
-        #expect(result.downgrades.isEmpty)
+        #expect(result.downgrades == [Self.block1MIDI1Only])
+        #expect(result.downgrades.first?.possibleTranslationLosses == (try Self.observedDownLosses()))
     }
 }

@@ -86,9 +86,13 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `TimecodeMachineTests`, `AutomationBankTests`, `AutomationRenderTests`,
 `AutomationRenderHandbackTests`, `AutomationRenderLoopTests`,
 `AutomationRenderTempoTests`, `ActionSetSubmissionTests`,
-`ActionSetSubmissionAdmissionTests` and `ActionSetSubmissionCancelTests`
+`ActionSetSubmissionAdmissionTests`, `ActionSetSubmissionCancelTests`,
+`RecordingTakeTests`, `RecordingTakeBackwardJumpTests`,
+`RecordingTakeDiscontinuityTests`, `RecordingTakeRecoveryTests`,
+`RecordingTakeV1GateTests`, `PatchVariationTests`,
+`PatchVariationEditingTests` and `PatchVariationRepairTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those one hundred and two macOS-guarded suites remain unadopted.
+owners of those one hundred and ten macOS-guarded suites remain unadopted.
 Other owners' annotation obligations remain unsatisfied: inventory
 intentionally exits 0 with `enforcementSatisfied: false`, while default
 enforcement exits 1. Inventory success is not coverage or isolation.
@@ -1193,6 +1197,88 @@ own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 the suite name), carrying that run ID, with all 14 operation IDs reporting
 zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
 `DeclarativeActionTests` was compiled for its helpers but filtered out.
+These runs add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the remaining #60 gates above still apply and #60
+remains open.
+
+## Recording take and patch variation source adoption
+
+`RecordingTakeTests`, `RecordingTakeBackwardJumpTests`,
+`RecordingTakeDiscontinuityTests`, `RecordingTakeRecoveryTests`,
+`RecordingTakeV1GateTests`, `PatchVariationTests`,
+`PatchVariationEditingTests` and `PatchVariationRepairTests` now use the
+canonical trait under `#if os(macOS)` on their root declarations, matching
+`GraphCompilerTests`, without test-body, helper, target-membership or
+registration changes. The five recording-take suites and
+`PatchVariationTests` had no `@Suite` and gain a bare
+`@Suite(.productionAccessAudit)` inside `#if os(macOS)`, as `MPEZoneTests`
+did. `PatchVariationEditingTests` and `PatchVariationRepairTests` keep their
+display names: the trait is added to each existing `@Suite` in the macOS
+branch and the `#else` branch keeps that `@Suite` unchanged. None of the
+eight has other suite traits. Each is a separate root `struct`
+(`RecordingTakeTests.swift`, `RecordingTakeTests+BackwardJumps.swift`,
+`RecordingTakeTests+Discontinuities.swift`,
+`RecordingTakeTests+Recovery.swift`, `RecordingTakeV1GateTests.swift`,
+`PatchVariationTests.swift`, `PatchVariationTests+Editing.swift` and
+`PatchVariationTests+Repair.swift`); the longest root file,
+`RecordingTakeTests.swift`, grows from 496 to 499 lines, under the 500-line
+`file_length` limit. Their extensions,
+`RecordingTakeV1GateTests+Discontinuities.swift` and
+`PatchVariationTests+Recall.swift`, stay unannotated. The top-level
+`TakeLedgerTestFixture` enum in `RecordingTakeTests.swift` and the
+function-local `Closing` enums in `RecordingTakeBackwardJumpTests` are not
+suites and stay unannotated. The five recording-take suites alias
+`TakeLedgerTestFixture` as their fixture; the editing and repair suites alias
+`PatchVariationTests`. The suites build take openings, synthetic
+`RuntimeSampleStamp`, `RuntimeClockAnchor`, `RuntimeDiscontinuity` and
+`HostStamp` values, recording segments, patches and variation sets from
+literals and inline JSON, and drive the `Shared/Media/Recording` take ledger
+and `RecordingTakeV1` export gate, and the
+`Shared/Performance/Patches` variation records, recall plan, editor and
+repair, with `Shared/Contracts` coding. They declare no `static var`
+members and no classes, and import only Foundation and Testing. The
+production closure the fixture copied is all of `Shared/Contracts`,
+`Shared/Media/Recording` and `Shared/Performance/Patches`, and
+`Shared/WING/FaderMath.swift`. No source in it imports anything but
+Foundation. Its only `static var` members are computed or protocol
+requirements, and its only class is the stateless
+`fileprivate final class Identity` token in `TriggerSession.swift`. None of
+the eight suites touches the file system, bundles, wall clock, sleep,
+dispatch, defaults, global mutable state, MIDI hardware, network or audio.
+
+Against the unmodified UARG17 tree, both checker modes report 4,888
+registrations. Satisfied rows rise from 896 (856 `FluxKlangMacTests`, 40
+`FluxKlangTests`) to 960 (920 `FluxKlangMacTests`, 40 `FluxKlangTests`).
+The eight suites' 64 `FluxKlangMacTests` root rows (eight per suite) are
+now satisfied, which accounts for the whole increase; no row is removed.
+Diagnostics fall by 112, from 6,168 to 6,056, and none is added. The two
+named suites lose eight each (the missing trait). The six suites that had
+no `@Suite` lose sixteen each: per Mac row, both the missing-trait
+diagnostic and the "requires a single @Suite" one. The iOS
+`FluxKlangTests` root rows for all eight suites stay unsatisfied, with the
+same diagnostics as before (eight per named suite, sixteen per bare one).
+Apart from the Mac rows' status, the only row change, in both modules, is
+that test line numbers in the root files shift by three (bare form) or four
+(named form); tests in the two extension files keep their lines. Inventory
+still exits 0 and default enforcement still exits 1. This comparison is a
+row-level diff of both trees' output.
+
+A fresh SwiftPM package (default build system, no private witness or
+observer) byte-copied 94 repository sources from this change. 11 are test
+sources: the eight suites' files, the two extension files and
+`ProductionAccessScope.swift`. The other 83 are
+`Shared/Store/ProductionAccessAudit.swift` and the in-memory production
+closure: the 58 `Shared/Contracts`, 15 `Shared/Media/Recording` and eight
+`Shared/Performance/Patches` sources and `FaderMath.swift`. Debug and
+Release (`-c release -Xswiftc -enable-testing`) runs filtered to the eight
+suites each passed 136 tests (none parameterized) in eight suites, with
+`--xunit-output` and `--experimental-event-stream-output`. Each xUnit report
+lists 136 test cases with no failures or skips, and each event stream ends
+all 136 test functions and eight suites with no issue events. Each run, under
+its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the eight suites (`FluxKlangTests/` plus
+the suite name), carrying that run ID, with all 14 operation IDs reporting
+zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
 These runs add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the remaining #60 gates above still apply and #60
 remains open.
