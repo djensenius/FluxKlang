@@ -82,13 +82,16 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `MIDIControlIntakeTests`, `ActiveSensingTests`, `MIDISourceRegistryTests`,
 `StandardMIDIFileTests`, `StandardMIDIFileReaderTests`,
 `CaptureSMFExportTests`, `MIDICaptureExportTests`, `MIDICaptureClockTests`,
-`MIDICaptureProtocolTests`, `MIDICaptureRestartTests` and
-`TimecodeMachineTests`
+`MIDICaptureProtocolTests`, `MIDICaptureRestartTests`,
+`TimecodeMachineTests`, `AutomationBankTests`, `AutomationRenderTests`,
+`AutomationRenderHandbackTests`, `AutomationRenderLoopTests`,
+`AutomationRenderTempoTests`, `ActionSetSubmissionTests`,
+`ActionSetSubmissionAdmissionTests` and `ActionSetSubmissionCancelTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those ninety-four macOS-guarded suites remain unadopted. Other
-owners' annotation obligations remain unsatisfied: inventory intentionally
-exits 0 with `enforcementSatisfied: false`, while default enforcement
-exits 1. Inventory success is not coverage or isolation.
+owners of those one hundred and two macOS-guarded suites remain unadopted.
+Other owners' annotation obligations remain unsatisfied: inventory
+intentionally exits 0 with `enforcementSatisfied: false`, while default
+enforcement exits 1. Inventory success is not coverage or isolation.
 
 The trait observes cumulative suite-exit state with nonrecursive scope, not
 per-test evidence or exclusive attribution. Missing/invalid
@@ -1108,6 +1111,88 @@ its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 the suite name), carrying that run ID, with all 14 operation IDs reporting
 zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
 `MIDIClipTimingTests` was compiled for its helpers but filtered out.
+These runs add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the remaining #60 gates above still apply and #60
+remains open.
+
+## Automation rendering and action-set submission source adoption
+
+`AutomationBankTests`, `AutomationRenderTests`,
+`AutomationRenderHandbackTests`, `AutomationRenderLoopTests`,
+`AutomationRenderTempoTests`, `ActionSetSubmissionTests`,
+`ActionSetSubmissionAdmissionTests` and `ActionSetSubmissionCancelTests` now
+use the canonical trait under `#if os(macOS)` on their root declarations,
+matching `GraphCompilerTests`, without test-body, helper, target-membership
+or registration changes. All eight keep their display names: the trait is
+added to each existing `@Suite` in the macOS branch and the `#else` branch
+keeps that `@Suite` unchanged. None of the eight has other suite traits.
+Each is a separate root `struct` (`AutomationBankTests.swift`,
+`AutomationRenderTests.swift`, `AutomationRenderTests+Handback.swift`,
+`AutomationRenderTests+Loop.swift`, `AutomationRenderTests+Tempo.swift`,
+`ActionSetSubmissionTests.swift`, `ActionSetSubmissionTests+Admission.swift`
+and `ActionSetSubmissionTests+Cancel.swift`); the longest root file,
+`ActionSetSubmissionTests.swift`, grows from 446 to 450 lines, under the
+500-line `file_length` limit. Their only extension,
+`AutomationBankTests+Limits.swift`, stays unannotated. The nested
+`AutomationBankTests.Tally`, `AutomationRenderTests.SplitMix`,
+`AutomationRenderHandbackTests.Release`, `AutomationRenderLoopTests.Handback`
+and `HandbackRun`, and `AutomationRenderTempoTests.PowerError`, and the
+top-level `ActionSetSubmissionHarness` and `ActionSetSubmissionSchedulerCase`,
+are not suites and stay unannotated. The four automation suites alias
+`AutomationRenderTests` as their fixture, and the loop and tempo suites also
+alias `AutomationRenderHandbackTests`. The three action-set suites share
+`ActionSetSubmissionHarness`, which builds on the `ActionSetFixture` struct in
+`DeclarativeActionTests.swift`; that suite has no `@Suite` and is not adopted
+here. The suites build lanes, breakpoints, action sets and scheduler
+snapshots from literals and seeded generators, and drive the
+`Shared/Performance/Automation` lanes, arbiter, bank and block renderer and
+the `Shared/Performance/Actions` action-set submitter, with the
+`Shared/Contracts` trigger scheduler, over synthetic `HostStamp`,
+`ClockAnchor`, `MusicalClockMap` and `ClockGenerationSnapshot` values. They
+declare no `static var` members. The only class is `AutomationBankTests.Tally`,
+a render-call counter that each test creates locally; no tally is shared.
+The automation suites import only Testing and the action-set suites only
+Foundation and Testing. The production closure the fixture copied is all of
+`Shared/Contracts`, `Shared/Performance/Automation` and
+`Shared/Performance/Actions`, the top-level `Shared/Control/Bindings` sources
+and `Shared/WING/FaderMath.swift`. No source in it imports anything but
+Foundation. Its only `static var` members are computed or protocol
+requirements, and its only class is the stateless
+`fileprivate final class Identity` token in `TriggerSession.swift`. None of
+the eight suites touches the file system, bundles, wall clock, sleep,
+dispatch, defaults, global mutable state, MIDI hardware, network or audio.
+
+Against the unmodified UARG16 tree, both checker modes report 4,888
+registrations. Satisfied rows rise from 832 (792 `FluxKlangMacTests`, 40
+`FluxKlangTests`) to 896 (856 `FluxKlangMacTests`, 40 `FluxKlangTests`).
+The eight suites' 64 `FluxKlangMacTests` root rows (eight per suite) are
+now satisfied, which accounts for the whole increase; no row is removed.
+Diagnostics fall by 64, from 6,232 to 6,168: eight removed per suite, as
+each had a named `@Suite`, and none added. The iOS `FluxKlangTests` root
+rows for all eight suites stay unsatisfied, with one diagnostic per row
+(eight per suite). Apart from the Mac rows' status, the only row change,
+in both modules, is that test line numbers in the eight root files shift
+by four. Inventory still exits 0 and default enforcement still exits 1.
+This comparison is a row-level diff of both trees' output.
+
+A fresh SwiftPM package (default build system, no private witness or
+observer) byte-copied 100 repository sources from this change. 11 are test
+sources: the eight suites' files, `AutomationBankTests+Limits.swift`,
+`DeclarativeActionTests.swift` and `ProductionAccessScope.swift`. The other
+89 are `Shared/Store/ProductionAccessAudit.swift` and the in-memory
+production closure: the 58 `Shared/Contracts`, 12
+`Shared/Performance/Automation`, nine `Shared/Performance/Actions` and eight
+top-level `Shared/Control/Bindings` sources and `FaderMath.swift`. Debug and
+Release (`-c release -Xswiftc -enable-testing`) runs filtered to the eight
+suites each passed 93 tests (nine parameterized, 39 cases) in eight suites,
+with `--xunit-output` and `--event-stream-output-path`. Each xUnit report
+lists 93 test cases with no failures or skips, and each event stream ends all
+93 test functions and eight suites with no issue events. Each run, under its
+own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the eight suites (`FluxKlangTests/` plus
+the suite name), carrying that run ID, with all 14 operation IDs reporting
+zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
+`DeclarativeActionTests` was compiled for its helpers but filtered out.
 These runs add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the remaining #60 gates above still apply and #60
 remains open.
