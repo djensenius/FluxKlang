@@ -18,15 +18,17 @@ private struct StreamPropertyGenerator: RandomNumberGenerator {
     }
 }
 
-/// One generated step: a message received, or a poll from the caller's timer.
+/// One generated step: a message received, a system message received, or a poll from the caller's timer.
 private enum StreamPropertyStep {
     case message(UMPMIDI1ChannelVoice)
+    case system(UMPSystemCommonRealTime)
     case poll
 }
 
 /// Draws timeouts, gaps and messages that select parameters and hold, complete, abandon and time out Data Entry
 /// values on two groups × two channels. Half the messages reuse the previous message's group and channel, so a CC 38
-/// often follows its CC 6.
+/// often follows its CC 6. About one step in eleven is a System Real Time or System Common message, which can fall
+/// between a CC 6 and its CC 38.
 private struct StreamPropertyScript {
     var random: StreamPropertyGenerator
     var last: (group: UInt8, channel: UInt8) = (0, 0)
@@ -83,13 +85,23 @@ private struct StreamPropertyScript {
         return plan
     }
 
+    /// A System Real Time or (as often) System Common message.
+    mutating func system(_ group: UMPGroup, value: UInt8) throws -> UMPSystemCommonRealTime {
+        let realTime: [UMPSystemMessage] = [.timingClock, .start, .continue, .stop, .activeSensing, .reset]
+        let common: [UMPSystemMessage] = [.mtcQuarterFrame(try UMPSevenBit(value)), .songPositionPointer(257),
+                                          .songSelect(try UMPSevenBit(value)), .tuneRequest]
+        return try UMPSystemCommonRealTime(group: group, message: pick(random.next() % 2 == 0 ? realTime : common))
+    }
+
     mutating func step() throws -> StreamPropertyStep {
         if random.next() % 2 == 0 { last = (UInt8(random.next() % 2), UInt8(random.next() % 2)) }
         let group = try UMPGroup(last.group)
         let channel = last.channel
         let value = UInt8(random.next() % 128)
         let event: MIDI1Event
-        switch random.next() % 20 {
+        switch random.next() % 22 {
+        case 20..<22:
+            return .system(try system(group, value: value))
         case 0..<3:
             return .poll
         case 3..<8:
@@ -173,6 +185,19 @@ struct UMPTranslationStreamPropertyTests {
                             "run \(run) at \(time)")
                     sent += actual.messages
                     untimedSent += try untimed.translate(voice).messages
+                case let .system(system):
+                    // System Common sends a held CC 6 as any non-completing message does; Real Time leaves it held
+                    // and keeps a pending idle-flushed CC 6 pending, since a CC 38 after it is still late.
+                    if case .systemCommon = system.event {
+                        expected += reference.flushAll()
+                        untimedSent += untimed.flushAll()
+                        heldSince = nil
+                        pending = nil
+                    }
+                    let actual = try stream.receive(system: system, at: time)
+                    #expect(actual == expected.map(UMPTranslationStreamItem.voice) + [.system(system)],
+                            "run \(run) at \(time)")
+                    sent += expected
                 }
                 #expect(stream.deadline == heldSince.map { $0 + timeout.nanoseconds }, "run \(run)")
                 #expect(stream.translator == reference, "run \(run)")
@@ -207,8 +232,8 @@ struct UMPTranslationStreamPropertyTests {
             var polled = UMPTranslationStream(timeout: timeout)
             var unpolled = UMPTranslationStream(timeout: timeout)
             var time = script.random.next() % (1 << 40)
-            var polledSent: [UMPMIDI2ChannelVoice] = []
-            var unpolledSent: [UMPMIDI2ChannelVoice] = []
+            var polledSent: [UMPTranslationStreamItem] = []
+            var unpolledSent: [UMPTranslationStreamItem] = []
             for (gap, step) in try script.plan(Self.steps, timeout: timeout) {
                 time += gap
                 switch step {
@@ -217,14 +242,18 @@ struct UMPTranslationStreamPropertyTests {
                     let flushed = try polled.poll(at: time)
                     #expect(flushed.isEmpty == (deadline.map { time < $0 } ?? true), "run \(run) at \(time)")
                     totalPolledFlushes += flushed.count
-                    polledSent += flushed
+                    polledSent += flushed.map(UMPTranslationStreamItem.voice)
                 case let .message(voice):
-                    polledSent += try polled.receive(voice, at: time).messages
-                    unpolledSent += try unpolled.receive(voice, at: time).messages
+                    polledSent += try polled.receive(voice, at: time).messages.map(UMPTranslationStreamItem.voice)
+                    unpolledSent += try unpolled.receive(voice, at: time).messages.map(UMPTranslationStreamItem.voice)
+                case let .system(system):
+                    // Kept in place, so a system message's position among the voice messages is compared too.
+                    polledSent += try polled.receive(system: system, at: time)
+                    unpolledSent += try unpolled.receive(system: system, at: time)
                 }
             }
-            polledSent += polled.endOfStream()
-            unpolledSent += unpolled.endOfStream()
+            polledSent += polled.endOfStream().map(UMPTranslationStreamItem.voice)
+            unpolledSent += unpolled.endOfStream().map(UMPTranslationStreamItem.voice)
             #expect(polledSent == unpolledSent, "run \(run)")
             #expect(polled.idleFlushes + polled.endOfStreamFlushes
                 == unpolled.idleFlushes + unpolled.endOfStreamFlushes, "run \(run)")

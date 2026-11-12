@@ -23,9 +23,10 @@ enum UMPFlexDataRefusal: Error, Equatable, Sendable {
     case wrongFormat(status: UInt8, format: UInt8)
     /// The address (word 0 bits 21...20) is 2 or 3, which no source defines.
     case reservedAddress(status: UInt8, address: UInt8)
-    /// Set Tempo and Set Time Signature are addressed to the whole group, never to one channel.
+    /// Building only: Set Tempo and Set Time Signature are built addressed to the whole group, never to one channel.
+    /// Decoding accepts a channel address for every status and never throws this.
     case channelAddressNotAllowed(status: UInt8)
-    /// A reserved bit is non-zero. This includes the channel nibble of a group-addressed message.
+    /// A reserved bit is non-zero. The channel nibble of a group-addressed message is ignored, not refused.
     case reservedBitsSet(status: UInt8)
     /// A field is outside its allowed range or names a reserved value.
     case invalidField(UMPFlexDataField, value: Int)
