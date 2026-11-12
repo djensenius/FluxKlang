@@ -6,7 +6,7 @@
 //  operation leaves the spec inputs and the voice unchanged.
 //
 
-/// Why a backing-clip spec, voice transition, seek, insert or render is refused.
+/// Why a backing-clip spec, start mapping, voice transition, seek, insert or render is refused.
 enum BackingClipRefusal: Error, Equatable, Sendable {
     /// A clip holds at least one frame.
     case totalFramesNotPositive(Int64)
@@ -40,4 +40,6 @@ enum BackingClipRefusal: Error, Equatable, Sendable {
     case counterWouldOverflow(BackingCounter)
     /// The prefetch playhead refused (insert, render length, overflow, generation overflow).
     case prefetch(PrefetchRefusal)
+    /// A trigger outcome failed `TriggerOutcome.validateMediaShape()`; no start was mapped.
+    case malformedOutcome(TriggerOutcomeValidationError)
 }
