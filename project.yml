@@ -514,6 +514,7 @@ targets:
       - path: FluxKlangTests/MIDICIMessageTests+MUID.swift
       - path: FluxKlangTests/MIDICIMessageTests+Hostile.swift
       - path: FluxKlangTests/MIDICIMessageTests+Profile.swift
+      - path: FluxKlangTests/MIDICIMessageTests+ProfileReport.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift

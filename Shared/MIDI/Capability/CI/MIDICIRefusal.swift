@@ -16,14 +16,16 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
         case statusCode
         case statusData
         case details
+        case channelCount
     }
 
     /// Not a MIDI-CI payload: the first byte is not 0x7E or the third byte is not 0x0D.
     case notCI
     /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK).
     case unsupportedFormat(UInt8)
-    /// The sub-id 2 byte is not one of the five handled here. This also covers valid MIDI-CI sub-ids this slice
-    /// does not decode (for example 0x72 and 0x73, and the profile and property exchange messages).
+    /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
+    /// `MIDICIProfileMessage`: 0x20, 0x21, 0x24-0x27). This also covers valid MIDI-CI sub-ids neither decodes (for
+    /// example 0x72, 0x73, Set Profile On and Off 0x22 and 0x23, and the property exchange messages).
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -34,7 +36,7 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     case dataByteHigh(offset: Int)
     case invalidMUID(UInt32)
     case sourceIsBroadcast
-    /// Discovery and Invalidate MUID must be addressed to the broadcast MUID.
+    /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
     /// ACK and NAK must be addressed to one MUID.
     case destinationIsBroadcast
@@ -63,6 +65,12 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// (`MIDICIProfileMessage.maximumProfilesPerList`). On decode this is checked against the declared 14-bit
     /// count before any profile id is read.
     case tooManyProfiles(count: Int, limit: Int)
+    /// A Profile Enabled or Disabled Report carries a channel count in CI 1.2 only (the CI 1.1 form, from JUCE, ends
+    /// after the profile id): `channelCountNotAllowed` is a CI 1.1 report with a count, `channelCountRequired` a
+    /// CI 1.2 report without one. Raised by `encode` only; on decode a mismatch is a length refusal
+    /// (`trailingBytes` / `truncated`).
+    case channelCountNotAllowed
+    case channelCountRequired
 }
 
 /// Caller-chosen bounds for decoding and encoding. Built only through `make`, so a value is always within the
