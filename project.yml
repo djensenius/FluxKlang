@@ -591,6 +591,7 @@ targets:
       - path: FluxKlangTests/UMPTranslationTests+DataEntry.swift
       - path: FluxKlangTests/UMPTranslationStreamTests.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+Property.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+System.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests+Refusals.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
