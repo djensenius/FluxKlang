@@ -164,4 +164,8 @@ enum UMPStreamMessage: Equatable, Sendable {
     case functionBlockDiscovery(UMPStreamFunctionBlockQuery)
     case functionBlockInfo(UMPStreamFunctionBlockInfo)
     case functionBlockName(index: Int, name: UMPStreamString)
+    /// Start of Clip (status 0x020): one complete packet with no payload; every other bit is reserved.
+    case startOfClip
+    /// End of Clip (status 0x021): one complete packet with no payload; every other bit is reserved.
+    case endOfClip
 }

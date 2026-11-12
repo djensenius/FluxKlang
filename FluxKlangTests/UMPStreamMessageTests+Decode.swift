@@ -20,7 +20,9 @@ extension UMPStreamMessageTests {
         (0x005, [0xF005_0202, 0, 0, 0]),
         (0x006, [0xF006_0101, 0, 0, 0]),
         (0x010, [0xF010_0503, 0, 0, 0]),
-        (0x011, [0xF011_833B, 0x0402_0201, 0, 0])
+        (0x011, [0xF011_833B, 0x0402_0201, 0, 0]),
+        (0x020, [0xF020_0000, 0, 0, 0]),
+        (0x021, [0xF021_0000, 0, 0, 0])
     ]
 
     private static func setting(_ word: Int, _ bit: Int, in words: [UInt32]) -> [UInt32] {
@@ -41,6 +43,7 @@ extension UMPStreamMessageTests {
             add(0, Array(0..<16)); add(1, Array(24..<32) + [7, 15, 23]); add(2, [7, 15, 23, 31])
             add(3, [7, 15, 23, 31])
         case 0x005, 0x006, 0x010: add(0, Array(2..<8)); add(1, all); add(2, all); add(3, all)
+        case 0x020, 0x021: add(0, Array(0..<16)); add(1, all); add(2, all); add(3, all)
         default: add(0, [6, 7]); add(2, all); add(3, all)
         }
         return pairs
@@ -62,13 +65,15 @@ extension UMPStreamMessageTests {
     }
 
     @Test func everyUnassignedOrUnsupportedStatusIsRefusedWithItsValue() throws {
-        for status in [UInt32(0x007), 0x00F, 0x013, 0x020, 0x021, 0x100, 0x3FF] {
+        for status in [UInt32(0x007), 0x00F, 0x013, 0x01F, 0x022, 0x030, 0x100, 0x3FF] {
             #expect(try Self.decodeRefusal([0xF000_0000 | status << 16, 0, 0, 0]) == .unknownStatus(UInt16(status)))
         }
     }
 
     @Test func everyTenBitStatusIsKnownOrRefusedAsUnknownExactlyOnce() throws {
-        let known: Set<UInt16> = [0x000, 0x001, 0x002, 0x003, 0x004, 0x005, 0x006, 0x010, 0x011, 0x012]
+        let known: Set<UInt16> = [
+            0x000, 0x001, 0x002, 0x003, 0x004, 0x005, 0x006, 0x010, 0x011, 0x012, 0x020, 0x021
+        ]
         for status in 0..<UInt32(1024) {
             let outcome = try Self.decodeRefusal([0xF000_0000 | status << 16, 0, 0, 0])
             if known.contains(UInt16(status)) {
@@ -261,13 +266,15 @@ extension UMPStreamMessageTests {
 
     @Test func unknownStatusIsReportedBeforeAWrongFormat() throws {
         #expect(try Self.decodeRefusal([0xF407_0000, 0, 0, 0]) == .unknownStatus(7))
-        #expect(try Self.decodeRefusal([0xFC20_0000, 0x1, 0, 0]) == .unknownStatus(0x20))
+        #expect(try Self.decodeRefusal([0xFC22_0000, 0x1, 0, 0]) == .unknownStatus(0x22))
     }
 
     @Test func wrongFormatIsReportedBeforeReservedBitsAndFieldRanges() throws {
         #expect(try Self.decodeRefusal([0xF400_0000, 0, 0, 1]) == .wrongFormat(status: 0, format: 1))
         #expect(try Self.decodeRefusal([0xF801_0000, 0x7F00_0000, 0, 1]) == .wrongFormat(status: 1, format: 2))
         #expect(try Self.decodeRefusal([0xFC11_FF00, 0, 1, 0]) == .wrongFormat(status: 0x11, format: 3))
+        #expect(try Self.decodeRefusal([0xF420_FFFF, 1, 0, 0]) == .wrongFormat(status: 0x20, format: 1))
+        #expect(try Self.decodeRefusal([0xFC21_0001, 0, 0, 1]) == .wrongFormat(status: 0x21, format: 3))
     }
 
     @Test func reservedBitsAreReportedBeforeFieldRangeErrors() throws {

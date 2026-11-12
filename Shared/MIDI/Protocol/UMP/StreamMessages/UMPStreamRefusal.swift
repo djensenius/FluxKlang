@@ -18,7 +18,8 @@ enum UMPStreamField: Equatable, Sendable {
 enum UMPStreamRefusal: Error, Equatable, Sendable {
     /// The packet is not Message Type 0xF.
     case notStream(actual: UMPMessageType)
-    /// The 10-bit status is not one this codec decodes (this includes Start/End of Clip, status 0x20 and 0x21).
+    /// The 10-bit status is not one this codec decodes. It decodes 0x000...0x006, 0x010...0x012, and Start and End
+    /// of Clip (0x020 and 0x021).
     case unknownStatus(UInt16)
     /// A message that has one packet, or a text message handed to `decode`, carries a format other than 0.
     case wrongFormat(status: UInt16, format: UInt8)

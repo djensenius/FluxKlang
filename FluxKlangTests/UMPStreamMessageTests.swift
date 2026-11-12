@@ -105,7 +105,9 @@ struct UMPStreamMessageTests {
             )),
             .functionBlockDiscovery(UMPStreamFunctionBlockQuery(target: .block(5), wantsInfo: true, wantsName: true)),
             .functionBlockInfo(blockInfo),
-            .functionBlockName(index: 9, name: UMPStreamString("Lead"))
+            .functionBlockName(index: 9, name: UMPStreamString("Lead")),
+            .startOfClip,
+            .endOfClip
         ]
     }
 
@@ -266,6 +268,24 @@ struct UMPStreamMessageTests {
             firstGroup: 15, groupCount: 1, midiCIVersion: 1, maximumSysEx8Streams: 0
         )
         try expectGolden(.functionBlockInfo(sender), [[0xF011_8026, 0x0F01_0100, 0, 0]])
+    }
+
+    @Test func startAndEndOfClipGoldenWordsEncodeAndDecode() throws {
+        try expectGolden(.startOfClip, [[0xF020_0000, 0, 0, 0]])
+        try expectGolden(.endOfClip, [[0xF021_0000, 0, 0, 0]])
+    }
+
+    @Test func startAndEndOfClipRefuseAnyNonZeroReservedBit() throws {
+        for (first, status) in [(UInt32(0xF020_0000), UInt16(0x020)), (0xF021_0000, 0x021)] {
+            for words in [
+                [first | 0x0001, 0, 0, 0], [first | 0x8000, 0, 0, 0], [first | 0x00FF, 0, 0, 0],
+                [first, 0x0000_0001, 0, 0], [first, 0x8000_0000, 0, 0],
+                [first, 0, 0x0000_0001, 0], [first, 0, 0x8000_0000, 0],
+                [first, 0, 0, 0x0000_0001], [first, 0, 0, 0x8000_0000]
+            ] {
+                #expect(try Self.decodeRefusal(words) == .reservedBitsSet(status: status), "\(words)")
+            }
+        }
     }
 
     @Test func shortTextGoldenWordsForEndpointProductAndFunctionBlockNames() throws {
