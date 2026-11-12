@@ -5,7 +5,7 @@
 | Contract | `fluxklang.media` |
 | Version | `1` (integer major version; see [§12](#12-versioning-and-compatibility)) |
 | Gate | G-MEDIA, issue #53 (roadmap #48). Must be accepted before the #54/#55 schema freeze |
-| Status | **Proposed**. Becomes **Accepted v1** when this PR merges after coordinator review. #54 and #55 then adopt the accepted v1; later changes follow [§12](#12-versioning-and-compatibility) |
+| Status | **Accepted v1**, frozen in #135 (merged 2026-10-31). #54 and #55 adopt it; later changes follow [§12](#12-versioning-and-compatibility) |
 | Owners | This document: #53. Production types: #55 (stamps, generations, commands) and #54 (persisted media references) |
 | Machine-readable form | [`media-contract/media-contract-v1.schema.json`](media-contract/media-contract-v1.schema.json) and [`media-contract/examples/`](media-contract/examples/) |
 | Validation | `python3 docs/transformation/media-contract/check_media_contract.py` (standard library only; [§15](#15-examples-and-validation)) |
@@ -534,7 +534,7 @@ Coordinator follow-ups (proposed, not done here): a CI or Makefile step that run
 
 ## 13. Non-goals
 
-- No Swift types, queues or backend choice, and no edits to `Shared/` or the project. Owners adopt this contract.
+- No Swift types, queues or backend choice are defined here: they belong to their owners ([§11](#11-ownership-and-adoption-notes)), who adopt this contract. The production types live under `Shared/`, mostly in `Shared/Contracts` and `Shared/Media`.
 - No sample-accurate cueing of external hardware, and no network clocks (network tempo-sync protocols, PTP, MIDI clock over network).
 - No time-stretch algorithm or vendor choice.
 - No lossless UMP→SMF conversion, and no recovery of fidelity the OS already discarded.
