@@ -45,6 +45,8 @@ extension CaptureSMFExportTests {
         /// A JR Timestamp (MT 0x0), a SysEx 7 packet (MT 0x3) and a system real-time clock (MT 0x1).
         static let utility: [UInt32] = [0x0020_1F40]
         static let sysEx: [UInt32] = [0x3004_0102, 0x0300_0000]
+        /// A SysEx 7 `continue` packet (one byte) with no message open: it is orphaned and dropped.
+        static let orphanSysEx: [UInt32] = [0x3021_0100, 0x0000_0000]
         static let realTime: [UInt32] = [0x10F8_0000]
 
         static func anchor(transport: Int?, frame: Int64 = 0, ticks: Int64 = 0, host: UInt64? = nil,

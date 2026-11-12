@@ -568,6 +568,7 @@ targets:
       - path: FluxKlangTests/CaptureSMFExportTests+Losses.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Order.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Pairing.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+SysEx.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift
