@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "96d41e669c6f820eb0b8b80026e5b9544ac1f5423667303cf4e3c8409d5d6d9e",
+    "sha256": "162790dba693d146bd9b8527cc8564052896ac3e25ef809876639dc8dfdea8f3",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -418,6 +418,7 @@
         "FluxKlangTests/MIDICIMessageTests+Hostile.swift",
         "FluxKlangTests/MIDICIMessageTests+Profile.swift",
         "FluxKlangTests/MIDICIMessageTests+ProfileReport.swift",
+        "FluxKlangTests/MIDICIMessageTests+Property.swift",
         "FluxKlangTests/PeerEndpointPolicyTests.swift",
         "FluxKlangTests/PeerEndpointPolicyTests+Classify.swift",
         "FluxKlangTests/PeerEndpointPolicyTests+Order.swift",
