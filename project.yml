@@ -547,6 +547,8 @@ targets:
       - path: FluxKlangTests/WiringConnectionListTests+Refusals.swift
       - path: FluxKlangTests/WiringSourceListTests.swift
       - path: FluxKlangTests/WiringSourceListTests+Refusals.swift
+      - path: FluxKlangTests/SpatialPanelPresentationTests.swift
+      - path: FluxKlangTests/SpatialPanelPresentationTests+Masks.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
