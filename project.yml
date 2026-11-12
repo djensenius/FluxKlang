@@ -581,6 +581,7 @@ targets:
       - path: FluxKlangTests/SMFTempoImportTests+Tempo.swift
       - path: FluxKlangTests/UMPCodecTests.swift
       - path: FluxKlangTests/UMPCodecTests+ChannelVoice.swift
+      - path: FluxKlangTests/UMPCodecTests+Data128.swift
       - path: FluxKlangTests/UMPCodecTests+Scaling.swift
       - path: FluxKlangTests/UMPCodecTests+SysEx7.swift
       - path: FluxKlangTests/UMPCodecTests+System.swift
