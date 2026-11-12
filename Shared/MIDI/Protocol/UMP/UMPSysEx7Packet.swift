@@ -1,7 +1,7 @@
 /// The status nibble of an MT 0x3 SysEx7 packet (M2-104-UM, Data Messages (64-bit); CoreMIDI `MIDISysExStatus`).
 ///
 /// This is the UMP-layer status. The kernel's `SysExChunkStatus` has the same values but is kept separate so the
-/// protocol codec does not depend on the audio kernel; a later slice can bridge them.
+/// protocol codec does not depend on the audio kernel; the kernel-side bridge is `SysExChunk+UMP.swift`.
 enum UMPSysEx7Status: UInt8, CaseIterable, Equatable, Sendable {
     /// The whole message fits in this packet.
     case complete = 0x0
