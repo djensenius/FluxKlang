@@ -30,10 +30,11 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// Endpoint Information Inquiry or Reply (0x72 and 0x73 exist from CI 1.2 on).
     case unsupportedFormat(UInt8)
     /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
-    /// `MIDICIProfileMessage`: 0x20, 0x21, 0x24-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
+    /// `MIDICIProfileMessage`: 0x20-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
     /// Capabilities Inquiry and Reply 0x30 and 0x31; `MIDICIEndpointMessage`: the Endpoint Information Inquiry and
-    /// Reply 0x72 and 0x73). This also covers valid MIDI-CI sub-ids none decodes (for example Set Profile On and
-    /// Off 0x22 and 0x23, and the property data, subscription and notify messages 0x34 to 0x3F).
+    /// Reply 0x72 and 0x73). This also covers valid MIDI-CI sub-ids none decodes (for example the Profile Details
+    /// Inquiry and Reply 0x28 and 0x29, Profile Specific Data 0x2F, and the property data, subscription and notify
+    /// messages 0x34 to 0x3F).
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -46,7 +47,7 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     case sourceIsBroadcast
     /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
-    /// ACK, NAK and the Endpoint Information Inquiry and Reply must be addressed to one MUID.
+    /// ACK, NAK, the Endpoint Information Inquiry and Reply, and Set Profile On and Off must be addressed to one MUID.
     case destinationIsBroadcast
     case targetIsBroadcast
     /// The text has this many utf8 bytes (encode) or declares this length (decode).
@@ -73,10 +74,10 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// (`MIDICIProfileMessage.maximumProfilesPerList`). On decode this is checked against the declared 14-bit
     /// count before any profile id is read.
     case tooManyProfiles(count: Int, limit: Int)
-    /// A Profile Enabled or Disabled Report carries a channel count in CI 1.2 only (the CI 1.1 form, from JUCE, ends
-    /// after the profile id): `channelCountNotAllowed` is a CI 1.1 report with a count, `channelCountRequired` a
-    /// CI 1.2 report without one. Raised by `encode` only; on decode a mismatch is a length refusal
-    /// (`trailingBytes` / `truncated`).
+    /// A Set Profile On or a Profile Enabled or Disabled Report carries a channel count in CI 1.2 only (the CI 1.1
+    /// form ends after the profile id): `channelCountNotAllowed` is a CI 1.1 message with a count,
+    /// `channelCountRequired` a CI 1.2 message without one. Raised by `encode` only; on decode a mismatch is a length
+    /// refusal (`trailingBytes` / `truncated`).
     case channelCountNotAllowed
     case channelCountRequired
     /// A Property Exchange Capabilities Inquiry or Reply carries the Property Exchange major and minor version in

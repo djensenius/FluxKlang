@@ -261,7 +261,8 @@ extension MIDICapabilityDiscovery {
     }
 
     /// Collects a Reply to Profile Inquiry from the peer, which arrived on `transport` (required: a legacy port says
-    /// so with `.legacyPort`); the Inquiry and the four reports are `.ignored(.notCollected)`.
+    /// so with `.legacyPort`); the Inquiry, Set Profile On and Off (an Initiator's commands: discovery is not a
+    /// profile host and never acts on them) and the four reports are `.ignored(.notCollected)`.
     @discardableResult
     mutating func collect(
         _ message: MIDICIProfileMessage, on transport: MIDICapabilityCITransport
@@ -270,7 +271,7 @@ extension MIDICapabilityDiscovery {
         case let .inquiryReply(header, enabled, disabled):
             if let ignored = ignoredDestination(header) { return .ignored(ignored) }
             return try collectProfiles(header, on: transport, enabled: enabled, disabled: disabled)
-        case .inquiry, .enabledReport, .disabledReport, .addedReport, .removedReport:
+        case .inquiry, .setProfileOn, .setProfileOff, .enabledReport, .disabledReport, .addedReport, .removedReport:
             return .ignored(.notCollected)
         }
     }

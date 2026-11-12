@@ -397,8 +397,11 @@ struct MIDICapabilityDiscoveryTests {
         for message in ciMessages {
             #expect(try discovery.collect(message) == .ignored(.notCollected), "\(message)")
         }
+        let toDevice = try Self.header(source: Self.hostRaw, destination: Self.deviceRaw)
         let profileMessages: [MIDICIProfileMessage] = [
             .inquiry(try Self.header(source: Self.hostRaw)),
+            .setProfileOn(toDevice, profile: try Self.profile(1), channels: 1),
+            .setProfileOff(toDevice, profile: try Self.profile(1)),
             .addedReport(try Self.header(), profile: try Self.profile(1))
         ]
         for message in profileMessages {
