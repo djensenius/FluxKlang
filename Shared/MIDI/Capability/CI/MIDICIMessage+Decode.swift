@@ -36,11 +36,11 @@ extension MIDICIMessage {
     ///     because step 2 runs first);
     ///  4. fewer than 5 bytes: `truncated(5)`;
     ///  5. sub-id 2 (byte 3) not 0x70, 0x71, 0x7D, 0x7E or 0x7F: `unknownSubID` (this includes valid MIDI-CI
-    ///     sub-ids that no decoder here handles, such as the property data messages 0x34 to 0x3F; Profile Inquiry
-    ///     0x20, its Reply 0x21 and the profile reports 0x24 to 0x27 are decoded by
-    ///     `MIDICIProfileMessage.decode(payload:limits:)` instead, the Property Exchange Capabilities Inquiry 0x30
-    ///     and Reply 0x31 by `MIDICIPropertyCapabilityMessage.decode(payload:limits:)`, and the Endpoint
-    ///     Information Inquiry 0x72 and Reply 0x73 by `MIDICIEndpointMessage.decode(payload:limits:)`);
+    ///     sub-ids that no decoder here handles, such as the property data messages 0x34 to 0x3F; the profile
+    ///     messages 0x20 to 0x27 (Profile Inquiry and its Reply, Set Profile On and Off, and the four profile
+    ///     reports) are decoded by `MIDICIProfileMessage.decode(payload:limits:)` instead, the Property Exchange
+    ///     Capabilities Inquiry 0x30 and Reply 0x31 by `MIDICIPropertyCapabilityMessage.decode(payload:limits:)`, and
+    ///     the Endpoint Information Inquiry 0x72 and Reply 0x73 by `MIDICIEndpointMessage.decode(payload:limits:)`);
     ///  6. format (byte 4) not 1 or 2: `unsupportedFormat`; an ACK in CI 1.1 is `unsupportedFormat(1)` too, because
     ///     no source reviewed defines it;
     ///  7. fewer than 13 bytes: `truncated(13)`;
