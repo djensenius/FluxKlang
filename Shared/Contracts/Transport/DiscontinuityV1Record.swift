@@ -11,7 +11,7 @@ import Foundation
 
 /// One `discontinuityRecord` of a contract v1 trace (media-contract.md §8.3-8.4). Built only by `make`.
 ///
-/// It covers every type but `sampleJump`, which is not built yet. A take's `overflow` and `captureStopped`
+/// It covers every `type` of the schema's `discontinuityRecord`. A take's `overflow` and `captureStopped`
 /// records are usually built through `RecordingTakeV1Discontinuities`, which numbers them and runs the
 /// take-level checks first. Each `Event` case carries exactly the §8.4 data its type needs, so `previousFrame`
 /// and `hostTicks` appear only on `clockRestart`, `frames` only on `underrun` and `overflow`, `reason` only on
@@ -45,6 +45,9 @@ struct DiscontinuityV1Record: Hashable, Sendable {
     enum Event: Hashable, Sendable {
         /// A new sample clock generation begins at `hostTicks`; the old one ended at `previousFrame`.
         case clockRestart(hostTicks: UInt64, previousFrame: Int64)
+        /// The device's frame counter jumped within one sample clock generation (#352): the record's `frame` is
+        /// the first frame after the jump. A forward jump splits a take and names its gap in `gapFrames`.
+        case sampleJump
         /// The playback stream ran out of prefetched data for `frames` frames.
         case underrun(StreamID, frames: Int64)
         case sourceLost(StreamID)
@@ -65,6 +68,7 @@ struct DiscontinuityV1Record: Hashable, Sendable {
         var type: String {
             switch self {
             case .clockRestart: "clockRestart"
+            case .sampleJump: "sampleJump"
             case .underrun: "underrun"
             case .sourceLost: "sourceLost"
             case .sourceRestored: "sourceRestored"
@@ -81,7 +85,7 @@ struct DiscontinuityV1Record: Hashable, Sendable {
             case .underrun(let stream, _), .sourceLost(let stream), .sourceRestored(let stream),
                  .formatChange(let stream), .overflow(let stream, _), .captureStopped(let stream, _):
                 stream
-            case .clockRestart, .locate, .loopWrap:
+            case .clockRestart, .sampleJump, .locate, .loopWrap:
                 nil
             }
         }
@@ -114,7 +118,8 @@ struct DiscontinuityV1Record: Hashable, Sendable {
         switch event {
         case .underrun(_, let frames), .overflow(_, let frames):
             guard (1...maximumFrames).contains(frames) else { throw .framesOutOfRange(frames) }
-        case .clockRestart, .sourceLost, .sourceRestored, .locate, .loopWrap, .formatChange, .captureStopped:
+        case .clockRestart, .sampleJump, .sourceLost, .sourceRestored, .locate, .loopWrap, .formatChange,
+             .captureStopped:
             break
         }
         if let note {
@@ -167,7 +172,7 @@ extension DiscontinuityV1Record: Encodable {
             try container.encode(previousFrame, forKey: .previousFrame)
         case .underrun(_, let frames), .overflow(_, let frames):
             try container.encode(frames, forKey: .frames)
-        case .sourceLost, .sourceRestored, .locate, .loopWrap, .formatChange, .captureStopped:
+        case .sampleJump, .sourceLost, .sourceRestored, .locate, .loopWrap, .formatChange, .captureStopped:
             break
         }
         try container.encodeIfPresent(event.stream, forKey: .stream)

@@ -985,11 +985,23 @@ class Trace:
         for i, seg in enumerate(segs):
             clock, gen, start = seg["sampleClock"], seg["generation"], seg["startFrame"]
             end, restart = start + seg["frames"], restarts.get((clock, gen + 1), {})
-            if end > restart.get("previousFrame", end) or i + 1 < len(segs) and (
-                    (segs[i + 1]["sampleClock"], segs[i + 1]["generation"]) != (clock, gen + 1)
-                    or end != restart.get("previousFrame") or segs[i + 1]["startFrame"] != restart.get("frame")):
+            prev, nxt = segs[i - 1] if i else None, segs[i + 1] if i + 1 < len(segs) else None
+            jump = prev is not None and (prev["sampleClock"], prev["generation"]) == (clock, gen)  # forward sampleJump
+            split = nxt and (nxt["sampleClock"], nxt["generation"]) != (clock, gen)  # a same-generation pair is a jump
+            if end > restart.get("previousFrame", end) or split and (
+                    (nxt["sampleClock"], nxt["generation"]) != (clock, gen + 1)
+                    or end != restart.get("previousFrame") or nxt["startFrame"] != restart.get("frame")):
                 self.err(r, "segments split at each clock restart: ending at its previousFrame (no segment, the last "
                             "included, ends after it), resuming at its frame")
+            if ("gapFrames" in seg) != jump:
+                self.err(r, "gapFrames is required exactly on a segment that continues the previous segment's sample "
+                            "clock generation")
+            elif jump and start != prev["startFrame"] + prev["frames"] + seg["gapFrames"]:
+                self.err(r, "a same-generation segment starts gapFrames after the previous segment's end")
+            if jump and not any(d["type"] == "sampleJump" and (d["sampleClock"], d["generation"], d["frame"])
+                                == (clock, gen, start) for d in self.discs):
+                self.err(r, "a same-generation segment's startFrame is the frame of a sampleJump on its clock "
+                            "generation")
             if seg["fileFrameStart"] != file_frame:
                 self.err(r, "segments are contiguous in the file; no padding across clock restarts")
             anchor = self.first_anchor.get((clock, gen))
@@ -1137,6 +1149,22 @@ MUTATIONS = [
     ("11", 3, {"reason": "jumpBeforeTakeStart"}, '.reason: "jumpBeforeTakeStart" not in enum'),
     ("11", 2, {"reason": "discontinuity"}, "reason is required on captureStopped discontinuities and only there"),
     ("11", "timeline", {"2": None, "2.seq": 3, "2.stopReason": "user"}, None),  # without its stop it is a user take
+    # Example 12's take spans a forward sampleJump: its second segment states the never-captured gap in gapFrames (§8.3).
+    ("12", 4, {"segments.1.gapFrames": None}, "gapFrames is required exactly on a segment that continues"),
+    ("12", 4, {"segments.0.gapFrames": 1}, "gapFrames is required exactly on a segment that continues"),
+    ("08", 8, {"segments.1.gapFrames": 5}, "gapFrames is required exactly on a segment that continues"),
+    ("12", 4, {"segments.1.gapFrames": 143999}, "starts gapFrames after the previous segment's end"),
+    ("12", 4, {"segments.1.gapFrames": 145000}, "starts gapFrames after the previous segment's end"),
+    ("12", 4, {"segments.1.gapFrames": 0}, "gapFrames: 0 out of range"),  # a zero gap is not a jump
+    ("12", 4, {"segments.1.startFrame": 90000, "segments.1.gapFrames": -6000}, "gapFrames: -6000 out of range"),
+    ("12", "timeline", {"2": None, "2.seq": 3}, "is the frame of a sampleJump on its clock generation"),
+    ("12", 3, {"frame": 240001}, "is the frame of a sampleJump on its clock generation"),
+    ("12", 4, {"segments.1.startOffsetNs": 4999999999}, "segment startOffsetNs is the ns offset"),
+    ("12", 4, {"segments.1.fileFrameStart": 240000}, "segments are contiguous in the file"),  # the gap is not padded
+    ("12", 2, {"frame": 95900}, "lies wholly inside its segment"),  # straddles segment 0's end
+    ("12", 4, {"droppedFrames": 0}, "no silent capture loss"),
+    ("12", "", {"timeline.1.frame": 120000, "timeline.3.segments.0.paddedFrames": 0, "timeline.3.droppedFrames": 0},
+     None),  # an overflow wholly inside the gap belongs to no segment
 ]
 
 

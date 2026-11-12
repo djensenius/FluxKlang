@@ -14,7 +14,7 @@ struct RecordingTakeV1GateTests {
     typealias Refusal = RecordingTakeV1Refusal
 
     /// The refusal `clear` throws for `take`, or nil when it clears.
-    private func refusal(_ take: RecordingTake) -> Refusal? {
+    func refusal(_ take: RecordingTake) -> Refusal? {
         do {
             _ = try RecordingTakeV1Gate.clear(take)
             return nil
@@ -102,7 +102,7 @@ struct RecordingTakeV1GateTests {
     }
 
     @Test
-    func recordingTakeV1GateRefusesASameGenerationSampleJumpSplit() throws {
+    func recordingTakeV1GateClearsAForwardSampleJumpAndRefusesABackwardOne() throws {
         var forward = try anchoredLedger()
         try forward.advance(Fixture.take1, to: Fixture.stamp(1, 48_000))
         #expect(try forward.ingest(Fixture.jump(1, 96_000)) == [.split(Fixture.take1)])
@@ -110,7 +110,7 @@ struct RecordingTakeV1GateTests {
         let forwardTake = try forward.finish(Fixture.take1, reason: .user)
         #expect(forwardTake.segments.map(\.generation.value) == [1, 1])
         #expect(forwardTake.unplacedSegments.isEmpty)
-        #expect(refusal(forwardTake) == Refusal.notRestartSplit(after: 0))
+        #expect(refusal(forwardTake) == nil)
 
         var backward = try anchoredLedger()
         try backward.advance(Fixture.take1, to: Fixture.stamp(1, 48_000))
@@ -119,7 +119,7 @@ struct RecordingTakeV1GateTests {
         let backwardTake = try backward.finish(Fixture.take1, reason: .user)
         #expect(backwardTake.segments.map(\.generation.value) == [1, 1])
         #expect(backwardTake.unplacedSegments.isEmpty)
-        #expect(refusal(backwardTake) == Refusal.notRestartSplit(after: 0))
+        #expect(refusal(backwardTake) == Refusal.sampleJumpNotForward(after: 0))
     }
 
     @Test
@@ -182,7 +182,7 @@ struct RecordingTakeV1GateTests {
         let pairFirst = try split.finish(Fixture.take1, reason: .user)
         #expect(pairFirst.segments.map(\.generation.value) == [1, 1])
         #expect(pairFirst.unplacedSegments == [0, 1])
-        #expect(refusal(pairFirst) == Refusal.notRestartSplit(after: 0))
+        #expect(refusal(pairFirst) == Refusal.sampleJumpNotForward(after: 0))
 
         let stop = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
         #expect(try ended.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, stop)])
@@ -190,7 +190,7 @@ struct RecordingTakeV1GateTests {
         #expect(endedPair.segments.map(\.generation.value) == [1, 1])
         #expect(endedPair.unplacedSegments == [0, 1])
         // A ledger stop refuses nothing (#336), so the pair rule is still the first refusal.
-        #expect(refusal(endedPair) == Refusal.notRestartSplit(after: 0))
+        #expect(refusal(endedPair) == Refusal.sampleJumpNotForward(after: 0))
 
         var lone = try unanchoredLedger(from: 0)
         try lone.advance(Fixture.take1, to: Fixture.stamp(1, 100))
