@@ -101,4 +101,23 @@ extension PerformanceProjectSession {
     func inspector(_ subject: WiringInspectorSubject) throws(WiringInspectorRefusal) -> WiringInspector {
         try WiringInspector.make(subject, draft: snapshot.history.draft, active: base)
     }
+
+    /// The draft's Connections list (#101): one section per destination node. The base is empty, so every row is
+    /// a draft row. Refused only when the model refuses; nothing is listed, clamped or guessed then.
+    func connectionList() throws(WiringConnectionListRefusal) -> WiringConnectionList {
+        // #100 owns the real presence source (this host's rig and routes); until then every role node is unmapped.
+        let presence = Self.presenceWithoutRig(base.nodes + snapshot.candidate.nodes)
+        return try WiringConnectionList.make(active: base, review: snapshot.diff, presence: presence)
+    }
+
+    /// Node presence for a session with no rig, routes or engine: no role node has a route on this host, so each
+    /// is `.unmapped`, an expected state and not an error (README "Shared state words"). It never says `.ready`,
+    /// `.missing` or `.lost`, which need a rig or plugin status this session lacks. A node that is not a role node
+    /// gets NO entry rather than a guess, so the model refuses a section for it (`presenceMissing`) and the view
+    /// shows its one-line fallback. This session creates only role nodes today.
+    nonisolated static func presenceWithoutRig(_ nodes: [GraphNode]) -> [NodeID: WiringNodePresence] {
+        var presence: [NodeID: WiringNodePresence] = [:]
+        for node in nodes where node.kind.requiresRole { presence[node.id] = .unmapped }
+        return presence
+    }
 }

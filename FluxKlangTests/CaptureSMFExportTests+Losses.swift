@@ -18,8 +18,7 @@ extension CaptureSMFExportTests {
         #expect(export.droppedUMPOnly == 4)
         #expect(export.clip.items == [.note(MIDIClipNote(channel: 1, note: 60, velocity: 64, releaseVelocity: 64,
                                                          startTicks: 0, endTicks: 50))])
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1, .umpOnlyDropped: 4])
-        #expect(!export.fidelityUnverified)
+        #expect(export.smf().losses.losses == [.umpOnlyDropped: 4])
     }
 
     @Test func aSelectionWhereEveryCaptureIsDroppedRefusesNothingExportableWithTheCount() throws {
@@ -37,43 +36,55 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamB, Fixture.utility, tick: 10, endpoint: .unknown)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 20)
         let export = try Fixture.export(feed.log, [Fixture.streamA])
-        #expect(export.droppedUMPOnly == 0 && !export.fidelityUnverified)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1])
+        #expect(export.droppedUMPOnly == 0)
+        #expect(export.smf().losses.losses == [:])
     }
 
-    @Test func anUnknownEndpointProtocolMarksTheExportUnverifiedAndItStillSucceeds() throws {
-        var feed = try Fixture.Feed([Fixture.streamA])
+    @Test func anMT2OnlyTimedCaptureIsLosslessWhateverItsEndpointProtocolOrPort() throws {
+        var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB, Fixture.streamC])
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0, endpoint: .unknown)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 10, endpoint: .unknown)
-        let export = try Fixture.export(feed.log, [Fixture.streamA])
-        #expect(export.fidelityUnverified)
+        try feed.add(Fixture.streamB, Fixture.noteOn(1, 61, 64), tick: 20, endpoint: .midi2, port: .midi1)
+        try feed.add(Fixture.streamB, Fixture.noteOff(1, 61, 64), tick: 30, endpoint: .midi2, port: .midi1)
+        try feed.add(Fixture.streamC, Fixture.noteOn(1, 62, 64), tick: 40, endpoint: .midi1, port: .midi1)
+        try feed.add(Fixture.streamC, Fixture.noteOff(1, 62, 64), tick: 50, endpoint: .midi1, port: .midi1)
+        for streams in [[Fixture.streamA], [Fixture.streamB], [Fixture.streamC],
+                        [Fixture.streamA, Fixture.streamB, Fixture.streamC]] {
+            let file = try Fixture.export(feed.log, streams).smf()
+            #expect(file.losses.losses == [:])
+            #expect(file.losses.lossless)
+        }
+        let all = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB, Fixture.streamC])
+        #expect(all.clip.items.count == 3)
+    }
+
+    @Test func everyCaptureTheFileLacksIsCountedAsUMPOnlyDroppedAndTheExportIsNeverLossless() throws {
+        let streams = [Fixture.streamA, Fixture.streamB, Fixture.streamC, Fixture.other]
+        var feed = try Fixture.Feed(streams)
+        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
+        // An OS-upscaled MIDI 1.0 note (MT 0x4 from a midi1 endpoint), a genuine MIDI 2.0 note, a SysEx 7 and a
+        // utility message: section 9.3 counts the first and third as lossless once written, but none is written yet.
+        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 10, endpoint: .midi1, port: .midi2)
+        try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 20, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.other, Fixture.sysEx, tick: 30)
+        try feed.add(Fixture.other, Fixture.utility, tick: 40)
+        try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 50)
+        let export = try Fixture.export(feed.log, streams)
+        #expect(export.droppedUMPOnly == 4)
         #expect(export.clip.items.count == 1)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1, .fidelityUnverified: 1])
+        let file = export.smf()
+        #expect(file.losses.losses == [.umpOnlyDropped: 4])
+        #expect(!file.losses.lossless)
     }
 
-    @Test func anOSTranslatedCaptureMarksTheExportUnverified() throws {
-        var feed = try Fixture.Feed([Fixture.streamA])
-        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0, endpoint: .midi2, port: .midi1)
-        try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 10, endpoint: .midi2, port: .midi1)
-        let export = try Fixture.export(feed.log, [Fixture.streamA])
-        #expect(export.fidelityUnverified)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1, .fidelityUnverified: 1])
-    }
-
-    @Test func aVerifiedNativeMIDI1CaptureLeavesTheExportVerified() throws {
-        var feed = try Fixture.Feed([Fixture.streamA])
-        try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0, endpoint: .midi1, port: .midi1)
-        let export = try Fixture.export(feed.log, [Fixture.streamA])
-        #expect(!export.fidelityUnverified)
-    }
-
-    @Test func aDroppedUnverifiedCaptureStillMarksTheSelectionUnverified() throws {
-        var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
+    @Test func anUnknownEndpointUMPOnlyCaptureAddsNoFidelityUnverified() throws {
+        var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB, Fixture.streamC])
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
         try feed.add(Fixture.streamB, Fixture.utility, tick: 5, endpoint: .unknown)
-        let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
-        #expect(export.droppedUMPOnly == 1 && export.fidelityUnverified)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1, .umpOnlyDropped: 1, .fidelityUnverified: 1])
+        try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 6, endpoint: .unknown, port: .midi2)
+        let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB, Fixture.streamC])
+        #expect(export.droppedUMPOnly == 2)
+        #expect(export.smf().losses.losses == [.umpOnlyDropped: 2])
     }
 
     @Test func everyLossAtOnceIsReportedAndTheBytesAreTheWritersBytes() throws {
@@ -83,7 +94,7 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamB, Fixture.realTime, tick: 6)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
         let file = export.smf()
-        #expect(file.losses.losses == [.syntheticTempoMap: 1, .umpOnlyDropped: 2, .fidelityUnverified: 1])
+        #expect(file.losses.losses == [.umpOnlyDropped: 2])
         #expect(!file.losses.lossless)
         #expect(file.bytes == StandardMIDIFile.write(export.clip).bytes)
         #expect(file.reorderedItems == StandardMIDIFile.write(export.clip).reorderedItems)
@@ -98,7 +109,7 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamA, Fixture.noteOn(2, 61, 64), tick: 30)
         let export = try Fixture.export(feed.log, [Fixture.streamA])
         #expect(export.unpairedOffs == 1 && export.widenedNotes == 1 && export.openNotesClosed == 2)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1])
+        #expect(export.smf().losses.losses == [:])
         #expect(export.clip.items == [
             .note(MIDIClipNote(channel: 1, note: 50, velocity: 64, releaseVelocity: 64, startTicks: 10,
                                endTicks: 11)),
@@ -141,7 +152,7 @@ extension CaptureSMFExportTests {
         #expect(secondRecord.musicalRoundTripFrame == 3)
         let first = try Fixture.export(feed.log, [Fixture.streamA])
         #expect(first.timingQuantized == 1)
-        #expect(first.smf().losses.losses == [.syntheticTempoMap: 1, .timingQuantized: 1])
+        #expect(first.smf().losses.losses == [.timingQuantized: 1])
         #expect(first.smf().bytes == StandardMIDIFile.write(first.clip).bytes)
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 61, 64), tick: 4)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 61, 64), tick: 25)
@@ -160,7 +171,7 @@ extension CaptureSMFExportTests {
         try exact.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
         try exact.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 25)
         let unchanged = try Fixture.export(exact.log, [Fixture.streamA])
-        #expect(unchanged.timingQuantized == 0 && unchanged.smf().losses.losses == [.syntheticTempoMap: 1])
+        #expect(unchanged.timingQuantized == 0 && unchanged.smf().losses.losses == [:])
         var oneToOne = try Fixture.Feed([Fixture.streamA])
         try oneToOne.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 1)
         let plainRecord = try #require(oneToOne.log.records.last)
@@ -180,7 +191,7 @@ extension CaptureSMFExportTests {
         #expect(overflowed.musicalRoundTripFrame == nil)
         let unprovable = try Fixture.export(wide.log, [Fixture.streamA])
         #expect(unprovable.timingQuantized == 1)
-        #expect(unprovable.smf().losses.losses == [.syntheticTempoMap: 1, .timingQuantized: 1])
+        #expect(unprovable.smf().losses.losses == [.timingQuantized: 1])
     }
 
     @Test func aCaptureWithoutTransportCarriesNoRoundTripFrame() throws {

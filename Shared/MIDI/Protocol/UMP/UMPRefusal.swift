@@ -10,7 +10,8 @@ enum UMPField: Equatable, Sendable {
     case batchLimit
     /// The MT 0x3 SysEx7 number of bytes, 0...6.
     case sysEx7ByteCount
-    /// The MT 0x5 SysEx8 number of bytes, 1...14, counting the Stream ID.
+    /// The MT 0x5 SysEx8 number of bytes, 1...14, counting the Stream ID; 15 is valid only on an End, as the abort
+    /// marker (M2-104-UM §7.8.1), and 0 is never valid.
     case sysEx8ByteCount
     /// The MT 0x5 Mixed Data Set ID, 0...15.
     case mixedDataSetID

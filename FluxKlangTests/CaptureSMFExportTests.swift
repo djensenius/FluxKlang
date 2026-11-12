@@ -40,12 +40,12 @@ struct CaptureSMFExportTests {
         let file = export.smf()
         #expect(file.bytes == StandardMIDIFile.write(export.clip).bytes)
         #expect(file.reorderedItems == 0)
-        #expect(file.losses.losses == [.syntheticTempoMap: 1])
+        #expect(file.losses.losses == [:])
         let read = try StandardMIDIFile.read(file.bytes)
         #expect(read.clip == export.clip)
         #expect(read.clip.items == expected)
         #expect(export.droppedUMPOnly == 0 && export.unpairedOffs == 0 && export.openNotesClosed == 0)
-        #expect(export.widenedNotes == 0 && !export.fidelityUnverified)
+        #expect(export.widenedNotes == 0)
     }
 
     @Test func aNoteKeepsItsCaptureTicksVelocityAndReleaseVelocity() throws {
