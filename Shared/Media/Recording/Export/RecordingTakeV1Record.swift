@@ -33,6 +33,10 @@ struct RecordingTakeV1Record: Hashable, Sendable {
         let fileFrameStart: Int64
         let frames: Int64
         let paddedFrames: Int64
+        /// The frames never captured between the previous segment's end and `startFrame` (#352): present exactly
+        /// when the previous segment has the same sample clock and generation (a forward `sampleJump`), never
+        /// padded and never in `droppedFrames`. Omitted from the JSON when nil.
+        let gapFrames: Int64?
     }
 
     static let kind = "take"
@@ -64,10 +68,11 @@ struct RecordingTakeV1Record: Hashable, Sendable {
         for (index, segment) in take.segments.enumerated() {
             guard let offset = segment.startOffsetNs else { throw .uncleared(.unplacedSegment(index)) }
             guard MediaContractV1ID.matches(segment.clock.rawValue) else { throw .invalidSampleClock(segment: index) }
+            let gap = try gapFrames(before: index, in: take.segments)
             segments.append(Segment(
                 sampleClock: segment.clock, generation: segment.generation, startFrame: segment.startFrame,
                 startOffsetNs: offset, fileFrameStart: segment.fileFrameStart, frames: segment.frames,
-                paddedFrames: segment.paddedFrames))
+                paddedFrames: segment.paddedFrames, gapFrames: gap))
         }
         let stopReason = take.stopReason.contractV1StopReason()
         if let note {
@@ -94,6 +99,21 @@ struct RecordingTakeV1Record: Hashable, Sendable {
         self.droppedFrames = droppedFrames
         self.stopReason = stopReason
         self.note = note
+    }
+
+    /// The frames between the end of segment `index - 1` and the start of segment `index`, or nil unless both
+    /// share a clock and generation. The gap of a cleared take is at least 1 (the gate's forward-jump rule) and
+    /// at most the schema's `Int64` maximum, unless the subtraction itself overflows: `startFrame` is any `Int64`.
+    private static func gapFrames(before index: Int,
+                                  in segments: [RecordingSegment]) throws(RecordingTakeV1RecordRefusal) -> Int64? {
+        guard index > 0 else { return nil }
+        let earlier = segments[index - 1]
+        let later = segments[index]
+        guard earlier.clock == later.clock, earlier.generation == later.generation else { return nil }
+        let (gap, overflow) = later.startFrame.subtractingReportingOverflow(earlier.startFrame + earlier.frames)
+        guard !overflow else { throw .gapFramesOutOfRange(segment: index) }
+        guard gap >= 1 else { throw .uncleared(.sampleJumpNotForward(after: index - 1)) }
+        return gap
     }
 
     /// Compact UTF-8 JSON with sorted keys and unescaped slashes (`ContractCoding`), holding exactly the

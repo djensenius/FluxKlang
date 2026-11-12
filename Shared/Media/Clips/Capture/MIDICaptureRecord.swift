@@ -9,8 +9,8 @@
 //
 
 /// One accepted capture: the UMP words verbatim, host ticks, the frame derived through the current anchor, musical
-/// ticks exactly when a transport was anchored, the frame those ticks map back to, and the §9.1 protocol fields.
-/// Host ticks are transient (M13).
+/// ticks exactly when a transport was anchored, the frame those ticks map back to, the pass the ticks belong to, and
+/// the §9.1 protocol fields. Host ticks are transient (M13).
 struct MIDICaptureRecord: Equatable, Sendable {
     let stream: StreamID
     let packet: UMPPacket
@@ -20,17 +20,43 @@ struct MIDICaptureRecord: Equatable, Sendable {
     /// The frame `musicalTicks` maps back to through the capture-time musical map; nil when there are no ticks or
     /// the map-back overflowed Int64. A frame other than `sample.frame` means the ticks quantized the timing.
     let musicalRoundTripFrame: Int64?
+    /// The pass `musicalTicks` belong to; nil exactly when there are no ticks.
+    let pass: MIDICapturePass?
     let protocolStamp: MIDIProtocolStamp
 
     init(_ admission: MIDICaptureLog.Admission, stream: StreamID, packet: UMPPacket, host: HostStamp,
-         sample: SampleStamp, musicalTicks: Int64?, musicalRoundTripFrame: Int64?, protocolStamp: MIDIProtocolStamp) {
+         sample: SampleStamp, musicalTicks: Int64?, musicalRoundTripFrame: Int64?, pass: MIDICapturePass?,
+         protocolStamp: MIDIProtocolStamp) {
         self.stream = stream
         self.packet = packet
         self.host = host
         self.sample = sample
         self.musicalTicks = musicalTicks
         self.musicalRoundTripFrame = musicalRoundTripFrame
+        self.pass = pass
         self.protocolStamp = protocolStamp
+    }
+}
+
+/// Where a capture lies among the passes of its musical timeline (media-contract.md §9.3). `span` counts the locates
+/// and transport restarts before it and `iteration` the loop iterations within its span, carried over a clock restart,
+/// which continues its pass. Passes order by span, then iteration; two captures overlay when their passes differ.
+struct MIDICapturePass: Comparable, Sendable {
+    static let initial = MIDICapturePass(span: 0, iteration: 0)
+
+    let span: Int
+    let iteration: Int
+
+    /// The pass a locate or transport restart begins: the next span, at its first loop iteration.
+    var nextSpan: MIDICapturePass { MIDICapturePass(span: span + 1, iteration: 0) }
+
+    /// This pass `loops` loop iterations further on.
+    func advanced(byLoops loops: UInt32) -> MIDICapturePass {
+        MIDICapturePass(span: span, iteration: iteration + Int(loops))
+    }
+
+    static func < (lhs: MIDICapturePass, rhs: MIDICapturePass) -> Bool {
+        (lhs.span, lhs.iteration) < (rhs.span, rhs.iteration)
     }
 }
 

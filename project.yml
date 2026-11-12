@@ -323,6 +323,7 @@ targets:
       - path: FluxKlangTests/RecordingTakeV1GateTests.swift
       - path: FluxKlangTests/RecordingTakeV1GateTests+Discontinuities.swift
       - path: FluxKlangTests/RecordingTakeV1GateTests+LedgerStop.swift
+      - path: FluxKlangTests/RecordingTakeV1GateTests+SampleJump.swift
       - path: FluxKlangTests/DraftHistoryTests.swift
       - path: FluxKlangTests/DraftHistoryTests+Undo.swift
       - path: FluxKlangTests/SpatialEditingTests.swift
@@ -567,6 +568,7 @@ targets:
       - path: FluxKlangTests/CaptureSMFExportTests+Losses.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Order.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Pairing.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+SysEx.swift
       - path: FluxKlangTests/MIDIClipContinuityTests.swift
       - path: FluxKlangTests/MIDIClipContinuityTests+Tempo.swift
       - path: FluxKlangTests/BackingClipPlaybackTests.swift

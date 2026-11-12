@@ -45,15 +45,22 @@ extension CaptureSMFExportTests {
         /// A JR Timestamp (MT 0x0), a SysEx 7 packet (MT 0x3) and a system real-time clock (MT 0x1).
         static let utility: [UInt32] = [0x0020_1F40]
         static let sysEx: [UInt32] = [0x3004_0102, 0x0300_0000]
+        /// A SysEx 7 `continue` packet (one byte) with no message open: it is orphaned and dropped.
+        static let orphanSysEx: [UInt32] = [0x3021_0100, 0x0000_0000]
         static let realTime: [UInt32] = [0x10F8_0000]
 
-        static func anchor(transport: Int?, frame: Int64 = 0, ticks: Int64 = 0,
-                           host: UInt64? = nil) throws -> ClockAnchor {
+        static func anchor(transport: Int?, frame: Int64 = 0, ticks: Int64 = 0, host: UInt64? = nil,
+                           loopIteration: UInt32 = 0) throws -> ClockAnchor {
             let musical = try transport.map {
-                MusicalStamp(transport: try Generation($0), musicalMap: .initial, ticks: ticks, loopIteration: 0)
+                MusicalStamp(transport: try Generation($0), musicalMap: .initial, ticks: ticks,
+                             loopIteration: loopIteration)
             }
             return ClockAnchor(sample: SampleStamp(clock: clock, generation: .initial, frame: frame),
                                host: HostStamp(ticks: host ?? baseHost + UInt64(frame) * hostPerTick), musical: musical)
+        }
+
+        static func pass(_ span: Int, _ iteration: Int = 0) -> MIDICapturePass {
+            MIDICapturePass(span: span, iteration: iteration)
         }
 
         /// A musical map through `anchor`, which must carry a musical stamp. At the default 320,000 microseconds per
@@ -118,9 +125,12 @@ extension CaptureSMFExportTests {
 
         /// Anchors the transport at `frame`, so captures from there on carry musical ticks from `ticks`. The anchor's
         /// host is `host`, or the host of `frame` at one host-tick step per frame when nil; captures then follow
-        /// that host one frame per `hostPerTick`, so a huge `frame` needs an explicit `host`.
-        mutating func anchorTransport(atFrame frame: Int64, ticks: Int64 = 0, host: UInt64? = nil) throws {
-            let anchor = try Fixture.anchor(transport: 1, frame: frame, ticks: ticks, host: host)
+        /// that host one frame per `hostPerTick`, so a huge `frame` needs an explicit `host`. `transport` is the
+        /// anchor's transport generation (a transport restart changes it) and `loopIteration` its loop pass.
+        mutating func anchorTransport(atFrame frame: Int64, ticks: Int64 = 0, host: UInt64? = nil,
+                                      transport: Int = 1, loopIteration: UInt32 = 0) throws {
+            let anchor = try Fixture.anchor(transport: transport, frame: frame, ticks: ticks, host: host,
+                                            loopIteration: loopIteration)
             try log.observe(anchor: anchor)
             musicalMap = try Fixture.map(anchor, microsPerQuarter: microsPerQuarter)
             anchorHost = anchor.host.ticks

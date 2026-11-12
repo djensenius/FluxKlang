@@ -49,7 +49,7 @@ and CoreMIDI stay behind adapters ([§10](#10-adapter-boundary)).
 | Discontinuity | A recorded break in continuity (restart, jump, underrun, overflow, loss, locate, wrap, format change, stop) |
 | Container | How MIDI bytes are carried: UMP words, MIDI 1.0 bytes or SMF |
 | Effective protocol | The protocol the source actually produced (`midi1` or `midi2`). It is independent of the container |
-| Take / segment | A capture. A take has one segment per sample clock generation |
+| Take / segment | A capture. A take has one segment per sample clock generation, and one more after each forward `sampleJump` |
 
 ## 3. Plain values
 
@@ -347,18 +347,38 @@ fallback (example 04).
   segment's frames are at its generation's own rate (example 08 goes from 48 to 96 kHz). Each segment stores
   `startOffsetNs`, the nanosecond offset of its anchored start from the first segment's (the take's anchor), never
   absolute host ticks (M13).
+- A forward `sampleJump` also starts a new segment, in the same sample clock generation (example 12). The recorder
+  closes the current segment at its last captured frame and opens the next at the jump's `frame`, the first frame after
+  the jump. `gapFrames` on that next segment is the number of device frames, on that generation's clock, between the
+  end of the previous stored segment and its `startFrame`: `startFrame` equals the previous `startFrame` plus its
+  `frames` (padding included) plus `gapFrames`. Those frames were never captured. They are not padded (the file stays
+  contiguous: `fileFrameStart` does not advance), not counted in `droppedFrames`, and not silent: `gapFrames` and the
+  `sampleJump` record, which has the same clock and generation and `frame` equal to the segment's `startFrame`, state
+  them. `startOffsetNs` includes the gap's wall time, because one generation's anchor maps both starts. `gapFrames` is
+  an integer of at least 1, and is present exactly when the previous segment has the same sample clock and generation:
+  it never appears on the first segment or after a restart split. An overflow interval wholly inside a gap belongs to
+  no segment, so the take is not charged for it; one that straddles a segment edge still fails "wholly inside its
+  segment". A jump may be followed by a restart (the next segment is in generation + 1 and resumes at the restart's
+  `frame` after the last segment ends at `previousFrame`). A generation skip and a clock change are not expressible:
+  the restart rule above still refuses them. Neither is a segment that starts at or before the previous segment's end
+  in the same generation: `gapFrames` is at least 1 and must equal `startFrame` minus that end, so no value fits.
 - Disk full records `captureStopped` at the end of the last segment and leaves a recoverable partial file
   (example 08).
 - A take owns only the overflow and `captureStopped` records on its stream that touch its own segments (same clock
   generation, overlapping frames), so earlier and later takes never count. A `captureStopped` it owns must match its
   `stopReason`: a `user` stop owns none; any other owns exactly one, whose `reason` equals the `stopReason`, at the end
   of its last segment (example 08 `tk.2`, example 11).
-- The recorder can end a take itself. When a `sampleJump` lands before the start of the take's first segment, in that
-  segment's generation, the take has nowhere to continue: it ends at its last good frame and keeps the audio up to it.
-  Its `stopReason` is `discontinuity`. It is never `user`, because the user did not stop it, and never `diskFull` or
-  `deviceLost`, because capture did not stop on its own. Capture does not report this stop; the recorder derives it and
-  records it as the take's one `captureStopped`, with `reason` `discontinuity` (example 11). The record carries the
-  fact, not the cause (today only that `sampleJump` ends a take this way); a `note` may name the cause as prose.
+- The recorder can end a take itself, the counterpart of the forward gap above. The take ledger decides a `sampleJump`
+  by where it lands. In the take's first generation, before the start of the take's first segment, the take has
+  nowhere to continue: it ends at its last good frame and keeps the audio up to it. Anywhere else the ledger splits the
+  take at the jump's frame: forward, the frames in between are the gap above; backward but not before the take's start,
+  the new segment would overlap frames already captured, which the contract cannot state, so the exporter refuses such
+  a take (#352). An empty segment (a jump or restart right after another) is dropped, so a gap is measured from the
+  previous stored segment. A ledger-ended take's `stopReason` is `discontinuity`. It is never `user`, because the user
+  did not stop it, and never `diskFull` or `deviceLost`, because capture did not stop on its own. Capture does not
+  report this stop; the recorder derives it and records it as the take's one `captureStopped`, with `reason`
+  `discontinuity` (example 11). The record carries the fact, not the cause (today only that `sampleJump` ends a take
+  this way); a `note` may name the cause as prose.
 
 | `stopReason` | Who ended the take | The `captureStopped` it owns |
 |---|---|---|
@@ -372,7 +392,7 @@ fallback (example 04).
 | Type | Meaning | Required data |
 |---|---|---|
 | `clockRestart` | New sample clock generation begins | new generation, `hostTicks`, `previousFrame` |
-| `sampleJump` | Frame jump within a continuous device mapping | frame |
+| `sampleJump` | Frame jump within a continuous device mapping | frame: the first frame after the jump |
 | `underrun` | Playback ran out of prefetched data | playback stream, `frames` |
 | `overflow` | Capture handoff full; frames padded | capture stream, `frames` |
 | `sourceLost`, `sourceRestored` | Source availability changed (one per `source` bump) | stream |
@@ -499,6 +519,12 @@ Coordinator follow-ups (proposed, not done here): a CI or Makefile step that run
   stop. A reader that knows it treats the take as ended by the recorder itself at its last good frame: the audio up to
   that frame is kept, and the record does not say why. It must not remap the value to another reason, and a writer
   must not emit another reason for such a take.
+- Additive revision: `gapFrames` on a take segment (#352, [§8.3](#83-capture-109-110), example 12). An optional
+  integer of at least 1, present exactly when the previous segment has the same sample clock and generation: a forward
+  `sampleJump` inside the take, never captured, neither padded nor counted in `droppedFrames`. Every earlier document
+  stays valid, under the earlier schema too. A reader or validator that predates it rejects the unknown field (the
+  strict validator rejects unknown fields): it fails closed. A reader that knows it must not read the gap as silence or
+  padding, and a writer must not pad the file or emit a clock restart for a jump.
 - Readers preserve unknown optional data under `extensions`. The strict validator rejects unknown fields elsewhere,
   so drift is caught.
 - Examples are synthetic and deterministic, and use stable synthetic IDs (`ex.NN-name`, `trg.N`, `act.name`).
@@ -544,6 +570,7 @@ Coordinator follow-ups (proposed, not done here): a CI or Makefile step that run
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss, groupless JR Timestamp |
 | [`11-audio-capture-discontinuity-stop`](media-contract/examples/11-audio-capture-discontinuity-stop.json) | the recorder ends a take at its last good frame: `discontinuity` stop reason with its one matching `captureStopped`, neither a user nor a device stop |
+| [`12-audio-capture-sample-jump-split`](media-contract/examples/12-audio-capture-sample-jump-split.json) | a forward `sampleJump` splits one take into two segments of the same generation: `gapFrames` names the uncaptured frames, the file stays contiguous, `startOffsetNs` includes the gap, and the `sampleJump` record sits at the second segment's start |
 
 Timeline records are transient traces; their host ticks are never persisted. Take segments and export records show the
 persisted, anchor-relative shapes. Constants: 48 kHz unless a generation sets a rate; host timebase 125/3 ns per tick
@@ -569,8 +596,10 @@ Run the focused trace regressions with
 `python3 -B -m unittest discover -s docs/transformation/media-contract -p 'test_*.py'`.
 They cover declared musical-counter identities, primary render progress despite a stale secondary-clock dependency,
 loop-bounded `nextBoundary` fallback, including a valid loop-end target, and the `discontinuity` stop reason (its one
-matching `captureStopped`, additivity for a reader that predates it, and no cause value). Native Swift coverage remains
-part of #55.
+matching `captureStopped`, additivity for a reader that predates it, and no cause value), and the forward `sampleJump`
+split (example 12: `gapFrames` and its bound `sampleJump` record, additivity and fail-closed behaviour for a reader
+that predates it, a jump then a restart, and the backward, zero-gap and generation-skip shapes that stay refused).
+Native Swift coverage remains part of #55.
 
 **Checker limits.** Not fully checked here; acceptance items for the #55 Swift contract tests or the named owner:
 - lateness and `asap` against the exact latency-inclusive horizon at commit; the checker only lower-bounds it (§6.1);
@@ -579,10 +608,11 @@ part of #55.
 - bounded SPSC handoffs, render-thread safety and adapter-only engine types (M8, M11, §10; #64, #109);
 - the recorder's report of cross-restart captures (§9.2; #110, #112); the checker just rejects such traces;
 - why the recorder ended a take with `discontinuity` (§8.3; #110): the cause is not in the record, so the checker
-  enforces the take's matching `captureStopped` and nothing about any `sampleJump`. It also scopes a take's
+  enforces the take's matching `captureStopped` and does not tie it to a `sampleJump` record. It also scopes a take's
   `overflow` and `captureStopped` records by frame range within a clock generation, so after a backward jump a later
   take on the same stream whose frames overlap that range is charged the overlap's overflows and `captureStopped`
-  records (#352);
+  records (#352). A backward jump inside a take is not a contract shape: the checker fails a same-generation pair that
+  does not start `gapFrames` after the previous segment's end;
 - rejecting captures stamped before a locate but delivered after it (§9.2); the checker remaps them;
 - readiness invalidation and re-preparation after a `source` bump (§5.1, §5.7); the checker trusts readiness records.
 

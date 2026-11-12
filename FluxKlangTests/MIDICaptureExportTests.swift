@@ -18,17 +18,20 @@ enum MIDICaptureFixture {
     static let legacy = StreamID(validated: "str.synth-legacy")
     static let unknown = StreamID(validated: "str.synth-unknown")
     static let umpExport = ExportID(validated: "exp.ump")
+    /// Example 03's stream.
+    static let keysIn = StreamID(validated: "str.keys-in")
 
     static func log(_ streams: [StreamID], timebase: HostTimebase = timebase,
                     nominalRate: Int = 48_000) throws -> MIDICaptureLog {
         try MIDICaptureLog(streams: streams, clock: clock, timebase: timebase, nominalRate: nominalRate)
     }
 
-    /// An anchor of `smp.main`; with `transport`, it also anchors `mus.main` at `ticks`.
+    /// An anchor of `smp.main`; with `transport`, it also anchors `mus.main` at `ticks` in loop pass `loopIteration`.
     static func anchor(_ generation: Int, frame: Int64, host: UInt64, transport: Int? = nil,
-                       ticks: Int64 = 0) throws -> ClockAnchor {
+                       ticks: Int64 = 0, loopIteration: UInt32 = 0) throws -> ClockAnchor {
         let musical = try transport.map {
-            MusicalStamp(transport: try Generation($0), musicalMap: .initial, ticks: ticks, loopIteration: 0)
+            MusicalStamp(transport: try Generation($0), musicalMap: .initial, ticks: ticks,
+                         loopIteration: loopIteration)
         }
         return ClockAnchor(sample: SampleStamp(clock: clock, generation: try Generation(generation), frame: frame),
                            host: HostStamp(ticks: host), musical: musical)
@@ -118,6 +121,26 @@ enum MIDICaptureFixture {
                     microsPerQuarter: 500_000)
         try capture(&log, synth, [0x0020_1F40], host: 2_460_000_000, endpoint: .midi2, port: .midi2,
                     microsPerQuarter: 500_000)
+        return log
+    }
+
+    /// Example 03 through seq 22: a capture before the loop wrap delivered after it, one after it, and one after the
+    /// locate on transport 2, at 120 BPM.
+    static func example03() throws -> MIDICaptureLog {
+        var log = try log([keysIn])
+        let first = try anchor(1, frame: 0, host: 2_400_000_000, transport: 1)
+        try log.observe(anchor: first)
+        let wrap = try anchor(1, frame: 192_000, host: 2_496_000_000, transport: 1, loopIteration: 1)
+        try log.observe(anchor: wrap)
+        func deliver(_ word: UInt32, host: UInt64, through anchor: ClockAnchor) throws {
+            _ = try log.capture([word], stream: keysIn, host: HostStamp(ticks: host), endpoint: .midi1, port: .midi1,
+                                musicalMap: musicalMap(anchor, microsPerQuarter: 500_000), current: .initial)
+        }
+        try deliver(0x2090_3C64, host: 2_495_500_000, through: first)
+        try deliver(0x2080_3C00, host: 2_496_500_000, through: wrap)
+        try log.observe(discontinuity(.locate, frame: 210_000, host: 2_505_000_000), stream: nil)
+        try log.observe(anchor: anchor(1, frame: 210_000, host: 2_505_000_000, transport: 2, ticks: 61_440))
+        try capture(&log, keysIn, [0x2090_3E64], host: 2_505_500_000, microsPerQuarter: 500_000)
         return log
     }
 }

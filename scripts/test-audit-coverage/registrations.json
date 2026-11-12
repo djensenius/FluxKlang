@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "49df0a354ce6c9b952c60adf0e07ca4e049a14efce3e990c2286e47623c0c2e3",
+    "sha256": "8ebb5c987b4e5c2bdf462fa1d1dc92b181ad7723d7e118a9519dad4025fee5c3",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -221,6 +221,7 @@
         "FluxKlangTests/RecordingTakeV1GateTests.swift",
         "FluxKlangTests/RecordingTakeV1GateTests+Discontinuities.swift",
         "FluxKlangTests/RecordingTakeV1GateTests+LedgerStop.swift",
+        "FluxKlangTests/RecordingTakeV1GateTests+SampleJump.swift",
         "FluxKlangTests/DraftHistoryTests.swift",
         "FluxKlangTests/DraftHistoryTests+Undo.swift",
         "FluxKlangTests/SpatialEditingTests.swift",
@@ -465,6 +466,7 @@
         "FluxKlangTests/CaptureSMFExportTests+Losses.swift",
         "FluxKlangTests/CaptureSMFExportTests+Order.swift",
         "FluxKlangTests/CaptureSMFExportTests+Pairing.swift",
+        "FluxKlangTests/CaptureSMFExportTests+SysEx.swift",
         "FluxKlangTests/MIDIClipContinuityTests.swift",
         "FluxKlangTests/MIDIClipContinuityTests+Tempo.swift",
         "FluxKlangTests/BackingClipPlaybackTests.swift",
