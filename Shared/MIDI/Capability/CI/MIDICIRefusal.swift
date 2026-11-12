@@ -29,21 +29,27 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
         case propertyDataLength
         case chunkCount
         case chunkNumber
+        case inquiryTarget
+        case inquiryTargetData
+        case inquiryTargetDataLength
+        case profileSpecificData
     }
 
     /// Not a MIDI-CI payload: the first byte is not 0x7E or the third byte is not 0x0D.
     case notCI
     /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK), on an
     /// Endpoint Information Inquiry or Reply (0x72 and 0x73 exist from CI 1.2 on) or on a Process Inquiry message
-    /// (0x40 to 0x44, which exist from CI 1.2 on too).
+    /// (0x40 to 0x44, which exist from CI 1.2 on too), or on a Profile Details Inquiry or Reply (0x28, 0x29, which
+    /// exist from CI 1.2 on as well; Profile Specific Data 0x2F accepts both formats).
     case unsupportedFormat(UInt8)
     /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
     /// `MIDICIProfileMessage`: 0x20-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
     /// Capabilities Inquiry and Reply 0x30 and 0x31; `MIDICIEndpointMessage`: the Endpoint Information Inquiry and
     /// Reply 0x72 and 0x73; `MIDICIProcessInquiryMessage`: the Process Inquiry messages 0x40-0x44;
-    /// `MIDICIPropertyDataMessage`: the Property Exchange data messages 0x34-0x39 and 0x3F). This also covers valid
-    /// MIDI-CI sub-ids none decodes (for example the Profile Details Inquiry and Reply 0x28 and 0x29 and Profile
-    /// Specific Data 0x2F); the other decoders refuse 0x34-0x39 and 0x3F too.
+    /// `MIDICIPropertyDataMessage`: the Property Exchange data messages 0x34-0x39 and 0x3F;
+    /// `MIDICIProfileDetailsMessage`: the Profile Details Inquiry and Reply 0x28 and 0x29 and Profile Specific Data
+    /// 0x2F). This also covers sub-ids none decodes (for example the reserved 0x2A-0x2E); the other decoders refuse
+    /// 0x28, 0x29, 0x2F, 0x34-0x39 and 0x3F too.
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -57,7 +63,8 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
     /// ACK, NAK, the Endpoint Information Inquiry and Reply, Set Profile On and Off, the Process Inquiry messages
-    /// (0x40 to 0x44) and the Property Exchange data messages (0x34 to 0x39, 0x3F) must be addressed to one MUID.
+    /// (0x40 to 0x44), the Profile Details Inquiry and Reply (0x28, 0x29) and the Property Exchange data messages
+    /// (0x34 to 0x39, 0x3F) must be addressed to one MUID.
     case destinationIsBroadcast
     case targetIsBroadcast
     /// The text has this many utf8 bytes (encode) or declares this length (decode).

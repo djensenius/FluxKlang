@@ -27,7 +27,7 @@ enum MIDICIProfileKind: UInt8, Sendable {
 /// MIDI-CI Profile Inquiry (sub-id 2 0x20), Reply to Profile Inquiry (0x21), Set Profile On (0x22) and Off (0x23) and
 /// the Profile Enabled, Disabled, Added and Removed Reports (0x24 to 0x27), kept apart from the management messages
 /// of `MIDICIMessage` (whose decoder still refuses 0x20 to 0x27 with `unknownSubID`). The Profile Details Inquiry and
-/// Reply (0x28 and 0x29) and Profile Specific Data (0x2F) are not decoded here.
+/// Reply (0x28 and 0x29) and Profile Specific Data (0x2F) are not decoded here: `MIDICIProfileDetailsMessage` does.
 ///
 /// Layout of the payload as `MIDI1Event.sysEx` delivers it (F0 and F7 excluded). The common 13-byte header is
 /// `7E, device id, 0D, sub-id 2, format, source MUID (4), destination MUID (4)`, MUIDs 7 bits per byte, least
