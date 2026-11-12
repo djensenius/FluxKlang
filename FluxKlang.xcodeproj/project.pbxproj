@@ -1351,6 +1351,7 @@
 		5EB9CC87A9E1F1CFF9A4AEAA /* MIDICaptureProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 431C2A45158AAF8819F4EFF8 /* MIDICaptureProtocol.swift */; };
 		5EEEE6393F02160D513D29EA /* SpatialAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73DE7BE04973697D985BCE41 /* SpatialAdapterTests.swift */; };
 		5EF1358DA57367F05E67A361 /* StagingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 357979A4AD5B2C010EE4B2DB /* StagingPlan.swift */; };
+		5EFB452019888CB2ED55ACF6 /* UMPFlexDataTests+Text.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1942DE01663651399E7BBF2 /* UMPFlexDataTests+Text.swift */; };
 		5EFCC3DBB7A5B3678152A0E7 /* NeutralSnapshotTests+Matching.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AAF169E40615B3237E703AB /* NeutralSnapshotTests+Matching.swift */; };
 		5F0AA96CFACA515ED0958936 /* PatchTransitionPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFEDD1BF6701499829469B0 /* PatchTransitionPlanner.swift */; };
 		5F0B1C5A98D9E30CA97A1AFF /* FluxKlangMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B990158172E39E44F90115 /* FluxKlangMacApp.swift */; };
@@ -1639,6 +1640,7 @@
 		7287A926FE6B5AE350605DF7 /* MeterDisplayTests+Ordering.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58982621216D0B819B9D79DF /* MeterDisplayTests+Ordering.swift */; };
 		7297D816E6266525B8071244 /* ShowFootswitchMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A15D3C0D69C40A3CA7ACE2 /* ShowFootswitchMap.swift */; };
 		72A49E9F31A8DFA23A8B94A1 /* RealtimeHandoffTests+KernelCycleStress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D5F32B30C535CBD67D1F250 /* RealtimeHandoffTests+KernelCycleStress.swift */; };
+		72A51AFE763EEEB47FA440BB /* UMPFlexDataText.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD248211FB4D815848C0C30 /* UMPFlexDataText.swift */; };
 		72B7ADF24EE12E1AC3D71271 /* MIDIClipOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C811DB54D0C44EFCEA87827B /* MIDIClipOwnershipTests.swift */; };
 		72C37C3321442877B85E3646 /* MIDIInputSessionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345015B23EE946F2C6380581 /* MIDIInputSessionResult.swift */; };
 		72D7320FB6F8673568E3CDC6 /* EffectRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E502F19AA5C1BCD11E888CE2 /* EffectRow.swift */; };
@@ -1934,6 +1936,7 @@
 		88632231F813C900725C0B6B /* UMPTranslationStreamTimeout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434002094E001040D9FEB093 /* UMPTranslationStreamTimeout.swift */; };
 		8863C90AD4DA583C41EF6866 /* AssistantActionReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACED8B2ABA64555DD48CE6F /* AssistantActionReviewView.swift */; };
 		886732882B57B22284AC8F8C /* DeviceRegistryPresenceGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A24E3F0E65961E19C3A42DD /* DeviceRegistryPresenceGate.swift */; };
+		8884302B55E5F18FC4C458E4 /* UMPFlexDataText.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD248211FB4D815848C0C30 /* UMPFlexDataText.swift */; };
 		8894BB59F73C38302DDCE61A /* ShowCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A71E2C853796C50D3F84721 /* ShowCursor.swift */; };
 		88B20B1D04A04BFE5AEA1F5E /* PluginCatalogCacheTests+Invalidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B74280535C1E280D417BA25E /* PluginCatalogCacheTests+Invalidation.swift */; };
 		88BC37FB274D7E3EED2F7D9A /* WiringInspectorLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B38004FD3B5A470154B5275 /* WiringInspectorLabel.swift */; };
@@ -2907,6 +2910,7 @@
 		C99C5F269F34D649EBBCB279 /* PeerSyncReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87E682428C35A9BB3EFE0A77 /* PeerSyncReceiver.swift */; };
 		C9A158186E0019CCD5D094FA /* RemoteRoleTests+Lease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89284334344028D15FC2B444 /* RemoteRoleTests+Lease.swift */; };
 		C9BCFCFBCE2F874A3B4C2EA0 /* MIDIClockFollowerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F7704E6CD0C89793F64CAA /* MIDIClockFollowerTests.swift */; };
+		C9FCB2CCC6A7C0AFF88B3AD8 /* UMPFlexDataTests+Text.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1942DE01663651399E7BBF2 /* UMPFlexDataTests+Text.swift */; };
 		CA1AFE7329A63B552A2ABCC8 /* NativeUMPExportV1RecordRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72AD164AED754D6225228ED0 /* NativeUMPExportV1RecordRefusal.swift */; };
 		CA1E0F5560A85EAE27F2544A /* ProjectCheckpointTests+Compare.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C90CCA7056FA7DC0717825C /* ProjectCheckpointTests+Compare.swift */; };
 		CA3B5598AB4C28312C2D8F56 /* ProjectMediaAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EBD995D9A0B296AE7A563D0 /* ProjectMediaAction.swift */; };
@@ -4951,6 +4955,7 @@
 		A181F62B7C92ADA740F2F25E /* ShowSetlist.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowSetlist.swift; sourceTree = "<group>"; };
 		A18982F123B7C1D338F645BE /* PresetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsTests.swift; sourceTree = "<group>"; };
 		A189ADFA18FC194AD3111CBE /* MIDIClockError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIClockError.swift; sourceTree = "<group>"; };
+		A1942DE01663651399E7BBF2 /* UMPFlexDataTests+Text.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UMPFlexDataTests+Text.swift"; sourceTree = "<group>"; };
 		A1B3EB324D30338583E39889 /* SpatialMappingTests+Goldens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpatialMappingTests+Goldens.swift"; sourceTree = "<group>"; };
 		A1BF0847FDBE7B2CFB66F529 /* CoreMIDIInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMIDIInput.swift; sourceTree = "<group>"; };
 		A1BF4DB5B0AC37D43208C179 /* RoutingScheduleTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutingScheduleTypes.swift; sourceTree = "<group>"; };
@@ -5565,6 +5570,7 @@
 		EFB4B221ABC938A3BC766A7C /* AppModel+AssistantMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel+AssistantMixer.swift"; sourceTree = "<group>"; };
 		EFBD62D72FDA2BA1B56C3729 /* ShowChartReference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowChartReference.swift; sourceTree = "<group>"; };
 		EFCC28F8CFB9482005976E45 /* LegacySidecarPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySidecarPlan.swift; sourceTree = "<group>"; };
+		EFD248211FB4D815848C0C30 /* UMPFlexDataText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UMPFlexDataText.swift; sourceTree = "<group>"; };
 		F025888E3A31B4727FA9B52C /* RigLibraryRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RigLibraryRefusal.swift; sourceTree = "<group>"; };
 		F03BD1E482EF4934A715E2DD /* PerformCellModelTests+Entry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PerformCellModelTests+Entry.swift"; sourceTree = "<group>"; };
 		F06173B51FCABC2577C3360C /* MenuBarMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarMixer.swift; sourceTree = "<group>"; };
@@ -7819,6 +7825,7 @@
 				0DFC166F34AD94CA3B1F53B4 /* UMPFlexDataMessage.swift */,
 				690C166E38AAAEBAE0F664E1 /* UMPFlexDataMessage+Decode.swift */,
 				ED17888BA84243C48AFF0445 /* UMPFlexDataRefusal.swift */,
+				EFD248211FB4D815848C0C30 /* UMPFlexDataText.swift */,
 			);
 			path = FlexData;
 			sourceTree = "<group>";
@@ -9385,6 +9392,7 @@
 				7B9C1EDBBC7F3BEBE68D0FC7 /* UMPCodecTests+SysEx7.swift */,
 				A3482DF7C83426AEC7C2894B /* UMPCodecTests+System.swift */,
 				D05931FF875C3C91620F2FCA /* UMPFlexDataTests.swift */,
+				A1942DE01663651399E7BBF2 /* UMPFlexDataTests+Text.swift */,
 				53EE26BD19B076F47922D0BA /* UMPStreamMessageTests.swift */,
 				F0F13CB0451141E599B90989 /* UMPStreamMessageTests+Decode.swift */,
 				D78E2EFC4E7B6AA4E9F66DFD /* UMPStreamMessageTests+Hostile.swift */,
@@ -10681,6 +10689,7 @@
 				B14D4306D60206E6B9222857 /* UMPFlexDataMessage+Decode.swift in Sources */,
 				46D2F8EE946B58DD93EAA2EC /* UMPFlexDataMessage.swift in Sources */,
 				9A0880D0AD17C9B68DF365C3 /* UMPFlexDataRefusal.swift in Sources */,
+				72A51AFE763EEEB47FA440BB /* UMPFlexDataText.swift in Sources */,
 				2BB5F084718AB0D33AB390C9 /* UMPMessageType.swift in Sources */,
 				3E57A18C1EA950F5417DFAF2 /* UMPPacket.swift in Sources */,
 				F6AB06BA45ADE067621508AE /* UMPRefusal.swift in Sources */,
@@ -11749,6 +11758,7 @@
 				B4B1A4AC498022EB7260A255 /* UMPFlexDataMessage+Decode.swift in Sources */,
 				7C91E257B16C87C5C7D06870 /* UMPFlexDataMessage.swift in Sources */,
 				9546A35EF22A373197DEE193 /* UMPFlexDataRefusal.swift in Sources */,
+				8884302B55E5F18FC4C458E4 /* UMPFlexDataText.swift in Sources */,
 				F73384AEFF3BE72C5EA9019B /* UMPMessageType.swift in Sources */,
 				D27F985D1486FA5ADC3C9E21 /* UMPPacket.swift in Sources */,
 				2DDD011E5ABA6CF06332A05C /* UMPRefusal.swift in Sources */,
@@ -12528,6 +12538,7 @@
 				E51ACEEDAEA90D26781FAF4E /* UMPCodecTests+SysEx7.swift in Sources */,
 				07B74CF19E8BA2477EC7F379 /* UMPCodecTests+System.swift in Sources */,
 				081980742A6DD19C3237E27F /* UMPCodecTests.swift in Sources */,
+				5EFB452019888CB2ED55ACF6 /* UMPFlexDataTests+Text.swift in Sources */,
 				70817C740A4B994C8EAA7BDF /* UMPFlexDataTests.swift in Sources */,
 				1B5CBF5698D966815FA4182B /* UMPStreamMessageTests+Decode.swift in Sources */,
 				43CF9CB6F5E62A6DA3DFDE79 /* UMPStreamMessageTests+Hostile.swift in Sources */,
@@ -13403,6 +13414,7 @@
 				183203500D07F2901EE88746 /* UMPCodecTests+SysEx7.swift in Sources */,
 				C46B99D899086438CC49D1C5 /* UMPCodecTests+System.swift in Sources */,
 				92852EE0B8B53D82AE9B3D64 /* UMPCodecTests.swift in Sources */,
+				C9FCB2CCC6A7C0AFF88B3AD8 /* UMPFlexDataTests+Text.swift in Sources */,
 				331DF2BECE3A534AFAA48F6F /* UMPFlexDataTests.swift in Sources */,
 				F2D7DF3D6E81285E3038DA8F /* UMPStreamMessageTests+Decode.swift in Sources */,
 				31054791F9B4FDE22BCC43CC /* UMPStreamMessageTests+Hostile.swift in Sources */,
