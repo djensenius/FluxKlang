@@ -1616,6 +1616,7 @@
 		6CDC42883AFB4219898C5969 /* OSCTransportTests+Principal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3E44D02E772CFAD506288B /* OSCTransportTests+Principal.swift */; };
 		6CE659D7635F7F892F266B8D /* HostAuthorityTests+RecoveryProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43AFA86663D393C6CFA525BB /* HostAuthorityTests+RecoveryProvenance.swift */; };
 		6CF78C50DB43ECAE38BB68D1 /* CaptureDrainSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D410727DBA71B10879AD15 /* CaptureDrainSupport.swift */; };
+		6CFD815C633CF0D678AC71A4 /* ControlContractTests+TraceExample10.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82DB4F21DBFBFF006E238073 /* ControlContractTests+TraceExample10.swift */; };
 		6D2AEFA2F3AE10AF8279E4EB /* RealtimeHandoffTests+UMPSysEx.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9102042C01FA01E46B0CB8F0 /* RealtimeHandoffTests+UMPSysEx.swift */; };
 		6D2C206FFC47BBDB627D04AD /* ProgramRecallTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA410375BFFAEE9D15A41CC4 /* ProgramRecallTests.swift */; };
 		6D2EE34D9A216E0C936C5125 /* UMPCodecTests+Data128.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29F71B764A39489F8674D7A0 /* UMPCodecTests+Data128.swift */; };
@@ -2424,6 +2425,7 @@
 		A26257B0E63C2573AE2ECBCF /* StagingFileSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADA4A6D79163C2780C4CAF1F /* StagingFileSystem.swift */; };
 		A2664CA4A67726B782861499 /* NeutralSnapshotTests+UnicodeHardening.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D1B3F50DBBE84F338C415D /* NeutralSnapshotTests+UnicodeHardening.swift */; };
 		A26965160ECE6A18EEC8A8D4 /* GenerationV1RecordRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79524A800A3FD66F4E01313B /* GenerationV1RecordRefusal.swift */; };
+		A26D8A5B00BA1AFE0D5B8A17 /* ControlContractTests+TraceExample09.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48C22A077F0434A5F2D38B8 /* ControlContractTests+TraceExample09.swift */; };
 		A2731673CB85746B3FA8A4E5 /* RecordingTakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070440E390D692A3E5F6F9FB /* RecordingTakeTests.swift */; };
 		A283151195B656074D90FDB2 /* PressureFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA91B60B5D134B52C068924D /* PressureFixture.swift */; };
 		A2A06142E8E87696736E2B29 /* MIDI1StateRefusal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 215D151777DE1AA6D30BCBF1 /* MIDI1StateRefusal.swift */; };
@@ -4895,6 +4897,7 @@
 		82BE99C7BE6B57BDBBD6F974 /* ControlBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlBinding.swift; sourceTree = "<group>"; };
 		82CA8DBFFD538E703E5BC1A2 /* MIDINoteLedgerPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDINoteLedgerPolicy.swift; sourceTree = "<group>"; };
 		82DAEC3844DEFAE04346B74B /* CaptureSMFExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSMFExportTests.swift; sourceTree = "<group>"; };
+		82DB4F21DBFBFF006E238073 /* ControlContractTests+TraceExample10.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+TraceExample10.swift"; sourceTree = "<group>"; };
 		83103D9B86EDF177B69FA61B /* SpatialBlockMixer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialBlockMixer.swift; sourceTree = "<group>"; };
 		834B3F839743E70274C9D787 /* MacCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCommands.swift; sourceTree = "<group>"; };
 		83B9A5531685B554F7877D17 /* RealtimeHandoffTests+ScratchStress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RealtimeHandoffTests+ScratchStress.swift"; sourceTree = "<group>"; };
@@ -5281,6 +5284,7 @@
 		B418A863A2A992FB3E04DE06 /* CaptureClipExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureClipExport.swift; sourceTree = "<group>"; };
 		B457F24BAF4DFAAFC171EC50 /* FluxKlang.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FluxKlang.entitlements; sourceTree = "<group>"; };
 		B468257C21F6685C1F6AC4FA /* UMPStreamMessage+Encode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UMPStreamMessage+Encode.swift"; sourceTree = "<group>"; };
+		B48C22A077F0434A5F2D38B8 /* ControlContractTests+TraceExample09.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ControlContractTests+TraceExample09.swift"; sourceTree = "<group>"; };
 		B491A650D04B0DEADA13E0BF /* SysExPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SysExPool.swift; sourceTree = "<group>"; };
 		B4CFC68C36EAA88D4285AA05 /* GraphValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphValues.swift; sourceTree = "<group>"; };
 		B4D28FAD296DFBE788E0432D /* PerformCellModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformCellModel.swift; sourceTree = "<group>"; };
@@ -8998,6 +9002,8 @@
 				51493C77FB0DA55C1CA47F28 /* ControlContractTests+TraceExample02.swift */,
 				CAC8EAA7EC36561F1FD2230D /* ControlContractTests+TraceExample06.swift */,
 				B6F792F42F0880362B243F3D /* ControlContractTests+TraceExample07.swift */,
+				B48C22A077F0434A5F2D38B8 /* ControlContractTests+TraceExample09.swift */,
+				82DB4F21DBFBFF006E238073 /* ControlContractTests+TraceExample10.swift */,
 				FA9DE01BE2E9A3DC554B4151 /* ControlContractTests+Transport.swift */,
 				CFE289DC554F5321E725DA06 /* ControlContractTests+TransportRuntime.swift */,
 				7FFD36AD9365935E47203183 /* ControlContractTests+TriggerLifecycle.swift */,
@@ -13138,6 +13144,8 @@
 				09D3807E1EE85153C77FF22C /* ControlContractTests+TraceExample02.swift in Sources */,
 				9931D80DC041A9392F263FBB /* ControlContractTests+TraceExample06.swift in Sources */,
 				B7306176B35F3C25DD8E0119 /* ControlContractTests+TraceExample07.swift in Sources */,
+				A26D8A5B00BA1AFE0D5B8A17 /* ControlContractTests+TraceExample09.swift in Sources */,
+				6CFD815C633CF0D678AC71A4 /* ControlContractTests+TraceExample10.swift in Sources */,
 				DB6498D82ADE8A1B864670F5 /* ControlContractTests+Transport.swift in Sources */,
 				8BF8EE9B4BF4B3613165B886 /* ControlContractTests+TransportRuntime.swift in Sources */,
 				3FDFA833D278E566062AA7B2 /* ControlContractTests+TriggerLifecycle.swift in Sources */,
