@@ -1126,6 +1126,17 @@ MUTATIONS = [
      "effective": "midi1"}}, "capture timestamp predates clockRestart"),
     ("08", 10, {"takeId": "tk.1"}, "duplicate takeId"),
     ("01", 8, {"frame": -1}, "their clockRestart stamp"),  # not before the restart even within jitter
+    # Example 11's take ends on the recorder's own discontinuity stop and owns one matching captureStopped (§8.3).
+    ("11", 4, {"stopReason": "user"}, "captureStopped matches its stopReason"),  # a user stop owns none
+    ("11", 4, {"stopReason": "deviceLost"}, "captureStopped matches its stopReason"),  # never a device stop
+    ("11", 3, {"reason": "deviceLost"}, "captureStopped matches its stopReason"),
+    ("11", 3, {"frame": 239999}, "captureStopped matches its stopReason"),  # not at the take's last frame
+    ("11", 3, {"frame": 96000}, "captureStopped matches its stopReason"),  # at its start: not the take's stop
+    ("11", "timeline", {"2": None, "2.seq": 3}, "captureStopped matches its stopReason"),  # a stop is owed, none
+    ("11", 4, {"stopReason": "jumpBeforeTakeStart"}, '.stopReason: "jumpBeforeTakeStart" not in enum'),
+    ("11", 3, {"reason": "jumpBeforeTakeStart"}, '.reason: "jumpBeforeTakeStart" not in enum'),
+    ("11", 2, {"reason": "discontinuity"}, "reason is required on captureStopped discontinuities and only there"),
+    ("11", "timeline", {"2": None, "2.seq": 3, "2.stopReason": "user"}, None),  # without its stop it is a user take
 ]
 
 

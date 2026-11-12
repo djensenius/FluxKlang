@@ -374,16 +374,13 @@ struct RecordingTakeRecoveryTests {
         #expect(take.segments[0].overflows.map(\.startFrame) == [10, 15] && take.droppedFrames == 10)
     }
 
-    /// Only v1's three stop reasons export; a ledger stop waits for the contract revision (#336).
+    /// Every stop has a v1 `stopReason`; a ledger stop is `discontinuity` (#336), never a user or device reason.
     @Test
-    func contractV1StopReasonRefusesLedgerStops() throws {
-        #expect(try TakeStopReason.user.contractV1StopReason() == "user")
-        #expect(try TakeStopReason.diskFull.contractV1StopReason() == "diskFull")
-        #expect(try TakeStopReason.deviceLost.contractV1StopReason() == "deviceLost")
-        let ended = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
-        Fixture.refusal(.stopReasonNotInContractV1(ended)) { () throws(TakeLedgerError) in
-            _ = try ended.contractV1StopReason()
-        }
+    func contractV1StopReasonMapsEveryStopIncludingLedgerStops() {
+        #expect(TakeStopReason.user.contractV1StopReason() == "user")
+        #expect(TakeStopReason.diskFull.contractV1StopReason() == "diskFull")
+        #expect(TakeStopReason.deviceLost.contractV1StopReason() == "deviceLost")
+        #expect(TakeStopReason.discontinuity(.jumpBeforeTakeStart).contractV1StopReason() == "discontinuity")
     }
 
     /// Fix 3: take records are built only through validating initializers.

@@ -84,7 +84,7 @@ struct RecordingTakeV1GateTests {
     }
 
     @Test
-    func recordingTakeV1GateRefusesALedgerStop() throws {
+    func recordingTakeV1GateClearsALedgerStop() throws {
         var ledger = try TakeLedger(timebase: Fixture.timebase)
         try ledger.observe(Fixture.anchor(1, 0, host: 0), nominalRate: 48_000)
         try ledger.open(Fixture.opening(Fixture.take1, 1, 1000))
@@ -94,10 +94,8 @@ struct RecordingTakeV1GateTests {
         let take = try ledger.finish(Fixture.take1, reason: ended)
         #expect(take.segments.count == 1)
         #expect(take.unplacedSegments.isEmpty)
-        Fixture.refusal(.stopReasonNotInContractV1(ended)) { () throws(TakeLedgerError) in
-            _ = try ended.contractV1StopReason()
-        }
-        #expect(refusal(take) == Refusal.stopReason(ended))
+        #expect(take.stopReason == ended)
+        #expect(refusal(take) == nil)
     }
 
     @Test
@@ -185,10 +183,11 @@ struct RecordingTakeV1GateTests {
 
         let stop = TakeStopReason.discontinuity(.jumpBeforeTakeStart)
         #expect(try ended.ingest(Fixture.jump(1, 500)) == [.ended(Fixture.take1, stop)])
-        let allThree = try ended.finish(Fixture.take1, reason: stop)
-        #expect(allThree.segments.map(\.generation.value) == [1, 1])
-        #expect(allThree.unplacedSegments == [0, 1])
-        #expect(refusal(allThree) == Refusal.stopReason(stop))
+        let endedPair = try ended.finish(Fixture.take1, reason: stop)
+        #expect(endedPair.segments.map(\.generation.value) == [1, 1])
+        #expect(endedPair.unplacedSegments == [0, 1])
+        // A ledger stop refuses nothing (#336), so the pair rule is still the first refusal.
+        #expect(refusal(endedPair) == Refusal.notRestartSplit(after: 0))
 
         var lone = try unanchoredLedger(from: 0)
         try lone.advance(Fixture.take1, to: Fixture.stamp(1, 100))
