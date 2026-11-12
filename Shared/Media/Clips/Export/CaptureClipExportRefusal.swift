@@ -43,7 +43,7 @@ enum CaptureClipExportRefusal: Error, Equatable, Sendable {
     case ticksOutOfRange(ticks: Int64, lengthTicks: Int64)
     /// A Note On arrived for a channel and note that was sounding since `sinceTicks`.
     case noteOnWhileSounding(channel: UInt8, note: UInt8, ticks: Int64, sinceTicks: Int64)
-    /// The export would hold `count` items, more than `limit`.
+    /// The export would hold `count` items, clip items and SysEx events together, more than `limit`.
     case tooManyItems(count: Int, limit: Int)
     /// The clip refused the converted items.
     case clip(MIDIClipRefusal)

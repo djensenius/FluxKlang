@@ -67,7 +67,9 @@ struct CaptureSysEx7Assembler: Equatable, Sendable {
             open[key] = Open(ticks: ticks, index: index, payload: packet.bytes, packets: 1)
             return nil
         case .continue:
-            guard var message = open[key] else {
+            // The entry leaves the dictionary before the append, so the payload is uniquely referenced and the
+            // append is in place; appending to a copy held by the dictionary would copy the whole payload each time.
+            guard var message = open.removeValue(forKey: key) else {
                 dropped += 1
                 return nil
             }
