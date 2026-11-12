@@ -570,6 +570,11 @@ targets:
       - path: FluxKlangTests/CaptureSMFExportTests+Fixture.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Groups.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Losses.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Examples.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Fixture.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Silent.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2State.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Order.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Pairing.swift
       - path: FluxKlangTests/CaptureSMFExportTests+SysEx.swift

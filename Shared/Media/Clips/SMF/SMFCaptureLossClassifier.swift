@@ -6,7 +6,7 @@
 //  media-contract.md §9.3). A building block for an SMF export record: it
 //  reads only the packet words and the §9.1 protocol stamp, so timing, pass
 //  and group losses, which depend on the other captures, are not counted here.
-//  To be wired into `CaptureClipExport.smf()` by #584 (SMF2b), once MT 0x4 is written (it is dropped today).
+//  Wired into `CaptureClipExport` (#584 SMF2b-2): it sums these counts over the selected captures.
 //
 
 /// Counts the §9.3 categories one capture adds to an SMF export, exactly as the reference checker does per event
