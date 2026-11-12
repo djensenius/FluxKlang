@@ -109,7 +109,9 @@ extension ControlContractTests {
              try midiCapture(first + 7), try take(first + 8), try export(first + 9)]
         }
 
-        /// The wrapped record's own `encodedJSON()`: the contract between the array and the ten builders.
+        // swiftlint:disable cyclomatic_complexity
+        /// The wrapped record's own `encodedJSON()`: the contract between the array and the ten builders (the
+        /// export kind has two, one per format).
         static func payloadJSON(_ entry: TimelineV1Entry) throws -> Data {
             switch entry {
             case .anchor(let record): try record.encodedJSON()
@@ -122,8 +124,10 @@ extension ControlContractTests {
             case .midiCapture(let record): try record.encodedJSON()
             case .take(let record): try record.encodedJSON()
             case .export(let record): try record.encodedJSON()
+            case .smfExport(let record): try record.encodedJSON()
             }
         }
+        // swiftlint:enable cyclomatic_complexity
 
         /// `[` + each entry's own JSON joined with `,` + `]`.
         static func joined(_ entries: [TimelineV1Entry]) throws -> Data {
