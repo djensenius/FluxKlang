@@ -43,10 +43,12 @@ struct CaptureNotePairing: Equatable, Sendable {
     /// Pairs `events`, which must be in nondecreasing tick order (a later Note Off before its Note On is left to
     /// the clip to refuse), per channel and note. Work is linear in `events.count`: one pass over the ticks, one
     /// pairing pass, and one pass over the notes still open. Refuses any tick outside `0...lengthTicks`, then a
-    /// Note On on a note that is sounding, then more than `MIDIClip.maximumItems` items. `lengthTicks` must not be
+    /// Note On on a note that is sounding, then more than `MIDIClip.maximumItems` items. `otherItems` is how many
+    /// items outside `events` share that cap (the SysEx events of an export): they count toward the limit and are
+    /// included in the refusal's `count`, even when the paired items alone exceed it. `lengthTicks` must not be
     /// negative: `0...lengthTicks` traps on a negative bound (`make` guarantees at least 1).
-    static func pair(_ events: [CaptureTimedMessage],
-                     lengthTicks: Int64) throws(CaptureClipExportRefusal) -> CaptureNotePairing {
+    static func pair(_ events: [CaptureTimedMessage], lengthTicks: Int64,
+                     otherItems: Int = 0) throws(CaptureClipExportRefusal) -> CaptureNotePairing {
         for event in events where !(0...lengthTicks).contains(event.ticks) {
             throw .ticksOutOfRange(ticks: event.ticks, lengthTicks: lengthTicks)
         }
@@ -84,8 +86,8 @@ struct CaptureNotePairing: Equatable, Sendable {
                                  widened: &widened, lengthTicks: lengthTicks)
             items[sounding.index] = .note(span)
         }
-        guard items.count <= MIDIClip.maximumItems else {
-            throw .tooManyItems(count: items.count, limit: MIDIClip.maximumItems)
+        guard items.count + otherItems <= MIDIClip.maximumItems else {
+            throw .tooManyItems(count: items.count + otherItems, limit: MIDIClip.maximumItems)
         }
         return CaptureNotePairing(items: items, unpairedOffs: unpaired, openNotesClosed: leftOpen.count,
                                   widenedNotes: widened)
