@@ -55,8 +55,8 @@ protocol MIDIWriting {
 }
 
 enum RemoteRoleGuard {
-    /// The total capability table (see DESIGN.md). In a remote role only `peerUICommand` (not for an
-    /// observer, not while the host is lost) and `statusRead` pass.
+    /// The total capability table: the `switch` below decides every phase and capability. In a remote role only
+    /// `peerUICommand` (not for an observer, not while the host is lost) and `statusRead` pass.
     static func decide(role: RemoteRole, capability: RemoteCapability) -> RemoteRoleDecision {
         switch role.phase {
         case .standalone:
