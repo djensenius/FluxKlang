@@ -108,7 +108,8 @@ extension MediaBlockPoolTests {
 
     /// Everything observable about the block counts and the lease order.
     private struct MediaBlockPoolRunState: Equatable {
-        /// `[leased, free, retired, high-water, frames copied, copies completed, copies refused]`.
+        /// `[leased, free, retired, high-water, frames copied, copies completed, copies refused, leases refused as
+        /// exhausted, leases refused as busy]`. The random steps never read and lease at once, so busy stays 0.
         let counts: [Int]
         let freeOrder: [Int]
     }
@@ -137,6 +138,7 @@ extension MediaBlockPoolTests {
         private var framesCopied = 0
         private var copiesCompleted = 0
         private var copiesRefused = 0
+        private var leasesRefusedExhausted = 0
 
         init(blockCount: Int, blockFrames: Int, poolChannels: Int, maximumGeneration: Int) {
             self.blockFrames = blockFrames
@@ -158,6 +160,7 @@ extension MediaBlockPoolTests {
 
         mutating func lease() -> MediaBlockPoolStepEvent {
             guard !freeOrder.isEmpty else {
+                leasesRefusedExhausted += 1
                 return .refused(.poolExhausted(leased: leasedCount, retired: retiredCount))
             }
             let slot = freeOrder.removeFirst()
@@ -208,7 +211,7 @@ extension MediaBlockPoolTests {
             MediaBlockPoolRunState(
                 counts: [
                     leasedCount, freeOrder.count, retiredCount, highWater,
-                    framesCopied, copiesCompleted, copiesRefused
+                    framesCopied, copiesCompleted, copiesRefused, leasesRefusedExhausted, 0
                 ],
                 freeOrder: freeOrder
             )
@@ -266,7 +269,8 @@ extension MediaBlockPoolTests {
                 counts: [
                     stats.leasedCount, stats.freeCount, stats.retiredCount, stats.highWaterLeased,
                     Int(clamping: stats.framesCopied), Int(clamping: stats.copiesCompleted),
-                    Int(clamping: stats.copiesRefused)
+                    Int(clamping: stats.copiesRefused), Int(clamping: stats.leasesRefusedExhausted),
+                    Int(clamping: stats.leasesRefusedBusy)
                 ],
                 freeOrder: pool.freeSlotsInLeaseOrder()
             )
