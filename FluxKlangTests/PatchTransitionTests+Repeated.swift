@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Patch transitions: repeated recall and parameter changes", .productionAccessAudit)
+#else
 @Suite("Patch transitions: repeated recall and parameter changes")
+#endif
 struct PatchTransitionRepeatedTests {
     typealias Fixture = PatchTransitionFixture
 

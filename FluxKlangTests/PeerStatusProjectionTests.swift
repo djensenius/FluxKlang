@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("PeerStatusProjectionTests", .productionAccessAudit)
+#else
 @Suite("PeerStatusProjectionTests")
+#endif
 struct PeerStatusProjectionTests {
     enum FixtureError: Error { case invalid }
 
