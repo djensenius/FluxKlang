@@ -3,7 +3,8 @@
 /// answer, a missing endpoint or an endpoint without any protocol gives the legacy MIDI 1.0 byte-stream level;
 /// otherwise the level is `umpMIDI2` when the endpoint supports MIDI 2.0 and `umpMIDI1` when it does not.
 ///
-/// A downgrade is recorded for every defect present in the facts, whatever the resulting level (see
+/// A downgrade is recorded for every defect present in the facts, whatever the resulting level, except
+/// `functionBlockMIDI1Only`, which only exists at the `umpMIDI2` level and does not lower it (see
 /// `MIDICapabilityDowngradeReason`). Invalid or ambiguous facts are refused, in the order documented at
 /// `MIDICapabilityRefusal`; nothing is repaired.
 enum MIDICapabilityResolver {
@@ -37,6 +38,11 @@ enum MIDICapabilityResolver {
 
         var hasActiveBlock: Bool {
             blocks.contains { $0.isActive }
+        }
+
+        /// The indices of the active blocks that declare a MIDI 1.0 mode, ascending (`blocks` is sorted by index).
+        var midi1OnlyBlockIndices: [Int] {
+            blocks.filter { $0.isActive && $0.midi1Mode != .notMIDI1 }.map(\.index)
         }
     }
 
@@ -80,7 +86,8 @@ enum MIDICapabilityResolver {
     static func downgrade(_ reason: MIDICapabilityDowngradeReason, inputs: Inputs) -> MIDICapabilityDowngrade? {
         guard isPresent(reason, inputs: inputs) else { return nil }
         return MIDICapabilityDowngrade(
-            reason: reason, lost: reason.lostFeatures, possibleTranslationLosses: translationLosses(reason, inputs))
+            reason: reason, lost: reason.lostFeatures, possibleTranslationLosses: translationLosses(reason, inputs),
+            functionBlockIndices: reason == .functionBlockMIDI1Only ? inputs.midi1OnlyBlockIndices : [])
     }
 
     private static func isPresent(_ reason: MIDICapabilityDowngradeReason, inputs: Inputs) -> Bool {
@@ -93,6 +100,8 @@ enum MIDICapabilityResolver {
             return !inputs.answered
         case .endpointLacksMIDI2:
             return inputs.supportsMIDI1 && !inputs.supportsMIDI2
+        case .functionBlockMIDI1Only:
+            return level(of: inputs) == .umpMIDI2 && !inputs.midi1OnlyBlockIndices.isEmpty
         case .profilesNotAdvertised:
             return inputs.answered && !inputs.profiles.isEmpty && !inputs.profileConfigurationAnnounced
         }
@@ -104,7 +113,7 @@ enum MIDICapabilityResolver {
         switch reason {
         case .ciAnswerMissing:
             return inputs.supportsMIDI2 ? midi2ToMIDI1Losses : []
-        case .endpointLacksMIDI2:
+        case .endpointLacksMIDI2, .functionBlockMIDI1Only:
             return midi2ToMIDI1Losses
         case .noUMPEndpoint, .endpointSupportsNoProtocol, .profilesNotAdvertised:
             return []

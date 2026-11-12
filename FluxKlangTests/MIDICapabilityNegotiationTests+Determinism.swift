@@ -131,8 +131,8 @@ extension MIDICapabilityNegotiationTests {
     ]
 
     static let productionFiles = [
-        "MIDICapabilityFacts.swift", "MIDICapabilityRefusal.swift", "MIDICapabilityResolver+Validate.swift",
-        "MIDICapabilityResolver.swift", "MIDICapabilityResult.swift"
+        "MIDICapabilityDiscovery.swift", "MIDICapabilityFacts.swift", "MIDICapabilityRefusal.swift",
+        "MIDICapabilityResolver+Validate.swift", "MIDICapabilityResolver.swift", "MIDICapabilityResult.swift"
     ]
 
     static func productionDirectory(from path: String = #filePath) -> URL? {
@@ -169,7 +169,7 @@ extension MIDICapabilityNegotiationTests {
     }
 
     @Test(.enabled(if: Self.sourcesAreReachable, "the production sources are not next to the tests"))
-    func theFiveProductionFilesImportNothingAndNameNoForbiddenToken() throws {
+    func theSixProductionFilesImportNothingAndNameNoForbiddenToken() throws {
         let directory = try #require(Self.productionDirectory())
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasSuffix(".swift") }.sorted()

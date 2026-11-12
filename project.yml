@@ -292,6 +292,8 @@ targets:
       - path: FluxKlangTests/UMPCapabilityTests+Exchange.swift
       - path: FluxKlangTests/UMPCapabilityTests+Fallback.swift
       - path: FluxKlangTests/UMPCapabilityTests+Packet.swift
+      - path: FluxKlangTests/MIDICapabilityDiscoveryTests.swift
+      - path: FluxKlangTests/MIDICapabilityDiscoveryTests+Peer.swift
       - path: FluxKlangTests/NeutralSnapshotTests+Limits.swift
       - path: FluxKlangTests/UndoSessionRebindTests.swift
       - path: FluxKlangTests/UndoSessionRebindTests+Order.swift
