@@ -20,17 +20,20 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
         case simultaneousRequests
         case propertyExchangeMajorVersion
         case propertyExchangeMinorVersion
+        case endpointStatus
+        case endpointInformation
     }
 
     /// Not a MIDI-CI payload: the first byte is not 0x7E or the third byte is not 0x0D.
     case notCI
-    /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK).
+    /// The format byte is not 0x01 or 0x02, or it is 0x01 on an ACK (no source reviewed defines a CI 1.1 ACK) or on an
+    /// Endpoint Information Inquiry or Reply (0x72 and 0x73 exist from CI 1.2 on).
     case unsupportedFormat(UInt8)
     /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
     /// `MIDICIProfileMessage`: 0x20, 0x21, 0x24-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
-    /// Capabilities Inquiry and Reply 0x30 and 0x31). This also covers valid MIDI-CI sub-ids none decodes (for
-    /// example 0x72, 0x73, Set Profile On and Off 0x22 and 0x23, and the property data, subscription and notify
-    /// messages 0x34 to 0x3F).
+    /// Capabilities Inquiry and Reply 0x30 and 0x31; `MIDICIEndpointMessage`: the Endpoint Information Inquiry and
+    /// Reply 0x72 and 0x73). This also covers valid MIDI-CI sub-ids none decodes (for example Set Profile On and
+    /// Off 0x22 and 0x23, and the property data, subscription and notify messages 0x34 to 0x3F).
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -43,7 +46,7 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     case sourceIsBroadcast
     /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
-    /// ACK and NAK must be addressed to one MUID.
+    /// ACK, NAK and the Endpoint Information Inquiry and Reply must be addressed to one MUID.
     case destinationIsBroadcast
     case targetIsBroadcast
     /// The text has this many utf8 bytes (encode) or declares this length (decode).
@@ -82,6 +85,10 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// (`trailingBytes` / `truncated`).
     case propertyVersionNotAllowed
     case propertyVersionRequired
+    /// A Reply to Endpoint Information declares or holds `count` information bytes, more than `limit`
+    /// (`MIDICIEndpointMessage.maximumInformationBytes`). On decode this is checked against the declared 14-bit
+    /// length before any information byte is read.
+    case informationTooLong(count: Int, limit: Int)
 }
 
 /// Caller-chosen bounds for decoding and encoding. Built only through `make`, so a value is always within the
