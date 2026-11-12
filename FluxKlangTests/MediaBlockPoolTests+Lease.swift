@@ -17,18 +17,28 @@ extension MediaBlockPoolTests {
             #expect(pool.statistics.freeCount == 4 - expected)
         }
         #expect(pool.statistics.highWaterLeased == 4)
+        try #require(leases.count == 4)
         let full = Self.snapshot(pool)
-        // N+1: the pool never grows, blocks or allocates; it refuses, every time, and changes nothing.
+        #expect(full.statistics.leasesRefusedExhausted == 0 && full.statistics.leasesRefusedBusy == 0)
+        // N+1: the pool never grows, blocks or allocates; it refuses, every time. Only the exhausted counter moves.
         let exhausted = MediaBlockPoolRefusal.poolExhausted(leased: 4, retired: 0)
         #expect(Self.refusal { try pool.lease() } == exhausted)
         #expect(Self.refusal { try pool.lease() } == exhausted)
-        #expect(Self.snapshot(pool) == full)
+        let refused = pool.statistics
+        #expect(refused.leasesRefusedExhausted == 2 && refused.leasesRefusedBusy == 0)
+        #expect(refused.blockCount == 4 && refused.leasedCount == 4 && refused.retiredCount == 0)
+        #expect(refused.highWaterLeased == 4 && refused.freeCount == 0)
+        #expect(refused.framesCopied == 0 && refused.copiesCompleted == 0 && refused.copiesRefused == 0)
+        #expect(pool.freeSlotsInLeaseOrder() == full.freeOrder)
         // Releasing one block makes exactly that block leasable again.
         try pool.release(leases[2])
         let again = try pool.lease()
         #expect(again.slot == 2)
         #expect(pool.statistics.leasedCount == 4)
+        // The lease after a release succeeded, so it counted nothing.
+        #expect(pool.statistics.leasesRefusedExhausted == 2 && pool.statistics.leasesRefusedBusy == 0)
         #expect(Self.refusal { try pool.lease() } == exhausted)
+        #expect(pool.statistics.leasesRefusedExhausted == 3 && pool.statistics.leasesRefusedBusy == 0)
     }
 
     @Test
@@ -160,7 +170,16 @@ extension MediaBlockPoolTests {
         #expect(viewed == [1, 2, 3, 4])
         #expect(refusals.count == 4)
         #expect(refusals.allSatisfy { $0 == .accessInProgress })
-        #expect(Self.snapshot(pool) == before)
+        // Only the refused lease counts, as busy and not as exhausted (a block was free); the other three refusals
+        // changed nothing.
+        let after = pool.statistics
+        #expect(after.leasesRefusedBusy == 1 && after.leasesRefusedExhausted == 0)
+        #expect(after.leasedCount == before.statistics.leasedCount && after.freeCount == 1)
+        #expect(after.highWaterLeased == before.statistics.highWaterLeased && after.retiredCount == 0)
+        #expect(after.framesCopied == before.statistics.framesCopied)
+        #expect(after.copiesCompleted == before.statistics.copiesCompleted)
+        #expect(after.copiesRefused == before.statistics.copiesRefused)
+        #expect(pool.freeSlotsInLeaseOrder() == before.freeOrder)
         // Reads may nest, and the guard stays up until the OUTERMOST read has returned.
         var afterNested: MediaBlockPoolRefusal?
         try pool.withSamples(of: reading) { (_: UnsafeBufferPointer<Float>) in
@@ -168,9 +187,11 @@ extension MediaBlockPoolTests {
             afterNested = Self.refusal { try pool.lease() }
         }
         #expect(afterNested == .accessInProgress)
-        // Afterwards the pool works again, and the refused calls changed nothing.
+        #expect(pool.statistics.leasesRefusedBusy == 2 && pool.statistics.leasesRefusedExhausted == 0)
+        // Afterwards the pool works again, and a successful lease counts nothing.
         let next = try pool.lease()
         #expect(next.slot == 2)
+        #expect(pool.statistics.leasesRefusedBusy == 2 && pool.statistics.leasesRefusedExhausted == 0)
         try pool.release(next)
         try Self.fill(pool, [5, 6], frames: 1, lease: other)
         #expect(try pool.copyOut(of: other) == [5, 6])

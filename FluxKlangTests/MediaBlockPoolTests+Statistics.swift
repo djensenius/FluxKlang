@@ -34,7 +34,40 @@ extension MediaBlockPoolTests {
         #expect(Self.blockCounts(pool) == [3, 0, 1, 3, 0])
         #expect(Self.refusal { try pool.lease() } == .poolExhausted(leased: 3, retired: 1))
         #expect(Self.blockCounts(pool) == [3, 0, 1, 3, 0])
+        #expect(pool.statistics.leasesRefusedExhausted == 1 && pool.statistics.leasesRefusedBusy == 0)
         #expect(pool.statistics.blockCount == 4)
+    }
+
+    @Test
+    func leaseRefusalCountersAreZeroInAFreshPoolAndSaturateAtUInt64Max() {
+        let fresh = MediaBlockPoolStatistics(blockCount: 7)
+        #expect(fresh.leasesRefusedExhausted == 0 && fresh.leasesRefusedBusy == 0)
+        let top = UInt64.max
+        var stats = MediaBlockPoolStatistics(
+            blockCount: 2, leasesRefusedExhausted: top - 1, leasesRefusedBusy: top - 1
+        )
+        // Exactly up to the maximum is exact, and each counter moves alone.
+        stats.recordLeaseRefusedExhausted()
+        #expect(stats.leasesRefusedExhausted == top && stats.leasesRefusedBusy == top - 1)
+        stats.recordLeaseRefusedBusy()
+        #expect(stats.leasesRefusedExhausted == top && stats.leasesRefusedBusy == top)
+        // One past it saturates instead of wrapping to zero.
+        stats.recordLeaseRefusedExhausted()
+        stats.recordLeaseRefusedBusy()
+        #expect(stats.leasesRefusedExhausted == top && stats.leasesRefusedBusy == top)
+        #expect(stats.leasedCount == 0 && stats.retiredCount == 0 && stats.copiesRefused == 0)
+    }
+
+    @Test
+    func statisticsDifferWhenOnlyOneLeaseRefusalCounterDiffers() {
+        let base = MediaBlockPoolStatistics(blockCount: 3)
+        #expect(base == MediaBlockPoolStatistics(blockCount: 3, leasesRefusedExhausted: 0, leasesRefusedBusy: 0))
+        #expect(base != MediaBlockPoolStatistics(blockCount: 3, leasesRefusedExhausted: 1))
+        #expect(base != MediaBlockPoolStatistics(blockCount: 3, leasesRefusedBusy: 1))
+        #expect(
+            MediaBlockPoolStatistics(blockCount: 3, leasesRefusedExhausted: 1)
+                != MediaBlockPoolStatistics(blockCount: 3, leasesRefusedBusy: 1)
+        )
     }
 
     @Test

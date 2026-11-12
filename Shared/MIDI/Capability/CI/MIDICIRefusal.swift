@@ -23,6 +23,12 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
         case endpointStatus
         case endpointInformation
         case dataControl
+        case requestID
+        case headerData
+        case propertyData
+        case propertyDataLength
+        case chunkCount
+        case chunkNumber
     }
 
     /// Not a MIDI-CI payload: the first byte is not 0x7E or the third byte is not 0x0D.
@@ -34,9 +40,10 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// The sub-id 2 byte is not one the called decoder handles (`MIDICIMessage`: 0x70, 0x71, 0x7D-0x7F;
     /// `MIDICIProfileMessage`: 0x20-0x27; `MIDICIPropertyCapabilityMessage`: the Property Exchange
     /// Capabilities Inquiry and Reply 0x30 and 0x31; `MIDICIEndpointMessage`: the Endpoint Information Inquiry and
-    /// Reply 0x72 and 0x73; `MIDICIProcessInquiryMessage`: the Process Inquiry messages 0x40-0x44). This also covers
-    /// valid MIDI-CI sub-ids none decodes (for example the Profile Details Inquiry and Reply 0x28 and 0x29, Profile
-    /// Specific Data 0x2F, and the property data, subscription and notify messages 0x34 to 0x3F).
+    /// Reply 0x72 and 0x73; `MIDICIProcessInquiryMessage`: the Process Inquiry messages 0x40-0x44;
+    /// `MIDICIPropertyDataMessage`: the Property Exchange data messages 0x34-0x39 and 0x3F). This also covers valid
+    /// MIDI-CI sub-ids none decodes (for example the Profile Details Inquiry and Reply 0x28 and 0x29 and Profile
+    /// Specific Data 0x2F); the other decoders refuse 0x34-0x39 and 0x3F too.
     case unknownSubID(UInt8)
     /// The message needs `need` bytes in total but only `have` were given.
     case truncated(need: Int, have: Int)
@@ -49,8 +56,8 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     case sourceIsBroadcast
     /// Discovery, Invalidate MUID and the profile reports (0x24 to 0x27) must be addressed to the broadcast MUID.
     case destinationNotBroadcast
-    /// ACK, NAK, the Endpoint Information Inquiry and Reply, Set Profile On and Off, and the Process Inquiry messages
-    /// (0x40 to 0x44) must be addressed to one MUID.
+    /// ACK, NAK, the Endpoint Information Inquiry and Reply, Set Profile On and Off, the Process Inquiry messages
+    /// (0x40 to 0x44) and the Property Exchange data messages (0x34 to 0x39, 0x3F) must be addressed to one MUID.
     case destinationIsBroadcast
     case targetIsBroadcast
     /// The text has this many utf8 bytes (encode) or declares this length (decode).
@@ -101,6 +108,19 @@ enum MIDICIRefusal: Error, Equatable, Hashable, Sendable {
     /// Function Block); this is the device id it carried. Raised by `encode` only: decode keeps the device id as
     /// received.
     case systemReportNeedsFunctionBlock(UInt8)
+    /// The header data of a Property Exchange data message is, or declares, this many bytes, more than
+    /// `MIDICIPropertyChunk.maximumHeaderBytes`. On decode this is checked against the declared 14-bit length before
+    /// any further length is read.
+    case propertyHeaderTooLong(Int)
+    /// An Inquiry: Get Property Data or a Reply to Set Property Data (0x34, 0x37) carries this many bytes of
+    /// property data; Tables 33 and 36 fix the length at 0x0000. Raised by `encode` only.
+    case propertyDataNotAllowed(Int)
+    /// An Inquiry: Get Property Data or a Reply to Set Property Data (0x34, 0x37) must declare one chunk and be chunk
+    /// one (section 8.3.2, Tables 33 and 36); these are the values it carried. Raised by `encode` only.
+    case singleChunkRequired(count: UInt16, number: UInt16)
+    /// A Property Exchange data message of chunk number 2 or more carries header data; section 8.3.1 allows it in the
+    /// first chunk only. This is the chunk number. Raised by `encode` only.
+    case headerOnlyInFirstChunk(UInt16)
 }
 
 /// Caller-chosen bounds for decoding and encoding. Built only through `make`, so a value is always within the

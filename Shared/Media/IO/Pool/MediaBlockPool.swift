@@ -162,10 +162,15 @@ final class MediaBlockPool {
     // MARK: - Lease and release
 
     /// Takes the next free block. It starts with `usedFrames == 0`. Refused with `.poolExhausted` when every block is
-    /// leased or retired (the pool never grows), and with `.accessInProgress` while a `withSamples` body runs.
+    /// leased or retired (the pool never grows), and with `.accessInProgress` while a `withSamples` body runs. A
+    /// refused lease adds one to `leasesRefusedExhausted` or `leasesRefusedBusy` respectively and changes nothing else.
     func lease() throws(MediaBlockPoolRefusal) -> MediaBlockLease {
-        guard readerDepth == 0 else { throw .accessInProgress }
+        guard readerDepth == 0 else {
+            statistics.recordLeaseRefusedBusy()
+            throw .accessInProgress
+        }
         guard freeTop > 0 else {
+            statistics.recordLeaseRefusedExhausted()
             throw .poolExhausted(leased: statistics.leasedCount, retired: statistics.retiredCount)
         }
         freeTop -= 1
