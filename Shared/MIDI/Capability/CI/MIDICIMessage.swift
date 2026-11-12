@@ -170,14 +170,35 @@ enum MIDICIMessage: Equatable, Sendable {
     static func validateAddressing(
         _ kind: MIDICIKind, source: MIDICIMUID, destination: MIDICIMUID
     ) throws(MIDICIRefusal) {
-        if source.isBroadcast { throw .sourceIsBroadcast }
+        let rule: MIDICIDestinationRule
         switch kind {
-        case .discovery, .invalidateMUID:
+        case .discovery, .invalidateMUID: rule = .broadcast
+        case .ack, .nak: rule = .oneMUID
+        case .discoveryReply: rule = .either
+        }
+        try validateAddressing(rule, source: source, destination: destination)
+    }
+
+    /// The same rule by destination kind, for messages outside `MIDICIKind` (the profile messages use `.either`):
+    /// `sourceIsBroadcast` first, then `destinationNotBroadcast` or `destinationIsBroadcast`.
+    static func validateAddressing(
+        _ rule: MIDICIDestinationRule, source: MIDICIMUID, destination: MIDICIMUID
+    ) throws(MIDICIRefusal) {
+        if source.isBroadcast { throw .sourceIsBroadcast }
+        switch rule {
+        case .broadcast:
             if !destination.isBroadcast { throw .destinationNotBroadcast }
-        case .ack, .nak:
+        case .oneMUID:
             if destination.isBroadcast { throw .destinationIsBroadcast }
-        case .discoveryReply:
+        case .either:
             break
         }
     }
+}
+
+/// Which destination MUID a message may carry: only broadcast, only one assignable MUID, or either.
+enum MIDICIDestinationRule: Sendable {
+    case broadcast
+    case oneMUID
+    case either
 }
