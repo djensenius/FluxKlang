@@ -35,10 +35,11 @@ struct TakeOpening: Hashable, Sendable {
 
 /// A finished take. It reaches contract v1 only through `RecordingTakeV1Gate` → `RecordingTakeV1Record.make`
 /// (#109, #110). A ledger stop exports as the contract's `discontinuity` stop reason (#336). The gate refuses
-/// with typed errors, never by remapping: any two consecutive stored segments that are not
-/// `(clock, gen) → (clock, gen + 1)`, split at a restart, which covers same-generation `sampleJump`
-/// splits and generation skips left by a dropped empty restart segment (#352); and any `.unplaced`
-/// segment (v1 requires `startOffsetNs`).
+/// with typed errors, never by remapping: any two consecutive stored segments that are neither a restart split
+/// (`(clock, gen) → (clock, gen + 1)`) nor a forward `sampleJump` split (same clock and generation, the later
+/// starting after the earlier's last frame, exported with `gapFrames`); that covers a backward or zero-gap
+/// `sampleJump` pair, a clock change and a generation skip left by a dropped empty restart segment (#352); and any
+/// `.unplaced` segment (v1 requires `startOffsetNs`).
 struct RecordingTake: Hashable, Sendable {
     let take: TakeID
     let stream: StreamID

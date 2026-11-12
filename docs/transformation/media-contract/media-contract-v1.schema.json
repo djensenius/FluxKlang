@@ -210,7 +210,10 @@
               "sampleClock": {"$ref": "#/$defs/id"}, "generation": {"$ref": "#/$defs/generation"},
               "startFrame": {"$ref": "#/$defs/frame"}, "startOffsetNs": {"$ref": "#/$defs/count"},
               "fileFrameStart": {"$ref": "#/$defs/count"}, "frames": {"$ref": "#/$defs/positive"},
-              "paddedFrames": {"$ref": "#/$defs/count"}}}},
+              "paddedFrames": {"$ref": "#/$defs/count"},
+              "gapFrames": {
+                "description": "Frames on this segment's own sample clock generation between the end of the previous segment and this startFrame, never captured: a forward sampleJump. Not padded, not droppedFrames. Required exactly when the previous segment has the same sampleClock and generation (media-contract.md 8.3).",
+                "type": "integer", "minimum": 1, "maximum": 9223372036854775807}}}},
         "droppedFrames": {"$ref": "#/$defs/count"},
         "stopReason": {
           "description": "user: the operator stopped the take. diskFull, deviceLost: capture stopped on its own. discontinuity: the recorder ended the take at its last good frame because a discontinuity left it nowhere to continue; the cause is not encoded. Any value but user needs exactly one matching captureStopped at the take's last frame (media-contract.md 8.3).",
