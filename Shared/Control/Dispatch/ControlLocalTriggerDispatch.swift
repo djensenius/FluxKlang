@@ -4,8 +4,9 @@
 //
 //  Turns one local MIDI control message into the commands of `ControlTriggerDetector.handle` (#87, LTD1): the
 //  intake decides which source the message is and how each trigger binding decodes it, then every binding that
-//  hears it is handed to the detector in ascending binding id order. Nothing calls this yet. It reads no MIDI port,
-//  registry or Learn gate, owns no detector (the caller passes one `inout`) and sends nothing.
+//  hears it is handed to the detector in ascending binding id order. Only `ControlInputBank.receive` calls it, and
+//  nothing calls that yet. It reads no MIDI port, registry or Learn gate, owns no detector (the caller passes one
+//  `inout`) and sends nothing.
 //
 
 /// What `dispatch` decided. `commands`, `silent` and the per-binding entries of `refusals` follow ascending binding

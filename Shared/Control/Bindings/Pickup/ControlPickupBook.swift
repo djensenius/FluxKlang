@@ -15,8 +15,10 @@ struct ControlPickupBookEntry: Hashable, Sendable {
 /// loss and return of a controller. It resolves no input, reads no host truth, writes no parameter and never
 /// moves a target; the takeover decision stays in `ControlRecord.resolve`, which the book never calls.
 ///
-/// The book is a plain value: nothing calls it yet, it subscribes to nothing, and `sourceLost` and `sourceSeen`
-/// are commands that a future host sends. It allocates (a Dictionary, a Set), so it belongs to the control thread.
+/// The book is a plain value that subscribes to nothing. `ControlInputBank` owns one and sends `sourceLost` and
+/// `sourceSeen` from its `inputLost` and `inputSeen`; `PerformBindingList.make` reads one. Nothing calls
+/// `ControlInputBank` or `PerformBindingList.make` yet. The book allocates (a Dictionary, a Set), so it belongs to
+/// the control thread.
 struct ControlPickupBook: Hashable, Sendable {
     /// The most bindings one book holds: the cap both dispatchers enforce on a binding list.
     static let maximumBindings = ControlBindingLimit.maximumBindings
