@@ -28,6 +28,9 @@ extension UMPPacketFramingTests {
             ([0x5013_FF80, 0xFE00_0000, 0, 0], try sysEx8(0, .start, 0xFF, [0x80, 0xFE])),
             ([0x5F22_00F7, 0, 0, 0], try sysEx8(15, .continue, 0x00, [0xF7])),
             ([0x5031_0500, 0, 0, 0], try sysEx8(0, .end, 0x05, [])),
+            ([0x503F_4200, 0, 0, 0], .sysEx8Abort(UMPSysEx8Abort(group: try UMPGroup(0), streamID: 0x42))),
+            ([0x5F3F_0F00, 0, 0, 0], .sysEx8Abort(UMPSysEx8Abort(group: try UMPGroup(15), streamID: 0x0F))),
+            ([0x593F_FF00, 0, 0, 0], .sysEx8Abort(UMPSysEx8Abort(group: try UMPGroup(9), streamID: 0xFF))),
             ([0x5384_1234, 0x5678_9ABC, 0xDEF0_0FED, 0xCBA9_8765], .mixedDataSetHeader(header)),
             ([0x529F_0102, 0x0304_0506, 0x0708_090A, 0x0B0C_0D0E], .mixedDataSetPayload(payload))
         ]
@@ -153,17 +156,86 @@ extension UMPPacketFramingTests {
         }
     }
 
-    @Test func sysEx8RefusesByteCountZeroAndFifteen() throws {
+    @Test func sysEx8RefusesByteCountZeroOnEveryStatus() throws {
         for status in UInt32(0)...3 {
-            for count in [UInt32(0), 15] {
-                #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: Int(count))) {
-                    try Self.data128([0x5000_0000 | status << 20 | count << 16, 0, 0, 0])
-                }
-                // The count is checked before the padding bits.
-                #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: Int(count))) {
-                    try Self.data128([0x5000_FFFF | status << 20 | count << 16, 0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF])
-                }
+            #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: 0)) {
+                try Self.data128([0x5000_0000 | status << 20, 0, 0, 0])
             }
+            // The count is checked before the padding bits.
+            #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: 0)) {
+                try Self.data128([0x5000_FFFF | status << 20, 0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF])
+            }
+        }
+    }
+
+    @Test func sysEx8RefusesByteCountFifteenExceptOnEnd() throws {
+        // Complete, Start and Continue (status 0...2) never carry 15, with or without non-zero data.
+        for status in UInt32(0)...2 {
+            #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: 15)) {
+                try Self.data128([0x500F_0000 | status << 20, 0, 0, 0])
+            }
+            #expect(throws: UMPRefusal.valueOutOfRange(field: .sysEx8ByteCount, value: 15)) {
+                try Self.data128([0x500F_FFFF | status << 20, 0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF])
+            }
+        }
+    }
+
+    @Test func sysEx8AbortDecodesEveryGroup() throws {
+        for group in UInt8(0)...15 {
+            let words: [UInt32] = [0x503F_0700 | UInt32(group) << 24, 0, 0, 0]
+            let expected = UMPData128Message.sysEx8Abort(UMPSysEx8Abort(group: try UMPGroup(group), streamID: 0x07))
+            #expect(try Self.data128(words) == expected, "group \(group)")
+            #expect(expected.packet.words == words, "group \(group)")
+        }
+    }
+
+    @Test func sysEx8AbortIsKeyedOnByteCountNotStreamID() throws {
+        let group = try UMPGroup(5)
+        for stream in UInt8(0)...255 {
+            let words: [UInt32] = [0x553F_0000 | UInt32(stream) << 8, 0, 0, 0]
+            #expect(try Self.data128(words) == .sysEx8Abort(UMPSysEx8Abort(group: group, streamID: stream)),
+                    "stream \(stream)")
+        }
+        // Stream IDs 0x01 and 0x0F with number of bytes 1 are ordinary End packets with no data.
+        for stream in [UInt8(0x01), 0x0F] {
+            let words: [UInt32] = [0x5531_0000 | UInt32(stream) << 8, 0, 0, 0]
+            let ordinary = try UMPSysEx8Packet(group: group, status: .end, streamID: stream, bytes: [])
+            #expect(try Self.data128(words) == .sysEx8(ordinary), "stream \(stream)")
+        }
+    }
+
+    @Test func sysEx8AbortPacketWordsAreHandWritten() throws {
+        let abort = UMPSysEx8Abort(group: try UMPGroup(0xA), streamID: 0x5C)
+        #expect(abort.packet.words == [0x5A3F_5C00, 0, 0, 0])
+        #expect(abort.packet.messageType == .data128)
+    }
+
+    @Test func sysEx8EndWithCountOneStaysOrdinary() throws {
+        let decoded = try Self.data128([0x5031_0900, 0, 0, 0])
+        guard case .sysEx8(let packet) = decoded else {
+            Issue.record("not an ordinary SysEx8 packet: \(decoded)")
+            return
+        }
+        #expect(packet.status == .end && packet.bytes.isEmpty && packet.streamID == 0x09)
+    }
+
+    @Test func sysEx8AbortRefusesNonZeroDataAndChecksOtherFieldsFirst() throws {
+        // Every bit of all thirteen data bytes (packet bytes 3...15), one bit at a time.
+        let refusal = UMPRefusal.reservedBitsSet(mt: .data128, status: 3)
+        for bit in 0..<104 {
+            let slot = bit / 8 + 3
+            var words: [UInt32] = [0x503F_AB00, 0, 0, 0]
+            words[slot / 4] |= 1 << UInt32(8 * (3 - slot % 4) + bit % 8)
+            #expect(throws: refusal, "bit \(bit)") {
+                try Self.data128(words)
+            }
+        }
+        // Message type and status come before the count and data bits.
+        #expect(throws: UMPRefusal.wrongMessageType(expected: .data128, actual: .utility)) {
+            try Self.data128([0x003F_0000])
+        }
+        #expect(throws: UMPRefusal.reservedStatus(mt: .data128, status: 0x7)) {
+            try Self.data128([0x507F_0000, 0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF])
         }
     }
 
