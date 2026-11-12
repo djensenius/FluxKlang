@@ -7,7 +7,11 @@ import Testing
 
 private typealias Fixture = RigMappingReviewFixture
 
+#if os(macOS)
+@Suite("Rig mapping review: channel overlap policy", .productionAccessAudit)
+#else
 @Suite("Rig mapping review: channel overlap policy")
+#endif
 struct RigMappingReviewOverlapTests {
     @Test func aChoiceThatWritesAnotherRoutesOutputIsRefused() throws {
         let review = try Fixture.lostRigReview()

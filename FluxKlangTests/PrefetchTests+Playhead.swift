@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Prefetch playhead and underrun", .productionAccessAudit)
+#else
 @Suite("Prefetch playhead and underrun")
+#endif
 struct PrefetchPlayheadTests {
     typealias Fixture = PrefetchFixture
 
