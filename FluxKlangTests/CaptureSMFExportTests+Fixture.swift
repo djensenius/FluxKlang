@@ -40,8 +40,10 @@ extension CaptureSMFExportTests {
             [0x2000_0000 | UInt32(status) << 16 | UInt32(data1) << 8 | UInt32(data2 ?? 0)]
         }
 
-        /// A MIDI 2 channel-voice Note On (MT 0x4), which this slice does not translate.
+        /// A MIDI 2 channel-voice Note On (MT 0x4), velocity `0xC924`, which the export translates (Note On, 100).
         static let midi2NoteOn: [UInt32] = [0x4090_3C00, 0xC924_0000]
+        /// A 128-bit data packet (MT 0x5): a capture the export never writes and counts `umpOnlyDropped`.
+        static let data128: [UInt32] = [0x5000_0000, 0, 0, 0]
         /// A JR Timestamp (MT 0x0), a SysEx 7 packet (MT 0x3) and a system real-time clock (MT 0x1).
         static let utility: [UInt32] = [0x0020_1F40]
         static let sysEx: [UInt32] = [0x3004_0102, 0x0300_0000]

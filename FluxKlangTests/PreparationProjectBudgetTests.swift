@@ -6,6 +6,9 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct PreparationProjectBudgetTests {
     static func empty() -> ProjectDocument {
         ProjectDocument(id: ProjectID(validated: "prj.p"), name: "")

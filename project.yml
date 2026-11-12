@@ -530,6 +530,8 @@ targets:
       - path: FluxKlangTests/MIDICIMessageTests+ProcessInquiryReport.swift
       - path: FluxKlangTests/MIDICIMessageTests+PropertyData.swift
       - path: FluxKlangTests/MIDICIMessageTests+PropertyDataRules.swift
+      - path: FluxKlangTests/MIDICIMessageTests+ProfileDetails.swift
+      - path: FluxKlangTests/MIDICIMessageTests+ProfileDetailsRules.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Classify.swift
       - path: FluxKlangTests/PeerEndpointPolicyTests+Order.swift
@@ -570,6 +572,11 @@ targets:
       - path: FluxKlangTests/CaptureSMFExportTests+Fixture.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Groups.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Losses.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Examples.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Fixture.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2Silent.swift
+      - path: FluxKlangTests/CaptureSMFExportTests+Midi2State.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Order.swift
       - path: FluxKlangTests/CaptureSMFExportTests+Pairing.swift
       - path: FluxKlangTests/CaptureSMFExportTests+SysEx.swift
@@ -844,6 +851,10 @@ targets:
       - path: FluxKlangTests/PluginCatalogTests.swift
       - path: FluxKlangTests/PluginCatalogTests+Service.swift
       - path: FluxKlangTests/PluginCatalogTests+Capacity.swift
+      - path: FluxKlangTests/LibraryPatchListTests.swift
+      - path: FluxKlangTests/LibraryPatchListTests+Search.swift
+      - path: FluxKlangTests/LibraryPluginListTests.swift
+      - path: FluxKlangTests/LibraryPluginListTests+Search.swift
       - path: FluxKlangTests/PluginCatalogCacheTests.swift
       - path: FluxKlangTests/PluginCatalogCacheTests+Codec.swift
       - path: FluxKlangTests/PluginCatalogCacheTests+Invalidation.swift
