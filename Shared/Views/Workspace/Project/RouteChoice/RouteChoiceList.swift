@@ -104,9 +104,10 @@ struct RouteChoiceList: Equatable, Sendable {
         }
     }
 
-    /// Test-only: for each block, in order, the distinct roles in RoleID byte order that claim it, and the work done:
-    /// `operations` counts every route visited plus every channel of a route that passed the filter and shares a
-    /// (device, direction) with a block (one lookup each).
+    /// Test-only: for each block, in order, the distinct roles in RoleID byte order that claim it, and the work done.
+    /// `operations` counts every route visited (once per group of 64 blocks), plus every channel of a route that
+    /// passed the filter and shares a (device, direction) with a block of the group (one lookup each), plus every
+    /// block such a route claims (one update each, however many of its channels touch the block).
     static func claimantsForTesting(
         of blocks: [RigRouteCandidate], role: RoleID, in routes: [AudioRoute]
     ) -> (claimants: [[RoleID]], operations: Int) {
@@ -122,27 +123,44 @@ struct RouteChoiceList: Equatable, Sendable {
 
     /// For each block, the distinct roles, in RoleID byte order, of the live routes that use its channels. Mirrors
     /// the policy in `RigChannelOverlap.swift`: only `.proposed` and `.confirmed` routes claim, per device and
-    /// direction. The target role's own route is the one a choice replaces, so it never claims. One pass over the
-    /// routes, linear in routes plus route channels plus block channels.
+    /// direction. The target role's own route is the one a choice replaces, so it never claims. The blocks are taken
+    /// in groups of 64 (one bit each); per group the routes are scanned once, and a route updates each block it
+    /// touches once. Linear in routes plus route channels plus claimed blocks per route.
     private static func claimants(
         of blocks: [RigRouteCandidate], role: RoleID, in routes: [AudioRoute], operations: inout Int
     ) -> [[RoleID]] {
-        var wanted: [ClaimKey: [Int: [Int]]] = [:]
-        for index in blocks.indices {
-            let key = ClaimKey(device: blocks[index].device, direction: blocks[index].direction)
-            for channel in blocks[index].channels { wanted[key, default: [:]][channel, default: []].append(index) }
-        }
         var found = [Set<RoleID>](repeating: [], count: blocks.count)
-        for route in routes {
-            operations += 1
-            guard route.binding == .proposed || route.binding == .confirmed, route.role != role,
-                  let channels = wanted[ClaimKey(device: route.device, direction: route.direction)] else { continue }
-            for channel in route.channels {
+        for first in stride(from: 0, to: blocks.count, by: UInt64.bitWidth) {
+            let group = blocks[first..<min(first + UInt64.bitWidth, blocks.count)]
+            let wanted = masks(of: group)
+            for route in routes {
                 operations += 1
-                for index in channels[channel] ?? [] { found[index].insert(route.role) }
+                guard route.binding == .proposed || route.binding == .confirmed, route.role != role,
+                      let masks = wanted[ClaimKey(device: route.device, direction: route.direction)] else { continue }
+                var hit: UInt64 = 0
+                for channel in route.channels {
+                    operations += 1
+                    hit |= masks[channel] ?? 0
+                }
+                while hit != 0 {
+                    operations += 1
+                    found[first + hit.trailingZeroBitCount].insert(route.role)
+                    hit &= hit - 1
+                }
             }
         }
         return found.map { $0.sorted(by: { bytesPrecede($0, $1) }) }
+    }
+
+    /// (device, direction) -> channel -> the blocks of the group that list the channel, one bit per block offset.
+    private static func masks(of group: ArraySlice<RigRouteCandidate>) -> [ClaimKey: [Int: UInt64]] {
+        var wanted: [ClaimKey: [Int: UInt64]] = [:]
+        for (offset, block) in group.enumerated() {
+            let key = ClaimKey(device: block.device, direction: block.direction)
+            let bit = UInt64(1) << UInt64(offset)
+            for channel in block.channels { wanted[key, default: [:]][channel, default: 0] |= bit }
+        }
+        return wanted
     }
 
     private static func makeRow(
