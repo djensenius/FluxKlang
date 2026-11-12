@@ -251,7 +251,9 @@ extension UMPFlexDataTests {
         }
     }
 
-    @Test func textRefusesReservedAddressesAndChannelNibble() throws {
+    @Test func textRefusesReservedAddressesAndIgnoresChannelNibbleWhenGroupAddressed() throws {
+        // "ABCDEFGHIJKL": 12 bytes, valid in every form.
+        let data: [UInt32] = [0x4142_4344, 0x4546_4748, 0x494A_4B4C]
         for form in UInt32(0)...3 {
             for address in UInt32(2)...3 {
                 let words: [UInt32] = [0xD000_0201 | form << 22 | address << 20, 0, 0, 0]
@@ -259,9 +261,22 @@ extension UMPFlexDataTests {
                     try Self.decodeText(words)
                 }
             }
-            for channel in UInt32(1)...15 {
-                let words: [UInt32] = [0xD010_010C | form << 22 | channel << 16, 0, 0, 0]
-                #expect(throws: UMPFlexDataRefusal.reservedBitsSet(status: 0x0C)) { try Self.decodeText(words) }
+            // Bank 0x01 (metadata) status 0x0C and bank 0x02 (performance) status 0x01.
+            for (bank, status) in [(UInt32(0x01), UInt32(0x0C)), (0x02, 0x01)] {
+                let kind = UMPFlexDataTextKind(bank: UInt8(bank), status: UInt8(status))
+                #expect(kind != nil)
+                let cleared: [UInt32] = [0xD310_0000 | form << 22 | bank << 8 | status] + data
+                for channel in UInt32(1)...15 {
+                    let words: [UInt32] = [0xD310_0000 | form << 22 | channel << 16 | bank << 8 | status] + data
+                    let decoded = try Self.decodeText(words)
+                    #expect(decoded.group.value == 3)
+                    #expect(decoded.address == .group)
+                    #expect(decoded.form.rawValue == UInt8(form))
+                    #expect(decoded.kind == kind)
+                    #expect(decoded.bytes == Self.ascii("ABCDEFGHIJKL"))
+                    #expect(decoded.packet.words == cleared)
+                    #expect(decoded == (try Self.decodeText(cleared)))
+                }
             }
         }
     }
@@ -341,7 +356,7 @@ extension UMPFlexDataTests {
     }
 
     @Test func textRefusalOrderFollowsTheDocumentedSequence() throws {
-        // Unknown status beats address; address beats channel nibble.
+        // Unknown status beats address. A reserved address is refused even with a channel nibble set.
         #expect(throws: UMPFlexDataRefusal.unknownStatus(bank: 1, status: 0x0D)) {
             try Self.decodeText([0xD0FF_010D, 0x0041_0000, 0, 0])
         }

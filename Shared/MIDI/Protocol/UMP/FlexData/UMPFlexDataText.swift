@@ -99,7 +99,8 @@ enum UMPFlexDataTextKind: Equatable, Sendable {
 /// `payload_as_string` stops at the first 0x00 instead. Only trailing 0x00 bytes are padding, the same rule as
 /// `UMPStreamText`: a start or continuation packet is always full (the splitter only shortens the last packet, and
 /// ni-midi2 asserts it), so its `bytes` are all 12 bytes; a complete or end packet drops its trailing 0x00 bytes.
-/// Either way `packet` re-encodes the received words exactly.
+/// Either way `packet` re-encodes the received words exactly, except that the ignored channel nibble of a
+/// group-addressed packet comes back as 0.
 struct UMPFlexDataTextPacket: Equatable, Sendable {
     /// Words 1...3.
     static let maximumByteCount = 12
@@ -107,7 +108,8 @@ struct UMPFlexDataTextPacket: Equatable, Sendable {
     let group: UMPGroup
     /// Either address is accepted for every text status: bl-midi2-rs gives each text message an
     /// `OptionalChannelProperty`, ni-midi2's tests build bank 0x01 text channel-addressed, and cmidi2 and
-    /// AM_MIDI2.0Lib take the address from the caller. A group-addressed packet must have channel nibble 0.
+    /// AM_MIDI2.0Lib take the address from the caller. As in `UMPFlexDataMessage`, decoding ignores the
+    /// channel nibble of a group-addressed packet.
     let address: UMPFlexDataAddress
     let form: UMPFlexDataForm
     let kind: UMPFlexDataTextKind
@@ -192,8 +194,8 @@ struct UMPFlexDataTextPacket: Equatable, Sendable {
 
 extension UMPFlexDataTextPacket {
     /// Decodes one text packet of any form. Order of refusals: not MT 0xD, bank or status not a text message
-    /// (`unknownStatus`, including every bank 0x00 message), reserved address, non-zero channel nibble when
-    /// group-addressed (`reservedBitsSet`). Text bytes are never refused.
+    /// (`unknownStatus`, including every bank 0x00 message), reserved address. The channel nibble of a
+    /// group-addressed packet is ignored, and text bytes are never refused.
     init(decoding packet: UMPPacket) throws(UMPFlexDataRefusal) {
         guard packet.messageType == .flexData else { throw .notFlexData(actual: packet.messageType) }
         let words = packet.words
@@ -213,7 +215,7 @@ extension UMPFlexDataTextPacket {
                 throw .ump(error)
             }
         case 1:
-            guard channelBits == 0 else { throw .reservedBitsSet(status: status) }
+            // The channel nibble is ignored, as in `UMPFlexDataMessage`; `packet` encodes it as 0.
             address = .group
         case let reserved:
             throw .reservedAddress(status: status, address: reserved)
