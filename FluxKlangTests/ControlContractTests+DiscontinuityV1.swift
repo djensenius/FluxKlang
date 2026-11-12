@@ -34,7 +34,7 @@ private func keys(_ record: DiscontinuityV1Record) throws -> Set<String> {
 }
 
 /// A golden `discontinuityRecord` from a media contract example (`<example> seq <n>`), keys sorted, compact;
-/// the table pins all 8 example records of the types this builder covers.
+/// the table pins all 9 example records of the types this builder covers.
 private struct GoldenDiscontinuity {
     let label: String
     let event: Event
@@ -78,13 +78,18 @@ private let goldenDiscontinuityRecords: [GoldenDiscontinuity] = [
     .init("09 seq 8", .clockRestart(hostTicks: 2_490_000_000, previousFrame: 150_000), generation: 2, frame: 0,
           seq: 8,
           #"{"frame":0,"generation":2,"hostTicks":2490000000,"kind":"discontinuity","previousFrame":150000,"#
-            + #""sampleClock":"smp.main","seq":8,"type":"clockRestart"}"#)
+            + #""sampleClock":"smp.main","seq":8,"type":"clockRestart"}"#),
+    .init("12 seq 3", .sampleJump, generation: 1, frame: 240_000, seq: 3,
+          note: "The device's frame counter jumped forward: frame 240000 is the first frame after the jump.",
+          #"{"frame":240000,"generation":1,"kind":"discontinuity","note":"The device's frame counter jumped "#
+            + #"forward: frame 240000 is the first frame after the jump.","sampleClock":"smp.main","seq":3,"#
+            + #""type":"sampleJump"}"#)
 ]
 
 extension ControlContractTests {
     struct DiscontinuityV1 {
         @Test func discontinuityV1RecordEncodesTheGoldenDiscontinuityRecordsExactly() throws {
-            #expect(goldenDiscontinuityRecords.count == 8)
+            #expect(goldenDiscontinuityRecords.count == 9)
             for golden in goldenDiscontinuityRecords {
                 let generation = try Generation(golden.generation)
                 let record = try DiscontinuityV1Record.make(golden.event, sampleClock: smpMain, generation: generation,
@@ -108,7 +113,7 @@ extension ControlContractTests {
             let cases: [(Event, Set<String>)] = [
                 (.clockRestart(hostTicks: 1, previousFrame: 2), ["hostTicks", "previousFrame"]),
                 (.underrun(backing, frames: 1), ["frames", "stream"]),
-                (.sourceLost(backing), ["stream"]), (.sourceRestored(backing), ["stream"]),
+                (.sourceLost(backing), ["stream"]), (.sourceRestored(backing), ["stream"]), (.sampleJump, []),
                 (.locate, []), (.loopWrap, []), (.formatChange(backing), ["stream"])
             ]
             for (event, extra) in cases {
@@ -120,8 +125,8 @@ extension ControlContractTests {
                 #expect(try keys(noted) == common.union(extra).union(["note"]), "\(event.type)")
             }
             let types = cases.map(\.0.type)
-            #expect(types == ["clockRestart", "underrun", "sourceLost", "sourceRestored", "locate", "loopWrap",
-                              "formatChange"])
+            #expect(types == ["clockRestart", "underrun", "sourceLost", "sourceRestored", "sampleJump", "locate",
+                              "loopWrap", "formatChange"])
             let extreme = try DiscontinuityV1Record.make(
                 .clockRestart(hostTicks: .max, previousFrame: .min), sampleClock: smpMain,
                 generation: Generation(Generation.maximumValue), frame: .max, seq: .max)
