@@ -15,7 +15,7 @@ enum UMPStreamFormat: UInt8, Equatable, Sendable {
     }
 }
 
-/// The ten statuses this codec decodes.
+/// The twelve statuses this codec decodes.
 enum UMPStreamStatus: UInt16, Equatable, Sendable {
     case endpointDiscovery = 0x000
     case endpointInfo = 0x001
@@ -27,6 +27,8 @@ enum UMPStreamStatus: UInt16, Equatable, Sendable {
     case functionBlockDiscovery = 0x010
     case functionBlockInfo = 0x011
     case functionBlockName = 0x012
+    case startOfClip = 0x020
+    case endOfClip = 0x021
 }
 
 /// Word 0 of a Stream packet, split into its fields. Built only from a Message Type 0xF packet.
@@ -71,10 +73,13 @@ extension UMPStreamMessage {
         case .endpointDiscovery: return try decodeEndpointDiscovery(header)
         case .endpointInfo: return try decodeEndpointInfo(header)
         case .deviceIdentity: return try decodeDeviceIdentity(header)
-        case .streamConfigRequest: return .streamConfigRequest(try decodeConfiguration(header))
-        case .streamConfigNotification: return .streamConfigNotification(try decodeConfiguration(header))
+        case .streamConfigRequest, .streamConfigNotification:
+            let configuration = try decodeConfiguration(header)
+            return status == .streamConfigRequest
+                ? .streamConfigRequest(configuration) : .streamConfigNotification(configuration)
         case .functionBlockDiscovery: return try decodeFunctionBlockDiscovery(header)
         case .functionBlockInfo: return try decodeFunctionBlockInfo(header)
+        case .startOfClip, .endOfClip: return try decodeClip(header, status == .startOfClip ? .startOfClip : .endOfClip)
         case .endpointName, .productInstanceID, .functionBlockName:
             return try decodeText(packet, header, limits)
         }
@@ -201,5 +206,12 @@ extension UMPStreamMessage {
         )
         try info.validate()
         return .functionBlockInfo(info)
+    }
+
+    /// Start and End of Clip carry nothing: word 0 bits 15...0 and words 1...3 are all reserved.
+    private static func decodeClip(_ header: UMPStreamHeader, _ message: Self) throws(UMPStreamRefusal) -> Self {
+        let words = header.words
+        try requireZero(header.payload != 0 || words[1] != 0 || words[2] != 0 || words[3] != 0, header)
+        return message
     }
 }

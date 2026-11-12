@@ -13,7 +13,7 @@ extension UMPStreamMessage {
         case .functionBlockName(let index, let name):
             return try UMPStreamText.packets(kind: .functionBlockName, index: index, text: name, limits: limits)
         case .endpointDiscovery, .endpointInfo, .deviceIdentity, .streamConfigRequest, .streamConfigNotification,
-             .functionBlockDiscovery, .functionBlockInfo:
+             .functionBlockDiscovery, .functionBlockInfo, .startOfClip, .endOfClip:
             return [try encodeSinglePacket(message)]
         }
     }
@@ -63,6 +63,8 @@ extension UMPStreamMessage {
             return try single(.functionBlockDiscovery, payload: target << 8 | flags)
         case .functionBlockInfo(let info):
             return try encodeFunctionBlockInfo(info)
+        case .startOfClip, .endOfClip:
+            return try single(message == .startOfClip ? .startOfClip : .endOfClip, payload: 0)
         case .endpointName, .productInstanceID, .functionBlockName:
             // Unreachable: `encode` sends the text messages to `UMPStreamText`.
             throw .unknownStatus(UInt16.max)
