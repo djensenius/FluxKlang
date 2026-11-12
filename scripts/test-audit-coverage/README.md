@@ -79,9 +79,13 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `ControlLearnTests`, `ControlLearnConflictTests`, `ControlInputGateTests`,
 `ControlInputBankTests`, `ControlSourceAvailabilityTests`,
 `ControlLocalTriggerDispatchTests`, `ControlFeedbackTests`,
-`MIDIControlIntakeTests`, `ActiveSensingTests` and `MIDISourceRegistryTests`
+`MIDIControlIntakeTests`, `ActiveSensingTests`, `MIDISourceRegistryTests`,
+`StandardMIDIFileTests`, `StandardMIDIFileReaderTests`,
+`CaptureSMFExportTests`, `MIDICaptureExportTests`, `MIDICaptureClockTests`,
+`MIDICaptureProtocolTests`, `MIDICaptureRestartTests` and
+`TimecodeMachineTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those eighty-six macOS-guarded suites remain unadopted. Other
+owners of those ninety-four macOS-guarded suites remain unadopted. Other
 owners' annotation obligations remain unsatisfied: inventory intentionally
 exits 0 with `enforcementSatisfied: false`, while default enforcement
 exits 1. Inventory success is not coverage or isolation.
@@ -1017,6 +1021,93 @@ its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
 `--attachments-path` for each of the seven suites (`FluxKlangTests/` plus
 the suite name), carrying that run ID, with all 14 operation IDs reporting
 zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
+These runs add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the remaining #60 gates above still apply and #60
+remains open.
+
+## Standard MIDI File, MIDI capture and timecode machine source adoption
+
+`StandardMIDIFileTests`, `StandardMIDIFileReaderTests`,
+`CaptureSMFExportTests`, `MIDICaptureExportTests`, `MIDICaptureClockTests`,
+`MIDICaptureProtocolTests`, `MIDICaptureRestartTests` and
+`TimecodeMachineTests` now use the canonical trait under `#if os(macOS)` on
+their root declarations, matching `GraphCompilerTests`, without test-body,
+helper, target-membership or registration changes. All eight keep their
+display names: the trait is added to each existing `@Suite` in the macOS
+branch and the `#else` branch keeps that `@Suite` unchanged. None of the
+eight has other suite traits. Each is a separate root `struct`
+(`StandardMIDIFileTests.swift`, `StandardMIDIFileTests+Reader.swift`,
+`CaptureSMFExportTests.swift`, `MIDICaptureExportTests.swift`,
+`MIDICaptureExportTests+Clock.swift`, `MIDICaptureExportTests+Protocol.swift`,
+`MIDICaptureExportTests+Restart.swift` and `TimecodeMachineTests.swift`);
+the longest root file, `MIDICaptureExportTests+Clock.swift`, grows from 457
+to 461 lines, under the 500-line `file_length` limit. Their extensions stay
+unannotated: the in-file extension of `StandardMIDIFileTests`; the six
+`CaptureSMFExportTests+` files (`Bounds`, `Fixture`, `Groups`, `Losses`,
+`Order` and `Pairing`); `MIDICaptureExportTests+V1Capture.swift`; and the
+four `TimecodeMachineTests+` files (`Authorization`, `Gate`, `SendGrant`
+and `TempoSharing`). The nested `CaptureSMFExportTests.Fixture`, the shared
+`MIDICaptureFixture` enum, the file-private `MIDICaptureProtocolRow` and
+`protocolTable`, and the file-private `TempoRecorder` are not suites and
+stay unannotated. The three `MIDICapture` suites split from
+`MIDICaptureExportTests` share its `MIDICaptureFixture`, and
+`MIDICaptureRestartTests` calls the `MIDICaptureExportTests.json` helper.
+`StandardMIDIFileTests` and `StandardMIDIFileReaderTests` alias
+`MIDIClipTimingTests`, adopted earlier, for clip fixtures;
+`StandardMIDIFileTests` also uses its seeded `MIDIClipSplitMix64` and
+`MIDICaptureFixture`. The suites build bytes, `UMPPacket` words, MMC
+messages and grants from literals and drive `StandardMIDIFile`, the
+`Shared/Media/Clips` `Capture`, `Export`, `SMF` and `Tempo` value types and
+the `Shared/MIDI/Timecode/Machine` gate, authorization, send builder and
+tempo-sharing seam, over synthetic `HostStamp`, `SampleStamp`,
+`ClockAnchor` and `MusicalClockMap` values. They declare no `static var`
+members. Only `TimecodeMachineTests+TempoSharing.swift` imports anything
+beyond Testing: Synchronization, for the `Mutex` call log owned by each
+`TempoRecorder` instance, which a test creates locally; no recorder is
+shared. The production closure the fixture copied is all of
+`Shared/Contracts`, `Shared/MIDI/Protocol/MIDI1`, `Shared/MIDI/Protocol/UMP`
+and `Shared/MIDI/Timecode`, `Shared/Media/Clips` except `Ownership`, and
+`Shared/WING/FaderMath.swift`. No source in it imports anything but
+Foundation; the two `V1Record` capture sources use it for `Data` and
+`String(format:)`. Its only `static var` members are computed or protocol
+requirements, and its only class is the stateless
+`fileprivate final class Identity` token in
+`TriggerSession.swift`. None of the eight suites touches the file system,
+bundles, wall clock, sleep, dispatch, defaults, global mutable state, MIDI
+hardware, network or audio.
+
+Against the unmodified UARG15 tree, both checker modes report 4,888
+registrations. Satisfied rows rise from 768 (728 `FluxKlangMacTests`, 40
+`FluxKlangTests`) to 832 (792 `FluxKlangMacTests`, 40 `FluxKlangTests`).
+The eight suites' 64 `FluxKlangMacTests` root rows (eight per suite) are
+now satisfied, which accounts for the whole increase; no row is removed.
+Diagnostics fall by 64, from 6,296 to 6,232: eight removed per suite, as
+each had a named `@Suite`, and none added. The iOS `FluxKlangTests` root
+rows for all eight suites stay unsatisfied, with one diagnostic per row
+(eight per suite). Apart from the Mac rows' status, the only row change,
+in both modules, is that test line numbers in the eight root files shift
+by four. Inventory still exits 0 and default enforcement still exits 1.
+This comparison is a row-level diff of both trees' output.
+
+A fresh SwiftPM package (default build system, no private witness or
+observer) byte-copied 161 repository sources from this change. 21 are test
+sources: the eight suites' files, their 11 extension-only files,
+`MIDIClipTimingTests.swift` and `ProductionAccessScope.swift`. The other
+140 are `Shared/Store/ProductionAccessAudit.swift` and the in-memory
+production closure: the 58 `Shared/Contracts`, ten
+`Shared/MIDI/Protocol/MIDI1`, 21 `Shared/MIDI/Protocol/UMP`, 22
+`Shared/MIDI/Timecode` and 27 `Shared/Media/Clips` sources and
+`FaderMath.swift`. Debug and Release
+(`-c release -Xswiftc -enable-testing`) runs filtered to the eight suites
+each passed 208 tests (two parameterized, 13 cases) in eight suites, with
+`--xunit-output` and `--event-stream-output-path`. Each xUnit report lists
+208 test cases with no failures or skips, and each event stream ends all
+208 test functions and eight suites with no issue events. Each run, under
+its own fresh `FLUXKLANG_AUDIT_RUN_ID`, wrote one `suiteExit` attachment to
+`--attachments-path` for each of the eight suites (`FluxKlangTests/` plus
+the suite name), carrying that run ID, with all 14 operation IDs reporting
+zero `apiEntered` and `factoryEvaluated` and no audit issue recorded.
+`MIDIClipTimingTests` was compiled for its helpers but filtered out.
 These runs add no process-identity, argv or bootstrap evidence and do not
 cover the iOS owners; the remaining #60 gates above still apply and #60
 remains open.

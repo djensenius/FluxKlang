@@ -122,7 +122,11 @@ enum MIDICaptureFixture {
     }
 }
 
+#if os(macOS)
+@Suite("MIDI capture export", .productionAccessAudit)
+#else
 @Suite("MIDI capture export")
+#endif
 struct MIDICaptureExportTests {
     typealias Fixture = MIDICaptureFixture
 
