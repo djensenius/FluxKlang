@@ -172,3 +172,113 @@ struct UMPPacketFramingTests {
         #expect(throws: UMPRefusal.valueOutOfRange(field: .sevenBit, value: 128)) { try UMPSevenBit(128) }
     }
 }
+
+// MARK: - Utility messages (MT 0x0)
+
+extension UMPPacketFramingTests {
+    /// Hand-written MT 0x0 words (M2-104-UM v1.1, Utility Messages) and the message each must decode to.
+    static let utilityGoldens: [(word: UInt32, message: UMPUtilityMessage)] = [
+        (0x0000_0000, .noop),
+        (0x0010_1234, .jrClock(senderTime: 0x1234)),
+        (0x0010_FFFF, .jrClock(senderTime: 0xFFFF)),
+        (0x0020_1F40, .jrTimestamp(0x1F40)), // media-contract example 10
+        (0x0030_03C0, .deltaClockstampTicksPerQuarterNote(960)),
+        (0x0040_0000, .deltaClockstamp(ticks: 0)),
+        (0x004F_FFFF, .deltaClockstamp(ticks: 0xF_FFFF))
+    ]
+
+    @Test func utilityGoldensDecodeAndEncode() throws {
+        for (word, message) in Self.utilityGoldens {
+            let packet = try UMPPacket(words: [word])
+            #expect(try UMPUtilityMessage(decoding: packet) == message, "\(word)")
+            #expect(try message.packet().words == [word], "\(word)")
+        }
+    }
+
+    @Test func utilityRoundTrips() throws {
+        let messages: [UMPUtilityMessage] = [
+            .noop, .jrClock(senderTime: 0), .jrClock(senderTime: 0xABCD), .jrTimestamp(0), .jrTimestamp(0xFFFF),
+            .deltaClockstampTicksPerQuarterNote(0), .deltaClockstampTicksPerQuarterNote(0xFFFF),
+            .deltaClockstamp(ticks: 1), .deltaClockstamp(ticks: 0x8_0001), .deltaClockstamp(ticks: 0xF_FFFF)
+        ]
+        for message in messages {
+            let packet = try message.packet()
+            let word = try #require(packet.words.first)
+            #expect(packet.words.count == 1)
+            #expect(word & 0x0F00_0000 == 0, "group nibble stays zero")
+            #expect(packet.messageType == .utility)
+            #expect(try UMPUtilityMessage(decoding: packet) == message)
+        }
+    }
+
+    @Test func utilityRefusesOtherMessageTypes() throws {
+        // A reserved status, group bits and data bits are all set, so the type check must come first.
+        for type in UMPMessageType.allCases where type != .utility {
+            let packet = try UMPPacket(words: UMPFixture.packet(type, low: 0x0F5F_FFFF))
+            #expect(throws: UMPRefusal.wrongMessageType(expected: .utility, actual: type)) {
+                try UMPUtilityMessage(decoding: packet)
+            }
+        }
+    }
+
+    @Test func utilityRefusesReservedStatuses() throws {
+        for status in UInt32(0x5)...0xF {
+            let packet = try UMPPacket(words: [status << 20])
+            #expect(throws: UMPRefusal.reservedStatus(mt: .utility, status: UInt8(status))) {
+                try UMPUtilityMessage(decoding: packet)
+            }
+        }
+        // Status is checked before reserved bits.
+        let both = try UMPPacket(words: [0x0F5F_FFFF])
+        #expect(throws: UMPRefusal.reservedStatus(mt: .utility, status: 0x5)) {
+            try UMPUtilityMessage(decoding: both)
+        }
+    }
+
+    @Test func utilityRefusesReservedGroupNibble() throws {
+        // MT 0x0 is groupless in UMP 1.1; a UMP 1.0 style group is refused, not ignored.
+        for (word, _) in Self.utilityGoldens {
+            for group in UInt32(1)...15 {
+                let packet = try UMPPacket(words: [word | group << 24])
+                let status = UInt8((word >> 20) & 0x0F)
+                #expect(throws: UMPRefusal.reservedBitsSet(mt: .utility, status: status), "\(word) g\(group)") {
+                    try UMPUtilityMessage(decoding: packet)
+                }
+            }
+        }
+    }
+
+    @Test func utilityRefusesReservedDataBits() throws {
+        for status in UInt32(0x1)...0x3 {
+            for bit in UInt32(16)...19 {
+                let packet = try UMPPacket(words: [status << 20 | 1 << bit | 0x1F40])
+                #expect(throws: UMPRefusal.reservedBitsSet(mt: .utility, status: UInt8(status)), "\(status) \(bit)") {
+                    try UMPUtilityMessage(decoding: packet)
+                }
+            }
+        }
+        for bit in UInt32(0)...19 {
+            let packet = try UMPPacket(words: [1 << bit])
+            #expect(throws: UMPRefusal.reservedBitsSet(mt: .utility, status: 0), "NOOP bit \(bit)") {
+                try UMPUtilityMessage(decoding: packet)
+            }
+        }
+    }
+
+    @Test func utilityEncodeRefusesDeltaClockstampAboveTwentyBits() throws {
+        #expect(UMPUtilityMessage.maximumDeltaClockstampTicks == 0xF_FFFF)
+        #expect(try UMPUtilityMessage.deltaClockstamp(ticks: 0xF_FFFF).packet().words == [0x004F_FFFF])
+        for ticks: UInt32 in [0x10_0000, 0xFFFF_FFFF] {
+            #expect(throws: UMPRefusal.valueOutOfRange(field: .twentyBit, value: Int(ticks))) {
+                try UMPUtilityMessage.deltaClockstamp(ticks: ticks).packet()
+            }
+        }
+    }
+
+    @Test func utilityPacketIsExactlyOneWord() {
+        // `UMPPacket` cannot carry a multi-word MT 0x0 packet, so no decoder ever sees one.
+        #expect(throws: UMPRefusal.wrongWordCount(mt: .utility, have: 2, need: 1)) {
+            try UMPPacket(words: [0x0020_1F40, 0])
+        }
+    }
+}
