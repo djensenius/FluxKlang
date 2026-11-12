@@ -17,8 +17,9 @@
 //  to `decide`. The caller must submit every emitted trigger against that
 //  same snapshot, with no source-generation change in between; otherwise the
 //  scheduler, which admits triggers one at a time, could still admit part of
-//  the set. Atomic batch admission in `TriggerScheduler` is a tracked
-//  follow-up owned by the scheduler and integration, not this slice.
+//  the set. `ActionSetSubmitter.fire` (#107 A2) does that: it decides and
+//  submits against one snapshot and admits every member's trigger or none.
+//  A `.dropped` result and a thrown refusal both admit none.
 //
 
 import Foundation
@@ -61,8 +62,9 @@ enum ActionSetTriggerBuilder {
     /// it is dropped whole, each member reporting its own state, reason and stale requirements.
     ///
     /// The guarantee holds for this one `ledger` snapshot only: submit every emitted trigger against
-    /// the same snapshot, with no source-generation change in between. Atomic batch admission in
-    /// `TriggerScheduler` is a follow-up owned by the scheduler and integration, not this slice.
+    /// the same snapshot, with no source-generation change in between. `ActionSetSubmitter.fire` (#107 A2)
+    /// decides and submits against one snapshot and admits every member's trigger or none: a `.dropped`
+    /// result and a thrown refusal both admit none.
     static func decide(_ resolved: ResolvedActionSet, request: ActionSetFireRequest,
                        readiness: ActionReadiness, ledger: GenerationLedger)
         throws(ActionSetRefusal) -> ActionSetFireDecision {

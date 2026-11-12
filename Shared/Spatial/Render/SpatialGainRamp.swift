@@ -20,7 +20,8 @@ import Foundation
 /// columns (`speakerIDs`). A layout reorder or membership change, even at the
 /// same speaker count, is refused with `.columnMismatch` rather than ramping one
 /// speaker's gain toward another's (an unintended pan); it needs a fresh plan
-/// (a jump). An ID-aligned ramp across layout changes is an M2 follow-up.
+/// (a jump). `SpatialPlanTransition` (#115 SM2) ramps across layout changes by ID for the offline mixer;
+/// this type still refuses them.
 ///
 /// Pure value math at control rate: not for the audio thread (building plans
 /// allocates). Both plans come only from `SpatialRenderer`, whose plans always

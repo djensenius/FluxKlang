@@ -115,8 +115,9 @@ renormalization, then the trim.
   applied generation + 1 and has no effect until `promote` swaps it in whole.
 - **Ramps:** `SpatialGainRamp` interpolates linearly between two plans over 0–48,000 frames. Both plans need
   identical row sources and identical ordered speaker IDs; a layout reorder or membership change is refused
-  (`columnMismatch`) and needs a fresh plan (a jump). ID-aligned ramps are an M2 follow-up. Frames before 0
-  give the start plan; frames from the duration on (so any frame ≥ 0 of a 0-frame ramp) give the end plan,
+  (`columnMismatch`) and needs a fresh plan (a jump). The offline mixer's `SpatialPlanTransition` (#115 SM2)
+  ramps across such changes by ID instead. Frames before 0 give the start plan; frames from the duration on
+  (so any frame ≥ 0 of a 0-frame ramp) give the end plan,
   and no frame yields NaN. Linear amplitude dips in power mid-ramp (to about −3 dB between disjoint speakers)
   and never rises above the endpoints.
 - **Silence:** any refusal is typed (`SpatialRenderError`), and `planOrSilence` returns all-zero gains of the
