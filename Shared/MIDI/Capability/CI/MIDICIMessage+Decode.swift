@@ -36,7 +36,8 @@ extension MIDICIMessage {
     ///     because step 2 runs first);
     ///  4. fewer than 5 bytes: `truncated(5)`;
     ///  5. sub-id 2 (byte 3) not 0x70, 0x71, 0x7D, 0x7E or 0x7F: `unknownSubID` (this includes valid MIDI-CI
-    ///     sub-ids that no decoder here handles, such as the property data messages 0x34 to 0x3F; the profile
+    ///     sub-ids that no decoder here handles, such as 0x28, 0x29 and 0x2F; the Property Exchange data messages 0x34
+    ///     to 0x39 and 0x3F are decoded by `MIDICIPropertyDataMessage.decode(payload:limits:)`; the profile
     ///     messages 0x20 to 0x27 (Profile Inquiry and its Reply, Set Profile On and Off, and the four profile
     ///     reports) are decoded by `MIDICIProfileMessage.decode(payload:limits:)` instead, the Property Exchange
     ///     Capabilities Inquiry 0x30 and Reply 0x31 by `MIDICIPropertyCapabilityMessage.decode(payload:limits:)`, the

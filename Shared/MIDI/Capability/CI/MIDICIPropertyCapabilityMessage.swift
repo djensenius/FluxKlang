@@ -47,7 +47,8 @@ struct MIDICIPropertyCapabilities: Equatable, Hashable, Sendable {
 /// MIDI-CI Inquiry: Property Exchange Capabilities (sub-id 2 0x30) and Reply to Property Exchange Capabilities
 /// (0x31), kept apart from `MIDICIMessage` and `MIDICIProfileMessage` (whose decoders still refuse 0x30 and 0x31
 /// with `unknownSubID`). Only this handshake is decoded: Get and Set Property Data, subscriptions and notifications
-/// (0x34 to 0x3F) are refused here with `unknownSubID` and no property payload is read.
+/// (0x34 to 0x39 and 0x3F) are refused here with `unknownSubID` and no property payload is read;
+/// `MIDICIPropertyDataMessage` decodes them.
 ///
 /// Layout of the payload as `MIDI1Event.sysEx` delivers it (F0 and F7 excluded). The common 13-byte header is
 /// `7E, device id, 0D, sub-id 2, format, source MUID (4), destination MUID (4)`, MUIDs 7 bits per byte, least
@@ -109,7 +110,8 @@ enum MIDICIPropertyCapabilityMessage: Equatable, Hashable, Sendable {
     ///  3. the first byte from offset 1 on that is 0x80 or more: `dataByteHigh(offset)` (this covers the device id,
     ///     the request count and both version bytes);
     ///  4. fewer than 5 bytes: `truncated(5)`;
-    ///  5. sub-id 2 (byte 3) not 0x30 or 0x31: `unknownSubID` (this includes 0x34 to 0x3F);
+    ///  5. sub-id 2 (byte 3) not 0x30 or 0x31: `unknownSubID` (this includes 0x34 to 0x3F, which
+    ///     `MIDICIPropertyDataMessage` decodes except for the reserved 0x3A to 0x3E);
     ///  6. format (byte 4) not 1 or 2: `unsupportedFormat`;
     ///  7. fewer than 13 bytes: `truncated(13)`;
     ///  8. the length: exactly 14 bytes in CI 1.1 and 16 in CI 1.2; fewer is `truncated(expected)`, more is
