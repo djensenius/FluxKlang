@@ -48,10 +48,10 @@ extension CaptureSMFExportTests {
         #expect(export.groupsFlattened == 0)
     }
 
-    @Test func aDroppedMIDI2CaptureInAnotherGroupStillCountsAsFlattened() throws {
+    @Test func aDroppedDataCaptureInAnotherGroupStillCountsAsFlattened() throws {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
         try feed.add(Fixture.streamA, Fixture.controlChange(1, 7, 1), tick: 0)
-        try feed.add(Fixture.streamB, Self.inGroup(3, Fixture.midi2NoteOn), tick: 1, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.streamB, Self.inGroup(3, Fixture.data128), tick: 1, endpoint: .midi2, port: .midi2)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
         #expect(export.droppedUMPOnly == 1)
         #expect(export.clip.items.count == 1)

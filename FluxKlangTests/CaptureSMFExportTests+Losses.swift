@@ -12,7 +12,7 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamA, Fixture.utility, tick: 10)
         try feed.add(Fixture.streamA, Fixture.sysEx, tick: 20)
         try feed.add(Fixture.streamA, Fixture.realTime, tick: 30)
-        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 40, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.streamB, Fixture.data128, tick: 40, endpoint: .midi2, port: .midi2)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 50)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
         #expect(export.droppedUMPOnly == 3)
@@ -26,7 +26,7 @@ extension CaptureSMFExportTests {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
         try feed.add(Fixture.streamA, Fixture.utility, tick: 10)
         try feed.add(Fixture.streamA, Fixture.orphanSysEx, tick: 20)
-        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 30, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.streamB, Fixture.data128, tick: 30, endpoint: .midi2, port: .midi2)
         #expect(Fixture.refusal(feed.log, [Fixture.streamA, Fixture.streamB]) == .nothingExportable(dropped: 3))
         #expect(Fixture.refusal(feed.log, [Fixture.streamA]) == .nothingExportable(dropped: 2))
     }
@@ -63,10 +63,10 @@ extension CaptureSMFExportTests {
         let streams = [Fixture.streamA, Fixture.streamB, Fixture.streamC, Fixture.other]
         var feed = try Fixture.Feed(streams)
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
-        // An OS-upscaled MIDI 1.0 note (MT 0x4 from a midi1 endpoint), a genuine MIDI 2.0 note, an orphaned SysEx 7
-        // packet and a utility message: section 9.3 counts the first as lossless once written, but none is written.
-        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 10, endpoint: .midi1, port: .midi2)
-        try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 20, endpoint: .midi2, port: .midi2)
+        // Two 128-bit data packets (MT 0x5; one from a midi1 endpoint, one from a midi2 endpoint), an orphaned SysEx 7
+        // packet and a utility message: the file holds none of them, and the classifier counts each one.
+        try feed.add(Fixture.streamB, Fixture.data128, tick: 10, endpoint: .midi1, port: .midi2)
+        try feed.add(Fixture.streamC, Fixture.data128, tick: 20, endpoint: .midi2, port: .midi2)
         try feed.add(Fixture.other, Fixture.orphanSysEx, tick: 30)
         try feed.add(Fixture.other, Fixture.utility, tick: 40)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 50)
@@ -82,7 +82,7 @@ extension CaptureSMFExportTests {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB, Fixture.streamC])
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
         try feed.add(Fixture.streamB, Fixture.utility, tick: 5, endpoint: .unknown)
-        try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 6, endpoint: .unknown, port: .midi2)
+        try feed.add(Fixture.streamC, Fixture.data128, tick: 6, endpoint: .unknown, port: .midi2)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB, Fixture.streamC])
         #expect(export.droppedUMPOnly == 2)
         #expect(export.smf().losses.losses == [.umpOnlyDropped: 2])
@@ -161,7 +161,7 @@ extension CaptureSMFExportTests {
         #expect(exactRecord.musicalTicks == 16)
         #expect(exactRecord.musicalRoundTripFrame == 25)
         try feed.add(Fixture.streamA, Fixture.utility, tick: 1)
-        try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 7, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.streamB, Fixture.data128, tick: 7, endpoint: .midi2, port: .midi2)
         let onlyA = try Fixture.export(feed.log, [Fixture.streamA])
         let both = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
         #expect(onlyA.droppedUMPOnly == 1 && both.droppedUMPOnly == 2)
@@ -438,7 +438,7 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamB, Fixture.noteOn(1, 62, 64), tick: 10)
         try feed.add(Fixture.streamB, Fixture.noteOff(1, 62, 64), tick: 20)
         try feed.add(Fixture.streamB, Fixture.utility, tick: 21)
-        try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 22, endpoint: .midi2, port: .midi2)
+        try feed.add(Fixture.streamC, Fixture.data128, tick: 22, endpoint: .midi2, port: .midi2)
         let earlier = try Fixture.export(feed.log, [Fixture.streamA])
         #expect(earlier.passesOverlaid == 0 && earlier.smf().losses.lossless)
         let later = try Fixture.export(feed.log, [Fixture.streamB])
