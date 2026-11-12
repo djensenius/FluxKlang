@@ -6,7 +6,8 @@
 //  outputs of a graph grouped by node, with signal and channel count, and each observed shortcut listed as
 //  "observed, not routable" and disabled. A pure value: it reads only the graph's nodes (no edge, draft or
 //  presence), validates nothing and classifies no destination; `WiringDestinationList.make(from:in:)` does that for
-//  the address a row names. Nothing calls it yet.
+//  the address a row names. `PerformanceWiringListView` draws it (#101 ADP1) with the list
+//  `PerformanceProjectSession.sourceList()` makes.
 //
 
 /// One output port of a routable node. Built only by `WiringSourceList.make(in:)`.
