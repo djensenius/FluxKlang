@@ -6,6 +6,9 @@ import Testing
 #endif
 
 /// Fixtures for the control input gate suites. Every session is built through `LearnSession`'s own transitions.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct ControlInputGateTests {
     static let deviceA = DeviceID(validated: "dev.ctl-a")
     static let deviceB = DeviceID(validated: "dev.ctl-b")
