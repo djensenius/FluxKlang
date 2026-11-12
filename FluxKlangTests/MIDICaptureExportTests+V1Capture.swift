@@ -142,25 +142,7 @@ extension MIDICaptureExportTests {
     /// Example 03 through seq 22: a capture before the loop wrap delivered after it, one after it, and one after the
     /// locate on transport 2.
     @Test func midiCaptureV1RecordsEncodeExample03Exactly() throws {
-        let keysIn = StreamID(validated: "str.keys-in")
-        var log = try Fixture.log([keysIn])
-        let first = try Fixture.anchor(1, frame: 0, host: 2_400_000_000, transport: 1)
-        try log.observe(anchor: first)
-        let wrap = ClockAnchor(
-            sample: SampleStamp(clock: Fixture.clock, generation: .initial, frame: 192_000),
-            host: HostStamp(ticks: 2_496_000_000),
-            musical: MusicalStamp(transport: .initial, musicalMap: .initial, ticks: 0, loopIteration: 1))
-        try log.observe(anchor: wrap)
-        func deliver(_ word: UInt32, host: UInt64, through anchor: ClockAnchor) throws {
-            _ = try log.capture([word], stream: keysIn, host: HostStamp(ticks: host), endpoint: .midi1, port: .midi1,
-                                musicalMap: Fixture.musicalMap(anchor, microsPerQuarter: 500_000), current: .initial)
-        }
-        try deliver(0x2090_3C64, host: 2_495_500_000, through: first)
-        try deliver(0x2080_3C00, host: 2_496_500_000, through: wrap)
-        try log.observe(Fixture.discontinuity(.locate, frame: 210_000, host: 2_505_000_000), stream: nil)
-        try log.observe(anchor: Fixture.anchor(1, frame: 210_000, host: 2_505_000_000, transport: 2, ticks: 61_440))
-        try Fixture.capture(&log, keysIn, [0x2090_3E64], host: 2_505_500_000, microsPerQuarter: 500_000)
-        try expectV1Captures(log, Self.example03V1Captures, notes: [
+        try expectV1Captures(Fixture.example03(), Self.example03V1Captures, notes: [
             9: "Event before the wrap, delivered after it: it resolves through iteration 0's anchor."
         ])
     }
