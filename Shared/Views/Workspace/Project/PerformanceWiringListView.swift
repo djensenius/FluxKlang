@@ -99,25 +99,46 @@ struct PerformanceWiringListView: View {
         if let source = session.liveSource(pendingSource) {
             destinationPicker(source)
         } else {
-            Menu(PerformanceWiringText.addConnection) {
-                ForEach(outputPorts, id: \.self) { address in
-                    Button(PerformanceWiringText.portTitle(address, in: graph)) { pendingSource = address }
+            switch sourceList() {
+            case .success(let list):
+                Menu(PerformanceWiringText.addConnection) {
+                    ForEach(list.sections) { section in sourceSection(section) }
                 }
+                .disabled(list.rows.isEmpty)
+                .fixedSize()
+                if let empty = list.emptyText { Text(empty).foregroundStyle(.secondary) }
+            case .failure(let refusal):
+                Text(PerformanceWiringText.sourcesUnavailable(refusal))
             }
-            .disabled(outputPorts.isEmpty)
-            .fixedSize()
         }
     }
 
-    private var outputPorts: [PortAddress] {
-        graph.nodes.filter(\.kind.isRoutable).flatMap { node in
-            node.ports.filter { $0.direction == .output }.map { PortAddress(node: node.id, port: $0.id) }
+    private func sourceList() -> Result<WiringSourceList, WiringSourceListRefusal> {
+        do { return .success(try session.sourceList()) } catch { return .failure(error) }
+    }
+
+    /// The model's heading over one button per output; an observed shortcut is one disabled entry.
+    @ViewBuilder
+    private func sourceSection(_ section: WiringSourceSection) -> some View {
+        if section.isEnabled {
+            Section(section.heading) {
+                ForEach(section.rows) { row in
+                    Button(PerformanceWiringText.sourceTitle(row)) { pendingSource = row.address }
+                        .accessibilityLabel(row.accessibilityLabel)
+                }
+            }
+        } else {
+            Button(section.heading) {}
+                .disabled(true)
+                .accessibilityLabel(section.accessibilityLabel)
         }
     }
 
     @ViewBuilder
     private func destinationPicker(_ source: PortAddress) -> some View {
-        Text("Connect \(PerformanceWiringText.portTitle(source, in: graph)) to:").font(.headline)
+        let from = session.fromText(source) ?? PerformanceWiringText.portTitle(source, in: graph)
+        Text(PerformanceWiringText.fromHeader(from)).font(.headline)
+        Text(PerformanceWiringText.toHeading).font(.subheadline.bold()).accessibilityAddTraits(.isHeader)
         switch destinations(source) {
         case .success(let list):
             ForEach(PerformanceWiringText.listedDestinations(list), id: \.to) { candidate in

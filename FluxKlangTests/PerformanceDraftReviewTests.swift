@@ -151,4 +151,78 @@ struct PerformanceDraftReviewTests {
         #expect(removable == [WiringConnectionBadge.none, .draft])
         #expect(!PerformanceWiringText.isRemovable(.willRemove))
     }
+
+    // MARK: Add Connection "From" list (#101 ADP1)
+
+    @Test func starterGraphListsOneSourceSection() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let list = try session.sourceList()
+        let section = try #require(list.sections.first)
+        #expect(list.sections.count == 1 && section.node == session.stereoEdge.from.node)
+        #expect(section.heading == "Source (2ch)" && section.isEnabled && section.stateText == nil)
+        let row = try #require(section.rows.first)
+        #expect(section.rows.count == 1 && list.rows == [row])
+        #expect(row.address == session.stereoEdge.from && row.title == "audio" && row.signalText == "2ch")
+        #expect(row.fromText == "Source (2ch audio)")
+        #expect(list.emptyText == nil)
+    }
+
+    @Test func sourceListFollowsTheDraft() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let sourceRole = try #require(session.project.roles.first { $0.direction == .input })
+        let node = try session.addRoleNode(role: sourceRole.id, id: NodeID(uuid: UUID()), label: "Source 2")
+        let added = try session.sourceList()
+        #expect(added.sections.map(\.title) == ["Source", "Source 2"])
+        #expect(added.section(for: node.id)?.heading == "Source 2 (2ch)")
+        try session.undo()
+        #expect(try session.sourceList().sections.count == 1)
+        try session.removeNode(session.stereoEdge.from.node)
+        let emptied = try session.sourceList()
+        #expect(emptied.sections.isEmpty && emptied.rows.isEmpty)
+        #expect(emptied.emptyText == "No outputs")
+    }
+
+    @Test func listedSourcesAreLiveAndOfferDestinationsUntilTheirNodeIsUndone() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let starter = try #require(try session.sourceList().rows.first)
+        #expect(session.liveSource(starter.address) == starter.address)
+        #expect(session.fromText(starter.address) == "Source (2ch audio)")
+        #expect(try session.destinations(from: starter.address).group(.existing)?.candidates.count == 1)
+        let sourceRole = try #require(session.project.roles.first { $0.direction == .input })
+        let node = try session.addRoleNode(role: sourceRole.id, id: NodeID(uuid: UUID()), label: "Source 2")
+        let added = try #require(try session.sourceList().section(for: node.id)?.rows.first)
+        #expect(session.liveSource(added.address) == added.address)
+        #expect(session.fromText(added.address) == "Source 2 (2ch audio)")
+        #expect(try session.destinations(from: added.address).group(.valid)?.candidates.count == 1)
+        try session.undo()
+        #expect(session.fromText(added.address) == nil)
+        #expect(session.liveSource(added.address) == nil)
+        #expect(session.fromText(starter.address) == "Source (2ch audio)")
+    }
+
+    @Test func anObservedShortcutIsListedDisabledWithNoRows() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let shortcut = GraphNode(
+            id: NodeID(validated: "node.console7"), kind: .observedShortcut, label: "Console channel 7"
+        )
+        try session.apply([.addNode(shortcut)])
+        let list = try session.sourceList()
+        let section = try #require(list.sections.last)
+        #expect(list.sections.count == 2 && section.node == shortcut.id)
+        #expect(!section.isEnabled && section.rows.isEmpty)
+        #expect(section.stateText == "observed, not routable")
+        #expect(section.heading == "Console channel 7 (observed, not routable)")
+        #expect(list.rows.map(\.address) == [session.stereoEdge.from] && list.emptyText == nil)
+    }
+
+    @Test func sourceTextHelpersBuildTheMenuRowTheHeaderAndTheRefusalLine() throws {
+        let session = try PerformanceProjectSession(window: WindowID(uuid: UUID()))
+        let row = try #require(try session.sourceList().rows.first)
+        #expect(PerformanceWiringText.sourceTitle(row) == "audio (2ch)")
+        #expect(PerformanceWiringText.fromHeader("Source (2ch audio)") == "From: Source (2ch audio)")
+        let refusal = WiringSourceListRefusal.duplicateNode(NodeID(validated: "node.a"))
+        let line = PerformanceWiringText.sourcesUnavailable(refusal)
+        #expect(line == "Sources unavailable: \(PerformanceWiringText.failure(refusal))")
+        #expect(line.hasPrefix("Sources unavailable: ") && line.contains("duplicateNode"))
+    }
 }

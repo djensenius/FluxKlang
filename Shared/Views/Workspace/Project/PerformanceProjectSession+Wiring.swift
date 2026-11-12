@@ -110,6 +110,19 @@ extension PerformanceProjectSession {
         return try WiringConnectionList.make(active: base, review: snapshot.diff, presence: presence)
     }
 
+    /// The draft's Add Connection "From" list (#101): the outputs of the draft graph (the candidate, the graph
+    /// `liveSource` checks) grouped by node. Refused only when the model refuses; nothing is listed, clamped or
+    /// guessed then. It needs no active graph, presence or review.
+    func sourceList() throws(WiringSourceListRefusal) -> WiringSourceList {
+        try WiringSourceList.make(in: snapshot.candidate)
+    }
+
+    /// The destination step's header text for the picked `source`, or nil when the list is refused or has no
+    /// such row.
+    func fromText(_ source: PortAddress) -> String? {
+        (try? sourceList())?.row(for: source)?.fromText
+    }
+
     /// Node presence for a session with no rig, routes or engine: no role node has a route on this host, so each
     /// is `.unmapped`, an expected state and not an error (README "Shared state words"). It never says `.ready`,
     /// `.missing` or `.lost`, which need a rig or plugin status this session lacks. A node that is not a role node

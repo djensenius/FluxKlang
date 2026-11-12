@@ -5,7 +5,7 @@
 //  The fixed English of the Add Connection "From" list (#101 WSRC1; phone-compact-routing.md "Three narrow
 //  screens" and "Add Connection flow", wiring.md "observed shortcut"): the observed-shortcut text, the empty
 //  text, headings, the next screen's `From:` text and the accessibility labels. Pure string builders: no
-//  localisation, truncation or escaping. Nothing calls it yet.
+//  localisation, truncation or escaping. `PerformanceWiringListView` shows them (#101 ADP1).
 //
 
 /// Text builders for `WiringSourceList`.
