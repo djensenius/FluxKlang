@@ -104,14 +104,58 @@ extension CaptureSMFExportTests {
         #expect(Fixture.pairingRefusal(events, length: top) == .ticksOutOfRange(ticks: top, lengthTicks: top))
     }
 
-    @Test func aSecondNoteOnWhileSoundingIsRefusedWithItsExactPayload() {
+    @Test func aSecondNoteOnAtTheTickTheNoteBeganIsRefusedWithItsExactPayload() {
         let events = [Fixture.timed(300, .noteOn(channel: 5, note: 61, velocity: 70)),
-                      Fixture.timed(700, .noteOn(channel: 5, note: 61, velocity: 71))]
+                      Fixture.timed(300, .noteOn(channel: 5, note: 61, velocity: 71))]
         #expect(Fixture.pairingRefusal(events, length: 1_000)
-            == .noteOnWhileSounding(channel: 5, note: 61, ticks: 700, sinceTicks: 300))
+            == .noteOnWhileSounding(channel: 5, note: 61, ticks: 300, sinceTicks: 300))
         let released = events + [Fixture.timed(800, .noteOff(channel: 5, note: 61, velocity: 0))]
         #expect(Fixture.pairingRefusal(released, length: 1_000)
-            == .noteOnWhileSounding(channel: 5, note: 61, ticks: 700, sinceTicks: 300))
+            == .noteOnWhileSounding(channel: 5, note: 61, ticks: 300, sinceTicks: 300))
+    }
+
+    @Test func aNoteOnAtALaterTickRetriggersTheSoundingNote() throws {
+        let events = [Fixture.timed(300, .noteOn(channel: 5, note: 70, velocity: 70)),
+                      Fixture.timed(700, .noteOn(channel: 5, note: 70, velocity: 71)),
+                      Fixture.timed(800, .noteOff(channel: 5, note: 70, velocity: 9))]
+        let pairing = try CaptureNotePairing.pair(events, lengthTicks: 1_000)
+        #expect(pairing.items == [
+            .note(MIDIClipNote(channel: 5, note: 70, velocity: 70, releaseVelocity: 64, startTicks: 300,
+                               endTicks: 700)),
+            .note(MIDIClipNote(channel: 5, note: 70, velocity: 71, releaseVelocity: 9, startTicks: 700,
+                               endTicks: 800))])
+        #expect(pairing.retriggeredNotes == 1)
+        #expect(pairing.unpairedOffs == 0 && pairing.openNotesClosed == 0 && pairing.widenedNotes == 0)
+    }
+
+    @Test func aChainOfNoteOnsRetriggersEachTimeAndTheLastNoteStaysOpen() throws {
+        let events = [Fixture.timed(100, .noteOn(channel: 1, note: 60, velocity: 10)),
+                      Fixture.timed(200, .noteOn(channel: 1, note: 60, velocity: 20)),
+                      Fixture.timed(300, .noteOn(channel: 1, note: 60, velocity: 30))]
+        let pairing = try CaptureNotePairing.pair(events, lengthTicks: 1_000)
+        #expect(pairing.items == [
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 10, releaseVelocity: 64, startTicks: 100,
+                               endTicks: 200)),
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 20, releaseVelocity: 64, startTicks: 200,
+                               endTicks: 300)),
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 30, releaseVelocity: 64, startTicks: 300,
+                               endTicks: 1_000))])
+        #expect(pairing.retriggeredNotes == 2 && pairing.openNotesClosed == 1)
+    }
+
+    @Test func aRetriggerLeavesAnotherOpenKeyAlone() throws {
+        let events = [Fixture.timed(0, .noteOn(channel: 1, note: 60, velocity: 10)),
+                      Fixture.timed(10, .noteOn(channel: 1, note: 61, velocity: 11)),
+                      Fixture.timed(20, .noteOn(channel: 1, note: 60, velocity: 12)),
+                      Fixture.timed(30, .noteOff(channel: 1, note: 61, velocity: 5)),
+                      Fixture.timed(40, .noteOff(channel: 1, note: 60, velocity: 6))]
+        let pairing = try CaptureNotePairing.pair(events, lengthTicks: 100)
+        #expect(pairing.items == [
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 10, releaseVelocity: 64, startTicks: 0, endTicks: 20)),
+            .note(MIDIClipNote(channel: 1, note: 61, velocity: 11, releaseVelocity: 5, startTicks: 10, endTicks: 30)),
+            .note(MIDIClipNote(channel: 1, note: 60, velocity: 12, releaseVelocity: 6, startTicks: 20,
+                               endTicks: 40))])
+        #expect(pairing.retriggeredNotes == 1 && pairing.openNotesClosed == 0 && pairing.unpairedOffs == 0)
     }
 
     @Test func pairingTickBoundsAreZeroThroughTheLengthAndRefuseOneBeyondEither() throws {
@@ -149,9 +193,9 @@ extension CaptureSMFExportTests {
         let change = MIDI1Semantic.controlChange(channel: 1, controller: 7, value: 1)
         var events = (0..<MIDIClip.maximumItems).map { Fixture.timed(Int64($0), change) }
         events.append(Fixture.timed(20_000, .noteOn(channel: 9, note: 12, velocity: 5)))
-        events.append(Fixture.timed(20_001, .noteOn(channel: 9, note: 12, velocity: 6)))
+        events.append(Fixture.timed(20_000, .noteOn(channel: 9, note: 12, velocity: 6)))
         #expect(Fixture.pairingRefusal(events, length: 30_000)
-            == .noteOnWhileSounding(channel: 9, note: 12, ticks: 20_001, sinceTicks: 20_000))
+            == .noteOnWhileSounding(channel: 9, note: 12, ticks: 20_000, sinceTicks: 20_000))
     }
 
     @Test func ticksOutOfRangeIsReportedBeforeANoteOnWhileSounding() {

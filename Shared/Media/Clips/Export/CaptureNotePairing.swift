@@ -3,8 +3,9 @@
 //  FluxKlang
 //
 //  Pairs the MIDI 1 channel-voice messages of a capture into clip items (#112 CL5): a Note On opens a note on its
-//  channel and note, a Note Off (or a Note On of velocity 0) closes it. `MIDIClip` refuses Note On and Note Off as
-//  events, so every sounding note must become a `MIDIClipNote` span.
+//  channel and note, a Note Off (or a Note On of velocity 0) closes it, and a later Note On of a sounding note closes
+//  it and opens a new one (its Off was lost). `MIDIClip` refuses Note On and Note Off as events, so every sounding
+//  note must become a `MIDIClipNote` span.
 //
 
 /// One MIDI 1 channel-voice message at a clip tick.
@@ -27,12 +28,17 @@ struct CaptureNotePairing: Equatable, Sendable {
     let openNotesClosed: Int
     /// Zero-length notes (End == Start), widened by one tick.
     let widenedNotes: Int
+    /// Notes closed by a later Note On of the same channel and note (its Off was lost), at that Note On's tick with
+    /// release velocity `defaultReleaseVelocity`. A repair count, not a loss.
+    let retriggeredNotes: Int
 
-    private init(items: [MIDIClipItem], unpairedOffs: Int, openNotesClosed: Int, widenedNotes: Int) {
+    private init(items: [MIDIClipItem], unpairedOffs: Int, openNotesClosed: Int, widenedNotes: Int,
+                 retriggeredNotes: Int) {
         self.items = items
         self.unpairedOffs = unpairedOffs
         self.openNotesClosed = openNotesClosed
         self.widenedNotes = widenedNotes
+        self.retriggeredNotes = retriggeredNotes
     }
 
     private struct Open {
@@ -42,8 +48,10 @@ struct CaptureNotePairing: Equatable, Sendable {
 
     /// Pairs `events`, which must be in nondecreasing tick order (a later Note Off before its Note On is left to
     /// the clip to refuse), per channel and note. Work is linear in `events.count`: one pass over the ticks, one
-    /// pairing pass, and one pass over the notes still open. Refuses any tick outside `0...lengthTicks`, then a
-    /// Note On on a note that is sounding, then more than `MIDIClip.maximumItems` items. `otherItems` is how many
+    /// pairing pass, and one pass over the notes still open. A Note On on a note that is sounding since an earlier
+    /// tick retriggers: the open note closes at the new tick (release velocity `defaultReleaseVelocity`), is counted
+    /// in `retriggeredNotes`, and the new note opens. Refuses any tick outside `0...lengthTicks`, then a Note On at
+    /// the very tick the sounding note began, then more than `MIDIClip.maximumItems` items. `otherItems` is how many
     /// items outside `events` share that cap (the SysEx events of an export): they count toward the limit and are
     /// included in the refusal's `count`, even when the paired items alone exceed it. `lengthTicks` must not be
     /// negative: `0...lengthTicks` traps on a negative bound (`make` guarantees at least 1).
@@ -57,13 +65,20 @@ struct CaptureNotePairing: Equatable, Sendable {
         var open: [UInt16: Open] = [:]
         var unpaired = 0
         var widened = 0
+        var retriggered = 0
         for event in events {
             switch event.message {
             case let .noteOn(channel, note, velocity) where velocity > 0:
                 let key = key(channel, note)
                 if let sounding = open[key] {
-                    throw .noteOnWhileSounding(channel: channel, note: note, ticks: event.ticks,
-                                               sinceTicks: sounding.note.startTicks)
+                    guard sounding.note.startTicks < event.ticks else {
+                        throw .noteOnWhileSounding(channel: channel, note: note, ticks: event.ticks,
+                                                   sinceTicks: sounding.note.startTicks)
+                    }
+                    items[sounding.index] = .note(try ended(sounding.note, at: event.ticks,
+                                                            release: defaultReleaseVelocity, widened: &widened,
+                                                            lengthTicks: lengthTicks))
+                    retriggered += 1
                 }
                 let span = MIDIClipNote(channel: channel, note: note, velocity: velocity,
                                         releaseVelocity: defaultReleaseVelocity, startTicks: event.ticks,
@@ -90,7 +105,7 @@ struct CaptureNotePairing: Equatable, Sendable {
             throw .tooManyItems(count: items.count + otherItems, limit: MIDIClip.maximumItems)
         }
         return CaptureNotePairing(items: items, unpairedOffs: unpaired, openNotesClosed: leftOpen.count,
-                                  widenedNotes: widened)
+                                  widenedNotes: widened, retriggeredNotes: retriggered)
     }
 
     // The close step threads the pairing's running state; the parameters are kept flat on purpose.

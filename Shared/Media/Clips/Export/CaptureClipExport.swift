@@ -31,6 +31,9 @@ struct CaptureClipExport: Equatable, Sendable {
     private(set) var openNotesClosed: Int
     /// Zero-length notes, widened by one tick.
     private(set) var widenedNotes: Int
+    /// Notes closed by a later Note On of the same channel and note, release velocity 64. A pairing repair count
+    /// like the three above: it is not a loss and is outside `smf().losses` and §9.3.
+    private(set) var retriggeredNotes: Int
     /// Selected captures outside the lowest group when the selection spans more than one group. Counted over every
     /// selected capture, those dropped as UMP-only included, and only for types that carry a group; pairing stays
     /// keyed by (channel, note), so an off of one group can close a note of another.
@@ -51,6 +54,7 @@ struct CaptureClipExport: Equatable, Sendable {
         unpairedOffs = pairing.unpairedOffs
         openNotesClosed = pairing.openNotesClosed
         widenedNotes = pairing.widenedNotes
+        retriggeredNotes = pairing.retriggeredNotes
         self.timingQuantized = timingQuantized
         self.groupsFlattened = groupsFlattened
         self.passesOverlaid = passesOverlaid
@@ -213,8 +217,8 @@ struct CaptureClipExport: Equatable, Sendable {
     /// `passesOverlaid` for the captures of later passes and `timingQuantized` (added to whatever the writer
     /// reported) when capture positions were rounded to ticks. No tempo event is written, so `syntheticTempoMap` is
     /// never reported, and `fidelityUnverified` is not either: it qualifies converted MT 0x4 events and none are
-    /// converted. Unpaired Note Offs, closed open notes and widened notes are counted on this value, not as §9.3
-    /// categories.
+    /// converted. Unpaired Note Offs, closed open notes, widened notes and retriggered notes are counted on this
+    /// value, not as §9.3 categories.
     func smf() -> SMFWriteResult {
         let written = StandardMIDIFile.write(clip, sysEx: sysEx)
         var losses = written.losses.losses

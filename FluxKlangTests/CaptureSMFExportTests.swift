@@ -45,7 +45,7 @@ struct CaptureSMFExportTests {
         #expect(read.clip == export.clip)
         #expect(read.clip.items == expected)
         #expect(export.droppedUMPOnly == 0 && export.unpairedOffs == 0 && export.openNotesClosed == 0)
-        #expect(export.widenedNotes == 0)
+        #expect(export.widenedNotes == 0 && export.retriggeredNotes == 0)
     }
 
     @Test func aNoteKeepsItsCaptureTicksVelocityAndReleaseVelocity() throws {
