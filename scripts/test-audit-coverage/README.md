@@ -94,10 +94,11 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `PatchTransitionTests`, `PatchTransitionBoundsTests`,
 `PatchTransitionLifecycleTests`, `PatchTransitionRepeatedTests`,
 `PatchTransitionSustainTests`, `PeerStatusProjectionTests`,
-`PeerBackpressureTests`, `PeerEndpointPolicyTests` and
-`PeerControlMessageTests`
+`PeerBackpressureTests`, `PeerEndpointPolicyTests`,
+`PeerControlMessageTests`, `PeerSyncTests`, `PeerSyncCommandTests`,
+`PeerReconnectTests` and `PeerReconnectEpochTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those one hundred and nineteen macOS-guarded suites remain
+owners of those one hundred and twenty-three macOS-guarded suites remain
 unadopted.
 Other owners' annotation obligations remain unsatisfied: inventory
 intentionally exits 0 with `enforcementSatisfied: false`, while default
@@ -1363,6 +1364,57 @@ receipts. The runs add no process-identity, argv or bootstrap
 evidence and do not cover the iOS owners; the iOS `FluxKlangTests` rows for
 these suites stay unsatisfied, the remaining #60 gates above still apply and
 #60 remains open.
+
+## Peer sync and reconnect source adoption
+
+`PeerSyncTests`, `PeerSyncCommandTests`, `PeerReconnectTests` and
+`PeerReconnectEpochTests` now use the canonical trait under `#if os(macOS)`
+on their root declarations, without test-body, helper, target-membership or
+registration changes. All four already had a named `@Suite`, so each keeps
+its display name: the trait is added to the `@Suite` in the macOS branch and
+the `#else` branch keeps it unchanged. None has other suite traits. Each is
+a separate root `struct`: `PeerSyncTests` and `PeerReconnectTests` in their
+own files, and `PeerSyncCommandTests` and `PeerReconnectEpochTests` in
+`PeerSyncTests+Commands.swift` and `PeerReconnectTests+Epochs.swift`. The
+longest, `PeerReconnectTests.swift`, grows from 491 to 495 lines, under the
+500-line `file_length` limit. The `PeerSyncFixture` and `PeerReconnectFixture`
+enums are not suites.
+
+The suites drive the `Shared/Peer` sync publisher and receiver, command
+processor and ledger, reconnect state, backoff and connection epoch issuer
+from literals and injected values; the backoff takes its jitter as an
+argument and returns a `Duration` value, and no clock is read. They declare
+no classes, actors or `static var`, and import only Testing. The production
+closure the mirror copied is 135 sources: `Shared/Contracts` (58 files), the
+patch and transition values, the `Shared/Peer` sync, reliability, wire,
+commands, telemetry and trust sources, `PeerSessionNegotiator.swift`, the
+`Shared/MIDI/Performance` and `Shared/MIDI/Protocol/MIDI1` values,
+`Shared/WING/FaderMath.swift` and `ProductionAccessAudit.swift`, which imports
+only `Synchronization`. The only other non-Foundation import is `CryptoKit`
+in `Shared/Peer/Trust/PeerIdentity.swift` (a one-shot SHA-256 over in-memory
+bytes). The closure's `static var` members are computed or protocol
+requirements and its only classes are `ProductionAccessAudit` and the
+stateless `fileprivate final class Identity` token. It has no `async` or
+`await`: the async `PeerFramedChannel.swift` and the endpoint policy sources
+are not needed and were left out.
+
+Other wiring and perform panel suites were reviewed and not adopted. The
+following contain a `#filePath` source scan that reads files through
+`FileManager` or `URL`: `WiringImpactTests`, `WiringInspectorTests`,
+`WiringProblemListTests`, `WiringSelectionTests`, `PerformPanelEditTests`,
+`PerformPanelLayoutTests`, `PerformPanelSurfaceTests`,
+`ControlFeedbackMIDI1Tests` and `ControlLocalDispatchTests`. They stay
+unadopted until the scan is split into its own un-audited suite.
+
+A fresh SwiftPM package (default build system) byte-copied those sources and
+the four suites' test files plus `ProductionAccessScope.swift`. Debug and
+Release (`-c release -Xswiftc -enable-testing`) runs each passed 78 tests in
+four suites with no warnings. They add no process-identity, argv or
+bootstrap evidence and do not cover the iOS owners; the iOS `FluxKlangTests`
+rows for these suites stay unsatisfied, the remaining #60 gates above still
+apply and #60 remains open.
+
+Checker totals are in the pull request.
 
 ## Headless fixtures
 

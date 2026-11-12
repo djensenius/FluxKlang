@@ -52,7 +52,11 @@ private struct Sender {
     }
 }
 
+#if os(macOS)
+@Suite("PeerSyncTests+Commands", .productionAccessAudit)
+#else
 @Suite("PeerSyncTests+Commands")
+#endif
 struct PeerSyncCommandTests {
     @Test func oldEpochsRejectAbsoluteSettersAndSafetyBeforeTheLedger() throws {
         let live = Fixture.session(host: 2, connection: 5)
