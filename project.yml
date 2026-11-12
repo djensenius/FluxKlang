@@ -786,6 +786,9 @@ targets:
       - path: FluxKlangTests/MIDI1ChannelStateTests.swift
       - path: FluxKlangTests/MIDI1ParameterStateTests.swift
       - path: FluxKlangTests/MIDI1PerformanceSnapshotTests.swift
+      - path: FluxKlangTests/MIDI1WireTests.swift
+      - path: FluxKlangTests/MIDI1WireTests+Refusals.swift
+      - path: FluxKlangTests/MIDI1WireTests+RunningStatus.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift
