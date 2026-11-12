@@ -5,9 +5,11 @@
 //  Typed refusals of the preallocated media block pool (#109 IO1,
 //  media-contract.md §8.2). A bounded pool never allocates, truncates, blocks
 //  or silently drops to make an operation succeed: it refuses, visibly. A
-//  refused operation leaves the pool unchanged, with one documented exception:
+//  refused operation leaves the pool unchanged, with two documented exceptions:
 //  a copy refused for its shape on a valid lease adds exactly one to the
-//  `copiesRefused` counter and changes nothing else.
+//  `copiesRefused` counter, and a refused lease adds exactly one to
+//  `leasesRefusedExhausted` (`.poolExhausted`) or `leasesRefusedBusy`
+//  (`.accessInProgress`); each changes nothing else.
 //
 
 /// Why a media block pool could not be built, or an operation on it was refused.
