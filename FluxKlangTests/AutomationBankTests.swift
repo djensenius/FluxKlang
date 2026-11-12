@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Automation bank", .productionAccessAudit)
+#else
 @Suite("Automation bank")
+#endif
 struct AutomationBankTests {
     typealias Fixture = AutomationRenderTests
 

@@ -5,7 +5,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Automation block rendering", .productionAccessAudit)
+#else
 @Suite("Automation block rendering")
+#endif
 struct AutomationRenderTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
