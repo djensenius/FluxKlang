@@ -69,7 +69,7 @@ invalid, never overwritten. These semantics are normative; the field widths belo
 | `TriggerStamp` | `triggerId` (UInt64), `action` slot, `originHost`, `horizonFrame` (Int64), `requires` (bounded array of ≤ 8 `(GenerationKey, UInt64)`), `target` |
 | `Target` | `timeBase` (musical, sample or asap), `gridTicks`, `atTicks` or `atFrame` |
 | `Outcome` | `triggerId`, `result` (UInt8), `reason` (UInt8), `assignedFrame`, `frame`, `startOffsetFrames` (Int64), `musicalMap` revision |
-| `Discontinuity` | `type` (UInt8), `SampleStamp`, `frames` (UInt32, optional), `stream` slot, optional `HostStamp`; `previousFrame` (Int64) on `clockRestart` and `reason` (UInt8) on `captureStopped` only |
+| `Discontinuity` | `type` (UInt8), `SampleStamp`, `frames` (UInt32, optional), `stream` slot, optional `HostStamp`; `previousFrame` (Int64) on `clockRestart` and `reason` (UInt8) on `captureStopped` only (`diskFull`, `deviceLost`; the recorder's own `discontinuity` stop is in [§8.3](#83-capture-109-110)) |
 
 ## 4. Invariants
 
@@ -351,7 +351,21 @@ fallback (example 04).
   (example 08).
 - A take owns only the overflow and `captureStopped` records on its stream that touch its own segments (same clock
   generation, overlapping frames), so earlier and later takes never count. A `captureStopped` it owns must match its
-  `stopReason`: a `user` stop owns none; any other owns exactly one, at the end of its last segment (example 08 `tk.2`).
+  `stopReason`: a `user` stop owns none; any other owns exactly one, whose `reason` equals the `stopReason`, at the end
+  of its last segment (example 08 `tk.2`, example 11).
+- The recorder can end a take itself. When a `sampleJump` lands before the start of the take's first segment, in that
+  segment's generation, the take has nowhere to continue: it ends at its last good frame and keeps the audio up to it.
+  Its `stopReason` is `discontinuity`. It is never `user`, because the user did not stop it, and never `diskFull` or
+  `deviceLost`, because capture did not stop on its own. Capture does not report this stop; the recorder derives it and
+  records it as the take's one `captureStopped`, with `reason` `discontinuity` (example 11). The record carries the
+  fact, not the cause (today only that `sampleJump` ends a take this way); a `note` may name the cause as prose.
+
+| `stopReason` | Who ended the take | The `captureStopped` it owns |
+|---|---|---|
+| `user` | The operator stopped it | none |
+| `diskFull` | Capture stopped: the disk filled. The partial file stays recoverable | one, `reason` `diskFull` |
+| `deviceLost` | Capture stopped: the device was lost | one, `reason` `deviceLost` |
+| `discontinuity` | The recorder, at the take's last good frame, after a discontinuity left it nowhere to continue | one, `reason` `discontinuity` |
 
 ### 8.4 Discontinuity kinds
 
@@ -365,7 +379,7 @@ fallback (example 04).
 | `locate` | Transport jumped (one per `locate` bump) | frame |
 | `loopWrap` | Loop iteration boundary | frame |
 | `formatChange` | Stream format or MIDI protocol changed (for example after MIDI-CI) | stream, before the next capture |
-| `captureStopped` | Capture ended for a non-user reason | stream, `reason` (`diskFull` or `deviceLost`) |
+| `captureStopped` | Capture ended for a non-user reason | stream, `reason` (`diskFull`, `deviceLost` or `discontinuity`: [§8.3](#83-capture-109-110)) |
 
 ### 8.5 Latency
 
@@ -466,7 +480,7 @@ FFI or plugin code real-time safe (#48).
 | #84 Musical MIDI clock | Owns `transport` and `musicalMap`, rate-limited external tempo, the restart resume rule ([§5.3](#53-clock-restart)), and with #107 the commit look-ahead ([§2](#2-terminology)) |
 | #107 Preloaded performance actions | Uses triggers, the requires list, `cancelScope`, the late policies and readiness. Decides `notReady` deferral and, with #84, the commit look-ahead |
 | #109 Shared prefetch and capture handoff | Implements [§8.2](#82-prefetch-109)–[§8.3](#83-capture-109-110). Owns `source` generations for files |
-| #110 Bounded I/O and recoverable recording | Implements takes, segments, overflow padding, `captureStopped` and latency evidence |
+| #110 Bounded I/O and recoverable recording | Implements takes, segments, overflow padding, `captureStopped` (including the recorder's own `discontinuity` stop) and latency evidence |
 | #111 Backing clips, metronome, tuner | Backing clips are `fixedRate` by default and use `joinInProgress`. The metronome is a musical-grid `state` or `midi` action with no audio stretching |
 | #112 MIDI clips with protocol fidelity | Plays clips with `tempoFollowing` by default. Implements native UMP capture and export (timing as offsets from the take start), and SMF export with declared losses ([§9](#9-midi-fidelity-and-export)) |
 
@@ -478,6 +492,13 @@ Coordinator follow-ups (proposed, not done here): a CI or Makefile step that run
 - Every example declares `"contract": "fluxklang.media"` and `"version": 1`.
 - Within v1, changes are additive and optional only. Removing or renaming a field or enum value, or changing any
   invariant or default, requires `version: 2` and new examples.
+- Additive revision: the `discontinuity` stop reason (#336, [§8.3](#83-capture-109-110), example 11). `stopReason` and a
+  `captureStopped` `reason` gain `discontinuity`, and the one-matching-`captureStopped` rule is unchanged. Every earlier
+  document stays valid, under the earlier schema too. A reader or validator that predates it rejects a document
+  carrying the value as outside the enum: it fails closed and never reads the take as a user, disk-full or device
+  stop. A reader that knows it treats the take as ended by the recorder itself at its last good frame: the audio up to
+  that frame is kept, and the record does not say why. It must not remap the value to another reason, and a writer
+  must not emit another reason for such a take.
 - Readers preserve unknown optional data under `extensions`. The strict validator rejects unknown fields elsewhere,
   so drift is caught.
 - Examples are synthetic and deterministic, and use stable synthetic IDs (`ex.NN-name`, `trg.N`, `act.name`).
@@ -522,6 +543,7 @@ Coordinator follow-ups (proposed, not done here): a CI or Makefile step that run
 | [`08-audio-capture-discontinuities`](media-contract/examples/08-audio-capture-discontinuities.json) | overflow padding, 48 → 96 kHz restart splits the take, disk full, a later take scoped to its own stop |
 | [`09-midi1-in-ump-capture-export`](media-contract/examples/09-midi1-in-ump-capture-export.json) | MIDI 1 in UMP, OS upconversion, lossless SMF at 20 BPM, native export origin across a restart |
 | [`10-midi2-capture-lossy-smf-export`](media-contract/examples/10-midi2-capture-lossy-smf-export.json) | genuine MIDI 2, unknown endpoint, native UMP export, declared SMF loss, groupless JR Timestamp |
+| [`11-audio-capture-discontinuity-stop`](media-contract/examples/11-audio-capture-discontinuity-stop.json) | the recorder ends a take at its last good frame: `discontinuity` stop reason with its one matching `captureStopped`, neither a user nor a device stop |
 
 Timeline records are transient traces; their host ticks are never persisted. Take segments and export records show the
 persisted, anchor-relative shapes. Constants: 48 kHz unless a generation sets a rate; host timebase 125/3 ns per tick
@@ -546,7 +568,9 @@ file or trace reports `FAIL`, never a crash, and is not used for mutations.
 Run the focused trace regressions with
 `python3 -B -m unittest discover -s docs/transformation/media-contract -p 'test_*.py'`.
 They cover declared musical-counter identities, primary render progress despite a stale secondary-clock dependency,
-and loop-bounded `nextBoundary` fallback, including a valid loop-end target. Native Swift coverage remains part of #55.
+loop-bounded `nextBoundary` fallback, including a valid loop-end target, and the `discontinuity` stop reason (its one
+matching `captureStopped`, additivity for a reader that predates it, and no cause value). Native Swift coverage remains
+part of #55.
 
 **Checker limits.** Not fully checked here; acceptance items for the #55 Swift contract tests or the named owner:
 - lateness and `asap` against the exact latency-inclusive horizon at commit; the checker only lower-bounds it (§6.1);
@@ -554,6 +578,11 @@ and loop-bounded `nextBoundary` fallback, including a valid loop-end target. Nat
 - owned-note releases at locate, loop wrap, clock restart and stop (§5.1, §6.5);
 - bounded SPSC handoffs, render-thread safety and adapter-only engine types (M8, M11, §10; #64, #109);
 - the recorder's report of cross-restart captures (§9.2; #110, #112); the checker just rejects such traces;
+- why the recorder ended a take with `discontinuity` (§8.3; #110): the cause is not in the record, so the checker
+  enforces the take's matching `captureStopped` and nothing about any `sampleJump`. It also scopes a take's
+  `overflow` and `captureStopped` records by frame range within a clock generation, so after a backward jump a later
+  take on the same stream whose frames overlap that range is charged the overlap's overflows and `captureStopped`
+  records (#352);
 - rejecting captures stamped before a locate but delivered after it (§9.2); the checker remaps them;
 - readiness invalidation and re-preparation after a `source` bump (§5.1, §5.7); the checker trusts readiness records.
 

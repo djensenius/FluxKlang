@@ -96,7 +96,7 @@ extension CaptureSMFExportTests {
         #expect(feed.log.records.count == MIDICaptureLog.maximumCaptures)
         let export = try Fixture.export(feed.log, [Fixture.streamA])
         #expect(export.clip.items.count == 16_384 && export.droppedUMPOnly == 49_152)
-        #expect(export.smf().losses.losses == [.syntheticTempoMap: 1, .umpOnlyDropped: 49_152])
+        #expect(export.smf().losses.losses == [.umpOnlyDropped: 49_152])
         #expect(feed.captureRefusal(Fixture.streamB, Fixture.utility, tick: 0) == .capacity(limit: 65_536))
         #expect(Fixture.refusal(feed.log, [Fixture.streamB])
             == .capture(.captureRefusedAtCapacity(stream: Fixture.streamB)))

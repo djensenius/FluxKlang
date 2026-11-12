@@ -7,7 +7,8 @@
 //
 
 /// The first offence `RecordingTakeV1Record.make` finds, in this order: `seq`, `takeId`, `stream`, the segment
-/// count, then per segment (lowest index first) its placement and `sampleClock`, then the stop, then `note`.
+/// count, then per segment (lowest index first) its placement and `sampleClock`, then `note`. The stop never
+/// refuses: every stop has a contract v1 value.
 enum RecordingTakeV1RecordRefusal: Error, Hashable, Sendable {
     /// `seq` is below 1.
     case invalidSeq(Int)

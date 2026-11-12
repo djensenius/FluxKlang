@@ -69,8 +69,23 @@ enum PerformanceWiringText {
         "\(nodeTitle(edge.from.node, in: graph)) to \(nodeTitle(edge.to.node, in: graph))"
     }
 
-    static func destinationHeading(_ node: NodeID, in graph: GraphDocument) -> String {
-        "To \(nodeTitle(node, in: graph))"
+    /// The Remove button and "Remove from draft" action belong to rows that stay in the draft (wiring.md "Node and
+    /// edge states"). A row the review will remove can only be undone, so it has neither.
+    static func isRemovable(_ badge: WiringConnectionBadge) -> Bool {
+        switch badge {
+        case .none, .draft: true
+        case .willRemove: false
+        }
+    }
+
+    /// `Remove Source to Output from draft`: the row's Remove button label for VoiceOver.
+    static func removeLabel(_ row: WiringConnectionRow) -> String {
+        "Remove \(row.sourceText) to \(row.destinationText) from draft"
+    }
+
+    /// The one line shown in place of the list when `WiringConnectionList` refuses the draft: nothing is guessed.
+    static func connectionsUnavailable(_ refusal: WiringConnectionListRefusal) -> String {
+        "Connections unavailable: \(failure(refusal))"
     }
 
     static func addNodeItem(_ role: ProjectRole) -> String {

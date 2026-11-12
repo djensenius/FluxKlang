@@ -3,6 +3,11 @@
 // `cmidi2_ump_get_mds_*`), AM_MIDI2.0Lib (`umpProcessor` MT 0x5, `mt5MDSHeader`, `mt5MDSPayload`) and MIDI2.0Workbench
 // `messageTypes.js`. A packet is read as sixteen bytes, most significant first; byte 0 is `[0x5 | group]` and the
 // high nibble of byte 1 is the status.
+//
+// The SysEx8 abort marker: M2-104-UM v1.1.2 §7.8 says "The special value 0xF is used in an End UMP to abort a System
+// Exclusive 8 message"; §7.8.1 sends that End UMP "with all data bytes set to zero" (0x1 means the data so far is
+// valid, 0xF that it is incomplete or of unknown quality); Appendix E.3 Table 25 lists it as "SysEx8 End Incomplete"
+// with size 0xF and the Stream ID kept. It is keyed on the number-of-bytes nibble, never on the Stream ID.
 
 /// The status nibble of an MT 0x5 SysEx8 packet (M2-104-UM, Data Messages (128-bit); CoreMIDI `MIDISysExStatus`).
 ///
@@ -20,7 +25,8 @@ enum UMPSysEx8Status: UInt8, CaseIterable, Equatable, Sendable {
 ///
 /// The number of bytes counts the Stream ID too, so it is 1...14 for 0...13 data bytes (cmidi2
 /// `cmidi2_ump_get_sysex8_data` subtracts one; bl-midi2-rs `ValidPacketSizes` accepts only 1...14). Data bytes are
-/// full 8-bit values. Bytes past the count are unused and must be zero.
+/// full 8-bit values. Bytes past the count are unused and must be zero. The abort marker (an End with number of bytes
+/// 15) is not a data packet; see `UMPSysEx8Abort`.
 struct UMPSysEx8Packet: Equatable, Sendable {
     /// The most data bytes one packet carries, not counting the Stream ID.
     static let maximumByteCount = 13
@@ -78,6 +84,24 @@ struct UMPSysEx8Packet: Equatable, Sendable {
             let chunk = Array(payload[offset..<min(offset + maximumByteCount, payload.count)])
             return UMPSysEx8Packet(validatedGroup: group, status: status, streamID: streamID, bytes: chunk)
         }
+    }
+}
+
+/// The SysEx8 abort marker: an End UMP (MT 0x5 status 0x3) with number of bytes 0xF and all thirteen data bytes zero
+/// (M2-104-UM §7.8, §7.8.1, Appendix E.3 Table 25 "SysEx8 End Incomplete"). It tells the receiver that the SysEx8
+/// message on this (group, Stream ID) ended unexpectedly, so any partial payload must be dropped. Every Stream ID is
+/// valid here, including 0x01 and 0x0F.
+struct UMPSysEx8Abort: Equatable, Sendable {
+    let group: UMPGroup
+    let streamID: UInt8
+
+    /// The four-word packet `[0x5g3F_ss00, 0, 0, 0]`: byte 1 is `0x3F`, byte 2 the Stream ID, bytes 3...15 zero.
+    var packet: UMPPacket {
+        var slots = [UInt8](repeating: 0, count: UMPData128Message.packetByteCount)
+        slots[0] = group.value
+        slots[1] = UMPSysEx8Status.end.rawValue << 4 | UMPData128Message.sysEx8AbortByteCount
+        slots[2] = streamID
+        return UMPData128Message.packet(slots)
     }
 }
 
@@ -158,22 +182,26 @@ struct UMPMixedDataSetPayload: Equatable, Sendable {
 /// One decoded UMP Data Message (128-bit), MT 0x5.
 ///
 /// Decoding refuses, in this order: another message type (`wrongMessageType`), a status 0x4...0x7 or 0xA...0xF
-/// (`reservedStatus`); then, for SysEx8 only, a number of bytes 0 or 15 (`valueOutOfRange(field: .sysEx8ByteCount)`)
-/// and any non-zero bit past the count (`reservedBitsSet`). Mixed Data Set packets use every bit, so they have no
-/// further refusals. So a decoded packet always re-encodes to the received words. This type is a stateless codec; it
-/// does not assemble messages or Mixed Data Sets across packets.
+/// (`reservedStatus`); then, for SysEx8 only, a number of bytes 0 (`valueOutOfRange(field: .sysEx8ByteCount)`), a
+/// number of bytes 15 on Complete, Start or Continue (the same refusal), and any non-zero bit past the count
+/// (`reservedBitsSet`; for an End with number of bytes 15 that means any non-zero data byte). Mixed Data Set packets
+/// use every bit, so they have no further refusals. So a decoded packet always re-encodes to the received words. This
+/// type is a stateless codec; it does not assemble messages or Mixed Data Sets across packets.
 ///
-/// A number of bytes of 15 is refused for every status, as bl-midi2-rs `ValidPacketSizes` does; bl-midi2-rs
-/// `sysex8::Packet` alone reads an End packet with 15 and zero data as an "unexpected end, data invalid" marker.
-/// An End packet with number of bytes 1 (Stream ID only) decodes as an ordinary `end` with no data bytes.
+/// An End with number of bytes 15 and zero data is the abort marker (`sysEx8Abort`, M2-104-UM §7.8.1). An End with
+/// number of bytes 1 (Stream ID only) decodes as an ordinary `end` with no data bytes: on the wire it is the same as
+/// a "valid early end", so it has no separate representation.
 enum UMPData128Message: Equatable, Sendable {
     case sysEx8(UMPSysEx8Packet)
+    case sysEx8Abort(UMPSysEx8Abort)
     case mixedDataSetHeader(UMPMixedDataSetHeader)
     case mixedDataSetPayload(UMPMixedDataSetPayload)
 
     static let mixedDataSetHeaderStatus: UInt8 = 0x8
     static let mixedDataSetPayloadStatus: UInt8 = 0x9
     fileprivate static let packetByteCount = 16
+    /// The number of bytes nibble of the abort marker.
+    fileprivate static let sysEx8AbortByteCount: UInt8 = 0xF
 
     init(decoding packet: UMPPacket) throws(UMPRefusal) {
         guard packet.messageType == .data128 else {
@@ -188,10 +216,17 @@ enum UMPData128Message: Equatable, Sendable {
         let low = slots[1] & 0x0F
         if let status = UMPSysEx8Status(rawValue: statusNibble) {
             let count = Int(low)
+            let data = slots[3...]
+            if status == .end && low == Self.sysEx8AbortByteCount {
+                guard data.allSatisfy({ $0 == 0 }) else {
+                    throw .reservedBitsSet(mt: .data128, status: statusNibble)
+                }
+                self = .sysEx8Abort(UMPSysEx8Abort(group: group, streamID: slots[2]))
+                return
+            }
             guard (1...UMPSysEx8Packet.maximumByteCount + 1).contains(count) else {
                 throw .valueOutOfRange(field: .sysEx8ByteCount, value: count)
             }
-            let data = slots[3...]
             guard data.dropFirst(count - 1).allSatisfy({ $0 == 0 }) else {
                 throw .reservedBitsSet(mt: .data128, status: statusNibble)
             }
@@ -219,6 +254,8 @@ enum UMPData128Message: Equatable, Sendable {
     var packet: UMPPacket {
         switch self {
         case .sysEx8(let message):
+            return message.packet
+        case .sysEx8Abort(let message):
             return message.packet
         case .mixedDataSetHeader(let message):
             return message.packet

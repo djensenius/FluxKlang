@@ -5,7 +5,7 @@
 //  The fixed English of the compact Connections list (#101 WCL1; phone-compact-routing.md "Three narrow screens"
 //  and "States", wiring.md "Node and edge states"): node presence and row badges with their text and VoiceOver
 //  labels, the heading's channel or signal text, the short and long conversion text and the accessibility labels.
-//  Pure string builders: no localisation, truncation or escaping. Nothing calls this yet.
+//  Pure string builders: no localisation, truncation or escaping. `PerformanceWiringListView` shows them (#101 WCL2).
 //
 
 /// A destination node's presence on this host, injected by the caller: it comes from this host's rig and session
