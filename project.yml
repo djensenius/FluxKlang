@@ -551,6 +551,7 @@ targets:
       - path: FluxKlangTests/SpatialPanelPresentationTests.swift
       - path: FluxKlangTests/SpatialPanelPresentationTests+Masks.swift
       - path: FluxKlangTests/SpatialSourcePanelPresentationTests.swift
+      - path: FluxKlangTests/SpatialMaskEditorTests.swift
       - path: FluxKlangTests/PeerRosterListTests.swift
       - path: FluxKlangTests/PeerRosterListTests+Prompt.swift
       - path: FluxKlangTests/LibraryMediaListTests.swift
