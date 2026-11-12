@@ -70,9 +70,10 @@ struct MIDICapabilityNegotiationTests {
         }
     }
 
+    /// A MIDI 2.0 block (`notMIDI1`), so a MIDI 2.0 endpoint records no `functionBlockMIDI1Only` downgrade for it.
     static func block(_ index: Int, first: Int, count: Int = 1, active: Bool = true) -> Block {
         Block(
-            index: index, isActive: active, uiHint: .both, midi1Mode: .unrestricted, direction: .bidirectional,
+            index: index, isActive: active, uiHint: .both, midi1Mode: .notMIDI1, direction: .bidirectional,
             firstGroup: first, groupCount: count, midiCIVersion: 2, maximumSysEx8Streams: 1)
     }
 
