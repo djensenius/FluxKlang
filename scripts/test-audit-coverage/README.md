@@ -1540,12 +1540,12 @@ in the `FluxKlangMacTests` list and pure by the same search: `PrefetchFixture`
 (`ProjectPackageAdmissionTests.swift`, a suite that already carries the trait)
 and `ProjectPreparationContextTests.sample()`, itself adopted here.
 
-The production closure the mirror copied is 149 sources: `Shared/Contracts`
+The production closure the mirror copied is 147 sources: `Shared/Contracts`
 (70 files), `Shared/Media/Prefetch` (4), `Shared/Persistence/Projects`
 (`ProjectPackageAdmission`, `ProjectPackageLimits` and `ProjectPackagePath`),
 `Shared/Rig` identity, library, mapping and review (17), the registry,
 descriptor and presence sources of `Shared/Audio/Devices/Registry` (8),
-`Shared/Spatial` adapter, render and routing (16), `Shared/MIDI/Performance`
+`Shared/Spatial` adapter, render and routing (14), `Shared/MIDI/Performance`
 (19) and `Shared/MIDI/Protocol/MIDI1` (10), `Shared/WING/FaderMath.swift` and
 `ProductionAccessAudit.swift`. They have no `async` or `await`, actor,
 file, bundle, date, `URL`, clock or `.now`. `import Foundation` is for value
@@ -1553,6 +1553,13 @@ types only, and `Synchronization` appears only in the audit trait. `UUID()`
 appears only in `Shared/Contracts/Commands/MusicalTimeline.swift`, which none
 of the eight suites uses. The only classes are `ProductionAccessAudit` and
 a stateless `fileprivate final class Identity` token.
+
+The Spatial adapter group is five of the seven files in
+`Shared/Spatial/Adapter`. The closure leaves out
+`LegacySpatialModelInputs.swift`, which needs the `Speaker`, `SpatialSource`
+and `SpeakerArray` models, and `LegacySpatialRenderBridge.swift`; of the tests,
+only `SpatialMaskTests` (deferred) and `SpatialMappingTests` (not adopted
+here) use either.
 
 Not adopted: `SpatialMaskTests` and the three legacy adoption suites
 (`ProjectLegacyAdoptionTests`, `ProjectLegacyAdoptionRefusalTests` and
