@@ -31,7 +31,7 @@ extension UMPStreamMessageTests {
         return result
     }
 
-    /// The reserved bits of each non-text status as (word index, bit) pairs, from DESIGN.md section 2.
+    /// The reserved bits of each non-text status as (word index, bit) pairs (not re-checked against M2-104-UM).
     private static func reservedBits(of status: UInt16) -> [(word: Int, bit: Int)] {
         var pairs: [(word: Int, bit: Int)] = []
         func add(_ word: Int, _ bits: [Int]) { pairs += bits.map { (word: word, bit: $0) } }

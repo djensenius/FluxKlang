@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-/// Hand-computed values; DESIGN.md shows the arithmetic. None of these is produced by the production formula.
+/// Hand-computed values; none of these is produced by the production formula.
 extension MIDIResponseCurveTests {
     @Test func linearCurvesMapEveryInputInTheirDomainToItself() {
         let velocity = MIDIResponseCurve.linear(.velocity)

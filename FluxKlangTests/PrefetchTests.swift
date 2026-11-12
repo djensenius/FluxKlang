@@ -137,7 +137,7 @@ struct PrefetchPlanTests {
         let plan = try Fixture.smallPlan()
         #expect(Fixture.refusal { try Fixture.playhead(plan, source: 0) } == .sourceGenerationNotPositive)
         #expect(try Fixture.playhead(plan, source: 1).sourceGeneration == 1)
-        // The schema has no read-generation field, so no minimum is invented for it (DESIGN.md).
+        // The schema has no read-generation field, so no minimum is invented for it.
         #expect(try Fixture.block(0, read: 0).readGeneration == 0)
         #expect(try Fixture.playhead(plan, read: 0).readGeneration == 0)
     }

@@ -6,7 +6,7 @@
 //  playhead and is applied only when it succeeds, so any refusal leaves the voice
 //  unchanged. It never does I/O: it serves what the prefetch pool holds and
 //  reports every gap, wrap and locate as a `RuntimeDiscontinuity`. One call is one
-//  chunk: it never straddles a loop wrap (see DESIGN.md, "Render protocol").
+//  chunk: it never straddles a loop wrap (`nextChunk` stops it at the loop end).
 //
 
 /// The finished state of one render. Only the render step in this file can build it.
