@@ -7,7 +7,11 @@ import Testing
 
 /// Shared fixtures of the per-source MIDI 1 registry tests. The test files of this suite are the extensions
 /// `+Isolation`, `+Endpoint`, `+Reset` and `+Bounds`.
+#if os(macOS)
+@Suite("MIDISourceRegistry", .productionAccessAudit)
+#else
 @Suite("MIDISourceRegistry")
+#endif
 struct MIDISourceRegistryTests {
     /// Bytes that expose hidden parser state: a pending data byte or running status completes into an event, and an
     /// open SysEx turns the F7 into a SysEx event instead of a bare System Common F7.

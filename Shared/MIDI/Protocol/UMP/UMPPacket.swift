@@ -73,6 +73,11 @@ struct UMPPacket: Equatable, Sendable {
         UMPPacket(validatedWords: [(first & 0x0FFF_FFFF) | 0x4000_0000, second])
     }
 
+    /// An MT 0x5 packet; the top nibble is forced to 0x5, so the result is always well formed.
+    static func data128(_ first: UInt32, _ second: UInt32, _ third: UInt32, _ fourth: UInt32) -> UMPPacket {
+        UMPPacket(validatedWords: [(first & 0x0FFF_FFFF) | 0x5000_0000, second, third, fourth])
+    }
+
     var words: [UInt32] { storedWords }
 
     var messageType: UMPMessageType { UMPMessageType(firstWord: storedWords[0]) }
