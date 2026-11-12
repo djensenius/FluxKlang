@@ -45,7 +45,7 @@ struct RecordingTakeV1Record: Hashable, Sendable {
     let inputLatency: InputLatencyRecord
     let segments: [Segment]
     let droppedFrames: Int64
-    /// `user`, `diskFull` or `deviceLost`.
+    /// `user`, `diskFull`, `deviceLost` or `discontinuity` (the ledger ended the take, #336).
     let stopReason: String
     let note: String?
 
@@ -69,12 +69,7 @@ struct RecordingTakeV1Record: Hashable, Sendable {
                 startOffsetNs: offset, fileFrameStart: segment.fileFrameStart, frames: segment.frames,
                 paddedFrames: segment.paddedFrames))
         }
-        let stopReason: String
-        do {
-            stopReason = try take.stopReason.contractV1StopReason()
-        } catch {
-            throw .uncleared(.stopReason(take.stopReason))
-        }
+        let stopReason = take.stopReason.contractV1StopReason()
         if let note {
             let bytes = note.utf8.count
             guard MediaContractV1Note.isValid(note) else {

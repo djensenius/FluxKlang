@@ -64,8 +64,6 @@ enum TakeLedgerError: Error, Equatable, Sendable {
     /// `noCapturedFrames` names a take that holds frames.
     case discardReasonMismatch(TakeDiscardReason)
     case inconsistentRecord(TakeRecordFault)
-    /// Contract v1 has no `stopReason` value for this stop (#336).
-    case stopReasonNotInContractV1(TakeStopReason)
     case arithmeticOverflow
     case negativeLatency(Int64)
     case invalidLatencyEvidence(bytes: Int)

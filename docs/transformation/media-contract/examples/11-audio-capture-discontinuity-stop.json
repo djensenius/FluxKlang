@@ -1,0 +1,18 @@
+{
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.11-audio-capture-discontinuity-stop",
+  "title": "Audio capture: a sampleJump before the take's start leaves it nowhere to continue, so the recorder ends it at its last good frame with the discontinuity stop reason",
+  "covers": ["capture"],
+  "notes": [
+    "Neither the user nor the device stopped tk.1: a sampleJump landed before its start in its own generation, so the recorder ended it at its last good frame and kept the audio recorded up to there.",
+    "stopReason is discontinuity and the take owns one captureStopped with the same reason at the end of its last segment, as every non-user stop does (example 08). It is not mapped to user, diskFull or deviceLost.",
+    "The cause is not a contract field: the captureStopped note names it as prose. The stop and the take are the record; the checker needs no sampleJump record."],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}},
+  "streams": [{"streamId": "str.take-in", "ordinal": 0, "media": "audio", "direction": "capture"}],
+  "initialGenerations": {"sampleClock/smp.main": 1, "context/ctx.main": 1},
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 48000, "hostTicks": 2424000000},
+    {"seq": 2, "kind": "discontinuity", "type": "overflow", "sampleClock": "smp.main", "generation": 1, "frame": 120000, "frames": 512, "stream": "str.take-in"},
+    {"seq": 3, "kind": "discontinuity", "type": "captureStopped", "sampleClock": "smp.main", "generation": 1, "frame": 240000, "stream": "str.take-in", "reason": "discontinuity", "note": "The recorder ended the take: a sampleJump landed before its start, so it keeps the audio up to this frame."},
+    {"seq": 4, "kind": "take", "takeId": "tk.1", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 1, "startFrame": 96000, "startOffsetNs": 0, "fileFrameStart": 0, "frames": 144000, "paddedFrames": 512}], "droppedFrames": 512, "stopReason": "discontinuity"}]}
