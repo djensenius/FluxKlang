@@ -582,6 +582,7 @@ targets:
       - path: FluxKlangTests/UMPCodecTests.swift
       - path: FluxKlangTests/UMPCodecTests+ChannelVoice.swift
       - path: FluxKlangTests/UMPCodecTests+Scaling.swift
+      - path: FluxKlangTests/UMPCodecTests+System.swift
       - path: FluxKlangTests/UMPTranslationTests.swift
       - path: FluxKlangTests/UMPTranslationTests+State.swift
       - path: FluxKlangTests/UMPTranslationTests+DataEntry.swift
