@@ -88,6 +88,23 @@ enum PerformanceWiringText {
         "Connections unavailable: \(failure(refusal))"
     }
 
+    /// The Add Connection menu's row for one output, `audio (2ch)`; the node's section heading names the node.
+    static func sourceTitle(_ row: WiringSourceRow) -> String {
+        "\(row.title) (\(row.signalText))"
+    }
+
+    /// The destination step's header, `From: Source (2ch audio)`.
+    static func fromHeader(_ text: String) -> String {
+        "From: \(text)"
+    }
+
+    static let toHeading = "To"
+
+    /// The one line shown in place of the Add Connection menu when `WiringSourceList` refuses the draft.
+    static func sourcesUnavailable(_ refusal: WiringSourceListRefusal) -> String {
+        "Sources unavailable: \(failure(refusal))"
+    }
+
     static func addNodeItem(_ role: ProjectRole) -> String {
         "\(role.label) (\(role.direction.rawValue) role)"
     }

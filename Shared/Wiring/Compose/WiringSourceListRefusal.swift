@@ -2,7 +2,8 @@
 //  WiringSourceListRefusal.swift
 //  FluxKlang
 //
-//  Why the Add Connection "From" list cannot be made (#101 WSRC1). A refusal lists nothing. Nothing calls it yet.
+//  Why the Add Connection "From" list cannot be made (#101 WSRC1). A refusal lists nothing.
+//  `PerformanceWiringListView` shows a refusal as one line (#101 ADP1).
 //
 
 /// Why `WiringSourceList.make(in:)` is refused. The checks run in the order the cases are declared; the first
