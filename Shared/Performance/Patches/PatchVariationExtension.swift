@@ -69,7 +69,8 @@ enum PatchVariationExtension {
     /// nothing this reader cannot interpret is ever dropped or rewritten. This fails
     /// closed: a stored set that is malformed or fails `validateStructure()` (for
     /// example 129 variations) cannot be replaced or cleared through `write` either.
-    /// A deliberate repair or discard path is a follow-up.
+    /// `PatchVariationRepair.discard` and `PatchVariationRepair.salvage` are the deliberate repair paths, each an
+    /// explicit call; neither touches a future version.
     static func write(_ set: PatchVariationSet, to patch: ProjectPatch) throws(PatchVariationError) -> ProjectPatch {
         let existing = try content(of: patch)
         if case .future(let version) = existing { throw .futureVersionReadOnly(version) }
