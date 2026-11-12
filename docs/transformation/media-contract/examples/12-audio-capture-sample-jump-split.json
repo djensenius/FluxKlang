@@ -1,0 +1,18 @@
+{
+  "contract": "fluxklang.media", "version": 1, "exampleId": "ex.12-audio-capture-sample-jump-split",
+  "title": "Audio capture: a forward sampleJump splits one take into two segments of the same generation, and gapFrames names the frames that were never captured",
+  "covers": ["capture"],
+  "notes": [
+    "The device's frame counter jumped forward by 144000 frames inside one sample clock generation, with no clock restart: tk.1 continues, in a new segment that starts at the jump's frame.",
+    "Segment 1 states the gap in gapFrames. The file stays contiguous (fileFrameStart does not advance), the gap is not padded and not counted in droppedFrames: those frames were never captured, and gapFrames and the sampleJump record are what say so.",
+    "Segment 1's startOffsetNs includes the gap's wall time (the same generation's anchor maps both starts): 120000000 host ticks of 125/3 ns are 5000000000 ns."],
+  "clocks": {
+    "host": {"timebaseNumer": 125, "timebaseDenom": 3}, "sample": [{"clockId": "smp.main", "nominalRate": 48000}],
+    "musical": {"clockId": "mus.main", "ticksPerQuarter": 15360, "meter": {"numerator": 4, "denominator": 4}, "musicalMap": [{"atTicks": 0, "microsPerQuarter": 500000}]}},
+  "streams": [{"streamId": "str.take-in", "ordinal": 0, "media": "audio", "direction": "capture"}],
+  "initialGenerations": {"sampleClock/smp.main": 1, "context/ctx.main": 1},
+  "timeline": [
+    {"seq": 1, "kind": "anchor", "sampleClock": "smp.main", "generation": 1, "frame": 48000, "hostTicks": 2424000000},
+    {"seq": 2, "kind": "discontinuity", "type": "overflow", "sampleClock": "smp.main", "generation": 1, "frame": 48000, "frames": 512, "stream": "str.take-in"},
+    {"seq": 3, "kind": "discontinuity", "type": "sampleJump", "sampleClock": "smp.main", "generation": 1, "frame": 240000, "note": "The device's frame counter jumped forward: frame 240000 is the first frame after the jump."},
+    {"seq": 4, "kind": "take", "takeId": "tk.1", "stream": "str.take-in", "inputLatency": {"reportedFrames": 312, "measuredFrames": null}, "segments": [{"sampleClock": "smp.main", "generation": 1, "startFrame": 0, "startOffsetNs": 0, "fileFrameStart": 0, "frames": 96000, "paddedFrames": 512}, {"sampleClock": "smp.main", "generation": 1, "startFrame": 240000, "gapFrames": 144000, "startOffsetNs": 5000000000, "fileFrameStart": 96000, "frames": 96000, "paddedFrames": 0}], "droppedFrames": 512, "stopReason": "user"}]}
