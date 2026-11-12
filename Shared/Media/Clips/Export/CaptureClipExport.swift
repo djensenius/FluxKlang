@@ -4,8 +4,9 @@
 //
 //  Converts the MIDI 1 channel-voice captures of a `MIDICaptureLog` into a validated `MIDIClip` and, through the
 //  existing `StandardMIDIFile.write`, into a Standard MIDI File (#112 CL5, media-contract.md §9.3). The SysEx7
-//  (MT 0x3) captures are assembled into messages and written as SysEx events beside the clip (#584 SMF2a). Other
-//  captures are counted, never silently skipped; this slice translates no MIDI 2 data.
+//  (MT 0x3) captures are assembled into messages and written as SysEx events beside the clip (#584 SMF2a). The
+//  MIDI 2.0 channel-voice (MT 0x4) captures are translated to MIDI 1 messages (#584 SMF2b-2). Other captures are
+//  counted, never silently skipped.
 //
 
 /// A clip and SysEx events converted from captures, with what the conversion counted. Built only by `make`.
@@ -19,12 +20,18 @@ struct CaptureClipExport: Equatable, Sendable {
     private(set) var clip: MIDIClip
     /// The delivered SysEx7 messages, in merge order, written beside the clip, which cannot hold them.
     private(set) var sysEx: [SMFSysExEvent]
-    /// Every selected capture the file does not contain: all that are not MIDI 1 channel voice (MT 0x2) or SysEx7
-    /// (MT 0x3), MIDI 2 channel voice (MT 0x4) included, and the packets of SysEx messages that were aborted,
-    /// orphaned or never finished (one each); a delivered SysEx message counts nothing. §9.3 counts OS-upscaled
-    /// MT 0x4 as lossless and splits genuine MT 0x4 by opcode, because it assumes they are written; this export
-    /// drops them, so they are all counted here until #584 converts them and the per-event counts follow.
-    private(set) var droppedUMPOnly: Int
+    /// The §9.3 losses of the selected captures themselves, summed from `SMFCaptureLossClassifier` over every
+    /// selected capture (MT 0x4 included), plus `umpOnlyDropped` for each MT 0x4 capture that translated to no MIDI 1
+    /// message and that the classifier counted neither as `perNoteDropped` nor as `umpOnlyDropped`, plus one
+    /// `umpOnlyDropped` for each packet of a SysEx message that was aborted, orphaned or never finished. The
+    /// translator's own losses are never added: §9.3 has no category for some of them. Opcode 0x7 is refused when
+    /// the capture is decoded, so the classifier's branch for it cannot be reached through `make`. Only nonzero
+    /// counts are stored.
+    private(set) var captureLosses: [SMFExportLoss: Int]
+    /// The `umpOnlyDropped` count of `captureLosses`: selected captures of a type other than MT 0x2, 0x3 and 0x4,
+    /// the packets of broken SysEx messages, and the MIDI 2.0 captures that translated to nothing (unless counted
+    /// as `perNoteDropped`). It is not the number of captures the file lacks.
+    var droppedUMPOnly: Int { captureLosses[.umpOnlyDropped] ?? 0 }
     /// Note Offs (or velocity-0 Note Ons) with no open note, dropped.
     private(set) var unpairedOffs: Int
     /// Notes still open at the end, closed at the clip length.
@@ -46,11 +53,11 @@ struct CaptureClipExport: Equatable, Sendable {
     /// Each such capture counts, not each pass; the file puts all of them on one tick line.
     private(set) var passesOverlaid: Int
 
-    private init(clip: MIDIClip, sysEx: [SMFSysExEvent], droppedUMPOnly: Int, pairing: CaptureNotePairing,
-                 groupsFlattened: Int, timingQuantized: Int, passesOverlaid: Int) {
+    private init(clip: MIDIClip, sysEx: [SMFSysExEvent], captureLosses: [SMFExportLoss: Int],
+                 pairing: CaptureNotePairing, groupsFlattened: Int, timingQuantized: Int, passesOverlaid: Int) {
         self.clip = clip
         self.sysEx = sysEx
-        self.droppedUMPOnly = droppedUMPOnly
+        self.captureLosses = captureLosses
         unpairedOffs = pairing.unpairedOffs
         openNotesClosed = pairing.openNotesClosed
         widenedNotes = pairing.widenedNotes
@@ -67,34 +74,25 @@ struct CaptureClipExport: Equatable, Sendable {
         let ticks: Int64
     }
 
-    /// One selected MIDI 1 channel-voice capture, ready to merge.
-    private struct Converted {
-        let ticks: Int64
-        let stream: StreamID
-        let index: Int
-        let message: MIDI1Semantic
-
-        func precedes(_ other: Converted) -> Bool {
-            if ticks != other.ticks { return ticks < other.ticks }
-            if stream != other.stream {
-                return stream.rawValue.utf8.lexicographicallyPrecedes(other.stream.rawValue.utf8)
-            }
-            return index < other.index
-        }
-    }
-
     /// What conversion made of the selected captures.
     private struct Conversion {
-        var messages: [Converted] = []
+        var queue: [CaptureMergeEntry] = []
         var sysEx: [CaptureSysEx7Message] = []
+        /// Selected captures of a type the file never holds (not MT 0x2, 0x3 or 0x4).
         var dropped = 0
+        var losses: [SMFExportLoss: Int] = [:]
+        /// The group of the first MT 0x4 capture in capture order: the file has no groups, so every MIDI 2.0 voice
+        /// is moved to it and the translator keeps its state per channel only.
+        var canonicalGroup: UMPGroup?
     }
 
     /// Exports the captures of `streams`. `lengthTicks` is the clip length in `1...MIDIClip.maximumLengthTicks`, or
-    /// nil for the next quarter boundary strictly after the last MIDI 1 channel-voice or SysEx7 capture (one quarter
-    /// at least); that default is taken from the selected MT 0x2 and MT 0x3 captures, decodable or not and delivered
-    /// or not (so an orphan SysEx packet can lengthen the clip), and checked before any of them is decoded. Messages
-    /// merge by (ticks, stream id by UTF-8 bytes ascending, record index of the first packet), so the order of
+    /// nil for the next quarter boundary strictly after the last MIDI 1 channel-voice, SysEx7 or MIDI 2.0
+    /// channel-voice capture (one quarter at least); that default is taken from the selected MT 0x2, MT 0x3 and
+    /// MT 0x4 captures, decodable or not and delivered or not (so an orphan SysEx packet can lengthen the clip), and
+    /// checked before any of them is decoded. MIDI 2.0 voices are translated to MIDI 1 messages with
+    /// `UMPMIDI2ToMIDI1Translator` (`CaptureMIDI2Translation`). Messages and voices merge in one queue by (ticks,
+    /// stream id by UTF-8 bytes ascending, record index), sorted once and translated in that order, so the order of
     /// `streams` never matters; a SysEx message sits at the tick of its first packet. The refusal order is that of
     /// `CaptureClipExportRefusal`. Nothing in `log` changes.
     static func make(from log: MIDICaptureLog, streams: [StreamID],
@@ -114,17 +112,20 @@ struct CaptureClipExport: Equatable, Sendable {
         }
         guard !records.isEmpty else { throw .capture(.exportHasNoCaptures) }
         let requested = try resolvedLength(lengthTicks, records)
-        let conversion = try convert(records)
-        guard let length = requested, !conversion.messages.isEmpty || !conversion.sysEx.isEmpty else {
-            throw .nothingExportable(dropped: conversion.dropped)
-        }
+        var conversion = try convert(records)
         let events = conversion.sysEx.sorted { $0.precedes($1) }
+        let translation = try CaptureMIDI2Translation.translate(conversion.queue, canonical: conversion.canonicalGroup,
+                                                                sysExTicks: events.map(\.ticks))
+        guard let length = requested, !translation.messages.isEmpty || !events.isEmpty else {
+            throw .nothingExportable(dropped: conversion.dropped + translation.silentVoices)
+        }
+        if translation.silentUncounted > 0 {
+            conversion.losses[.umpOnlyDropped, default: 0] += translation.silentUncounted
+        }
         if let late = events.first(where: { $0.ticks >= length }) {
             throw .ticksOutOfRange(ticks: late.ticks, lengthTicks: length)
         }
-        let converted = conversion.messages.sorted { $0.precedes($1) }
-        let timed = converted.map { CaptureTimedMessage(ticks: $0.ticks, message: $0.message) }
-        let pairing = try CaptureNotePairing.pair(timed, lengthTicks: length, otherItems: events.count)
+        let pairing = try CaptureNotePairing.pair(translation.messages, lengthTicks: length, otherItems: events.count)
         let clip: MIDIClip
         do throws(MIDIClipRefusal) {
             clip = try MIDIClip.make(lengthTicks: length, items: pairing.items)
@@ -132,14 +133,14 @@ struct CaptureClipExport: Equatable, Sendable {
             throw .clip(error)
         }
         return CaptureClipExport(clip: clip, sysEx: events.map { SMFSysExEvent(ticks: $0.ticks, payload: $0.payload) },
-                                 droppedUMPOnly: conversion.dropped, pairing: pairing,
+                                 captureLosses: conversion.losses, pairing: pairing,
                                  groupsFlattened: groupsFlattened(in: records),
                                  timingQuantized: timingQuantized(in: records),
                                  passesOverlaid: passesOverlaid(in: records))
     }
 
-    /// The explicit length, checked; or, when nil, the default length of the selected MT 0x2 and MT 0x3 captures
-    /// (decodable or not, delivered or not), nil when there is none so that `nothingExportable` reports.
+    /// The explicit length, checked; or, when nil, the default length of the selected MT 0x2, MT 0x3 and MT 0x4
+    /// captures (decodable or not, delivered or not), nil when there is none so that `nothingExportable` reports.
     private static func resolvedLength(_ lengthTicks: Int64?,
                                        _ records: [Selected]) throws(CaptureClipExportRefusal) -> Int64? {
         if let lengthTicks {
@@ -147,7 +148,7 @@ struct CaptureClipExport: Equatable, Sendable {
             return lengthTicks
         }
         let voice = records.filter {
-            $0.record.packet.messageType == .midi1ChannelVoice || $0.record.packet.messageType == .data64
+            [.midi1ChannelVoice, .data64, .midi2ChannelVoice].contains($0.record.packet.messageType)
         }
         guard !voice.isEmpty else { return nil }
         return try defaultLength(lastTicks: voice.reduce(0) { max($0, $1.ticks) })
@@ -176,53 +177,90 @@ struct CaptureClipExport: Equatable, Sendable {
         return groups.count { $0 != lowest }
     }
 
-    /// Decodes the MIDI 1 channel-voice captures, assembles the SysEx7 ones and counts the rest, in capture order.
+    /// Decodes the MIDI 1 and MIDI 2.0 channel-voice captures into one queue, assembles the SysEx7 ones and counts
+    /// the rest, in capture order. The classifier's per-capture losses are summed over every selected capture.
     private static func convert(_ records: [Selected]) throws(CaptureClipExportRefusal) -> Conversion {
         var conversion = Conversion()
         var assembler = CaptureSysEx7Assembler()
         for item in records {
-            if item.record.packet.messageType == .data64 {
-                let packet: UMPSysEx7Packet
+            let record = item.record
+            let classified = SMFCaptureLossClassifier.losses(of: record.packet, stamp: record.protocolStamp)
+            for (loss, count) in classified { conversion.losses[loss, default: 0] += count }
+            switch record.packet.messageType {
+            case .data64:
+                if let message = try accept(item, into: &assembler) { conversion.sysEx.append(message) }
+            case .midi1ChannelVoice:
                 do throws(UMPRefusal) {
-                    packet = try UMPSysEx7Packet(decoding: item.record.packet)
+                    let message = try UMPMIDI1ChannelVoice(decoding: record.packet).semantic
+                    let resets = try resetChannel(of: message, in: record.packet)
+                    conversion.queue.append(CaptureMergeEntry(ticks: item.ticks, stream: record.stream,
+                                                              index: item.index,
+                                                              content: .midi1(message, resets: resets)))
                 } catch {
-                    throw .invalidSysEx7(stream: item.record.stream, index: item.index, error)
+                    throw .invalidChannelVoice(stream: record.stream, index: item.index, error)
                 }
-                if let message = assembler.accept(packet, stream: item.record.stream, ticks: item.ticks,
-                                                  index: item.index) {
-                    conversion.sysEx.append(message)
+            case .midi2ChannelVoice:
+                do throws(UMPRefusal) {
+                    conversion.queue.append(try voiceEntry(item, classified: classified, in: &conversion))
+                } catch {
+                    throw .invalidChannelVoice(stream: record.stream, index: item.index, error)
                 }
-                continue
-            }
-            guard item.record.packet.messageType == .midi1ChannelVoice else {
+            default:
                 conversion.dropped += 1
-                continue
             }
-            let message: MIDI1Semantic
-            do throws(UMPRefusal) {
-                message = try UMPMIDI1ChannelVoice(decoding: item.record.packet).semantic
-            } catch {
-                throw .invalidChannelVoice(stream: item.record.stream, index: item.index, error)
-            }
-            conversion.messages.append(Converted(ticks: item.ticks, stream: item.record.stream, index: item.index,
-                                                 message: message))
         }
         assembler.finish()
         conversion.dropped += assembler.dropped
+        if assembler.dropped > 0 { conversion.losses[.umpOnlyDropped, default: 0] += assembler.dropped }
         return conversion
     }
 
+    /// Feeds one SysEx7 capture to the assembler; the message it completes, when it does.
+    private static func accept(_ item: Selected,
+                               into assembler: inout CaptureSysEx7Assembler) throws(CaptureClipExportRefusal)
+        -> CaptureSysEx7Message? {
+        let record = item.record
+        let packet: UMPSysEx7Packet
+        do throws(UMPRefusal) {
+            packet = try UMPSysEx7Packet(decoding: record.packet)
+        } catch {
+            throw .invalidSysEx7(stream: record.stream, index: item.index, error)
+        }
+        return assembler.accept(packet, stream: record.stream, ticks: item.ticks, index: item.index)
+    }
+
+    /// The queue entry of a MIDI 2.0 channel voice capture, flattened to the export's one canonical group (the first
+    /// voice's), and whether the classifier already counted it as dropped.
+    private static func voiceEntry(_ item: Selected, classified: [SMFExportLoss: Int],
+                                   in conversion: inout Conversion) throws(UMPRefusal) -> CaptureMergeEntry {
+        let decoded = try UMPMIDI2ChannelVoice(decoding: item.record.packet)
+        let group = conversion.canonicalGroup ?? decoded.group
+        conversion.canonicalGroup = group
+        let voice = UMPMIDI2ChannelVoice(group: group, channel: decoded.channel, message: decoded.message)
+        let counted = classified[.perNoteDropped] != nil || classified[.umpOnlyDropped] != nil
+        return CaptureMergeEntry(ticks: item.ticks, stream: item.record.stream, index: item.index,
+                                 content: .midi2(voice, classified: counted))
+    }
+
+    /// The channel of a MIDI 1 Control Change whose controller makes the translator's cached state stale
+    /// (`CaptureMIDI2Translation.resetsTranslator`), nil for any other message.
+    private static func resetChannel(of message: MIDI1Semantic,
+                                     in packet: UMPPacket) throws(UMPRefusal) -> UMPChannel? {
+        guard case let .controlChange(_, controller, _) = message,
+              CaptureMIDI2Translation.resetsTranslator(controller: controller) else { return nil }
+        return try UMPChannel(UInt8((packet.words[0] >> 16) & 0x0F))
+    }
+
     /// The file for `clip` and the SysEx events, written by `StandardMIDIFile.write`, with the losses of this export:
-    /// `umpOnlyDropped` for every selected capture the file lacks, `groupsFlattened` when the selection spans groups,
-    /// `passesOverlaid` for the captures of later passes and `timingQuantized` (added to whatever the writer
-    /// reported) when capture positions were rounded to ticks. No tempo event is written, so `syntheticTempoMap` is
-    /// never reported, and `fidelityUnverified` is not either: it qualifies converted MT 0x4 events and none are
-    /// converted. Unpaired Note Offs, closed open notes, widened notes and retriggered notes are counted on this
-    /// value, not as §9.3 categories.
+    /// the `captureLosses` (the per-capture §9.3 counts, which include `umpOnlyDropped` for the MIDI 2.0 captures
+    /// the file lacks), `groupsFlattened` when the selection spans groups, `passesOverlaid` for the captures of
+    /// later passes and `timingQuantized` (added to whatever the writer reported) when capture positions were
+    /// rounded to ticks. No tempo event is written, so `syntheticTempoMap` is never reported. Unpaired Note Offs,
+    /// closed open notes, widened notes and retriggered notes are counted on this value, not as §9.3 categories.
     func smf() -> SMFWriteResult {
         let written = StandardMIDIFile.write(clip, sysEx: sysEx)
         var losses = written.losses.losses
-        if droppedUMPOnly > 0 { losses[.umpOnlyDropped] = droppedUMPOnly }
+        for (loss, count) in captureLosses { losses[loss, default: 0] += count }
         if groupsFlattened > 0 { losses[.groupsFlattened] = groupsFlattened }
         if passesOverlaid > 0 { losses[.passesOverlaid] = passesOverlaid }
         if timingQuantized > 0 { losses[.timingQuantized, default: 0] += timingQuantized }

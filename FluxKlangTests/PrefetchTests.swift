@@ -46,7 +46,11 @@ enum PrefetchFixture {
     }
 }
 
+#if os(macOS)
+@Suite("Prefetch plan", .productionAccessAudit)
+#else
 @Suite("Prefetch plan")
+#endif
 struct PrefetchPlanTests {
     typealias Fixture = PrefetchFixture
 
