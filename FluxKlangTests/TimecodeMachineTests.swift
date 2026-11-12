@@ -7,7 +7,11 @@ import Testing
 
 /// MMC machine-control intents, default-deny authorization, send grants and the tempo-sharing seam (#85 X3).
 /// The topic suites live in `TimecodeMachineTests+*.swift` extensions.
+#if os(macOS)
+@Suite("TimecodeMachine", .productionAccessAudit)
+#else
 @Suite("TimecodeMachine")
+#endif
 struct TimecodeMachineTests {
     static func deviceID(_ raw: UInt8) throws -> SysExDeviceID {
         try SysExDeviceID(raw)
