@@ -51,6 +51,8 @@ struct TimelineV1Record: Hashable, Sendable {
                 guard takes.insert(record.takeID).inserted else { throw .duplicateTakeID(record.takeID) }
             case .export(let record):
                 guard exports.insert(record.exportID).inserted else { throw .duplicateExportID(record.exportID) }
+            case .smfExport(let record):
+                guard exports.insert(record.exportID).inserted else { throw .duplicateExportID(record.exportID) }
             case .anchor, .generation, .outcome, .readiness, .discontinuity, .dispatch, .midiCapture:
                 continue
             }
