@@ -7,6 +7,9 @@ import Testing
 
 /// A routing rule's optional `MIDIValueTransform` as the note ledger applies it: note-on velocity and controller
 /// values on the way out, nothing on the release path.
+#if os(macOS)
+@Suite(.productionAccessAudit)
+#endif
 struct MIDIRoutingCurveTests {
     typealias Fixture = MIDIPerformanceFixture
 

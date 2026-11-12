@@ -97,10 +97,14 @@ manifest is complete. `MacPureModelSmokeTests`, `MIDIClipOwnershipTests`,
 `PeerBackpressureTests`, `PeerEndpointPolicyTests`,
 `PeerControlMessageTests`, `PeerSyncTests`, `PeerSyncCommandTests`,
 `PeerReconnectTests`, `PeerReconnectEpochTests`, `PeerTrustVectorTests`,
-`PeerTrustStorageTests`, `PeerTrustTests`, `PeerTransportTests` and
-`PeerRetryClassTests`
+`PeerTrustStorageTests`, `PeerTrustTests`, `PeerTransportTests`,
+`PeerRetryClassTests`, `ProjectPackageStreamTests`,
+`PreparationProjectBudgetTests`, `ProjectPreparationContextTests`,
+`PrefetchPlanTests`, `PrefetchPlayheadTests`,
+`RigMappingReviewOverlapTests`, `DevicePresenceRouteAvailabilityTests` and
+`MIDIRoutingCurveTests`
 use the canonical suite trait; this is partial source adoption only. The iOS
-owners of those one hundred and twenty-eight macOS-guarded suites remain
+owners of those one hundred and thirty-six macOS-guarded suites remain
 unadopted.
 Other owners' annotation obligations remain unsatisfied: inventory
 intentionally exits 0 with `enforcementSatisfied: false`, while default
@@ -1505,6 +1509,68 @@ by three for the one test of `PeerRetryClassTests` in its root file (its other
 59 tests are in the three extension files and do not move). Inventory still
 exits 0 and default enforcement still exits 1. This comparison is a row-level
 diff of both trees' output.
+
+## Project, prefetch, rig review, device presence and MIDI routing adoption
+
+`ProjectPackageStreamTests`, `PreparationProjectBudgetTests`,
+`ProjectPreparationContextTests`, `PrefetchPlanTests`,
+`PrefetchPlayheadTests`, `RigMappingReviewOverlapTests`,
+`DevicePresenceRouteAvailabilityTests` and `MIDIRoutingCurveTests` now use the
+canonical trait under `#if os(macOS)` on their root declarations, without
+test-body, helper, target-membership or registration changes.
+`PrefetchPlanTests`,
+`PrefetchPlayheadTests` and `RigMappingReviewOverlapTests` already had a named
+`@Suite` and keep its display name exactly: the trait is added in the macOS
+branch and the `#else` branch keeps the original. The other five had no
+`@Suite`, so they take the bare form, with any doc comment above the `#if`.
+None has other suite traits. Each is a root struct in the file named for it
+(`PrefetchTests.swift`, `PrefetchTests+Playhead.swift` and
+`RigMappingReviewTests+Overlap.swift` for the three named ones); the other
+suites of those families stay unannotated. The longest touched file,
+`PrefetchTests+Playhead.swift`, is 250 lines, far below the 500-line limit.
+
+The suites build values, plans and documents from literals and injected
+fixtures. They declare no actors and no `static var`, and read no file, bundle,
+date or clock; `DevicePresenceRouteAvailabilityTests` uses `contentsOf:` only
+to append event arrays. Several suites use helpers from other test files, all
+in the `FluxKlangMacTests` list and pure by the same search: `PrefetchFixture`
+(in `PrefetchTests.swift`), `RigMappingReviewFixture`
+(`RigMappingReviewTests.swift`), `MIDIPerformanceFixture`
+(`MIDIPerformanceTests.swift`), `ProjectPackageTestSupport`
+(`ProjectPackageAdmissionTests.swift`, a suite that already carries the trait)
+and `ProjectPreparationContextTests.sample()`, itself adopted here.
+
+The production closure the mirror copied is 147 sources: `Shared/Contracts`
+(70 files), `Shared/Media/Prefetch` (4), `Shared/Persistence/Projects`
+(`ProjectPackageAdmission`, `ProjectPackageLimits` and `ProjectPackagePath`),
+`Shared/Rig` identity, library, mapping and review (17), the registry,
+descriptor and presence sources of `Shared/Audio/Devices/Registry` (8),
+`Shared/Spatial` adapter, render and routing (14), `Shared/MIDI/Performance`
+(19) and `Shared/MIDI/Protocol/MIDI1` (10), `Shared/WING/FaderMath.swift` and
+`ProductionAccessAudit.swift`. They have no `async` or `await`, actor,
+file, bundle, date, `URL`, clock or `.now`. `import Foundation` is for value
+types only, and `Synchronization` appears only in the audit trait. `UUID()`
+appears only in `Shared/Contracts/Commands/MusicalTimeline.swift`, which none
+of the eight suites uses. The only classes are `ProductionAccessAudit` and
+a stateless `fileprivate final class Identity` token.
+
+Not adopted: `SpatialMaskTests` and the three legacy adoption suites
+(`ProjectLegacyAdoptionTests`, `ProjectLegacyAdoptionRefusalTests` and
+`ProjectLegacyAdoptionRoleTests`) are deferred. Their closure reaches the
+studio models (`Speaker` through `WingNodeRef` and `WingAddressBook`, and
+`StudioGraphImport` through `StudioGraph`), which reach `WingSetting` and
+`WingValue`; `WingValue.swift:10` imports the external `SwiftOSC` package,
+which the mirror cannot build. The legacy suites also reach the package
+reader and its descriptor-level file code through `ProjectPackageContents`.
+
+A fresh SwiftPM package byte-copied those sources and the suites' test files
+plus `ProductionAccessScope.swift`. Debug and Release (`-c release
+-Xswiftc -enable-testing`) runs each passed 149 tests in 11 suites with no
+warnings. They add no process-identity, argv or bootstrap evidence and do not
+cover the iOS owners; the iOS `FluxKlangTests` rows for these suites stay
+unsatisfied, the remaining #60 gates above still apply and #60 remains open.
+
+Checker totals are in the pull request.
 
 ## Headless fixtures
 
