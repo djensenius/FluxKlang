@@ -15,16 +15,17 @@ extension CaptureSMFExportTests {
         try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 40, endpoint: .midi2, port: .midi2)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 50)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
-        #expect(export.droppedUMPOnly == 4)
+        #expect(export.droppedUMPOnly == 3)
         #expect(export.clip.items == [.note(MIDIClipNote(channel: 1, note: 60, velocity: 64, releaseVelocity: 64,
                                                          startTicks: 0, endTicks: 50))])
-        #expect(export.smf().losses.losses == [.umpOnlyDropped: 4])
+        #expect(export.sysEx == [SMFSysExEvent(ticks: 20, payload: [1, 2, 3, 0])])
+        #expect(export.smf().losses.losses == [.umpOnlyDropped: 3])
     }
 
     @Test func aSelectionWhereEveryCaptureIsDroppedRefusesNothingExportableWithTheCount() throws {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
         try feed.add(Fixture.streamA, Fixture.utility, tick: 10)
-        try feed.add(Fixture.streamA, Fixture.sysEx, tick: 20)
+        try feed.add(Fixture.streamA, Fixture.orphanSysEx, tick: 20)
         try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 30, endpoint: .midi2, port: .midi2)
         #expect(Fixture.refusal(feed.log, [Fixture.streamA, Fixture.streamB]) == .nothingExportable(dropped: 3))
         #expect(Fixture.refusal(feed.log, [Fixture.streamA]) == .nothingExportable(dropped: 2))
@@ -62,11 +63,11 @@ extension CaptureSMFExportTests {
         let streams = [Fixture.streamA, Fixture.streamB, Fixture.streamC, Fixture.other]
         var feed = try Fixture.Feed(streams)
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0)
-        // An OS-upscaled MIDI 1.0 note (MT 0x4 from a midi1 endpoint), a genuine MIDI 2.0 note, a SysEx 7 and a
-        // utility message: section 9.3 counts the first and third as lossless once written, but none is written yet.
+        // An OS-upscaled MIDI 1.0 note (MT 0x4 from a midi1 endpoint), a genuine MIDI 2.0 note, an orphaned SysEx 7
+        // packet and a utility message: section 9.3 counts the first as lossless once written, but none is written.
         try feed.add(Fixture.streamB, Fixture.midi2NoteOn, tick: 10, endpoint: .midi1, port: .midi2)
         try feed.add(Fixture.streamC, Fixture.midi2NoteOn, tick: 20, endpoint: .midi2, port: .midi2)
-        try feed.add(Fixture.other, Fixture.sysEx, tick: 30)
+        try feed.add(Fixture.other, Fixture.orphanSysEx, tick: 30)
         try feed.add(Fixture.other, Fixture.utility, tick: 40)
         try feed.add(Fixture.streamA, Fixture.noteOff(1, 60, 64), tick: 50)
         let export = try Fixture.export(feed.log, streams)
@@ -90,7 +91,7 @@ extension CaptureSMFExportTests {
     @Test func everyLossAtOnceIsReportedAndTheBytesAreTheWritersBytes() throws {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])
         try feed.add(Fixture.streamA, Fixture.noteOn(1, 60, 64), tick: 0, endpoint: .unknown)
-        try feed.add(Fixture.streamB, Fixture.sysEx, tick: 5)
+        try feed.add(Fixture.streamB, Fixture.orphanSysEx, tick: 5)
         try feed.add(Fixture.streamB, Fixture.realTime, tick: 6)
         let export = try Fixture.export(feed.log, [Fixture.streamA, Fixture.streamB])
         let file = export.smf()
