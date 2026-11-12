@@ -262,7 +262,7 @@ extension ControlContractTests {
             let built = try canonical(builderBytes: actionsRecord().encodedJSON())
             #expect(built == (try exampleSection("actions")))
             let section = try #require(exampleObject()["actions"] as? [[String: Any]])
-            #expect(section.count == 4)
+            try #require(section.count == 4)
             let join = try #require(section.first?["late"] as? [String: Any])
             #expect(join["maxLatenessMs"] as? Int == 50)
             #expect(join["retroactiveMs"] as? Int == 40)
