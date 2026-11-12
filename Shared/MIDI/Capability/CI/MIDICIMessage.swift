@@ -180,8 +180,9 @@ enum MIDICIMessage: Equatable, Sendable {
     }
 
     /// The same rule by destination kind, for messages outside `MIDICIKind` (see `MIDICIProfileKind.destinationRule`,
-    /// `MIDICIPropertyCapabilityMessage.destinationRule` and `MIDICIEndpointMessage.destinationRule`):
-    /// `sourceIsBroadcast` first, then `destinationNotBroadcast` or `destinationIsBroadcast`.
+    /// `MIDICIPropertyCapabilityMessage.destinationRule`, `MIDICIEndpointMessage.destinationRule` and
+    /// `MIDICIProcessInquiryMessage.destinationRule`): `sourceIsBroadcast` first, then `destinationNotBroadcast` or
+    /// `destinationIsBroadcast`.
     static func validateAddressing(
         _ rule: MIDICIDestinationRule, source: MIDICIMUID, destination: MIDICIMUID
     ) throws(MIDICIRefusal) {
