@@ -22,7 +22,11 @@ private struct TransitionSeededGenerator {
     }
 }
 
+#if os(macOS)
+@Suite("Patch transitions: sustain, tails and loss", .productionAccessAudit)
+#else
 @Suite("Patch transitions: sustain, tails and loss")
+#endif
 struct PatchTransitionSustainTests {
     typealias Fixture = PatchTransitionFixture
 

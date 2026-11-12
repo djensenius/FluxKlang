@@ -6,8 +6,8 @@
 //  added"): the active graph's edges grouped by destination node, so "what feeds Mains?" is one heading, with the
 //  edges a review adds (Draft badge) or removes (struck through, "Will remove"). Every destination node has a
 //  section, and a section without rows says "No connections". A pure value: it reads only the active graph, the
-//  review diff and the injected node presence; nothing is drawn, edited or sent, and nothing calls this yet
-//  (`PerformanceWiringListView` keeps its own inline grouping until a later slice adopts this).
+//  review diff and the injected node presence; nothing is drawn, edited or sent. `PerformanceWiringListView`
+//  draws it (#101 WCL2) with the presence `PerformanceProjectSession.connectionList()` injects.
 //
 
 /// One connection of a section. Built only by `WiringConnectionList.make(active:review:presence:)`.

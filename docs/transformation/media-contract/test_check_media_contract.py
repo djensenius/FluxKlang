@@ -121,6 +121,91 @@ class MediaContractRegressionTests(unittest.TestCase):
         doc["timeline"][2].update(assignedFrame=1563, frame=1563)
         self.assertEqual(self.errors(doc, name), [])
 
+    def discontinuity_stop(self):
+        doc, name = self.example("11")
+        return doc, name, doc["timeline"][2], doc["timeline"][3]
+
+    def test_discontinuity_stop_example_pairs_the_take_with_one_matching_stop(self):
+        doc, name, stop, take = self.discontinuity_stop()
+        last = take["segments"][-1]
+
+        self.assertEqual(self.errors(doc, name), [])
+        self.assertEqual((stop["type"], stop["reason"], take["stopReason"]),
+                         ("captureStopped", "discontinuity", "discontinuity"))
+        self.assertEqual((stop["sampleClock"], stop["generation"]), (last["sampleClock"], last["generation"]))
+        self.assertEqual(stop["frame"], last["startFrame"] + last["frames"])
+
+    def test_every_non_user_stop_reason_is_a_captureStopped_reason(self):
+        defs = self.schema["$defs"]
+        stop_reasons = defs["takeRecord"]["properties"]["stopReason"]["enum"]
+        capture_reasons = defs["discontinuityRecord"]["properties"]["reason"]["enum"]
+
+        self.assertIn("user", stop_reasons)
+        self.assertNotIn("user", capture_reasons)
+        self.assertEqual(set(stop_reasons) - {"user"}, set(capture_reasons))
+        self.assertEqual(set(capture_reasons), {"diskFull", "deviceLost", "discontinuity"})
+
+    def test_discontinuity_stop_is_additive_for_a_reader_that_predates_it(self):
+        old = copy.deepcopy(self.schema)
+        defs = old["$defs"]
+        defs["takeRecord"]["properties"]["stopReason"]["enum"].remove("discontinuity")
+        defs["discontinuityRecord"]["properties"]["reason"]["enum"].remove("discontinuity")
+
+        for number in range(1, 11):
+            doc, name = self.example("%02d" % number)
+            with self.subTest(example=name):
+                self.assertEqual(checker.check_example(doc, name, old)[0], [])
+
+        doc, name = self.example("11")
+        errors = checker.check_example(doc, name, old)[0]
+        self.assertEqual(len(errors), 2, errors)
+        self.assertTrue(all('"discontinuity" not in enum' in error for error in errors), errors)
+        self.assertTrue(any(".timeline[2].reason" in error for error in errors), errors)
+        self.assertTrue(any(".timeline[3].stopReason" in error for error in errors), errors)
+
+    def test_discontinuity_stop_needs_exactly_one_matching_stop_at_the_last_frame(self):
+        rule = "captureStopped matches its stopReason"
+        cases = (
+            ("a user take owns no stop", 3, {"stopReason": "user"}),
+            ("never a device stop on the take", 3, {"stopReason": "deviceLost"}),
+            ("never a disk-full stop on the take", 3, {"stopReason": "diskFull"}),
+            ("never a device stop on the record", 2, {"reason": "deviceLost"}),
+            ("never a disk-full stop on the record", 2, {"reason": "diskFull"}),
+            ("one frame before the last", 2, {"frame": 239999}),
+            ("one frame past the last", 2, {"frame": 240001}),
+            ("at the take's start", 2, {"frame": 96000}),
+        )
+        for label, index, changes in cases:
+            with self.subTest(label):
+                doc, name, _, _ = self.discontinuity_stop()
+                doc["timeline"][index].update(changes)
+                errors = self.errors(doc, name)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(rule, errors[0])
+
+        with self.subTest("the stop is missing"):
+            doc, name, _, _ = self.discontinuity_stop()
+            del doc["timeline"][2]
+            doc["timeline"][2]["seq"] = 3
+            self.assert_rejected(doc, name, rule)
+            doc["timeline"][2]["stopReason"] = "user"
+            self.assertEqual(self.errors(doc, name), [])
+
+        with self.subTest("the stop is doubled"):
+            doc, name, stop, take = self.discontinuity_stop()
+            doc["timeline"].insert(3, dict(copy.deepcopy(stop), seq=4))
+            take["seq"] = 5
+            self.assert_rejected(doc, name, rule)
+
+    def test_discontinuity_stop_leaves_its_cause_out_of_both_enums(self):
+        doc, name, stop, take = self.discontinuity_stop()
+        take["stopReason"] = "jumpBeforeTakeStart"
+        stop["reason"] = "jumpBeforeTakeStart"
+        errors = self.errors(doc, name)
+
+        self.assertEqual(len(errors), 2, errors)
+        self.assertTrue(all('"jumpBeforeTakeStart" not in enum' in error for error in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,9 +27,9 @@ enum MediaIOFaultMapping {
         }
     }
 
-    /// Contract v1 has two stop reasons. `diskFull` maps to itself; every other writer fault is approximated as
-    /// `deviceLost` ("the destination went away or failed"), a documented approximation until the contract gains
-    /// a file-failure reason (#336-style revision).
+    /// The runtime's writer-fault stop reasons are `diskFull` and `deviceLost`. `diskFull` maps to itself; every
+    /// other writer fault is approximated as `deviceLost` ("the destination went away or failed"), a documented
+    /// approximation until the contract gains a file-failure reason (#336-style revision).
     static func captureStopReason(for fault: MediaWriteFault) -> RuntimeCaptureStopReason {
         switch fault {
         case .diskFull: .diskFull

@@ -5,8 +5,8 @@
 //  Why a recording take ended (media-contract.md §8.3), or why it was discarded.
 //  Capture emits only the device reasons as `RuntimeCaptureStopReason`; a `user`
 //  stop owns no `captureStopped` record; a `discontinuity` stop is set by the
-//  ledger itself when a capture record leaves the take nowhere to continue; it stays
-//  in memory only until contract v1 gains a value for it (#336).
+//  ledger itself when a capture record leaves the take nowhere to continue, and
+//  exports as the contract's `discontinuity` stop reason (#336).
 //
 
 /// A discontinuity that ended a take at its last good frame.
@@ -26,7 +26,8 @@ enum TakeStopReason: Hashable, Sendable {
         }
     }
 
-    /// The `captureStopped` reason this stop must own, or nil for `user` and ledger stops.
+    /// The device's `captureStopped` reason this stop must own, or nil for `user` and ledger stops: capture
+    /// never reports a ledger stop. The exported record's reason is `contractV1CaptureStoppedReason`.
     var captureReason: RuntimeCaptureStopReason? {
         switch self {
         case .user, .discontinuity: nil
@@ -41,16 +42,22 @@ enum TakeStopReason: Hashable, Sendable {
         if case .discontinuity = self { true } else { false }
     }
 
-    /// The take document's `stopReason` under contract v1 (frozen: `user`, `diskFull`, `deviceLost`).
-    /// A ledger stop has no v1 value and is refused, never mapped onto another reason; #336 tracks
-    /// the contract revision that will add one.
-    func contractV1StopReason() throws(TakeLedgerError) -> String {
+    /// The `captureStopped` reason the take document must own for this stop (§8.3), or nil for `user`, which
+    /// owns none. A ledger stop is `discontinuity`, never a device reason. The sub-cause
+    /// (`TakeDiscontinuityStop`) is not part of the contract and is dropped here.
+    var contractV1CaptureStoppedReason: DiscontinuityV1Record.CaptureStoppedReason? {
         switch self {
-        case .user: "user"
-        case .diskFull: "diskFull"
-        case .deviceLost: "deviceLost"
-        case .discontinuity: throw .stopReasonNotInContractV1(self)
+        case .user: nil
+        case .diskFull: .diskFull
+        case .deviceLost: .deviceLost
+        case .discontinuity: .discontinuity
         }
+    }
+
+    /// The take document's `stopReason` under contract v1 (§8.3): `user`, or the name of the
+    /// `captureStopped` reason the take owns. Every stop has a value, so none is refused or remapped.
+    func contractV1StopReason() -> String {
+        contractV1CaptureStoppedReason?.contractV1Name ?? "user"
     }
 }
 

@@ -61,7 +61,11 @@ enum PeerBackpressureFixture {
 private typealias Fixture = PeerBackpressureFixture
 private typealias Refusal = PeerBackpressureRefusal
 
+#if os(macOS)
+@Suite("PeerBackpressureTests", .productionAccessAudit)
+#else
 @Suite("PeerBackpressureTests")
+#endif
 struct PeerBackpressureTests {
     // MARK: Inbound budget limits
 
