@@ -9,12 +9,16 @@
 
 /// A clip converted from captures, with what the conversion counted. Built only by `make`.
 ///
-/// The clip's tick scale is the log's musical ticks (`MusicalTime.ticksPerQuarter`, 15,360 per quarter) and its
-/// tempo is synthetic: the file carries no tempo, so `smf()` always reports `.syntheticTempoMap`, and rounding
-/// capture positions to ticks is declared as `.timingQuantized` with its count.
+/// The clip's tick scale is the log's musical ticks (`MusicalTime.ticksPerQuarter`, 15,360 per quarter) and the
+/// file carries no tempo event, so a position needs no tempo map and §9.3's `syntheticTempoMap` (an event without a
+/// musical stamp) cannot occur: `make` refuses such captures. Rounding capture positions to ticks is declared as
+/// `.timingQuantized` with its count.
 struct CaptureClipExport: Equatable, Sendable {
     private(set) var clip: MIDIClip
-    /// Selected captures that are not MIDI 1 channel voice (MIDI 2 channel voice and every other message type).
+    /// Every selected capture the file does not contain: all that are not MIDI 1 channel voice (MT 0x2), MIDI 2
+    /// channel voice (MT 0x4) and SysEx (MT 0x3) included. §9.3 counts MT 0x3 and OS-upscaled MT 0x4 as lossless and
+    /// splits genuine MT 0x4 by opcode, because it assumes they are written; this export drops them, so they are all
+    /// counted here until #584 converts them and the per-event counts follow.
     private(set) var droppedUMPOnly: Int
     /// Note Offs (or velocity-0 Note Ons) with no open note, dropped.
     private(set) var unpairedOffs: Int
@@ -22,8 +26,6 @@ struct CaptureClipExport: Equatable, Sendable {
     private(set) var openNotesClosed: Int
     /// Zero-length notes, widened by one tick.
     private(set) var widenedNotes: Int
-    /// True when any selected capture has an unknown endpoint protocol or was translated by the OS.
-    private(set) var fidelityUnverified: Bool
     /// Selected captures outside the lowest group when the selection spans more than one group. Counted over every
     /// selected capture, those dropped as UMP-only included, and only for types that carry a group; pairing stays
     /// keyed by (channel, note), so an off of one group can close a note of another.
@@ -32,14 +34,13 @@ struct CaptureClipExport: Equatable, Sendable {
     /// were captured at (or whose map-back is unknown): the export's positions are rounded to ticks.
     private(set) var timingQuantized: Int
 
-    private init(clip: MIDIClip, droppedUMPOnly: Int, pairing: CaptureNotePairing, fidelityUnverified: Bool,
-                 groupsFlattened: Int, timingQuantized: Int) {
+    private init(clip: MIDIClip, droppedUMPOnly: Int, pairing: CaptureNotePairing, groupsFlattened: Int,
+                 timingQuantized: Int) {
         self.clip = clip
         self.droppedUMPOnly = droppedUMPOnly
         unpairedOffs = pairing.unpairedOffs
         openNotesClosed = pairing.openNotesClosed
         widenedNotes = pairing.widenedNotes
-        self.fidelityUnverified = fidelityUnverified
         self.timingQuantized = timingQuantized
         self.groupsFlattened = groupsFlattened
     }
@@ -71,7 +72,6 @@ struct CaptureClipExport: Equatable, Sendable {
     private struct Conversion {
         var messages: [Converted] = []
         var dropped = 0
-        var unverified = false
     }
 
     /// Exports the captures of `streams`. `lengthTicks` is the clip length in `1...MIDIClip.maximumLengthTicks`, or
@@ -110,7 +110,6 @@ struct CaptureClipExport: Equatable, Sendable {
             throw .clip(error)
         }
         return CaptureClipExport(clip: clip, droppedUMPOnly: conversion.dropped, pairing: pairing,
-                                 fidelityUnverified: conversion.unverified,
                                  groupsFlattened: groupsFlattened(in: records),
                                  timingQuantized: timingQuantized(in: records))
     }
@@ -147,8 +146,6 @@ struct CaptureClipExport: Equatable, Sendable {
     private static func convert(_ records: [Selected]) throws(CaptureClipExportRefusal) -> Conversion {
         var conversion = Conversion()
         for item in records {
-            let stamp = item.record.protocolStamp
-            if !stamp.verified || stamp.translatedByOS { conversion.unverified = true }
             guard item.record.packet.messageType == .midi1ChannelVoice else {
                 conversion.dropped += 1
                 continue
@@ -165,17 +162,16 @@ struct CaptureClipExport: Equatable, Sendable {
         return conversion
     }
 
-    /// The file for `clip`, written by `StandardMIDIFile.write`, with the losses of this export: the synthetic tempo
-    /// map always, `umpOnlyDropped` for the dropped captures, `fidelityUnverified` when flagged, `groupsFlattened`
-    /// when the selection spans groups and `timingQuantized` (added to whatever the writer reported) when capture
-    /// positions were rounded to ticks. Unpaired Note Offs, closed open notes and widened notes are counted on this
-    /// value, not as §9.3 categories.
+    /// The file for `clip`, written by `StandardMIDIFile.write`, with the losses of this export: `umpOnlyDropped`
+    /// for every selected capture the file lacks, `groupsFlattened` when the selection spans groups and
+    /// `timingQuantized` (added to whatever the writer reported) when capture positions were rounded to ticks. No
+    /// tempo event is written, so `syntheticTempoMap` is never reported, and `fidelityUnverified` is not either: it
+    /// qualifies converted MT 0x4 events and none are converted. Unpaired Note Offs, closed open notes and widened
+    /// notes are counted on this value, not as §9.3 categories.
     func smf() -> SMFWriteResult {
         let written = StandardMIDIFile.write(clip)
         var losses = written.losses.losses
-        losses[.syntheticTempoMap] = 1
         if droppedUMPOnly > 0 { losses[.umpOnlyDropped] = droppedUMPOnly }
-        if fidelityUnverified { losses[.fidelityUnverified] = 1 }
         if groupsFlattened > 0 { losses[.groupsFlattened] = groupsFlattened }
         if timingQuantized > 0 { losses[.timingQuantized, default: 0] += timingQuantized }
         return SMFWriteResult(bytes: written.bytes, losses: SMFExportLossReport(losses: losses),
