@@ -8,7 +8,11 @@ import Testing
 
 /// MIDI control intake (#87, #88): origin and key validation, bounds, width checks, check precedence, golden vectors
 /// and determinism. Fixtures are nested here so no name leaks into the shared test module.
+#if os(macOS)
+@Suite("MIDIControlIntakeTests", .productionAccessAudit)
+#else
 @Suite("MIDIControlIntakeTests")
+#endif
 struct MIDIControlIntakeTests {
     typealias Outcome = Result<ControlIntakeSample, ControlIntakeRefusal>
 
