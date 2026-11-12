@@ -120,10 +120,7 @@ struct CaptureClipExport: Equatable, Sendable {
         }
         let converted = conversion.messages.sorted { $0.precedes($1) }
         let timed = converted.map { CaptureTimedMessage(ticks: $0.ticks, message: $0.message) }
-        let pairing = try CaptureNotePairing.pair(timed, lengthTicks: length)
-        guard pairing.items.count + events.count <= MIDIClip.maximumItems else {
-            throw .tooManyItems(count: pairing.items.count + events.count, limit: MIDIClip.maximumItems)
-        }
+        let pairing = try CaptureNotePairing.pair(timed, lengthTicks: length, otherItems: events.count)
         let clip: MIDIClip
         do throws(MIDIClipRefusal) {
             clip = try MIDIClip.make(lengthTicks: length, items: pairing.items)
