@@ -94,15 +94,17 @@ extension MIDICIProfileDetailsMessage {
     /// of 0x80 or more (`fieldOutOfRange(.inquiryTarget)`), a data byte of 0x80 or more
     /// (`fieldOutOfRange(.inquiryTargetData)` or `.profileSpecificData`), a Reply's data above 0x3FFF bytes
     /// (`fieldOutOfRange(.inquiryTargetDataLength)`), last `payloadTooLarge`. The profile id is 7-bit by construction.
-    /// The 28-bit length of Profile Specific Data cannot be exceeded: the payload cap is at most 4,096 bytes.
+    /// The 28-bit length of Profile Specific Data cannot be exceeded: the payload cap is at most 4,096 bytes. Every
+    /// check reads the data in place and the size is computed from the lengths, so an oversized input is refused
+    /// before any body is built or copied.
     func encode(limits: MIDICILimits) throws(MIDICIRefusal) -> [UInt8] {
         let header = self.header
         guard kind.accepts(header.format) else { throw .unsupportedFormat(header.format.rawValue) }
         try MIDICIMessage.validateAddressing(
             kind.destinationRule, source: header.source, destination: header.destination)
-        let body = try encodedBody()
-        let total = MIDICILayout.headerBytes + body.count
+        let total = try checkedTotal()
         guard total <= limits.maximumPayloadBytes else { throw .payloadTooLarge(total) }
+        let body = self.body
         let prefix: [UInt8] = [
             MIDICILayout.universalNonRealTime, header.device.rawValue, MIDICILayout.ciSubID1,
             kind.rawValue, header.format.rawValue
@@ -111,26 +113,41 @@ extension MIDICIProfileDetailsMessage {
             + MIDICIWire.encode(header.destination.rawValue, byteCount: 4) + body
     }
 
-    private func encodedBody() throws(MIDICIRefusal) -> [UInt8] {
+    /// The field checks in their documented order, without building anything, then the total payload size: the fixed
+    /// bytes of the kind (header included) plus the data count. The sum of a few small constants and an array count
+    /// cannot overflow `Int`.
+    private func checkedTotal() throws(MIDICIRefusal) -> Int {
         switch self {
-        case let .detailsInquiry(_, profile, target):
-            return profile.bytes + [try Self.checkedTarget(target)]
-        case let .detailsReply(_, profile, target, data):
-            let targetByte = try Self.checkedTarget(target)
+        case let .detailsInquiry(_, _, target):
+            try Self.checkTarget(target)
+            return kind.fixedBytes
+        case let .detailsReply(_, _, target, data):
+            try Self.checkTarget(target)
             try Self.checkSevenBit(data, field: .inquiryTargetData)
             guard data.count <= Self.maximumReplyDataBytes else {
                 throw .fieldOutOfRange(.inquiryTargetDataLength, value: data.count)
             }
-            return profile.bytes + [targetByte] + MIDICIWire.encode(UInt32(data.count), byteCount: 2) + data
-        case let .specificData(_, profile, data):
+            return kind.fixedBytes + data.count
+        case let .specificData(_, _, data):
             try Self.checkSevenBit(data, field: .profileSpecificData)
+            return kind.fixedBytes + data.count
+        }
+    }
+
+    /// Built only after `checkedTotal` and the size check have passed.
+    private var body: [UInt8] {
+        switch self {
+        case let .detailsInquiry(_, profile, target):
+            return profile.bytes + [target]
+        case let .detailsReply(_, profile, target, data):
+            return profile.bytes + [target] + MIDICIWire.encode(UInt32(data.count), byteCount: 2) + data
+        case let .specificData(_, profile, data):
             return profile.bytes + MIDICIWire.encode(UInt32(data.count), byteCount: 4) + data
         }
     }
 
-    private static func checkedTarget(_ target: UInt8) throws(MIDICIRefusal) -> UInt8 {
+    private static func checkTarget(_ target: UInt8) throws(MIDICIRefusal) {
         guard target < 0x80 else { throw .fieldOutOfRange(.inquiryTarget, value: Int(target)) }
-        return target
     }
 
     private static func checkSevenBit(_ data: [UInt8], field: MIDICIRefusal.Field) throws(MIDICIRefusal) {
