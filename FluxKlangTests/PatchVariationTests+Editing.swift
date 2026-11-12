@@ -6,7 +6,11 @@ import Testing
 @testable import FluxKlang
 #endif
 
+#if os(macOS)
+@Suite("Patch variation editing", .productionAccessAudit)
+#else
 @Suite("Patch variation editing")
+#endif
 struct PatchVariationEditingTests {
     typealias Fixture = PatchVariationTests
     static let verse = Fixture.verse
