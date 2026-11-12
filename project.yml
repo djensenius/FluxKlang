@@ -558,6 +558,7 @@ targets:
       - path: FluxKlangTests/LibraryReplacementPlanTests.swift
       - path: FluxKlangTests/LibraryReplacementPlanTests+Refusals.swift
       - path: FluxKlangTests/WorkspaceInspectorSelectionTests.swift
+      - path: FluxKlangTests/RouteChoiceListTests.swift
       - path: FluxKlangTests/PeerRetryClassTests+Order.swift
       - path: FluxKlangTests/PeerBackpressureTests.swift
       - path: FluxKlangTests/PeerBackpressureTests+Backlog.swift
