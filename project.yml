@@ -550,6 +550,7 @@ targets:
       - path: FluxKlangTests/WiringSourceListTests+Refusals.swift
       - path: FluxKlangTests/SpatialPanelPresentationTests.swift
       - path: FluxKlangTests/SpatialPanelPresentationTests+Masks.swift
+      - path: FluxKlangTests/SpatialSourcePanelPresentationTests.swift
       - path: FluxKlangTests/PeerRosterListTests.swift
       - path: FluxKlangTests/PeerRosterListTests+Prompt.swift
       - path: FluxKlangTests/LibraryMediaListTests.swift
