@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ControlTriggerDetectorTests {
     typealias Fixture = ControlTriggerTests
     static let id = BindingID(validated: "bnd.trigger")

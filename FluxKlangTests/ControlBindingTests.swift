@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ControlBindingTests {
     static let level = ParameterID(validated: "par.mains.gain")
     static let mix = ParameterID(validated: "par.verb.mix")

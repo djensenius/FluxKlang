@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ControlPickupTests {
     typealias Fixture = ControlBindingTests
     static let width = ParameterID(validated: "par.space.width")
