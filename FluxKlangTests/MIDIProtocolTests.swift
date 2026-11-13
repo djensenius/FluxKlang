@@ -158,9 +158,7 @@ private let semanticCases: [MIDI1SemanticCase] = [
     .sysEx(payload: [0xF8])
 ].map { .init(raw: $0, expected: nil) }
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MIDIProtocolTests {
     @Test(arguments: shortStatuses)
     fileprivate func shortLengthsAndChunkContinuation(status: UInt8) throws {

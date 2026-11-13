@@ -40,9 +40,7 @@ enum MIDI1StateFixture {
     }
 }
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MIDI1ChannelStateTests {
     typealias Fixture = MIDI1StateFixture
 
