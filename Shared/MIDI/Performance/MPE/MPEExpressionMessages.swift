@@ -6,8 +6,8 @@
 /// (`valueOutOfRange`; nothing is clamped or masked), then a channel with no role under the configuration
 /// (`unboundChannel`). A member channel and a manager channel are both accepted; a manager message is zone-wide. The
 /// builders do not know which notes are held, so a member channel with no note passes here and the receiving
-/// `MPENoteExpression` refuses it as unbound. The order of messages around a Note On is not decided here, and turning
-/// a message into bytes is a separate value.
+/// `MPENoteExpression` records its channel values for a later Note On. The order of messages around a Note On is not
+/// decided here, and turning a message into bytes is a separate value.
 enum MPEExpressionMessages {
     private static let sevenBitLimit: UInt16 = 127
     private static let fourteenBitLimit: UInt16 = 16_383

@@ -26,12 +26,13 @@ struct MPEExpressionEntry: Equatable, Sendable {
     let zone: MPEExpressionValues
 }
 
-/// What an expression message touched: one note's member channel, or a whole zone through its manager channel.
-/// `entries` lists the affected bound notes in ascending channel order; a manager message with no bound note in the
-/// zone has an empty list but still updates the zone-wide values. An output report value, like the two types above.
+/// What an expression message touched: one member channel, or a whole zone through its manager channel. `entries`
+/// lists the affected bound notes in ascending channel order; a member message before Note On, or a manager message
+/// with no bound note in the zone, has an empty list but still updates its channel or zone values. An output report
+/// value, like the two types above.
 struct MPEExpressionUpdate: Equatable, Sendable {
     enum Target: Equatable, Sendable {
-        case note(channel: UInt8)
+        case memberChannel(channel: UInt8)
         case zone(MPEZone)
     }
 
@@ -39,10 +40,10 @@ struct MPEExpressionUpdate: Equatable, Sendable {
     let entries: [MPEExpressionEntry]
 }
 
-/// Associates channel pressure, pitch bend and controller 74 with the note bound to a member channel, and applies
-/// the same messages on a manager channel to every note in its zone. The bend range is caller-supplied, 1...96
-/// semitones, with no fallback. Only `make` builds one. Its bindings are independent of `MPEMemberAllocator`: the
-/// caller keeps the two in sync, and binding a note to a channel the allocator did not hand out is not checked.
+/// Tracks channel pressure, pitch bend and controller 74 on member channels independently of note bindings, and
+/// applies the same messages on a manager channel to every note in its zone. The bend range is caller-supplied,
+/// 1...96 semitones, with no fallback. Only `make` builds one. Its bindings are independent of `MPEMemberAllocator`:
+/// the caller keeps the two in sync, and binding a note to a channel the allocator did not hand out is not checked.
 struct MPENoteExpression: Equatable, Sendable {
     static let bendRangeSemitones = 1...96
     static let slideController: UInt8 = 74
@@ -58,7 +59,6 @@ struct MPENoteExpression: Equatable, Sendable {
 
     private struct Bound: Equatable, Sendable {
         let note: UInt8
-        var raw = Raw()
     }
 
     private enum Change {
@@ -68,12 +68,14 @@ struct MPENoteExpression: Equatable, Sendable {
     }
 
     private var bound: [Bound?]
+    private var memberRaw: [Raw]
     private var zoneRaw: [Raw]
 
     private init(configuration: MPEZoneConfiguration, bendRange: Int) {
         self.configuration = configuration
         self.bendRange = bendRange
         bound = Array(repeating: nil, count: 16)
+        memberRaw = Array(repeating: Raw(), count: 16)
         zoneRaw = Array(repeating: Raw(), count: MPEZone.allCases.count)
     }
 
@@ -92,17 +94,25 @@ struct MPENoteExpression: Equatable, Sendable {
 
     /// The member channel's own values, or nil when no note is bound there.
     func memberValues(on channel: UInt8) -> MPEExpressionValues? {
-        guard (1...16).contains(channel), let slot = bound[Int(channel) - 1] else { return nil }
-        return values(slot.raw)
+        guard (1...16).contains(channel), bound[Int(channel) - 1] != nil else { return nil }
+        return values(memberRaw[Int(channel) - 1])
+    }
+
+    /// The raw values stored for a member channel, or nil for an invalid or non-member channel.
+    func memberChannelValues(on channel: UInt8) -> MPEExpressionValues? {
+        guard (1...16).contains(channel),
+              let role = try? MPEChannelClassifier.role(of: channel, in: configuration),
+              case .member = role else { return nil }
+        return values(memberRaw[Int(channel) - 1])
     }
 
     func zoneValues(_ zone: MPEZone) -> MPEExpressionValues {
         values(zoneRaw[Self.index(of: zone)])
     }
 
-    /// Binds `note` to a member channel with neutral member values. Refuses, in this order: a channel outside 1...16,
-    /// a note above 127, a channel that is not a member channel, a channel already bound, a note already bound to
-    /// another member channel of the same zone.
+    /// Binds `note` to a member channel with its current channel values. Refuses, in this order: a channel outside
+    /// 1...16, a note above 127, a channel that is not a member channel, a channel already bound, a note already
+    /// bound to another member channel of the same zone.
     mutating func bind(note: UInt8, channel: UInt8) throws(MPERefusal) {
         let role = try MPEChannelClassifier.role(of: channel, in: configuration)
         guard note <= 127 else { throw .invalidNote(note) }
@@ -123,8 +133,8 @@ struct MPENoteExpression: Equatable, Sendable {
     }
 
     /// Applies channel pressure, pitch bend or controller 74. Refuses, in this order: any other message, a channel
-    /// outside 1...16, a value above 127 (16383 for pitch bend), a channel with no bound note or no role. A message
-    /// on a member channel updates that note; on a manager channel it updates the zone for every bound note.
+    /// outside 1...16, a value above 127 (16383 for pitch bend), or a channel with no role. A member channel's values
+    /// update even with no bound note; on a manager channel the zone values update for every bound note.
     mutating func apply(_ semantic: MIDI1Semantic) throws(MPERefusal) -> MPEExpressionUpdate {
         let (channel, change) = try Self.parse(semantic)
         let role = try MPEChannelClassifier.role(of: channel, in: configuration)
@@ -133,11 +143,12 @@ struct MPENoteExpression: Equatable, Sendable {
         case .unassigned:
             throw .unboundChannel(channel)
         case let .member(zone):
-            guard var slot = bound[Int(channel) - 1] else { throw .unboundChannel(channel) }
-            Self.write(change, to: &slot.raw)
-            bound[Int(channel) - 1] = slot
+            Self.write(change, to: &memberRaw[Int(channel) - 1])
+            let entries = bound[Int(channel) - 1].map {
+                [entry(channel: channel, slot: $0, zone: zone)]
+            } ?? []
             return MPEExpressionUpdate(
-                target: .note(channel: channel), entries: [entry(channel: channel, slot: slot, zone: zone)]
+                target: .memberChannel(channel: channel), entries: entries
             )
         case let .manager(zone):
             Self.write(change, to: &zoneRaw[Self.index(of: zone)])
@@ -190,6 +201,8 @@ struct MPENoteExpression: Equatable, Sendable {
     }
 
     private func entry(channel: UInt8, slot: Bound, zone: MPEZone) -> MPEExpressionEntry {
-        MPEExpressionEntry(channel: channel, note: slot.note, member: values(slot.raw), zone: zoneValues(zone))
+        MPEExpressionEntry(
+            channel: channel, note: slot.note, member: values(memberRaw[Int(channel) - 1]), zone: zoneValues(zone)
+        )
     }
 }

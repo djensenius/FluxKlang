@@ -62,7 +62,7 @@ extension MPEZoneTests {
     @Test func channelPressureOnAMemberChannelUpdatesOnlyThatNoteAndTheLastValueWins() throws {
         var live = try Self.bound(3, 0, [(60, 2), (62, 3)])
         let first = try live.apply(.channelPressure(channel: 2, pressure: 10))
-        #expect(first.target == .note(channel: 2))
+        #expect(first.target == .memberChannel(channel: 2))
         let second = try live.apply(.channelPressure(channel: 2, pressure: 90))
         let member = MPEExpressionValues(pressure: 90, slide: 0, pitchBend: 8192, bendCents: 0)
         #expect(second.entries == [MPEExpressionEntry(channel: 2, note: 60, member: member, zone: Self.neutral())])
@@ -114,12 +114,16 @@ extension MPEZoneTests {
         #expect(live == (try Self.bound(3, 0, [(60, 2)])))
     }
 
-    @Test func anExpressionOnAnUnboundMemberOrAnUnassignedChannelIsRefusedAsUnbound() throws {
+    @Test func expressionOnAnUnboundMemberIsStoredButAnUnassignedChannelIsRefused() throws {
         var live = try Self.bound(3, 0, [(60, 2)])
-        #expect(throws: MPERefusal.unboundChannel(3)) { try live.apply(.channelPressure(channel: 3, pressure: 5)) }
+        let update = try live.apply(.channelPressure(channel: 3, pressure: 5))
+        #expect(update.target == .memberChannel(channel: 3))
+        #expect(update.entries.isEmpty)
+        #expect(live.memberChannelValues(on: 3)?.pressure == 5)
         #expect(throws: MPERefusal.unboundChannel(8)) { try live.apply(.pitchBend(channel: 8, value: 100)) }
         #expect(throws: MPERefusal.unboundChannel(16)) { try live.apply(.pitchBend(channel: 16, value: 100)) }
-        #expect(live == (try Self.bound(3, 0, [(60, 2)])))
+        #expect(live.boundNote(on: 2) == 60)
+        #expect(live.memberChannelValues(on: 8) == nil)
     }
 
     @Test func aManagerMessageUpdatesTheZoneForEveryBoundNoteInAscendingChannelOrder() throws {
@@ -178,16 +182,66 @@ extension MPEZoneTests {
         #expect(live.memberValues(on: 2)?.pitchBend == 0)
     }
 
-    @Test func unbindingReturnsTheNoteFreesTheChannelAndARebindStartsNeutral() throws {
+    @Test func invalidMessagesOnAnUnboundMemberDoNotMutateItsChannelValues() throws {
+        var live = try Self.expression(3, 0)
+        _ = try live.apply(.controlChange(channel: 3, controller: 74, value: 42))
+        let held = live
+        #expect(throws: MPERefusal.valueOutOfRange(128)) {
+            try live.apply(.channelPressure(channel: 3, pressure: 128))
+        }
+        #expect(throws: MPERefusal.valueOutOfRange(16_384)) {
+            try live.apply(.pitchBend(channel: 3, value: 16_384))
+        }
+        #expect(throws: MPERefusal.valueOutOfRange(128)) {
+            try live.apply(.controlChange(channel: 3, controller: 74, value: 128))
+        }
+        #expect(throws: MPERefusal.notExpressionMessage) {
+            try live.apply(.controlChange(channel: 3, controller: 73, value: 10))
+        }
+        #expect(live == held)
+        #expect(live.memberChannelValues(on: 3) == MPEExpressionValues(
+            pressure: 0, slide: 42, pitchBend: 8192, bendCents: 0
+        ))
+    }
+
+    @Test func memberExpressionBeforeNoteOnIsStoredAndInheritedWhenBound() throws {
+        var live = try Self.expression(3, 0)
+        let pressure = try live.apply(.channelPressure(channel: 2, pressure: 90))
+        #expect(pressure.target == .memberChannel(channel: 2))
+        #expect(pressure.entries.isEmpty)
+        let slide = try live.apply(.controlChange(channel: 2, controller: 74, value: 45))
+        #expect(slide.target == .memberChannel(channel: 2))
+        #expect(slide.entries.isEmpty)
+        let bend = try live.apply(.pitchBend(channel: 2, value: 12_345))
+        #expect(bend.target == .memberChannel(channel: 2))
+        #expect(bend.entries.isEmpty)
+
+        let expected = MPEExpressionValues(pressure: 90, slide: 45, pitchBend: 12_345, bendCents: 2_433)
+        #expect(live.memberValues(on: 2) == nil)
+        #expect(live.memberChannelValues(on: 2) == expected)
+        try live.bind(note: 60, channel: 2)
+        #expect(live.memberValues(on: 2) == expected)
+    }
+
+    @Test func unbindingPreservesChannelValuesForTheNextNote() throws {
         var live = try Self.bound(3, 0, [(60, 2)])
         _ = try live.apply(.channelPressure(channel: 2, pressure: 99))
+        _ = try live.apply(.controlChange(channel: 2, controller: 74, value: 42))
+        _ = try live.apply(.pitchBend(channel: 2, value: 16_383))
         #expect(Self.unbound(&live, 2) == 60)
         #expect(Self.unbound(&live, 2) == nil)
         #expect(Self.unbound(&live, 0) == nil)
         #expect(live.memberValues(on: 2) == nil)
-        #expect(throws: MPERefusal.unboundChannel(2)) { try live.apply(.channelPressure(channel: 2, pressure: 5)) }
+        #expect(live.memberChannelValues(on: 2) == MPEExpressionValues(
+            pressure: 99, slide: 42, pitchBend: 16_383, bendCents: 4_799
+        ))
+        let update = try live.apply(.channelPressure(channel: 2, pressure: 5))
+        #expect(update.target == .memberChannel(channel: 2))
+        #expect(update.entries.isEmpty)
         try live.bind(note: 61, channel: 2)
-        #expect(live.memberValues(on: 2) == Self.neutral())
+        #expect(live.memberValues(on: 2) == MPEExpressionValues(
+            pressure: 5, slide: 42, pitchBend: 16_383, bendCents: 4_799
+        ))
     }
 
     @Test func lookupsOutsideOneToSixteenAndOnFreeChannelsAreNil() throws {
@@ -195,6 +249,7 @@ extension MPEZoneTests {
         for channel in [UInt8(0), 17, 255, 3, 1, 16] {
             #expect(live.boundNote(on: channel) == nil)
             #expect(live.memberValues(on: channel) == nil)
+            #expect(live.memberChannelValues(on: channel) == (channel == 3 ? Self.neutral() : nil))
         }
         #expect(live.boundNote(on: 2) == 60)
     }
@@ -351,7 +406,7 @@ extension MPEZoneTests {
         let pressure = try MPEExpressionMessages.pressure(channel: 2, value: 90, in: live.configuration)
         let first = try live.apply(pressure)
         let member = MPEExpressionValues(pressure: 90, slide: 0, pitchBend: 8192, bendCents: 0)
-        #expect(first.target == .note(channel: 2))
+        #expect(first.target == .memberChannel(channel: 2))
         #expect(first.entries == [MPEExpressionEntry(channel: 2, note: 60, member: member, zone: Self.neutral())])
         let slide = try MPEExpressionMessages.slide(channel: 2, value: 64, in: live.configuration)
         #expect(try live.apply(slide).entries.first?.member.slide == 64)
@@ -369,7 +424,9 @@ extension MPEZoneTests {
         #expect(entry.zone.pressure == 33)
         let unbound = try MPEExpressionMessages.pressure(channel: 3, value: 5, in: live.configuration)
         #expect(unbound == .channelPressure(channel: 3, pressure: 5))
-        #expect(throws: MPERefusal.unboundChannel(3)) { try live.apply(unbound) }
+        let preNote = try live.apply(unbound)
+        #expect(preNote.target == .memberChannel(channel: 3))
+        #expect(preNote.entries.isEmpty)
     }
 
     @Test func expressionBuildersMatchAnIndependentRoleOracleForEveryLayoutAndChannel() throws {

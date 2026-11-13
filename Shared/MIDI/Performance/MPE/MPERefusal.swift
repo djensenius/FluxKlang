@@ -41,7 +41,7 @@ enum MPERefusal: Error, Equatable, Sendable {
     case channelAlreadyBound(UInt8)
     /// The note is already bound to a member channel of the same zone.
     case noteAlreadyBound(UInt8)
-    /// A per-note message arrived on a channel with no bound note, or on an unassigned channel.
+    /// A message arrived on an unassigned channel, or an operation required a member channel.
     case unboundChannel(UInt8)
     /// The message is not channel pressure, pitch bend or controller 74.
     case notExpressionMessage
