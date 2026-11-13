@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ProjectPreparationContextTests {
     static let digest = "sha256:" + String(repeating: "0123456789abcdef", count: 4)
 

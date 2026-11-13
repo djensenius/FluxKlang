@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ProjectPackageManifestValidationTests {
     @Test func requiresExplicitPositiveManifestCeilingWithinEntryLimit() throws {
         let limits = try ManifestTestSupport.policy().packageLimits

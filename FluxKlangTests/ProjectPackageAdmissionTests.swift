@@ -28,9 +28,7 @@ enum ProjectPackageTestSupport {
     }
 }
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ProjectPackageAdmissionTests {
     @Test func countsDirectoriesAndFilesAtExactEntryLimit() throws {
         var admission = ProjectPackageAdmission(limits: try ProjectPackageTestSupport.limits(entries: 2))
