@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ControlLearnTests {
     static let size = ParameterID(validated: "par.verb.size")
     static let trim = ParameterID(validated: "par.mic.trim")

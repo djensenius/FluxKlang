@@ -8,9 +8,7 @@ import Testing
 /// MPE zone model: configuration, channel roles, the member allocator and per-note expression.
 /// Root file: shared fixtures plus the configuration and channel-role tests. RPN 6 lives in `+Config`, the allocator in
 /// `+Allocator` and expression in `+Expression`.
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MPEZoneTests {
     static func config(_ lower: Int, _ upper: Int) throws -> MPEZoneConfiguration {
         try MPEZoneConfiguration.make(lowerMembers: lower, upperMembers: upper)
