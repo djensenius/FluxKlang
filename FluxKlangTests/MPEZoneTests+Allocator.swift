@@ -149,6 +149,125 @@ extension MPEZoneTests {
         #expect(live.channel(of: 99, in: .lower) == nil)
     }
 
+    static func mpxDisplaced(_ channel: UInt8, _ note: UInt8, _ zone: MPEZone) -> MPEDisplacedNote {
+        MPEDisplacedNote(channel: channel, note: note, zone: zone)
+    }
+
+    @Test func displacedNotesAreEmptyWhenEveryHeldNoteStaysOnAMemberChannelOfItsZone() throws {
+        let held = try Self.filled(5, 0, lowerNotes: [60, 61, 62, 63, 64])
+        for (lower, upper) in [(5, 0), (6, 0), (15, 0), (5, 3)] {
+            #expect(MPEZoneImpact.displacedNotes(in: held, after: try Self.config(lower, upper)).isEmpty)
+        }
+        let empty = try Self.filled(3, 3)
+        #expect(MPEZoneImpact.displacedNotes(in: empty, after: try Self.config(0, 0)).isEmpty)
+    }
+
+    @Test func aShrinkingLowerZoneDisplacesTheNotesOnItsDroppedMembers() throws {
+        let held = try Self.filled(5, 0, lowerNotes: [60, 61, 62, 63, 64])
+        let report = MPEZoneImpact.displacedNotes(in: held, after: try Self.config(3, 0))
+        #expect(report == [Self.mpxDisplaced(5, 63, .lower), Self.mpxDisplaced(6, 64, .lower)])
+    }
+
+    @Test func aShrinkingUpperZoneIsReportedAscendingByChannel() throws {
+        let held = try Self.filled(0, 5, upperNotes: [60, 61, 62, 63, 64])
+        let report = MPEZoneImpact.displacedNotes(in: held, after: try Self.config(0, 2))
+        #expect(report == [
+            Self.mpxDisplaced(11, 64, .upper), Self.mpxDisplaced(12, 63, .upper), Self.mpxDisplaced(13, 62, .upper)
+        ])
+    }
+
+    @Test func displacedNotesCoverOnlyHeldChannelsNotFreeOnes() throws {
+        var held = try Self.filled(5, 0, lowerNotes: [60, 61, 62, 63, 64])
+        for note in [UInt8(61), 62, 63] { #expect(Self.free(&held, note, .lower)) }
+        let report = MPEZoneImpact.displacedNotes(in: held, after: try Self.config(1, 0))
+        #expect(report == [Self.mpxDisplaced(6, 64, .lower)])
+    }
+
+    @Test func turningAZoneOffDisplacesEveryHeldNoteOfThatZone() throws {
+        let off = try Self.config(0, 0)
+        let lowerHeld = try Self.filled(5, 0, lowerNotes: [60, 61, 62, 63, 64])
+        let lowerReport = MPEZoneImpact.displacedNotes(in: lowerHeld, after: off)
+        #expect(lowerReport.map(\.channel) == [2, 3, 4, 5, 6])
+        #expect(lowerReport.map(\.note) == [60, 61, 62, 63, 64])
+        #expect(lowerReport.allSatisfy { $0.zone == .lower })
+        let upperHeld = try Self.filled(0, 3, upperNotes: [70, 71, 72])
+        #expect(MPEZoneImpact.displacedNotes(in: upperHeld, after: off) == [
+            Self.mpxDisplaced(13, 72, .upper), Self.mpxDisplaced(14, 71, .upper), Self.mpxDisplaced(15, 70, .upper)
+        ])
+        let both = try Self.filled(3, 4, lowerNotes: [10, 11, 12], upperNotes: [20, 21, 22, 23])
+        #expect(MPEZoneImpact.displacedNotes(in: both, after: off) == [
+            Self.mpxDisplaced(2, 10, .lower), Self.mpxDisplaced(3, 11, .lower), Self.mpxDisplaced(4, 12, .lower),
+            Self.mpxDisplaced(12, 23, .upper), Self.mpxDisplaced(13, 22, .upper), Self.mpxDisplaced(14, 21, .upper),
+            Self.mpxDisplaced(15, 20, .upper)
+        ])
+    }
+
+    @Test func aSingleZoneShrinkingFromFifteenMembersDisplacesNotesOnTheEdgeChannels() throws {
+        let lowerHeld = try Self.filled(15, 0, lowerNotes: Array(60...74))
+        let lowerChange = try MPEZoneConfiguration.fromRPN6(channel: 16, dataEntryMSB: 2, current: Self.config(15, 0))
+        #expect(MPEZoneImpact.displacedNotes(in: lowerHeld, after: lowerChange.configuration) == [
+            Self.mpxDisplaced(14, 72, .lower), Self.mpxDisplaced(15, 73, .lower), Self.mpxDisplaced(16, 74, .lower)
+        ])
+        let upperHeld = try Self.filled(0, 15, upperNotes: Array(60...74))
+        let upperChange = try MPEZoneConfiguration.fromRPN6(channel: 1, dataEntryMSB: 2, current: Self.config(0, 15))
+        #expect(MPEZoneImpact.displacedNotes(in: upperHeld, after: upperChange.configuration) == [
+            Self.mpxDisplaced(1, 74, .upper), Self.mpxDisplaced(2, 73, .upper), Self.mpxDisplaced(3, 72, .upper)
+        ])
+    }
+
+    @Test func upperNotesOnChannelsThatBecameLowerMembersAreStillDisplaced() throws {
+        let held = try Self.filled(3, 5, lowerNotes: [60, 61, 62], upperNotes: [80, 81, 82, 83, 84])
+        let change = try MPEZoneConfiguration.fromRPN6(channel: 1, dataEntryMSB: 12, current: Self.config(3, 5))
+        #expect(change.configuration == (try Self.config(12, 2)))
+        #expect(MPEZoneImpact.displacedNotes(in: held, after: change.configuration) == [
+            Self.mpxDisplaced(11, 84, .upper), Self.mpxDisplaced(12, 83, .upper), Self.mpxDisplaced(13, 82, .upper)
+        ])
+    }
+
+    @Test func theSameNoteNumberInBothZonesIsReportedPerZoneInChannelOrder() throws {
+        let held = try Self.filled(3, 3, lowerNotes: [60, 61, 62], upperNotes: [60, 61, 62])
+        #expect(MPEZoneImpact.displacedNotes(in: held, after: try Self.config(0, 1)) == [
+            Self.mpxDisplaced(2, 60, .lower), Self.mpxDisplaced(3, 61, .lower), Self.mpxDisplaced(4, 62, .lower),
+            Self.mpxDisplaced(13, 62, .upper), Self.mpxDisplaced(14, 61, .upper)
+        ])
+    }
+
+    @Test func reportingDisplacedNotesChangesNothingAndRepeatsTheSameAnswer() throws {
+        let held = try Self.filled(3, 3, lowerNotes: [60, 61, 62], upperNotes: [70, 71])
+        let twin = try Self.filled(3, 3, lowerNotes: [60, 61, 62], upperNotes: [70, 71])
+        let target = try Self.config(1, 1)
+        let first = MPEZoneImpact.displacedNotes(in: held, after: target)
+        #expect(held == twin)
+        let second = MPEZoneImpact.displacedNotes(in: held, after: target)
+        #expect(held == twin)
+        #expect(first.count == 3)
+        #expect(first == second)
+    }
+
+    @Test func displacedNotesMatchAnIndependentOracleForEveryPairOfLayouts() throws {
+        let pairs = Self.allValidPairs()
+        var total = 0
+        for (oldLower, oldUpper) in pairs {
+            let lowerNotes = (0..<oldLower).map { UInt8(10 + $0) }
+            let upperNotes = (0..<oldUpper).map { UInt8(60 + $0) }
+            let held = try Self.filled(oldLower, oldUpper, lowerNotes: lowerNotes, upperNotes: upperNotes)
+            for (newLower, newUpper) in pairs {
+                var expected: [MPEDisplacedNote] = []
+                for index in 0..<oldLower where index >= newLower {
+                    expected.append(Self.mpxDisplaced(UInt8(2 + index), UInt8(10 + index), .lower))
+                }
+                for index in 0..<oldUpper where index >= newUpper {
+                    expected.append(Self.mpxDisplaced(UInt8(15 - index), UInt8(60 + index), .upper))
+                }
+                expected.sort { $0.channel < $1.channel }
+                let report = MPEZoneImpact.displacedNotes(in: held, after: try Self.config(newLower, newUpper))
+                #expect(report == expected)
+                total += 1
+            }
+        }
+        #expect(total == 14_884)
+    }
+
     @Test func aFreshAllocatorForAnOffConfigurationHoldsNothingAndRefusesBothZones() throws {
         var live = try Self.allocator(0, 0)
         for channel in UInt8(1)...16 { #expect(live.note(on: channel) == nil) }
