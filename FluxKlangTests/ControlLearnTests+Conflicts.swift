@@ -26,6 +26,8 @@ struct ControlLearnConflictTests {
             var session = try Learn.listening()
             let hearing = try session.hear(Learn.knob5, present: [Learn.deviceA], existing: existing, now: 1)
             #expect(Learn.proposal(hearing)?.conflicts == expected)
+            guard case .awaitingReview(let review) = session.phase else { Issue.record("not reviewing"); continue }
+            #expect(review.conflictingBindings == existing.filter { $0.id != Self.unrelated }.sorted { $0.id < $1.id })
         }
         #expect(try LearnConflicts.find(source: Learn.encoder2.source, target: Learn.trim, in: Self.crowd()).isEmpty)
     }
@@ -46,7 +48,13 @@ struct ControlLearnConflictTests {
     func replacingExactlyTheConflictSetCommits() throws {
         var session = try Learn.reviewing(Learn.knob5, existing: Self.crowd())
         let named: Set = [Self.sameSource, Self.sameTarget, Self.sameBoth]
-        let commit = try session.confirm(.replace(named), descriptor: Learn.sizeDescriptor(), existing: Self.crowd())
+        var current = try Self.crowd().reversed().map { binding in
+            var fields = binding.fields
+            if binding.id == Self.unrelated { fields.pickup = .catch }
+            return try ControlBinding(fields)
+        }
+        current.append(try Self.binding("bnd.extra", source: "ctl.extra", target: Learn.level))
+        let commit = try session.confirm(.replace(named), descriptor: Learn.sizeDescriptor(), existing: current)
         #expect(commit.removing == [Self.sameTarget, Self.sameBoth, Self.sameSource])
         #expect(commit.binding.id == Learn.newID && session.phase == .committed(commit))
     }
@@ -75,14 +83,55 @@ struct ControlLearnConflictTests {
     @Test
     func conflictsAreRecomputedAtConfirm() throws {
         var session = try Learn.reviewing(Learn.knob5, existing: Self.crowd())
+        let before = session
         let current = try Self.crowd().filter { $0.id == Self.unrelated || $0.id == Self.sameTarget }
         let proposed: Set = [Self.sameSource, Self.sameTarget, Self.sameBoth]
         #expect(throws: LearnRefusal.staleReplacement(expected: [Self.sameTarget], found: proposed.sorted())) {
             try session.confirm(.replace(proposed), descriptor: Learn.sizeDescriptor(), existing: current)
         }
+        #expect(throws: LearnRefusal.staleReview) {
+            try session.confirm(.replace([Self.sameTarget]), descriptor: Learn.sizeDescriptor(), existing: current)
+        }
+        #expect(session == before)
+        try session.cancel()
+        try session.start(Learn.sizeDescriptor(), binding: Learn.newID, policy: LearnEligibilityPolicy(),
+                          timeoutTicks: 100, now: 2)
+        let heard = try session.hear(Learn.knob5, present: [Learn.deviceA], existing: current, now: 3)
+        #expect(try #require(Learn.proposal(heard)).conflicts == [
+            LearnConflict(binding: Self.sameTarget, kind: .sameTarget)
+        ])
         let commit = try session.confirm(.replace([Self.sameTarget]), descriptor: Learn.sizeDescriptor(),
                                          existing: current)
         #expect(commit.removing == [Self.sameTarget])
+        #expect(session.phase == .committed(commit))
+    }
+
+    @Test
+    func sameConflictIdentityWithChangedContentRequiresFreshReview() throws {
+        let original = try Self.binding(Self.sameBoth.rawValue, source: "ctl.knob-5", target: Learn.size)
+        for (profile, pickup) in [(EncoderProfile.absolute(resolution: 128), PickupMode.catch),
+                                  (.absolute(resolution: 256), .jump)] {
+            var session = try Learn.reviewing(Learn.knob5, existing: [original])
+            let before = session
+            let changed = try ControlBinding(.init(id: original.id, source: original.source, target: original.target,
+                                                   unit: original.unit, profile: profile, pickup: pickup))
+            let conflicts = try LearnConflicts.find(source: Learn.knob5.source, target: Learn.size, in: [changed])
+            #expect(conflicts == [LearnConflict(binding: Self.sameBoth, kind: .sameSourceAndTarget)])
+            #expect(throws: LearnRefusal.staleReview) {
+                try session.confirm(.replace([Self.sameBoth]), descriptor: Learn.sizeDescriptor(), existing: [changed])
+            }
+            #expect(session == before)
+            try session.cancel()
+            try session.start(Learn.sizeDescriptor(), binding: Learn.newID, policy: LearnEligibilityPolicy(),
+                              timeoutTicks: 100, now: 2)
+            _ = try #require(Learn.proposal(session.hear(Learn.knob5, present: [Learn.deviceA],
+                                                         existing: [changed], now: 3)))
+            guard case .awaitingReview(let review) = session.phase else { Issue.record("not reviewing"); continue }
+            #expect(review.conflictingBindings == [changed])
+            let commit = try session.confirm(.replace([Self.sameBoth]), descriptor: Learn.sizeDescriptor(),
+                                             existing: [changed])
+            #expect(commit.removing == [Self.sameBoth] && session.phase == .committed(commit))
+        }
     }
 
     @Test
@@ -123,7 +172,7 @@ struct ControlLearnConflictTests {
         let swapped = try Self.binding(Self.sameTarget.rawValue, source: "ctl.fader-1", target: Learn.size)
         var crowded = try Self.filler(limit - 1)
         crowded.append(swapped)
-        var replacing = try Learn.reviewing(Learn.knob5)
+        var replacing = try Learn.reviewing(Learn.knob5, existing: crowded)
         let commit = try replacing.confirm(.replace([Self.sameTarget]), descriptor: Learn.sizeDescriptor(),
                                            existing: crowded)
         #expect(commit.removing == [Self.sameTarget])
@@ -167,6 +216,11 @@ struct ControlLearnConflictTests {
             try session.confirm(descriptor: Learn.sizeDescriptor(), existing: [squatter])
         }
         let previous = try Self.binding(Learn.newID.rawValue, source: "ctl.knob-5", target: Learn.size)
+        try session.cancel()
+        try session.start(Learn.sizeDescriptor(), binding: Learn.newID, policy: LearnEligibilityPolicy(),
+                          timeoutTicks: 100, now: 2)
+        _ = try #require(Learn.proposal(session.hear(Learn.knob5, present: [Learn.deviceA],
+                                                     existing: [previous], now: 3)))
         let commit = try session.confirm(.replace([Learn.newID]), descriptor: Learn.sizeDescriptor(),
                                          existing: [previous])
         #expect(commit.removing == [Learn.newID])

@@ -35,6 +35,8 @@ enum LearnRefusal: Error, Hashable, Sendable {
     case conflicted([LearnConflict])
     /// A replacement set that is not exactly the current conflict set (both sorted).
     case staleReplacement(expected: [BindingID], found: [BindingID])
+    /// The current descriptor or complete conflicting bindings differ from the explicit review.
+    case staleReview
     /// The new binding's ID belongs to an existing binding that is not being replaced.
     case bindingIDInUse(BindingID)
 }

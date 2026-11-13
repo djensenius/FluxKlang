@@ -46,10 +46,13 @@ struct LearnProposal: Hashable, Sendable {
 struct LearnReview: Hashable, Sendable {
     let target: LearnTarget
     let proposal: LearnProposal
+    /// Complete reviewed conflicts, sorted by binding ID; unrelated bindings are not review truth.
+    let conflictingBindings: [ControlBinding]
 
-    fileprivate init(target: LearnTarget, proposal: LearnProposal) {
+    fileprivate init(target: LearnTarget, proposal: LearnProposal, conflictingBindings: [ControlBinding]) {
         self.target = target
         self.proposal = proposal
+        self.conflictingBindings = conflictingBindings
     }
 }
 
@@ -176,12 +179,15 @@ struct LearnSession: Hashable, Sendable {
             return .ignored(error)
         }
         let proposal = LearnProposal(device: heard.device, binding: binding, conflicts: conflicts)
-        phase = .awaitingReview(LearnReview(target: target, proposal: proposal))
+        let records = Self.conflictingBindings(for: conflicts, in: existing)
+        phase = .awaitingReview(LearnReview(target: target, proposal: proposal,
+                                            conflictingBindings: records))
         return .recorded(proposal)
     }
 
     /// Confirms the reviewed proposal against current host truth. Conflicts are recomputed from
     /// `existing`; by default any conflict refuses, and `replace` must name exactly the conflicts.
+    /// Changed review truth requires explicit cancel/start/hear and renewed review, not new replacement IDs.
     mutating func confirm(_ resolution: LearnConflictResolution = .refuse, descriptor: ParameterDescriptor,
                           existing: [ControlBinding]) throws(LearnRefusal) -> LearnCommit {
         guard case .awaitingReview(let review) = phase else { throw .notAwaitingReview(phase.kind) }
@@ -197,6 +203,10 @@ struct LearnSession: Hashable, Sendable {
         }
         let resulting = existing.count - removing.count + 1
         guard resulting <= ControlBindingLimit.maximumBindings else { throw .tooManyBindings(resulting) }
+        guard descriptor == review.target.descriptor,
+              Self.conflictingBindings(for: conflicts, in: existing) == review.conflictingBindings else {
+            throw .staleReview
+        }
         let commit = LearnCommit(binding: binding, removing: removing)
         phase = .committed(commit)
         return commit
@@ -210,6 +220,13 @@ struct LearnSession: Hashable, Sendable {
 
     private func requireMonotonic(_ now: UInt64) throws(LearnRefusal) {
         guard now >= lastTick else { throw .tickRegressed(last: lastTick, now: now) }
+    }
+
+    /// Called only after conflict discovery has bounded the input and rejected duplicate IDs.
+    private static func conflictingBindings(for conflicts: [LearnConflict],
+                                            in existing: [ControlBinding]) -> [ControlBinding] {
+        let ids = Set(conflicts.map(\.binding))
+        return existing.filter { ids.contains($0.id) }.sorted { $0.id < $1.id }
     }
 
     /// Checked, so a broken `startTick > now` invariant refuses instead of trapping.
