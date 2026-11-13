@@ -1,9 +1,11 @@
 /// The MIDI 1 control changes that make up an MPE Configuration Message for one zone (#82, slice MPC1). Nothing calls
-/// it yet. The layout is the coordinator's judgment, not read from the MPE specification: the ordinary RPN sequence
+/// it yet. The layout agrees with the MPE specification (version 1.0, 2.1.1): the ordinary RPN sequence
 /// (controller 101 = MSB 0, controller 100 = LSB 6, then Data Entry MSB, controller 6) on the zone's manager channel,
-/// which is what `MPEZoneConfiguration.fromRPN6` and `MIDI1PerformanceState` already accept. No null-function
-/// terminator (101 and 100 = 127) follows, and only the one zone is checked: a receiver shrinks the other zone when
-/// the two do not fit, and `fromRPN6` reports it.
+/// which is what `MPEZoneConfiguration.fromRPN6` and `MIDI1PerformanceState` already accept. The specification lists
+/// controller 100 before 101 (the receiver here selects 0/6 in either order), and each of its examples starts with
+/// Reset All Controllers (controller 121), which is not sent. No null-function terminator (101 and 100 = 127) follows,
+/// as in its examples, and only the one zone is checked: a receiver shrinks the other zone when the two do not fit,
+/// and `fromRPN6` reports it.
 enum MPEConfigurationMessage {
     /// The three control changes of an MPE Configuration Message that sets `zone` to `members` member channels.
     /// Refuses a count outside 0...15 (0 turns the zone off) before building anything.
