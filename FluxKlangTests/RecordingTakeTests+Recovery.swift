@@ -7,9 +7,7 @@ import Testing
 #endif
 
 /// Round 2: no abnormal path leaves a take stuck, drops a record or loses captured audio.
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct RecordingTakeRecoveryTests {
     typealias Fixture = TakeLedgerTestFixture
 

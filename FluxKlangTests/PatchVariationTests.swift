@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct PatchVariationTests {
     static let gain = ParameterID(validated: "par.gain")
     static let mix = ParameterID(validated: "par.mix")
