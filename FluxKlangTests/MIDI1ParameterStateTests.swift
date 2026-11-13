@@ -5,9 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MIDI1ParameterStateTests {
     typealias Fixture = MIDI1StateFixture
 

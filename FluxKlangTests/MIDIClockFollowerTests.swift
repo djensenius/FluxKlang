@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MIDIClockFollowerTests {
     private static func host(_ ticks: UInt64) -> HostStamp { HostStamp(ticks: ticks) }
 

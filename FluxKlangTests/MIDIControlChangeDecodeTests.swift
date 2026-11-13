@@ -8,9 +8,7 @@ import Testing
 /// `MIDIControlChange.decode(_:)` on the MIDI 1 parser (#80, slice LD1). This file holds the basic contract and the
 /// size bounds; `+Legacy` holds the frozen old decoder and the before/after tables, `+RealTime` the F8...FF cases and
 /// `+Fragments` truncation, non-CC skipping, running status and SysEx.
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct MIDIControlChangeDecodeTests {
     static func cc(_ channel: Int, _ controller: UInt8, _ value: UInt8) -> MIDIControlChange {
         MIDIControlChange(channel: channel, controller: controller, value: value)
