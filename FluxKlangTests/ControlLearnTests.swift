@@ -289,6 +289,25 @@ struct ControlLearnTests {
     }
 
     @Test
+    func compatibleDescriptorChangeRequiresFreshReview() throws {
+        var session = try Self.reviewing(Self.knob5)
+        let before = session
+        let current = try Self.descriptor(Self.size, unit: .normalized, range: 0...0.5)
+        #expect(throws: LearnRefusal.staleReview) {
+            try session.confirm(descriptor: current, existing: [])
+        }
+        #expect(session == before)
+        try session.cancel()
+        try session.start(current, binding: Self.newID, policy: LearnEligibilityPolicy(), timeoutTicks: 100, now: 2)
+        _ = try #require(Self.proposal(session.hear(Self.knob5, present: [Self.deviceA], existing: [], now: 3)))
+        guard case .awaitingReview(let review) = session.phase else { Issue.record("not reviewing"); return }
+        #expect(review.target.descriptor == current)
+        let commit = try session.confirm(descriptor: current, existing: [])
+        #expect(try commit.binding.validate(against: current) == 0...0.5)
+        #expect(session.phase == .committed(commit))
+    }
+
+    @Test
     func sameInputsGiveEqualOutputs() throws {
         func run() throws -> (LearnHearing, LearnSession) {
             var session = try Self.listening(timeoutTicks: 50, now: 7)
