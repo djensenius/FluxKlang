@@ -6,9 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ControlHostTruthTests {
     typealias Fixture = ControlBindingTests
     static let mix = ParameterID(validated: "par.verb.mix")

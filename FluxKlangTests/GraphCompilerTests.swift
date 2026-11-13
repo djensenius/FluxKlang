@@ -5,9 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct GraphCompilerTests {
     private typealias Fixtures = AudioRoutingTestFixtures
     private typealias Mutation = (inout Fixtures.Documents) -> Void
