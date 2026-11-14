@@ -7,6 +7,7 @@ import Testing
 #endif
 
 /// Staged package export/import over the in-memory fake volume. Topics live in `ProjectStagingTests+*.swift`.
+@Suite(.productionAccessAudit)
 struct ProjectStagingTests {
     typealias Fake = InMemoryStagingFileSystem
 

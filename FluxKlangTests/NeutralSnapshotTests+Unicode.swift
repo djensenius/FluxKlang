@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct NeutralSnapshotUnicodeTests {
     static let marker = UntrustedLabel.withheldMarker
     static let serial = ["SN-12345"]

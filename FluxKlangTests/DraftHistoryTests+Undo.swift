@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Draft undo and redo")
+@Suite("Draft undo and redo", .productionAccessAudit)
 struct DraftUndoTests {
     typealias Fixture = DraftHistoryFixture
 

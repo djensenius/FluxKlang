@@ -15,6 +15,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct NeutralSnapshotUnicodeScanTests {
     /// Every valid Unicode scalar, including unassigned and private-use values.
     /// `filterScalars` removes the latter two before matching, but case-fold closure is
