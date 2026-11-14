@@ -138,3 +138,94 @@ jobs:
             [ -f "DerivedData/Build/Products/$rel" ] || { echo "::error::missing $rel"; status=1; }
           done
           exit "$status"
+
+  qualification-build:
+    # Compile-only: build-for-testing of the opt-in Apple qualification scheme. It never runs the
+    # live Apple-model tests, which need a fresh host and separate execution authorization.
+    # A separate job so it runs in parallel with `build`; same image and pins as `build`.
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        with:
+          version: 2026.10.25
+          install_args: xcodegen
+      - name: Pinned XcodeGen is on PATH
+        run: |
+          want=$(mise current xcodegen); have=$(xcodegen --version)
+          echo "$have at $(command -v xcodegen); mise.toml pins $want"
+          if [ -z "$want" ] || [ "$have" != "Version: $want" ]; then
+            echo "::error::xcodegen '$have' is not the mise.toml pin '$want'"; exit 1
+          fi
+      - name: Require OS-27 SDKs
+        run: |
+          [ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || { ls -d /Applications/Xcode*.app || true; echo "::error::$DEVELOPER_DIR missing on this image (no fallback)"; exit 1; }
+          xcodebuild -version
+          # Only the simulator SDK: this job builds nothing for macOS or devices.
+          sdk=iphonesimulator
+          v=$(xcrun --sdk "$sdk" --show-sdk-version)
+          echo "$sdk SDK $v"
+          case $v in [0-9]*) ;; *) echo "::error::$sdk SDK version '$v' unparseable"; exit 1 ;; esac
+          [ "${v%%.*}" -ge 27 ] || { echo "::error::$sdk SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
+      - name: Generated project is in sync
+        # Whole tree: XcodeGen also rewrites both apps' Info.plist and .entitlements files.
+        run: |
+          xcodegen generate
+          git status --porcelain --untracked-files=all
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git --no-pager diff --stat
+            echo "::error::xcodegen generate changed the tree; commit the regenerated project"; exit 1
+          fi
+      - name: Package.resolved is in sync
+        # Resolve only from the committed pins; later xcodebuild calls never re-resolve.
+        # -derivedDataPath requires -scheme; packages are per project, so one scheme resolves them all.
+        run: |
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests -resolvePackageDependencies \
+            -disableAutomaticPackageResolution -derivedDataPath DerivedData
+          git --no-pager diff --exit-code -- '*Package.resolved'
+      - name: Build Apple qualification for testing
+        # Same flags as the `build` job's iOS step. build-for-testing only; never `test`.
+        run: >
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangAppleQualification
+          -destination 'generic/platform=iOS Simulator'
+          -disableAutomaticPackageResolution -derivedDataPath DerivedData
+          build-for-testing CODE_SIGNING_ALLOWED=NO ARCHS=arm64
+      - name: Built products target OS 27.0
+        # Same scan as the `build` job; this job builds no UI-test runner, so its exclusions match nothing.
+        run: |
+          status=0; count=0
+          [ -d DerivedData/Build/Products ] || { echo "::error::no Products dir"; exit 1; }
+          while IFS= read -r -d '' bin; do
+            # Check linked images by content, not mode: libraries can be 0644. Objects and dSYMs are skipped.
+            case $(file -b "$bin") in
+              Mach-O*executable* | Mach-O*shared\ library* | Mach-O*bundle*) ;;
+              *) continue ;;
+            esac
+            rel=${bin#DerivedData/Build/Products/}
+            count=$((count + 1))
+            if ! info=$(xcrun vtool -show-build "$bin" 2>&1) || ! archs=$(xcrun lipo -archs "$bin"); then
+              echo "::error::$rel could not be inspected"; status=1; continue
+            fi
+            # Universal binaries report one minos per slice; every slice must report 27.0.
+            # Arrays rather than unquoted `set -- $var` (SC2086); bash 3.2-compatible (no mapfile).
+            read -r -d '' -a minos_list < <(awk '$1 == "minos" { print $2 }' <<< "$info") || true
+            read -r -a arch_list <<< "$archs"
+            [ "${#minos_list[@]}" -ge "${#arch_list[@]}" ] \
+              || { echo "::error::$rel has ${#arch_list[@]} slice(s) but ${#minos_list[@]} minos"; status=1; }
+            for minos in ${minos_list[@]+"${minos_list[@]}"}; do
+              echo "minos $minos $rel"
+              [ "$minos" = "27.0" ] || { echo "::error::$rel minos $minos; deployment must stay 27.0"; status=1; }
+            done
+          done < <(find DerivedData/Build/Products -type f ! -path '*-Runner.app/*-Runner' \
+            ! -path '*-Runner.app/Frameworks/*' ! -path '*-Runner.app/Contents/Frameworks/*' -print0)
+          [ "$count" -gt 0 ] || { echo "::error::no Mach-O products found"; exit 1; }
+          # The host app and the app-hosted qualification bundle (TEST_HOST FluxKlang.app) must exist.
+          for rel in \
+            Debug-iphonesimulator/FluxKlang.app/FluxKlang \
+            Debug-iphonesimulator/FluxKlang.app/PlugIns/FluxKlangAppleQualificationTests.xctest/FluxKlangAppleQualificationTests; do
+            [ -f "DerivedData/Build/Products/$rel" ] || { echo "::error::missing $rel"; status=1; }
+          done
+          exit "$status"
