@@ -201,7 +201,12 @@ unchanged.
   final name is inspected and opened relative to it without following links. A
   value ending in `/`, `/.` or `/..` is refused. Each receipt is exclusively created as
   `.<name>.partial` (mode 0600), fully written and `fsync`ed, then published
-  with a no-replace rename. Any refusal or failure records the existing
+  with a no-replace rename. Because that rename guards only the destination,
+  the partial must still be this invocation's regular file (device and inode)
+  before the rename, and the published name must be it afterwards; a
+  replacement is reported and left in place, never moved back or deleted (a
+  swap in the residual check-to-rename window is detected after the rename).
+  Any refusal or failure records the existing
   submission Issue, removes only this invocation's unpublished partial and
   never overwrites or falls back.
 

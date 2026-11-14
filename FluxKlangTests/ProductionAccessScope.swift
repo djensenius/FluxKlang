@@ -156,16 +156,21 @@ struct ProductionAccessReceiptSink: Sendable {
         let description: String
     }
 
-    /// Ownership and write seams for pure tests; the defaults are the real POSIX calls.
+    /// Ownership, write and pre-rename seams for pure tests; the defaults are the real POSIX calls.
     struct FileSystem: Sendable {
         var effectiveUserID: @Sendable () -> uid_t = { geteuid() }
         /// Returns the `write(2)` result, leaving `errno` set on failure.
         var write: @Sendable (Int32, UnsafeRawBufferPointer) -> Int = { Darwin.write($0, $1.baseAddress, $1.count) }
+        /// Runs after the source identity check, just before the rename; receives the partial name.
+        var beforePublish: @Sendable (String) -> Void = { _ in }
     }
 
     let directory: String
     var fileSystem = FileSystem()
 
+    /// Published bytes are identity-verified: the partial must still be this invocation's regular
+    /// file before the rename, and the published name must be it afterwards. A replacement is
+    /// reported, never moved back or deleted.
     func publish(_ bytes: Data, named name: String) throws {
         try Self.validate(name: name)
         let directoryFD = try openDirectory()
@@ -199,11 +204,31 @@ struct ProductionAccessReceiptSink: Sendable {
             let failure = Self.posixFailure("close \(partial)", code: code)
             throw Self.remove(partial, in: directoryFD, created: created, after: failure)
         }
+        // `RENAME_EXCL` guards only the destination, so the source and the published name are
+        // identity-checked; a replacement is reported and left in place, never moved back or deleted.
+        var source = stat()
+        guard fstatat(directoryFD, partial, &source, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Failure(description: "\(Self.posixFailure("fstatat \(partial)", code: code)); left in place")
+        }
+        guard source.st_mode & S_IFMT == S_IFREG, Self.sameFile(source, created) else {
+            throw Failure(description: "publish refused: \(partial) is not this invocation's file; left in place")
+        }
+        fileSystem.beforePublish(partial)
         guard renameatx_np(directoryFD, partial, directoryFD, name, UInt32(RENAME_EXCL)) == 0 else {
             let code = errno
             let failure = Self.posixFailure("publish \(name)", code: code)
             throw Self.remove(partial, in: directoryFD, created: created, after: failure)
         }
+        // The residual check-to-rename window is detected here and reported, not repaired.
+        var published = stat()
+        guard fstatat(directoryFD, name, &published, AT_SYMLINK_NOFOLLOW) == 0, Self.sameFile(published, created) else {
+            throw Failure(description: "published \(name) is not this invocation's file; left in place")
+        }
+    }
+
+    private static func sameFile(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
     }
 
     private static func validate(name: String) throws {

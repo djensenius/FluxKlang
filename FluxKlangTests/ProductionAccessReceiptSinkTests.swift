@@ -103,6 +103,11 @@ struct ProductionAccessReceiptSinkTests {
         case existingFinal, symlinkedFinal, existingPartial
     }
 
+    /// Replacements of the partial after a successful write, or between the source check and the rename.
+    enum SourceReplacement: CaseIterable, Sendable {
+        case regularFileAfterWrite, symlinkAfterWrite, regularFileBeforeRename
+    }
+
     @Test func keyAbsentUsesTheAttachmentPathUnchanged() async throws {
         let spy = SinkSpy()
         try await runScope(environment(directory: nil), spy: spy)
@@ -224,7 +229,8 @@ struct ProductionAccessReceiptSinkTests {
                 try sink.publish(Data("receipt".utf8), named: name)
             }
             #expect(failure?.description == ProductionAccessReceiptSink.unsafeNameMessage)
-            #expect(try entries(directory).isEmpty)
+            let remaining = try entries(directory)
+            #expect(remaining.isEmpty)
         }
     }
 
@@ -305,6 +311,72 @@ struct ProductionAccessReceiptSinkTests {
                 #expect(try status(survivor.path).st_ino == survivor.inode)
                 #expect(try Data(contentsOf: URL(fileURLWithPath: survivor.path)) == foreignBytes)
             }
+        }
+    }
+
+    /// `RENAME_EXCL` protects only the destination: a replaced source is refused before the rename,
+    /// and a swap inside the check-to-rename window is detected after it. Neither is moved back or deleted.
+    @Test(arguments: SourceReplacement.allCases)
+    func sourceReplacementIsReportedAndLeftInPlace(replacement: SourceReplacement) async throws {
+        try await withReceiptDirectory { directory in
+            let spy = SinkSpy()
+            let foreignBytes = Data("foreign".utf8)
+            let target = directory + "/target"
+            // The foreign entry is created while the original still exists, then renamed over the
+            // partial, so its inode is necessarily distinct.
+            let replace: @Sendable (String) -> Void = { partial in
+                let partialPath = directory + "/" + partial
+                let staging = directory + "/staging"
+                if replacement == .symlinkAfterWrite {
+                    FileManager.default.createFile(atPath: target, contents: foreignBytes)
+                    symlink(target, staging)
+                } else {
+                    FileManager.default.createFile(atPath: staging, contents: foreignBytes)
+                }
+                rename(staging, partialPath)
+                let inode = try? status(partialPath).st_ino
+                spy.state.withLock { state in state.foreign = inode.map { (path: partialPath, inode: $0) } }
+            }
+            var fileSystem = ProductionAccessReceiptSink.FileSystem()
+            fileSystem.write = { fileFD, buffer in
+                let first = spy.state.withLock { state in
+                    state.writeCalls += 1
+                    return state.writeCalls == 1
+                }
+                if first, replacement != .regularFileBeforeRename,
+                   let partial = (try? entries(directory))?.first(where: { $0.hasSuffix(".partial") }) {
+                    replace(partial)
+                }
+                return Darwin.write(fileFD, buffer.baseAddress, buffer.count)
+            }
+            if replacement == .regularFileBeforeRename { fileSystem.beforePublish = replace }
+            try await expectingSubmissionIssue(spy: spy) {
+                try await runScope(environment(directory: directory), spy: spy, fileSystem: fileSystem)
+            }
+            #expect(spy.state.withLock { $0.attachments.isEmpty })
+            let error = try #require(spy.state.withLock { $0.issueErrors.first })
+            let foreign = try #require(spy.state.withLock { $0.foreign })
+            let names = try entries(directory)
+            if replacement == .regularFileBeforeRename {
+                // The swapped file was published; it is reported and left under the final name.
+                #expect(error.contains("published production-access-testCaseExit-"))
+                try #require(names.count == 1)
+                #expect(names[0].hasPrefix("production-access-testCaseExit-"))
+                let published = directory + "/" + names[0]
+                #expect(try status(published).st_ino == foreign.inode)
+                #expect(try Data(contentsOf: URL(fileURLWithPath: published)) == foreignBytes)
+            } else {
+                #expect(error.contains("publish refused: .production-access-testCaseExit-"))
+                let partial = (foreign.path as NSString).lastPathComponent
+                #expect(names == (replacement == .symlinkAfterWrite ? [partial, "target"] : [partial]))
+                #expect(try status(foreign.path).st_ino == foreign.inode)
+                #expect(try Data(contentsOf: URL(fileURLWithPath: foreign.path)) == foreignBytes)
+                if replacement == .symlinkAfterWrite {
+                    #expect(try status(foreign.path).st_mode & S_IFMT == S_IFLNK)
+                    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: foreign.path) == target)
+                }
+            }
+            #expect(error.contains("is not this invocation's file; left in place"))
         }
     }
 }
