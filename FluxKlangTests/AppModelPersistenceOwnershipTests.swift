@@ -11,6 +11,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AppModelPersistenceOwnershipTests {
     @Test func injectedDomainStoreReachesAllSevenOwners() async throws {

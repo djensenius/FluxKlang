@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct LaunchControlXLTests {
     @Test func bundledMappingMatchesLaunchControlXL3DefaultMode16() throws {
         let configuration = try #require(LaunchControlXLConfiguration.bundled())
