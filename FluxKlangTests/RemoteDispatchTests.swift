@@ -8,6 +8,7 @@ import Testing
 /// RR2 (#96): the remote mirror and the bound local-MIDI proposals. Topic files are `extension RemoteDispatchTests`
 /// (+Mirror, +Dispatch, +Refusals, +Limits, +Order, +Sources). Every fixture is a plain value built here: a host
 /// synced at sequence 5 and 6, a catalog of seven parameters, and four bindings on two MIDI controllers.
+@Suite(.productionAccessAudit)
 struct RemoteDispatchTests {
     static let hostA = HostID(validated: "host.rr2a")
     static let hostB = HostID(validated: "host.rr2b")

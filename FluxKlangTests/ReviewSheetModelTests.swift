@@ -16,7 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Review sheet model")
+@Suite("Review sheet model", .productionAccessAudit)
 struct ReviewSheetModelTests {
     enum FixtureError: Error { case notStale }
 

@@ -7,6 +7,7 @@ import Testing
 #endif
 
 /// Tests of the grounded Explain baseline (#119, slice EX1). Fixtures live here; the topic files extend this suite.
+@Suite(.productionAccessAudit)
 struct ExplainGroundingTests {
     typealias Snapshot = NeutralSnapshot
 
