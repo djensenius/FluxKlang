@@ -6,11 +6,7 @@ import Testing
 #endif
 
 /// The pure MTC follower (#85 X2). The topic suites live in `MTCFollowerTests+*.swift` extensions.
-#if os(macOS)
 @Suite("MTCFollower", .productionAccessAudit)
-#else
-@Suite("MTCFollower")
-#endif
 struct MTCFollowerTests {
     @Test func aNewFollowerIsAbsentWithNoPositionAndNoCounters() throws {
         let follower = try Self.follower()

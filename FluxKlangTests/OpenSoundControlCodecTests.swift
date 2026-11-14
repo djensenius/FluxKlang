@@ -72,11 +72,7 @@ enum OpenSoundControlFixture {
     }
 }
 
-#if os(macOS)
 @Suite("OpenSoundControl codec", .productionAccessAudit)
-#else
-@Suite("OpenSoundControl codec")
-#endif
 struct OpenSoundControlCodecTests {
     typealias Fixture = OpenSoundControlFixture
     typealias CodecError = OpenSoundControl.CodecError

@@ -30,11 +30,7 @@ private let protocolTable = [
                            effective: .midi1, verified: false)
 ]
 
-#if os(macOS)
 @Suite("MIDI capture protocol", .productionAccessAudit)
-#else
-@Suite("MIDI capture protocol")
-#endif
 struct MIDICaptureProtocolTests {
     typealias Fixture = MIDICaptureFixture
 
