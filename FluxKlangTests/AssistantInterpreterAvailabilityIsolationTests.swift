@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantInterpreterAvailabilityTests {
     @Test(arguments: [nil, .model, .routing] as [FoundationModelActionInterpreter.LiveTestPurpose?])

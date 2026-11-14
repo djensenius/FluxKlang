@@ -9,6 +9,7 @@ import Synchronization
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct WingDiscoveryTests {
     @Test func directInterfaceEnumerationIsDeniedBeforeAPIAccess() throws {
         try #require(AppPersistence.isTesting, "Production-boundary tests require process-selected isolation")
