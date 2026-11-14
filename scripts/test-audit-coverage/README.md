@@ -210,14 +210,18 @@ unchanged.
   place, never moved back or deleted. In the residual check-to-rename window,
   our own rename publishes the swapped entry under the final name, where it is
   reported and left; consumers must treat that Issue as failing the run.
-  Any refusal or failure records the existing
-  submission Issue, removes only this invocation's unpublished partial and
-  never overwrites or falls back.
+  The sink never deletes or moves any entry except the single exclusive
+  rename of its own partial: no unlink by name can be bound to its descriptor
+  (the SDKs have no `funlinkat`), so on any failure the hidden
+  `.<name>.partial` is left in place and named in the existing submission
+  Issue. It never overwrites or falls back. A `close` failure after
+  publication leaves the receipt published and also records the Issue.
 
 Prepared Xcode-harness runners (xctestrun `EnvironmentVariables`), where a
 suite-scope `Attachment.record` traps (#652, #659), must supply the key and
 refuse before launch if it is missing, empty or invalid, or if the directory
-fails these checks. A run with `FLUXKLANG_AUDIT_RUN_ID` but no key remains a
+fails these checks. They must use a fresh per-run 0700 directory, treat any
+Issue as failing the run, and may discard the directory afterwards. A run with `FLUXKLANG_AUDIT_RUN_ID` but no key remains a
 known trap path; there is no in-process harness detection. The sink lives in
 `ProductionAccessScope.swift`, so fixtures that compile that file need no extra
 source. It is not a production transport, retention or quiescence evidence,

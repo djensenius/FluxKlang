@@ -18,6 +18,10 @@ private final class SinkSpy: Sendable {
         var issueErrors: [String] = []
         var writeCalls = 0
         var foreign: (path: String, inode: ino_t)?
+        /// This invocation's partial, identified through the write seam's descriptor.
+        var ownInode: ino_t?
+        var written = Data()
+        var partial: String?
     }
     let state = Mutex(State())
 
@@ -176,21 +180,45 @@ struct ProductionAccessReceiptSinkTests {
         }
     }
 
-    @Test func writeFailureRecordsIssueAndRemovesOnlyItsPartial() async throws {
+    /// The sink never unlinks: after a partial write fails, its own partial stays with the bytes written so far.
+    @Test func writeFailureRecordsIssueAndLeavesItsPartialInPlace() async throws {
         try await withReceiptDirectory { directory in
             let spy = SinkSpy()
             var fileSystem = ProductionAccessReceiptSink.FileSystem()
-            fileSystem.write = { _, _ in
-                spy.state.withLock { $0.writeCalls += 1 }
-                errno = EIO
-                return -1
+            fileSystem.write = { fileFD, buffer in
+                var own = stat()
+                let identified = fstat(fileFD, &own) == 0
+                let call = spy.state.withLock { state in
+                    state.writeCalls += 1
+                    if identified { state.ownInode = own.st_ino }
+                    return state.writeCalls
+                }
+                guard call == 1 else {
+                    errno = EIO
+                    return -1
+                }
+                let written = Darwin.write(fileFD, buffer.baseAddress, min(buffer.count, 5))
+                if written > 0, let base = buffer.baseAddress {
+                    spy.state.withLock { $0.written = Data(bytes: base, count: written) }
+                }
+                return written
             }
             try await expectingSubmissionIssue(spy: spy) {
                 try await runScope(environment(directory: directory), spy: spy, fileSystem: fileSystem)
             }
-            #expect(spy.state.withLock { $0.writeCalls } == 1)
+            #expect(spy.state.withLock { $0.writeCalls } == 2)
             #expect(spy.state.withLock { $0.attachments.isEmpty })
-            #expect(try entries(directory).isEmpty)
+            let names = try entries(directory)
+            try #require(names.count == 1)
+            #expect(names[0].hasPrefix(".production-access-testCaseExit-") && names[0].hasSuffix(".json.partial"))
+            let error = try #require(spy.state.withLock { $0.issueErrors.first })
+            #expect(error.hasPrefix("write failed: Input/output error (errno 5); "))
+            #expect(error.hasSuffix("; \(names[0]) left in place"))
+            let partial = directory + "/" + names[0]
+            let (ownInode, written) = spy.state.withLock { ($0.ownInode, $0.written) }
+            #expect(try status(partial).st_ino == ownInode)
+            #expect(written.count == 5)
+            #expect(try Data(contentsOf: URL(fileURLWithPath: partial)) == written)
         }
     }
 
@@ -267,10 +295,20 @@ struct ProductionAccessReceiptSinkTests {
             try #require(FileManager.default.createFile(atPath: directory + "/" + existing, contents: old))
             let before = try entries(directory)
             let identities = try before.map { try status(directory + "/" + $0).st_ino }
-            #expect(throws: ProductionAccessReceiptSink.Failure.self) {
+            let failure = #expect(throws: ProductionAccessReceiptSink.Failure.self) {
                 try ProductionAccessReceiptSink(directory: directory).publish(Data("new".utf8), named: name)
             }
-            #expect(try entries(directory) == before)
+            if collision == .existingPartial {
+                #expect(failure?.description == "exclusive-create \(partial) failed: File exists (errno 17)")
+                #expect(try entries(directory) == before)
+            } else {
+                // The refused rename leaves this invocation's complete partial in place, never unlinked.
+                let refusal = "publish \(name) failed: File exists (errno 17); \(partial) left in place"
+                #expect(failure?.description == refusal)
+                #expect(try entries(directory) == (before + [partial]).sorted())
+                #expect(try Data(contentsOf: URL(fileURLWithPath: directory + "/" + partial)) == Data("new".utf8))
+                #expect(try status(directory + "/" + partial).st_mode & 0o777 == 0o600)
+            }
             #expect(try before.map { try status(directory + "/" + $0).st_ino } == identities)
             #expect(try Data(contentsOf: URL(fileURLWithPath: directory + "/" + existing)) == old)
             if collision == .symlinkedFinal {
@@ -280,7 +318,8 @@ struct ProductionAccessReceiptSinkTests {
     }
 
     /// A final-name collision, a replaced partial and a vanished partial all become the scope's
-    /// submission Issue, with no attachment fallback and no removal of a file this run did not create.
+    /// submission Issue naming the partial left in place, with no attachment fallback and no unlink:
+    /// an entry swapped in before a failure can no longer be deleted by cleanup.
     @Test(arguments: WriteHazard.allCases)
     func writeTimeHazardBecomesIssueWithoutForeignCleanup(hazard: WriteHazard) async throws {
         try await withReceiptDirectory { directory in
@@ -294,6 +333,15 @@ struct ProductionAccessReceiptSinkTests {
                 }
                 guard first, let partial = (try? entries(directory))?.first(where: { $0.hasSuffix(".partial") }) else {
                     return Darwin.write(fileFD, buffer.baseAddress, buffer.count)
+                }
+                var own = stat()
+                let identified = fstat(fileFD, &own) == 0
+                spy.state.withLock { state in
+                    state.partial = partial
+                    if identified { state.ownInode = own.st_ino }
+                    if hazard == .finalCollision, let base = buffer.baseAddress {
+                        state.written = Data(bytes: base, count: buffer.count)
+                    }
                 }
                 let partialPath = directory + "/" + partial
                 if hazard != .finalCollision { unlink(partialPath) }
@@ -313,17 +361,26 @@ struct ProductionAccessReceiptSinkTests {
             }
             #expect(spy.state.withLock { $0.attachments.isEmpty })
             let error = try #require(spy.state.withLock { $0.issueErrors.first })
+            let partial = try #require(spy.state.withLock { $0.partial })
+            let finalName = String(partial.dropFirst().dropLast(".partial".count))
+            let names = try entries(directory)
             switch hazard {
-            case .finalCollision: #expect(error.contains("publish production-access-testCaseExit-"))
-            case .replacedPartial: #expect(error.contains("not this invocation's file"))
-            case .missingPartial: #expect(error.contains("; cleanup fstatat"))
+            case .finalCollision:
+                #expect(error == "publish \(finalName) failed: File exists (errno 17); \(partial) left in place")
+                #expect(names == [partial, finalName])
+                // This invocation's complete partial stays, with every byte it wrote.
+                let (ownInode, written) = spy.state.withLock { ($0.ownInode, $0.written) }
+                #expect(try status(directory + "/" + partial).st_ino == ownInode)
+                #expect(!written.isEmpty)
+                #expect(try Data(contentsOf: URL(fileURLWithPath: directory + "/" + partial)) == written)
+            case .replacedPartial, .missingPartial:
+                #expect(error == "write failed: Input/output error (errno 5); \(partial) left in place")
+                #expect(names == (hazard == .replacedPartial ? [partial] : []))
             }
             if hazard == .missingPartial {
                 #expect(spy.state.withLock { $0.foreign == nil })
-                #expect(try entries(directory).isEmpty)
             } else {
                 let survivor = try #require(spy.state.withLock { $0.foreign })
-                #expect(try entries(directory) == [(survivor.path as NSString).lastPathComponent])
                 #expect(try status(survivor.path).st_ino == survivor.inode)
                 #expect(try Data(contentsOf: URL(fileURLWithPath: survivor.path)) == foreignBytes)
             }

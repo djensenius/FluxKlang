@@ -170,7 +170,10 @@ struct ProductionAccessReceiptSink: Sendable {
 
     /// Published bytes are identity-verified: the partial must still be this invocation's regular
     /// file before the rename, and the published name must be it afterwards. A replacement is
-    /// reported, never moved back or deleted.
+    /// reported, never moved back or deleted. The sink's only directory mutations are the exclusive
+    /// create of its own partial and one `RENAME_EXCL` rename of it; it never unlinks anything,
+    /// because no unlink by name can be bound to the descriptor. On failure the partial is left in
+    /// place and named in the error.
     func publish(_ bytes: Data, named name: String) throws {
         try Self.validate(name: name)
         let directoryFD = try openDirectory()
@@ -181,17 +184,16 @@ struct ProductionAccessReceiptSink: Sendable {
             let code = errno
             throw Self.posixFailure("exclusive-create \(partial)", code: code)
         }
-        // This invocation created the partial; it alone is removed on failure, until publication.
-        // If fstat fails here, the partial's identity is unverified, so it is left behind and reported.
+        // This invocation created the partial; on any later failure it is left in place and reported.
         var created = stat()
         guard fstat(fileFD, &created) == 0 else {
             let code = errno
             close(fileFD)
-            throw Failure(description: "\(Self.posixFailure("fstat \(partial)", code: code)); cleanup left unverified")
+            throw Self.leftInPlace(partial, after: Self.posixFailure("fstat \(partial)", code: code))
         }
-        // From here `fileFD` stays open through every identity comparison, the rename and any
-        // cleanup, pinning the inode so its number cannot be reused; it is closed exactly once below,
-        // and a close failure is reported (after publication it no longer triggers cleanup).
+        // From here `fileFD` stays open through every identity comparison and the rename, pinning
+        // the inode so its number cannot be reused; it is closed exactly once below, and a close
+        // failure is reported (after publication the receipt stays published).
         var failure: Error?
         do {
             do {
@@ -201,7 +203,7 @@ struct ProductionAccessReceiptSink: Sendable {
                     throw Self.posixFailure("fsync \(partial)", code: code)
                 }
             } catch {
-                throw Self.remove(partial, in: directoryFD, created: created, after: error)
+                throw Self.leftInPlace(partial, after: error)
             }
             try publishVerified(partial, as: name, in: directoryFD, created: created)
         } catch {
@@ -215,7 +217,7 @@ struct ProductionAccessReceiptSink: Sendable {
         if let failure { throw failure }
     }
 
-    /// A refused rename removes only this invocation's partial; a replacement is never touched.
+    /// A refused rename leaves the partial in place; a replacement is never touched.
     private func publishVerified(_ partial: String, as name: String, in directoryFD: Int32, created: stat) throws {
         // `RENAME_EXCL` guards only the destination, so the source and the published name are
         // identity-checked; a replacement is reported and left in place, never moved back or deleted.
@@ -230,8 +232,7 @@ struct ProductionAccessReceiptSink: Sendable {
         fileSystem.beforePublish(partial)
         guard renameatx_np(directoryFD, partial, directoryFD, name, UInt32(RENAME_EXCL)) == 0 else {
             let code = errno
-            let failure = Self.posixFailure("publish \(name)", code: code)
-            throw Self.remove(partial, in: directoryFD, created: created, after: failure)
+            throw Self.leftInPlace(partial, after: Self.posixFailure("publish \(name)", code: code))
         }
         // The residual check-to-rename window is detected here and reported, not repaired.
         var published = stat()
@@ -337,21 +338,8 @@ struct ProductionAccessReceiptSink: Sendable {
         }
     }
 
-    /// Removes only this invocation's unpublished partial; cleanup failure joins the thrown error.
-    private static func remove(_ partial: String, in directoryFD: Int32, created: stat, after error: Error) -> Error {
-        var current = stat()
-        guard fstatat(directoryFD, partial, &current, AT_SYMLINK_NOFOLLOW) == 0 else {
-            let code = errno
-            return Failure(description: "\(error); cleanup \(posixFailure("fstatat \(partial)", code: code))")
-        }
-        guard current.st_dev == created.st_dev, current.st_ino == created.st_ino else {
-            return Failure(description: "\(error); cleanup left \(partial): not this invocation's file")
-        }
-        guard unlinkat(directoryFD, partial, 0) == 0 else {
-            let code = errno
-            return Failure(description: "\(error); cleanup \(posixFailure("unlinkat \(partial)", code: code))")
-        }
-        return error
+    private static func leftInPlace(_ partial: String, after error: Error) -> Failure {
+        Failure(description: "\(error); \(partial) left in place")
     }
 
     /// `code` must be captured from `errno` immediately after the failing call.
