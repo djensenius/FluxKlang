@@ -680,6 +680,46 @@ class ObservationSummaryRedactionTests(unittest.TestCase):
         summary, _ = self.summarize(["run %s other %s" % (self.RUN_ID.upper(), self.INVOCATION)])
         self.assertEqual(summary["first_failures"][0]["message"], "run %s other <uuid>" % self.RUN_ID.upper())
 
+    def test_result_and_xcresult_error_rows_are_redacted(self):
+        path = "/tmp/audit-receipts-%s/%s" % (self.RUN_ID, self.PARTIAL)
+        summary, markdown = observation_summary.summarize(
+            {"RUN_ID": self.RUN_ID}, {"result": "Failed at %s" % path}, "cannot open %s" % path, {})
+        self.assertNoReceiptName(json.dumps(summary) + markdown)
+        self.assertIn("| Result | Failed at <receipt-file> |", markdown.splitlines())
+        self.assertIn("xcresult summary: cannot open <receipt-file>", markdown.splitlines())
+
+    def test_receipt_counts_classify_without_names(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "r"), 0o700)
+            receipts = os.path.join(root, "r")
+            Path(receipts, self.NAME).write_bytes(b"{}")
+            Path(receipts, self.PARTIAL).write_bytes(b"{")
+            os.symlink(self.NAME, os.path.join(receipts, "linked-" + self.NAME))
+            os.mkdir(os.path.join(receipts, "nested-" + self.INVOCATION))
+            counts = observation_summary.receipt_counts(receipts)
+        self.assertEqual(counts, {
+            "receipts_published": 1, "receipts_partial_leftovers": 1, "receipts_other_entries": 2,
+        })
+        self.assertNoReceiptName(json.dumps(counts))
+
+    def test_main_writes_both_summaries_without_a_result_bundle(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "out")
+            os.mkdir(out)
+            step_summary = os.path.join(root, "step-summary.md")
+            env = {
+                "RUN_ID": self.RUN_ID, "RESULT_BUNDLE": os.path.join(root, "missing.xcresult"),
+                "RECEIPT_DIR": "", "SUMMARY_DIR": out, "GITHUB_STEP_SUMMARY": step_summary,
+            }
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertEqual(observation_summary.main(), 0)
+            summary = json.loads(Path(out, "summary.json").read_text(encoding="utf-8"))
+            markdown = Path(out, "summary.md").read_text(encoding="utf-8")
+            self.assertEqual(summary["xcresult_error"], "no result bundle")
+            self.assertEqual(summary["run_id"], self.RUN_ID)
+            self.assertTrue(markdown.startswith("## Observation result"))
+            self.assertEqual(Path(step_summary).read_text(encoding="utf-8"), markdown)
+
 
 if __name__ == "__main__":
     unittest.main()

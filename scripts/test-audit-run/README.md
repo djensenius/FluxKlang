@@ -237,10 +237,6 @@ NO`, adds no filters or retries, and is recorded exactly. `-test-iterations 1`
 is omitted because an actual local Xcode 27.2 invocation rejected it (exit 64;
 no tests ran); behavior on Xcode 27.1 is unverified.
 
-Only a redacted summary is kept: receipt filenames (published or `.partial`,
-including path forms) and UUIDs other than the run ID are redacted from xcresult
-text before it is truncated or stored (`observation_summary.py`).
-
 A `prepare`/`validate` refusal is an expected possible first result: the
 `OBSERVED` allowlist exactly matches an earlier specimen, and Xcode 27.1 output
 may differ. A refusal is recorded, not repaired or retried; it is a result about
@@ -255,8 +251,11 @@ in the run summary:
   `FLUXKLANG_AUDIT_RUN_ID` and the prepared output must not change. Delivery
   through the `TEST_RUNNER_` prefix is unverified; a missing key is a known trap path.
 
-Only a summary is kept: counts, trimmed failure text, and receipt-file counts.
-Receipt contents, the result bundle and DerivedData are not uploaded. This is an
+Only a summary is kept: counts, redacted and trimmed failure text, and
+receipt-file counts. Receipt filenames (published or `.partial`, including path
+forms) and UUIDs other than the run ID are redacted from xcresult text before it
+is truncated or stored (`observation_summary.py`). Receipt contents, the result
+bundle and DerivedData are not uploaded. This is an
 observation, not qualification of #60; the limits above still apply.
 
 ## Pure fixture checks
