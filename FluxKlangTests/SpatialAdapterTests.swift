@@ -7,6 +7,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialAdapterTests {
     static let legacyQuad: [(Double, Double)] = [(0, 0), (1, 0), (0, 1), (1, 1)]
 

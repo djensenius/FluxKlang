@@ -17,6 +17,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialMaskTests {
     /// Every non-empty subset of `count` speakers, as column index sets.
     static func subsets(of count: Int) -> [Set<Int>] {

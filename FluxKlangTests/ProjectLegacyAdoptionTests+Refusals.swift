@@ -6,7 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Legacy project adoption refusals")
+@Suite("Legacy project adoption refusals", .productionAccessAudit)
 struct ProjectLegacyAdoptionRefusalTests {
     private typealias Fixture = LegacyAdoptionP5Fixture
     private static let empty = #"{"nodes":[],"edges":[]}"#
@@ -118,7 +118,7 @@ struct ProjectLegacyAdoptionRefusalTests {
     }
 }
 
-@Suite("Legacy adoption role derivation")
+@Suite("Legacy adoption role derivation", .productionAccessAudit)
 struct ProjectLegacyAdoptionRoleTests {
     private typealias Fixture = LegacyAdoptionP5Fixture
     private let role = RoleID(validated: "rol.shared")
