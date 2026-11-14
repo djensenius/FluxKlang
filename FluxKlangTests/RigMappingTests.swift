@@ -93,7 +93,7 @@ enum RigMappingFixture {
 
 private typealias Fixture = RigMappingFixture
 
-@Suite("Rig mapping proposals")
+@Suite("Rig mapping proposals", .productionAccessAudit)
 struct RigMappingTests {
     @Test func singleMatchingBlockBecomesAProposedRouteInTheRoleDirection() throws {
         let roles = try [Fixture.role("role.mains", .output, channels: 2),

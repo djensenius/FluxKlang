@@ -51,7 +51,7 @@ private enum LibraryFixture {
     static func spaces(_ count: Int) -> String { String(repeating: " ", count: count) }
 }
 
-@Suite("Rig library: values, names and construction")
+@Suite("Rig library: values, names and construction", .productionAccessAudit)
 struct RigLibraryTests {
     private typealias Lib = LibraryFixture
     typealias Fixture = RigIdentityFixture

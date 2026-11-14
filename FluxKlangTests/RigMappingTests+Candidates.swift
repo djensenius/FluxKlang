@@ -7,7 +7,7 @@ import Testing
 
 private typealias Fixture = RigMappingFixture
 
-@Suite("Rig mapping candidates")
+@Suite("Rig mapping candidates", .productionAccessAudit)
 struct RigMappingCandidateTests {
     @Test func candidatesAreContiguousBlocksInDeviceThenChannelOrder() throws {
         let devices = try [Fixture.device("dev.b", outputs: 4), Fixture.device("dev.a", outputs: 3)]

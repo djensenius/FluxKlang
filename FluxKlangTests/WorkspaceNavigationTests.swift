@@ -13,6 +13,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct WorkspaceNavigationTests {
     static let windowA = WindowID(validated: "win.a")
     static let windowB = WindowID(validated: "win.b")
