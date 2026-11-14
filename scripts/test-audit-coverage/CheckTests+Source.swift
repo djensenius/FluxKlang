@@ -368,10 +368,11 @@ extension FixtureTests {
             }
             for mac in [false, true] {
                 let report = try sourceReport(sources, macImport: mac)
-                try require(report.exitCode == 1 && report.ownership.count == 2, "U1 model failed")
+                try require(report.exitCode == 0 && report.ownership.count == 2, "U1 model failed")
                 try require(Set(report.ownership.map { $0.registration.name }) ==
                             ["ProductionAccessScopeTests", "ProductionAccessScopeSuiteTests"], "wrong U1 roots")
-                try require(report.ownership.allSatisfy { !$0.annotationSatisfied }, "U1 file exemption")
+                try require(report.ownership.allSatisfy { $0.annotationSatisfied },
+                            "U1 roots must carry the canonical audit trait")
                 try require(report.ownership.reduce(0) { $0 + $1.tests.count } == 9, "U1 test obligations missing")
             }
         }
@@ -477,7 +478,8 @@ extension FixtureTests {
                 ("FluxKlangTests/" + $0, try String(contentsOf: u1Root.appendingPathComponent($0), encoding: .utf8))
             }
             let report = try sourceReport(sources)
-            try require(report.exitCode == 1 && report.analysisComplete && report.ownership.count == 2,
+            try require(report.exitCode == 0 && report.analysisComplete && report.ownership.count == 2 &&
+                        report.ownership.allSatisfy { $0.annotationSatisfied },
                         "standard Observable helpers changed source obligations")
         }
         test("standard qualified Observable is bounded; conflicting or opaque macros still fail closed") {

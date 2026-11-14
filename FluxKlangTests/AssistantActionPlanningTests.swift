@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantActionPlanningTests {
     private func fixture(label: String = "Astrolab", lifetime: TimeInterval = 60)
         // swiftlint:disable:next large_tuple
