@@ -9,6 +9,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct DemoModeTests {
     @Test func demoConnectsAndSeedsConsole() async throws {

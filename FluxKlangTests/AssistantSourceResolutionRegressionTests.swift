@@ -6,7 +6,7 @@ import FoundationModels
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantSourceResolutionRegressionTests {
     @Test(arguments: [false, true], [false, true])
     func connectedNowInventoryNeverRetriesOrMutatesDraft(priorRoute: Bool, existingDraft: Bool) async throws {

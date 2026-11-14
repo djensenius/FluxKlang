@@ -2,6 +2,7 @@ import Testing
 
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantRecordingWingTransportGateTests {
     @Test(arguments: RecordingWingFixtureGate.allCases)
