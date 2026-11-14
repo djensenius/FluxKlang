@@ -7,7 +7,7 @@ import Testing
 #endif
 
 /// Rig reservation ledger (#68, slice RIG1): builders, the scripted lock fake, token, instant and window tests.
-@Suite("Rig reservation ledger")
+@Suite("Rig reservation ledger", .productionAccessAudit)
 struct RigReservationTests {
     // MARK: Scripted lock
 

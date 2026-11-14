@@ -7,7 +7,7 @@ import Testing
 
 private typealias Fixture = RigMappingReviewFixture
 
-@Suite("Rig mapping review: replacement offers")
+@Suite("Rig mapping review: replacement offers", .productionAccessAudit)
 struct RigMappingReviewReplaceTests {
     /// A muted `rte.space` on missing `dev.b` whose role fits exactly one block of present `dev.a`.
     private static func singleCandidateRig(_ binding: RouteBinding) throws -> DeviceCapabilityDocument {
@@ -382,7 +382,7 @@ struct RigMappingReviewReplaceTests {
     }
 }
 
-@Suite("Rig mapping review: choice capacity accounting")
+@Suite("Rig mapping review: choice capacity accounting", .productionAccessAudit)
 struct RigMappingReviewCapacityTests {
     @Test func decliningAnAutoProposalCreditsChoiceCapacity() throws {
         let limit = DeviceCapabilityLimits.routes

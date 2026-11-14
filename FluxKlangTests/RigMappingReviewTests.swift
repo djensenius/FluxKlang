@@ -101,7 +101,7 @@ private enum RigMappingReviewFixtureError: Error { case notPending }
 
 private typealias Fixture = RigMappingReviewFixture
 
-@Suite("Rig mapping review and apply")
+@Suite("Rig mapping review and apply", .productionAccessAudit)
 struct RigMappingReviewTests {
     @Test func reviewListsTheLostRigFixture() throws {
         let review = try Fixture.lostRigReview()
