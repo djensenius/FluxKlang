@@ -234,6 +234,22 @@ struct ProductionAccessReceiptSinkTests {
         }
     }
 
+    /// The value is split on UTF-8 bytes: a component starting with a combining mark is accepted,
+    /// and a combining mark right after the root `/` is still absolute (refused only at lookup).
+    @Test func combiningMarkAfterSlashIsSplitOnBytes() async throws {
+        try await withReceiptDirectory { root in
+            let marked = root + "/\u{301}x"
+            try succeeded(mkdir(marked, 0o700))
+            try ProductionAccessReceiptSink(directory: marked).publish(Data("receipt".utf8), named: "receipt.json")
+            #expect(try entries(marked) == ["receipt.json"])
+        }
+        let absent = "/\u{301}fluxklang-660-absent-\(UUID().uuidString)"
+        let failure = #expect(throws: ProductionAccessReceiptSink.Failure.self) {
+            try ProductionAccessReceiptSink(directory: absent).publish(Data("receipt".utf8), named: "receipt.json")
+        }
+        #expect(failure?.description.hasPrefix("fstatat \(ProductionAccessReceiptSink.directoryKey) failed") == true)
+    }
+
     @Test(arguments: Collision.allCases)
     func collisionIsRefusedWithoutOverwriteOrForeignCleanup(collision: Collision) async throws {
         try await withReceiptDirectory { directory in

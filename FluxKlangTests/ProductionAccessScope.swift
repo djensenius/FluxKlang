@@ -189,21 +189,34 @@ struct ProductionAccessReceiptSink: Sendable {
             close(fileFD)
             throw Failure(description: "\(Self.posixFailure("fstat \(partial)", code: code)); cleanup left unverified")
         }
+        // From here `fileFD` stays open through every identity comparison, the rename and any
+        // cleanup, pinning the inode so its number cannot be reused; it is closed exactly once below,
+        // and a close failure is reported (after publication it no longer triggers cleanup).
+        var failure: Error?
         do {
-            try writeAll(bytes, to: fileFD)
-            guard fsync(fileFD) == 0 else {
-                let code = errno
-                throw Self.posixFailure("fsync \(partial)", code: code)
+            do {
+                try writeAll(bytes, to: fileFD)
+                guard fsync(fileFD) == 0 else {
+                    let code = errno
+                    throw Self.posixFailure("fsync \(partial)", code: code)
+                }
+            } catch {
+                throw Self.remove(partial, in: directoryFD, created: created, after: error)
             }
+            try publishVerified(partial, as: name, in: directoryFD, created: created)
         } catch {
-            close(fileFD)
-            throw Self.remove(partial, in: directoryFD, created: created, after: error)
+            failure = error
         }
         guard close(fileFD) == 0 else {
             let code = errno
-            let failure = Self.posixFailure("close \(partial)", code: code)
-            throw Self.remove(partial, in: directoryFD, created: created, after: failure)
+            let closeFailure = Self.posixFailure("close \(partial)", code: code)
+            throw failure.map { Failure(description: "\($0); \(closeFailure)") } ?? closeFailure
         }
+        if let failure { throw failure }
+    }
+
+    /// A refused rename removes only this invocation's partial; a replacement is never touched.
+    private func publishVerified(_ partial: String, as name: String, in directoryFD: Int32, created: stat) throws {
         // `RENAME_EXCL` guards only the destination, so the source and the published name are
         // identity-checked; a replacement is reported and left in place, never moved back or deleted.
         var source = stat()
@@ -222,7 +235,11 @@ struct ProductionAccessReceiptSink: Sendable {
         }
         // The residual check-to-rename window is detected here and reported, not repaired.
         var published = stat()
-        guard fstatat(directoryFD, name, &published, AT_SYMLINK_NOFOLLOW) == 0, Self.sameFile(published, created) else {
+        guard fstatat(directoryFD, name, &published, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Failure(description: "\(Self.posixFailure("fstatat \(name)", code: code)); left in place")
+        }
+        guard Self.sameFile(published, created) else {
             throw Failure(description: "published \(name) is not this invocation's file; left in place")
         }
     }
@@ -241,17 +258,22 @@ struct ProductionAccessReceiptSink: Sendable {
 
     /// Opens the parent (ancestors resolve normally), then inspects and opens the final component
     /// relative to it without following a symlink. A trailing `/`, `.` or `..` is refused, because
-    /// it would make path resolution follow a final symlink.
+    /// it would make path resolution follow a final symlink. The value is split on UTF-8 bytes, so a
+    /// combining mark after `/` cannot merge with it.
     private func openDirectory() throws -> Int32 {
         let key = Self.directoryKey
-        guard directory.hasPrefix("/"), let separator = directory.lastIndex(of: "/") else {
+        let bytes = directory.utf8
+        let slash = UInt8(ascii: "/")
+        guard bytes.first == slash, let separator = bytes.lastIndex(of: slash) else {
             throw Failure(description: "\(key) must be a non-empty absolute path")
         }
-        let name = String(directory[directory.index(after: separator)...])
-        guard !name.isEmpty, name != ".", name != ".." else {
+        let nameBytes = bytes[bytes.index(after: separator)...]
+        guard !nameBytes.isEmpty, !nameBytes.elementsEqual(".".utf8), !nameBytes.elementsEqual("..".utf8) else {
             throw Failure(description: "\(key) must not end in /, . or ..")
         }
-        let parentPath = separator == directory.startIndex ? "/" : String(directory[..<separator])
+        // Both slices are bounded by an ASCII `/`, so they are scalar-aligned and convert losslessly.
+        let name = String(Substring(nameBytes))
+        let parentPath = separator == bytes.startIndex ? "/" : String(Substring(bytes[..<separator]))
         let parentFD = open(parentPath, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard parentFD >= 0 else {
             let code = errno

@@ -197,15 +197,19 @@ unchanged.
   `Attachment.record`. The value must be an absolute path to an existing real
   directory, owned by the effective user with no group or other permission
   bits; it is never created. Only the final component must not be a symlink:
-  the parent is opened normally (so `/var` resolves to `/private/var`), then the
+  the parent is opened normally (so `/var` resolves to `/private/var`) and must
+  be readable as well as searchable, then the
   final name is inspected and opened relative to it without following links. A
-  value ending in `/`, `/.` or `/..` is refused. Each receipt is exclusively created as
+  value ending in `/`, `/.` or `/..` is refused; the value is split on UTF-8
+  bytes. Each receipt is exclusively created as
   `.<name>.partial` (mode 0600), fully written and `fsync`ed, then published
   with a no-replace rename. Because that rename guards only the destination,
-  the partial must still be this invocation's regular file (device and inode)
-  before the rename, and the published name must be it afterwards; a
-  replacement is reported and left in place, never moved back or deleted (a
-  swap in the residual check-to-rename window is detected after the rename).
+  the partial must still be this invocation's regular file (device and inode,
+  compared while its descriptor stays open) before the rename, and the
+  published name must be it afterwards; a replacement is reported and left in
+  place, never moved back or deleted. In the residual check-to-rename window,
+  our own rename publishes the swapped entry under the final name, where it is
+  reported and left; consumers must treat that Issue as failing the run.
   Any refusal or failure records the existing
   submission Issue, removes only this invocation's unpublished partial and
   never overwrites or falls back.
