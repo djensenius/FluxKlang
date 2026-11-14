@@ -13,7 +13,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Perform panel surface (#102 PNS1)")
+@Suite("Perform panel surface (#102 PNS1)", .productionAccessAudit)
 struct PerformPanelSurfaceTests {
     typealias XYEntry = PerformPanelSurfaceXYEntry
     typealias RecallEntry = PerformPanelSurfaceRecallEntry

@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct ProgramRecallTests {
     static let targetA = ControlTriggerTargetID(validated: "trg.recall.a")
     static let targetB = ControlTriggerTargetID(validated: "trg.recall.b")

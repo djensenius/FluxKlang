@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct AssistantInferenceGovernorTests {
     /// What one `evaluate` produced: a decision or a refusal.
     enum Outcome: Equatable {

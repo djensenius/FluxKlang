@@ -42,7 +42,7 @@ extension PerformRecallFacts {
     }
 }
 
-@Suite("Perform recall cell reducer (#102 RCL1)")
+@Suite("Perform recall cell reducer (#102 RCL1)", .productionAccessAudit)
 struct PerformRecallTests {
     static let epochA = HostEpoch(host: HostID(validated: "host.a"), generation: Generation.initial)
     static let epochOtherHost = HostEpoch(host: HostID(validated: "host.b"), generation: Generation.initial)

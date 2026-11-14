@@ -13,7 +13,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Perform panel layout (#102 PNL1)")
+@Suite("Perform panel layout (#102 PNL1)", .productionAccessAudit)
 struct PerformPanelLayoutTests {
     static func descriptor(_ id: String, unit: ParameterUnit) throws -> ParameterDescriptor {
         let parameter = try ParameterID(id)

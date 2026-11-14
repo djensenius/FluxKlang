@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct AssistantFallbackPolicyTests {
     /// What `decide` produced: one disclosure or one refusal.
     enum Outcome: Equatable {

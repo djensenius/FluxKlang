@@ -13,7 +13,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Perform panel edit (#102 PNE1)")
+@Suite("Perform panel edit (#102 PNE1)", .productionAccessAudit)
 struct PerformPanelEditTests {
     typealias Fixture = PerformPanelLayoutTests
 

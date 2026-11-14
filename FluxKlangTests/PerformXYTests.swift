@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct PerformXYTests {
     static func point(_ pointX: Int, _ pointY: Int) -> PerformXYPoint {
         PerformXYPoint(x: pointX, y: pointY)
