@@ -160,9 +160,7 @@ enum ShowTransitionTestFixture {
     }
 }
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct ShowTransitionTests {
     typealias Fix = ShowTransitionTestFixture
 

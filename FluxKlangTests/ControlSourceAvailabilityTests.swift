@@ -7,11 +7,7 @@ import Testing
 
 /// Controller source availability (#87, CSA1): which bindings have their controller origin listed as live. Every
 /// fixture is a private static of the suite, so no name leaves it. Golden values are typed by hand.
-#if os(macOS)
 @Suite("Control source availability", .productionAccessAudit)
-#else
-@Suite("Control source availability")
-#endif
 struct ControlSourceAvailabilityTests {
     private static let pad70 = "midi.csa-pad.1.cc.70"
     private static let pad14 = "midi.csa-pad.2.cc14.7"
