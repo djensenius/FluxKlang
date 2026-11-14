@@ -17,7 +17,7 @@ import Testing
 
 private typealias Fixture = WiringPreviewFixture
 
-@Suite("Wiring edit impact preview")
+@Suite("Wiring edit impact preview", .productionAccessAudit)
 struct WiringImpactTests {
     static let draftID = DraftID(validated: "dft.impact")
     static let verb = NodeID(validated: "nod.verb")

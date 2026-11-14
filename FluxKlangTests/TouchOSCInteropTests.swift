@@ -10,7 +10,7 @@ import Testing
 /// mapper and feedback planner (#91, slice X1). Everything is a value: ticks are integers, and no test touches a
 /// socket, clock, `Date`, MIDI, OSC device or network. The split across `+Table`, `+Packets` and `+Feedback`
 /// keeps every file small; every fixture is nested in `TouchOSCInteropFixture` so no name leaves this lane.
-@Suite("TouchOSC interop")
+@Suite("TouchOSC interop", .productionAccessAudit)
 struct TouchOSCInteropTests {
     typealias Fixture = TouchOSCInteropFixture
     typealias OSC = OpenSoundControl

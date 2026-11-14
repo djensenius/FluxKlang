@@ -19,7 +19,7 @@ import Testing
 
 private typealias Fixture = WiringPreviewFixture
 
-@Suite("Wiring inspector")
+@Suite("Wiring inspector", .productionAccessAudit)
 struct WiringInspectorTests {
     static let draftID = DraftID(validated: "dft.inspector")
 

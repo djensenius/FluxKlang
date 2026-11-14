@@ -60,7 +60,7 @@ enum InterruptedTakeSalvageFixture {
     }
 }
 
-@Suite("Interrupted take salvage planner")
+@Suite("Interrupted take salvage planner", .productionAccessAudit)
 struct InterruptedTakeSalvageTests {
     typealias Fixture = InterruptedTakeSalvageFixture
 

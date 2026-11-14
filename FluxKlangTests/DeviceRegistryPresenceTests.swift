@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct DeviceRegistryPresenceTests {
     private struct FixtureFailure: Error {}
 
