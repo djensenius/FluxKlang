@@ -15,11 +15,7 @@ private struct FlexDataVector {
 /// UMP Flex Data (MT 0xD), status bank 0x00: Set Tempo, Set Time Signature and Set Key Signature. Every golden word
 /// was written by hand from the published test vectors of bl-midi2-rs (`midi2/src/flex_data/set_*.rs`) and
 /// ni-midi2 (`tests/flex_data_message_tests.cpp`), not computed by the production code.
-#if os(macOS)
 @Suite("UMP Flex Data", .productionAccessAudit)
-#else
-@Suite("UMP Flex Data")
-#endif
 struct UMPFlexDataTests {
     static func decode(_ words: [UInt32]) throws -> UMPFlexDataMessage {
         try UMPFlexDataMessage(decoding: UMPPacket(words: words))

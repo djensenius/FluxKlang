@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI Active Sensing observer", .productionAccessAudit)
-#else
-@Suite("MIDI Active Sensing observer")
-#endif
 struct ActiveSensingTests {
     static let inputSeven = MIDIInputID(7)
     static let inputNine = MIDIInputID(9)

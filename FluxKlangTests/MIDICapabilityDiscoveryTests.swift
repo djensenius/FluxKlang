@@ -9,11 +9,7 @@ import Testing
 /// `MIDICapabilityFacts` (#83, slice UCA1, #572). This file covers the collection rules of the UMP Stream state and of
 /// the profile Reply; `+Peer` covers the peer identity, the MUID rule, the NAK and the function block MIDI 1.0
 /// downgrade. Every message is built as a value, with no decoder in between.
-#if os(macOS)
 @Suite("MIDI capability discovery", .productionAccessAudit)
-#else
-@Suite("MIDI capability discovery")
-#endif
 struct MIDICapabilityDiscoveryTests {
     typealias Discovery = MIDICapabilityDiscovery
     typealias Block = UMPStreamFunctionBlockInfo

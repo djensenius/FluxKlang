@@ -22,11 +22,7 @@ import Testing
 /// `discovery(_:ci:)` below only decodes and feeds it, in order. Every word and byte below was written by hand
 /// from the layouts documented in `UMPStreamMessage+Decode.swift`, `MIDICIMessage.swift` and
 /// `MIDICIProfileMessage.swift`, never produced by an encoder.
-#if os(macOS)
 @Suite("UMP capability", .productionAccessAudit)
-#else
-@Suite("UMP capability")
-#endif
 struct UMPCapabilityTests {
     typealias Facts = MIDICapabilityFacts
     typealias CIAnswer = MIDICapabilityCIAnswer

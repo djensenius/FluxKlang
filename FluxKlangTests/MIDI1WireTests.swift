@@ -14,11 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI 1 wire bytes", .productionAccessAudit)
-#else
-@Suite("MIDI 1 wire bytes")
-#endif
 struct MIDI1WireTests {
     func events(_ bytes: [UInt8]) throws -> [MIDI1Event] {
         var parser = try #require(MIDI1Parser(maximumSysExPayloadBytes: 64))

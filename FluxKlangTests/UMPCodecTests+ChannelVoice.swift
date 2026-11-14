@@ -17,11 +17,7 @@ private struct UMPMT4Vector {
     }
 }
 
-#if os(macOS)
 @Suite("UMP channel voice", .productionAccessAudit)
-#else
-@Suite("UMP channel voice")
-#endif
 struct UMPChannelVoiceTests {
     static func seven(_ value: UInt8) throws -> UMPSevenBit { try UMPSevenBit(value) }
 

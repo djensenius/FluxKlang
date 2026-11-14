@@ -17,11 +17,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI-CI Mcoded7", .productionAccessAudit)
-#else
-@Suite("MIDI-CI Mcoded7")
-#endif
 struct MIDICIMcoded7Tests {
     typealias Pair = (raw: [UInt8], encoded: [UInt8])
 

@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI 1↔2 translation data entry", .productionAccessAudit)
-#else
-@Suite("MIDI 1↔2 translation data entry")
-#endif
 struct UMPTranslationDataEntryTests {
     static func cc(_ channel: UInt8, _ controller: UInt8, _ value: UInt8, group: UInt8 = 0) throws
         -> UMPMIDI1ChannelVoice {
