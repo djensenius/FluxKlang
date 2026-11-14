@@ -9,7 +9,7 @@ import Testing
 /// MIDI 1 control feedback bytes (#88, slice FBM1): goldens, refusals, refusal order and batch bounds. The round trip
 /// through the MIDI 1 state and the intake is in `ControlFeedbackMIDI1Tests+RoundTrip.swift`. Goldens are typed by
 /// hand and positions are exact binary fractions, so the expected step is unambiguous.
-@Suite("ControlFeedbackMIDI1Tests")
+@Suite("ControlFeedbackMIDI1Tests", .productionAccessAudit)
 struct ControlFeedbackMIDI1Tests {
     typealias Outcome = Result<ControlFeedbackMIDI1Packet, ControlFeedbackMIDI1Refusal>
     typealias Refusal = ControlFeedbackMIDI1Refusal

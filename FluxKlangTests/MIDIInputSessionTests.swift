@@ -9,7 +9,7 @@ import Testing
 /// Tests of the control-side MIDI input session: a source registry, Active Sensing observers and a note ledger as one
 /// value. This file holds the fixtures, the lifecycle tests and the source scan; `+Loss` holds the loss, poll, pedal,
 /// feed-order and limit tests.
-@Suite("MIDIInputSession")
+@Suite("MIDIInputSession", .productionAccessAudit)
 struct MIDIInputSessionTests {
     static let keys = MIDIInputID(1)
     static let pads = MIDIInputID(2)

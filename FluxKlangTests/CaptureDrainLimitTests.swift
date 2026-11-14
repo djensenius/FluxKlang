@@ -8,7 +8,7 @@ import Testing
 
 /// The limits of the capture write drain pump (#109 WDP1) at N and N + 1, its counters, the ring, its composition with
 /// the scripted writer and a gated scan of its sources. Pure values only: no file, thread, time or randomness.
-@Suite("Capture write drain pump limits")
+@Suite("Capture write drain pump limits", .productionAccessAudit)
 struct CaptureDrainLimitTests {
     @Test func captureDrainBoundsOneAndTheLargestAreAcceptedAndZeroAndOneOverAreRefused() throws {
         let smallest = try CaptureDrainPump.make(startFrame: 0, pendingBound: 1)

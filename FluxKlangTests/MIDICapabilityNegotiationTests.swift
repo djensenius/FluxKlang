@@ -9,6 +9,7 @@ import Testing
 /// Tests of the MIDI capability negotiation (#83, slice CAP1): fixtures, the level rule, the granted features and the
 /// profile identifier factory. The topic files extend this suite with the downgrade records, the refusals and the
 /// input-order tests.
+@Suite(.productionAccessAudit)
 struct MIDICapabilityNegotiationTests {
     typealias Block = UMPStreamFunctionBlockInfo
     typealias Facts = MIDICapabilityFacts

@@ -10,7 +10,7 @@ import Testing
 /// no socket and no `Date`: every host stamp is a tick count the test picks. With the unit timebase one tick is one
 /// nanosecond, and tick 0 is the anchor of the wall-clock mapping, so a bundle tagged `n` seconds after the reference
 /// instant opens `n` seconds after tick 0.
-@Suite("OSC receive context and scheduler wrapper")
+@Suite("OSC receive context and scheduler wrapper", .productionAccessAudit)
 struct OSCReceiveContextTests {
     typealias OSC = OpenSoundControl
     typealias Context = OpenSoundControl.ReceiveContext
