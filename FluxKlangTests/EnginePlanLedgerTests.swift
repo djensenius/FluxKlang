@@ -57,6 +57,7 @@ func ledgerBinding(
     return binding
 }
 
+@Suite(.productionAccessAudit)
 struct EnginePlanLedgerTests {
     @Test(arguments: [false, true])
     func completeRetiringBindsAtomicallyFromEitherPendingState(reclaim: Bool) throws {

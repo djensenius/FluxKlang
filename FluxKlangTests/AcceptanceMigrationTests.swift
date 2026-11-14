@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AcceptanceMigrationTests {
     @Test @MainActor func emptyEquipmentAcceptanceSeedUsesKnownSource() throws {
         let emptySource = try AcceptanceLaunchConfiguration.acceptanceSource(in: [])

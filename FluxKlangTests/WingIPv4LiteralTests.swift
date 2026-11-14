@@ -1,6 +1,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct WingIPv4LiteralTests {
     @Test(arguments: ["192.0.2.10", "127.0.0.1", "0.0.0.0", "255.255.255.255"])
     func numericIPv4NeedsNoResolution(_ host: String) {

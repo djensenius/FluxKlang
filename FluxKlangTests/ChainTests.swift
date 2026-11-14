@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ChainTests {
     private struct Fixture {
         var graph: ChainGraph
