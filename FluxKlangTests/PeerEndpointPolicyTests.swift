@@ -12,9 +12,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct PeerEndpointPolicyTests {
     static func v4Bytes(_ first: UInt8, _ second: UInt8, _ third: UInt8, _ fourth: UInt8) -> [UInt8] {
         [first, second, third, fourth]

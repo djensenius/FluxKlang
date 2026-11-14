@@ -85,11 +85,7 @@ private typealias Fixture = PeerReconnectFixture
 
 private func ids(_ raws: [String]) -> [CommandID] { raws.map(Fixture.id) }
 
-#if os(macOS)
 @Suite("PeerReconnectTests", .productionAccessAudit)
-#else
-@Suite("PeerReconnectTests")
-#endif
 struct PeerReconnectTests {
     @Test func inputStaysDisabledUntilACurrentSnapshotIsApplied() throws {
         let session = Fixture.session()
