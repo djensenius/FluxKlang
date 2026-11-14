@@ -92,6 +92,7 @@ private func sameCase(_ lhs: JSONValue, _ rhs: JSONValue) -> Bool {
     String(describing: lhs) == String(describing: rhs)
 }
 
+@Suite(.productionAccessAudit)
 struct ContractCoreTests {}
 
 extension ContractCoreTests {

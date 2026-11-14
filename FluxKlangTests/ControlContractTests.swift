@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ControlContractTests {}
 
 private let host = HostID(validated: "host.test")

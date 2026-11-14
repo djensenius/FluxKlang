@@ -10,6 +10,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct GraphContractTests {
     static let canonicalGraph = #"{"capabilities":[{"id":"cap.au-effect","label":"AU effect"}],"#
         + #""contract":"fluxklang.graph","edges":[{"conversion":{"kind":"channelMap","map":[[0],[0]]},"#

@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ProjectLegacyContractTests {
     @Test func emptyLegacyImportStaysInertAndFutureEnvelopesReject() throws {
         let data = Data(#"{"nodes":[],"edges":[]}"#.utf8)

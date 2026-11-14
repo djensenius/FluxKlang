@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct WingAddressTests {
     @Test func faderPositionsEncodeAsDecibelsForHardware() {
         let address = WingAddress.fader(.bus, 5)

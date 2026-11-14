@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct FaderMathTests {
     @Test func unityGainSitsAtThreeQuarters() {
         #expect(FaderMath.position(fromDecibels: 0) == 0.75)

@@ -11,6 +11,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ProjectContractTests {
     static let digest = "sha256:" + String(repeating: "0123456789abcdef", count: 4)
     static let canonicalProject = #"{"assets":[{"contentDigest":"\#(digest)","extensions":{"loudnessLufs":-14},"#

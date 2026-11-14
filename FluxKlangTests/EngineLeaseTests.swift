@@ -68,6 +68,7 @@ private let interleavings: [[ScriptedStep]] = [
      .refused(.release(1), .staleToken)]
 ]
 
+@Suite(.productionAccessAudit)
 struct EngineLeaseTests {
     @Test func firstWindowAcquiresLease() throws {
         var registry = EngineLeaseRegistry()

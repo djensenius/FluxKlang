@@ -8,6 +8,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ModelsTests {
     @Test func faderLayoutIncludesGeneratedStudioControlsWithoutDuplicates() {
         let endpoint = StudioEndpoint(name: "Main Speakers", destination: .finalMix)

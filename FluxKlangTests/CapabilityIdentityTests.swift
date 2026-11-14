@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct CapabilityIdentityTests {
     @Test func reservedExtensionsAreSeparateFromUnknownMetadata() throws {
         let input = Data("""

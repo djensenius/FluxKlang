@@ -1,6 +1,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ContractFixtureTests {}
 
 extension ContractFixtureTests {
