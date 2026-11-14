@@ -7,6 +7,7 @@ import Testing
 
 /// Statistics of host-stamp windows: goldens, the mean, the extremes and equal stamps. Nearest-rank tables, nominal
 /// intervals, refusals and the verdict are in the extensions of this suite.
+@Suite(.productionAccessAudit)
 struct MIDIClockJitterTests {
     static func stamps(_ ticks: [UInt64]) -> [HostStamp] {
         ticks.map { HostStamp(ticks: $0) }

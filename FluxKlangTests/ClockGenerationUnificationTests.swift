@@ -9,6 +9,7 @@ import Testing
 /// One clock-generation snapshot for the metronome, MIDI clips and automation, which take it directly since #108
 /// GU1b-1, GU1b-2 and GU1b-3 (GU1, slice a, added it). This file holds the fixtures, the checks on the snapshot value
 /// and the scan of the new sources; the ledger, staleness and drift guard tests are in the extensions beside it.
+@Suite(.productionAccessAudit)
 struct ClockGenerationUnificationTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")

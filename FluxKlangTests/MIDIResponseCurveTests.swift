@@ -7,6 +7,7 @@ import Testing
 
 /// Construction, bounds and refusal order of `MIDIResponseCurve`. Golden values, transforms and ownership are in the
 /// extensions of this suite.
+@Suite(.productionAccessAudit)
 struct MIDIResponseCurveTests {
     static func points(_ pairs: [(UInt8, UInt8)]) -> [MIDICurvePoint] {
         pairs.map { MIDICurvePoint(input: $0.0, output: $0.1) }

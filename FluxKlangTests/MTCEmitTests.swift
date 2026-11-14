@@ -8,6 +8,7 @@ import Testing
 
 /// Structure, ordering, origin and full frame of `MTCEmitPlan`. Goldens, refusals and wraps are in the extensions of
 /// this suite.
+@Suite(.productionAccessAudit)
 struct MTCEmitTests {
     static let unitTimebase = HostTimebase(numer: 1, denom: 1)
 

@@ -8,7 +8,7 @@ import Testing
 /// Local control dispatch (#88, LCD1): `admit` decides which bindings hear one local MIDI control message. This file
 /// holds the fixtures and the admission tests; `+Composition` holds `settle` and the composition with the feedback
 /// echo check. Every fixture is nested in `Fx`, so no name leaves the suite.
-@Suite("Control local dispatch")
+@Suite("Control local dispatch", .productionAccessAudit)
 struct ControlLocalDispatchTests {
     // swiftlint:disable:next type_name
     enum Fx {

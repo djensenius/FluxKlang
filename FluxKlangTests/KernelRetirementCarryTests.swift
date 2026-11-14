@@ -8,6 +8,7 @@ import Testing
 /// #364 E5c: the bounded carry of stateful events across cycle retirement (slice a). Pure values: no clock, no
 /// threads, no wiring. The record, capacity and equality tests are in `+Capacity`; how a replacement plans and
 /// re-admits the carry is tested with the cycle in `RealtimeHandoffTests+KernelCycleReadmission*`.
+@Suite(.productionAccessAudit)
 struct KernelRetirementCarryTests {
     static func control(
         frame: Int64 = 0, channel: UInt8 = 0, controller: UInt8 = 1, value: UInt32 = 2, sequence: UInt64 = 0
