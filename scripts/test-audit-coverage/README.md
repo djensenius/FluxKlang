@@ -19,6 +19,7 @@ ulimit -c 0
 root="$PWD"
 work="$(mktemp -d "${TMPDIR:-/tmp}/fluxklang-test-audit.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
+case "$work" in /private/var/* | /private/tmp/*) work="${work#/private}" ;; esac
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 host="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host"
 sources=(scripts/test-audit-coverage/*.swift)
@@ -30,6 +31,10 @@ xcrun swiftc "${common[@]}" "${sources[@]}" -o "$work/Check"
 "$work/Check" --root "$root" --mode inventory > "$work/inventory.json"
 "$work/Check" --root "$root" > "$work/enforcement.json"
 ```
+
+`pwd -P` resolves any symlinked `TMPDIR` that the checker would reject; the `case`
+line keeps macOS's `/var` or `/tmp` spelling because Foundation's standardization
+strips `/private`, so the checker rejects `/private` roots as non-normalized.
 
 `--root` is absolute. The optional `--manifest` is root-relative and defaults to
 `scripts/test-audit-coverage/registrations.json`. `--format text` selects a
