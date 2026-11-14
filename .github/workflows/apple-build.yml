@@ -40,10 +40,12 @@ jobs:
           fi
       - name: Require OS-27 SDKs
         run: |
+          [ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || { ls -d /Applications/Xcode*.app || true; echo "::error::$DEVELOPER_DIR missing on this image (no fallback)"; exit 1; }
           xcodebuild -version
           for sdk in macosx iphoneos iphonesimulator; do
             v=$(xcrun --sdk "$sdk" --show-sdk-version)
             echo "$sdk SDK $v"
+            case $v in [0-9]*) ;; *) echo "::error::$sdk SDK version '$v' unparseable"; exit 1 ;; esac
             [ "${v%%.*}" -ge 27 ] || { echo "::error::$sdk SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
           done
       - name: Generated project is in sync
@@ -51,15 +53,28 @@ jobs:
         run: |
           xcodegen generate
           git status --porcelain --untracked-files=all
-          test -z "$(git status --porcelain --untracked-files=all)"
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git --no-pager diff --stat
+            echo "::error::xcodegen generate changed the tree; commit the regenerated project"; exit 1
+          fi
+      - name: Package.resolved is in sync
+        # Resolve only from the committed pins; later xcodebuild calls never re-resolve.
+        # -derivedDataPath requires -scheme; packages are per project, so one scheme resolves them all.
+        run: |
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests -resolvePackageDependencies \
+            -disableAutomaticPackageResolution -derivedDataPath DerivedData
+          git --no-pager diff --exit-code -- '*Package.resolved'
       - name: Effective deployment targets are 27.0
         run: |
           status=0
           for cfg in Debug Release; do
-            rows=$(xcodebuild -project FluxKlang.xcodeproj -alltargets -configuration "$cfg" \
-                -showBuildSettings -json \
-              | jq -r '.[] | .buildSettings as $s | $s.DEPLOYMENT_TARGET_SETTING_NAME as $k
-                  | [.target, $k, ($s[$k] // "unset")] | @tsv')
+            # No -derivedDataPath: xcodebuild rejects it without -scheme, which -alltargets excludes.
+            json=$(xcodebuild -project FluxKlang.xcodeproj -alltargets -configuration "$cfg" \
+              -disableAutomaticPackageResolution -showBuildSettings -json)
+            jq -e 'type == "array" and length > 0' <<< "$json" >/dev/null || { echo "::error::bad $cfg settings JSON"; exit 1; }
+            rows=$(jq -r '.[] | .buildSettings as $s | ($s.DEPLOYMENT_TARGET_SETTING_NAME // "") as $k
+                | [.target, (if $k == "" then "MISSING_SETTING_NAME" else $k end),
+                   (if $k == "" then "unset" else ($s[$k] // "unset") end)] | @tsv' <<< "$json")
             [ -n "$rows" ] || { echo "::error::no $cfg build settings"; exit 1; }
             while IFS=$'\t' read -r target key value; do
               echo "$cfg $target $key=$value"
@@ -73,17 +88,22 @@ jobs:
         run: >
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests
           -destination 'platform=macOS'
-          -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
+          -disableAutomaticPackageResolution -derivedDataPath DerivedData
+          build-for-testing CODE_SIGNING_ALLOWED=NO
       - name: Build iOS for testing
         # Generic destination: needs no particular simulator device on the image.
+        # ARCHS=arm64: OS-27 hosts are Apple silicon, so an x86_64 simulator slice only doubles compile time.
         run: >
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests
           -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
+          -disableAutomaticPackageResolution -derivedDataPath DerivedData
+          build-for-testing CODE_SIGNING_ALLOWED=NO ARCHS=arm64
       - name: Built products target OS 27.0
-        # Skips Xcode's prebuilt UI-test runner stub (minos 17.0); its PlugIns are still checked.
+        # Skips Xcode's prebuilt UI-test runner stubs and the XCTest frameworks Xcode copies into them
+        # (minos 17.0); the runners' PlugIns (our test bundles) are still checked.
         run: |
           status=0; count=0
+          [ -d DerivedData/Build/Products ] || { echo "::error::no Products dir"; exit 1; }
           while IFS= read -r -d '' bin; do
             # Check linked images by content, not mode: libraries can be 0644. Objects and dSYMs are skipped.
             case $(file -b "$bin") in
@@ -92,7 +112,7 @@ jobs:
             esac
             rel=${bin#DerivedData/Build/Products/}
             count=$((count + 1))
-            if ! info=$(xcrun vtool -show-build "$bin" 2>&1) || ! archs=$(xcrun lipo -archs "$bin" 2>&1); then
+            if ! info=$(xcrun vtool -show-build "$bin" 2>&1) || ! archs=$(xcrun lipo -archs "$bin"); then
               echo "::error::$rel could not be inspected"; status=1; continue
             fi
             # Universal binaries report one minos per slice; every slice must report 27.0.
@@ -101,10 +121,20 @@ jobs:
             read -r -a arch_list <<< "$archs"
             [ "${#minos_list[@]}" -ge "${#arch_list[@]}" ] \
               || { echo "::error::$rel has ${#arch_list[@]} slice(s) but ${#minos_list[@]} minos"; status=1; }
-            for minos in "${minos_list[@]}"; do
+            for minos in ${minos_list[@]+"${minos_list[@]}"}; do
               echo "minos $minos $rel"
               [ "$minos" = "27.0" ] || { echo "::error::$rel minos $minos; deployment must stay 27.0"; status=1; }
             done
-          done < <(find DerivedData/Build/Products -type f ! -path '*-Runner.app/*-Runner' -print0)
+          done < <(find DerivedData/Build/Products -type f ! -path '*-Runner.app/*-Runner' \
+            ! -path '*-Runner.app/Frameworks/*' ! -path '*-Runner.app/Contents/Frameworks/*' -print0)
           [ "$count" -gt 0 ] || { echo "::error::no Mach-O products found"; exit 1; }
+          # The main products must exist, so the scan above cannot pass on a partial build.
+          for rel in \
+            Debug/FluxKlangMac.app/Contents/MacOS/FluxKlangMac \
+            Debug/FluxKlangMac.app/Contents/PlugIns/FluxKlangMacTests.xctest/Contents/MacOS/FluxKlangMacTests \
+            Debug-iphonesimulator/FluxKlang.app/FluxKlang \
+            Debug-iphonesimulator/FluxKlang.app/PlugIns/FluxKlangTests.xctest/FluxKlangTests \
+            Debug-iphonesimulator/FluxKlangUITests-Runner.app/PlugIns/FluxKlangUITests.xctest/FluxKlangUITests; do
+            [ -f "DerivedData/Build/Products/$rel" ] || { echo "::error::missing $rel"; status=1; }
+          done
           exit "$status"

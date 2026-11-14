@@ -510,13 +510,21 @@ Gaps and blockers:
 
 Status: A, B, D and E are applied on `main` by the coordinator follow-up to #59. C is applied
 by the compile-only #61 change, which still leaves #61 open, and F stays with the runtime lanes.
-The applied `.github/workflows/apple-build.yml` differs from the block below in five ways:
+The applied `.github/workflows/apple-build.yml` differs from the block below in these ways:
 - It builds the `FluxKlangMacIsolatedTests` and `FluxKlangIsolatedTests` schemes. They compile
   the same targets as `FluxKlangMac` and `FluxKlang` and match `make build-for-testing-mac` and
   `make build-for-testing`.
-- It uses `-destination 'generic/platform=iOS Simulator'`, so no device name is needed.
-- It adds `timeout-minutes` and a `concurrency` group.
-- It counts `minos` slices with arrays (SC2086).
+- It uses `-destination 'generic/platform=iOS Simulator'` with `ARCHS=arm64`. No device name is
+  needed, and no OS-27 host can run an x86_64 simulator. `make build-for-testing` uses the same
+  generic destination without `ARCHS`, so local builds still compile both slices.
+- It adds `timeout-minutes` and a `concurrency` group. It fails early if `DEVELOPER_DIR` is
+  missing or an SDK version can't be parsed.
+- It checks package pins: it resolves packages from the committed `Package.resolved` with
+  `-disableAutomaticPackageResolution`, fails on a diff, and later steps never re-resolve.
+- The deployment check validates the settings JSON and reports a missing
+  `DEPLOYMENT_TARGET_SETTING_NAME`.
+- The `minos` check skips the XCTest frameworks that Xcode copies into `*-Runner.app`. It counts
+  slices with arrays (SC2086) and requires the five main app and test executables.
 - `.github/actionlint.yaml` declares `xcode-27`.
 
 C has still not been verified on a GitHub runner.
