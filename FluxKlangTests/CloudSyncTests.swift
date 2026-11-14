@@ -12,6 +12,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct CloudSyncTests {
     /// In-memory stand-in for iCloud's key-value store.
     private final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {

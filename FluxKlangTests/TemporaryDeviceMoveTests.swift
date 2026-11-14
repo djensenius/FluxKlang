@@ -7,6 +7,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct TemporaryDeviceMoveTests {
     private final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {
         private let lock = NSLock()

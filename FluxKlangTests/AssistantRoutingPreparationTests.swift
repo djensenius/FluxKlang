@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AssistantRoutingPreparationTests {
     @Test func ownerRequestBuildRevalidateAndMergeRetainsExactlyThreePaths() throws {
         let fixture = AssistantRoutingFixture()

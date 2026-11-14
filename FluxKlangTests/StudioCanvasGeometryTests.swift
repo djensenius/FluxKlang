@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioCanvasGeometryTests {
     @Test func emptyCanvasKeepsMinimumLanesAndExtent() {
         let geometry = StudioCanvasGeometry(positions: [])

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioConnectionMigrationTests {
     private final class MemoryCloudStore: CloudKeyValueStore, @unchecked Sendable {
         private let lock = NSLock()
