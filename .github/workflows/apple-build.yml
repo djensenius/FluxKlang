@@ -87,7 +87,7 @@ jobs:
       - name: Build macOS for testing
         run: >
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests
-          -destination 'platform=macOS'
+          -destination 'platform=macOS,arch=arm64'
           -disableAutomaticPackageResolution -derivedDataPath DerivedData
           build-for-testing CODE_SIGNING_ALLOWED=NO
       - name: Build iOS for testing
