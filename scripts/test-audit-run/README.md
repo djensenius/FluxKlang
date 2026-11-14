@@ -232,8 +232,14 @@ CI-computed pin, not an independently reviewed one: it binds only build,
 re-pinned after a refusal. It then runs `prepare` and `validate` with
 `--profile mac-isolated-unit` and one `test-without-building`. Its argv follows
 the candidate argv under "Single-attempt Mac process library" below, without
-`-derivedDataPath`: it keeps `-parallel-testing-enabled NO` and
-`-test-iterations 1`, adds no filters or retries, and is recorded exactly.
+`-derivedDataPath` or `-test-iterations 1`: it keeps `-parallel-testing-enabled
+NO`, adds no filters or retries, and is recorded exactly. `-test-iterations 1`
+is omitted because an actual local Xcode 27.2 invocation rejected it (exit 64;
+no tests ran); behavior on Xcode 27.1 is unverified.
+
+Only a redacted summary is kept: receipt filenames (published or `.partial`,
+including path forms) and UUIDs other than the run ID are redacted from xcresult
+text before it is truncated or stored (`observation_summary.py`).
 
 A `prepare`/`validate` refusal is an expected possible first result: the
 `OBSERVED` allowlist exactly matches an earlier specimen, and Xcode 27.1 output
@@ -634,6 +640,11 @@ process tests prove neither compatibility nor incompatibility. Resolve that
 separately before any real call; do not investigate by executing/retrying a
 consumed attempt, adapting flags, adding a scheme or moving Products. This is
 not a supported execution workflow or permission to run tests/apps.
+
+Note: an actual local Xcode 27.2 invocation rejected `-test-iterations 1`
+("Must specify -test-iterations with more than 1 iteration.", exit 64) before
+any test ran. Do not copy that flag from this candidate argv; `mac_launch.py`
+itself is unchanged here.
 
 After claim, every runner path (including the longer `process-outcome.json`)
 is checked for literal UTF-8/NUL grammar, the 4,096-byte ceiling and local

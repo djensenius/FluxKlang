@@ -260,14 +260,15 @@ jobs:
           PREPARED_XCTESTRUN: ${{ steps.prepare.outputs.output }}
           TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR: ${{ steps.receipts.outputs.dir }}
         # Exactly one invocation, aligned with the README's candidate argv (#294) minus
-        # -derivedDataPath: no retries, filters or other parallel-testing/iteration overrides.
+        # -derivedDataPath and -test-iterations 1 (an actual Xcode 27.2 run rejected it with exit 64
+        # before any test ran): no retries, filters or other parallel-testing/iteration overrides.
         run: |
           [ -n "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] && [ -d "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] \
             || { echo "::error::receipt directory missing; refusing to launch"; exit 1; }
           argv=("$DEVELOPER_DIR/usr/bin/xcodebuild"
             test-without-building -xctestrun "$PREPARED_XCTESTRUN"
             -destination 'platform=macOS,arch=arm64'
-            -parallel-testing-enabled NO -test-iterations 1
+            -parallel-testing-enabled NO
             -resultBundlePath "$RUNNER_TEMP/observation.xcresult")
           argv_text=$(printf '%q ' "${argv[@]}"); argv_text=${argv_text% }
           case $argv_text in *$'\n'* | *$'\r'*) echo "::error::argv contains a line break"; exit 1 ;; esac
@@ -300,120 +301,11 @@ jobs:
           TEST_ARGV: ${{ steps.test.outputs.argv }}
           RESULT_BUNDLE: ${{ runner.temp }}/observation.xcresult
           SUMMARY_DIR: ${{ runner.temp }}/observation-summary
-        # Counts and trimmed failure text only; receipt contents and names are never read or printed.
+        # Counts and redacted, trimmed failure text only; receipt contents and filenames are never
+        # written (scripts/test-audit-run/observation_summary.py redacts before truncating).
         run: |
           mkdir -p "$SUMMARY_DIR"
-          python3 - <<'PY'
-          import json, os, re, subprocess
-
-          NA = "not available"
-          def env(key):
-              return os.environ.get(key) or NA
-
-          summary = {
-              "head_sha": env("HEAD_SHA"), "event_sha": env("GITHUB_SHA"), "pr_head_sha": env("PR_HEAD_SHA"),
-              "xcode": env("XCODE"), "macos": env("MACOS"), "python": env("PYTHON"),
-              "xctestrun": env("XCTESTRUN"), "xctestrun_sha256": env("XCTESTRUN_SHA256"),
-              "preparation": env("PREPARE_OUTCOME"), "run_id": env("RUN_ID"),
-              "start_utc": env("TEST_START"), "end_utc": env("TEST_END"),
-              "exit_code": env("TEST_STATUS"), "test_argv": env("TEST_ARGV"),
-              "deviations": [
-                  "CODE_SIGNING_ALLOWED=NO: host ad-hoc signed by the linker without entitlements; unsandboxed",
-                  "receipt directory supplied via TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR (delivery unverified)",
-              ],
-          }
-
-          results, error = None, None
-          bundle = os.environ["RESULT_BUNDLE"]
-          if os.path.isdir(bundle):
-              try:
-                  proc = subprocess.run(
-                      ["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", bundle, "--compact"],
-                      capture_output=True, text=True, timeout=600)
-                  if proc.returncode == 0:
-                      results = json.loads(proc.stdout)
-                  else:
-                      error = proc.stderr.strip()[:500] or "exit %d" % proc.returncode
-              except Exception as exc:  # keep the summary robust
-                  error = str(exc)[:500]
-          else:
-              error = "no result bundle"
-          summary["xcresult_error"] = error
-
-          audit = re.compile(r"productionaccess|production access|audit", re.IGNORECASE)
-          def text(value, limit=300):
-              # Single line, no backticks: keeps the markdown table and code fence intact.
-              return " ".join(str(value).split()).replace("`", "'")[:limit]
-          if isinstance(results, dict):
-              for key, name in (("result", "result"), ("totalTestCount", "total"), ("passedTests", "passed"),
-                                ("failedTests", "failed"), ("skippedTests", "skipped"),
-                                ("expectedFailures", "expected_failures_known_issues"),
-                                ("startTime", "xcresult_start"), ("finishTime", "xcresult_finish")):
-                  summary[name] = results.get(key, NA)
-              failures = results.get("testFailures") or []
-              failures = failures if isinstance(failures, list) else []
-              summary["failure_count"] = len(failures)
-              summary["audit_failure_count"] = sum(
-                  1 for f in failures if isinstance(f, dict) and audit.search(
-                      "%s %s" % (f.get("testName", ""), f.get("failureText", ""))))
-              summary["first_failures"] = [
-                  {"target": text(f.get("targetName", NA), 100), "test": text(f.get("testName", NA), 200),
-                   "message": text(f.get("failureText", NA))}
-                  for f in failures[:20] if isinstance(f, dict)]
-          else:
-              for name in ("result", "total", "passed", "failed", "skipped", "expected_failures_known_issues",
-                           "failure_count", "audit_failure_count"):
-                  summary[name] = NA
-              summary["first_failures"] = []
-
-          receipt_dir = os.environ.get("RECEIPT_DIR", "")
-          if receipt_dir and os.path.isdir(receipt_dir) and not os.path.islink(receipt_dir):
-              names = os.listdir(receipt_dir)
-              partial = [n for n in names if n.startswith(".") and n.endswith(".partial")]
-              published = [n for n in names if not n.startswith(".")
-                           and os.path.isfile(os.path.join(receipt_dir, n))
-                           and not os.path.islink(os.path.join(receipt_dir, n))]
-              summary["receipts_published"] = len(published)
-              summary["receipts_partial_leftovers"] = len(partial)
-              summary["receipts_other_entries"] = len(names) - len(published) - len(partial)
-          else:
-              summary["receipts_published"] = summary["receipts_partial_leftovers"] = NA
-              summary["receipts_other_entries"] = NA
-
-          out = os.environ["SUMMARY_DIR"]
-          with open(os.path.join(out, "summary.json"), "w") as stream:
-              json.dump(summary, stream, indent=2, sort_keys=True)
-              stream.write("\n")
-
-          rows = [
-              ("HEAD SHA", "head_sha"), ("Event SHA", "event_sha"), ("PR head SHA", "pr_head_sha"),
-              ("Xcode", "xcode"), ("macOS", "macos"),
-              ("xctestrun sha256", "xctestrun_sha256"), ("Preparation", "preparation"), ("Run ID", "run_id"),
-              ("Start (UTC)", "start_utc"), ("End (UTC)", "end_utc"), ("Exit code", "exit_code"),
-              ("Result", "result"), ("Total", "total"), ("Passed", "passed"), ("Failed", "failed"),
-              ("Skipped", "skipped"), ("Expected failures (known issues)", "expected_failures_known_issues"),
-              ("Failures mentioning productionAccess/audit", "audit_failure_count"),
-              ("Published receipt files", "receipts_published"),
-              ("Hidden .partial leftovers", "receipts_partial_leftovers"),
-              ("Other receipt-dir entries", "receipts_other_entries"),
-          ]
-          lines = ["## Observation result", "", "| Field | Value |", "| --- | --- |"]
-          lines += ["| %s | %s |" % (label, text(summary.get(key, NA), 200).replace("|", "\\|"))
-                    for label, key in rows]
-          if error:
-              lines += ["", "xcresult summary: " + text(error)]
-          lines += ["", "Test argv (exact):", "", "```text", text(summary["test_argv"], 4000), "```"]
-          lines += ["", "Deviations: " + "; ".join(summary["deviations"]) + ".", ""]
-          if summary["first_failures"]:
-              lines += ["### First failures (trimmed)", "", "```text"]
-              lines += ["%s / %s: %s" % (f["target"], f["test"], f["message"]) for f in summary["first_failures"]]
-              lines += ["```", ""]
-          markdown = "\n".join(lines)
-          with open(os.path.join(out, "summary.md"), "w") as stream:
-              stream.write(markdown + "\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-              stream.write(markdown + "\n")
-          PY
+          python3 scripts/test-audit-run/observation_summary.py
       - name: Upload the summary only
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

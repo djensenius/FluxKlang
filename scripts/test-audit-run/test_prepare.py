@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 import uuid
 
+import observation_summary
 import prepare
 
 
@@ -620,6 +621,64 @@ class PreparationTests(unittest.TestCase):
             self.assertTrue(path.is_symlink())
             path.unlink()
             saved.rename(path)
+
+
+
+class ObservationSummaryRedactionTests(unittest.TestCase):
+    """Receipt filenames from sink errors never reach the retained summaries (#693)."""
+
+    RUN_ID = "0f8e6a2c-4b1d-4e3f-9a5b-6c7d8e9f0a1b"
+    INVOCATION = "3C1F2A9B-7D4E-4F60-8A1B-2C3D4E5F6A7B"
+    NAME = "production-access-testCaseExit-%s.json" % INVOCATION
+    PARTIAL = ".%s.partial" % NAME
+
+    def summarize(self, failure_texts, error=None):
+        failures = [
+            {"targetName": "FluxKlangMacTests", "testName": "t%d()" % i, "failureText": t}
+            for i, t in enumerate(failure_texts)
+        ]
+        results = {"result": "Failed", "failedTests": len(failures), "testFailures": failures}
+        summary, markdown = observation_summary.summarize(
+            {"RUN_ID": self.RUN_ID}, results, error, {"receipts_published": 0})
+        return summary, json.dumps(summary) + markdown
+
+    def assertNoReceiptName(self, rendered):
+        for leak in ("production-access-", self.INVOCATION, self.INVOCATION.lower(),
+                     self.INVOCATION[:8], self.INVOCATION[-12:]):
+            self.assertNotIn(leak, rendered)
+
+    def test_sink_errors_keep_operation_and_errno(self):
+        summary, rendered = self.summarize([
+            "exclusive-create %s failed: File exists (errno 17)" % self.PARTIAL,
+            "publish %s failed: File exists (errno 17); %s left in place" % (self.NAME, self.PARTIAL),
+            "published %s is not this invocation's file; left in place" % self.NAME,
+        ])
+        self.assertNoReceiptName(rendered)
+        messages = [f["message"] for f in summary["first_failures"]]
+        self.assertEqual(messages[0], "exclusive-create <receipt-file> failed: File exists (errno 17)")
+        self.assertEqual(
+            messages[1],
+            "publish <receipt-file> failed: File exists (errno 17); <receipt-file> left in place")
+
+    def test_absolute_paths_case_variants_and_error_text(self):
+        path = "/private/var/run/audit-receipts-%s/%s" % (self.RUN_ID, self.PARTIAL)
+        summary, rendered = self.summarize(
+            ["fstatat %s failed (errno 2)" % path, "close %s" % self.PARTIAL.upper().replace(".JSON", ".json")],
+            error="xcresulttool: cannot read %s" % self.NAME.lower())
+        self.assertNoReceiptName(rendered)
+        self.assertNotIn("PRODUCTION-ACCESS-", rendered)
+        self.assertEqual(summary["first_failures"][0]["message"], "fstatat <receipt-file> failed (errno 2)")
+        self.assertEqual(summary["xcresult_error"], "xcresulttool: cannot read <receipt-file>")
+
+    def test_truncation_boundary_and_untruncated_audit_count(self):
+        for pad in range(270, 300):
+            summary, rendered = self.summarize(["x" * pad + " " + self.PARTIAL + " audit"])
+            self.assertNoReceiptName(rendered)
+            self.assertEqual(summary["audit_failure_count"], 1)
+
+    def test_only_the_recorded_run_id_survives(self):
+        summary, _ = self.summarize(["run %s other %s" % (self.RUN_ID.upper(), self.INVOCATION)])
+        self.assertEqual(summary["first_failures"][0]["message"], "run %s other <uuid>" % self.RUN_ID.upper())
 
 
 if __name__ == "__main__":
