@@ -19,11 +19,7 @@ import Testing
 
 private typealias Fixture = WiringPreviewFixture
 
-#if os(macOS)
 @Suite("Wiring node add and remove", .productionAccessAudit)
-#else
-@Suite("Wiring node add and remove")
-#endif
 struct WiringNodeEditTests {
     static let keys = NodeID(validated: "nod.keys")
     static let verb = NodeID(validated: "nod.verb")

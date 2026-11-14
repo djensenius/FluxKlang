@@ -120,11 +120,7 @@ enum WiringPreviewFixture {
 
 private typealias Fixture = WiringPreviewFixture
 
-#if os(macOS)
 @Suite("Wiring preview candidates", .productionAccessAudit)
-#else
-@Suite("Wiring preview candidates")
-#endif
 struct WiringPreviewTests {
     @Test func fixtureGraphIsValid() {
         #expect(Fixture.graph.validationErrors().isEmpty)

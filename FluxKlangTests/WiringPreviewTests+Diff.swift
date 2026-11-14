@@ -29,11 +29,7 @@ private struct WiringPreviewSeededGenerator: RandomNumberGenerator {
     }
 }
 
-#if os(macOS)
 @Suite("Wiring review diff", .productionAccessAudit)
-#else
-@Suite("Wiring review diff")
-#endif
 struct WiringReviewDiffTests {
     static let comp = Fixture.stereo("nod.comp", at: 10)
     static let gate = Fixture.stereo("nod.gate", at: 11)

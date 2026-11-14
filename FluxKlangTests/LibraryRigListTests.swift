@@ -99,9 +99,7 @@ enum LibraryRigFixture {
     }
 }
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct LibraryRigListTests {
     private typealias Fixture = LibraryRigFixture
 

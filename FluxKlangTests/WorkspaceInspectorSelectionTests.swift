@@ -39,11 +39,7 @@ enum WorkspaceInspectorFixture {
     }
 }
 
-#if os(macOS)
 @Suite("Workspace inspector selection", .productionAccessAudit)
-#else
-@Suite("Workspace inspector selection")
-#endif
 struct WorkspaceInspectorSelectionTests {
     typealias Fixture = WorkspaceInspectorFixture
 

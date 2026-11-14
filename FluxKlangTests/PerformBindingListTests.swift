@@ -9,9 +9,7 @@ import Testing
 /// The perform "Bindings..." list (#102 PBL1): one row per binding of a pickup book, its exact text, the stale
 /// controller rule, the UTF-8 byte order and the refusal order. Every fixture is a private static of the suite and
 /// every expected text is typed by hand. Pure values only: no device, clock, store or I/O.
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct PerformBindingListTests {
     private static let knobSource = ControlSourceID(validated: "midi.ctl-a.1.cc.70")
     private static let encoderSource = ControlSourceID(validated: "midi.ctl-a.1.cc.71")

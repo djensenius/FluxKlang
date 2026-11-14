@@ -17,11 +17,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Library media list", .productionAccessAudit)
-#else
-@Suite("Library media list")
-#endif
 struct LibraryMediaListTests {
     @Test func aStaleDocumentRowReadsAsTheDocMocksIt() throws {
         let list = try LibraryMediaList.make(

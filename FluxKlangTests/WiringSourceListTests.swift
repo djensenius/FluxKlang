@@ -16,11 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Wiring source list", .productionAccessAudit)
-#else
-@Suite("Wiring source list")
-#endif
 struct WiringSourceListTests {
     typealias Fixture = WiringSourceFixture
 
