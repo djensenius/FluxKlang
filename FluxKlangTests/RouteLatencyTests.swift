@@ -9,7 +9,7 @@ import Testing
 /// Route latency model (#68, slice LAT1): measurement kinds, the callback budget, configuration-bound calibration
 /// records, the impulse-offset estimator and parallel path delay compensation. This root file holds the shared
 /// builders plus the kind, measurement, stream setup and callback budget tests; the other files extend the suite.
-@Suite("Route latency")
+@Suite("Route latency", .productionAccessAudit)
 struct RouteLatencyTests {
     private struct CallbackBudgetCase {
         let frames: Int

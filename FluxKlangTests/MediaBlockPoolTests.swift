@@ -8,7 +8,7 @@ import Testing
 /// The preallocated media block pool (#109 IO1). Creation and its bounds are here; leasing, copying, slot
 /// generations, statistics and seeded random sequences are in the `MediaBlockPoolTests+...` extensions, which share
 /// the builders below.
-@Suite("Media block pool")
+@Suite("Media block pool", .productionAccessAudit)
 struct MediaBlockPoolTests {
     /// Everything a refused operation must leave untouched.
     struct Snapshot: Equatable {

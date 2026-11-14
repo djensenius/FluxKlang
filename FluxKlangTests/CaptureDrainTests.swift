@@ -7,7 +7,7 @@ import Testing
 
 /// The capture write drain pump (#109 WDP1): the coordinator's golden run, the pinned refusal orders, the retry
 /// budget and the latch, the frame invariant. Pure values only: no file, thread, time or randomness.
-@Suite("Capture write drain pump")
+@Suite("Capture write drain pump", .productionAccessAudit)
 struct CaptureDrainTests {
     @Test func captureDrainMakeRefusesTheBoundBeforeTheStartFrameWhenBothAreWrong() {
         let refusal = drainRefusal { try CaptureDrainPump.make(startFrame: -1, pendingBound: 0) }

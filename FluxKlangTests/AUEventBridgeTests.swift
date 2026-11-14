@@ -7,7 +7,7 @@ import Testing
 
 /// AU event and parameter bridge generation guards (#73, slice PLG3). Topic files: Events, Ramps, Latency, Order.
 /// Every bound is restated here as a literal; fixtures are pure values (no AudioToolbox, no plugin).
-@Suite("AUEventBridgeTests")
+@Suite("AUEventBridgeTests", .productionAccessAudit)
 struct AUEventBridgeTests {
     static func generation(_ resources: Int = 1, _ sampleRate: Int = 1, _ latency: Int = 1) throws
         -> CapabilityGeneration {

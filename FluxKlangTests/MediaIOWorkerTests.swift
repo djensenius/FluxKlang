@@ -9,7 +9,7 @@ import Testing
 /// The off-render media I/O worker contract (#109 IO2): limits and faults, validated requests, scripted fakes, the
 /// prefetch fill pump and the fault mapping. The topics live in the `MediaIOWorkerTests+...` extensions, which share
 /// the builders below. No test touches a file, a clock, a thread or randomness beyond a fixed seed.
-@Suite("Media I/O workers")
+@Suite("Media I/O workers", .productionAccessAudit)
 struct MediaIOWorkerTests {
     /// The refusal a throwing body produced, or nil when it did not throw that type.
     static func refusal<Failure: Error, Value>(_ type: Failure.Type, _ body: () throws -> Value) -> Failure? {

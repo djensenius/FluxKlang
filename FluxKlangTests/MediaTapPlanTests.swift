@@ -8,7 +8,7 @@ import Testing
 /// The capture tap plan (#109 IO3). Tap ids, roles and consumer specs are here; plans and policies are in
 /// `MediaTapPlanTests+Policies`, refusal order in `+Order`, the claim table in `+Claims`. The extensions share the
 /// builders below.
-@Suite("Media tap plan")
+@Suite("Media tap plan", .productionAccessAudit)
 struct MediaTapPlanTests {
     static let allContexts: [ExecutionContext] = [.render, .control, .ui, .midiReceive, .auHost, .worker]
 
