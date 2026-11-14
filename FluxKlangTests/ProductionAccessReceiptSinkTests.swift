@@ -15,7 +15,9 @@ private final class SinkSpy: Sendable {
     struct State {
         var attachments: [(json: String, filename: String)] = []
         var submissionIssues = 0
+        var issueErrors: [String] = []
         var writeCalls = 0
+        var foreign: (path: String, inode: ino_t)?
     }
     let state = Mutex(State())
 
@@ -32,7 +34,8 @@ private func succeeded(_ result: Int32) throws {
 
 /// A fresh, owned 0700 directory per test, removed afterwards.
 private func withReceiptDirectory(_ body: (String) async throws -> Void) async throws {
-    let path = NSTemporaryDirectory() + "fluxklang-660-\(UUID().uuidString)"
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("fluxklang-660-\(UUID().uuidString)", isDirectory: false).path
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
     defer { try? FileManager.default.removeItem(atPath: path) }
     try succeeded(chmod(path, 0o700))
@@ -76,7 +79,10 @@ private func expectingSubmissionIssue(spy: SinkSpy, _ body: () async throws -> V
         guard case .errorCaught = issue.kind, issue.comments == [Comment(rawValue: sinkSubmissionIssue)] else {
             return false
         }
-        spy.state.withLock { $0.submissionIssues += 1 }
+        spy.state.withLock { state in
+            state.submissionIssues += 1
+            state.issueErrors.append(issue.error.map { String(describing: $0) } ?? "")
+        }
         return true
     }
     #expect(spy.state.withLock { $0.submissionIssues } == 1)
@@ -84,7 +90,13 @@ private func expectingSubmissionIssue(spy: SinkSpy, _ body: () async throws -> V
 
 struct ProductionAccessReceiptSinkTests {
     enum Refusal: CaseIterable, Sendable {
-        case empty, relative, missing, regularFile, symlinkedDirectory, groupBits, otherBits, foreignOwner
+        case empty, relative, missing, regularFile, symlinkedDirectory, symlinkTrailingSlash, symlinkTrailingDot
+        case directoryTrailingSlash, groupBits, otherBits, foreignOwner
+    }
+
+    /// Hazards injected on the first write of a scope-submitted receipt.
+    enum WriteHazard: CaseIterable, Sendable {
+        case finalCollision, replacedPartial, missingPartial
     }
 
     enum Collision: CaseIterable, Sendable {
@@ -136,9 +148,11 @@ struct ProductionAccessReceiptSinkTests {
             case .regularFile:
                 value = root + "/file"
                 try #require(FileManager.default.createFile(atPath: value, contents: Data("old".utf8)))
-            case .symlinkedDirectory:
-                value = root + "/link"
-                try succeeded(symlink(real, value))
+            case .symlinkedDirectory, .symlinkTrailingSlash, .symlinkTrailingDot:
+                let link = root + "/link"
+                try succeeded(symlink(real, link))
+                value = link + (refusal == .symlinkTrailingSlash ? "/" : refusal == .symlinkTrailingDot ? "/." : "")
+            case .directoryTrailingSlash: value = real + "/"
             case .groupBits, .otherBits:
                 value = real
                 try succeeded(chmod(real, refusal == .groupBits ? 0o750 : 0o705))
@@ -206,9 +220,10 @@ struct ProductionAccessReceiptSinkTests {
     func unsafeFilenameIsRefused(name: String) async throws {
         try await withReceiptDirectory { directory in
             let sink = ProductionAccessReceiptSink(directory: directory)
-            #expect(throws: ProductionAccessReceiptSink.Failure.self) {
+            let failure = #expect(throws: ProductionAccessReceiptSink.Failure.self) {
                 try sink.publish(Data("receipt".utf8), named: name)
             }
+            #expect(failure?.description == ProductionAccessReceiptSink.unsafeNameMessage)
             #expect(try entries(directory).isEmpty)
         }
     }
@@ -238,6 +253,57 @@ struct ProductionAccessReceiptSinkTests {
             #expect(try Data(contentsOf: URL(fileURLWithPath: directory + "/" + existing)) == old)
             if collision == .symlinkedFinal {
                 #expect(try status(directory + "/" + name).st_mode & S_IFMT == S_IFLNK)
+            }
+        }
+    }
+
+    /// A final-name collision, a replaced partial and a vanished partial all become the scope's
+    /// submission Issue, with no attachment fallback and no removal of a file this run did not create.
+    @Test(arguments: WriteHazard.allCases)
+    func writeTimeHazardBecomesIssueWithoutForeignCleanup(hazard: WriteHazard) async throws {
+        try await withReceiptDirectory { directory in
+            let spy = SinkSpy()
+            let foreignBytes = Data("foreign".utf8)
+            var fileSystem = ProductionAccessReceiptSink.FileSystem()
+            fileSystem.write = { fileFD, buffer in
+                let first = spy.state.withLock { state in
+                    state.writeCalls += 1
+                    return state.writeCalls == 1
+                }
+                guard first, let partial = (try? entries(directory))?.first(where: { $0.hasSuffix(".partial") }) else {
+                    return Darwin.write(fileFD, buffer.baseAddress, buffer.count)
+                }
+                let partialPath = directory + "/" + partial
+                if hazard != .finalCollision { unlink(partialPath) }
+                if hazard != .missingPartial {
+                    let foreignPath = hazard == .replacedPartial
+                        ? partialPath : directory + "/" + String(partial.dropFirst().dropLast(".partial".count))
+                    FileManager.default.createFile(atPath: foreignPath, contents: foreignBytes)
+                    let inode = try? status(foreignPath).st_ino
+                    spy.state.withLock { state in state.foreign = inode.map { (path: foreignPath, inode: $0) } }
+                }
+                if hazard == .finalCollision { return Darwin.write(fileFD, buffer.baseAddress, buffer.count) }
+                errno = EIO
+                return -1
+            }
+            try await expectingSubmissionIssue(spy: spy) {
+                try await runScope(environment(directory: directory), spy: spy, fileSystem: fileSystem)
+            }
+            #expect(spy.state.withLock { $0.attachments.isEmpty })
+            let error = try #require(spy.state.withLock { $0.issueErrors.first })
+            switch hazard {
+            case .finalCollision: #expect(error.contains("publish production-access-testCaseExit-"))
+            case .replacedPartial: #expect(error.contains("not this invocation's file"))
+            case .missingPartial: #expect(error.contains("; cleanup fstatat"))
+            }
+            if hazard == .missingPartial {
+                #expect(spy.state.withLock { $0.foreign == nil })
+                #expect(try entries(directory).isEmpty)
+            } else {
+                let survivor = try #require(spy.state.withLock { $0.foreign })
+                #expect(try entries(directory) == [(survivor.path as NSString).lastPathComponent])
+                #expect(try status(survivor.path).st_ino == survivor.inode)
+                #expect(try Data(contentsOf: URL(fileURLWithPath: survivor.path)) == foreignBytes)
             }
         }
     }

@@ -195,8 +195,11 @@ unchanged.
   the SwiftPM `--attachments-path` runs above.
 - **Present (any value):** only a test-only file sink is used, never
   `Attachment.record`. The value must be an absolute path to an existing real
-  directory (not a symlink), owned by the effective user with no group or other
-  permission bits; it is never created. Each receipt is exclusively created as
+  directory, owned by the effective user with no group or other permission
+  bits; it is never created. Only the final component must not be a symlink:
+  the parent is opened normally (so `/var` resolves to `/private/var`), then the
+  final name is inspected and opened relative to it without following links. A
+  value ending in `/`, `/.` or `/..` is refused. Each receipt is exclusively created as
   `.<name>.partial` (mode 0600), fully written and `fsync`ed, then published
   with a no-replace rename. Any refusal or failure records the existing
   submission Issue, removes only this invocation's unpublished partial and

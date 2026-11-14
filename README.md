@@ -207,7 +207,9 @@ A generated or manually supplied UUID is neither provenance nor permission.
 Unit audit receipts use `Attachment.record` unless `FLUXKLANG_AUDIT_RECEIPT_DIR`
 is present; then only a test-only exclusive-create file sink is used, and an
 empty, relative, missing or unsafe directory records an Issue with nothing
-submitted. Prepared Xcode-harness runners must supply an existing, owned 0700
+submitted. The final path component must not be a symlink (parents such as
+`/var` resolve normally) and a trailing `/`, `/.` or `/..` is refused.
+Prepared Xcode-harness runners must supply an existing, owned 0700
 directory and refuse to launch otherwise, because suite-scope attachments trap
 there (#652, #659). This is not a production transport, retention or quiescence
 evidence; see `scripts/test-audit-coverage/README.md`.

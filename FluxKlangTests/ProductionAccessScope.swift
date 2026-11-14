@@ -144,11 +144,13 @@ extension Trait where Self == ProductionAccessScope {
 
 /// Test-only receipt file transport (#660), selected only by `FLUXKLANG_AUDIT_RECEIPT_DIR`.
 /// Not a production transport, and not retention or quiescence evidence. The directory is
-/// never created; every file operation is relative to its validated descriptor.
+/// never created; every file operation is relative to its validated descriptor. Only the final
+/// path component must not be a symlink; parents resolve normally (e.g. /var -> /private/var).
 struct ProductionAccessReceiptSink: Sendable {
     static let directoryKey = "FLUXKLANG_AUDIT_RECEIPT_DIR"
     /// Keeps `.<name>.partial` within the 255-byte component limit.
     static let maximumNameBytes = 246
+    static let unsafeNameMessage = "Receipt filename must be one safe path component"
 
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -170,26 +172,37 @@ struct ProductionAccessReceiptSink: Sendable {
         defer { close(directoryFD) }
         let partial = ".\(name).partial"
         let fileFD = openat(directoryFD, partial, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fileFD >= 0 else { throw Self.posixFailure("exclusive-create \(partial)") }
+        guard fileFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("exclusive-create \(partial)", code: code)
+        }
         // This invocation created the partial; it alone is removed on failure, until publication.
+        // If fstat fails here, the partial's identity is unverified, so it is left behind and reported.
         var created = stat()
         guard fstat(fileFD, &created) == 0 else {
-            let failure = Self.posixFailure("fstat \(partial)")
+            let code = errno
             close(fileFD)
-            throw Failure(description: "\(failure); cleanup left unverified \(partial)")
+            throw Failure(description: "\(Self.posixFailure("fstat \(partial)", code: code)); cleanup left unverified")
         }
         do {
             try writeAll(bytes, to: fileFD)
-            guard fsync(fileFD) == 0 else { throw Self.posixFailure("fsync \(partial)") }
+            guard fsync(fileFD) == 0 else {
+                let code = errno
+                throw Self.posixFailure("fsync \(partial)", code: code)
+            }
         } catch {
             close(fileFD)
             throw Self.remove(partial, in: directoryFD, created: created, after: error)
         }
         guard close(fileFD) == 0 else {
-            throw Self.remove(partial, in: directoryFD, created: created, after: Self.posixFailure("close \(partial)"))
+            let code = errno
+            let failure = Self.posixFailure("close \(partial)", code: code)
+            throw Self.remove(partial, in: directoryFD, created: created, after: failure)
         }
         guard renameatx_np(directoryFD, partial, directoryFD, name, UInt32(RENAME_EXCL)) == 0 else {
-            throw Self.remove(partial, in: directoryFD, created: created, after: Self.posixFailure("publish \(name)"))
+            let code = errno
+            let failure = Self.posixFailure("publish \(name)", code: code)
+            throw Self.remove(partial, in: directoryFD, created: created, after: failure)
         }
     }
 
@@ -197,25 +210,49 @@ struct ProductionAccessReceiptSink: Sendable {
         let bytes = Array(name.utf8)
         guard !bytes.isEmpty, bytes.count <= maximumNameBytes, bytes.first != UInt8(ascii: "."),
               !bytes.contains(UInt8(ascii: "/")), !bytes.contains(0) else {
-            throw Failure(description: "Receipt filename must be one safe path component")
+            throw Failure(description: unsafeNameMessage)
         }
     }
 
+    /// Opens the parent (ancestors resolve normally), then inspects and opens the final component
+    /// relative to it without following a symlink. A trailing `/`, `.` or `..` is refused, because
+    /// it would make path resolution follow a final symlink.
     private func openDirectory() throws -> Int32 {
-        guard directory.hasPrefix("/") else {
-            throw Failure(description: "\(Self.directoryKey) must be a non-empty absolute path")
+        let key = Self.directoryKey
+        guard directory.hasPrefix("/"), let separator = directory.lastIndex(of: "/") else {
+            throw Failure(description: "\(key) must be a non-empty absolute path")
         }
+        let name = String(directory[directory.index(after: separator)...])
+        guard !name.isEmpty, name != ".", name != ".." else {
+            throw Failure(description: "\(key) must not end in /, . or ..")
+        }
+        let parentPath = separator == directory.startIndex ? "/" : String(directory[..<separator])
+        let parentFD = open(parentPath, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parentFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("open parent of \(key)", code: code)
+        }
+        defer { close(parentFD) }
         var pathStatus = stat()
-        guard lstat(directory, &pathStatus) == 0 else { throw Self.posixFailure("lstat \(Self.directoryKey)") }
+        guard fstatat(parentFD, name, &pathStatus, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Self.posixFailure("fstatat \(key)", code: code)
+        }
         guard pathStatus.st_mode & S_IFMT == S_IFDIR else {
-            throw Failure(description: "\(Self.directoryKey) must be a real directory, not a symlink or file")
+            throw Failure(description: "\(key) must be a real directory, not a symlink or file")
         }
         try checkOwnerAndMode(pathStatus)
-        let directoryFD = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard directoryFD >= 0 else { throw Self.posixFailure("open \(Self.directoryKey)") }
+        let directoryFD = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("open \(key)", code: code)
+        }
         do {
             var openedStatus = stat()
-            guard fstat(directoryFD, &openedStatus) == 0 else { throw Self.posixFailure("fstat \(Self.directoryKey)") }
+            guard fstat(directoryFD, &openedStatus) == 0 else {
+                let code = errno
+                throw Self.posixFailure("fstat \(key)", code: code)
+            }
             guard openedStatus.st_mode & S_IFMT == S_IFDIR, openedStatus.st_dev == pathStatus.st_dev,
                   openedStatus.st_ino == pathStatus.st_ino else {
                 throw Failure(description: "\(Self.directoryKey) changed while it was opened")
@@ -242,8 +279,9 @@ struct ProductionAccessReceiptSink: Sendable {
             var offset = 0
             while offset < buffer.count {
                 let written = fileSystem.write(fileFD, UnsafeRawBufferPointer(rebasing: buffer[offset...]))
-                if written < 0 && errno == EINTR { continue }
-                guard written >= 0 else { throw Self.posixFailure("write") }
+                let code = errno
+                if written < 0 && code == EINTR { continue }
+                guard written >= 0 else { throw Self.posixFailure("write", code: code) }
                 guard written > 0, written <= buffer.count - offset else {
                     throw Failure(description: "write returned \(written) bytes")
                 }
@@ -256,19 +294,21 @@ struct ProductionAccessReceiptSink: Sendable {
     private static func remove(_ partial: String, in directoryFD: Int32, created: stat, after error: Error) -> Error {
         var current = stat()
         guard fstatat(directoryFD, partial, &current, AT_SYMLINK_NOFOLLOW) == 0 else {
-            return Failure(description: "\(error); cleanup \(posixFailure("fstatat \(partial)"))")
+            let code = errno
+            return Failure(description: "\(error); cleanup \(posixFailure("fstatat \(partial)", code: code))")
         }
         guard current.st_dev == created.st_dev, current.st_ino == created.st_ino else {
             return Failure(description: "\(error); cleanup left \(partial): not this invocation's file")
         }
         guard unlinkat(directoryFD, partial, 0) == 0 else {
-            return Failure(description: "\(error); cleanup \(posixFailure("unlinkat \(partial)"))")
+            let code = errno
+            return Failure(description: "\(error); cleanup \(posixFailure("unlinkat \(partial)", code: code))")
         }
         return error
     }
 
-    private static func posixFailure(_ operation: String) -> Failure {
-        let code = errno
+    /// `code` must be captured from `errno` immediately after the failing call.
+    private static func posixFailure(_ operation: String, code: Int32) -> Failure {
         return Failure(description: "\(operation) failed: \(String(cString: strerror(code))) (errno \(code))")
     }
 }
