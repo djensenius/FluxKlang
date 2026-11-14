@@ -7,7 +7,7 @@ import Testing
 
 /// Controller-side pairing initiator (#94 P2). Time comes only from `start` (one read of the clock, as in
 /// `PeerTrustTests+Pairing`) plus durations; nothing sleeps and nothing else reads a clock.
-@Suite("PeerPairingInitiatorTests")
+@Suite("PeerPairingInitiatorTests", .productionAccessAudit)
 struct PeerPairingInitiatorTests {
     let start = ContinuousClock.now
     /// The number of the first attempt every fixture starts from a fresh initiator.

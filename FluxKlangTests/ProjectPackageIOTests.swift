@@ -94,6 +94,7 @@ enum PackageIOTestSupport {
     }
 }
 
+@Suite(.productionAccessAudit)
 struct ProjectPackageIOTests {
     private typealias Support = PackageIOTestSupport
 
