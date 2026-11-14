@@ -13,6 +13,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct WorkspaceStatusTests {
     /// The eight permission states in declaration order, so that one loop covers every effect.
     static let allPermissionStatuses: [PermissionStatus] = [

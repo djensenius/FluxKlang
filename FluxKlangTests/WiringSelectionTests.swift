@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct WiringSelectionTests {
     static let graphID = GraphID(validated: "gph.selection")
 

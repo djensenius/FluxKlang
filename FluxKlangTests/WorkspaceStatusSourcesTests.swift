@@ -12,6 +12,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct WorkspaceStatusSourcesTests {
     private func record(_ severity: DiagnosticSeverity, _ number: Int = 0) throws -> NeutralDiagnosticRecord {
         NeutralDiagnosticRecord(id: try DiagnosticID("diag.\(number)"), severity: severity, summary: "text")

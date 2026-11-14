@@ -47,7 +47,7 @@ private enum ListFixture {
     }
 }
 
-@Suite("Diagnostics list")
+@Suite("Diagnostics list", .productionAccessAudit)
 struct DiagnosticsListTests {
     // MARK: - Order
 

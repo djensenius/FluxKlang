@@ -8,6 +8,7 @@ import Testing
 
 /// Tests of the legacy sidecar plan: absence, exact retention, content probes and the production sources.
 /// The Bounds, Order and Compose files extend this suite and share its fixtures.
+@Suite(.productionAccessAudit)
 struct LegacySidecarAdoptionTests {
     enum Fixture {
         static let projectID = ProjectID(validated: "prj.sidecars")

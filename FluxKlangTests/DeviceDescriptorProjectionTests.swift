@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct DeviceDescriptorProjectionTests {
     // One record more than the device cap; the cap test takes prefixes of it.
     private static let capPlusOne: [DeviceRecord] = makeRecords(DeviceCapabilityLimits.devices + 1)

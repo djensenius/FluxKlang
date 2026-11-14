@@ -15,6 +15,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct WiringProblemListTests {
     @Test func wiringProblemListOfNoErrorsAndOfAValidGraphIsEmpty() {
         let lists = [WiringProblemList.make(errors: []), WiringProblemList.make(graph: ProblemFixtures.validGraph())]
