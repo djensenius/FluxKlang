@@ -25,11 +25,7 @@ private func milliseconds(_ attempt: Int, _ jitter: Double) throws -> Duration {
     try PeerReconnectBackoff.delay(attempt: attempt, jitterUnit: jitter)
 }
 
-#if os(macOS)
 @Suite("PeerReconnectTests+Epochs", .productionAccessAudit)
-#else
-@Suite("PeerReconnectTests+Epochs")
-#endif
 struct PeerReconnectEpochTests {
     @Test func epochsComeFromOneHostWideCounterAndAreNeverReused() throws {
         var issuer = issuer()

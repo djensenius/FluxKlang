@@ -93,11 +93,7 @@ enum PeerTrustTestSupport {
 
 private typealias Support = PeerTrustTestSupport
 
-#if os(macOS)
 @Suite("PeerTrustTests", .productionAccessAudit)
-#else
-@Suite("PeerTrustTests")
-#endif
 struct PeerTrustTests {
     private let peer = Support.identity(1)
 

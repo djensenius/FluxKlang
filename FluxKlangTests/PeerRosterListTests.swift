@@ -81,11 +81,7 @@ enum PeerRosterFixture {
     static func utf8(_ rows: [PeerRosterRow]) -> [[UInt8]] { rows.map { Array($0.name.utf8) } }
 }
 
-#if os(macOS)
 @Suite("Peer roster list", .productionAccessAudit)
-#else
-@Suite("Peer roster list")
-#endif
 struct PeerRosterListTests {
     typealias Fixture = PeerRosterFixture
 

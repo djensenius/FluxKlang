@@ -97,11 +97,7 @@ private let refusalCases: [RefusalCase] = [
           error: .oversized(length: .max, limit: 16_384))
 ]
 
-#if os(macOS)
 @Suite("PeerTransportTests", .productionAccessAudit)
-#else
-@Suite("PeerTransportTests")
-#endif
 struct PeerTransportTests {
     private func frames(_ messages: [PeerOutboundMessage]) -> [PeerFrame] {
         var decoder = PeerFrameDecoder()

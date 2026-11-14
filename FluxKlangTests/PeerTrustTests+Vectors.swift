@@ -9,11 +9,7 @@ private typealias Support = PeerTrustTestSupport
 
 /// Fixed vectors for the derivations both peers must compute identically (#94 P1).
 /// Computed independently with Python `hashlib` from the documented byte layouts.
-#if os(macOS)
 @Suite("PeerTrustTests+Vectors", .productionAccessAudit)
-#else
-@Suite("PeerTrustTests+Vectors")
-#endif
 struct PeerTrustVectorTests {
     private let hostIdentity = Support.identity(100)
     private let peer = Support.identity(1)

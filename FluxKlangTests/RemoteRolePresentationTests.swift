@@ -54,11 +54,7 @@ private typealias Fixture = RemoteRolePresentationFixture
 
 /// The remote controller's role-dependent presentation (#96 REM1): title, state, texts, inputs and refusals. Every
 /// expected text is typed by hand from host-remote-roles.md. Pure values only: no view, clock, store or I/O.
-#if os(macOS)
 @Suite("Remote role presentation", .productionAccessAudit)
-#else
-@Suite("Remote role presentation")
-#endif
 struct RemoteRolePresentationTests {
     @Test func theDocumentExampleIsTheConnectedController() throws {
         let value = try Fixture.make(role: Fixture.role(), phase: Fixture.synced())
