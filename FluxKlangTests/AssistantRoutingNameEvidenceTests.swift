@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantRoutingNameEvidenceTests {
     @Test(arguments: [false, true], [false, true])
