@@ -7,7 +7,7 @@ import Testing
 
 /// The resident block ledger (#109 BLG1). Leases come only from a real `MediaBlockPool`; the pool is a lease source
 /// and nothing here claims more about it than the lease order of a fresh pool (slots 0, 1, 2, ...).
-@Suite("Media block ledger")
+@Suite("Media block ledger", .productionAccessAudit)
 struct MediaBlockLedgerTests {
     private static func makePool(blocks: Int) throws -> MediaBlockPool {
         let plan = try PrefetchPlan.make(blockFrames: 64, blockCount: blocks, headFrames: 64)

@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Truthful meter display (#102 M1)")
+@Suite("Truthful meter display (#102 M1)", .productionAccessAudit)
 struct MeterDisplayTests {
     static let millisecond: UInt64 = 1_000_000
     static let second: UInt64 = 1_000_000_000

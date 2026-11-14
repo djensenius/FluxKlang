@@ -6,7 +6,7 @@ import Testing
 #endif
 
 /// The backing-clip voice state machine (#111 PB1). This root file holds the shared builders and the arm tests.
-@Suite("Backing clip playback voice")
+@Suite("Backing clip playback voice", .productionAccessAudit)
 struct BackingClipPlaybackTests {
     static let action = ActionID(validated: "act.backing")
     static let sourceKey = GenerationKey(kind: .source, subject: GenerationSubject(validated: "src.clip"))

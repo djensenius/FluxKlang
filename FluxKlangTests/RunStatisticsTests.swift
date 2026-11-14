@@ -8,7 +8,7 @@ import Testing
 /// Run statistics (#74, slice LAT2): validated run records, nearest-rank percentiles, deadline and dropout evidence,
 /// uncertainty notes, the lowest-stable-buffer observation and signed run comparisons. This root file holds the
 /// shared builders and the controlled-variable tests; the other files extend the suite.
-@Suite("Run statistics")
+@Suite("Run statistics", .productionAccessAudit)
 struct RunStatisticsTests {
     // MARK: Builders
 

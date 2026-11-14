@@ -114,7 +114,7 @@ private enum LedgerFixture {
     }
 }
 
-@Suite("Capture overflow coalescer")
+@Suite("Capture overflow coalescer", .productionAccessAudit)
 struct CaptureOverflowCoalescerTests {
     @Test
     func captureOverflowCoalescerGoldenTouchingRunBecomesOneRecord() throws {
