@@ -206,7 +206,7 @@ enum OSCTransportFixture {
 
 /// Bounded OSC intake: policy validation, the opt-in lifecycle and the gate order. The budget, framing and
 /// principal suites live in the `+Budget`, `+Framing` and `+Principal` extensions.
-@Suite("OSC bounded intake")
+@Suite("OSC bounded intake", .productionAccessAudit)
 struct OSCTransportTests {
     typealias Fixture = OSCTransportFixture
     typealias OSC = OpenSoundControl

@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct ParameterAutomationTests {
     static let level = ParameterID(validated: "par.auto.level")
     static let fader = ControlSourceID(validated: "ctl.fader")

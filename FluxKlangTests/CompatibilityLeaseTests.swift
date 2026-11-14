@@ -8,7 +8,7 @@ import Testing
 
 /// WL1 (#76): the pure WING compatibility lease. The fixtures here build every lease by a scripted legal path (there
 /// is no test-only initializer) and every expected value in the suites is a literal, never a production formula.
-@Suite("CompatibilityLeaseTests")
+@Suite("CompatibilityLeaseTests", .productionAccessAudit)
 struct CompatibilityLeaseTests {
     // MARK: Fixtures shared by the extension files
 

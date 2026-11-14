@@ -18,6 +18,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct MIDICIMessageTests {
     // MARK: Golden bytes (written by hand from the layout, never produced by the encoder)
 

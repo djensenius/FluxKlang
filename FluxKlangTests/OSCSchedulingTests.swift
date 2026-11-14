@@ -129,7 +129,7 @@ enum OSCSchedulingFixture {
     }
 }
 
-@Suite("OSC timetag scheduling")
+@Suite("OSC timetag scheduling", .productionAccessAudit)
 struct OSCSchedulingTests {
     typealias Fixture = OSCSchedulingFixture
     typealias OSC = OpenSoundControl

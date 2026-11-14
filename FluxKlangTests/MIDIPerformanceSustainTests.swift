@@ -5,6 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct MIDIPerformanceSustainTests {
     typealias Fixture = MIDIPerformanceFixture
 
