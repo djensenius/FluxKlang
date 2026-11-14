@@ -52,11 +52,7 @@ enum WiringEditFixture {
 
 private typealias Edit = WiringEditFixture
 
-#if os(macOS)
 @Suite("Wiring edit paths", .productionAccessAudit)
-#else
-@Suite("Wiring edit paths")
-#endif
 struct WiringEditPathTests {
     static let keys = NodeID(validated: "nod.keys")
 

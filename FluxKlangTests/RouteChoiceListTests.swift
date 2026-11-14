@@ -83,11 +83,7 @@ enum RouteChoiceFixture {
     static func states(_ list: RouteChoiceList) -> [RouteChoiceState] { list.rows.map(\.state) }
 }
 
-#if os(macOS)
 @Suite("Route choice list", .productionAccessAudit)
-#else
-@Suite("Route choice list")
-#endif
 struct RouteChoiceListTests {
     typealias Fixture = RouteChoiceFixture
 

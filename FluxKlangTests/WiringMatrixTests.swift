@@ -20,11 +20,7 @@ import Testing
 private typealias Fixture = WiringPreviewFixture
 private typealias Edit = WiringEditFixture
 
-#if os(macOS)
 @Suite("Wiring matrix", .productionAccessAudit)
-#else
-@Suite("Wiring matrix")
-#endif
 struct WiringMatrixTests {
     static func window(
         _ draft: DraftEdits = Edit.draft(), active: GraphDocument = Fixture.graph

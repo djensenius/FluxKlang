@@ -16,11 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Library replacement plan", .productionAccessAudit)
-#else
-@Suite("Library replacement plan")
-#endif
 struct LibraryReplacementPlanTests {
     @Test func theSameLayoutKeepsEveryEdgeThatTouchesTheNode() throws {
         let plan = try Fixture.plan(Fixture.spring())

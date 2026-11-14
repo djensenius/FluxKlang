@@ -16,9 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct LibraryPatchListTests {
     @Test func noPatchesHaveNoRows() throws {
         #expect(try LibraryPatchList.make(patches: []).rows.isEmpty)

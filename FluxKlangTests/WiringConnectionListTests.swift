@@ -17,9 +17,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct WiringConnectionListTests {
     @Test func wiringConnectionListHeadingsShowChannelsSignalAndPresenceSuffix() throws {
         let list = try WiringConnectionList.make(active: Fixture.graph(), review: nil, presence: Fixture.presence())

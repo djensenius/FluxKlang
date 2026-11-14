@@ -60,11 +60,7 @@ enum WiringComposeFixture {
 
 private typealias Compose = WiringComposeFixture
 
-#if os(macOS)
 @Suite("Wiring connect composer", .productionAccessAudit)
-#else
-@Suite("Wiring connect composer")
-#endif
 struct WiringComposeTests {
     static let verbEchoCycle = [NodeID(validated: "nod.echo"), NodeID(validated: "nod.verb")]
 

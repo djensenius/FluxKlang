@@ -16,9 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct LibraryPluginListTests {
     @Test func emptyScannedCatalogHasNoRowsAndNoScanRow() throws {
         var catalog = PluginCatalog()
