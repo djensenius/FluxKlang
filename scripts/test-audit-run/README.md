@@ -221,6 +221,29 @@ All profiles deliberately fix unrelated diagnostic/language/logging
 values as well. Broader acceptance requires separate review; this implementation
 conservatively refuses that drift rather than inferring a wider supported shape.
 
+## Hosted CI observation (#693)
+
+`.github/workflows/mac-isolated-observation.yml` runs one sealed
+`FluxKlangMacIsolatedTests` observation on the hosted `xcode-27` image. Part of
+#693 and #60; #60 remains open. It runs `build-for-testing`, requires exactly one
+generated `.xctestrun`, and computes its SHA-256 once in CI. That value is the
+reviewed pin for this run; a refusal is recorded as the result and is never
+re-pinned, repaired or retried. It then runs `prepare` and `validate` with
+`--profile mac-isolated-unit` and exactly one `test-without-building` without
+filters or retries. Two deviations are recorded in the run summary:
+
+- The build uses `CODE_SIGNING_ALLOWED=NO`, as `make test-mac` does. The host is
+  ad-hoc signed by the linker without entitlements and runs unsandboxed.
+- The fresh 0700 receipt directory is passed as
+  `TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR`, not in the xctestrun
+  `EnvironmentVariables`, because the closed profile adds only
+  `FLUXKLANG_AUDIT_RUN_ID` and the prepared output must not change. Delivery
+  through the `TEST_RUNNER_` prefix is unverified; a missing key is a known trap path.
+
+Only a summary is kept: counts, trimmed failure text, and receipt-file counts.
+Receipt contents, the result bundle and DerivedData are not uploaded. This is an
+observation, not qualification of #60; the limits above still apply.
+
 ## Pure fixture checks
 
 ```sh

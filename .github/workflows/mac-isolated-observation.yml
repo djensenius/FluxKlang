@@ -1,0 +1,395 @@
+name: Mac isolated observation
+
+# One sealed hosted FluxKlangMacIsolatedTests audit observation (#693; part of #60).
+# An observation, not qualification of #60: see scripts/test-audit-run/README.md.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/mac-isolated-observation.yml
+      - scripts/test-audit-run/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-isolated-observation-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  observe:
+    # Same preview image and Xcode as apple-build.yml; no fallback to older images.
+    runs-on: xcode-27
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        with:
+          version: 2026.10.25
+          install_args: xcodegen
+      - name: Pinned XcodeGen is on PATH
+        run: |
+          want=$(mise current xcodegen); have=$(xcodegen --version)
+          echo "$have at $(command -v xcodegen); mise.toml pins $want"
+          if [ -z "$want" ] || [ "$have" != "Version: $want" ]; then
+            echo "::error::xcodegen '$have' is not the mise.toml pin '$want'"; exit 1
+          fi
+      - name: Record environment
+        id: env
+        # prepare.py needs Python >= 3.7 (argparse subparsers `required`); the runner's python3 is used.
+        run: |
+          [ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || { ls -d /Applications/Xcode*.app || true; echo "::error::$DEVELOPER_DIR missing on this image (no fallback)"; exit 1; }
+          head_sha=$(git rev-parse HEAD)
+          xcode=$(xcodebuild -version | tr '\n' ' ')
+          macos="$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+          python=$(python3 --version 2>&1)
+          echo "python3 at $(command -v python3): $python"
+          if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 7) else 1)'; then
+            echo "::error::$python is older than the Python 3.7 that prepare.py requires"; exit 1
+          fi
+          {
+            echo "head_sha=$head_sha"
+            echo "xcode=$xcode"
+            echo "macos=$macos"
+            echo "python=$python"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Environment"
+            echo
+            echo "- HEAD: \`$head_sha\` (event SHA \`$GITHUB_SHA\`)"
+            echo "- Xcode: $xcode"
+            echo "- macOS: $macos"
+            echo "- Python: $python"
+            echo "- Installed Xcodes:"
+            for app in /Applications/Xcode*.app; do echo "  - \`$app\`"; done
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Require OS-27 macOS SDK
+        run: |
+          v=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macosx SDK $v"
+          case $v in [0-9]*) ;; *) echo "::error::macosx SDK version '$v' unparseable"; exit 1 ;; esac
+          [ "${v%%.*}" -ge 27 ] || { echo "::error::macosx SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
+      - name: Generated project is in sync
+        run: |
+          xcodegen generate
+          git status --porcelain --untracked-files=all
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git --no-pager diff --stat
+            echo "::error::xcodegen generate changed the tree; commit the regenerated project"; exit 1
+          fi
+      - name: Resolve packages from committed pins
+        run: |
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests -resolvePackageDependencies \
+            -disableAutomaticPackageResolution -derivedDataPath "$RUNNER_TEMP/dd"
+          git --no-pager diff --exit-code -- '*Package.resolved'
+      - name: Build macOS for testing
+        # CODE_SIGNING_ALLOWED=NO (as `make test-mac`): the linker ad-hoc signs without entitlements,
+        # so the host runs unsandboxed. An ad-hoc `-` identity would embed iCloud entitlements and fail to launch.
+        run: |
+          xcodebuild build-for-testing -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests \
+            -destination 'platform=macOS,arch=arm64' \
+            -disableAutomaticPackageResolution -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO
+          {
+            echo "## Build"
+            echo
+            echo "- Deviation: built with \`CODE_SIGNING_ALLOWED=NO\`; the host is linker ad-hoc signed without"
+            echo "  entitlements and runs unsandboxed (no team signing, no iCloud/CloudKit entitlements)."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Pin the generated xctestrun
+        id: pin
+        # Computed once here from the fresh build; this is the reviewed pin for this observation.
+        # Never recompute or re-pin after a refusal.
+        run: |
+          products="$RUNNER_TEMP/dd/Build/Products"
+          found=()
+          while IFS= read -r -d '' f; do found+=("$f"); done \
+            < <(find "$products" -name '*.xctestrun' -print0)
+          if [ "${#found[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one .xctestrun under $products, found ${#found[@]}"
+            printf '%s\n' ${found[@]+"${found[@]}"}
+            exit 1
+          fi
+          xctestrun=${found[0]}
+          [ -f "$xctestrun" ] && [ ! -L "$xctestrun" ] || { echo "::error::$xctestrun is not a regular file"; exit 1; }
+          sha=$(shasum -a 256 "$xctestrun" | awk '{ print $1 }')
+          [[ $sha =~ ^[0-9a-f]{64}$ ]] || { echo "::error::unexpected sha256 '$sha'"; exit 1; }
+          plutil -p "$xctestrun"
+          echo "xctestrun=$xctestrun"
+          echo "sha256=$sha"
+          { echo "xctestrun=$xctestrun"; echo "sha256=$sha"; } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Pin"
+            echo
+            echo "- xctestrun: \`$xctestrun\`"
+            echo "- sha256: \`$sha\` (computed once in CI; never re-pinned)"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare and validate (mac-isolated-unit)
+        id: prepare
+        env:
+          XCTESTRUN: ${{ steps.pin.outputs.xctestrun }}
+          XCTESTRUN_SHA256: ${{ steps.pin.outputs.sha256 }}
+        # A refusal is a recorded observation result: no repair, no retry.
+        run: |
+          refused() {
+            local phase=$1 status=$2 stderr_file=$3
+            {
+              echo "## Preparation refused"
+              echo
+              echo "- Phase: \`$phase\`; exit status $status"
+              echo
+              echo '```text'
+              head -c 4000 "$stderr_file" | tr '\140' "'"
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::prepare.py $phase refused (exit $status)"
+            exit 1
+          }
+          work="$RUNNER_TEMP/prepare"
+          mkdir -m 700 "$work"
+          status=0
+          python3 scripts/test-audit-run/prepare.py prepare \
+            --input "$XCTESTRUN" --expected-sha256 "$XCTESTRUN_SHA256" --profile mac-isolated-unit \
+            > "$work/prepare.json" 2> "$work/prepare.err" || status=$?
+          cat "$work/prepare.err" >&2
+          [ "$status" -eq 0 ] || refused prepare "$status" "$work/prepare.err"
+          cat "$work/prepare.json"
+          IFS=$'\t' read -r run_id output intent < <(python3 -c '
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          assert d["status"] == "prepared"
+          i = d["intent"]
+          print("\t".join((i["run_id"], i["output"]["path"], i["intent_path"])))
+          ' "$work/prepare.json")
+          [[ $run_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
+            || { echo "::error::unexpected run ID '$run_id'"; exit 1; }
+          case $output in /*.xctestrun) ;; *) echo "::error::unexpected output '$output'"; exit 1 ;; esac
+          case $intent in /*.intent.json) ;; *) echo "::error::unexpected intent '$intent'"; exit 1 ;; esac
+          status=0
+          python3 scripts/test-audit-run/prepare.py validate \
+            --input "$XCTESTRUN" --expected-sha256 "$XCTESTRUN_SHA256" --profile mac-isolated-unit \
+            --output "$output" --intent "$intent" \
+            > "$work/validate.json" 2> "$work/validate.err" || status=$?
+          cat "$work/validate.err" >&2
+          [ "$status" -eq 0 ] || refused validate "$status" "$work/validate.err"
+          python3 -c '
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          assert d["status"] == "validated" and d["intent"]["run_id"] == sys.argv[2], "validation mismatch"
+          ' "$work/validate.json" "$run_id"
+          { echo "run_id=$run_id"; echo "output=$output"; echo "intent=$intent"; } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Preparation"
+            echo
+            echo "- Profile: \`mac-isolated-unit\`; prepare and validate exited 0"
+            echo "- Run ID: \`$run_id\`"
+            echo "- Prepared xctestrun: \`$output\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Create the receipt directory
+        id: receipts
+        env:
+          RUN_ID: ${{ steps.prepare.outputs.run_id }}
+        # Fresh, owned, 0700, real directory; refuse before launch otherwise (#652, #659).
+        run: |
+          dir="$RUNNER_TEMP/audit-receipts-$RUN_ID"
+          case $dir in
+            /*) ;;
+            *) echo "::error::receipt directory '$dir' is not absolute"; exit 1 ;;
+          esac
+          case $dir in
+            */ | */. | */..) echo "::error::receipt directory '$dir' has a trailing /, /. or /.."; exit 1 ;;
+          esac
+          [ ! -e "$dir" ] && [ ! -L "$dir" ] || { echo "::error::receipt directory '$dir' already exists"; exit 1; }
+          mkdir -m 700 "$dir"
+          [ -d "$dir" ] && [ ! -L "$dir" ] || { echo "::error::'$dir' is not a real directory"; exit 1; }
+          owner=$(stat -f %u "$dir"); mode=$(stat -f %Lp "$dir")
+          [ "$owner" = "$(id -u)" ] || { echo "::error::'$dir' owned by uid $owner, not $(id -u)"; exit 1; }
+          [ "$mode" = "700" ] || { echo "::error::'$dir' has mode $mode, not 700"; exit 1; }
+          [ -z "$(ls -A "$dir")" ] || { echo "::error::'$dir' is not empty"; exit 1; }
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Receipt directory"
+            echo
+            echo "- Fresh 0700 directory supplied as \`TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR\`."
+            echo "- Deviation: the README expects the key in xctestrun \`EnvironmentVariables\`, but the closed"
+            echo "  profile adds only \`FLUXKLANG_AUDIT_RUN_ID\` and the prepared output is not modified."
+            echo "  Delivery via the \`TEST_RUNNER_\` prefix is unverified; a missing key is a known trap path."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run the observation once
+        id: test
+        env:
+          PREPARED_XCTESTRUN: ${{ steps.prepare.outputs.output }}
+          TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR: ${{ steps.receipts.outputs.dir }}
+        # Exactly one invocation: no retries, filters, iterations or parallel-testing overrides.
+        run: |
+          [ -n "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] && [ -d "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] \
+            || { echo "::error::receipt directory missing; refusing to launch"; exit 1; }
+          start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "start=$start" >> "$GITHUB_OUTPUT"
+          set +e
+          xcodebuild test-without-building -xctestrun "$PREPARED_XCTESTRUN" \
+            -destination 'platform=macOS,arch=arm64' \
+            -resultBundlePath "$RUNNER_TEMP/observation.xcresult"
+          status=$?
+          set -e
+          end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          { echo "end=$end"; echo "status=$status"; } >> "$GITHUB_OUTPUT"
+          echo "xcodebuild test-without-building exited $status ($start .. $end)"
+      - name: Summarize the observation
+        if: always()
+        env:
+          HEAD_SHA: ${{ steps.env.outputs.head_sha }}
+          XCODE: ${{ steps.env.outputs.xcode }}
+          MACOS: ${{ steps.env.outputs.macos }}
+          PYTHON: ${{ steps.env.outputs.python }}
+          XCTESTRUN: ${{ steps.pin.outputs.xctestrun }}
+          XCTESTRUN_SHA256: ${{ steps.pin.outputs.sha256 }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          RUN_ID: ${{ steps.prepare.outputs.run_id }}
+          RECEIPT_DIR: ${{ steps.receipts.outputs.dir }}
+          TEST_START: ${{ steps.test.outputs.start }}
+          TEST_END: ${{ steps.test.outputs.end }}
+          TEST_STATUS: ${{ steps.test.outputs.status }}
+          RESULT_BUNDLE: ${{ runner.temp }}/observation.xcresult
+          SUMMARY_DIR: ${{ runner.temp }}/observation-summary
+        # Counts and trimmed failure text only; receipt contents and names are never read or printed.
+        run: |
+          mkdir -p "$SUMMARY_DIR"
+          python3 - <<'PY'
+          import json, os, re, subprocess
+
+          NA = "not available"
+          def env(key):
+              return os.environ.get(key) or NA
+
+          summary = {
+              "head_sha": env("HEAD_SHA"), "event_sha": env("GITHUB_SHA"),
+              "xcode": env("XCODE"), "macos": env("MACOS"), "python": env("PYTHON"),
+              "xctestrun": env("XCTESTRUN"), "xctestrun_sha256": env("XCTESTRUN_SHA256"),
+              "preparation": env("PREPARE_OUTCOME"), "run_id": env("RUN_ID"),
+              "start_utc": env("TEST_START"), "end_utc": env("TEST_END"),
+              "exit_code": env("TEST_STATUS"),
+              "deviations": [
+                  "CODE_SIGNING_ALLOWED=NO: host ad-hoc signed by the linker without entitlements; unsandboxed",
+                  "receipt directory supplied via TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR (delivery unverified)",
+              ],
+          }
+
+          results, error = None, None
+          bundle = os.environ["RESULT_BUNDLE"]
+          if os.path.isdir(bundle):
+              try:
+                  proc = subprocess.run(
+                      ["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", bundle, "--compact"],
+                      capture_output=True, text=True, timeout=600)
+                  if proc.returncode == 0:
+                      results = json.loads(proc.stdout)
+                  else:
+                      error = proc.stderr.strip()[:500] or "exit %d" % proc.returncode
+              except Exception as exc:  # keep the summary robust
+                  error = str(exc)[:500]
+          else:
+              error = "no result bundle"
+          summary["xcresult_error"] = error
+
+          audit = re.compile(r"productionaccess|production access|audit", re.IGNORECASE)
+          def text(value, limit=300):
+              # Single line, no backticks: keeps the markdown table and code fence intact.
+              return " ".join(str(value).split()).replace("`", "'")[:limit]
+          if isinstance(results, dict):
+              for key, name in (("result", "result"), ("totalTestCount", "total"), ("passedTests", "passed"),
+                                ("failedTests", "failed"), ("skippedTests", "skipped"),
+                                ("expectedFailures", "expected_failures_known_issues"),
+                                ("startTime", "xcresult_start"), ("finishTime", "xcresult_finish")):
+                  summary[name] = results.get(key, NA)
+              failures = results.get("testFailures") or []
+              failures = failures if isinstance(failures, list) else []
+              summary["failure_count"] = len(failures)
+              summary["audit_failure_count"] = sum(
+                  1 for f in failures if isinstance(f, dict) and audit.search(
+                      "%s %s" % (f.get("testName", ""), f.get("failureText", ""))))
+              summary["first_failures"] = [
+                  {"target": text(f.get("targetName", NA), 100), "test": text(f.get("testName", NA), 200),
+                   "message": text(f.get("failureText", NA))}
+                  for f in failures[:20] if isinstance(f, dict)]
+          else:
+              for name in ("result", "total", "passed", "failed", "skipped", "expected_failures_known_issues",
+                           "failure_count", "audit_failure_count"):
+                  summary[name] = NA
+              summary["first_failures"] = []
+
+          receipt_dir = os.environ.get("RECEIPT_DIR", "")
+          if receipt_dir and os.path.isdir(receipt_dir) and not os.path.islink(receipt_dir):
+              names = os.listdir(receipt_dir)
+              partial = [n for n in names if n.startswith(".") and n.endswith(".partial")]
+              published = [n for n in names if not n.startswith(".")
+                           and os.path.isfile(os.path.join(receipt_dir, n))
+                           and not os.path.islink(os.path.join(receipt_dir, n))]
+              summary["receipts_published"] = len(published)
+              summary["receipts_partial_leftovers"] = len(partial)
+              summary["receipts_other_entries"] = len(names) - len(published) - len(partial)
+          else:
+              summary["receipts_published"] = summary["receipts_partial_leftovers"] = NA
+              summary["receipts_other_entries"] = NA
+
+          out = os.environ["SUMMARY_DIR"]
+          with open(os.path.join(out, "summary.json"), "w") as stream:
+              json.dump(summary, stream, indent=2, sort_keys=True)
+              stream.write("\n")
+
+          rows = [
+              ("HEAD SHA", "head_sha"), ("Event SHA", "event_sha"), ("Xcode", "xcode"), ("macOS", "macos"),
+              ("xctestrun sha256", "xctestrun_sha256"), ("Preparation", "preparation"), ("Run ID", "run_id"),
+              ("Start (UTC)", "start_utc"), ("End (UTC)", "end_utc"), ("Exit code", "exit_code"),
+              ("Result", "result"), ("Total", "total"), ("Passed", "passed"), ("Failed", "failed"),
+              ("Skipped", "skipped"), ("Expected failures (known issues)", "expected_failures_known_issues"),
+              ("Failures mentioning productionAccess/audit", "audit_failure_count"),
+              ("Published receipt files", "receipts_published"),
+              ("Hidden .partial leftovers", "receipts_partial_leftovers"),
+              ("Other receipt-dir entries", "receipts_other_entries"),
+          ]
+          lines = ["## Observation result", "", "| Field | Value |", "| --- | --- |"]
+          lines += ["| %s | %s |" % (label, text(summary.get(key, NA), 200).replace("|", "\\|"))
+                    for label, key in rows]
+          if error:
+              lines += ["", "xcresult summary: " + text(error)]
+          lines += ["", "Deviations: " + "; ".join(summary["deviations"]) + ".", ""]
+          if summary["first_failures"]:
+              lines += ["### First failures (trimmed)", "", "```text"]
+              lines += ["%s / %s: %s" % (f["target"], f["test"], f["message"]) for f in summary["first_failures"]]
+              lines += ["```", ""]
+          markdown = "\n".join(lines)
+          with open(os.path.join(out, "summary.md"), "w") as stream:
+              stream.write(markdown + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+              stream.write(markdown + "\n")
+          PY
+      - name: Upload the summary only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-isolated-observation-summary
+          path: |
+            ${{ runner.temp }}/observation-summary/summary.json
+            ${{ runner.temp }}/observation-summary/summary.md
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Fail on a non-zero test exit code
+        env:
+          TEST_STATUS: ${{ steps.test.outputs.status }}
+        run: |
+          [ "$TEST_STATUS" = "0" ] || { echo "::error::xcodebuild test-without-building exited '$TEST_STATUS'"; exit 1; }
