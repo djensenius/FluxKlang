@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct CloudObserverIsolationTests {
     @Test func deniedConstructionAndTeardownEnterNoAPIs() throws {
         let environment = ProcessInfo.processInfo.environment

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct CloudStoreIsolationTests {
     @Test func defaultConstructionIsDeniedBeforeBackendSelection() throws {
         let audit = ProductionAccessAudit()
