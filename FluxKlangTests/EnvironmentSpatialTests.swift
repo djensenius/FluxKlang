@@ -8,6 +8,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct EnvironmentSpatialTests {
     private let quad = SpeakerArray.standardQuad.speakers
     private let centre = CGPoint(x: 0.5, y: 0.5)

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AssistantActionInterpretationTests {
     @Test func ownerUtterancesKeepMissingAmountAndExplicitFaderTravel() throws {
         let lower = AssistantActionInterpretationRequest(text: "turn down the volume of my Astrolab")

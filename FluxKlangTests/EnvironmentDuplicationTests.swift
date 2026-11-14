@@ -12,6 +12,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct EnvironmentDuplicationTests {
     /// A legacy environment exercising every reference kind duplication touches.
     private struct Fixture {

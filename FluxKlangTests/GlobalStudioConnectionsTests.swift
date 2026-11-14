@@ -7,6 +7,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct GlobalStudioConnectionsTests {
     @Test func connectionIssueIdentifiersUseExplicitStableComponents() {
         let id = UUID(uuidString: "C024A205-2CB4-4D3C-A66A-A6AB87218D32")!
