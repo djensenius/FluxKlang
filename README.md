@@ -204,6 +204,14 @@ This slice delivers **no replacement supported execution workflow**. Compilation
 remains available via the build-for-testing recipes; Mac/unit adoption is separate.
 A generated or manually supplied UUID is neither provenance nor permission.
 
+Unit audit receipts use `Attachment.record` unless `FLUXKLANG_AUDIT_RECEIPT_DIR`
+is present; then only a test-only exclusive-create file sink is used, and an
+empty, relative, missing or unsafe directory records an Issue with nothing
+submitted. Prepared Xcode-harness runners must supply an existing, owned 0700
+directory and refuse to launch otherwise, because suite-scope attachments trap
+there (#652, #659). This is not a production transport, retention or quiescence
+evidence; see `scripts/test-audit-coverage/README.md`.
+
 The two live Apple-model tests belong exclusively to the iOS
 `FluxKlangAppleQualificationTests` target. Its `FluxKlangAppleQualification`
 scheme selects only that target and explicitly sets the three flags above to

@@ -185,6 +185,32 @@ fresh-host isolation, actual UUID delivery and runtime `Test.ID`/result
 identity, attachment persistence, descendant closure and artifact sealing.
 Source registration rows are not runtime receipt expectations; #60 remains open.
 
+## Receipt transport selection (#660)
+
+`FLUXKLANG_AUDIT_RECEIPT_DIR` selects how `ProductionAccessScope` submits
+receipts; schema, counters, run-ID validation, context checks and Issues are
+unchanged.
+
+- **Absent:** the unchanged best-effort `Attachment.record` path, as used by
+  the SwiftPM `--attachments-path` runs above.
+- **Present (any value):** only a test-only file sink is used, never
+  `Attachment.record`. The value must be an absolute path to an existing real
+  directory (not a symlink), owned by the effective user with no group or other
+  permission bits; it is never created. Each receipt is exclusively created as
+  `.<name>.partial` (mode 0600), fully written and `fsync`ed, then published
+  with a no-replace rename. Any refusal or failure records the existing
+  submission Issue, removes only this invocation's unpublished partial and
+  never overwrites or falls back.
+
+Prepared Xcode-harness runners (xctestrun `EnvironmentVariables`), where a
+suite-scope `Attachment.record` traps (#652, #659), must supply the key and
+refuse before launch if it is missing, empty or invalid, or if the directory
+fails these checks. A run with `FLUXKLANG_AUDIT_RUN_ID` but no key remains a
+known trap path; there is no in-process harness detection. The sink lives in
+`ProductionAccessScope.swift`, so fixtures that compile that file need no extra
+source. It is not a production transport, retention or quiescence evidence,
+and its focused tests are not hosted-observation evidence.
+
 ## MIDI and history source adoption
 
 The existing MIDI clip ownership and CloudKit history isolation roots now use
