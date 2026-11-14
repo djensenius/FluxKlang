@@ -8,6 +8,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct SpatialTests {
     private let quad = [
         CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0),

@@ -7,6 +7,7 @@ import Testing
 import Foundation
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct EffectRoutingTests {
     private let stereoInstrument = Equipment(name: "Synth A", isStereo: true)   // channels 1, 2

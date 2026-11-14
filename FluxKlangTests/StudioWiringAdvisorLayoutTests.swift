@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioWiringAdvisorLayoutTests {
     @Test func advisorPlacesMultipleSourcesAndEffectChainWithoutOverlaps() {
         let sources = (0..<4).map { Equipment(name: "Source \($0)", outputs: ["Out"]) }

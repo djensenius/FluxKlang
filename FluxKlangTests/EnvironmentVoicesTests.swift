@@ -7,6 +7,7 @@ import Testing
 import Foundation
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct EnvironmentVoicesTests {
     private let moog = Equipment(name: "Moog", isStereo: true)   // channels 1, 2
