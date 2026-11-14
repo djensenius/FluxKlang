@@ -33,14 +33,14 @@ build-for-testing:
 # Compile-only: builds FluxKlangMac and FluxKlangMacTests without launching anything.
 build-for-testing-mac:
 	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests \
-	  -destination 'platform=macOS' \
+	  -destination 'platform=macOS,arch=arm64' \
 	  build-for-testing CODE_SIGNING_ALLOWED=NO
 
 # Hosted: launches FluxKlangMac.app as the test host. Requires the reviewed #60
 # isolation gate after startup hardware isolation (#51), plus separate execution authorization.
 test-mac:
 	xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests \
-	  -destination 'platform=macOS' \
+	  -destination 'platform=macOS,arch=arm64' \
 	  test CODE_SIGNING_ALLOWED=NO
 
 lint:
