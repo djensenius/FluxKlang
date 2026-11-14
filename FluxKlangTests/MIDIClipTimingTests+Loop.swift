@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI clip loop and stop", .productionAccessAudit)
-#else
-@Suite("MIDI clip loop and stop")
-#endif
 struct MIDIClipLoopTests {
     typealias Base = MIDIClipTimingTests
     static let quarter = MusicalTime.ticksPerQuarter

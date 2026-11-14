@@ -6,11 +6,7 @@ import Testing
 #endif
 
 /// The tempo and meter proposals of Standard MIDI File bytes (#112 CL6). Extension files hold the topics.
-#if os(macOS)
 @Suite("SMF tempo and meter import", .productionAccessAudit)
-#else
-@Suite("SMF tempo and meter import")
-#endif
 struct SMFTempoImportTests {
     // swiftlint:disable:next type_name
     typealias F = Fixture

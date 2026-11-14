@@ -65,11 +65,7 @@ func == (output: MTCAssemblerOutput?, expected: ExpectedPosition) -> Bool {
 // 13:45:37;21 at 29.97 drop: frames 0x15, seconds 0x25, minutes 0x2D, hours 0x0D, rate code 2.
 private let pinnedPieces: [UInt8] = [0x05, 0x11, 0x25, 0x32, 0x4D, 0x52, 0x6D, 0x74]
 
-#if os(macOS)
 @Suite("MIDI timecode", .productionAccessAudit)
-#else
-@Suite("MIDI timecode")
-#endif
 struct MIDITimecodeTests {
     @Test func rateCodesMapToTheFourMTCRates() throws {
         #expect(try SMPTEFrameRate(code: 0) == .fps24)

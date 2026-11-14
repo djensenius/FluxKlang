@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI clock leader dropout and reacquire", .productionAccessAudit)
-#else
-@Suite("MIDI clock leader dropout and reacquire")
-#endif
 struct MIDIClockArbitrationDropoutTests {
     static let sourceA = MIDIInputID(1)
     static let sourceB = MIDIInputID(2)

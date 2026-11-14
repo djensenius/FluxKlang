@@ -7,11 +7,7 @@ import Testing
 
 /// The #112 CL5 suites: MIDI 1 captures exported as a clip and a Standard MIDI File. The helpers live in the nested
 /// `Fixture` so no name is shared with another test file of the module.
-#if os(macOS)
 @Suite("Capture SMF export", .productionAccessAudit)
-#else
-@Suite("Capture SMF export")
-#endif
 struct CaptureSMFExportTests {
     @Test func eightPairedNotesOnTwoChannelsRoundTripThroughTheSMFReader() throws {
         var feed = try Fixture.Feed([Fixture.streamA, Fixture.streamB])

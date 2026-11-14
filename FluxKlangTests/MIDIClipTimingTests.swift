@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI clip timing", .productionAccessAudit)
-#else
-@Suite("MIDI clip timing")
-#endif
 struct MIDIClipTimingTests {
     static let primary = ClockID(validated: "smp.main")
     static let musical = ClockID(validated: "mus.main")
