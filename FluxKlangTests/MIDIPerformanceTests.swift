@@ -86,6 +86,7 @@ enum MIDIPerformanceFixture {
     }
 }
 
+@Suite(.productionAccessAudit)
 struct MIDIPerformanceTests {
     typealias Fixture = MIDIPerformanceFixture
 

@@ -7,6 +7,7 @@ import Testing
 
 /// Opaque plugin state references, restore qualification, the inactive restore plan and the editor
 /// fallback (#77, slice PLG4). The tests live in extensions of this suite; this file holds the fixtures.
+@Suite(.productionAccessAudit)
 struct PluginEditorStateTests {
     static let baseVersion: UInt32 = 0x0002_0100
 

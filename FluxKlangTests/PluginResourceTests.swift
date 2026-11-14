@@ -8,6 +8,7 @@ import Testing
 /// Plugin resource reservations, the pressure and latency-change policies and the version compatibility matrix
 /// (#78, slices A and B of PLG6). The tests live in extensions of this suite; this file holds the fixtures.
 /// Expected numbers are literals, never the production constants, so a changed limit fails a test.
+@Suite(.productionAccessAudit)
 struct PluginResourceTests {
     static let scratchLimit = 16_777_216
     static let instanceLimit = 256

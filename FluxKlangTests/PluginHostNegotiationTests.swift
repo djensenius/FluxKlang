@@ -8,7 +8,7 @@ import Testing
 
 /// Host-neutral render resource negotiation, dispatch guard and bounded reprepare-or-silence policy (#71/#72/#73).
 /// Topic files: Spec, Negotiation, Generations, Dispatch, Reprepare. Every bound is restated here as a literal.
-@Suite("PluginHostNegotiationTests")
+@Suite("PluginHostNegotiationTests", .productionAccessAudit)
 struct PluginHostNegotiationTests {
     /// Builds buses from channel counts; every index in `disabled` becomes a disabled bus.
     static func buses(_ channels: [Int], disabled: [Int] = []) throws -> [RenderBusSpec] {

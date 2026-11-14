@@ -7,6 +7,7 @@ import Testing
 
 /// Cache snapshot, codec and invalidation (#70, PLG5). Helpers are nested; byte fixtures are built by
 /// `Raw`, which follows the documented layout independently of the production writer.
+@Suite(.productionAccessAudit)
 struct PluginCatalogCacheTests {
     typealias Codec = PluginCatalogCacheCodec
 
