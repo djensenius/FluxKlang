@@ -3,7 +3,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantLiveWingAppModelTests {
     private struct Fixture {
         let model: AppModel

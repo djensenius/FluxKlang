@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AcceptanceAssistantSafetyTests {
     @Test func adversarialEquipmentNameAndPromptCannotWriteOrBypassReview() async throws {

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantPreferenceOwnershipTests {
     // Verified against AssistantChatController.spokenRepliesKey, not a new test-only key.

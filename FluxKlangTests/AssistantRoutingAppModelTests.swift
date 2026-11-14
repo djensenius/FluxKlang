@@ -3,7 +3,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantRoutingAppModelTests {
     @Test func naturalSiriUsesSameApplePlanAndLocalAcceptanceRetainsAllPaths() async throws {
         let fixture = AssistantRoutingFixture()
@@ -291,6 +291,7 @@ struct AssistantRoutingAppModelTests {
     }
 }
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantRoutingReviewRegressionTests {
     @Test(arguments: [false, true])
