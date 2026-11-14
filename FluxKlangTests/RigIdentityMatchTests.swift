@@ -71,7 +71,7 @@ enum RigIdentityFixture {
     static let decomposed = "cafe\u{0301}"
 }
 
-@Suite("Rig identity matching: saved devices and rigs")
+@Suite("Rig identity matching: saved devices and rigs", .productionAccessAudit)
 struct RigIdentityMatchTests {
     typealias Fixture = RigIdentityFixture
 

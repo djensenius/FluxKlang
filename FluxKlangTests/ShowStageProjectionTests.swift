@@ -177,6 +177,7 @@ enum ShowStageFixture {
     }
 }
 
+@Suite(.productionAccessAudit)
 struct ShowStageProjectionTests {
     typealias Fix = ShowStageFixture
 

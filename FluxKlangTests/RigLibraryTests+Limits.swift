@@ -66,7 +66,7 @@ private enum LibrarySources {
     }
 }
 
-@Suite("Rig library: removal, selection, devices and limits")
+@Suite("Rig library: removal, selection, devices and limits", .productionAccessAudit)
 struct RigLibraryLimitTests {
     private typealias Lib = LimitFixture
     typealias Fixture = RigIdentityFixture

@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct UndoSessionRebindTests {
     // MARK: - Shared fixtures (every extension file uses these)
 

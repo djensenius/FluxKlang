@@ -15,6 +15,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SetupFlowScreenTests {
     private struct Row: Equatable {
         let event: SetupFlowEvent

@@ -16,7 +16,7 @@ import Testing
 
 private typealias Fixture = RigMappingReviewFixture
 
-@Suite("Setup flow sources")
+@Suite("Setup flow sources", .productionAccessAudit)
 struct SetupFlowSourcesTests {
     private static func rig(_ raw: String) throws -> RigProfileID { try RigProfileID(raw) }
 
