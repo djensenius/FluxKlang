@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.0.8](https://github.com/djensenius/FluxKlang/compare/v0.0.7...v0.0.8) (2026-11-14)
+
+
+### Features
+
+* assemble validated media contract v1 trace documents ([33c811c](https://github.com/djensenius/FluxKlang/commit/33c811ce6c6afab3db307b4a00b3da8ffa0b3273))
+* connect an unsaved performance workspace ([7ca5096](https://github.com/djensenius/FluxKlang/commit/7ca50966d82ed6557571cf4e2e8aa6d085e7f516))
+* connect the unsaved performance workspace ([0e89216](https://github.com/djensenius/FluxKlang/commit/0e89216974703c3153be3556d1dfc7e3fc8c6c90))
+* **control:** input bank joining MIDI input, dispatch and pickup ([#87](https://github.com/djensenius/FluxKlang/issues/87)) ([576a530](https://github.com/djensenius/FluxKlang/commit/576a5302f486394223132f336bab49895d8e11f1))
+* **kernel:** hand pending stateful events to the replacement cycle ([#364](https://github.com/djensenius/FluxKlang/issues/364)) ([72b93c7](https://github.com/djensenius/FluxKlang/commit/72b93c72606490414c17d0c6951ba48249c17e87))
+* **media:** coalesce capture overflows into ledger discontinuities ([#109](https://github.com/djensenius/FluxKlang/issues/109)) ([1268248](https://github.com/djensenius/FluxKlang/commit/1268248d5dcf0da0e69e4df917d41d4b909096c2))
+* **media:** fail-closed v1 export gate for a recording take ([#110](https://github.com/djensenius/FluxKlang/issues/110)) ([e891731](https://github.com/djensenius/FluxKlang/commit/e8917316b83940c84f9250c6284ecd49e59364b0))
+* **plugins:** AU host musical context bound to the sample rate ([#73](https://github.com/djensenius/FluxKlang/issues/73)) ([54e6821](https://github.com/djensenius/FluxKlang/commit/54e6821cbc31371de1ad65e017c8cd459af9017d))
+* **status:** diagnostics list model with a derived count ([#99](https://github.com/djensenius/FluxKlang/issues/99)) ([437ca71](https://github.com/djensenius/FluxKlang/commit/437ca7108db3f48ca2f5d58b4366149501ab8d91))
+* **workspace:** list-based wiring editor for the unsaved performance draft ([9c3c3cb](https://github.com/djensenius/FluxKlang/commit/9c3c3cb495f4ea260c91643f69657f738edcd82f))
+* **workspace:** list-based wiring editor for the unsaved performance draft ([f5fe6dd](https://github.com/djensenius/FluxKlang/commit/f5fe6dd419254b07c6674ecf023d2b42359c04a8))
+
+
+### Bug Fixes
+
+* **assistant:** bound retained history diagnostics ([#507](https://github.com/djensenius/FluxKlang/issues/507)) ([fd937fc](https://github.com/djensenius/FluxKlang/commit/fd937fcce6381d46f82fe2987f8d403622a37900))
+* **assistant:** bound retained history diagnostics ([#507](https://github.com/djensenius/FluxKlang/issues/507)) ([29332c5](https://github.com/djensenius/FluxKlang/commit/29332c57d5991e7b098cdde727aff884f96cbbbb))
+* **control:** add a host clear to the input bank and snapshot before the refusal call ([#87](https://github.com/djensenius/FluxKlang/issues/87)) ([47f1b0a](https://github.com/djensenius/FluxKlang/commit/47f1b0ace20d17b6f408dab6d4b4bc1be2ee6c49))
+* **control:** one shared binding limit across dispatch, pickup and learn ([#87](https://github.com/djensenius/FluxKlang/issues/87)) ([06c24fa](https://github.com/djensenius/FluxKlang/commit/06c24fa9447bfc28c9a65d1b7f4e4dcf6d0dcdf8))
+* **midi:** bound clip render inputs before allocation ([ad7732a](https://github.com/djensenius/FluxKlang/commit/ad7732ad0fe655a7fb1f3ba3fe09363dd0d106c5))
+* **midi:** bound clip render inputs before allocation ([#112](https://github.com/djensenius/FluxKlang/issues/112)) ([06e2e8f](https://github.com/djensenius/FluxKlang/commit/06e2e8f6045b9ab0655381f6c93a2e2f36f35fb9))
+* **persistence:** let the caller abandon a failed save attempt ([#123](https://github.com/djensenius/FluxKlang/issues/123)) ([54403ee](https://github.com/djensenius/FluxKlang/commit/54403ee4e1f044bd26476ccd5ec22f4561859bce))
+* preserve compact More navigation after leaving Workspace ([551a40a](https://github.com/djensenius/FluxKlang/commit/551a40a1592f8b9b48becc2993bdcd462b346827))
+* preserve MPE member expression before note binding ([004072a](https://github.com/djensenius/FluxKlang/commit/004072aadd51b96c518d4784ca1582d5ad2ae9e2))
+* reject stale Learn review confirmations ([eb2e627](https://github.com/djensenius/FluxKlang/commit/eb2e627ff3c29f6a2d941008f91cf84b42472665))
+
+
+### Performance Improvements
+
+* **host:** query canonical ledger state without snapshots ([1793a8b](https://github.com/djensenius/FluxKlang/commit/1793a8b01f528f0ca9a02baa73ff71b82afc2a38))
+
 ## [0.0.7](https://github.com/djensenius/FluxKlang/compare/v0.0.6...v0.0.7) (2026-10-29)
 
 
