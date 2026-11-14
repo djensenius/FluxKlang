@@ -3,6 +3,7 @@ import Testing
 
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioLiveChannelBindingTests {
     private func binding(session: UUID = UUID()) -> StudioLiveChannelBinding {
         .init(

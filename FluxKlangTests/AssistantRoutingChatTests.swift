@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AssistantRoutingEvidenceRegressionTests {
     @Test func effectNameWordsCannotAuthorizeAnUnrequestedDryPath() throws {
         let fixture = AssistantRoutingFixture()

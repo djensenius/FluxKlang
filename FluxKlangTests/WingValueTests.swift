@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct WingValueTests {
     @Test func exposesTypedAccessors() {
         #expect(WingValue.float(0.25).floatValue == 0.25)

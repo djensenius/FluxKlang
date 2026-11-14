@@ -3,6 +3,7 @@ import Testing
 
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AssistantMixerIntentTests {
     @Test func explicitGrammar() {
         let examples: [(String, AssistantMixerCommand)] = [

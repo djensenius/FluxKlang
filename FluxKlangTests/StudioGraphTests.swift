@@ -8,6 +8,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioGraphTests {
     @Test func feedbackCycleIsAnErrorAndProducesNoSettings() {
         let firstEffect = StudioNode(kind: .effect(UUID()), title: "Delay")

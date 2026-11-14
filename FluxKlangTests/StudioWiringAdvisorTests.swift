@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioWiringAdvisorTests {
     @Test func advisorBuildsParallelDryAndEffectBranchesToMainSpeakers() {
         let fixture = Fixture()

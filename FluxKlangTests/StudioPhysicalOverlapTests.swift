@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct StudioPhysicalOverlapTests {
     // Changes 0/5 are disjoint, including equal output indices on different banks.
     // Changes 1/2 overlap one send/return leg; 3/4 reverse the overlapping pairs.
