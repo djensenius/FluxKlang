@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialMotionTests {
     static let source = SpatialSourceID(validated: "source")
     /// 2^53, the largest accepted frame.

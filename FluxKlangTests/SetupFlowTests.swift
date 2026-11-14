@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SetupFlowTests {
     /// What one `reduce` produced: the next state or a refusal.
     enum Outcome: Equatable {

@@ -9,6 +9,7 @@ import Testing
 
 /// Songs A (parts a1 a2 a3), B (b1 b2), C (no parts) and D (d1). Setlist `set.main` plays e1 A, e2 B, e3 A, e4 C,
 /// e5 D; `set.alt` plays f1 B and f2 D.
+@Suite(.productionAccessAudit)
 struct ShowResumePlannerTests {
     enum Fixture {
         static let songA = SongID(validated: "song.a")

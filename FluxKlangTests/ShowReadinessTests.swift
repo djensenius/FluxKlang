@@ -9,6 +9,7 @@ import Testing
 /// Pre-show readiness verdicts built from hand-made facts. The library has one setlist, `set.main`; each test chooses
 /// its songs and entries. Charts name `ast.gone` (the catalog lists no such asset, so the chart is missing) or
 /// `ast.ok` (a document with content, so the chart is available).
+@Suite(.productionAccessAudit)
 struct ShowReadinessTests {
     enum Fixture {
         static let songA = SongID(validated: "song.a")

@@ -97,7 +97,7 @@ private enum ApplyKit {
     }
 }
 
-@Suite("Setup apply guard")
+@Suite("Setup apply guard", .productionAccessAudit)
 struct SetupApplyGuardTests {
     @Test
     func setupApplyGuardGoldenAcceptedApplyIsTheDirectApplyWithThePickedRig() throws {

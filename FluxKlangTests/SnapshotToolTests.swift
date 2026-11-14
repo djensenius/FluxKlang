@@ -7,6 +7,7 @@ import Testing
 #endif
 
 /// Tests of the read-only snapshot tools (#118, slice AT1). Fixtures live here; the topic files extend this suite.
+@Suite(.productionAccessAudit)
 struct SnapshotToolTests {
     typealias Snapshot = NeutralSnapshot
     typealias Page = SnapshotToolPage
