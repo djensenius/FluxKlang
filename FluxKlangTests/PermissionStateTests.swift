@@ -23,7 +23,7 @@ private struct NIOStyleIOError: Error {
 private struct Wrapped: Error { let underlying: any Error }
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct PermissionStateTests {
     private static let host = "192.0.2.10"
 

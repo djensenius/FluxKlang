@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct StartupHardwareIsolationTests {
     @Test func completedSharedConstructionRecordsNoProductionEvaluationOrAPIEntry() throws {

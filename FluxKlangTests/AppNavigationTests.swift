@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AppNavigationTests {
     @Test func appStartsInStudio() {

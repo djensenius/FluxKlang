@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AppModelConversationOwnershipTests {
     @Test func assistantChatLoadsTheInjectedConversationStore() async throws {
