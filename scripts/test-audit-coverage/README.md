@@ -1669,8 +1669,8 @@ current-module-qualified and inherited aliases, source-defined XCTest names,
 cross-file extension ownership, local alias/namespace provenance and
 actual-owner member rejection, implicit getter boundaries, unsupported consumed
 alias initializers, cycle handling, and bounded input reads/rechecks.
-The actual-source expectations currently reflect unadopted audit traits; review
-those expectations when adopting or otherwise changing the reference sources.
+The actual-source expectations now reflect the adopted canonical audit trait on
+all four reference roots (#662); review them whenever the reference sources change.
 
 Retain command output, source/input hashes and the reviewed manifest for evidence.
 After the commands finish, remove only the generated scratch directory you

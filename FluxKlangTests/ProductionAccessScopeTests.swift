@@ -75,6 +75,7 @@ private func checkCounts(
     }
 }
 
+@Suite(.productionAccessAudit)
 struct ProductionAccessScopeTests {
     enum ExitMode: CaseIterable, Sendable {
         case normal, sentinel, cancellation
@@ -346,7 +347,7 @@ private struct SuiteExitProbe: SuiteTrait, TestScoping {
     }
 }
 
-@Suite(SuiteExitProbe())
+@Suite(SuiteExitProbe(), .productionAccessAudit)
 struct ProductionAccessScopeSuiteTests {
     @Test func suiteWithCaseIsInvalidButStillRunsBodyAndAudit() async throws {
         let suite = try #require(SuiteExitProbe.owningSuite)

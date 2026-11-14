@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantMixerExecutionTests {
     private func connected() async -> (WingController, AssistantRecordingWingTransport) {
         let transport = AssistantRecordingWingTransport()
