@@ -80,6 +80,7 @@ struct ActionSetFixture {
     }
 }
 
+@Suite(.productionAccessAudit)
 struct DeclarativeActionTests {
     static let setID = ActionSetID(validated: "set.a")
 

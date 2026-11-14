@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct DeviceLifecycleTests {
     private static let audioCapability = CapabilityID(validated: "cap.audio")
     private static let midiCapability = CapabilityID(validated: "cap.midi")

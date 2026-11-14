@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct DeclarativeActionTriggerTests {
     static let sceneKey = GenerationKey(kind: .cancelScope, subject: ActionSetFixture.scene)
     static let otherKey = GenerationKey(kind: .cancelScope, subject: ActionSetFixture.other)

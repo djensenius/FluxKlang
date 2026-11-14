@@ -67,6 +67,7 @@ enum DocumentsTestSupport {
     static func validGraphBytes() throws -> Data { try graph().encoded() }
 }
 
+@Suite(.productionAccessAudit)
 struct ProjectPackageDocumentsTests {
     private typealias Support = DocumentsTestSupport
 

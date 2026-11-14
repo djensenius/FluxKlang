@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Perform cell model (#102 P1)")
+@Suite("Perform cell model (#102 P1)", .productionAccessAudit)
 struct PerformCellModelTests {
     static let mainsID = ParameterID(validated: "par.mains.gain")
     static let otherID = ParameterID(validated: "par.verb.mix")

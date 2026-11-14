@@ -5,6 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct ProjectRecoveryTests {
     private static func version(_ digest: String) throws -> SaveContentVersion {
         try SaveContentVersion.make(digest: digest)

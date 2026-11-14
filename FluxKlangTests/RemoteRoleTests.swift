@@ -7,6 +7,7 @@ import Testing
 
 /// RR1 (#96): the remote-controller role machine, lease release/refusal and the capability guard.
 /// Topic files are `extension RemoteRoleTests` (+Transitions, +Lease, +Guard, +RawInput).
+@Suite(.productionAccessAudit)
 struct RemoteRoleTests {
     static let hostA = HostID(validated: "host.a")
     static let hostB = HostID(validated: "host.b")

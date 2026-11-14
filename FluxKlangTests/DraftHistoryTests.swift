@@ -150,7 +150,7 @@ enum DraftHistoryFixture {
     }
 }
 
-@Suite("Draft edit fold")
+@Suite("Draft edit fold", .productionAccessAudit)
 struct DraftHistoryTests {
     typealias Fixture = DraftHistoryFixture
 

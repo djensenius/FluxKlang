@@ -183,7 +183,7 @@ enum ShowRecoveryTestFixture {
 }
 
 /// Worklist tests; the decision, batch, navigation and randomized tests are in the `ShowRecoveryTests+` files.
-@Suite("Show chart recovery")
+@Suite("Show chart recovery", .productionAccessAudit)
 struct ShowRecoveryTests {
     typealias Fix = ShowRecoveryTestFixture
 
