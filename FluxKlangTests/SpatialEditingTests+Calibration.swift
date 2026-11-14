@@ -100,7 +100,7 @@ extension SpatialEditingFixture {
     }
 }
 
-@Suite("Spatial calibration flow phases, runs and staging")
+@Suite("Spatial calibration flow phases, runs and staging", .productionAccessAudit)
 struct SpatialCalibrationFlowTests {
     private typealias Fixture = SpatialEditingFixture
     private typealias Phase = SpatialCalibrationPhase

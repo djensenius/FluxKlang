@@ -51,7 +51,7 @@ enum SpatialEditingFixture {
     }
 }
 
-@Suite("Spatial placement editing and spoken positions")
+@Suite("Spatial placement editing and spoken positions", .productionAccessAudit)
 struct SpatialEditingTests {
     private typealias Fixture = SpatialEditingFixture
     private typealias Words = SpatialPositionDescription

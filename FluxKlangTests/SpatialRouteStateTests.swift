@@ -8,6 +8,7 @@ import Testing
 
 /// Tests of the host-local spatial route state (#114 SP1): route availability, speaker state and measurement
 /// identity. This file holds the fixtures and the cross-cutting tests; the topics live in the extensions.
+@Suite(.productionAccessAudit)
 struct SpatialRouteStateTests {
     static let hostA = HostID(validated: "host.a")
     static let hostB = HostID(validated: "host.b")

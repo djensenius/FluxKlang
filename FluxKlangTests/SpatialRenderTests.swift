@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialRenderTests {
     static let quadNames = ["spk.fl", "spk.fr", "spk.rl", "spk.rr"]
     static let quadPoints: [(Double, Double)] = [(-1, 1), (1, 1), (-1, -1), (1, -1)]

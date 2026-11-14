@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("Spatial calibration plans, digests and authorization bindings")
+@Suite("Spatial calibration plans, digests and authorization bindings", .productionAccessAudit)
 struct SpatialCalibrationAuthorizationTests {
     private typealias Fixture = SpatialEditingFixture
 
