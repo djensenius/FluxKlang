@@ -1,4 +1,5 @@
 import Foundation
+import ObjectiveC
 import Testing
 #if canImport(FluxKlangMac)
 @testable import FluxKlangMac
@@ -33,6 +34,7 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
     private let audit: ProductionAccessAudit
     private let runID: String?
     private let submit: @Sendable (String, String) throws -> Void
+    private let preflight: @Sendable () throws -> Void
 
     var isRecursive: Bool { false }
 
@@ -40,11 +42,12 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
         self.init(audit: .shared, environment: ProcessInfo.processInfo.environment)
     }
 
-    /// Transport-selection seam (#660). Without `FLUXKLANG_AUDIT_RECEIPT_DIR`, receipts go to
-    /// `attach` unchanged. With the key present (any value), only the file sink is used.
+    /// Ordinary transport selection is unchanged (#660). Required observation (#703) refuses
+    /// before the body unless the unprefixed key passes the sink's directory checks.
     init(
         audit: ProductionAccessAudit,
         environment: [String: String],
+        requiresFileReceipts: @escaping @Sendable () throws -> Bool = ProductionAccessObservation.requiresFileReceipts,
         fileSystem: ProductionAccessReceiptSink.FileSystem = .init(),
         attach: @escaping @Sendable (String, String) -> Void = { json, filename in
             // Void/best-effort: this is not a persistence or delivery acknowledgment.
@@ -58,7 +61,17 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
         } else {
             submit = attach
         }
-        self.init(audit: audit, runID: environment["FLUXKLANG_AUDIT_RUN_ID"], submit: submit)
+        self.audit = audit
+        self.runID = environment["FLUXKLANG_AUDIT_RUN_ID"]
+        self.submit = submit
+        self.preflight = {
+            guard try requiresFileReceipts() else { return }
+            guard let directory = environment[ProductionAccessReceiptSink.directoryKey] else {
+                throw ProductionAccessReceiptSink.Failure(
+                    description: "Observation requires unprefixed \(ProductionAccessReceiptSink.directoryKey)")
+            }
+            try ProductionAccessReceiptSink(directory: directory, fileSystem: fileSystem).validateDirectory()
+        }
     }
 
     /// Private-audit and local submission-failure seams for this helper's pure tests.
@@ -70,6 +83,7 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
         self.audit = audit
         self.runID = runID
         self.submit = submit
+        self.preflight = {} // Explicit private submission fixtures, not the canonical trait.
     }
 
     func provideScope(
@@ -77,6 +91,12 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
         testCase: Test.Case?,
         performing function: @Sendable () async throws -> Void
     ) async throws {
+        do {
+            try preflight()
+        } catch {
+            Issue.record(error, "Production access observation file receipt preflight failed")
+            return // No body, exit receipt, or attachment fallback on configuration/lookup failure.
+        }
         let invocationID = UUID()
         defer {
             // Exactly one coherent, absolute snapshot, even on error or cancellation.
@@ -142,6 +162,48 @@ extension Trait where Self == ProductionAccessScope {
     static var productionAccessAudit: Self { Self() }
 }
 
+/// An exact empty regular file at the unit bundle root opts into required file receipts.
+/// Only ENOENT for that entry means ordinary mode; lookup/shape errors are not absence.
+enum ProductionAccessObservation {
+    static let markerName = "FluxKlangAuditRequireFileReceipts-v1"
+    private final class BundleAnchor: NSObject {}
+
+    static func requiresFileReceipts() throws -> Bool {
+        let bundle = Bundle(for: BundleAnchor.self)
+        // Bundle(for:) can fall back to the main bundle. Verify its executable is the anchor's
+        // image, so a failed unit-bundle lookup cannot inspect the app host instead.
+        guard let image = class_getImageName(BundleAnchor.self), let executable = bundle.executableURL,
+              executable.resolvingSymlinksInPath() ==
+                URL(fileURLWithPath: String(cString: image)).resolvingSymlinksInPath() else {
+            throw ProductionAccessReceiptSink.Failure(description: "Cannot locate observation anchor's own bundle")
+        }
+        return try requiresFileReceipts(in: bundle.bundleURL)
+    }
+
+    /// Directory injection is only for owned temporary fixtures, never a process environment override.
+    static func requiresFileReceipts(in bundleDirectory: URL?) throws -> Bool {
+        guard let bundleDirectory, bundleDirectory.isFileURL else {
+            throw ProductionAccessReceiptSink.Failure(description: "Observation bundle directory is unavailable")
+        }
+        let directoryFD = open(bundleDirectory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directoryFD >= 0 else {
+            let code = errno
+            throw ProductionAccessReceiptSink.Failure(description: "Open observation bundle failed: errno \(code)")
+        }
+        defer { close(directoryFD) }
+        var marker = stat()
+        guard fstatat(directoryFD, markerName, &marker, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            if code == ENOENT { return false }
+            throw ProductionAccessReceiptSink.Failure(description: "Lookup observation marker failed: errno \(code)")
+        }
+        guard marker.st_mode & S_IFMT == S_IFREG, marker.st_size == 0 else {
+            throw ProductionAccessReceiptSink.Failure(description: "\(markerName) must be an empty regular file")
+        }
+        return true
+    }
+}
+
 /// Test-only receipt file transport (#660), selected only by `FLUXKLANG_AUDIT_RECEIPT_DIR`.
 /// Not a production transport, and not retention or quiescence evidence. The directory is
 /// never created; every file operation is relative to its validated descriptor. Only the final
@@ -167,6 +229,15 @@ struct ProductionAccessReceiptSink: Sendable {
 
     let directory: String
     var fileSystem = FileSystem()
+
+    /// Read-only pre-body check; publication must still reopen and revalidate the directory.
+    func validateDirectory() throws {
+        let directoryFD = try openDirectory()
+        guard close(directoryFD) == 0 else {
+            let code = errno
+            throw Self.posixFailure("close \(Self.directoryKey)", code: code)
+        }
+    }
 
     /// Published bytes are identity-verified: the partial must still be this invocation's regular
     /// file before the rename, and the published name must be it afterwards. A replacement is
