@@ -37,17 +37,27 @@ jobs:
           install_args: xcodegen
       - name: Pinned XcodeGen is on PATH
         run: |
-          want=$(mise current xcodegen); have=$(xcodegen --version)
+          command -v xcodegen >/dev/null || { echo "::error::xcodegen is not on PATH"; exit 1; }
+          want=$(mise current xcodegen) || { echo "::error::mise current xcodegen failed"; exit 1; }
+          have=$(xcodegen --version) || { echo "::error::xcodegen --version failed"; exit 1; }
           echo "$have at $(command -v xcodegen); mise.toml pins $want"
           if [ -z "$want" ] || [ "$have" != "Version: $want" ]; then
             echo "::error::xcodegen '$have' is not the mise.toml pin '$want'"; exit 1
           fi
       - name: Record environment
         id: env
+        env:
+          # Empty on workflow_dispatch; on pull_request HEAD/GITHUB_SHA are the merge commit.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # prepare.py needs Python >= 3.7 (argparse subparsers `required`); the runner's python3 is used.
         run: |
           [ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || { ls -d /Applications/Xcode*.app || true; echo "::error::$DEVELOPER_DIR missing on this image (no fallback)"; exit 1; }
           head_sha=$(git rev-parse HEAD)
+          pr_head_sha=${PR_HEAD_SHA:-not applicable}
+          case $pr_head_sha in
+            "not applicable") ;;
+            *) [[ $pr_head_sha =~ ^[0-9a-f]{40}$ ]] || { echo "::error::unexpected PR head SHA '$pr_head_sha'"; exit 1; } ;;
+          esac
           xcode=$(xcodebuild -version | tr '\n' ' ')
           macos="$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
           python=$(python3 --version 2>&1)
@@ -57,6 +67,7 @@ jobs:
           fi
           {
             echo "head_sha=$head_sha"
+            echo "pr_head_sha=$pr_head_sha"
             echo "xcode=$xcode"
             echo "macos=$macos"
             echo "python=$python"
@@ -64,7 +75,8 @@ jobs:
           {
             echo "## Environment"
             echo
-            echo "- HEAD: \`$head_sha\` (event SHA \`$GITHUB_SHA\`)"
+            echo "- HEAD: \`$head_sha\` (event SHA \`$GITHUB_SHA\`; the merge commit on pull requests)"
+            echo "- PR head: \`$pr_head_sha\`"
             echo "- Xcode: $xcode"
             echo "- macOS: $macos"
             echo "- Python: $python"
@@ -91,6 +103,10 @@ jobs:
           xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests -resolvePackageDependencies \
             -disableAutomaticPackageResolution -derivedDataPath "$RUNNER_TEMP/dd"
           git --no-pager diff --exit-code -- '*Package.resolved'
+          if [ -n "$(git status --porcelain --untracked-files=all -- '*Package.resolved')" ]; then
+            git status --porcelain --untracked-files=all -- '*Package.resolved'
+            echo "::error::package resolution changed or added a Package.resolved"; exit 1
+          fi
       - name: Build macOS for testing
         # CODE_SIGNING_ALLOWED=NO (as `make test-mac`): the linker ad-hoc signs without entitlements,
         # so the host runs unsandboxed. An ad-hoc `-` identity would embed iCloud entitlements and fail to launch.
@@ -108,8 +124,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Pin the generated xctestrun
         id: pin
-        # Computed once here from the fresh build; this is the reviewed pin for this observation.
-        # Never recompute or re-pin after a refusal.
+        # A CI-computed pin, not an independently reviewed one: computed once here from the fresh
+        # build, it binds only build -> prepare -> validate within this run. Never recomputed after a refusal.
         run: |
           products="$RUNNER_TEMP/dd/Build/Products"
           found=()
@@ -121,6 +137,7 @@ jobs:
             exit 1
           fi
           xctestrun=${found[0]}
+          case $xctestrun in *$'\n'* | *$'\r'*) echo "::error::xctestrun path contains a line break"; exit 1 ;; esac
           [ -f "$xctestrun" ] && [ ! -L "$xctestrun" ] || { echo "::error::$xctestrun is not a regular file"; exit 1; }
           sha=$(shasum -a 256 "$xctestrun" | awk '{ print $1 }')
           [[ $sha =~ ^[0-9a-f]{64}$ ]] || { echo "::error::unexpected sha256 '$sha'"; exit 1; }
@@ -132,7 +149,7 @@ jobs:
             echo "## Pin"
             echo
             echo "- xctestrun: \`$xctestrun\`"
-            echo "- sha256: \`$sha\` (computed once in CI; never re-pinned)"
+            echo "- sha256: \`$sha\` (CI-computed once, not independently reviewed; binds build, prepare and validate in this run only; never recomputed after a refusal)"
             echo
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare and validate (mac-isolated-unit)
@@ -166,13 +183,18 @@ jobs:
           cat "$work/prepare.err" >&2
           [ "$status" -eq 0 ] || refused prepare "$status" "$work/prepare.err"
           cat "$work/prepare.json"
-          IFS=$'\t' read -r run_id output intent < <(python3 -c '
+          fields=$(python3 -c '
           import json, sys
           d = json.load(open(sys.argv[1]))
           assert d["status"] == "prepared"
           i = d["intent"]
-          print("\t".join((i["run_id"], i["output"]["path"], i["intent_path"])))
-          ' "$work/prepare.json")
+          values = (i["run_id"], i["output"]["path"], i["intent_path"])
+          assert all(isinstance(v, str) and v and not any(c in v for c in "\t\r\n") for v in values)
+          print("\t".join(values))
+          ' "$work/prepare.json") || { echo "::error::could not parse prepare.json"; exit 1; }
+          IFS=$'\t' read -r run_id output intent <<< "$fields"
+          [ -n "$run_id" ] && [ -n "$output" ] && [ -n "$intent" ] \
+            || { echo "::error::prepare.json has an empty run ID, output or intent"; exit 1; }
           [[ $run_id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
             || { echo "::error::unexpected run ID '$run_id'"; exit 1; }
           case $output in /*.xctestrun) ;; *) echo "::error::unexpected output '$output'"; exit 1 ;; esac
@@ -188,7 +210,7 @@ jobs:
           import json, sys
           d = json.load(open(sys.argv[1]))
           assert d["status"] == "validated" and d["intent"]["run_id"] == sys.argv[2], "validation mismatch"
-          ' "$work/validate.json" "$run_id"
+          ' "$work/validate.json" "$run_id" || { echo "::error::could not parse or match validate.json"; exit 1; }
           { echo "run_id=$run_id"; echo "output=$output"; echo "intent=$intent"; } >> "$GITHUB_OUTPUT"
           {
             echo "## Preparation"
@@ -205,6 +227,7 @@ jobs:
         # Fresh, owned, 0700, real directory; refuse before launch otherwise (#652, #659).
         run: |
           dir="$RUNNER_TEMP/audit-receipts-$RUN_ID"
+          case $dir in *$'\n'* | *$'\r'*) echo "::error::receipt directory path contains a line break"; exit 1 ;; esac
           case $dir in
             /*) ;;
             *) echo "::error::receipt directory '$dir' is not absolute"; exit 1 ;;
@@ -215,7 +238,7 @@ jobs:
           [ ! -e "$dir" ] && [ ! -L "$dir" ] || { echo "::error::receipt directory '$dir' already exists"; exit 1; }
           mkdir -m 700 "$dir"
           [ -d "$dir" ] && [ ! -L "$dir" ] || { echo "::error::'$dir' is not a real directory"; exit 1; }
-          owner=$(stat -f %u "$dir"); mode=$(stat -f %Lp "$dir")
+          owner=$(/usr/bin/stat -f %u "$dir"); mode=$(/usr/bin/stat -f %Lp "$dir")
           [ "$owner" = "$(id -u)" ] || { echo "::error::'$dir' owned by uid $owner, not $(id -u)"; exit 1; }
           [ "$mode" = "700" ] || { echo "::error::'$dir' has mode $mode, not 700"; exit 1; }
           [ -z "$(ls -A "$dir")" ] || { echo "::error::'$dir' is not empty"; exit 1; }
@@ -231,19 +254,28 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Run the observation once
         id: test
+        # Bounded so a hung host still leaves time for the always-run summary and upload.
+        timeout-minutes: 60
         env:
           PREPARED_XCTESTRUN: ${{ steps.prepare.outputs.output }}
           TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR: ${{ steps.receipts.outputs.dir }}
-        # Exactly one invocation: no retries, filters, iterations or parallel-testing overrides.
+        # Exactly one invocation, aligned with the README's candidate argv (#294) minus
+        # -derivedDataPath: no retries, filters or other parallel-testing/iteration overrides.
         run: |
           [ -n "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] && [ -d "$TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR" ] \
             || { echo "::error::receipt directory missing; refusing to launch"; exit 1; }
+          argv=("$DEVELOPER_DIR/usr/bin/xcodebuild"
+            test-without-building -xctestrun "$PREPARED_XCTESTRUN"
+            -destination 'platform=macOS,arch=arm64'
+            -parallel-testing-enabled NO -test-iterations 1
+            -resultBundlePath "$RUNNER_TEMP/observation.xcresult")
+          argv_text=$(printf '%q ' "${argv[@]}"); argv_text=${argv_text% }
+          case $argv_text in *$'\n'* | *$'\r'*) echo "::error::argv contains a line break"; exit 1 ;; esac
+          echo "argv: $argv_text"
           start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          echo "start=$start" >> "$GITHUB_OUTPUT"
+          { echo "argv=$argv_text"; echo "start=$start"; } >> "$GITHUB_OUTPUT"
           set +e
-          xcodebuild test-without-building -xctestrun "$PREPARED_XCTESTRUN" \
-            -destination 'platform=macOS,arch=arm64' \
-            -resultBundlePath "$RUNNER_TEMP/observation.xcresult"
+          "${argv[@]}"
           status=$?
           set -e
           end=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -253,6 +285,7 @@ jobs:
         if: always()
         env:
           HEAD_SHA: ${{ steps.env.outputs.head_sha }}
+          PR_HEAD_SHA: ${{ steps.env.outputs.pr_head_sha }}
           XCODE: ${{ steps.env.outputs.xcode }}
           MACOS: ${{ steps.env.outputs.macos }}
           PYTHON: ${{ steps.env.outputs.python }}
@@ -264,6 +297,7 @@ jobs:
           TEST_START: ${{ steps.test.outputs.start }}
           TEST_END: ${{ steps.test.outputs.end }}
           TEST_STATUS: ${{ steps.test.outputs.status }}
+          TEST_ARGV: ${{ steps.test.outputs.argv }}
           RESULT_BUNDLE: ${{ runner.temp }}/observation.xcresult
           SUMMARY_DIR: ${{ runner.temp }}/observation-summary
         # Counts and trimmed failure text only; receipt contents and names are never read or printed.
@@ -277,12 +311,12 @@ jobs:
               return os.environ.get(key) or NA
 
           summary = {
-              "head_sha": env("HEAD_SHA"), "event_sha": env("GITHUB_SHA"),
+              "head_sha": env("HEAD_SHA"), "event_sha": env("GITHUB_SHA"), "pr_head_sha": env("PR_HEAD_SHA"),
               "xcode": env("XCODE"), "macos": env("MACOS"), "python": env("PYTHON"),
               "xctestrun": env("XCTESTRUN"), "xctestrun_sha256": env("XCTESTRUN_SHA256"),
               "preparation": env("PREPARE_OUTCOME"), "run_id": env("RUN_ID"),
               "start_utc": env("TEST_START"), "end_utc": env("TEST_END"),
-              "exit_code": env("TEST_STATUS"),
+              "exit_code": env("TEST_STATUS"), "test_argv": env("TEST_ARGV"),
               "deviations": [
                   "CODE_SIGNING_ALLOWED=NO: host ad-hoc signed by the linker without entitlements; unsandboxed",
                   "receipt directory supplied via TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR (delivery unverified)",
@@ -352,7 +386,8 @@ jobs:
               stream.write("\n")
 
           rows = [
-              ("HEAD SHA", "head_sha"), ("Event SHA", "event_sha"), ("Xcode", "xcode"), ("macOS", "macos"),
+              ("HEAD SHA", "head_sha"), ("Event SHA", "event_sha"), ("PR head SHA", "pr_head_sha"),
+              ("Xcode", "xcode"), ("macOS", "macos"),
               ("xctestrun sha256", "xctestrun_sha256"), ("Preparation", "preparation"), ("Run ID", "run_id"),
               ("Start (UTC)", "start_utc"), ("End (UTC)", "end_utc"), ("Exit code", "exit_code"),
               ("Result", "result"), ("Total", "total"), ("Passed", "passed"), ("Failed", "failed"),
@@ -367,6 +402,7 @@ jobs:
                     for label, key in rows]
           if error:
               lines += ["", "xcresult summary: " + text(error)]
+          lines += ["", "Test argv (exact):", "", "```text", text(summary["test_argv"], 4000), "```"]
           lines += ["", "Deviations: " + "; ".join(summary["deviations"]) + ".", ""]
           if summary["first_failures"]:
               lines += ["### First failures (trimmed)", "", "```text"]
@@ -382,11 +418,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mac-isolated-observation-summary
+          name: mac-isolated-observation-summary-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/observation-summary/summary.json
             ${{ runner.temp }}/observation-summary/summary.md
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
       - name: Fail on a non-zero test exit code
         env:

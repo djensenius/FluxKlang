@@ -226,11 +226,20 @@ conservatively refuses that drift rather than inferring a wider supported shape.
 `.github/workflows/mac-isolated-observation.yml` runs one sealed
 `FluxKlangMacIsolatedTests` observation on the hosted `xcode-27` image. Part of
 #693 and #60; #60 remains open. It runs `build-for-testing`, requires exactly one
-generated `.xctestrun`, and computes its SHA-256 once in CI. That value is the
-reviewed pin for this run; a refusal is recorded as the result and is never
-re-pinned, repaired or retried. It then runs `prepare` and `validate` with
-`--profile mac-isolated-unit` and exactly one `test-without-building` without
-filters or retries. Two deviations are recorded in the run summary:
+generated `.xctestrun`, and computes its SHA-256 once in CI. That hash is a
+CI-computed pin, not an independently reviewed one: it binds only build,
+`prepare` and `validate` within this one run, and is never recomputed or
+re-pinned after a refusal. It then runs `prepare` and `validate` with
+`--profile mac-isolated-unit` and one `test-without-building`. Its argv follows
+the candidate argv under "Single-attempt Mac process library" below, without
+`-derivedDataPath`: it keeps `-parallel-testing-enabled NO` and
+`-test-iterations 1`, adds no filters or retries, and is recorded exactly.
+
+A `prepare`/`validate` refusal is an expected possible first result: the
+`OBSERVED` allowlist exactly matches an earlier specimen, and Xcode 27.1 output
+may differ. A refusal is recorded, not repaired or retried; it is a result about
+the profile and toolchain, not evidence about #60. Two deviations are recorded
+in the run summary:
 
 - The build uses `CODE_SIGNING_ALLOWED=NO`, as `make test-mac` does. The host is
   ad-hoc signed by the linker without entitlements and runs unsandboxed.
