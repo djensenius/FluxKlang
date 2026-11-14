@@ -6,11 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Tuner display smoother", .productionAccessAudit)
-#else
-@Suite("Tuner display smoother")
-#endif
 struct TunerSmootherTests {
     static let centre = 220.0
 

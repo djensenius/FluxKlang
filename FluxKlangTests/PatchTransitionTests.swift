@@ -125,11 +125,7 @@ enum PatchTransitionFixture {
     }
 }
 
-#if os(macOS)
 @Suite("Patch transitions", .productionAccessAudit)
-#else
-@Suite("Patch transitions")
-#endif
 struct PatchTransitionTests {
     typealias Fixture = PatchTransitionFixture
 

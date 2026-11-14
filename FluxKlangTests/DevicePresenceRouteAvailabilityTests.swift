@@ -9,9 +9,7 @@ import Testing
 /// Composes real registry events with the spatial route chain (#114; #65 is related only):
 /// `DeviceRegistryPresence.make` -> `SpatialRouteAvailability.derive` -> `SpatialMaskSet.passes`.
 /// Nothing in production calls this chain yet; the tests pin what the three existing stages do together.
-#if os(macOS)
 @Suite(.productionAccessAudit)
-#endif
 struct DevicePresenceRouteAvailabilityTests {
     private struct FixtureFailure: Error {}
 

@@ -99,11 +99,7 @@ enum SpatialPanelFixture {
     }
 }
 
-#if os(macOS)
 @Suite("Spatial panel presentation", .productionAccessAudit)
-#else
-@Suite("Spatial panel presentation")
-#endif
 struct SpatialPanelPresentationTests {
     typealias Fixture = SpatialPanelFixture
 
