@@ -64,6 +64,7 @@ actor RoutingTestGenerator: AssistantGenerating {
     private func record() { calls += 1 }
 }
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantRoutingChatTests {
     private func wait(_ condition: () async -> Bool) async throws {

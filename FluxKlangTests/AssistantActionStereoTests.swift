@@ -5,7 +5,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantActionStereoTests {
     private func intent(action: AssistantActionIntent.Action = .setFaderPercent, amount: Double? = 50)
         -> AssistantActionIntent {

@@ -3,6 +3,7 @@ import Testing
 
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct AssistantActionIntentValidatorTests {
     @Test func thenCoordinationPreservesOneTargetAndOneMixerAction() {
         for connector in ["then", "and then"] {

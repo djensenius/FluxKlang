@@ -9,6 +9,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct PresetsTests {
     @Test func snapshotCapturesCurrentValues() async throws {

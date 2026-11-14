@@ -3,6 +3,7 @@ import Testing
 
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct AssistantMixerChatTests {
     @Test func missingPlannerFailsClosedForEveryProviderAndCannotRetryAfterReload() async throws {

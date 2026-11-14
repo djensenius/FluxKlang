@@ -4,7 +4,7 @@ import Testing
 @testable import FluxKlang
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .productionAccessAudit)
 struct AssistantLiveWingContextTests {
     @Test func localAndChannelAliasesUseRealPortMappingNotChannelNumber() {
         let gear = Equipment(name: "Saved Synth", outputs: ["L", "R"])
