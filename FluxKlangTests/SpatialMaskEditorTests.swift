@@ -84,11 +84,7 @@ enum SpatialMaskEditorFixture {
 }
 // swiftlint:enable identifier_name
 
-#if os(macOS)
 @Suite("Spatial mask editor", .productionAccessAudit)
-#else
-@Suite("Spatial mask editor")
-#endif
 struct SpatialMaskEditorTests {
     typealias Fixture = SpatialMaskEditorFixture
 

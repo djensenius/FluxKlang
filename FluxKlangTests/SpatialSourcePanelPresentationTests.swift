@@ -55,11 +55,7 @@ enum SpatialSourcePanelFixture {
 }
 // swiftlint:enable identifier_name
 
-#if os(macOS)
 @Suite("Spatial source panel", .productionAccessAudit)
-#else
-@Suite("Spatial source panel")
-#endif
 struct SpatialSourcePanelPresentationTests {
     typealias Fixture = SpatialSourcePanelFixture
 

@@ -6,11 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Tuner pitch estimator", .productionAccessAudit)
-#else
-@Suite("Tuner pitch estimator")
-#endif
 struct TunerPitchTests {
     /// The accuracy bound for pure sines from 30.9 Hz to 1318.5 Hz (acceptance 1).
     static let sineBoundCents = 1.0

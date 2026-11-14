@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Patch transitions: change bounds", .productionAccessAudit)
-#else
-@Suite("Patch transitions: change bounds")
-#endif
 struct PatchTransitionBoundsTests {
     typealias Fixture = PatchTransitionFixture
 

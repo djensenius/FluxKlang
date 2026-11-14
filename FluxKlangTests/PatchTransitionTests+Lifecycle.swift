@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Patch transitions: route lifecycle, budget and seeding", .productionAccessAudit)
-#else
-@Suite("Patch transitions: route lifecycle, budget and seeding")
-#endif
 struct PatchTransitionLifecycleTests {
     typealias Fixture = PatchTransitionFixture
 
