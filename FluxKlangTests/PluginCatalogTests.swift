@@ -5,6 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct PluginCatalogTests {
     @Test func identityIgnoresNamesVersionsAndScanOrder() throws {
         let verb = try Self.identity("Verb", manufacturer: "Ab C")

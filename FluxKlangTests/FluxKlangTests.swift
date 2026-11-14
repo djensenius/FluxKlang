@@ -6,6 +6,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct FluxKlangTests {
     @Test(arguments: [AssistantRecordingWingTransport.BindingRead.session, .peers])
     @MainActor func obsoleteBindingReadCannotOverwriteReplacement(_ read: AssistantRecordingWingTransport.BindingRead)

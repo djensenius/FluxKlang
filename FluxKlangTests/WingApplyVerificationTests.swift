@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct WingApplyVerificationTests {
     @Test @MainActor func assistantReadPreservesListenConfirmationsWithoutHiddenRetry() async throws {
         let transport = AssistantRecordingWingTransport()

@@ -1,6 +1,7 @@
 import Testing
 @testable import FluxKlang
 
+@Suite(.productionAccessAudit)
 struct ProductionAccessAuditTests {
     @Test func mirrorsRemainAdditiveAndSameRecorderIsNotDuplicated() {
         let primary = ProductionAccessAudit()
