@@ -33,7 +33,7 @@ xcrun swiftc "${common[@]}" "${sources[@]}" -o "$work/Check"
 ```
 
 `pwd -P` resolves any symlinked `TMPDIR` that the checker would reject; the `case`
-line keeps macOS's `/var` or `/tmp` spelling because Foundation's standardization
+line restores macOS's `/var` or `/tmp` spelling because Foundation's standardization
 strips `/private`, so the checker rejects `/private` roots as non-normalized.
 
 `--root` is absolute. The optional `--manifest` is root-relative and defaults to
