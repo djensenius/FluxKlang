@@ -16,6 +16,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialMappingTests {
     static let layouts = [quad, stereo, single, triangle, ring]
     /// The legacy placement grid of every golden layout: 0, 0.25, 0.5, 0.75, 1.

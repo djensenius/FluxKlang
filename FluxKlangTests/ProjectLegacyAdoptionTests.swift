@@ -103,7 +103,7 @@ enum LegacyAdoptionP5Fixture {
     }
 }
 
-@Suite("Legacy project adoption")
+@Suite("Legacy project adoption", .productionAccessAudit)
 struct ProjectLegacyAdoptionTests {
     private typealias Fixture = LegacyAdoptionP5Fixture
 
