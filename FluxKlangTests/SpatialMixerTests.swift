@@ -6,7 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-@Suite("SpatialMixerTests")
+@Suite("SpatialMixerTests", .productionAccessAudit)
 struct SpatialMixerTests {
     struct Source {
         let name: String

@@ -15,6 +15,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct SpatialMotionPlanStepperTests {
     private static let quadPoints: [(Double, Double)] = [(-1, 1), (1, 1), (-1, -1), (1, -1)]
 
