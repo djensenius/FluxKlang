@@ -185,6 +185,48 @@ fresh-host isolation, actual UUID delivery and runtime `Test.ID`/result
 identity, attachment persistence, descendant closure and artifact sealing.
 Source registration rows are not runtime receipt expectations; #60 remains open.
 
+## Receipt transport selection (#660)
+
+`FLUXKLANG_AUDIT_RECEIPT_DIR` selects how `ProductionAccessScope` submits
+receipts; schema, counters, run-ID validation, context checks and Issues are
+unchanged.
+
+- **Absent:** the unchanged best-effort `Attachment.record` path, as used by
+  the SwiftPM `--attachments-path` runs above.
+- **Present (any value):** only a test-only file sink is used, never
+  `Attachment.record`. The value must be an absolute path to an existing real
+  directory, owned by the effective user with no group or other permission
+  bits; it is never created. Only the final component must not be a symlink:
+  the parent is opened normally (so `/var` resolves to `/private/var`) and must
+  be readable as well as searchable, then the
+  final name is inspected and opened relative to it without following links. A
+  value ending in `/`, `/.` or `/..` is refused; the value is split on UTF-8
+  bytes. Each receipt is exclusively created as
+  `.<name>.partial` (mode 0600), fully written and `fsync`ed, then published
+  with a no-replace rename. Because that rename guards only the destination,
+  the partial must still be this invocation's regular file (device and inode,
+  compared while its descriptor stays open) before the rename, and the
+  published name must be it afterwards; a replacement is reported and left in
+  place, never moved back or deleted. In the residual check-to-rename window,
+  our own rename publishes the swapped entry under the final name, where it is
+  reported and left; consumers must treat that Issue as failing the run.
+  The sink never deletes or moves any entry except the single exclusive
+  rename of its own partial: no unlink by name can be bound to its descriptor
+  (the SDKs have no `funlinkat`), so on any failure the hidden
+  `.<name>.partial` is left in place and named in the existing submission
+  Issue. It never overwrites or falls back. A `close` failure after
+  publication leaves the receipt published and also records the Issue.
+
+Prepared Xcode-harness runners (xctestrun `EnvironmentVariables`), where a
+suite-scope `Attachment.record` traps (#652, #659), must supply the key and
+refuse before launch if it is missing, empty or invalid, or if the directory
+fails these checks. They must use a fresh per-run 0700 directory, treat any
+Issue as failing the run, and may discard the directory afterwards. A run with `FLUXKLANG_AUDIT_RUN_ID` but no key remains a
+known trap path; there is no in-process harness detection. The sink lives in
+`ProductionAccessScope.swift`, so fixtures that compile that file need no extra
+source. It is not a production transport, retention or quiescence evidence,
+and its focused tests are not hosted-observation evidence.
+
 ## MIDI and history source adoption
 
 The existing MIDI clip ownership and CloudKit history isolation roots now use

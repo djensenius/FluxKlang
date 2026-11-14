@@ -185,6 +185,7 @@ targets:
       - path: FluxKlangTests/SystemPermissionProbeIsolationTests.swift
       - path: FluxKlangTests/ProductionAccessScope.swift
       - path: FluxKlangTests/ProductionAccessScopeTests.swift
+      - path: FluxKlangTests/ProductionAccessReceiptSinkTests.swift
       - path: FluxKlangTests/UIAuditCaptureStateTests.swift
       - path: FluxKlangTests/UIAuditReceiptValidator.swift
       - path: FluxKlangTests/UIAuditReceiptValidatorTests.swift

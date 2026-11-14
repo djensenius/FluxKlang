@@ -37,13 +37,28 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
     var isRecursive: Bool { false }
 
     init() {
-        self.init(
-            audit: .shared,
-            runID: ProcessInfo.processInfo.environment["FLUXKLANG_AUDIT_RUN_ID"]
-        ) { json, filename in
+        self.init(audit: .shared, environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// Transport-selection seam (#660). Without `FLUXKLANG_AUDIT_RECEIPT_DIR`, receipts go to
+    /// `attach` unchanged. With the key present (any value), only the file sink is used.
+    init(
+        audit: ProductionAccessAudit,
+        environment: [String: String],
+        fileSystem: ProductionAccessReceiptSink.FileSystem = .init(),
+        attach: @escaping @Sendable (String, String) -> Void = { json, filename in
             // Void/best-effort: this is not a persistence or delivery acknowledgment.
             Attachment.record(json, named: filename)
         }
+    ) {
+        let submit: @Sendable (String, String) throws -> Void
+        if let directory = environment[ProductionAccessReceiptSink.directoryKey] {
+            let sink = ProductionAccessReceiptSink(directory: directory, fileSystem: fileSystem)
+            submit = { json, filename in try sink.publish(Data(json.utf8), named: filename) }
+        } else {
+            submit = attach
+        }
+        self.init(audit: audit, runID: environment["FLUXKLANG_AUDIT_RUN_ID"], submit: submit)
     }
 
     /// Private-audit and local submission-failure seams for this helper's pure tests.
@@ -125,4 +140,210 @@ struct ProductionAccessScope: SuiteTrait, TestTrait, TestScoping {
 
 extension Trait where Self == ProductionAccessScope {
     static var productionAccessAudit: Self { Self() }
+}
+
+/// Test-only receipt file transport (#660), selected only by `FLUXKLANG_AUDIT_RECEIPT_DIR`.
+/// Not a production transport, and not retention or quiescence evidence. The directory is
+/// never created; every file operation is relative to its validated descriptor. Only the final
+/// path component must not be a symlink; parents resolve normally (e.g. /var -> /private/var).
+struct ProductionAccessReceiptSink: Sendable {
+    static let directoryKey = "FLUXKLANG_AUDIT_RECEIPT_DIR"
+    /// Keeps `.<name>.partial` within the 255-byte component limit.
+    static let maximumNameBytes = 246
+    static let unsafeNameMessage = "Receipt filename must be one safe path component"
+
+    struct Failure: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    /// Ownership, write and pre-rename seams for pure tests; the defaults are the real POSIX calls.
+    struct FileSystem: Sendable {
+        var effectiveUserID: @Sendable () -> uid_t = { geteuid() }
+        /// Returns the `write(2)` result, leaving `errno` set on failure.
+        var write: @Sendable (Int32, UnsafeRawBufferPointer) -> Int = { Darwin.write($0, $1.baseAddress, $1.count) }
+        /// Runs after the source identity check, just before the rename; receives the partial name.
+        var beforePublish: @Sendable (String) -> Void = { _ in }
+    }
+
+    let directory: String
+    var fileSystem = FileSystem()
+
+    /// Published bytes are identity-verified: the partial must still be this invocation's regular
+    /// file before the rename, and the published name must be it afterwards. A replacement is
+    /// reported, never moved back or deleted. The sink's only directory mutations are the exclusive
+    /// create of its own partial and one `RENAME_EXCL` rename of it; it never unlinks anything,
+    /// because no unlink by name can be bound to the descriptor. On failure the partial is left in
+    /// place and named in the error.
+    func publish(_ bytes: Data, named name: String) throws {
+        try Self.validate(name: name)
+        let directoryFD = try openDirectory()
+        defer { close(directoryFD) }
+        let partial = ".\(name).partial"
+        let fileFD = openat(directoryFD, partial, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fileFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("exclusive-create \(partial)", code: code)
+        }
+        // This invocation created the partial; on any later failure it is left in place and reported.
+        var created = stat()
+        guard fstat(fileFD, &created) == 0 else {
+            let code = errno
+            close(fileFD)
+            throw Self.leftInPlace(partial, after: Self.posixFailure("fstat \(partial)", code: code))
+        }
+        // From here `fileFD` stays open through every identity comparison and the rename, pinning
+        // the inode so its number cannot be reused; it is closed exactly once below, and a close
+        // failure is reported (after publication the receipt stays published).
+        var failure: Error?
+        do {
+            do {
+                try writeAll(bytes, to: fileFD)
+                guard fsync(fileFD) == 0 else {
+                    let code = errno
+                    throw Self.posixFailure("fsync \(partial)", code: code)
+                }
+            } catch {
+                throw Self.leftInPlace(partial, after: error)
+            }
+            try publishVerified(partial, as: name, in: directoryFD, created: created)
+        } catch {
+            failure = error
+        }
+        guard close(fileFD) == 0 else {
+            let code = errno
+            let closeFailure = Self.posixFailure("close \(partial)", code: code)
+            throw failure.map { Failure(description: "\($0); \(closeFailure)") } ?? closeFailure
+        }
+        if let failure { throw failure }
+    }
+
+    /// A refused rename leaves the partial in place; a replacement is never touched.
+    private func publishVerified(_ partial: String, as name: String, in directoryFD: Int32, created: stat) throws {
+        // `RENAME_EXCL` guards only the destination, so the source and the published name are
+        // identity-checked; a replacement is reported and left in place, never moved back or deleted.
+        var source = stat()
+        guard fstatat(directoryFD, partial, &source, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Failure(description: "\(Self.posixFailure("fstatat \(partial)", code: code)); left in place")
+        }
+        guard source.st_mode & S_IFMT == S_IFREG, Self.sameFile(source, created) else {
+            throw Failure(description: "publish refused: \(partial) is not this invocation's file; left in place")
+        }
+        fileSystem.beforePublish(partial)
+        guard renameatx_np(directoryFD, partial, directoryFD, name, UInt32(RENAME_EXCL)) == 0 else {
+            let code = errno
+            throw Self.leftInPlace(partial, after: Self.posixFailure("publish \(name)", code: code))
+        }
+        // The residual check-to-rename window is detected here and reported, not repaired.
+        var published = stat()
+        guard fstatat(directoryFD, name, &published, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Failure(description: "\(Self.posixFailure("fstatat \(name)", code: code)); left in place")
+        }
+        guard Self.sameFile(published, created) else {
+            throw Failure(description: "published \(name) is not this invocation's file; left in place")
+        }
+    }
+
+    private static func sameFile(_ lhs: stat, _ rhs: stat) -> Bool {
+        lhs.st_dev == rhs.st_dev && lhs.st_ino == rhs.st_ino
+    }
+
+    private static func validate(name: String) throws {
+        let bytes = Array(name.utf8)
+        guard !bytes.isEmpty, bytes.count <= maximumNameBytes, bytes.first != UInt8(ascii: "."),
+              !bytes.contains(UInt8(ascii: "/")), !bytes.contains(0) else {
+            throw Failure(description: unsafeNameMessage)
+        }
+    }
+
+    /// Opens the parent (ancestors resolve normally), then inspects and opens the final component
+    /// relative to it without following a symlink. A trailing `/`, `.` or `..` is refused, because
+    /// it would make path resolution follow a final symlink. The value is split on UTF-8 bytes, so a
+    /// combining mark after `/` cannot merge with it.
+    private func openDirectory() throws -> Int32 {
+        let key = Self.directoryKey
+        let bytes = directory.utf8
+        let slash = UInt8(ascii: "/")
+        guard bytes.first == slash, let separator = bytes.lastIndex(of: slash) else {
+            throw Failure(description: "\(key) must be a non-empty absolute path")
+        }
+        let nameBytes = bytes[bytes.index(after: separator)...]
+        guard !nameBytes.isEmpty, !nameBytes.elementsEqual(".".utf8), !nameBytes.elementsEqual("..".utf8) else {
+            throw Failure(description: "\(key) must not end in /, . or ..")
+        }
+        // Both slices are bounded by an ASCII `/`, so they are scalar-aligned and convert losslessly.
+        let name = String(Substring(nameBytes))
+        let parentPath = separator == bytes.startIndex ? "/" : String(Substring(bytes[..<separator]))
+        let parentFD = open(parentPath, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parentFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("open parent of \(key)", code: code)
+        }
+        defer { close(parentFD) }
+        var pathStatus = stat()
+        guard fstatat(parentFD, name, &pathStatus, AT_SYMLINK_NOFOLLOW) == 0 else {
+            let code = errno
+            throw Self.posixFailure("fstatat \(key)", code: code)
+        }
+        guard pathStatus.st_mode & S_IFMT == S_IFDIR else {
+            throw Failure(description: "\(key) must be a real directory, not a symlink or file")
+        }
+        try checkOwnerAndMode(pathStatus)
+        let directoryFD = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directoryFD >= 0 else {
+            let code = errno
+            throw Self.posixFailure("open \(key)", code: code)
+        }
+        do {
+            var openedStatus = stat()
+            guard fstat(directoryFD, &openedStatus) == 0 else {
+                let code = errno
+                throw Self.posixFailure("fstat \(key)", code: code)
+            }
+            guard openedStatus.st_mode & S_IFMT == S_IFDIR, openedStatus.st_dev == pathStatus.st_dev,
+                  openedStatus.st_ino == pathStatus.st_ino else {
+                throw Failure(description: "\(Self.directoryKey) changed while it was opened")
+            }
+            try checkOwnerAndMode(openedStatus)
+        } catch {
+            close(directoryFD)
+            throw error
+        }
+        return directoryFD
+    }
+
+    private func checkOwnerAndMode(_ status: stat) throws {
+        guard status.st_uid == fileSystem.effectiveUserID() else {
+            throw Failure(description: "\(Self.directoryKey) must be owned by the effective user")
+        }
+        guard status.st_mode & 0o077 == 0 else {
+            throw Failure(description: "\(Self.directoryKey) must have no group or other permission bits")
+        }
+    }
+
+    private func writeAll(_ bytes: Data, to fileFD: Int32) throws {
+        try bytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            var offset = 0
+            while offset < buffer.count {
+                let written = fileSystem.write(fileFD, UnsafeRawBufferPointer(rebasing: buffer[offset...]))
+                let code = errno
+                if written < 0 && code == EINTR { continue }
+                guard written >= 0 else { throw Self.posixFailure("write", code: code) }
+                guard written > 0, written <= buffer.count - offset else {
+                    throw Failure(description: "write returned \(written) bytes")
+                }
+                offset += written
+            }
+        }
+    }
+
+    private static func leftInPlace(_ partial: String, after error: Error) -> Failure {
+        Failure(description: "\(error); \(partial) left in place")
+    }
+
+    /// `code` must be captured from `errno` immediately after the failing call.
+    private static func posixFailure(_ operation: String, code: Int32) -> Failure {
+        return Failure(description: "\(operation) failed: \(String(cString: strerror(code))) (errno \(code))")
+    }
 }
