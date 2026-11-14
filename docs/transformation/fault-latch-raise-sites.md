@@ -319,7 +319,11 @@ serialization, of thread stability or of a chain bound. For each API:
    unsynchronized contexts) that can raise on one latch over its whole life,
    with the counting rule for restarts.
 
-Until this is gathered, none of these callers is assumed to be one chain, or to
+Slice FLP2 records the authoritative platform evidence for questions 1 to 5 in
+[`fault-latch-platform-callbacks.md`](fault-latch-platform-callbacks.md). It
+establishes no chain bound or ordering edge for any caller.
+
+Until a caller proof exists, none of these callers is assumed to be one chain, or to
 be serialized.
 
 ## 8. What a proof must produce
