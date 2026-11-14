@@ -21,11 +21,7 @@ struct OpenSoundControlFuzzGenerator {
     }
 }
 
-#if os(macOS)
 @Suite("OpenSoundControl framing and malformed input", .productionAccessAudit)
-#else
-@Suite("OpenSoundControl framing and malformed input")
-#endif
 struct OpenSoundControlFramingTests {
     typealias Fixture = OpenSoundControlFixture
     typealias CodecError = OpenSoundControl.CodecError

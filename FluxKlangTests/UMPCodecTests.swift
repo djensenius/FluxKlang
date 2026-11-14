@@ -17,11 +17,7 @@ private enum UMPFixture {
     }
 }
 
-#if os(macOS)
 @Suite("UMP packet framing", .productionAccessAudit)
-#else
-@Suite("UMP packet framing")
-#endif
 struct UMPPacketFramingTests {
     @Test func lengthTableCoversAllSixteenMessageTypes() {
         // M2-104-UM MT allocation: 0/1/2/6/7 = 1; 3/4/8/9/A = 2; B/C = 3; 5/D/E/F = 4 words.

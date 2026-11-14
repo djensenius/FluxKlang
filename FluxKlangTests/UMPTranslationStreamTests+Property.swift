@@ -123,11 +123,7 @@ private struct StreamPropertyScript {
     }
 }
 
-#if os(macOS)
 @Suite("MIDI 1→2 translation stream property", .productionAccessAudit)
-#else
-@Suite("MIDI 1→2 translation stream property")
-#endif
 struct UMPTranslationStreamPropertyTests {
     static let seeds: [UInt64] = [0x0362, 0x5EED_0362, 0xC0FF_EE00_0362]
     static let runs = 120

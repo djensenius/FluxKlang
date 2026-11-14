@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI 1↔2 scaling", .productionAccessAudit)
-#else
-@Suite("MIDI 1↔2 scaling")
-#endif
 struct UMPScalingTests {
     static func up(_ value: UInt32, _ from: Int, _ to: Int) throws -> UInt32 {
         try UMPScaling.scaleUp(value, fromBits: from, toBits: to)

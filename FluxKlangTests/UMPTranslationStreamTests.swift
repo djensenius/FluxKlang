@@ -5,11 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("MIDI 1→2 translation stream", .productionAccessAudit)
-#else
-@Suite("MIDI 1→2 translation stream")
-#endif
 struct UMPTranslationStreamTests {
     static let msec: UInt64 = 1_000_000
     static let empty = UMPTranslationOutput<UMPMIDI2ChannelVoice>(messages: [], losses: [])
