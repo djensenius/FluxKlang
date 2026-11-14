@@ -6,6 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct UIAuditCaptureStateTests {
     private let runID = UUID(uuidString: "F767034A-C02C-47D7-A076-0110C8824C4E")!

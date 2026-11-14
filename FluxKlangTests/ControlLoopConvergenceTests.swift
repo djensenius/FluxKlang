@@ -8,7 +8,7 @@ import Testing
 #endif
 
 /// Closed-loop convergence (#86, I1): fake controllers and a fake host around the real `ControlFeedbackPlanner`.
-@Suite struct ControlLoopConvergenceTests {
+@Suite(.productionAccessAudit) struct ControlLoopConvergenceTests {
     @Test func aMovedFaderIsEchoSuppressedAndItsSiblingIsToldOnceThenTheLoopIsQuiet() throws {
         let a = try LoopHarness.binding("a", source: "x")
         let b = try LoopHarness.binding("b", source: "y")
