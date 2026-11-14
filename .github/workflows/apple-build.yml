@@ -1,0 +1,110 @@
+name: Apple build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Compile-only qualification; hosted test execution waits for #60.
+    # Preview image; the only GitHub-hosted label with OS-27 SDKs as of 2026-10-31.
+    # Never fall back to macos-26/macos-15: no deployment downgrade.
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6.0.3
+      - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+        with:
+          version: 2026.10.25
+          install_args: xcodegen
+      - name: Pinned XcodeGen is on PATH
+        run: |
+          want=$(mise current xcodegen); have=$(xcodegen --version)
+          echo "$have at $(command -v xcodegen); mise.toml pins $want"
+          if [ -z "$want" ] || [ "$have" != "Version: $want" ]; then
+            echo "::error::xcodegen '$have' is not the mise.toml pin '$want'"; exit 1
+          fi
+      - name: Require OS-27 SDKs
+        run: |
+          xcodebuild -version
+          for sdk in macosx iphoneos iphonesimulator; do
+            v=$(xcrun --sdk "$sdk" --show-sdk-version)
+            echo "$sdk SDK $v"
+            [ "${v%%.*}" -ge 27 ] || { echo "::error::$sdk SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
+          done
+      - name: Generated project is in sync
+        # Whole tree: XcodeGen also rewrites both apps' Info.plist and .entitlements files.
+        run: |
+          xcodegen generate
+          git status --porcelain --untracked-files=all
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Effective deployment targets are 27.0
+        run: |
+          status=0
+          for cfg in Debug Release; do
+            rows=$(xcodebuild -project FluxKlang.xcodeproj -alltargets -configuration "$cfg" \
+                -showBuildSettings -json \
+              | jq -r '.[] | .buildSettings as $s | $s.DEPLOYMENT_TARGET_SETTING_NAME as $k
+                  | [.target, $k, ($s[$k] // "unset")] | @tsv')
+            [ -n "$rows" ] || { echo "::error::no $cfg build settings"; exit 1; }
+            while IFS=$'\t' read -r target key value; do
+              echo "$cfg $target $key=$value"
+              [ "$value" = "27.0" ] || { echo "::error::$cfg $target $key=$value; deployment must stay 27.0"; status=1; }
+            done <<< "$rows"
+          done
+          exit "$status"
+      # Isolated schemes compile the same targets as FluxKlangMac/FluxKlang and match
+      # `make build-for-testing-mac` / `make build-for-testing`.
+      - name: Build macOS for testing
+        run: >
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangMacIsolatedTests
+          -destination 'platform=macOS'
+          -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
+      - name: Build iOS for testing
+        # Generic destination: needs no particular simulator device on the image.
+        run: >
+          xcodebuild -project FluxKlang.xcodeproj -scheme FluxKlangIsolatedTests
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath DerivedData build-for-testing CODE_SIGNING_ALLOWED=NO
+      - name: Built products target OS 27.0
+        # Skips Xcode's prebuilt UI-test runner stub (minos 17.0); its PlugIns are still checked.
+        run: |
+          status=0; count=0
+          while IFS= read -r -d '' bin; do
+            # Check linked images by content, not mode: libraries can be 0644. Objects and dSYMs are skipped.
+            case $(file -b "$bin") in
+              Mach-O*executable* | Mach-O*shared\ library* | Mach-O*bundle*) ;;
+              *) continue ;;
+            esac
+            rel=${bin#DerivedData/Build/Products/}
+            count=$((count + 1))
+            if ! info=$(xcrun vtool -show-build "$bin" 2>&1) || ! archs=$(xcrun lipo -archs "$bin" 2>&1); then
+              echo "::error::$rel could not be inspected"; status=1; continue
+            fi
+            # Universal binaries report one minos per slice; every slice must report 27.0.
+            # Arrays rather than unquoted `set -- $var` (SC2086); bash 3.2-compatible (no mapfile).
+            read -r -d '' -a minos_list < <(awk '$1 == "minos" { print $2 }' <<< "$info") || true
+            read -r -a arch_list <<< "$archs"
+            [ "${#minos_list[@]}" -ge "${#arch_list[@]}" ] \
+              || { echo "::error::$rel has ${#arch_list[@]} slice(s) but ${#minos_list[@]} minos"; status=1; }
+            for minos in "${minos_list[@]}"; do
+              echo "minos $minos $rel"
+              [ "$minos" = "27.0" ] || { echo "::error::$rel minos $minos; deployment must stay 27.0"; status=1; }
+            done
+          done < <(find DerivedData/Build/Products -type f ! -path '*-Runner.app/*-Runner' -print0)
+          [ "$count" -gt 0 ] || { echo "::error::no Mach-O products found"; exit 1; }
+          exit "$status"
