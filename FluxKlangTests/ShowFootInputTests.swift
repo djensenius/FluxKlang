@@ -135,11 +135,7 @@ struct ShowFootInputRig {
     }
 }
 
-#if os(macOS)
 @Suite("Show footswitch input end to end", .productionAccessAudit)
-#else
-@Suite("Show footswitch input end to end")
-#endif
 struct ShowFootInputTests {
     typealias Fix = ShowFootInputFixture
 

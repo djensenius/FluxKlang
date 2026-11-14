@@ -88,11 +88,7 @@ private enum Fx {
 
 /// Local trigger dispatch (#87, LTD1): one MIDI1 state update becomes the commands of `ControlTriggerDetector.handle`.
 /// Every fixture lives in the file-scope private `Fx`, so no name leaves this file.
-#if os(macOS)
 @Suite("Local trigger dispatch", .productionAccessAudit)
-#else
-@Suite("Local trigger dispatch")
-#endif
 struct ControlLocalTriggerDispatchTests {
     @Test
     func controlLocalTriggerDispatchGoldenPressFiresOneCommandForTheHeardBinding() throws {

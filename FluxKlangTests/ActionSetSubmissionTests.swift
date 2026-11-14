@@ -157,11 +157,7 @@ struct ActionSetSubmissionHarness {
     }
 }
 
-#if os(macOS)
 @Suite("Action-set atomic submission", .productionAccessAudit)
-#else
-@Suite("Action-set atomic submission")
-#endif
 struct ActionSetSubmissionTests {
     private typealias Harness = ActionSetSubmissionHarness
 

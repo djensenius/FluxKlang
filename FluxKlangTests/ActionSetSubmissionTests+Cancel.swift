@@ -6,11 +6,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
-#if os(macOS)
 @Suite("Action-set scope sweep and outcome round trip", .productionAccessAudit)
-#else
-@Suite("Action-set scope sweep and outcome round trip")
-#endif
 struct ActionSetSubmissionCancelTests {
     private typealias Harness = ActionSetSubmissionHarness
     private static let sceneKey = ActionSetSubmissionHarness.sceneKey

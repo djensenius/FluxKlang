@@ -8,11 +8,7 @@ import Testing
 /// Control input bank (#87, CPR1): one pickup book and one trigger detector behind `receive`, joined to a MIDI input
 /// through `inputLost` and `inputSeen`. This file holds the fixtures and the `receive` and build tests; `+Lifecycle`
 /// holds the link, loss and return tests. Every fixture is nested in `Fx`, so no name leaves the suite.
-#if os(macOS)
 @Suite("Control input bank", .productionAccessAudit)
-#else
-@Suite("Control input bank")
-#endif
 struct ControlInputBankTests {
     // swiftlint:disable:next type_name
     enum Fx {
