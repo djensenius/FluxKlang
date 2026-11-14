@@ -5,6 +5,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct AppPersistenceSelectionTests {
     @Test func strictIsolationNeedsNoHostMarkerOrUIArgument() {
         #expect(!AppPersistence.detectsTesting(environment: [:], arguments: []))

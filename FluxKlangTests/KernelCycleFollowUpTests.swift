@@ -94,7 +94,7 @@ struct FollowUpCase {
 /// The order `KernelCycle.init` reports preparation defects in, tested on every adjacent pair that a fan-in the
 /// type system allows can carry together (#360 ruling 2). `.deadline` is not reachable (`FanInHandoff` validates the
 /// policy first) and `.ackIdentitiesExhausted` needs 2^64 prior cycles, so pairs touching them have no fixture.
-@Suite struct KernelCycleFollowUpTests {
+@Suite(.productionAccessAudit) struct KernelCycleFollowUpTests {
     /// The error a case reports, and whether the ownership's claim word stayed what it was: a refusal claims nothing.
     static func refusal(_ defects: [FollowUpDefect]) throws -> (error: KernelCycle.PreparationError?, claimKept: Bool) {
         let fixture = try FollowUpCase(defects)

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+@Suite(.productionAccessAudit)
 @MainActor
 struct UIAuditRunPreflightTests {
     private let runIDKey = "FLUXKLANG_AUDIT_RUN_ID"

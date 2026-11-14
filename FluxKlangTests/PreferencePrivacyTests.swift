@@ -14,6 +14,7 @@ import Testing
 @testable import FluxKlang
 #endif
 
+@Suite(.productionAccessAudit)
 struct PreferencePrivacyTests {
     /// What `evaluate` produced: one plan or one refusal.
     enum Outcome: Equatable {
