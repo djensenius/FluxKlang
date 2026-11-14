@@ -92,6 +92,7 @@ private func expectingSubmissionIssue(spy: SinkSpy, _ body: () async throws -> V
     #expect(spy.state.withLock { $0.submissionIssues } == 1)
 }
 
+@Suite(.productionAccessAudit)
 struct ProductionAccessReceiptSinkTests {
     enum Refusal: CaseIterable, Sendable {
         case empty, relative, missing, regularFile, symlinkedDirectory, symlinkTrailingSlash, symlinkTrailingDot

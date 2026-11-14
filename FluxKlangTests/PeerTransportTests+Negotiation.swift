@@ -121,7 +121,7 @@ private let hostileSequences: [HostileSequence] = [
     .init(name: "control after close", messages: [validHello, Support.message(.close, epoch: 4)])
 ]
 
-@Suite("PeerTransportTests+Negotiation")
+@Suite("PeerTransportTests+Negotiation", .productionAccessAudit)
 struct PeerTransportNegotiationTests {
     @Test("Hello negotiates version, shared capabilities and the host's epochs")
     func handshake() throws {

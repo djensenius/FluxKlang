@@ -7,7 +7,7 @@ import Testing
 
 private typealias Support = PeerTrustTestSupport
 
-@Suite("PeerTrustTests+Pairing")
+@Suite("PeerTrustTests+Pairing", .productionAccessAudit)
 struct PeerTrustPairingTests {
     private let hostIdentity = Support.identity(100)
     private let peer = Support.identity(1)
