@@ -221,6 +221,43 @@ All profiles deliberately fix unrelated diagnostic/language/logging
 values as well. Broader acceptance requires separate review; this implementation
 conservatively refuses that drift rather than inferring a wider supported shape.
 
+## Required unit file-receipt observation guard (#703, prerequisite for #694)
+
+The exact marker is **`FluxKlangAuditRequireFileReceipts-v1`**, an **empty
+regular file directly at the unit-test bundle root**:
+`FluxKlangTests.xctest/FluxKlangAuditRequireFileReceipts-v1` on iOS, or
+`FluxKlangMacTests.xctest/FluxKlangAuditRequireFileReceipts-v1` on Mac (not
+`Contents/Resources`, a localized resource, the host app, or the UI bundle).
+Only this exact entry opts in; it has no environment-variable equivalent.
+An absent entry means ordinary transport selection. A present nonempty file,
+directory or symlink, or a bundle/marker lookup error, refuses execution rather
+than downgrading to attachments. The scope uses its own unit-bundle class anchor
+and verifies the bundle executable against that class's loaded image, so a
+`Bundle(for:)` fallback cannot silently inspect the app host instead.
+
+Before each canonical `ProductionAccessScope` body, the marker lookup runs.
+When required, the **unprefixed** `FLUXKLANG_AUDIT_RECEIPT_DIR` must be present
+and pass the existing sink directory validation: absolute path, existing real
+final directory component, effective-user ownership, no group/other bits, no
+final symlink or trailing `/`, `/.` or `/..`, and matching opened identity.
+Missing, prefix-only (`TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR`), invalid
+configuration or marker errors record an Issue with **zero scope-body and
+attachment-publisher calls**. Accepted configuration uses the existing file
+sink, including fresh publication-time validation and unchanged exclusive
+partial-file/no-replace publication. Preflight creates no directory or receipt
+and is not a write-permission or persistence probe. Without the marker, ordinary
+selection remains unchanged: absent key uses best-effort attachments, present
+key uses only the file sink, whose failures occur at publication.
+
+The future observation workflow must create and verify this exact marker
+against its **validated unit bundle before launch**, keep the products stable,
+and own the fresh per-run **0700 directory preflight** and launch-time forwarding.
+No marker or workflow is installed here; closed `prepare.py` profiles and the
+UI runner/app transport are unchanged. This is a **process-side pre-body guard,
+not pre-host-startup qualification**, a sandbox-access guarantee, test coverage,
+or platform delivery proof. Actual iOS forwarding, sandbox access and retained
+file receipts remain observational; earlier Mac file receipts do not prove them.
+
 ## Hosted CI observation (#693)
 
 `.github/workflows/mac-isolated-observation.yml` runs one sealed

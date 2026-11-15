@@ -9,11 +9,13 @@ import Testing
 
 private let sinkRunID = "6B1F3D8E-2C4A-4F7B-9E05-1D2C3B4A5F60"
 private let sinkSubmissionIssue = "Production access receipt encoding/submission failed"
+private let sinkPreflightIssue = "Production access observation file receipt preflight failed"
 
 /// Records attachment submissions, matched Issues and write-seam calls; never mutates the process environment.
 private final class SinkSpy: Sendable {
     struct State {
         var attachments: [(json: String, filename: String)] = []
+        var bodies = 0
         var submissionIssues = 0
         var issueErrors: [String] = []
         var writeCalls = 0
@@ -62,25 +64,30 @@ private func environment(directory: String?) -> [String: String] {
     return result
 }
 
-/// Run one real test-case scope with the injected environment.
+/// Explicit mode injection isolates private fixtures even when the outer canonical suite requires files.
 private func runScope(
     _ environment: [String: String],
     spy: SinkSpy,
+    required: Bool = false,
     fileSystem: ProductionAccessReceiptSink.FileSystem = .init()
 ) async throws {
     let test = try #require(Test.current)
     let testCase = try #require(Test.Case.current)
     let scope = ProductionAccessScope(
-        audit: ProductionAccessAudit(), environment: environment, fileSystem: fileSystem, attach: spy.attach)
-    try await scope.provideScope(for: test, testCase: testCase) {}
+        audit: ProductionAccessAudit(), environment: environment, requiresFileReceipts: { required },
+        fileSystem: fileSystem, attach: spy.attach)
+    try await scope.provideScope(for: test, testCase: testCase) { spy.state.withLock { $0.bodies += 1 } }
 }
 
-/// Only the scope's existing submission-failure Issue is known; it must occur exactly once.
-private func expectingSubmissionIssue(spy: SinkSpy, _ body: () async throws -> Void) async throws {
+/// Only the selected scope diagnostic is known; it must occur exactly once.
+private func expectingSubmissionIssue(
+    spy: SinkSpy, required: Bool = false, _ body: () async throws -> Void
+) async throws {
+    let message = required ? sinkPreflightIssue : sinkSubmissionIssue
     try await withKnownIssue("Intentional receipt sink refusal") {
         try await body()
     } matching: { issue in
-        guard case .errorCaught = issue.kind, issue.comments == [Comment(rawValue: sinkSubmissionIssue)] else {
+        guard case .errorCaught = issue.kind, issue.comments == [Comment(rawValue: message)] else {
             return false
         }
         spy.state.withLock { state in
@@ -113,9 +120,22 @@ struct ProductionAccessReceiptSinkTests {
         case regularFileAfterWrite, symlinkAfterWrite, regularFileBeforeRename
     }
 
-    @Test func keyAbsentUsesTheAttachmentPathUnchanged() async throws {
+    @Test(arguments: [false, true], [false, true])
+    func absentUnprefixedKeyRefusesOnlyRequiredObservation(required: Bool, prefixOnly: Bool) async throws {
         let spy = SinkSpy()
-        try await runScope(environment(directory: nil), spy: spy)
+        var values = environment(directory: nil)
+        if prefixOnly { values["TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR"] = "/unused/receipts" }
+        if required {
+            try await expectingSubmissionIssue(spy: spy, required: true) {
+                try await runScope(values, spy: spy, required: true)
+            }
+            #expect(spy.state.withLock { $0.bodies == 0 && $0.attachments.isEmpty })
+            #expect(spy.state.withLock { $0.issueErrors } ==
+                ["Observation requires unprefixed \(ProductionAccessReceiptSink.directoryKey)"])
+            return
+        }
+        try await runScope(values, spy: spy)
+        #expect(spy.state.withLock { $0.bodies } == 1)
         let attachments = spy.state.withLock { $0.attachments }
         try #require(attachments.count == 1)
         let receipt = try JSONDecoder().decode(
@@ -124,11 +144,13 @@ struct ProductionAccessReceiptSinkTests {
         #expect(attachments[0].filename == "production-access-testCaseExit-\(receipt.invocationID.uuidString).json")
     }
 
-    @Test func keyPresentPublishesOneOwnerOnlyReceiptWithoutAttachment() async throws {
+    @Test(arguments: [false, true])
+    func keyPresentPublishesOneOwnerOnlyReceiptWithoutAttachment(required: Bool) async throws {
         let test = try #require(Test.current)
         try await withReceiptDirectory { directory in
             let spy = SinkSpy()
-            try await runScope(environment(directory: directory), spy: spy)
+            try await runScope(environment(directory: directory), spy: spy, required: required)
+            #expect(spy.state.withLock { $0.bodies } == 1)
             #expect(spy.state.withLock { $0.attachments.isEmpty })
             let names = try entries(directory)
             try #require(names.count == 1)
@@ -144,8 +166,8 @@ struct ProductionAccessReceiptSinkTests {
         }
     }
 
-    @Test(arguments: Refusal.allCases)
-    func invalidDirectoryRecordsIssueAndSubmitsNothing(refusal: Refusal) async throws {
+    @Test(arguments: Refusal.allCases, [false, true])
+    func invalidDirectoryRecordsIssueAndSubmitsNothing(refusal: Refusal, required: Bool) async throws {
         try await withReceiptDirectory { root in
             let real = root + "/real"
             try succeeded(mkdir(real, 0o700))
@@ -172,9 +194,10 @@ struct ProductionAccessReceiptSinkTests {
             }
             let before = try entries(root)
             let spy = SinkSpy()
-            try await expectingSubmissionIssue(spy: spy) {
-                try await runScope(environment(directory: value), spy: spy, fileSystem: fileSystem)
+            try await expectingSubmissionIssue(spy: spy, required: required) {
+                try await runScope(environment(directory: value), spy: spy, required: required, fileSystem: fileSystem)
             }
+            #expect(spy.state.withLock { $0.bodies } == (required ? 0 : 1))
             #expect(spy.state.withLock { $0.attachments.isEmpty })
             #expect(try entries(root) == before)
             #expect(try entries(real).isEmpty)
