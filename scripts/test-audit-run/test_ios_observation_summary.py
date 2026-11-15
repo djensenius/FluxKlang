@@ -23,6 +23,10 @@ class SummaryTests(unittest.TestCase):
             with self.subTest(path=path):
                 state = {"run_id": RUN, "test_argv": ["xcodebuild", path, "id=" + OTHER],
                          "refusal": path + " " + OTHER + " " + "x" * 5000,
+                         "runtime_evidence": {"prebuild": "refused", "generated_input": "not available",
+                                              "refusal_context": {"component": path + OTHER + "x" * 5000,
+                                                                  "argv_sanitized": ["codesign", path],
+                                                                  "exit_code": 1, "st_readonly": False}},
                          "cleanup_failures": [path + " " + OTHER]}
                 result, markdown = summary.summarize(state, {
                     "result": path,
@@ -36,6 +40,7 @@ class SummaryTests(unittest.TestCase):
                     self.assertIn(RUN, rendered)
                     self.assertIn("<receipt-file>", rendered)
                 self.assertEqual(result["audit_failure_count"], 1)
+                self.assertIn(json.dumps(result["runtime_evidence"], indent=2, ensure_ascii=True), markdown)
                 self.assertIn("sanitized, possibly truncated; not exact", markdown)
 
     def test_unavailable_is_not_zero_and_no_receipt_contents_are_read(self):

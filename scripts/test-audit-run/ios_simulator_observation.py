@@ -5,14 +5,13 @@ No CLI bypasses. Fixtures inject the command boundary and use only temporary fil
 See README for dependency sequencing, API/layout refusals and remaining runtime proof.
 """
 
+from contextlib import contextmanager
 import hashlib
-import itertools
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
-import selectors
 import shutil
 import signal
 import stat
@@ -23,8 +22,9 @@ import time
 from datetime import datetime, timezone
 import uuid
 
+import ios_runtime
 import prepare
-from ios_observation_summary import NA, receipt_counts, safe_text, summarize, write_summary
+from ios_observation_summary import NA, receipt_counts, summarize, write_summary
 
 DEVELOPER = "/Applications/Xcode_27.1.app/Contents/Developer"
 SCHEME = "FluxKlangIsolatedTests"
@@ -159,55 +159,27 @@ def verify_sources(repo):
                 "reviewed source contract absent/changed: " + relative + " (requires integrated #703)")
 
 
-def signature_output(process, timeout):
-    """Drain both inspection pipes with a hard combined 16 KiB cap, without loading code."""
-    buffers = [bytearray(), bytearray()]
-    deadline = time.monotonic() + timeout
-    with selectors.DefaultSelector() as selector:
-        for index, pipe in enumerate((process.stdout, process.stderr)):
-            selector.register(pipe, selectors.EVENT_READ, index)
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(process.args, timeout)
-            for key, _ in selector.select(remaining):
-                chunk = os.read(key.fd, 4096)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                else:
-                    require(sum(map(len, buffers)) + len(chunk) <= 16384, "signature output exceeded 16 KiB")
-                    buffers[key.data].extend(chunk)
-        process.wait(timeout=max(0, deadline - time.monotonic()))
-    return tuple(value.decode("utf-8", errors="replace") for value in buffers)
-
-
 def commands(argv, *, cwd, env, timeout, input_text=None):
     """Never a shell. Reap the owned command group on timeout/cancellation; no command retries."""
     with subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_text is not None else None,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           universal_newlines=True, start_new_session=True) as process:
-        bounded = argv[0] == "/usr/bin/codesign"
         try:
-            stdout, stderr = (signature_output(process, timeout) if bounded else
-                              process.communicate(input=input_text, timeout=timeout))
+            stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except BaseException as exc:
-            if bounded:
-                process.stdout.close()
-                process.stderr.close()
-            reap = process.wait if bounded else process.communicate
             # This process group was created above, never discovered by name.
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             try:
-                reap(timeout=10)
+                process.communicate(timeout=10)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                reap()
+                process.communicate()
             exc.returncode = process.returncode  # Preserve a known killed-command exit, not a fabricated 124.
             raise
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
@@ -321,8 +293,6 @@ class Observation:
         self.state["phase"] = "inventory"
         inventory = load_json(self.sim("list", "--json").stdout)
         self.selection = select_inventory(inventory)
-        self.runtime_inventory = next(r for r in inventory["runtimes"]
-                                      if r.get("identifier") == self.selection["runtime_identifier"])
         self.state.update(self.selection)
         prior = {d["udid"].lower() for _, d in device_entries(inventory)}
         self.device_name = "FluxKlang-observation-" + str(uuid.uuid4())
@@ -623,58 +593,6 @@ class Observation:
         return status
 
 
-MISSING = object()
-
-
-def metadata_at(value, path):
-    for key in path:
-        value = value.get(key, MISSING) if isinstance(value, dict) else MISSING
-    return value
-
-
-def field_evidence(value, path):
-    value = metadata_at(value, path)
-    record = {"path": ".".join(path), "present": value is not MISSING,
-              "type": type(value).__name__ if value is not MISSING else "missing"}
-    if value is not MISSING:
-        raw = value if isinstance(value, str) else json.dumps(value, sort_keys=True, separators=(",", ":"))
-        display = safe_text(raw, 1000, "") if type(value) in (str, bool, int) else "<non-scalar withheld>"
-        record.update(value_sanitized=display, characters=len(raw), display_changed=display != raw,
-                      value_sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                      hash_encoding="UTF-8 string" if isinstance(value, str) else "sorted compact JSON")
-    return record
-
-
-def profile_mismatches(actual, expected, path="input"):
-    """Paths/types only; do not descend into unrecognized values."""
-    if type(actual) is type(expected) and isinstance(expected, dict):
-        for key in itertools.chain(expected, (k for k in actual if k not in expected)):
-            yield from profile_mismatches(actual.get(key, MISSING), expected.get(key, MISSING), path + "." + key)
-        return
-    if type(actual) is type(expected) and isinstance(expected, list) and len(actual) == len(expected):
-        for index, value in enumerate(expected):
-            yield from profile_mismatches(actual[index], value, path + "[%d]" % index)
-        return
-    if type(actual) is not type(expected) or actual != expected:
-        yield {"path": safe_text(path, 1000, ""),
-               "actual_type": "missing" if actual is MISSING else type(actual).__name__,
-               "expected_type": "missing" if expected is MISSING else type(expected).__name__}
-
-
-def inspected_file(path, root, limit):
-    require(root in path.parents and path.resolve(strict=True) == path, "inspection path escape/symlink")
-    with os.fdopen(os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
-        before = os.fstat(stream.fileno())
-        require(stat.S_ISREG(before.st_mode) and before.st_size <= limit, "inspection file type/size refused")
-        data = stream.read(limit + 1)
-        after = path.lstat()
-        require(len(data) <= limit and (identity(before), before.st_size, before.st_mtime_ns) ==
-                (identity(after), after.st_size, after.st_mtime_ns), "inspection file changed")
-    return data, {"canonical_path": str(path), "device": before.st_dev, "inode": before.st_ino,
-                  "size": before.st_size, "mode": stat.S_IMODE(before.st_mode), "uid": before.st_uid,
-                  "mtime_ns": before.st_mtime_ns, "sha256": hashlib.sha256(data).hexdigest()}
-
-
 class MetadataDiagnostic(Observation):
     """Temporary production entrypoint: build/read metadata only, always stop before preparation.
 
@@ -682,8 +600,32 @@ class MetadataDiagnostic(Observation):
     """
 
     def observe(self):
-        self.state["attempt_kind"] = "build/preflight-only metadata diagnostic; full observation blocked"
+        self.state["attempt_kind"] = "build/preflight-only runtime verification; full observation blocked"
+        self.state["runtime_evidence"] = {
+            "profile": prepare.IOS_RUNTIME_PROFILE, "prebuild": NA, "generated_input": NA,
+            "limitation": "completed checks only; NOT reusable launch authority",
+        }
         return super().observe()
+
+    @contextmanager
+    def runtime_check(self, stage):
+        self.state["phase"] = "runtime " + stage
+        evidence = self.state["runtime_evidence"]
+        try:
+            yield
+        except Exception as exc:
+            evidence[stage] = "refused"
+            evidence["refusal_context"] = getattr(exc, "context", {})
+            raise
+        else:
+            # Only after the real verifier's context exit/rechecks have completed.
+            evidence[stage] = "accepted"
+
+    def allocate_device(self):
+        with self.runtime_check("prebuild"):
+            with ios_runtime.verified_checker():
+                pass
+        super().allocate_device()
 
     def run(self, argv, **kwargs):
         # Defense in depth if a later change accidentally reaches the inherited launch path.
@@ -698,116 +640,17 @@ class MetadataDiagnostic(Observation):
         elif argv[0] == "xcrun":
             require(argv[1:] == ["--sdk", "iphonesimulator", "--show-sdk-version"],
                     "unsupported diagnostic xcrun command")
-        elif argv[0] == "/usr/bin/codesign":
-            require(argv in getattr(self, "signature_argv", [])
-                    and kwargs == {"timeout": 15, "checked": False}, "unapproved signature inspection")
         else:
             require(argv[0] in ("git", "mise", "xcodegen", "sw_vers"), "unsupported diagnostic command")
         return super().run(argv, **kwargs)
 
-    def runtime_evidence(self, parsed):
-        evidence = {"provenance": "NOT authenticated; inventory/static evidence only; compatibility deferred to #708",
-                    "library": NA, "signature": NA, "runtime_plist": NA, "relationship": NA}
-        self.state["runtime_evidence"] = evidence
-        runtime = self.runtime_inventory
-        evidence["inventory"] = [field_evidence(runtime, (key,)) for key in
-                                 ("identifier", "version", "buildversion", "bundlePath", "runtimeRoot")]
-        try:
-            for key in ("bundlePath", "runtimeRoot"):
-                value = runtime.get(key)
-                require(isinstance(value, str) and 0 < len(value) <= 4096 and Path(value).is_absolute()
-                        and ".." not in Path(value).parts and not any(c in value for c in "\x00\r\n:"),
-                        "missing/unsafe runtime inventory " + key)
-            bundle = Path(runtime["bundlePath"]).resolve(strict=True)
-            root = Path(runtime["runtimeRoot"]).resolve(strict=True)
-            require(bundle.suffix == ".simruntime" and bundle in root.parents
-                    and root == bundle / "Contents/Resources/RuntimeRoot", "runtime root/bundle relationship refused")
-            evidence.update(canonical_bundle=str(bundle), canonical_root=str(root))
-            try:
-                data, info = inspected_file(bundle / "Contents/Info.plist", bundle, 65536)
-                plist = plistlib.loads(data)
-                evidence["runtime_plist"] = {"file": info, "fields": [field_evidence(plist, (key,)) for key in
-                    ("CFBundleIdentifier", "CFBundleVersion", "CFBundleShortVersionString")]}
-            except Exception as exc:
-                evidence["runtime_plist"] = "unavailable: " + str(exc)
-            # No candidate DYLD component is ever opened, resolved, hashed, or passed to a tool.
-            library = root / "usr/lib/libMainThreadChecker.dylib"
-            _, info = inspected_file(library, root, 16 * 1024 * 1024)
-            evidence["library"] = info
-            spellings = {str(library), str(Path(runtime["runtimeRoot"]) / "usr/lib/libMainThreadChecker.dylib")}
-            evidence["relationship"] = [
-                {"path": field["path"], "literal_matches": sum(p in spellings for p in value.split(":"))
-                 if isinstance(value, str) else NA}
-                for field in self.state["metadata_fields"] if field["path"].endswith(".DYLD_INSERT_LIBRARIES")
-                for value in [metadata_at(parsed, field["path"].split("."))]]
-            evidence["relationship_limit"] = "literal comparison only; candidate aliases NOT resolved"
-            self.signature_argv = [
-                ["/usr/bin/codesign", "--display", "--verbose=4", "-r-", str(library)],
-                ["/usr/bin/codesign", "--verify", "--strict", "-R", "=anchor apple", str(library)],
-            ]
-            evidence["signature"] = []
-            for argv in self.signature_argv:
-                probe = {"argv_sanitized": argv, "exit_code": NA}
-                evidence["signature"].append(probe)
-                try:
-                    _, current = inspected_file(library, root, 16 * 1024 * 1024)
-                    require(current == info, "library changed before signature inspection")
-                    result = self.run(argv, timeout=15, checked=False)
-                    probe.update(exit_code=result.returncode,
-                                 output=field_evidence({"text": result.stdout + "\n" + result.stderr}, ("text",)))
-                    _, current = inspected_file(library, root, 16 * 1024 * 1024)
-                    require(current == info, "library changed during signature inspection")
-                except Exception as exc:
-                    probe["error"] = str(exc)
-                    if type(getattr(exc, "returncode", None)) is int:
-                        probe["exit_code"] = exc.returncode
-        except Exception as exc:
-            evidence["error"] = str(exc)
-        finally:
-            self.signature_argv = []
-
     def build_prepare(self):
         self.build()
-        self.state["phase"] = "metadata diagnostic"
-        real_path(self.original, self.work)
-        data = self.original.read_bytes()
-        require(hashlib.sha256(data).hexdigest() == self.pin, "diagnostic input SHA256 mismatch")
-        parsed = prepare.parse_plist(data)
-        paths = [(target, env, key) for target, env in (
-            ("FluxKlangTests", "EnvironmentVariables"), ("FluxKlangTests", "TestingEnvironmentVariables"),
-            ("FluxKlangUITests", "EnvironmentVariables"), ("FluxKlangUITests", "TestingEnvironmentVariables"),
-            ("FluxKlangUITests", "UITargetAppEnvironmentVariables"))
-            for key in ("DYLD_INSERT_LIBRARIES", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH")]
-        paths.append(("FluxKlangUITests", "UITargetAppMainThreadCheckerEnabled"))
-        self.state["metadata_fields"] = [field_evidence(parsed, path) for path in paths]
-        mismatches = list(itertools.islice(profile_mismatches(parsed, prepare.IOS_OBSERVED), 31))
-        self.state["metadata_mismatches"] = {"items": mismatches[:30], "truncated": len(mismatches) > 30}
-        self.runtime_evidence(parsed)
-        actual = parsed
-        expected = prepare.IOS_OBSERVED
-        path = ("FluxKlangTests", "TestingEnvironmentVariables", "DYLD_INSERT_LIBRARIES")
-        for key in path:
-            require(isinstance(actual, dict) and key in actual, "diagnostic field missing/malformed")
-            actual, expected = actual[key], expected[key]
-        self.state["metadata_field"] = ".".join(path)
-        self.state["metadata_expected"] = expected
-        self.state["metadata_actual_type"] = type(actual).__name__
-        if isinstance(actual, str):
-            display = safe_text(actual, 1000, "")
-            self.state.update(
-                metadata_actual_sanitized=display, metadata_actual_characters=len(actual),
-                metadata_actual_value_sha256=hashlib.sha256(actual.encode("utf-8")).hexdigest(),
-                metadata_actual_display_changed=display != actual)
-        else:
-            self.state["metadata_actual_sanitized"] = "non-string value withheld"
-        # Read-only check against the existing pin/profile. No UUID, prepared envelope or repair.
-        try:
-            prepare.pinned_input(self.original, self.pin, PROFILE)
-        except prepare.Refusal as exc:
-            self.state["metadata_profile_check"] = "refused: " + str(exc)
-        else:
-            self.state["metadata_profile_check"] = "matched closed profile; metadata only"
-        raise Refusal("build/preflight-only diagnostic complete; full observation remains blocked")
+        with self.runtime_check("generated_input"):
+            # A fresh verifier context, not the earlier result or a serialized binding.
+            real_path(self.original, self.work)
+            prepare.pinned_input(self.original, self.pin, prepare.IOS_RUNTIME_PROFILE)
+        raise Refusal("build/preflight-only verification complete; full observation remains blocked")
 
 
 def main():

@@ -5,10 +5,10 @@
 `.github/workflows/ios-isolated-observation.yml` and
 `ios_simulator_observation.py` implement one bounded, summary-only observation.
 **Local integration is not permission to publish or execute.** This branch now
-normal-merges `main` at `e6dfbde0d4be948de62fa3813d3ef18e4a46e8f2`, containing
-**both #699 and #703**. The coordinator must independently review this combined
+normal-merges `main` at `3038fa019b06a0b8a4b182c04f05977c972a6114`, containing
+**#699, #703 and #709**. The coordinator must independently review this combined
 tree before publishing or authorizing one hosted attempt. No dispatch, native
-execution, guard bypass, or profile change is part of this integration.
+execution, guard bypass, or relaxation of a profile is part of this integration.
 
 ### First hosted refusal and temporary diagnostic-only entrypoint
 
@@ -35,44 +35,47 @@ because the device was already Shutdown. No delete failure was listed; that
 alone does **not** independently verify device absence.
 
 **Full observation remains blocked.** The fixed production entrypoint is now
-`MetadataDiagnostic`, not the full observation runner. After a separately reviewed
-build/preflight-only hosted attempt, it exposes the field above and the bounded
-diagnostics below: presence, type, sanitized value, character count/value SHA256
-and whether display changed (hash encoding is recorded). It binds that evidence to
-the new build's once-selected run-local xctestrun pin, and performs a read-only
-check against the unchanged closed profile. It never prepares an envelope or
+`MetadataDiagnostic`, not the full observation runner. The next separately reviewed
+build/preflight-only attempt uses the actual #709 verifier as described below,
+not the earlier informational metadata/signature probes. It never prepares an envelope or
 allocates an audit run ID. It always ends in a recorded refusal, **even when the
 entire input matches**, before marker, boot, install or test execution.
 Its command boundary also rejects test/boot/install/launch operations. There is
 no dispatch input or environment switch enabling tests; restoring observation
 requires another reviewed code change. No raw plist, environment dump, receipt
 or xcresult is uploaded. A changed/truncated display is not exact-value evidence.
-No profile, pin, isolation setting or test selection has been repaired or relaxed.
+No profile, pin, isolation setting or test selection is repaired or relaxed.
 
 Run **43675292121**, artifact **14146592231**, recorded the runtime's
 `libMainThreadChecker.dylib` between XCTest injection and RPAC (306 characters,
 display unchanged). That is evidence from this diagnostic, **not** recovery of the
 first run's value or authentication of library bytes. Both earlier artifacts remain
-untouched. Compatibility/profile/verifier work is separately deferred to **#708**.
+untouched. **#708** tracks compatibility; **#709** supplied the separately reviewed
+runtime-backed profile, not proof of its acceptance on a hosted runner.
 
-The extension captures 16 fixed fields: `DYLD_INSERT_LIBRARIES`, `DYLD_FRAMEWORK_PATH`
-and `DYLD_LIBRARY_PATH` in both targets' environment/testing-environment maps and
-the UI target-app map, plus `UITargetAppMainThreadCheckerEnabled`. Missing fields
-are explicit. At most 30 remaining mismatch paths/types are retained, with a
-truncation flag; unrecognized values are not dumped. JSON and Markdown both include
-the sanitized records. Complex field values are withheld, not expanded.
-Runtime inspection requires both selected inventory `bundlePath` and `runtimeRoot`
-and their canonical `.simruntime/Contents/Resources/RuntimeRoot` relationship.
-Only its fixed `usr/lib/libMainThreadChecker.dylib` is inspected (regular,
-nonsymlink, at most 16 MiB); candidate DYLD paths are **never** opened or resolved.
-Literal relationship counts do not establish equivalence of other mount aliases.
-Bounded Info.plist fields (64 KiB maximum input), file identities and hashes, and
-two fixed `/usr/bin/codesign` inspections (`--display --verbose=4 -r-` and
-`--verify --strict -R '=anchor apple'`) are evidence only. Each has a 15-second
-timeout and hard 16 KiB combined output cap; failures/unavailability stay explicit.
-No signing, code loading, keychain query or runtime download is permitted.
-Neither signature exit zero nor a self-computed digest authenticates provenance
-or authorizes preparation/launch. Unsupported runtime layouts stay unavailable.
+Before device creation/build, `ios_runtime.verified_checker()` performs the actual
+fixed tool/runtime, signature, digest, no-follow ownership, alias and held-FD
+read-only mount checks documented below. `runtime_evidence.prebuild` becomes
+`accepted` **only after successful context exit**, including exit rechecks.
+Then the existing combined scheme is built and exactly one generated xctestrun
+is pinned once. Read-only `prepare.pinned_input(..., IOS_RUNTIME_PROFILE)` performs
+a **fresh** verifier check and binds both unit/UI metadata to the separate
+`ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1` profile.
+`runtime_evidence.generated_input` becomes `accepted` only after that call,
+including its verifier exit, completes. These results are not cached authority,
+serialized bindings, or authorization to prepare/launch. The original profiles
+and disabled full-run implementation remain unchanged.
+
+Both summaries record the stages as accepted/refused/unavailable and retain
+bounded refusal context from existing checks: independent component, observed
+type/mode/owner, held-FD `ST_RDONLY` (or unavailable), or sanitized native argv/exit
+where known. No extra probes follow refusal, and no candidate DYLD path supplies
+a probe. A generic signature success or a newly computed hash is not substituted
+for the verifier's exact reviewed identity/content/Apple-anchor requirements.
+No signing, code loading, keychain query, permission fallback or download is added.
+Actual hosted layout/acceptance, especially `/Applications` ownership and runtime
+mount flags, remains unproven. Even two accepted stages end with exit 1,
+zero test launches, and unavailable audit UUID/results/receipts.
 
 Cleanup now skips shutdown only after a fresh, full owned-device inventory/path
 check confirms `Shutdown`. If that cannot be confirmed, the original checked
@@ -80,7 +83,7 @@ shutdown is attempted and its errors remain failures. Delete still targets only
 the successfully created owned UUID; command success is distinguished from
 independently verified absence. These changes do not authorize a rerun.
 
-### Launch gates and receipt strategy
+### Retained launch gates and receipt strategy (full-run path disabled)
 
 - Pinned `xcode-27` / Xcode 27.1; the existing pinned checkout/mise/upload actions,
   XcodeGen version/project-sync checks and committed-package drift checks are
@@ -176,11 +179,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/test-audit-run
 actionlint -config-file .github/actionlint.yaml .github/workflows/ios-isolated-observation.yml
 ```
 
-`prepare.py` is an external, Python-standard-library metadata preparer, **never a
+`prepare.py` is an external, Python-standard-library preparer, **never a test
 launcher**. It generates a fresh UUID4 before any hypothetical future launch.
-It imports no app/production modules and performs no subprocess, network,
-test-host, UI-event, service, or hardware execution. There is no in-app fallback
-or conditional audit no-op.
+Existing profiles remain metadata-only with no subprocess or native-tool calls.
+The explicit runtime-backed profile below adds read-only native verification.
+No profile imports app/production modules, boots a simulator, installs an app,
+launches tests, or emits hardware actions. There is no in-app fallback or
+conditional audit no-op.
 
 ## Closed profiles and unchanged original behavior
 
@@ -221,15 +226,17 @@ iOS simulator XML plist FormatVersion **1** layout:
   locations: unit `EnvironmentVariables`, UI `EnvironmentVariables`, and UI
   `UITargetAppEnvironmentVariables`. No other value is added or changed.
 
-The complete reviewed input key/value/type allowlists are `OBSERVED` and
-`IOS_OBSERVED` in `prepare.py`. All profiles intentionally require **all observed values**,
+The original reviewed input key/value/type allowlists are `OBSERVED` and
+`IOS_OBSERVED` in `prepare.py`; the runtime-backed profile changes only the two
+explicitly described input fields below. All profiles require **all observed values**,
 including unrelated diagnostic, logging, environment, timeout, language, and
 attachment fields, including `SystemAttachmentLifetime = deleteOnSuccess` and
 `UserAttachmentLifetime = deleteOnSuccess` on every test target. Except for the
 explicit profile transformations described here, parsed values and supported
 Xcode path placeholders are preserved exactly; XML
 formatting/key order need not be byte-identical. No placeholder is expanded and
-no referenced product is opened. No arbitrary configuration switches exist.
+no app/test product is opened. The runtime-backed profile independently inspects
+its fixed tools and runtime library. No arbitrary configuration switches exist.
 
 Unknown/missing fields, changed values, alternate layouts, binary plists,
 FormatVersion2, duplicate plist/JSON keys, unsupported scalar types, ambiguous
@@ -246,6 +253,74 @@ Release, live Apple qualification, and any other target composition. Existing
 app/UI targets are unchanged; this utility never removes tests or presents skipped tests as green.
 The retained layout specimens are read-only metadata examples, **not
 execution-ready artifacts**.
+
+## Explicit runtime-backed MainThreadChecker profile
+
+`ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1` is a separate,
+opt-in profile for #708. It preserves MainThreadChecker rather than disabling
+diagnostics or broadening the original iOS profile. It accepts only two input
+differences from `IOS_OBSERVED`:
+
+- Unit `TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES` is exactly XCTest
+  injection, the verified checker, then RPAC, in that order.
+- UI `TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES` contains only the same
+  checker spelling. UI target-app DYLD injection and
+  `UITargetAppMainThreadCheckerEnabled` remain absent.
+
+The generated strings are preserved, not rewritten. Only the original three
+run-ID insertions are made; no retention request or runtime-authority record is
+added to the intent.
+
+Selecting this profile in **either** `prepare` or `validate` invokes
+`ios_runtime.py` for fresh, read-only verification. It uses the reviewed
+`/Applications/Xcode_27.1.app/Contents/Developer` path, ignores caller toolchain
+environment overrides, and never changes `xcode-select`. Apple-signed native
+tools must report Xcode 27.1 build `27A9275`, simulator SDK 27.1, and one
+available `com.apple.CoreSimulator.SimRuntime.iOS-27-0` runtime with version 27.0
+and build `24A434` on a Darwin arm64 host.
+
+The checker is derived from that live inventory, never from candidate DYLD
+text. Descriptor-relative, no-follow filesystem checks bind root-owned,
+non-group/world-writable ancestors, tools and checker. The runtime `Info.plist`
+is a distinct non-executable case: the reviewed artifact measured root-owned
+`0664`, not `0755`. That exact regular-file shape is accepted **only** when
+`fstatvfs` on its held descriptor freshly proves a read-only filesystem, checked
+again on exit. Writable or unavailable mounts are refused; this exception does
+not apply to ancestors, tools or the checker. The only alternate spelling is
+the standard `/var` to `/private/var` alias, positively checked for ownership,
+link destination and filesystem identity. Other aliases, unreviewed layouts,
+path replacements and mutable/unavailable paths are refused, even if their
+names or advertised versions look correct.
+
+The file must be a 338880-byte, root-owned `0755`, thin arm64 Mach-O with SHA256
+`1ab99e516a208f4ce91fcde55af17ee83a4aedfc9687ec1eeade456943ea32e8`.
+Fresh `codesign --verify --strict` enforces both
+`identifier "com.apple.libMainThreadChecker"` and `anchor apple`. Tool calls
+have a 30-second deadline, at most one additional 30-second cleanup wait, and a
+2 MiB merged-output bound. Cleanup attempts to kill only the owned child and
+closes its output even if killing or waiting fails; no implicit unbounded wait
+is used, and unsuccessful cleanup cannot return success. Inventory, file
+identity/content, runtime plist and alias are rechecked before returning
+success. The runtime plist identifier must match; its bundle version `392`
+is not treated as runtime build `24A434`.
+
+Evidence for these closed pins is diagnostic run `43678288031`, artifact
+`14146952925`, reviewed head `4d3451fbd1b3a129681205dc0dce6c6f86863bed`.
+That run did not launch tests or establish candidate filesystem binding.
+The new verifier's acceptance on a real host is a separate observation;
+the diagnostic did not measure the plist's read-only mount flag or every tool
+ancestor's permissions. Those live checks remain required and unproven on the
+host; unsupported layouts must not be repaired by relaxing them.
+
+Use the commands below with this explicit profile identifier. A previously
+successful intent is not reusable authority: any separately authorized runner
+must call `validate` again with the original pin and exact output/intent paths
+**immediately before launch**. Validation performs fresh verification; no
+serialized context or `verified` flag can bypass it. This utility has no
+launch capability and does not certify earliest-host isolation, installed
+guards, environment delivery, sandbox access, receipts, or #60 qualification.
+The existing four profiles remain metadata-only and retain their original
+inputs, outputs, CLI claims and platform independence.
 
 ## Explicit opt-in retention requests
 

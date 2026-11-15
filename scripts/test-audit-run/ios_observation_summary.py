@@ -105,7 +105,7 @@ def summarize(state, results=None, error=None, counts=None):
               json.dumps(summary["first_failures"], indent=2, ensure_ascii=True), "```", "",
               "### Cleanup failures", "```json",
               json.dumps(summary.get("cleanup_failures", []), indent=2, ensure_ascii=True), "```", ""]
-    for key in ("metadata_fields", "metadata_mismatches", "runtime_evidence"):
+    for key in ("runtime_evidence",):
         if key in summary:
             lines += ["### " + key + " (sanitized; evidence only)", "```json",
                       json.dumps(summary[key], indent=2, ensure_ascii=True), "```", ""]
