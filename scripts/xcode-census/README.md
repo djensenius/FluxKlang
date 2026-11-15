@@ -99,16 +99,113 @@ single `Applications` component, then walks **all** of `Xcode_27.1.app`, never
 following symlinks. No file bytes, target strings, host paths, environment dumps,
 authority token or permission-changing operations are emitted/executed.
 
-JSON contains aggregate uid/gid/mode/flags/device/link-count groups, mount
-fsid/type/flags, ACL counts, lexical symlink classes, hardlink observations and
+Schema 2 JSON contains aggregate uid/gid/mode/flags/device/link-count groups, mount
+fsid/type/flags/capacity, ACL counts, lexical symlink classes, hardlink observations and
 bounded samples. Scope 0 is `/`, 1 is `/Applications`, 2 is bundle-relative
 (`.` is that scope's root). Modes are decimal including file type; path bytes
 outside printable ASCII are escaped as `\u00XX`, not normalized as Unicode.
-Samples truncate at 159 bytes and explicitly mark truncation. Counts are per
-directory entry, **not deduplicated inodes or allocation estimates**.
+Samples truncate at 159 bytes and explicitly mark truncation. Existing counts are per
+directory entry, **not deduplicated inodes or allocation estimates**; the new
+`regular_links` object separately aggregates observed inode groups.
 `scanned_all` means enumeration finished, not that metadata is complete.
 `complete` requires no errors; incomplete/changed/budget/error results exit 1.
 Hardlinks and symlink cycles/escapes are observations, not loader-closure verdicts.
+
+### Bounded observed-link accounting (#712)
+
+The existing `hardlinks` count is unchanged: **all non-directory entries** with
+reported nlink >1, including links/special types, not just regular files.
+`regular_links.encountered` counts only regular entries reporting nlink >1,
+including an entry refused before accounting. Records start on the first
+multiply-linked regular observation. The key is the held parent's fsid/type
+plus the entry's st_dev/st_ino; no leaf is opened. Repeated keys compare parent
+filesystem flags and the existing explicit stat tuple: generation, device/inode,
+mode, uid/gid, nlink, flags, size, mtime/ctime/birthtime (including nanoseconds).
+No struct-padding comparison or new content observation is involved.
+Single-link observations look up existing records to detect link-count loss,
+but are not retained as new groups. Earlier single-link observations and
+unvisited aliases cannot be reconstructed.
+
+`recorded` is the number of observations entered into those records (including
+contradictory repeats). `reported_first_nlink_sum` sums each record's first nlink.
+`below`, `equal`, `above` compare each record's observed count with that first
+nlink, **including inconsistent groups**. `inconsistent_observations` counts
+repeats with tuple differences or counts above the first nlink, once per repeat;
+`inconsistent_groups` counts affected records. `reported_link_deficit` is the
+sum of positive (first reported nlink minus recorded count) differences, not a
+count of external aliases, observed refusals or unique objects.
+`unrecorded_observed_entries` independently counts encountered multiply-linked
+regular entries not entered into the ledger. Each such observation starts
+pending, including before other metadata/budget refusals; successful recording
+of that observation clears its pending count. It is **not** encountered minus
+recorded: contradictory single-link repeats increase only recorded. Ordinary
+single-link entries and unvisited aliases do not contribute to this quantity.
+For balanced A followed by refused B, the deficit is 0 and unrecorded is 1;
+one recorded alias with an unscanned sibling alias gives deficit 1, unrecorded 0.
+These are provisional
+aggregates when `accounting_complete` is false: partial enumeration, failed
+rechecks, contradictory records, deadline or accounting exhaustion prevent a
+definitive observed balance. Contradictions refuse the overall report.
+
+`accounting_complete` concerns only these bounded observations; it does not
+promote overall `complete` when ACLs remain unknown. Even complete accounting,
+zero differences and all-equal groups are **not containment proof**;
+`containment_proven` is always false. Observations are non-atomic and say nothing
+about held writers, safe custody or swap-and-restore races. In-place hardening
+can change outside aliases. The earlier clone/copy route remains blocked on
+per-call allocation-bound evidence.
+
+At most 16,384 records and 32,768 slots are part of the existing 8 MiB accounting
+model, not an additional budget or a prediction that real Xcode fits. Fixed
+array sizing, link-count sums and total reservations have compile-time checks;
+every FD reservation checks the full fixed storage against the runtime budget.
+Production and fixture entrypoints reuse one retained scanner scratch and one
+retained serialization buffer (including fixture output checks); both actual
+objects, the report and descriptor reservations are charged. The API is
+single-threaded/sequential, not thread-safe. Nested scanner calls, including
+from fixture hooks, return with errno EBUSY before changing scratch or report;
+integer scanner entrypoints return -1. All owning exits release the active
+guard. Output calls are synchronous with no callbacks and also require
+sequential use. This remains an allocation model, **not an OS RSS cap**.
+Lookup probes are capped at 128, each with a deadline check. Record, slot or
+collision-work exhaustion sets `exhausted`, refuses with
+`hardlink_accounting_budget`, and stops enumeration; records are never evicted.
+Final aggregation is a fixed bounded pass, followed by a deadline check.
+Only aggregate results are emitted, never an inode/path inventory.
+Limit lowering and forced collision/synthetic metadata seams are fixture-only.
+
+### Scoped held-directory filesystem observations
+
+Mount `boundary` values are separate from sample path scopes: 0 `/`, 1
+`/Applications`, 2 bundle root, 3 descendants. Mount records are grouped by this
+boundary and device/fsid/type/flags, at most 16 records. `mount_transitions`
+(also capped at 16) aggregates initial parent-to-held-directory identity changes:
+source device/fsid/type and destination mount index, whose boundary identifies
+the transition. `/` -> `/Applications` is permitted and recorded; bundle-root
+and descendant crossings are recorded and refused before enumeration. A
+directory device change is now observed with its held-directory fstatfs before
+refusal; non-directory device mismatches still refuse without any leaf open.
+
+Each scoped mount records the first initial and last final fstatfs capacity
+sample, with initial/final sample counts; these are aggregate endpoints, not
+per-directory pairs or a history. Missing samples are JSON null, not zero
+capacity. Final samples are attempted on directory completion/unwind and on
+the usual ancestor recheck path; earlier acquisition failures can lack finals.
+Raw `f_bsize`, `f_blocks`, `f_bfree`, `f_bavail` are retained. Derived total/free/
+available bytes require checked uint64 multiplication; invalid size/overflow
+refuses metadata and emits null derived bytes, never wrapped numbers.
+Changing free/available counts (or other capacity fields) is not an immutable
+mount-identity change. Capacity is neither reserved space, APFS physical
+exclusivity, a copy-allocation ceiling nor a provisioning quota.
+
+Schema 2 applies to fallback JSON too. The existing producer's fixture gate is
+field-based and its source manifest already includes these four files; no
+capture harness, workflow or other consumer change is required. New hosted-only
+fixtures cover two in-scope aliases, an owned sibling alias outside the scan
+root, multiple groups, tuple/nlink contradictions, balanced-A/refused-B accounting,
+shared-scratch reuse/nested refusal, table/probe exhaustion,
+partial enumeration, arithmetic overflow and scoped mount/capacity changes.
+No native checks or real process fixtures were run locally for this slice.
 
 Only local, non-union APFS is supported. Ancestor mount transitions are recorded;
 bundle mount crossings are refused, not traversed. **Regular files and symlinks

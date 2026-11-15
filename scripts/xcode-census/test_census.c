@@ -118,6 +118,8 @@ layout(void)
     REQUIRE(scan(NULL, NULL, NULL) != 0);
     REQUIRE(report.scanned_all && report.entries == 10);
     REQUIRE(report.files == 2 && report.hardlinks == 2 && report.special == 1);
+    REQUIRE(report.regular_links.groups == 1 && report.regular_links.equal == 1);
+    REQUIRE(report.regular_links.accounting_complete); /* not overall/ACL completeness */
     REQUIRE(report.symlinks == 6 && report.symlink_absolute == 1);
     REQUIRE(report.symlink_escape == 1 && report.symlink_relative == 4);
     REQUIRE(has_reason(XC_SPECIAL));
@@ -254,6 +256,250 @@ directory_type_swaps(void)
         ++cases;
     }
     REQUIRE(unlinkat(rootfd, "outside", AT_REMOVEDIR) == 0);
+}
+
+static void
+hardlink_accounting(void)
+{
+    file("one"); file("two");
+    REQUIRE(linkat(rootfd, "one", rootfd, "one-alias", 0) == 0);
+    REQUIRE(linkat(rootfd, "two", rootfd, "two-alias", 0) == 0);
+    forbidden_open = "one";
+    REQUIRE(scan(NULL, NULL, NULL) == 0);
+    REQUIRE(open_attempts == 1);
+    REQUIRE(report.hardlinks == 4 && report.regular_links.encountered == 4);
+    REQUIRE(report.regular_links.groups == 2 && report.regular_links.equal == 2);
+    REQUIRE(report.regular_links.recorded == 4 && report.regular_links.reported == 4);
+    REQUIRE(report.regular_links.reported_deficit == 0 && report.regular_links.accounting_complete);
+    REQUIRE(report.regular_links.unrecorded == 0);
+    struct xc_limits limits = normal;
+    limits.entries = 2; /* root and exactly one multiply-linked entry, any order */
+    REQUIRE(scan(&limits, NULL, NULL) != 0);
+    REQUIRE(!report.scanned_all && !report.regular_links.accounting_complete);
+    REQUIRE(report.regular_links.below == 1 && report.regular_links.reported_deficit == 1);
+    REQUIRE(report.regular_links.unrecorded == 0); /* unvisited entries are not observed */
+    forbidden_open = NULL;
+    remove_file("one"); remove_file("one-alias");
+    remove_file("two"); remove_file("two-alias");
+
+    make_directory("inside"); make_directory("sibling");
+    file("inside/one");
+    REQUIRE(linkat(rootfd, "inside/one", rootfd, "sibling/alias", 0) == 0);
+    int inside = openat(rootfd, "inside", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    REQUIRE(inside >= 0);
+    forbidden_open = "one";
+    open_attempts = 0;
+    REQUIRE(xc_fixture(inside, NULL, NULL, NULL, &report) == 0);
+    REQUIRE(open_attempts == 1 && report.entries == 2 && report.files == 1);
+    REQUIRE(report.regular_links.groups == 1 && report.regular_links.below == 1);
+    REQUIRE(report.regular_links.reported == 2 && report.regular_links.recorded == 1);
+    REQUIRE(report.regular_links.reported_deficit == 1 && report.regular_links.accounting_complete);
+    REQUIRE(report.regular_links.unrecorded == 0); /* outside alias is not an observed refusal */
+    forbidden_open = NULL;
+    REQUIRE(close(inside) == 0);
+    remove_file("inside/one"); remove_file("sibling/alias");
+    REQUIRE(unlinkat(rootfd, "inside", AT_REMOVEDIR) == 0);
+    REQUIRE(unlinkat(rootfd, "sibling", AT_REMOVEDIR) == 0);
+    ++cases;
+}
+
+static void
+synthetic_links(void)
+{
+    struct stat s[4] = {0};
+    struct statfs fs[4] = {0};
+    for (unsigned i = 0; i < 4; ++i) {
+        s[i].st_mode = S_IFREG | 0600;
+        s[i].st_dev = 1; s[i].st_ino = 10; s[i].st_nlink = 2;
+        fs[i].f_fsid.val[0] = 1;
+    }
+    xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.equal == 1 && report.regular_links.accounting_complete);
+    s[2].st_ino = 11; /* balanced A, then B refused at the one-record ceiling */
+    xc_test_links(s, fs, 3, 1, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.encountered == 3 && report.regular_links.recorded == 2);
+    REQUIRE(report.regular_links.equal == 1 && report.regular_links.reported_deficit == 0);
+    REQUIRE(report.regular_links.unrecorded == 1 && report.regular_links.exhausted);
+    REQUIRE(!report.scanned_all && !report.regular_links.accounting_complete);
+    REQUIRE(has_reason(XC_LINK_LIMIT));
+    s[2] = s[0];
+    xc_test_links(s, fs, 1, 2, 4, 4, 0, &report);
+    REQUIRE(report.regular_links.below == 1 && !report.regular_links.accounting_complete);
+    /* Same numeric inode on another parent-observed filesystem is another key. */
+    fs[1].f_fsid.val[0] = 2;
+    xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.groups == 2 && report.regular_links.below == 2);
+    fs[1] = fs[0];
+    for (unsigned kind = 0; kind < 10; ++kind) {
+        s[1] = s[0];
+        if (kind == 0) s[1].st_gen = 1;
+        if (kind == 1) s[1].st_nlink = 1; /* must look up even after link loss */
+        if (kind == 2) s[1].st_size = 1;
+        if (kind == 3) s[1].st_ctimespec.tv_nsec = 1;
+        if (kind == 4) s[1].st_uid = 1;
+        if (kind == 5) s[1].st_gid = 1;
+        if (kind == 6) s[1].st_mode = S_IFREG | 0640;
+        if (kind == 7) s[1].st_flags = UF_NODUMP;
+        if (kind == 8) s[1].st_mtimespec.tv_sec = 1;
+        if (kind == 9) s[1].st_birthtimespec.tv_sec = 1;
+        xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+        REQUIRE(report.scanned_all && report.regular_links.equal == 1);
+        REQUIRE(report.regular_links.inconsistent_groups == 1);
+        REQUIRE(report.regular_links.inconsistent_observations == 1);
+        REQUIRE(report.regular_links.unrecorded == 0);
+        if (kind == 1)
+            REQUIRE(report.regular_links.encountered == 1 && report.regular_links.recorded == 2);
+        REQUIRE(!report.regular_links.accounting_complete && has_reason(XC_CHANGED));
+    }
+    s[1] = s[0];
+    fs[1].f_flags = MNT_LOCAL;
+    xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.inconsistent_observations == 1);
+    REQUIRE(!report.regular_links.accounting_complete);
+    fs[1] = fs[0];
+    xc_test_links(s, fs, 3, 2, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.above == 1 && report.regular_links.reported_deficit == 0);
+    REQUIRE(report.regular_links.inconsistent_observations == 1);
+    REQUIRE(!report.regular_links.accounting_complete);
+    s[1].st_ino = 11;
+    xc_test_links(s, fs, 2, 1, 4, 4, 1, &report); /* record exhaustion */
+    REQUIRE(report.regular_links.groups == 1 && report.regular_links.encountered == 2);
+    REQUIRE(report.regular_links.exhausted && has_reason(XC_LINK_LIMIT));
+    REQUIRE(report.regular_links.unrecorded == 1 && report.regular_links.reported_deficit == 1);
+    REQUIRE(!report.scanned_all && !report.regular_links.accounting_complete);
+    xc_test_links(s, fs, 2, 2, 1, 4, 1, &report); /* slot exhaustion */
+    REQUIRE(report.regular_links.exhausted && has_reason(XC_LINK_LIMIT));
+    REQUIRE(report.regular_links.unrecorded == 1);
+    xc_test_links(s, fs, 2, 2, 4, 1, 1, &report); /* forced collision work cap */
+    REQUIRE(report.regular_links.exhausted && has_reason(XC_LINK_LIMIT));
+    REQUIRE(report.regular_links.unrecorded == 1);
+    xc_test_links(s, fs, 1, 2, 0, 4, 1, &report); /* no modulo by zero */
+    REQUIRE(report.regular_links.exhausted && !report.regular_links.accounting_complete);
+    xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+    REQUIRE(report.regular_links.groups == 2 && report.regular_links.accounting_complete);
+    s[0].st_mode = S_IFLNK | 0600;
+    s[1].st_mode = S_IFIFO | 0600;
+    xc_test_links(s, fs, 2, 2, 4, 4, 1, &report);
+    REQUIRE(report.hardlinks == 2 && report.regular_links.encountered == 0);
+    REQUIRE(report.regular_links.groups == 0); /* preserve legacy non-directory count */
+    ++cases;
+}
+
+static void
+nested_scan(enum xc_stage stage, int parent, const char *name, int held,
+            struct statfs *fs, void *arg)
+{
+    (void)parent; (void)name; (void)held; (void)fs;
+    int *fired = arg;
+    if (stage != XC_AFTER_OPEN || *fired)
+        return;
+    *fired = 1;
+    uint64_t entries = report.entries;
+    errno = 0;
+    REQUIRE(xc_fixture(rootfd, NULL, NULL, NULL, &report) == -1 && errno == EBUSY);
+    errno = 0;
+    xc_test_links(NULL, NULL, 0, 0, 0, 0, 1, &report);
+    REQUIRE(errno == EBUSY);
+    errno = 0;
+    xc_test_mounts(NULL, NULL, NULL, 0, &report);
+    REQUIRE(errno == EBUSY);
+    REQUIRE(report.entries == entries && report.errors == 0);
+}
+
+static void
+scratch_reuse(void)
+{
+    int fired = 0;
+    REQUIRE(scan(NULL, nested_scan, &fired) == 0 && fired);
+    REQUIRE(report.entries == 1 && report.scanned_all && open_attempts == 1);
+    struct xc_limits limits = normal;
+    limits.memory = 0;
+    REQUIRE(scan(&limits, NULL, NULL) != 0 && has_reason(XC_MEMORY_LIMIT));
+    REQUIRE(scan(NULL, NULL, NULL) == 0); /* release scratch on failure too */
+    ++cases;
+}
+
+static void
+capacity_change(enum xc_stage stage, int parent, const char *name, int held,
+                struct statfs *fs, void *arg)
+{
+    (void)parent; (void)name; (void)held; (void)arg;
+    if (stage != XC_FILESYSTEM && stage != XC_FILESYSTEM_END)
+        return;
+    fs->f_bsize = 4096; fs->f_blocks = 100;
+    fs->f_bfree = stage == XC_FILESYSTEM ? 50U : 30U;
+    fs->f_bavail = stage == XC_FILESYSTEM ? 40U : 20U;
+}
+
+static void
+scoped_capacity(void)
+{
+    uint64_t bytes = 7;
+    REQUIRE(xc_test_capacity(4096, 100, &bytes) == 0 && bytes == 409600);
+    REQUIRE(xc_test_capacity(1, UINT64_MAX, &bytes) == 0 && bytes == UINT64_MAX);
+    REQUIRE(xc_test_capacity(2, UINT64_MAX, &bytes) != 0 && bytes == UINT64_MAX);
+    REQUIRE(xc_test_capacity(0, 1, &bytes) != 0);
+    REQUIRE(xc_test_capacity(4096, 0, &bytes) == 0 && bytes == 0);
+    REQUIRE(scan(NULL, capacity_change, NULL) == 0);
+    REQUIRE(report.mounts_used == 1 && report.mount_crossings == 0);
+    const struct xc_mount *m = &report.mounts[0];
+    REQUIRE(m->boundary == XC_FS_BUNDLE && m->initial_samples == 1 && m->final_samples == 1);
+    REQUIRE(m->initial.bfree == 50 && m->final.bfree == 30);
+    REQUIRE(m->initial.bavail == 40 && m->final.bavail == 20);
+    REQUIRE(m->initial.bytes_valid && m->final.bytes_valid);
+    REQUIRE(m->initial.total_bytes == 409600 && m->final.free_bytes == 122880);
+
+    struct statfs fs[4] = {0};
+    int64_t devices[4] = {1, 2, 2, 2};
+    unsigned boundaries[4] = {
+        XC_FS_ROOT, XC_FS_APPLICATIONS, XC_FS_BUNDLE, XC_FS_DESCENDANT
+    };
+    for (unsigned i = 0; i < 4; ++i) {
+        fs[i].f_fsid.val[0] = i ? 2 : 1;
+        fs[i].f_flags = MNT_LOCAL;
+        strcpy(fs[i].f_fstypename, "apfs");
+        fs[i].f_bsize = 4096; fs[i].f_blocks = 100;
+        fs[i].f_bfree = 50 - i; fs[i].f_bavail = 40 - i;
+    }
+    xc_test_mounts(fs, devices, boundaries, 4, &report);
+    REQUIRE(report.errors == 0 && report.mounts_used == 4);
+    REQUIRE(report.mount_crossings == 1 && report.transitions_used == 1);
+    REQUIRE(report.mounts[report.transitions[0].to_mount].boundary == XC_FS_APPLICATIONS);
+    REQUIRE(report.transitions[0].from_device == 1 && report.transitions[0].count == 1);
+    fs[2].f_fsid.val[0] = 3;
+    xc_test_mounts(fs, devices, boundaries, 4, &report);
+    REQUIRE(has_reason(XC_MOUNT) && report.transitions_used == 2 && report.mounts_used == 3);
+    REQUIRE(report.mounts[report.transitions[1].to_mount].boundary == XC_FS_BUNDLE);
+    fs[2] = fs[1]; fs[3].f_fsid.val[0] = 3;
+    xc_test_mounts(fs, devices, boundaries, 4, &report);
+    REQUIRE(has_reason(XC_MOUNT) && report.mounts_used == 4);
+    REQUIRE(report.mounts[report.transitions[1].to_mount].boundary == XC_FS_DESCENDANT);
+    fs[0].f_blocks = UINT64_MAX;
+    xc_test_mounts(fs, devices, boundaries, 1, &report);
+    REQUIRE(has_reason(XC_METADATA) && !report.mounts[0].initial.bytes_valid);
+    REQUIRE(report.mounts[0].initial.blocks == UINT64_MAX);
+    REQUIRE(xc_test_output(&report, XC_OUTPUT) == 0);
+    /* Saturated aggregate arrays and worst-case escaped path samples stay
+     * bounded. No per-inode inventory is serialized, even at the record cap. */
+    report.groups_used = XC_GROUPS; report.mounts_used = XC_MOUNTS;
+    report.transitions_used = XC_MOUNTS; report.samples_used = XC_SAMPLES;
+    report.regular_links.groups = XC_LINK_RECORDS;
+    for (unsigned i = 0; i < XC_MOUNTS; ++i) {
+        report.mounts[i].initial_samples = report.mounts[i].final_samples = UINT64_MAX;
+        report.mounts[i].initial = report.mounts[0].initial;
+        report.mounts[i].initial.bytes_valid = 1;
+        report.mounts[i].initial.total_bytes = UINT64_MAX;
+        report.mounts[i].initial.free_bytes = UINT64_MAX;
+        report.mounts[i].initial.available_bytes = UINT64_MAX;
+        report.mounts[i].final = report.mounts[i].initial;
+    }
+    for (unsigned i = 0; i < XC_SAMPLES; ++i) {
+        memset(report.samples[i].path, '\n', XC_SAMPLE_PATH - 1);
+        report.samples[i].path[XC_SAMPLE_PATH - 1] = '\0';
+    }
+    REQUIRE(xc_test_output(&report, XC_OUTPUT) == 0);
+    REQUIRE(xc_test_output(&report, 1) != 0);
+    ++cases;
 }
 
 static void
@@ -580,6 +826,10 @@ main(void)
     remove_file("acl-probe");
     real_acl_and_read_error();
     layout();
+    hardlink_accounting();
+    synthetic_links();
+    scratch_reuse();
+    scoped_capacity();
     permissions();
     races_and_mounts();
     directory_type_swaps();
