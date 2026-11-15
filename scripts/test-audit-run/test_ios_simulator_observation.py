@@ -53,6 +53,7 @@ class HostedFixture:
 
     def __init__(self, root, fault=None, exit_code=0):
         self.root, self.fault, self.exit_code = root, fault, exit_code
+        self.inventory = copy.deepcopy(INVENTORY)
         self.repo = root / "repo"
         self.repo.mkdir()
         self.temp = root / "runner-temp"
@@ -116,6 +117,15 @@ class HostedFixture:
             metadata["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = (
                 "file:///private/.production-access-suiteExit-" + FOREIGN + ".json.partial "
                 + FOREIGN + "x" * 2000)
+        if self.fault == "missing-ui":
+            del metadata["FluxKlangUITests"]
+        if self.fault == "metadata-more":
+            metadata["FluxKlangUITests"]["UITargetAppMainThreadCheckerEnabled"] = True
+            metadata["FluxKlangUITests"]["EnvironmentVariables"].update(
+                {"unexpected%02d" % i: "DO NOT UPLOAD" for i in range(40)})
+        if hasattr(self, "runtime_library"):
+            metadata["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = str(
+                self.foreign / "untouched" if self.fault == "candidate" else self.runtime_library)
         (products / "generated.xctestrun").write_bytes(plistlib.dumps(metadata))
         if self.fault == "multiple":
             (products / "second.xctestrun").write_bytes(plistlib.dumps(metadata))
@@ -147,6 +157,14 @@ class HostedFixture:
             output = "27.0.1"
         elif argv == ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]:
             output = "27.1"
+        elif argv[0] == "/usr/bin/codesign":
+            assert timeout <= 15 and input_text is None and argv[-1] == str(self.runtime_library)
+            assert argv[1:-1] in (["--display", "--verbose=4", "-r-"],
+                                  ["--verify", "--strict", "-R", "=anchor apple"])
+            if self.fault == "signature-unavailable":
+                raise FileNotFoundError("fixture codesign unavailable")
+            code = 1 if self.fault == "signature-failed" else 0
+            error = "fixture signature file:///private/production-access-suiteExit-" + FOREIGN + ".json " + "x" * 1500
         elif argv[:3] == ["xcrun", "nm", "-a"]:
             symbols = list(GUARD_SYMBOLS)
             output = "\n".join("0000000000001000 t " + item for item in symbols)
@@ -212,7 +230,7 @@ class HostedFixture:
         elif argv[:2] == ["xcrun", "simctl"]:
             operation = argv[2]
             if operation == "list":
-                inventory = copy.deepcopy(INVENTORY)
+                inventory = copy.deepcopy(self.inventory)
                 if self.created and self.fault == "cleanup-inventory":
                     raise ios.Refusal("fixture cleanup inventory unavailable")
                 if self.created:
@@ -462,6 +480,9 @@ class ObservationTests(unittest.TestCase):
             forbidden = [
                 [ios.DEVELOPER + "/usr/bin/xcodebuild", "test-without-building"],
                 [ios.DEVELOPER + "/usr/bin/xcodebuild", "build-for-testing", "test"],
+                ["/usr/bin/codesign", "--sign", "-", "/foreign"],
+                ["/usr/bin/codesign", "--display", "--verbose=4", "-r-", "/foreign"],
+                ["/usr/bin/security", "find-identity"],
                 *[["xcrun", "simctl", op, DEVICE] for op in ("boot", "bootstatus", "install", "launch", "spawn")],
             ]
             for argv in forbidden:
@@ -469,6 +490,91 @@ class ObservationTests(unittest.TestCase):
                     observation.run(argv)
             self.assertEqual(fixture.calls, [])
             self.assertEqual(observation.state["test_launch_calls"], 0)
+
+    def test_diagnostic_missing_ui_and_bounded_mismatch_types_never_dump_values(self):
+        for fault in ("missing-ui", "metadata-more"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                fixture = HostedFixture(Path(temporary).resolve(), fault)
+                status, summary = fixture.observe(ios.MetadataDiagnostic)
+                self.assertEqual((status, summary["test_launch_calls"], fixture.test_calls), (1, 0, []))
+                fields = summary["metadata_fields"]
+                self.assertEqual(len(fields), 16)
+                if fault == "missing-ui":
+                    self.assertTrue(all(not f["present"] for f in fields if f["path"].startswith("FluxKlangUITests.")))
+                else:
+                    self.assertEqual((fields[-1]["type"], fields[-1]["value_sanitized"]), ("bool", "true"))
+                    self.assertEqual(len(summary["metadata_mismatches"]["items"]), 30)
+                    self.assertTrue(summary["metadata_mismatches"]["truncated"])
+                self.assertIn("bundlePath", summary["runtime_evidence"]["error"])
+                for rendered in (json.dumps(summary), fixture.markdown):
+                    self.assertNotIn("DO NOT UPLOAD", rendered)
+                    self.assertIn("metadata_fields", rendered)
+
+    def test_runtime_derived_inspection_is_evidence_only_and_never_probes_candidate(self):
+        for fault in ("ok", "candidate", "escape", "wrong-root", "signature-failed", "signature-unavailable"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                fixture = HostedFixture(Path(temporary).resolve(), fault)
+                bundle = fixture.root / "fixture.simruntime"
+                root = bundle / "Contents/Resources/RuntimeRoot"
+                fixture.runtime_library = root / "usr/lib/libMainThreadChecker.dylib"
+                fixture.runtime_library.parent.mkdir(parents=True)
+                fixture.runtime_library.write_bytes(b"fixture checker; never loaded")
+                (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": RUNTIME}))
+                fixture.inventory["runtimes"][0].update(bundlePath=str(bundle), runtimeRoot=str(root))
+                if fault == "escape":
+                    fixture.runtime_library.unlink()
+                    fixture.runtime_library.symlink_to(fixture.foreign / "untouched")
+                if fault == "wrong-root":
+                    fixture.inventory["runtimes"][0]["runtimeRoot"] = str(fixture.foreign)
+                with mock.patch.object(ios.prepare, "prepare", side_effect=AssertionError("preparation forbidden")), \
+                        mock.patch.object(ios, "inspected_file", wraps=ios.inspected_file) as inspected:
+                    status, summary = fixture.observe(ios.MetadataDiagnostic)
+                self.assertEqual((status, summary["test_launch_calls"], summary["run_id"]), (1, 0, "not available"))
+                evidence = summary["runtime_evidence"]
+                self.assertIn("NOT authenticated", evidence["provenance"])
+                probes = [a for a in fixture.calls if a[0] == "/usr/bin/codesign"]
+                if fault in ("escape", "wrong-root"):
+                    self.assertEqual(probes, [])
+                    self.assertIn("error", evidence)
+                else:
+                    self.assertEqual(len(probes), 2)
+                    self.assertEqual(evidence["library"]["sha256"],
+                                     hashlib.sha256(b"fixture checker; never loaded").hexdigest())
+                    self.assertEqual(evidence["relationship"][1]["literal_matches"], int(fault != "candidate"))
+                    self.assertTrue(all(c.args[0] != fixture.foreign / "untouched" for c in inspected.call_args_list))
+                    for probe in evidence["signature"]:
+                        self.assertEqual(probe["exit_code"], "not available" if fault == "signature-unavailable"
+                                         else int(fault == "signature-failed"))
+                    for rendered in (json.dumps(summary), fixture.markdown):
+                        self.assertNotIn(FOREIGN, rendered)
+                        self.assertNotIn("production-access-", rendered)
+                        self.assertIn("runtime_evidence", rendered)
+
+    def test_signature_capture_bounds_and_timeout_reap_without_unbounded_drain(self):
+        for fault in ("ok", "limit", "timeout"):
+            with self.subTest(fault=fault), mock.patch.object(ios.subprocess, "Popen") as popen, \
+                    mock.patch.object(ios.selectors, "DefaultSelector") as selectors, \
+                    mock.patch.object(ios.os, "read", return_value=b"x" * 4096), \
+                    mock.patch.object(ios.os, "killpg") as kill, \
+                    mock.patch.object(ios.time, "monotonic", return_value=0) as clock:
+                process = popen.return_value.__enter__.return_value
+                process.returncode, process.pid = 0, 12345
+                selector = selectors.return_value.__enter__.return_value
+                selector.get_map.side_effect = [True] * (5 if fault == "limit" else 1) + [False]
+                selector.select.return_value = [(mock.Mock(fd=123, data=0), 1)]
+                if fault == "timeout":
+                    clock.side_effect = [0, 11]
+                argv = ["/usr/bin/codesign", "--display", "--verbose=4", "-r-", "/unused-mocked-library"]
+                if fault == "ok":
+                    self.assertEqual(len(ios.commands(argv, cwd="/unused", env={}, timeout=10).stdout), 4096)
+                    kill.assert_not_called()
+                else:
+                    with self.assertRaises((ios.Refusal, subprocess.TimeoutExpired)):
+                        ios.commands(argv, cwd="/unused", env={}, timeout=10)
+                    kill.assert_called_once_with(12345, ios.signal.SIGTERM)
+                    process.stdout.close.assert_called_once()
+                    process.stderr.close.assert_called_once()
+                process.communicate.assert_not_called()
 
     def test_cleanup_skips_only_positively_verified_owned_shutdown(self):
         for fault in ("profile", "cleanup-inventory", "shutdown", "delete"):

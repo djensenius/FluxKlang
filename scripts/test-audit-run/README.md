@@ -36,9 +36,9 @@ alone does **not** independently verify device absence.
 
 **Full observation remains blocked.** The fixed production entrypoint is now
 `MetadataDiagnostic`, not the full observation runner. After a separately reviewed
-build/preflight-only hosted attempt, it will expose only the field above:
-expected value, actual type and sanitized/truncated string, original character
-count/string SHA256, and whether the display changed. It binds that evidence to
+build/preflight-only hosted attempt, it exposes the field above and the bounded
+diagnostics below: presence, type, sanitized value, character count/value SHA256
+and whether display changed (hash encoding is recorded). It binds that evidence to
 the new build's once-selected run-local xctestrun pin, and performs a read-only
 check against the unchanged closed profile. It never prepares an envelope or
 allocates an audit run ID. It always ends in a recorded refusal, **even when the
@@ -48,6 +48,31 @@ no dispatch input or environment switch enabling tests; restoring observation
 requires another reviewed code change. No raw plist, environment dump, receipt
 or xcresult is uploaded. A changed/truncated display is not exact-value evidence.
 No profile, pin, isolation setting or test selection has been repaired or relaxed.
+
+Run **43675292121**, artifact **14146592231**, recorded the runtime's
+`libMainThreadChecker.dylib` between XCTest injection and RPAC (306 characters,
+display unchanged). That is evidence from this diagnostic, **not** recovery of the
+first run's value or authentication of library bytes. Both earlier artifacts remain
+untouched. Compatibility/profile/verifier work is separately deferred to **#708**.
+
+The extension captures 16 fixed fields: `DYLD_INSERT_LIBRARIES`, `DYLD_FRAMEWORK_PATH`
+and `DYLD_LIBRARY_PATH` in both targets' environment/testing-environment maps and
+the UI target-app map, plus `UITargetAppMainThreadCheckerEnabled`. Missing fields
+are explicit. At most 30 remaining mismatch paths/types are retained, with a
+truncation flag; unrecognized values are not dumped. JSON and Markdown both include
+the sanitized records. Complex field values are withheld, not expanded.
+Runtime inspection requires both selected inventory `bundlePath` and `runtimeRoot`
+and their canonical `.simruntime/Contents/Resources/RuntimeRoot` relationship.
+Only its fixed `usr/lib/libMainThreadChecker.dylib` is inspected (regular,
+nonsymlink, at most 16 MiB); candidate DYLD paths are **never** opened or resolved.
+Literal relationship counts do not establish equivalence of other mount aliases.
+Bounded Info.plist fields (64 KiB maximum input), file identities and hashes, and
+two fixed `/usr/bin/codesign` inspections (`--display --verbose=4 -r-` and
+`--verify --strict -R '=anchor apple'`) are evidence only. Each has a 15-second
+timeout and hard 16 KiB combined output cap; failures/unavailability stay explicit.
+No signing, code loading, keychain query or runtime download is permitted.
+Neither signature exit zero nor a self-computed digest authenticates provenance
+or authorizes preparation/launch. Unsupported runtime layouts stay unavailable.
 
 Cleanup now skips shutdown only after a fresh, full owned-device inventory/path
 check confirms `Shutdown`. If that cannot be confirmed, the original checked
