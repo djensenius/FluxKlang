@@ -1,10 +1,12 @@
 # Mac and iOS audit-run preparation (partial regression only)
 
-`prepare.py` is an external, Python-standard-library metadata preparer, **never a
+`prepare.py` is an external, Python-standard-library preparer, **never a test
 launcher**. It generates a fresh UUID4 before any hypothetical future launch.
-It imports no app/production modules and performs no subprocess, network,
-test-host, UI-event, service, or hardware execution. There is no in-app fallback
-or conditional audit no-op.
+Existing profiles remain metadata-only with no subprocess or native-tool calls.
+The explicit runtime-backed profile below adds read-only native verification.
+No profile imports app/production modules, boots a simulator, installs an app,
+launches tests, or emits hardware actions. There is no in-app fallback or
+conditional audit no-op.
 
 ## Closed profiles and unchanged original behavior
 
@@ -45,15 +47,17 @@ iOS simulator XML plist FormatVersion **1** layout:
   locations: unit `EnvironmentVariables`, UI `EnvironmentVariables`, and UI
   `UITargetAppEnvironmentVariables`. No other value is added or changed.
 
-The complete reviewed input key/value/type allowlists are `OBSERVED` and
-`IOS_OBSERVED` in `prepare.py`. All profiles intentionally require **all observed values**,
+The original reviewed input key/value/type allowlists are `OBSERVED` and
+`IOS_OBSERVED` in `prepare.py`; the runtime-backed profile changes only the two
+explicitly described input fields below. All profiles require **all observed values**,
 including unrelated diagnostic, logging, environment, timeout, language, and
 attachment fields, including `SystemAttachmentLifetime = deleteOnSuccess` and
 `UserAttachmentLifetime = deleteOnSuccess` on every test target. Except for the
 explicit profile transformations described here, parsed values and supported
 Xcode path placeholders are preserved exactly; XML
 formatting/key order need not be byte-identical. No placeholder is expanded and
-no referenced product is opened. No arbitrary configuration switches exist.
+no app/test product is opened. The runtime-backed profile independently inspects
+its fixed tools and runtime library. No arbitrary configuration switches exist.
 
 Unknown/missing fields, changed values, alternate layouts, binary plists,
 FormatVersion2, duplicate plist/JSON keys, unsupported scalar types, ambiguous
@@ -70,6 +74,74 @@ Release, live Apple qualification, and any other target composition. Existing
 app/UI targets are unchanged; this utility never removes tests or presents skipped tests as green.
 The retained layout specimens are read-only metadata examples, **not
 execution-ready artifacts**.
+
+## Explicit runtime-backed MainThreadChecker profile
+
+`ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1` is a separate,
+opt-in profile for #708. It preserves MainThreadChecker rather than disabling
+diagnostics or broadening the original iOS profile. It accepts only two input
+differences from `IOS_OBSERVED`:
+
+- Unit `TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES` is exactly XCTest
+  injection, the verified checker, then RPAC, in that order.
+- UI `TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES` contains only the same
+  checker spelling. UI target-app DYLD injection and
+  `UITargetAppMainThreadCheckerEnabled` remain absent.
+
+The generated strings are preserved, not rewritten. Only the original three
+run-ID insertions are made; no retention request or runtime-authority record is
+added to the intent.
+
+Selecting this profile in **either** `prepare` or `validate` invokes
+`ios_runtime.py` for fresh, read-only verification. It uses the reviewed
+`/Applications/Xcode_27.1.app/Contents/Developer` path, ignores caller toolchain
+environment overrides, and never changes `xcode-select`. Apple-signed native
+tools must report Xcode 27.1 build `27A9275`, simulator SDK 27.1, and one
+available `com.apple.CoreSimulator.SimRuntime.iOS-27-0` runtime with version 27.0
+and build `24A434` on a Darwin arm64 host.
+
+The checker is derived from that live inventory, never from candidate DYLD
+text. Descriptor-relative, no-follow filesystem checks bind root-owned,
+non-group/world-writable ancestors, tools and checker. The runtime `Info.plist`
+is a distinct non-executable case: the reviewed artifact measured root-owned
+`0664`, not `0755`. That exact regular-file shape is accepted **only** when
+`fstatvfs` on its held descriptor freshly proves a read-only filesystem, checked
+again on exit. Writable or unavailable mounts are refused; this exception does
+not apply to ancestors, tools or the checker. The only alternate spelling is
+the standard `/var` to `/private/var` alias, positively checked for ownership,
+link destination and filesystem identity. Other aliases, unreviewed layouts,
+path replacements and mutable/unavailable paths are refused, even if their
+names or advertised versions look correct.
+
+The file must be a 338880-byte, root-owned `0755`, thin arm64 Mach-O with SHA256
+`1ab99e516a208f4ce91fcde55af17ee83a4aedfc9687ec1eeade456943ea32e8`.
+Fresh `codesign --verify --strict` enforces both
+`identifier "com.apple.libMainThreadChecker"` and `anchor apple`. Tool calls
+have a 30-second deadline, at most one additional 30-second cleanup wait, and a
+2 MiB merged-output bound. Cleanup attempts to kill only the owned child and
+closes its output even if killing or waiting fails; no implicit unbounded wait
+is used, and unsuccessful cleanup cannot return success. Inventory, file
+identity/content, runtime plist and alias are rechecked before returning
+success. The runtime plist identifier must match; its bundle version `392`
+is not treated as runtime build `24A434`.
+
+Evidence for these closed pins is diagnostic run `43678288031`, artifact
+`14146952925`, reviewed head `4d3451fbd1b3a129681205dc0dce6c6f86863bed`.
+That run did not launch tests or establish candidate filesystem binding.
+The new verifier's acceptance on a real host is a separate observation;
+the diagnostic did not measure the plist's read-only mount flag or every tool
+ancestor's permissions. Those live checks remain required and unproven on the
+host; unsupported layouts must not be repaired by relaxing them.
+
+Use the commands below with this explicit profile identifier. A previously
+successful intent is not reusable authority: any separately authorized runner
+must call `validate` again with the original pin and exact output/intent paths
+**immediately before launch**. Validation performs fresh verification; no
+serialized context or `verified` flag can bypass it. This utility has no
+launch capability and does not certify earliest-host isolation, installed
+guards, environment delivery, sandbox access, receipts, or #60 qualification.
+The existing four profiles remain metadata-only and retain their original
+inputs, outputs, CLI claims and platform independence.
 
 ## Explicit opt-in retention requests
 

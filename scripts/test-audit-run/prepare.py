@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""External, metadata-only preparation for closed Mac and iOS profiles.
+"""External preparation for closed Mac and iOS profiles.
 
-Never launches anything. Validation is read-only. This is partial regression
+Never launches tests. The runtime-backed opt-in performs read-only native
+verification; existing profiles remain metadata-only. This is partial regression
 preparation, not product closure, execution permission, or a runtime receipt.
 """
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import copy
 import hashlib
 import json
@@ -111,6 +113,7 @@ OBSERVED = {
 
 IOS_PROFILE = "ios-simulator-isolated-unit-ui-v1"
 IOS_RETENTION_PROFILE = "ios-simulator-isolated-unit-ui-retention-request-v1"
+IOS_RUNTIME_PROFILE = "ios-simulator-isolated-unit-ui-xcode27.1-runtime27.0-mtc-v1"
 
 # Complete observed combined simulator XML v1 input. The app-hosted unit
 # bundle and runner-hosted UI bundle intentionally have different fields.
@@ -288,7 +291,7 @@ def _profile_definition(profile):
             OBSERVED, [TARGET], ((TARGET, "EnvironmentVariables", RUN_KEY),),
             profile == RETENTION_PROFILE,
         )
-    if profile in (IOS_PROFILE, IOS_RETENTION_PROFILE):
+    if profile in (IOS_PROFILE, IOS_RETENTION_PROFILE, IOS_RUNTIME_PROFILE):
         return IOS_OBSERVED, ["FluxKlangTests", "FluxKlangUITests"], (
             ("FluxKlangTests", "EnvironmentVariables", RUN_KEY),
             ("FluxKlangUITests", "EnvironmentVariables", RUN_KEY),
@@ -410,7 +413,8 @@ def existing_file(selected):
     return path
 
 
-def pinned_input(selected, expected_sha256, profile):
+@contextmanager
+def _checked_input(selected, expected_sha256, profile):
     expected, _, _, _ = _profile_definition(profile)
     if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise Refusal("expected SHA256 must be 64 lowercase hexadecimal digits")
@@ -421,9 +425,36 @@ def pinned_input(selected, expected_sha256, profile):
     if digest(data) != expected_sha256:
         raise Refusal("input SHA256 mismatch")
     parsed = parse_plist(data)
-    # This also refuses every preexisting run key, including empty/malformed IDs.
-    require_equal(parsed, expected, "input")
-    return path, parsed
+    authority = nullcontext()
+    if profile == IOS_RUNTIME_PROFILE:
+        # Lazy import: old profiles have no runtime/platform/tool dependency.
+        import ios_runtime
+
+        authority = ios_runtime.verified_checker()
+    with authority as spellings:
+        if profile == IOS_RUNTIME_PROFILE:
+            # Candidate text can select only between two freshly proven exact
+            # spellings. It never supplies a path to a filesystem/tool probe.
+            try:
+                checker = parsed["FluxKlangUITests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"]
+            except (KeyError, TypeError) as error:
+                raise Refusal("missing runtime-backed UI checker field") from error
+            if type(checker) is not str or checker not in spellings:
+                raise Refusal("UI checker does not match the independently verified runtime")
+            expected = copy.deepcopy(expected)
+            expected["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = (
+                "__TESTHOST__/Frameworks/libXCTestBundleInject.dylib:"
+                + checker + ":/usr/lib/libRPAC.dylib"
+            )
+            expected["FluxKlangUITests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = checker
+        # Also refuses every preexisting run key, including empty/malformed IDs.
+        require_equal(parsed, expected, "input")
+        yield path, parsed
+
+
+def pinned_input(selected, expected_sha256, profile):
+    with _checked_input(selected, expected_sha256, profile) as result:
+        return result
 
 
 def check_run_id(value):
@@ -483,7 +514,11 @@ def intent_record(input_path, input_digest, output, output_digest, intent, run_i
 
 def validate(input_path, expected_sha256, profile, output_path, intent_path):
     """Read and verify only; never create identity, flags, files, or products."""
-    source, original = pinned_input(input_path, expected_sha256, profile)
+    with _checked_input(input_path, expected_sha256, profile) as (source, original):
+        return _validate(source, original, expected_sha256, profile, output_path, intent_path)
+
+
+def _validate(source, original, expected_sha256, profile, output_path, intent_path):
     output = existing_file(output_path)
     intent = existing_file(intent_path)
     record = json.loads(
@@ -512,7 +547,19 @@ def validate(input_path, expected_sha256, profile, output_path, intent_path):
 
 def prepare(input_path, expected_sha256, profile):
     """Create an exclusive sibling pair, publishing intent last; never launch."""
-    source, original = pinned_input(input_path, expected_sha256, profile)
+    created = []
+    try:
+        with _checked_input(input_path, expected_sha256, profile) as (source, original):
+            return _prepare(source, original, expected_sha256, profile, created)
+    except BaseException:
+        # Includes failures of the runtime authority's exit recheck.
+        # Remove only our own new files, intent first. Prior collisions survive.
+        for path in reversed(created):
+            path.unlink()
+        raise
+
+
+def _prepare(source, original, expected_sha256, profile, created):
     run_id = str(uuid.uuid4())
     check_run_id(run_id)
     output, intent = output_paths(source, run_id)
@@ -523,20 +570,13 @@ def prepare(input_path, expected_sha256, profile):
         source, expected_sha256, output, digest(data), intent, run_id, profile,
     )
     intent_data = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    created = []
-    try:
-        for path, content in ((output, data), (intent, intent_data)):
-            # Exclusive creation refuses existing files AND dangling symlinks.
-            with path.open("xb") as stream:
-                created.append(path)
-                stream.write(content)
-        # Recheck pinned input and actual bytes before reporting success.
-        validate(source, expected_sha256, profile, output, intent)
-    except BaseException:
-        # Remove only our own new files, intent first. Prior collisions survive.
-        for path in reversed(created):
-            path.unlink()
-        raise
+    for path, content in ((output, data), (intent, intent_data)):
+        # Exclusive creation refuses existing files AND dangling symlinks.
+        with path.open("xb") as stream:
+            created.append(path)
+            stream.write(content)
+    # Recheck pinned input and actual bytes before reporting success.
+    validate(source, expected_sha256, profile, output, intent)
     return record
 
 
@@ -549,6 +589,7 @@ def main(argv=None):
         command.add_argument("--expected-sha256", required=True)
         command.add_argument("--profile", required=True, choices=[
             PROFILE, IOS_PROFILE, RETENTION_PROFILE, IOS_RETENTION_PROFILE,
+            IOS_RUNTIME_PROFILE,
         ])
         if name == "validate":
             command.add_argument("--output", required=True, type=Path)
@@ -566,7 +607,11 @@ def main(argv=None):
         return 1
     print(json.dumps({
         "status": "prepared" if args.command == "prepare" else "validated",
-        "claim": "metadata-only; partial-regression; not execution authorization",
+        "claim": (
+            "fresh runtime verification; partial-regression; not execution authorization"
+            if args.profile == IOS_RUNTIME_PROFILE else
+            "metadata-only; partial-regression; not execution authorization"
+        ),
         "intent": record,
     }, indent=2, sort_keys=True))
     return 0
