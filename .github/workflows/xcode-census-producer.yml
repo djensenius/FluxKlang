@@ -1,0 +1,230 @@
+name: Xcode census producer (no runtime authority)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/xcode-census/**'
+      - '.github/workflows/xcode-census-producer.yml'
+  workflow_dispatch:
+    inputs:
+      run_census:
+        description: 'After independent review: one fixed-path READ-ONLY census'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  producer:
+    runs-on: xcode-27
+    # Leaves room for sequential capture ceilings, bounded cleanup and upload.
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      LC_ALL: C
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Record immutable producer identity (not an authority token)
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          python3 -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture
+          assert os.getuid() != 0 and os.geteuid() != 0, "nonroot producer required"
+          out = Path("scripts/xcode-census/build/evidence")
+          out.mkdir(parents=True, exist_ok=False)
+          assert capture(["uname", "-m"]).decode().strip() == "arm64"
+          sha = capture(["git", "rev-parse", "HEAD"]).decode().strip()
+          assert sha == os.environ["GITHUB_SHA"], "checkout must match event SHA"
+          assert sha == os.environ["WORKFLOW_SHA"], "workflow must match event SHA"
+          workflow = ".github/workflows/xcode-census-producer.yml"
+          sources = [workflow] + [
+              "scripts/xcode-census/" + name for name in
+              ("census.c", "census.h", "main.c", "test_census.c", "Makefile", "README.md",
+               "producer_capture.py", "test_producer_capture.py", "hosted_capture_fixtures.py")
+          ]
+          identity = {
+              "role": "producer-only; no bootstrap or iOS authority",
+              "source_sha": sha,
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "workflow_ref": os.environ["WORKFLOW_REF"],
+              "workflow_blob": capture(
+                  ["git", "rev-parse", sha + ":" + workflow]).decode().strip(),
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "ref": os.environ["GITHUB_REF"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "uid": os.getuid(), "euid": os.geteuid(),
+              "developer_dir": os.environ["DEVELOPER_DIR"],
+              "source_sha256": {
+                  name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
+                  for name in sources
+              },
+          }
+          (out / "identity.json").write_text(json.dumps(identity, indent=2) + "\n")
+          print(json.dumps(identity))
+          PY
+
+      - name: Strict native build and owned-temp fixtures ONLY
+        working-directory: scripts/xcode-census
+        run: |
+          python3 -B - <<'PY'
+          import json
+          import sys
+          from producer_capture import capture
+          capture([sys.executable, "-B", "-m", "unittest", "-v", "test_producer_capture"])
+          print(capture([sys.executable, "-B", "hosted_capture_fixtures.py",
+                         "--hosted-process-fixtures"], timeout=90).decode(), flush=True)
+          data = capture(["make", "all", "check"], timeout=600, limit=262144,
+                         output="producer.log")
+          sys.stdout.buffer.write(data)
+          fixture_json = 0
+          for line in data.splitlines():
+              if line.startswith(b"{"):
+                  record = json.loads(line)
+                  assert record["scanned_all"] and not record["complete"]
+                  assert record["samples_omitted"] > 0
+                  assert any("\n" in s["path"] for s in record["samples"])
+                  fixture_json += 1
+          assert fixture_json == 1, "missing fixture JSON escaping check"
+          PY
+
+      - name: Inspect production architecture, symbols and direct load commands
+        run: |
+          python3 -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture as capture_bytes
+          assert os.getuid() != 0 and os.geteuid() != 0
+          binary = Path("scripts/xcode-census/build/xcode-census")
+          out = binary.parent / "evidence"
+          assert 0 < binary.stat().st_size <= 2097152, "binary size budget"
+
+          def capture(argv):
+              return capture_bytes(argv).decode("utf-8", errors="strict")
+
+          developer = os.environ["DEVELOPER_DIR"]
+          compiler = developer + "/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          compiler_info = {
+              "compiler": compiler,
+              "version": capture([compiler, "--version"]),
+              "sdk_path": capture(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"]).strip(),
+              "sdk_version": capture(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"]).strip(),
+              "sdk_build": capture(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-build-version"]).strip(),
+          }
+          (out / "compiler.json").write_text(json.dumps(compiler_info, indent=2) + "\n")
+          arch = capture(["/usr/bin/lipo", "-archs", str(binary)]).strip()
+          loads = capture(["/usr/bin/otool", "-l", str(binary)])
+          deps = capture(["/usr/bin/otool", "-L", str(binary)])
+          symbols = capture(["/usr/bin/nm", "-gUj", str(binary)])
+          (out / "macho.txt").write_text(
+              "architecture: " + arch + "\n" + loads + "\n" + deps + "\n" + symbols)
+          digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+          (out / "binary.sha256").write_text(digest + "  xcode-census\n")
+          assert arch == "arm64", "expected thin arm64"
+          assert "_main" in symbols.splitlines()
+          assert not re.search(r"_xc_(fixture|test_)", symbols), "fixture seam in production"
+          commands = re.findall(r"^\s+cmd (LC_\S+)$", loads, re.M)
+          allowed = {
+              "LC_SEGMENT_64", "LC_SYMTAB", "LC_DYSYMTAB", "LC_UUID",
+              "LC_BUILD_VERSION", "LC_SOURCE_VERSION", "LC_MAIN",
+              "LC_LOAD_DYLINKER", "LC_LOAD_DYLIB", "LC_FUNCTION_STARTS",
+              "LC_DATA_IN_CODE", "LC_CODE_SIGNATURE", "LC_DYLD_CHAINED_FIXUPS",
+              "LC_DYLD_EXPORTS_TRIE", "LC_DYLD_INFO_ONLY",
+          }
+          assert commands and set(commands) <= allowed, "unexpected Mach-O load command"
+          assert commands.count("LC_LOAD_DYLINKER") == 1
+          assert commands.count("LC_LOAD_DYLIB") == 1
+          names = re.findall(r"^\s+name (.+) \(offset \d+\)$", loads, re.M)
+          assert sorted(names) == ["/usr/lib/dyld", "/usr/lib/libSystem.B.dylib"]
+          libraries = [line.strip().split(" (", 1)[0] for line in deps.splitlines()[1:]]
+          assert libraries == ["/usr/lib/libSystem.B.dylib"], "unexpected library"
+          print("PASS thin arm64; no fixture seam; OS dyld/libSystem only; no rpaths")
+          print("binary SHA256:", digest)
+          PY
+
+      - name: Optional fixed-path READ-ONLY census (never on PR)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_census }}
+        run: |
+          python3 -B - <<'PY'
+          import json
+          import os
+          import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture
+          assert os.getuid() != 0 and os.geteuid() != 0
+          data = capture(
+              ["scripts/xcode-census/build/xcode-census"],
+              timeout=660, output="census.txt")
+          record = json.loads(data)
+          print("census exit: 0 complete:", record["complete"])
+          sys.exit(0 if record["complete"] else 1)
+          PY
+
+      - name: Bound explicit artifact set even after failure
+        id: bounds
+        if: ${{ always() }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          assert os.getuid() != 0 and os.geteuid() != 0
+          base = Path("scripts/xcode-census/build")
+          assert not base.is_symlink() and not (base / "evidence").is_symlink()
+          files = {"xcode-census": 2097152}
+          files.update({"evidence/" + name: 262144 for name in (
+              "identity.json", "producer.log", "compiler.json",
+              "macho.txt", "binary.sha256", "census.txt")})
+          files.update({"evidence/capture.txt": 131072, "evidence/capture.json": 4096})
+          total = 0
+          for name, limit in files.items():
+              path = base / name
+              assert not path.is_symlink(), "no artifact symlinks"
+              if path.exists():
+                  assert path.is_file() and path.stat().st_size <= limit, name
+                  total += path.stat().st_size
+          assert total <= 4194304, "total artifact budget"
+          print("PASS explicit artifact bounds:", total, "bytes")
+          PY
+
+      - name: Upload bounded producer evidence (NEVER bootstrap input)
+        if: ${{ always() && steps.bounds.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: xcode-census-UNTRUSTED-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          compression-level: 0
+          path: |
+            scripts/xcode-census/build/xcode-census
+            scripts/xcode-census/build/evidence/identity.json
+            scripts/xcode-census/build/evidence/producer.log
+            scripts/xcode-census/build/evidence/compiler.json
+            scripts/xcode-census/build/evidence/macho.txt
+            scripts/xcode-census/build/evidence/binary.sha256
+            scripts/xcode-census/build/evidence/census.txt
+            scripts/xcode-census/build/evidence/capture.txt
+            scripts/xcode-census/build/evidence/capture.json
