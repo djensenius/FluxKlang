@@ -365,3 +365,96 @@ struct ProductionAccessScopeSuiteTests {
         #expect(log.state.withLock { $0.submissions.isEmpty })
     }
 }
+
+extension ProductionAccessScopeTests {
+    enum ObservationMarker: CaseIterable, Sendable {
+        case absent, required, nonempty, directory, symlink, danglingSymlink
+        case missingBundle, unavailableBundle, fileBundle
+    }
+
+    /// Owned stand-ins only: never write a marker into the running test bundle or app host.
+    @Test(arguments: ObservationMarker.allCases)
+    func observationMarkerLookupNeverDowngradesErrorsToAttachments(marker: ObservationMarker) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluxklang-703-\(UUID().uuidString).xctest", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let entry = root.appendingPathComponent(ProductionAccessObservation.markerName)
+        let bundleDirectory: URL?
+        switch marker {
+        case .absent:
+            try Data().write(to: root.appendingPathComponent(ProductionAccessObservation.markerName + "-other"))
+            bundleDirectory = root
+        case .required, .nonempty:
+            try Data((marker == .required ? "" : "1\n").utf8).write(to: entry)
+            bundleDirectory = root
+        case .directory:
+            try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: false)
+            bundleDirectory = root
+        case .symlink, .danglingSymlink:
+            let target = root.appendingPathComponent("target")
+            if marker == .symlink { try Data().write(to: target) }
+            try FileManager.default.createSymbolicLink(at: entry, withDestinationURL: target)
+            bundleDirectory = root
+        case .missingBundle: bundleDirectory = root.appendingPathComponent("missing")
+        case .unavailableBundle: bundleDirectory = nil
+        case .fileBundle:
+            try Data().write(to: entry)
+            bundleDirectory = entry
+        }
+        if marker == .absent || marker == .required {
+            #expect(try ProductionAccessObservation.requiresFileReceipts(in: bundleDirectory) == (marker == .required))
+        } else {
+            #expect(throws: ProductionAccessReceiptSink.Failure.self) {
+                try ProductionAccessObservation.requiresFileReceipts(in: bundleDirectory)
+            }
+        }
+        let before = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        let log = ScopeLog()
+        let scope = ProductionAccessScope(
+            audit: ProductionAccessAudit(), environment: ["FLUXKLANG_AUDIT_RUN_ID": scopeRunID],
+            requiresFileReceipts: { try ProductionAccessObservation.requiresFileReceipts(in: bundleDirectory) },
+            attach: log.submit)
+        let test = try #require(Test.current)
+        let testCase = try #require(Test.Case.current)
+        let run = {
+            try await scope.provideScope(for: test, testCase: testCase) {
+                log.state.withLock { $0.bodies += 1 }
+            }
+        }
+        if marker == .absent {
+            try await run()
+            #expect(log.state.withLock { $0.bodies == 1 && $0.submissions.count == 1 })
+        } else {
+            try await expectingIssues(["Production access observation file receipt preflight failed"], log: log) {
+                try await run()
+            }
+            #expect(log.state.withLock { $0.bodies == 0 && $0.submissions.isEmpty })
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() == before)
+    }
+
+    @Test func requiredObservationStillRevalidatesDirectoryAtPublication() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluxklang-703-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = ScopeLog()
+        let scope = ProductionAccessScope(
+            audit: ProductionAccessAudit(),
+            environment: ["FLUXKLANG_AUDIT_RUN_ID": scopeRunID, ProductionAccessReceiptSink.directoryKey: root.path],
+            requiresFileReceipts: { true }, attach: log.submit)
+        let test = try #require(Test.current)
+        let testCase = try #require(Test.Case.current)
+        try await expectingIssues([submissionIssue], log: log) {
+            try await scope.provideScope(for: test, testCase: testCase) {
+                log.state.withLock { $0.bodies += 1 }
+                try FileManager.default.setAttributes([.posixPermissions: 0o750], ofItemAtPath: root.path)
+            }
+        }
+        #expect(log.state.withLock { $0.bodies == 1 && $0.submissions.isEmpty })
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+    }
+}

@@ -30,7 +30,7 @@ PROFILE = "ios-simulator-isolated-unit-ui-v1"
 APP_ID = "org.davidjensenius.FluxKlang"
 MARKER = "FluxKlangAuditRequireFileReceipts-v1"
 PACKAGE = "FluxKlang.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
-# #703 implementation edd9feb, reviewed at 00c4d510. Not present on this branch's base.
+# #703 implementation edd9feb, reviewed at 00c4d510; integrated from main via #704.
 # Pin implementation bytes, not just the opt-in marker. No old-code fallback.
 SOURCE_PINS = {
     "FluxKlangTests/ProductionAccessScope.swift":
@@ -258,7 +258,7 @@ class Observation:
         require(self.state["pr_head_sha"] == "not applicable"
                 or re.fullmatch(r"[0-9a-f]{40}", self.state["pr_head_sha"]), "invalid PR head SHA")
         require(self.env.get("SETUP_OUTCOME") == "success/success", "checkout/mise setup failed")
-        verify_sources(self.repo)  # Fails on the current branch; marker alone is never authority.
+        verify_sources(self.repo)  # Verify integrated source; marker alone is never authority.
         self.state["guard"] = "reviewed integrated source verified; build not yet verified"
         self.state["python"] = sys.version
         require(sys.version_info >= (3, 7), "Python 3.7+ required")

@@ -1,8 +1,8 @@
 name: iOS isolated observation
 
 # #694, part of #60; roadmap #48. Observation, not qualification.
-# LOCAL IMPLEMENTATION: coordinator must normal-merge main containing #699 AND #703,
-# independently review the combined tree, and only then publish/allow one hosted attempt.
+# LOCAL INTEGRATION: main containing #699 AND #703 is normal-merged. Coordinator must
+# independently review the combined tree before publishing/allowing one hosted attempt.
 on:
   workflow_dispatch:
   pull_request:

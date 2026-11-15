@@ -28,7 +28,7 @@ extension FixtureTests {
                             "U1 auxiliary constructor not preserved")
                 try require(report.ownership.allSatisfy { $0.annotationSatisfied },
                             "U1 roots must carry the canonical audit trait")
-                try require(report.ownership.reduce(0) { $0 + $1.tests.count } == 9, "U1 test obligations missing")
+                try require(report.ownership.reduce(0) { $0 + $1.tests.count } == 11, "U1 test obligations missing")
             }
         }
     }
