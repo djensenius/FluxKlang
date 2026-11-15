@@ -361,7 +361,8 @@ extension RealtimeHandoffTests {
             #expect(state.hasSweepWork(after: 0))
             var next = [SafetyFlagSet](repeating: [], count: state.scopes)
             state.sweepAcknowledging(into: &next)
-            #expect(next.allSatisfy(\.isEmpty))
+            let nextSweepIsEmpty = next.allSatisfy(\.isEmpty)
+            #expect(nextSweepIsEmpty)
             #expect(!state.hasSweepWork(after: 0))
             #expect(state.wait(worker: 0, phase: "ack", current: 0, deadline: stressDeadline(), {
                 state.acknowledged.load(ordering: .acquiring) == state.signalled.load(ordering: .acquiring)
