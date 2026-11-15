@@ -3,6 +3,8 @@ name: iOS isolated observation
 # #694, part of #60; roadmap #48. Observation, not qualification.
 # LOCAL INTEGRATION: main containing #699 AND #703 is normal-merged. Coordinator must
 # independently review the combined tree before publishing/allowing one hosted attempt.
+# TEMPORARY: entrypoint is build/preflight-only after run 43672143259's metadata refusal.
+# There is no dispatch input enabling tests; full observation requires a separately reviewed change.
 on:
   workflow_dispatch:
   pull_request:
@@ -39,7 +41,7 @@ jobs:
         with:
           version: 2026.10.25
           install_args: xcodegen
-      - name: Preflight, build, and observe at most once
+      - name: Build/preflight-only metadata diagnostic (no test launch)
         id: observation
         if: always()
         timeout-minutes: 100
@@ -47,7 +49,7 @@ jobs:
           SETUP_OUTCOME: ${{ steps.checkout.outcome }}/${{ steps.mise.outcome }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # Python owns device/DD/results and cleanup; command timeouts leave cleanup headroom.
-        # Missing integrated #703 source/build proof refuses before a test invocation.
+        # MetadataDiagnostic always stops before preparation and rejects test/boot/install commands.
         run: python3 scripts/test-audit-run/ios_simulator_observation.py
       - name: Upload sanitized summaries only
         if: always()

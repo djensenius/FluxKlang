@@ -109,6 +109,13 @@ class HostedFixture:
         metadata = copy.deepcopy(FIXTURE)
         if self.fault == "profile":
             metadata["FluxKlangTests"]["EnvironmentVariables"]["FLUXKLANG_ISOLATED_TESTING"] = "0"
+        if self.fault == "dyld":
+            # Synthetic mismatch, NOT a claim about hosted run 43672143259's unknown value.
+            metadata["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = "fixture-only"
+        if self.fault == "dyld-sensitive":
+            metadata["FluxKlangTests"]["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"] = (
+                "file:///private/.production-access-suiteExit-" + FOREIGN + ".json.partial "
+                + FOREIGN + "x" * 2000)
         (products / "generated.xctestrun").write_bytes(plistlib.dumps(metadata))
         if self.fault == "multiple":
             (products / "second.xctestrun").write_bytes(plistlib.dumps(metadata))
@@ -206,6 +213,8 @@ class HostedFixture:
             operation = argv[2]
             if operation == "list":
                 inventory = copy.deepcopy(INVENTORY)
+                if self.created and self.fault == "cleanup-inventory":
+                    raise ios.Refusal("fixture cleanup inventory unavailable")
                 if self.created:
                     inventory["devices"][RUNTIME].append({
                         "udid": DEVICE, "name": self.name, "state": self.device_state,
@@ -250,7 +259,10 @@ class HostedFixture:
                         for path in self.container.iterdir():
                             path.chmod(0o755)
                 elif operation == "shutdown":
-                    self.device_state = "Shutdown"
+                    if self.device_state == "Shutdown":
+                        code, error = 149, "CoreSimulator SimError 405: current state: Shutdown"
+                    else:
+                        self.device_state = "Shutdown"
                 elif operation == "delete":
                     shutil.rmtree(self.device_root)
                     self.created = False
@@ -260,16 +272,18 @@ class HostedFixture:
             raise AssertionError("external command not mocked: " + repr(argv))
         return subprocess.CompletedProcess(argv, code, output, error)
 
-    def observe(self):
+    def observe(self, runner=ios.Observation):
         # Catch accidental code paths which bypass the injected command boundary.
         with mock.patch.object(ios, "SOURCE_PINS", self.pins), \
-                mock.patch("subprocess.Popen", side_effect=AssertionError("native command forbidden")):
-            observation = ios.Observation(self.repo, self.env, self.execute)
+                mock.patch("subprocess.Popen", side_effect=AssertionError("native command forbidden")), \
+                mock.patch.object(ios.os, "killpg", side_effect=AssertionError("real signal forbidden")):
+            observation = runner(self.repo, self.env, self.execute)
             status = observation.observe()
         summary = json.loads((observation.summary_dir / "summary.json").read_text())
         assert (self.foreign / "untouched").read_text() == "foreign"
         assert (self.temp / "unrelated").read_text() == "untouched"
         assert not observation.work.exists()
+        self.markdown = (observation.summary_dir / "summary.md").read_text()
         return status, summary
 
 
@@ -384,8 +398,11 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(fixture.test_calls, [])
                 cleanup = [a[2:] for a in fixture.calls if a[:2] == ["xcrun", "simctl"]
                            and a[2] in ("shutdown", "delete")]
-                expected = [] if fault in ("create", "create-collision", "create-malformed") else [
-                    ["shutdown", DEVICE], ["delete", DEVICE]]
+                expected = []
+                if fault not in ("create", "create-collision", "create-malformed"):
+                    if fault in ("bootstatus", "install"):
+                        expected.append(["shutdown", DEVICE])
+                    expected.append(["delete", DEVICE])
                 self.assertEqual(cleanup, expected, summary)
                 if fault == "create":
                     self.assertEqual((fixture.data / "uncertain-owner").read_text(), "not adopted")
@@ -394,6 +411,77 @@ class ObservationTests(unittest.TestCase):
                     self.assertTrue(any("ownership uncertain" in item for item in summary["cleanup_failures"]))
                 else:
                     self.assertFalse(fixture.device_root.exists())
+
+    def test_diagnostic_always_stops_before_preparation_even_when_profile_matches(self):
+        for fault in (None, "dyld", "dyld-sensitive"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                fixture = HostedFixture(Path(temporary).resolve(), fault)
+                with mock.patch.object(ios.prepare, "prepare", side_effect=AssertionError("preparation forbidden")):
+                    status, summary = fixture.observe(ios.MetadataDiagnostic)
+                self.assertEqual(status, 1)
+                self.assertEqual(fixture.test_calls, [])
+                self.assertEqual(summary["test_launch_calls"], 0)
+                self.assertEqual(summary["run_id"], "not available")
+                self.assertEqual(summary["test_exit_code"], "not available")
+                self.assertEqual(summary["receipts_published"], "not available")
+                self.assertIn("full observation remains blocked", summary["refusal"])
+                self.assertEqual(summary["metadata_field"],
+                                 "FluxKlangTests.TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES")
+                forbidden = {"boot", "bootstatus", "install", "launch", "spawn"}
+                self.assertFalse(any(a[:2] == ["xcrun", "simctl"] and a[2] in forbidden for a in fixture.calls))
+                self.assertFalse(any(a[:2] == ["xcrun", "nm"] for a in fixture.calls))
+                if fault is None:
+                    self.assertEqual(summary["metadata_profile_check"], "matched closed profile; metadata only")
+                    self.assertFalse(summary["metadata_actual_display_changed"])
+                elif fault == "dyld":
+                    self.assertEqual(summary["metadata_actual_sanitized"], "fixture-only")
+                    self.assertIn("DYLD_INSERT_LIBRARIES: unexpected value", summary["metadata_profile_check"])
+                    self.assertEqual(summary["metadata_actual_value_sha256"],
+                                     hashlib.sha256(b"fixture-only").hexdigest())
+                else:
+                    self.assertTrue(summary["metadata_actual_display_changed"])
+                    for rendered in (json.dumps(summary), fixture.markdown):
+                        self.assertNotIn(FOREIGN, rendered)
+                        self.assertNotIn("production-access-", rendered)
+                        self.assertIn("<receipt-file>", rendered)
+
+    def test_diagnostic_entrypoint_and_command_boundary_cannot_launch(self):
+        with mock.patch.object(ios, "MetadataDiagnostic") as diagnostic, \
+                mock.patch.object(ios.signal, "signal") as signals:
+            diagnostic.return_value.observe.return_value = 1
+            self.assertEqual(ios.main(), 1)
+            diagnostic.return_value.observe.assert_called_once_with()
+            self.assertEqual(signals.call_count, 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = HostedFixture(Path(temporary).resolve())
+            observation = ios.MetadataDiagnostic(fixture.repo, fixture.env, fixture.execute)
+            forbidden = [
+                [ios.DEVELOPER + "/usr/bin/xcodebuild", "test-without-building"],
+                [ios.DEVELOPER + "/usr/bin/xcodebuild", "build-for-testing", "test"],
+                *[["xcrun", "simctl", op, DEVICE] for op in ("boot", "bootstatus", "install", "launch", "spawn")],
+            ]
+            for argv in forbidden:
+                with self.assertRaises(ios.Refusal):
+                    observation.run(argv)
+            self.assertEqual(fixture.calls, [])
+            self.assertEqual(observation.state["test_launch_calls"], 0)
+
+    def test_cleanup_skips_only_positively_verified_owned_shutdown(self):
+        for fault in ("profile", "cleanup-inventory", "shutdown", "delete"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                fixture = HostedFixture(Path(temporary).resolve(), fault)
+                status, summary = fixture.observe()
+                self.assertEqual(status, 1)
+                self.assertIn(["xcrun", "simctl", "delete", DEVICE], fixture.calls)
+                if fault == "profile":
+                    self.assertNotIn(["xcrun", "simctl", "shutdown", DEVICE], fixture.calls)
+                    self.assertEqual(summary["cleanup_shutdown"], "not needed: owned device observed Shutdown")
+                    self.assertEqual(summary["cleanup_failures"], [])
+                else:
+                    self.assertIn(["xcrun", "simctl", "shutdown", DEVICE], fixture.calls)
+                    self.assertTrue(summary["cleanup_failures"])
+                if fault != "delete":
+                    self.assertEqual(summary["cleanup_delete"], "command exited 0; absence not independently verified")
 
     def test_publication_container_timeout_and_cleanup_failures_end_attempt(self):
         for fault in ("partial", "no-receipts", "container-change", "timeout", "killed", "shutdown", "delete"):

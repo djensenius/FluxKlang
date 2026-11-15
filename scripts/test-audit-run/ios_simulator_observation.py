@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One hosted-only iOS observation; stdlib, closed metadata profile, owned cleanup.
+"""Hosted-only iOS observation support; current entrypoint is build/preflight-only.
 
 No CLI bypasses. Fixtures inject the command boundary and use only temporary files.
 See README for dependency sequencing, API/layout refusals and remaining runtime proof.
@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 import uuid
 
 import prepare
-from ios_observation_summary import NA, receipt_counts, summarize, write_summary
+from ios_observation_summary import NA, receipt_counts, safe_text, summarize, write_summary
 
 DEVELOPER = "/Applications/Xcode_27.1.app/Contents/Developer"
 SCHEME = "FluxKlangIsolatedTests"
@@ -332,7 +332,7 @@ class Observation:
         require(device.get("dataPath") == str(root / "data"), "unexpected device dataPath")
         real_path(root / "data", root, directory=True)
 
-    def build_prepare(self):
+    def build(self):
         self.state["phase"] = "build"
         self.dd = self.work / "dd"
         self.dd.mkdir(mode=0o700)
@@ -352,6 +352,10 @@ class Observation:
         real_path(self.original, self.work)
         self.pin = hashlib.sha256(self.original.read_bytes()).hexdigest()  # Select once; never repin.
         self.state.update(xctestrun=str(self.original), xctestrun_sha256=self.pin, phase="prepare")
+        return products
+
+    def build_prepare(self):
+        products = self.build()
         record = prepare.prepare(self.original, self.pin, PROFILE)
         self.prepared, self.intent = Path(record["output"]["path"]), Path(record["intent_path"])
         self.state["run_id"] = record["run_id"]
@@ -514,7 +518,19 @@ class Observation:
         if owned:
             for operation in ("shutdown", "delete"):
                 try:
+                    if operation == "shutdown":
+                        try:
+                            self.verify_device("Shutdown")
+                        except Exception as exc:
+                            # Failure to confirm Shutdown is not permission to ignore a shutdown error.
+                            self.state["cleanup_shutdown_precheck"] = "not confirmed: " + str(exc)
+                        else:
+                            self.state["cleanup_shutdown"] = "not needed: owned device observed Shutdown"
+                            continue
                     self.sim(operation, self.device, timeout=120)
+                    self.state["cleanup_" + operation] = (
+                        "command exited 0; absence not independently verified" if operation == "delete"
+                        else "command exited 0")
                 except Exception as exc:
                     self.state["cleanup_failures"].append(operation + ": " + str(exc))
         # Receipt/container files belong to the owned simulator and are removed by simctl delete.
@@ -567,13 +583,73 @@ class Observation:
         return status
 
 
+class MetadataDiagnostic(Observation):
+    """Temporary production entrypoint: build/read metadata only, always stop before preparation.
+
+    No CLI/environment switch enables tests. Restoring observation requires a reviewed code change.
+    """
+
+    def observe(self):
+        self.state["attempt_kind"] = "build/preflight-only metadata diagnostic; full observation blocked"
+        return super().observe()
+
+    def run(self, argv, **kwargs):
+        # Defense in depth if a later change accidentally reaches the inherited launch path.
+        if argv[0] == DEVELOPER + "/usr/bin/xcodebuild":
+            require(not any(a in ("test", "test-without-building") for a in argv),
+                    "build/preflight-only diagnostic forbids test launch")
+            require(argv[1:] == ["-version"] or "-resolvePackageDependencies" in argv
+                    or "build-for-testing" in argv, "unsupported diagnostic xcodebuild command")
+        elif argv[:2] == ["xcrun", "simctl"]:
+            require(len(argv) > 2 and argv[2] in ("list", "create", "shutdown", "delete"),
+                    "build/preflight-only diagnostic forbids simulator boot/install/launch")
+        elif argv[0] == "xcrun":
+            require(argv[1:] == ["--sdk", "iphonesimulator", "--show-sdk-version"],
+                    "unsupported diagnostic xcrun command")
+        else:
+            require(argv[0] in ("git", "mise", "xcodegen", "sw_vers"), "unsupported diagnostic command")
+        return super().run(argv, **kwargs)
+
+    def build_prepare(self):
+        self.build()
+        self.state["phase"] = "metadata diagnostic"
+        real_path(self.original, self.work)
+        data = self.original.read_bytes()
+        require(hashlib.sha256(data).hexdigest() == self.pin, "diagnostic input SHA256 mismatch")
+        actual = prepare.parse_plist(data)
+        expected = prepare.IOS_OBSERVED
+        path = ("FluxKlangTests", "TestingEnvironmentVariables", "DYLD_INSERT_LIBRARIES")
+        for key in path:
+            require(isinstance(actual, dict) and key in actual, "diagnostic field missing/malformed")
+            actual, expected = actual[key], expected[key]
+        self.state["metadata_field"] = ".".join(path)
+        self.state["metadata_expected"] = expected
+        self.state["metadata_actual_type"] = type(actual).__name__
+        if isinstance(actual, str):
+            display = safe_text(actual, 1000, "")
+            self.state.update(
+                metadata_actual_sanitized=display, metadata_actual_characters=len(actual),
+                metadata_actual_value_sha256=hashlib.sha256(actual.encode("utf-8")).hexdigest(),
+                metadata_actual_display_changed=display != actual)
+        else:
+            self.state["metadata_actual_sanitized"] = "non-string value withheld"
+        # Read-only check against the existing pin/profile. No UUID, prepared envelope or repair.
+        try:
+            prepare.pinned_input(self.original, self.pin, PROFILE)
+        except prepare.Refusal as exc:
+            self.state["metadata_profile_check"] = "refused: " + str(exc)
+        else:
+            self.state["metadata_profile_check"] = "matched closed profile; metadata only"
+        raise Refusal("build/preflight-only diagnostic complete; full observation remains blocked")
+
+
 def main():
     def interrupted(signum, _frame):
         raise Refusal("runner interrupted by signal %d; no retry" % signum)
 
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    observation = Observation(Path(__file__).resolve().parents[2], os.environ)
+    observation = MetadataDiagnostic(Path(__file__).resolve().parents[2], os.environ)
     return observation.observe()
 
 

@@ -10,6 +10,51 @@ normal-merges `main` at `e6dfbde0d4be948de62fa3813d3ef18e4a46e8f2`, containing
 tree before publishing or authorizing one hosted attempt. No dispatch, native
 execution, guard bypass, or profile change is part of this integration.
 
+### First hosted refusal and temporary diagnostic-only entrypoint
+
+Run **43672143259** executed synthetic merge
+`7e164780c2d172095f00b76fd7feeb1c4845c154` (PR #707 head
+`3b0d3a8dcf76907daeb14445b800bf136e4a4b1a`). Xcode 27.1 / 27A9275,
+simulator SDK 27.1, and available iOS 27.0 / 24A434 / iPhone 17 reached the
+generated metadata pin
+`09b0c691618e39cf207e31c7da8bed43adc0df8c97853be8240cb643e0c1f08a`.
+Preparation refused the string value at
+`FluxKlangTests.TestingEnvironmentVariables.DYLD_INSERT_LIBRARIES`. The closed
+profile expects
+`__TESTHOST__/Frameworks/libXCTestBundleInject.dylib:/usr/lib/libRPAC.dylib`;
+**the actual value was not retained and is unknown**. This is not evidence of
+which library/path differs, or that all remaining metadata matches.
+
+Artifact **14144808894** contains only the original summaries. The complete
+23,307-byte job log (SHA256
+`4243cdf7bc0075e6d45dbcf4418cebe2ed111db3abcbdcd992cdc506b14f568f`)
+contains no DYLD/xctestrun value. The original evidence is not replaced: zero
+test launch calls, no run ID/results/receipts, source guard verified but built
+guard not yet checked. Cleanup reported shutdown exit 149 / CoreSimulator 405
+because the device was already Shutdown. No delete failure was listed; that
+alone does **not** independently verify device absence.
+
+**Full observation remains blocked.** The fixed production entrypoint is now
+`MetadataDiagnostic`, not the full observation runner. After a separately reviewed
+build/preflight-only hosted attempt, it will expose only the field above:
+expected value, actual type and sanitized/truncated string, original character
+count/string SHA256, and whether the display changed. It binds that evidence to
+the new build's once-selected run-local xctestrun pin, and performs a read-only
+check against the unchanged closed profile. It never prepares an envelope or
+allocates an audit run ID. It always ends in a recorded refusal, **even when the
+entire input matches**, before marker, boot, install or test execution.
+Its command boundary also rejects test/boot/install/launch operations. There is
+no dispatch input or environment switch enabling tests; restoring observation
+requires another reviewed code change. No raw plist, environment dump, receipt
+or xcresult is uploaded. A changed/truncated display is not exact-value evidence.
+No profile, pin, isolation setting or test selection has been repaired or relaxed.
+
+Cleanup now skips shutdown only after a fresh, full owned-device inventory/path
+check confirms `Shutdown`. If that cannot be confirmed, the original checked
+shutdown is attempted and its errors remain failures. Delete still targets only
+the successfully created owned UUID; command success is distinguished from
+independently verified absence. These changes do not authorize a rerun.
+
 ### Launch gates and receipt strategy
 
 - Pinned `xcode-27` / Xcode 27.1; the existing pinned checkout/mise/upload actions,
@@ -18,7 +63,7 @@ execution, guard bypass, or profile change is part of this integration.
   `CODE_SIGNING_ALLOWED=NO`, `ARCHS=arm64`, in a fresh owned DerivedData directory.
   This is **not** the Apple qualification scheme or a claim of an unsandboxed host.
 - Initial policy is exactly **iOS 27.0 / iPhone 17**, from
-  `docs/transformation/toolchain-inventory.md`, not a verified current runner.
+  `docs/transformation/toolchain-inventory.md`; availability is checked on each runner.
   Runtime and device-type identifiers come from `simctl list --json`, including
   availability, build, supported device types and numeric min/max runtime range.
   Absent, duplicate, unavailable, incompatible or unsupported JSON/layout data
@@ -70,8 +115,8 @@ container: the process guard must refuse inaccessible file transport, and
 post-run identity checks reject changed containers. No directory is recreated,
 permissions widened, or host/global-temp fallback attempted. Guard/publication
 failure ends the attempt. This is not earliest-host isolation, descendant
-coverage, or #60 qualification. No current hosted inventory/API/build/runtime
-success is claimed.
+coverage, or #60 qualification. The first attempt established inventory selection
+and build output, not app/test execution or file-transport success.
 
 ### Evidence and cleanup
 
