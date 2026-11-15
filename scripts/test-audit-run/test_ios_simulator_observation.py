@@ -32,6 +32,20 @@ INVENTORY = {
     }],
     "devices": {RUNTIME: [{"udid": FOREIGN, "state": "Booted"}]},
 }
+# Valid symbol text, checked with the existing swift-demangle --compact (no compilation).
+# The private discriminator is fixture-specific; provideScope uses Swift's Scope word substitution.
+GUARD_SYMBOLS = {
+    "_$s14FluxKlangTests27ProductionAccessObservationO20requiresFileReceiptsSbyKFZ":
+        "static FluxKlangTests.ProductionAccessObservation.requiresFileReceipts() throws -> Swift.Bool",
+    "_$s14FluxKlangTests27ProductionAccessObservationO12BundleAnchor"
+    "33_0123456789ABCDEF0123456789ABCDEFLLCMa":
+        "type metadata accessor for FluxKlangTests.ProductionAccessObservation."
+        "(BundleAnchor in _0123456789ABCDEF0123456789ABCDEF)",
+    "_$s14FluxKlangTests21ProductionAccessScopeV07provideF03for8testCase10performing"
+    "y7Testing4TestV_7Testing4TestV4CaseVSgyyYaYbKXEtYaKF":
+        "FluxKlangTests.ProductionAccessScope.provideScope(for: Testing.Test, testCase: Testing.Test.Case?, "
+        "performing: @Sendable () async throws -> ()) async throws -> ()",
+}
 
 
 class HostedFixture:
@@ -103,7 +117,7 @@ class HostedFixture:
         if self.fault == "marker-symlink":
             (unit / ios.MARKER).symlink_to(self.foreign / "untouched")
 
-    def execute(self, argv, *, cwd, env, timeout):
+    def execute(self, argv, *, cwd, env, timeout, input_text=None):
         assert cwd == str(self.repo) and 0 < timeout <= 2700
         assert isinstance(argv, list) and all(isinstance(v, str) for v in argv)
         self.calls.append(argv)
@@ -127,11 +141,25 @@ class HostedFixture:
         elif argv == ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]:
             output = "27.1"
         elif argv[:3] == ["xcrun", "nm", "-a"]:
-            output = "\n".join("0000000000001000 t _fixture_FluxKlangTests_" + item for item in (
-                "ProductionAccessObservation_requiresFileReceipts",
-                "ProductionAccessObservation_BundleAnchor", "ProductionAccessScope_provideScope"))
+            symbols = list(GUARD_SYMBOLS)
+            output = "\n".join("0000000000001000 t " + item for item in symbols)
             if self.fault == "symbols":
                 output = "old unguarded binary"
+            elif self.fault == "undefined-symbols":
+                output = "\n".join("0000000000001000 t " + item for item in symbols[:-1])
+                output += "\n                 U " + symbols[-1]
+                output += "\n0000000000000000 U " + symbols[-1]
+            elif self.fault == "foreign-symbols":
+                output = output.replace("FluxKlangTests", "FakeKlangTests")
+        elif argv == ["xcrun", "swift-demangle", "--compact"]:
+            assert isinstance(input_text, str), "symbols must be passed via stdin, not argv"
+            self.demangle_input = input_text
+            names = dict(GUARD_SYMBOLS)
+            names.update({k.replace("FluxKlangTests", "FakeKlangTests"):
+                          v.replace("FluxKlangTests", "FakeKlangTests") for k, v in GUARD_SYMBOLS.items()})
+            output = "\n".join(names[name] for name in input_text.splitlines() if name)
+            if self.fault == "demangle":
+                code, error = 1, "fixture demangler failure"
         elif argv[:5] == ["xcrun", "xcresulttool", "get", "test-results", "summary"]:
             output = json.dumps({
                 "result": "Passed" if self.exit_code == 0 else "Failed", "totalTestCount": 3,
@@ -196,6 +224,8 @@ class HostedFixture:
                     self.data.mkdir(parents=True)
                     output = DEVICE
                     code = 1 if self.fault == "create" else 0
+                    if self.fault == "create":
+                        (self.data / "uncertain-owner").write_text("not adopted")
             else:
                 assert argv[3] == DEVICE, "command targeted a foreign/global device"
                 if self.fault == operation:
@@ -244,6 +274,21 @@ class HostedFixture:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_demangler_symbol_input_uses_pipe_not_argv(self):
+        argv = ["xcrun", "swift-demangle", "--compact"]
+        # Larger than a typical ARG_MAX; only the fixed command ever enters argv.
+        symbols = ("\n".join(GUARD_SYMBOLS) + "\n") * 1000
+        process = mock.MagicMock()
+        process.communicate.return_value = ("\n".join(GUARD_SYMBOLS.values()), "")
+        process.returncode = 0
+        with mock.patch.object(ios.subprocess, "Popen") as popen:
+            popen.return_value.__enter__.return_value = process
+            result = ios.commands(argv, cwd="/unused-mocked-path", env={}, timeout=120, input_text=symbols)
+            self.assertEqual(popen.call_args[0], (argv,))
+            self.assertEqual(popen.call_args[1]["stdin"], subprocess.PIPE)
+            process.communicate.assert_called_once_with(input=symbols, timeout=120)
+            self.assertEqual(result.returncode, 0)
+
     def test_command_timeout_reaps_only_its_mocked_group_and_preserves_exit(self):
         process = mock.MagicMock()
         process.pid, process.returncode = 12345, -15
@@ -306,13 +351,15 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(summary["head_sha"], "a" * 40)
                 self.assertEqual(summary["pr_head_sha"], "c" * 40)
                 self.assertEqual(summary["receipts_published"], 1)
+                self.assertEqual(fixture.demangle_input.splitlines(), list(GUARD_SYMBOLS))
                 self.assertFalse(fixture.device_root.exists())
                 self.assertEqual([a[2:] for a in fixture.calls if a[:2] == ["xcrun", "simctl"]
                                   and a[2] in ("shutdown", "delete")], [["shutdown", DEVICE], ["delete", DEVICE]])
 
     def test_preflight_refusals_never_launch(self):
         faults = ("source", "setup", "ambient", "project", "package", "profile", "multiple",
-                  "symbols", "marker", "marker-symlink", "installed-marker", "installed-binary",
+                  "symbols", "undefined-symbols", "foreign-symbols", "demangle",
+                  "marker", "marker-symlink", "installed-marker", "installed-binary",
                   "directory", "container-path")
         for fault in faults:
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
@@ -324,6 +371,9 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(summary["test_exit_code"], "not available")
                 self.assertTrue(summary["refusal"])
                 self.assertFalse(fixture.device_root.exists())
+                if fault == "undefined-symbols":
+                    self.assertEqual(fixture.demangle_input.splitlines(), list(GUARD_SYMBOLS)[:-1])
+                    self.assertIn("built unit guard symbol absent: provideScope", summary["refusal"])
 
     def test_partial_setup_cleanup_and_no_foreign_adoption(self):
         for fault in ("create", "build", "boot", "bootstatus", "install", "create-collision", "create-malformed"):
@@ -334,10 +384,16 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(fixture.test_calls, [])
                 cleanup = [a[2:] for a in fixture.calls if a[:2] == ["xcrun", "simctl"]
                            and a[2] in ("shutdown", "delete")]
-                expected = [] if fault in ("create-collision", "create-malformed") else [
+                expected = [] if fault in ("create", "create-collision", "create-malformed") else [
                     ["shutdown", DEVICE], ["delete", DEVICE]]
                 self.assertEqual(cleanup, expected, summary)
-                self.assertFalse(fixture.device_root.exists())
+                if fault == "create":
+                    self.assertEqual((fixture.data / "uncertain-owner").read_text(), "not adopted")
+                    self.assertEqual(summary["device_udid"], "not available")
+                    self.assertIn("simctl create exited 1", summary["refusal"])
+                    self.assertTrue(any("ownership uncertain" in item for item in summary["cleanup_failures"]))
+                else:
+                    self.assertFalse(fixture.device_root.exists())
 
     def test_publication_container_timeout_and_cleanup_failures_end_attempt(self):
         for fault in ("partial", "no-receipts", "container-change", "timeout", "killed", "shutdown", "delete"):

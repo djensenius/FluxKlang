@@ -24,9 +24,11 @@ this implementation.
   availability, build, supported device types and numeric min/max runtime range.
   Absent, duplicate, unavailable, incompatible or unsupported JSON/layout data
   refuses; there is no guessed identifier, latest fallback or download.
-- A uniquely named device is created; only its returned canonical UUID, absent
-  from the pre-create inventory, is adopted. Build and test destinations use this
-  UUID. No global booted device or physical device is used.
+- A uniquely named device is created; only a successful create's returned canonical
+  UUID, absent from the pre-create inventory, is adopted. A failed create's output
+  never authorizes shutdown/delete, even for a valid previously unseen UUID.
+  Build and test destinations use the owned UUID. No global booted device or
+  physical device is used.
 - Exactly one generated xctestrun is selected and its SHA256 computed once as a
   **run-local, not independently reviewed pin**. The unchanged `prepare.py`
   prepares and validates `ios-simulator-isolated-unit-ui-v1`. Validation repeats
@@ -37,7 +39,9 @@ this implementation.
   `00c4d510` (implementation `edd9feb`), plus the existing UI prelaunch
   `-ui-testing`/matching UUID/flags checks and lazy fake-service selection.
   A fresh unit executable must contain its own defined guard/anchor/scope symbols
-  and marker string; built/installed unit bytes must still match at launch.
+  and marker string. Defined symbols are demangled via stdin before matching
+  qualified names; undefined references cannot satisfy this check.
+  Built/installed unit bytes must still match at launch.
   Source changes require independent review, not a runtime
   override. The current pre-#703 tree **refuses before build/device creation**.
 - Only then is the exact empty regular `FluxKlangAuditRequireFileReceipts-v1`
@@ -88,9 +92,10 @@ only the returned owned UUID, then remove only the identity-checked generated
 workspace (DD, metadata and results). Simulator deletion removes its receipt
 outputs; failed deletion is reported, not replaced by recursive deletion of a
 simulator path. Foreign files/devices and broader runner temp/workspace survive.
-No safe cleanup can be promised after host loss/SIGKILL, or a create failure that
-never returns a usable UUID; those ownership gaps are not repaired by sweeping
-inventory. Initial sanitized summaries survive a later interrupted run.
+No safe cleanup can be promised after host loss/SIGKILL, or a failed/unknown create
+outcome. Those ownership gaps are recorded, never repaired by adopting a failed
+create's printed UUID or sweeping inventory. Initial sanitized summaries survive
+a later interrupted run.
 The artifact selects only the two files advertised from this run's exclusively
 created summary directory, has a run-attempt suffix, and missing files fail upload.
 

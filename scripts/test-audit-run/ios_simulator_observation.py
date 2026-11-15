@@ -157,12 +157,13 @@ def verify_sources(repo):
                 "reviewed source contract absent/changed: " + relative + " (requires integrated #703)")
 
 
-def commands(argv, *, cwd, env, timeout):
+def commands(argv, *, cwd, env, timeout, input_text=None):
     """Never a shell. Reap the owned command group on timeout/cancellation; no command retries."""
-    with subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    with subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_text is not None else None,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           universal_newlines=True, start_new_session=True) as process:
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except BaseException as exc:
             # This process group was created above, never discovered by name.
             try:
@@ -211,7 +212,7 @@ class Observation:
                     "device_type_identifier", "device_type", "device_udid"):
             self.state[key] = NA
 
-    def run(self, argv, timeout=120, checked=True, extra_env=None):
+    def run(self, argv, timeout=120, checked=True, extra_env=None, input_text=None):
         if not self.finalizing:
             remaining = self.deadline - time.monotonic()
             require(remaining > 0, "observation deadline exhausted; no retry")
@@ -220,7 +221,7 @@ class Observation:
             require(self.state["test_launch_calls"] == 0, "a second test invocation is forbidden")
             self.state.update(test_launch_calls=1, test_start_utc=utc())
         result = self.execute([str(v) for v in argv], cwd=str(self.repo),
-                              env=dict(self.env, **(extra_env or {})), timeout=timeout)
+                              env=dict(self.env, **(extra_env or {})), timeout=timeout, input_text=input_text)
         if checked:
             require(result.returncode == 0,
                     "%s exited %s: %s" % (argv[0], result.returncode, result.stderr or result.stdout))
@@ -293,13 +294,16 @@ class Observation:
         self.state.update(self.selection)
         prior = {d["udid"].lower() for _, d in device_entries(inventory)}
         self.device_name = "FluxKlang-observation-" + str(uuid.uuid4())
-        # Capture a valid returned UUID even on a nonzero create exit, for partial-setup cleanup.
+        # A UUID printed by a failed create is not evidence of ownership, even if previously unseen.
         try:
             created = self.sim("create", self.device_name, self.selection["device_type_identifier"],
                                self.selection["runtime_identifier"], checked=False)
         except Exception:
-            self.state["cleanup_failures"].append("create failed without a returned UUID; ownership unavailable")
+            self.state["cleanup_failures"].append("create did not complete successfully; ownership uncertain; no device cleanup")
             raise
+        if created.returncode != 0:
+            self.state["cleanup_failures"].append("create failed; ownership uncertain; no device cleanup")
+            raise Refusal("simctl create exited %s; no device adopted" % created.returncode)
         try:
             candidate = device_uuid(created.stdout.strip())
         except ValueError:
@@ -308,7 +312,6 @@ class Observation:
         require(candidate.lower() not in prior, "create returned a preexisting device; not adopted")
         self.device = candidate
         self.state["device_udid"] = candidate
-        require(created.returncode == 0, "simctl create exited %s" % created.returncode)
         self.verify_device("Shutdown")
 
     def verify_device(self, expected_state):
@@ -371,11 +374,19 @@ class Observation:
                 symbols = [parts[2] for line in lines for parts in [line.split(maxsplit=2)]
                            if len(parts) == 3 and re.fullmatch(r"[0-9a-fA-F]+", parts[0])
                            and len(parts[1]) == 1 and parts[1] not in ("U", "u")]
-                for scope, symbol in (("ProductionAccessObservation", "requiresFileReceipts"),
-                                      ("ProductionAccessObservation", "BundleAnchor"),
-                                      ("ProductionAccessScope", "provideScope")):
-                    require(any("FluxKlangTests" in line and scope in line and symbol in line
-                                for line in symbols), "built unit guard symbol absent: " + symbol)
+                # Swift word substitutions can encode provideScope as 07provideF0. Demangle
+                # definitions only, via stdin rather than an argv proportional to the bundle.
+                symbols = self.run(["xcrun", "swift-demangle", "--compact"],
+                                   input_text="\n".join(symbols) + "\n").stdout.splitlines()
+                for pattern, symbol in (
+                    (r"static FluxKlangTests\.ProductionAccessObservation\.requiresFileReceipts\(",
+                     "requiresFileReceipts"),
+                    (r"type metadata(?: accessor)? for FluxKlangTests\.ProductionAccessObservation\."
+                     r"\(BundleAnchor in _[0-9a-fA-F]+\)$", "BundleAnchor"),
+                    (r"FluxKlangTests\.ProductionAccessScope\.provideScope\(", "provideScope"),
+                ):
+                    require(any(re.match(pattern, line) for line in symbols),
+                            "built unit guard symbol absent: " + symbol)
                 contents = binary.read_bytes()
                 require(MARKER.encode() in contents, "built unit guard marker string absent")
                 self.unit_executable = executable
@@ -490,7 +501,7 @@ class Observation:
                 self.result_error = str(exc)
 
     def cleanup(self):
-        # Only a UUID returned by our create and absent from the pre-create inventory is adopted.
+        # Only a valid new UUID returned by a successful create is adopted.
         # Even boot/install/build failures reach both shutdown and delete; never 'all'/'unavailable'.
         owned = bool(self.device)
         if self.device_root is not None:
