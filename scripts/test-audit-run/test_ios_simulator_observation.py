@@ -220,6 +220,10 @@ class HostedFixture:
                         "udid": DEVICE, "name": self.name, "state": self.device_state,
                         "deviceTypeIdentifier": TYPE, "isAvailable": True, "dataPath": str(self.data),
                     })
+                    if self.fault == "cleanup-replaced" and any("build-for-testing" in a for a in self.calls):
+                        self.device_root.rename(self.devices / "original-owned")
+                        shutil.copytree(self.foreign, self.device_root)
+                        self.data.mkdir()
                 output = json.dumps(inventory)
             elif operation == "create":
                 assert argv[4:] == [TYPE, RUNTIME]
@@ -482,6 +486,26 @@ class ObservationTests(unittest.TestCase):
                     self.assertTrue(summary["cleanup_failures"])
                 if fault != "delete":
                     self.assertEqual(summary["cleanup_delete"], "command exited 0; absence not independently verified")
+
+    def test_cleanup_losing_ownership_during_shutdown_probe_skips_both_device_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = HostedFixture(Path(temporary).resolve(), "cleanup-replaced")
+            status, summary = fixture.observe(ios.MetadataDiagnostic)
+            self.assertEqual(status, 1)
+            self.assertEqual(fixture.test_calls, [])
+            self.assertEqual(summary["test_launch_calls"], 0)
+            self.assertEqual(summary["metadata_profile_check"], "matched closed profile; metadata only")
+            self.assertEqual(fixture.calls.count(["xcrun", "simctl", "list", "devices", "--json"]), 2)
+            self.assertEqual(summary["cleanup_shutdown_precheck"],
+                             "not confirmed: owned device directory replaced")
+            self.assertEqual([a for a in fixture.calls if a[:2] == ["xcrun", "simctl"]
+                              and a[2] in ("shutdown", "delete")], [])
+            self.assertEqual(summary["cleanup_failures"], ["device ownership: owned device directory replaced"])
+            self.assertNotIn("cleanup_shutdown", summary)
+            self.assertNotIn("cleanup_delete", summary)
+            self.assertEqual((fixture.device_root / "untouched").read_text(), "foreign")
+            self.assertTrue((fixture.devices / "original-owned/data").is_dir())
+            # HostedFixture.observe also requires removal of owned work and preservation of summaries.
 
     def test_publication_container_timeout_and_cleanup_failures_end_attempt(self):
         for fault in ("partial", "no-receipts", "container-change", "timeout", "killed", "shutdown", "delete"):

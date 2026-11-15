@@ -527,6 +527,14 @@ class Observation:
                         else:
                             self.state["cleanup_shutdown"] = "not needed: owned device observed Shutdown"
                             continue
+                    # The inventory probe may have observed replacement; recheck before either command.
+                    if self.device_root is not None:
+                        try:
+                            require(identity(self.device_root.lstat()) == self.device_identity
+                                    and not self.device_root.is_symlink(), "owned device directory replaced")
+                        except Exception as exc:
+                            self.state["cleanup_failures"].append("device ownership: " + str(exc))
+                            break
                     self.sim(operation, self.device, timeout=120)
                     self.state["cleanup_" + operation] = (
                         "command exited 0; absence not independently verified" if operation == "delete"
