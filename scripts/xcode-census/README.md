@@ -1,8 +1,10 @@
 # Fixed Xcode read-only census (#710)
 
-**Source-only slice; native compilation, fixtures and loader checks are pending
-hosted execution after independent coordinator review/publication.** No result
-here authorizes provisioning, hardening, root delivery, bootstrap or iOS launches.
+Producer 43697825734 passed strict arm64 compilation, 15 fixtures and loader
+checks for reviewed `de143300`; the real census was skipped. Its sample fixture
+reported 50 unknown symlink ACLs, **not positive ACL completeness**. This diagnostic/
+positive-fixture revision still requires reviewed hosted validation. No result
+authorizes provisioning, hardening, root delivery, bootstrap or iOS launches.
 Unauthenticated filesystem metadata is not runtime authority.
 
 ## Separate producer
@@ -87,22 +89,36 @@ Primary sources consulted (declarations are taken from the build's Darwin SDK):
 [XNU f6217f8](https://github.com/apple-oss-distributions/xnu/tree/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea)
 `bsd/sys/{attr,kauth}.h`, `bsd/vfs/vfs_{attrlist,cache,lookup,vnops,subr}.c`;
 [Libc 71bbe35](https://github.com/apple-oss-distributions/Libc/tree/71bbe350ab79eef58113991d817ccc6165061a64)
-`posix1e/{acl,acl_entry,acl_file,aclvar}.*`,
+`posix1e/{acl,acl_entry,acl_file,acl_translate,aclvar}.*`,
 `gen/FreeBSD/{opendir,readdir,telldir}.*`.
 
 * Directory `acl_get_fd_np` NULL/error is unknown, never empty. Darwin ACL iteration uses
   0 for an entry and -1/EINVAL for end; the fixed ACE ceiling bounds iteration.
-* Regular/link ACLs use descriptor-relative `getattrlistat`, `FSOPT_NOFOLLOW`,
-  returned-attribute bits and bounded, alignment-independent attrreference /
-  SDK `kauth_filesec` parsing. Missing attributes, null/zero references, NOACL
-  sentinel or malformed encodings remain **unestablished/incomplete**. Current
-  XNU omits absent `va_acl`; Libc `acl_set_link_np` rejects symlinks. Hosted
-  fixtures require explicit unknowns for ordinary symlinks; absent regular ACLs
-  likewise remain incomplete unless an explicit valid empty ACL is returned.
-  Positive synthetic wire parsing does **not** establish symlink ACL support. A real
-  positive symlink-ACL fixture remains unsupported, not silently assumed.
+* Regular/link ACLs use descriptor-relative `getattrlistat`, `FSOPT_NOFOLLOW`
+  and bounded attrreference parsing. The pinned Darwin `getattrlist.2:684–689`
+  specifies **kauth_filesec**, not bare kauth_acl. XNU `vfs_attrlist.c:2051–2064`
+  constructs the filesec prefix plus native ACL; `2792–2809` sizes that wrapper.
+  With RETURNED_ATTRS, a null/unsupported `va_acl` omits both the bit and reference.
+  Omission cannot distinguish absence from unsupported metadata: it stays
+  **incomplete**, as do NOACL sentinels and malformed buffers. No layout fallback.
+  Name-based ACL JSON distinguishes `acl_query_errors` (actual syscall errno), `acl_omitted`,
+  `acl_noacl` and `acl_invalid`; decoder refusals set errno 0, not invented EINVAL.
+  The old run's errno 22 alone cannot identify which path failed.
   `vfs_attrlist.c:3532–3573` resolves via LOOKUP/OP_GETATTR with no FOLLOW,
   queries attributes and releases the vnode reference; it does not open it.
+* Real positive fixtures require explicit regular empty/nonempty ACLs, successful
+  decoding and independent `acl_get_fd_np` entry counts; unknown is not a pass.
+  Libc `acl_set_link_np` unconditionally refuses links (`acl_file.c:166–176`),
+  but this does not prove kernel ACL queries unsupported. The fixture instead
+  uses nofollow `setattrlist` with SDK `acl_copy_ext_native` serialization, then
+  `acl_get_link_np` as oracle, and checks the target's empty ACL is unchanged.
+  Success must yield a positive decoded link ACL and complete fixture census.
+  Only setter ENOTSUP is an explicit unsupported branch retaining incomplete
+  census; EINVAL/other errors fail. Numeric probes log syscall status/errno,
+  length, returned bits, reference position/offset/length, decoder status
+  (0 OK, 1 omitted, 2 NOACL, 3 invalid) and count; never ACL bytes/UUIDs.
+  Probe count 4294967295 means no count was decoded, not an observed ACL size.
+  All new positive/diagnostic expectations remain pending hosted execution.
 * Libc `fdopendir` can allocate an entire union directory: refuse union mounts
   before calling it. Non-union `readdir` buffers in the cited implementation
   grow from 2 to 8 KiB; ACL objects have fixed slots. Hosted SDK/runtime behavior,

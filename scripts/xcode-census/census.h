@@ -25,6 +25,8 @@ enum xc_error {
     XC_TIME_LIMIT, XC_PATH_LIMIT, XC_GROUP_LIMIT, XC_OUTPUT_LIMIT
 };
 
+enum xc_acl_result { XC_ACL_OK, XC_ACL_MISSING, XC_ACL_NOACL, XC_ACL_INVALID };
+
 struct xc_group {
     uint64_t count, links;
     uint32_t uid, gid, mode, flags;
@@ -48,6 +50,7 @@ struct xc_sample {
 struct xc_report {
     uint64_t entries, directories, files, symlinks, special, hardlinks;
     uint64_t acl_present, acl_empty, acl_unknown, acl_entries;
+    uint64_t acl_query_errors, acl_omitted, acl_noacl, acl_invalid;
     uint64_t symlink_absolute, symlink_escape, symlink_relative;
     uint64_t mount_crossings, unknown_flags, errors, samples_omitted;
     unsigned first_error, scanned_all, peak_fds, peak_depth;

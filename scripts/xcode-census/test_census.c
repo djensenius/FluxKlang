@@ -125,6 +125,7 @@ layout(void)
      * Current Darwin source omits the returned attribute for absent va_acl.
      * Any different hosted behavior fails review, not an automatic fallback. */
     REQUIRE(report.acl_unknown == 6 && has_reason(XC_SYMLINK_ACL));
+    REQUIRE(report.acl_omitted == 6 && report.acl_query_errors == 0);
     REQUIRE(report.acl_present == 3 && report.acl_empty == 0);
     REQUIRE(xc_test_output(&report, XC_OUTPUT) == 0);
     remove_file("regular"); remove_file("hard"); remove_file("absolute");
@@ -294,6 +295,7 @@ budgets(void)
     }
     REQUIRE(scan(NULL, NULL, NULL) != 0);
     REQUIRE(report.scanned_all && report.symlinks == XC_SAMPLES + 2);
+    REQUIRE(report.acl_omitted == XC_SAMPLES + 2 && report.acl_query_errors == 0);
     REQUIRE(report.samples_used == XC_SAMPLES && report.samples_omitted > 0);
     REQUIRE(xc_emit(&report) == 0); /* hosted Python validates JSON escaping */
     for (unsigned i = 0; i < XC_SAMPLES + 2; ++i) {
@@ -349,34 +351,101 @@ path_and_group_budgets(void)
     ++cases;
 }
 
-static void
-absent_acl_and_read_error(void)
+/* Numeric diagnostics only; never emit ACL bytes or principal UUIDs. */
+static int
+acl_probe(const char *name, unsigned tag, uint32_t *count)
 {
-    /* Empty ACL installation may be normalized to absence by the filesystem.
-     * Missing returned-attribute bits must never turn into acl_empty. */
-    file("empty");
-    int fd = openat(rootfd, "empty", O_RDONLY | O_NOFOLLOW);
-    REQUIRE(fd >= 0);
-    acl_t empty = acl_init(0);
-    REQUIRE(empty != NULL && acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0);
-    REQUIRE(acl_free(empty) == 0);
     struct attrlist attrs = {0};
     attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
     attrs.commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_EXTENDED_SECURITY;
     unsigned char bytes[XC_ACL_BYTES] = {0};
-    REQUIRE(getattrlistat(rootfd, "empty", &attrs, bytes, sizeof(bytes),
-                          FSOPT_NOFOLLOW) == 0);
+    int status = getattrlistat(rootfd, name, &attrs, bytes, sizeof(bytes), FSOPT_NOFOLLOW);
+    int error = status == 0 ? 0 : errno;
+    uint32_t length;
     attribute_set_t returned;
+    attrreference_t ref;
+    size_t pos = sizeof(length) + sizeof(returned);
+    memcpy(&length, bytes, sizeof(length));
     memcpy(&returned, bytes + sizeof(uint32_t), sizeof(returned));
-    int result = scan(NULL, NULL, NULL);
-    if (returned.commonattr & ATTR_CMN_EXTENDED_SECURITY) {
-        uint32_t count = 999;
-        REQUIRE(xc_test_acl(bytes, sizeof(bytes), &count) == 0 && count == 0);
-        REQUIRE(result == 0 && report.acl_empty == 1 && report.acl_unknown == 0);
-    } else {
-        REQUIRE(result != 0 && report.acl_empty == 0 && report.acl_unknown == 1);
-        REQUIRE(has_reason(XC_METADATA));
+    memcpy(&ref, bytes + pos, sizeof(ref)); /* zero scratch if omitted/failed */
+    *count = UINT32_MAX;
+    int decoded = status == 0 ? xc_test_acl(bytes, sizeof(bytes), count) : XC_ACL_INVALID;
+    printf("ACL probe=%u syscall=%d errno=%d length=%u returned=%u ref_at=%zu "
+           "offset=%d ref_length=%u decoded=%d count=%u\n", tag, status, error,
+           length, returned.commonattr, pos, ref.attr_dataoffset, ref.attr_length, decoded, *count);
+    REQUIRE(status == 0); /* kernel EINVAL is a failure, never an unsupported waiver */
+    return decoded;
+}
+
+static unsigned
+oracle_entries(acl_t acl)
+{
+    REQUIRE(acl != NULL);
+    acl_entry_t entry;
+    unsigned count = 0;
+    int id = ACL_FIRST_ENTRY, status;
+    errno = 0;
+    while ((status = acl_get_entry(acl, id, &entry)) == 0) {
+        REQUIRE(++count <= KAUTH_ACL_MAX_ENTRIES);
+        id = ACL_NEXT_ENTRY;
+        errno = 0;
     }
+    REQUIRE(status == -1 && errno == EINVAL && acl_free(acl) == 0);
+    return count;
+}
+
+static void
+real_acl_and_read_error(void)
+{
+    file("empty");
+    int fd = openat(rootfd, "empty", O_RDONLY | O_NOFOLLOW);
+    REQUIRE(fd >= 0);
+    uint32_t count;
+    int decoded = acl_probe("empty", 1, &count);
+    REQUIRE(oracle_entries(acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) == 1);
+    REQUIRE(decoded == XC_ACL_OK && count == 1);
+    REQUIRE(scan(NULL, NULL, NULL) == 0 && report.acl_present == 2);
+    acl_t empty = acl_init(0);
+    REQUIRE(empty != NULL && acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0);
+    REQUIRE(acl_free(empty) == 0);
+    decoded = acl_probe("empty", 0, &count);
+    REQUIRE(oracle_entries(acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) == 0);
+    REQUIRE(decoded == XC_ACL_OK && count == 0); /* omission cannot pass */
+    REQUIRE(scan(NULL, NULL, NULL) == 0 && report.acl_empty == 1 && !report.acl_unknown);
+
+    REQUIRE(symlinkat("empty", rootfd, "acl-link") == 0);
+    char path[XC_PATH];
+    int n = snprintf(path, sizeof(path), "%s/acl-link", temporary);
+    REQUIRE(n > 0 && (size_t)n < sizeof(path));
+    /* Libc acl_set_link_np refuses symlinks unconditionally. Exercise the
+     * nofollow setter using libSystem's serializer, not our synthetic layout. */
+    _Alignas(max_align_t) unsigned char bytes[XC_ACL_BYTES];
+    attrreference_t ref = { .attr_dataoffset = (int32_t)sizeof(ref) };
+    _Static_assert(sizeof(ref) % _Alignof(struct kauth_filesec) == 0, "ACL payload alignment");
+    ssize_t size = acl_copy_ext_native(bytes + sizeof(ref), allow_acl,
+                                       (ssize_t)(sizeof(bytes) - sizeof(ref)));
+    REQUIRE(size > 0 && (size_t)size <= sizeof(bytes) - sizeof(ref));
+    ref.attr_length = (uint32_t)size;
+    memcpy(bytes, &ref, sizeof(ref));
+    struct attrlist attrs = { .bitmapcount = ATTR_BIT_MAP_COUNT,
+                              .commonattr = ATTR_CMN_EXTENDED_SECURITY };
+    int status = setattrlist(path, &attrs, bytes, sizeof(ref) + (size_t)size, FSOPT_NOFOLLOW);
+    int error = status == 0 ? 0 : errno;
+    printf("ACL link_set syscall=%d errno=%d\n", status, error);
+    REQUIRE(status == 0 || error == ENOTSUP);
+    decoded = acl_probe("acl-link", 2, &count);
+    REQUIRE(oracle_entries(acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) == 0); /* target unchanged */
+    if (status == 0) {
+        REQUIRE(oracle_entries(acl_get_link_np(path, ACL_TYPE_EXTENDED)) == 1);
+        REQUIRE(decoded == XC_ACL_OK && count == 1);
+        REQUIRE(scan(NULL, NULL, NULL) == 0 && report.acl_present == 2 && report.acl_empty == 1);
+        puts("PASS real regular empty/nonempty and symlink ACLs (independent getters)");
+    } else {
+        REQUIRE(decoded == XC_ACL_MISSING);
+        REQUIRE(scan(NULL, NULL, NULL) != 0 && report.acl_omitted == 1 && report.acl_unknown == 1);
+        puts("UNSUPPORTED symlink ACL setter: ENOTSUP; census remains incomplete");
+    }
+    remove_file("acl-link");
     REQUIRE(close(fd) == 0);
     remove_file("empty");
     REQUIRE(mkdirat(rootfd, "unreadable", 0700) == 0);
@@ -442,9 +511,15 @@ wire_metadata(void)
     memcpy(bytes + pos, &ref, sizeof(ref));
     memcpy(bytes + start, &sec, header);
     REQUIRE(xc_test_acl(bytes, sizeof(bytes), &count) == 0 && count == 0);
+    sec.fsec_entrycount = KAUTH_FILESEC_NOACL;
+    memcpy(bytes + start, &sec, header);
+    REQUIRE(xc_test_acl(bytes, sizeof(bytes), &count) == XC_ACL_NOACL);
     returned.commonattr = ATTR_CMN_RETURNED_ATTRS;
+    length = (uint32_t)pos; /* real omitted-attribute shape: no reference */
+    memcpy(bytes, &length, sizeof(length));
     memcpy(bytes + sizeof(length), &returned, sizeof(returned));
-    REQUIRE(xc_test_acl(bytes, sizeof(bytes), &count) != 0);
+    REQUIRE(xc_test_acl(bytes, length, &count) == XC_ACL_MISSING);
+    REQUIRE(xc_test_acl(bytes, length - 1, &count) == XC_ACL_INVALID);
     puts("PASS synthetic ACL bounds; NOT proof of symlink ACL support");
     ++cases;
 }
@@ -476,13 +551,17 @@ main(void)
     REQUIRE(acl_add_perm(perms, ACL_READ_SECURITY) == 0);
     REQUIRE(acl_set_permset(entry, perms) == 0);
     REQUIRE(acl_set_fd_np(rootfd, allow_acl, ACL_TYPE_EXTENDED) == 0);
+    uint32_t count;
+    REQUIRE(symlinkat("missing", rootfd, "acl-probe") == 0);
+    REQUIRE(acl_probe("acl-probe", 3, &count) == XC_ACL_MISSING);
+    remove_file("acl-probe");
+    real_acl_and_read_error();
     layout();
     permissions();
     races_and_mounts();
     directory_type_swaps();
     budgets();
     path_and_group_budgets();
-    absent_acl_and_read_error();
     wire_metadata();
     REQUIRE(acl_free(allow_acl) == 0);
     REQUIRE(close(rootfd) == 0);

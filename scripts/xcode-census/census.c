@@ -78,6 +78,7 @@ serialize(const struct xc_report *r, struct output *o, unsigned limit)
     COUNT(entries); COUNT(directories); COUNT(files); COUNT(symlinks);
     COUNT(special); COUNT(hardlinks); COUNT(acl_present); COUNT(acl_empty);
     COUNT(acl_unknown); COUNT(acl_entries); COUNT(symlink_absolute);
+    COUNT(acl_query_errors); COUNT(acl_omitted); COUNT(acl_noacl); COUNT(acl_invalid);
     COUNT(symlink_escape); COUNT(symlink_relative); COUNT(mount_crossings);
     COUNT(unknown_flags); COUNT(samples_omitted);
 #undef COUNT
@@ -428,7 +429,8 @@ filesystem(struct scan *c, int parent, const char *name, int fd,
 
 /* Returned-attributes + one attrreference, all copied to aligned objects.
  * A missing attribute/zero reference is UNKNOWN, never "no ACL".
- * Return 0 only for a complete SDK kauth_filesec with a bounded ACE count.
+ * Darwin getattrlist(2) and XNU vfs_attrlist.c require kauth_filesec,
+ * NOT bare kauth_acl. Keep omission, NOACL and invalid wire data distinct.
  */
 static int
 parse_acl(const unsigned char *bytes, size_t capacity, uint32_t *count)
@@ -441,32 +443,39 @@ parse_acl(const unsigned char *bytes, size_t capacity, uint32_t *count)
     const size_t header = offsetof(struct kauth_filesec, fsec_acl) +
                           offsetof(struct kauth_acl, acl_ace);
     struct kauth_filesec security;
-    if (capacity < fixed)
-        return -1;
+    if (capacity < pos)
+        return XC_ACL_INVALID;
     memcpy(&length, bytes, sizeof(length));
     memcpy(&returned, bytes + sizeof(length), sizeof(returned));
-    if (length > capacity || length < fixed ||
-        returned.commonattr != (ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_EXTENDED_SECURITY) ||
+    if (length > capacity || length < pos ||
+        !(returned.commonattr & ATTR_CMN_RETURNED_ATTRS) ||
+        (returned.commonattr & ~(ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_EXTENDED_SECURITY)) ||
         returned.volattr || returned.dirattr || returned.fileattr || returned.forkattr)
-        return -1;
+        return XC_ACL_INVALID;
+    if (!(returned.commonattr & ATTR_CMN_EXTENDED_SECURITY))
+        return XC_ACL_MISSING; /* no attrreference is packed in this case */
+    if (length < fixed)
+        return XC_ACL_INVALID;
     memcpy(&ref, bytes + pos, sizeof(ref));
     if (ref.attr_dataoffset < (int32_t)sizeof(ref))
-        return -1;
+        return XC_ACL_INVALID;
     size_t offset = pos + (size_t)ref.attr_dataoffset;
     if (offset > length || ref.attr_length > length - offset ||
         ref.attr_length < header)
-        return -1;
+        return XC_ACL_INVALID;
     memset(&security, 0, sizeof(security));
     memcpy(&security, bytes + offset, header);
-    if (security.fsec_magic != KAUTH_FILESEC_MAGIC ||
-        security.fsec_entrycount == KAUTH_FILESEC_NOACL ||
-        security.fsec_entrycount > KAUTH_ACL_MAX_ENTRIES)
-        return -1;
+    if (security.fsec_magic != KAUTH_FILESEC_MAGIC)
+        return XC_ACL_INVALID;
+    if (security.fsec_entrycount == KAUTH_FILESEC_NOACL)
+        return ref.attr_length == header ? XC_ACL_NOACL : XC_ACL_INVALID;
+    if (security.fsec_entrycount > KAUTH_ACL_MAX_ENTRIES)
+        return XC_ACL_INVALID;
     size_t needed = header + (size_t)security.fsec_entrycount * sizeof(struct kauth_ace);
     if (needed != ref.attr_length)
-        return -1;
+        return XC_ACL_INVALID;
     *count = security.fsec_entrycount;
-    return 0;
+    return XC_ACL_OK;
 }
 
 static void
@@ -480,13 +489,19 @@ acl_observe(struct scan *c, int parent, const char *name, int fd,
         attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
         attrs.commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_EXTENDED_SECURITY;
         memset(c->acl, 0, sizeof(c->acl));
-        if (getattrlistat(parent, name, &attrs, c->acl, c->limits.acl_bytes,
-                          FSOPT_NOFOLLOW) < 0) {
+        int decoded = XC_ACL_OK;
+        int status = getattrlistat(parent, name, &attrs, c->acl, c->limits.acl_bytes,
+                                   FSOPT_NOFOLLOW);
+        if (status != 0) {
             error = errno;
-        } else if (parse_acl(c->acl, c->limits.acl_bytes, &count) != 0) {
-            error = EINVAL;
+            ++c->r->acl_query_errors;
+        } else {
+            decoded = parse_acl(c->acl, c->limits.acl_bytes, &count);
+            if (decoded == XC_ACL_MISSING) ++c->r->acl_omitted;
+            else if (decoded == XC_ACL_NOACL) ++c->r->acl_noacl;
+            else if (decoded == XC_ACL_INVALID) ++c->r->acl_invalid;
         }
-        if (error) {
+        if (status != 0 || decoded != XC_ACL_OK) {
             ++c->r->acl_unknown;
             issue(c, S_ISLNK(s->st_mode) ? XC_SYMLINK_ACL : XC_METADATA,
                   error, s, false);
