@@ -104,79 +104,6 @@ private final class Publication: @unchecked Sendable {
     }
 }
 
-/// Shared state for the concurrent-requests test. Requesters and the taker hand off through these counters only.
-private final class Contention: @unchecked Sendable {
-    let flags: SafetyFlags
-    let rounds: Int
-    let scopes = 8
-    let requesters = 4
-    /// Round the requesters may run; the taker advances it after each round's final sweep.
-    let round = Atomic<Int>(0)
-    /// Requester round completions (cumulative).
-    let completed = Atomic<Int>(0)
-    /// Mid-round handshakes raised by requesters (cumulative, RMW only).
-    let signalled = Atomic<Int>(0)
-    /// The `signalled` value the taker loaded before its most recent completed sweep.
-    let acknowledged = Atomic<Int>(0)
-    let timeouts = Atomic<Int>(0)
-    /// Written by the taker thread only; read after the join.
-    var lost = 0
-    var overlapped = 0
-
-    init(flags: SafetyFlags, rounds: Int) {
-        self.flags = flags
-        self.rounds = rounds
-    }
-
-    /// Requests `flag` on this requester's 4 scopes each round: 2 before a handshake with the taker, 2 after.
-    func requester(_ index: Int, deadline: ContinuousClock.Instant) {
-        let flag = SafetyFlag.allCases[index % SafetyFlag.allCases.count]
-        let mine = (0..<scopes).filter { $0 % (requesters / 2) == index / 2 }.map { UInt32($0) }
-        for current in 0..<rounds {
-            guard spin(until: deadline, timeouts: timeouts, { round.load(ordering: .acquiring) >= current }) else {
-                return
-            }
-            for scope in mine.prefix(2) { _ = flags.request(flag, scope: scope) }
-            // The taker's next sweep starts after an acquiring load of this value, so it must see both requests.
-            let signal = signalled.add(1, ordering: .releasing).newValue
-            guard spin(until: deadline, timeouts: timeouts, {
-                acknowledged.load(ordering: .acquiring) >= signal
-            }) else { return }
-            for scope in mine.dropFirst(2) { _ = flags.request(flag, scope: scope) }
-            completed.add(1, ordering: .releasing)
-        }
-    }
-
-    /// Sweeps every scope until all requesters finish the round, acknowledging handshakes, then sweeps once more.
-    func taker(deadline: ContinuousClock.Instant) {
-        for current in 0..<rounds {
-            var union = [SafetyFlagSet](repeating: [], count: scopes)
-            var sweeps = 0
-            while completed.load(ordering: .acquiring) < requesters * (current + 1) {
-                let seen = signalled.load(ordering: .acquiring)
-                sweep(flags, into: &union)
-                acknowledged.store(seen, ordering: .releasing)
-                sweeps &+= 1
-                if sweeps & 1_023 == 0, ContinuousClock.now >= deadline {
-                    timeouts.add(1, ordering: .relaxed)
-                    return
-                }
-            }
-            // Requests published before a handshake happen-before the acknowledging sweep, which ran before the
-            // round completed; so this union is non-empty in every round unless a request was lost.
-            if union.contains(where: { !$0.isEmpty }) { overlapped += 1 }
-            sweep(flags, into: &union)
-            lost += union.filter { $0 != [.panic, .allNotesOff] }.count
-            round.store(current + 1, ordering: .releasing)
-        }
-    }
-}
-
-/// Takes every scope once, accumulating what each take returned.
-private func sweep(_ flags: SafetyFlags, into union: inout [SafetyFlagSet]) {
-    for scope in union.indices { union[scope].formUnion(flags.take(scope: UInt32(scope))) }
-}
-
 private func ownership(scopes: Int) -> NoteOwnership? {
     try? NoteOwnership(scopes: scopes)
 }
@@ -419,20 +346,75 @@ extension RealtimeHandoffTests {
     }
 
     struct OwnershipStress {
-        /// Four requester `Thread`s and one spinning taker `Thread` run each round concurrently. Every
+        @Test func signalAfterSnapshotIsAcknowledgedByAnEmptySweep() throws {
+            let state = OwnershipContention(flags: try #require(safetyFlags(scopes: 8)), rounds: 1)
+            var union = [SafetyFlagSet](repeating: [], count: state.scopes)
+            _ = state.flags.request(.panic, scope: 0)
+            let first = state.signal()
+            state.sweepAcknowledging(into: &union) {
+                _ = state.flags.request(.allNotesOff, scope: 0)
+                state.signal()
+            }
+            #expect(state.acknowledged.load(ordering: .acquiring) == first)
+            #expect(state.signalled.load(ordering: .acquiring) > first)
+            #expect(union[0] == [.panic, .allNotesOff])
+            #expect(state.hasSweepWork(after: 0))
+            var next = [SafetyFlagSet](repeating: [], count: state.scopes)
+            state.sweepAcknowledging(into: &next)
+            let nextSweepIsEmpty = next.allSatisfy(\.isEmpty)
+            #expect(nextSweepIsEmpty)
+            #expect(!state.hasSweepWork(after: 0))
+            #expect(state.wait(worker: 0, phase: "ack", current: 0, deadline: stressDeadline(), {
+                state.acknowledged.load(ordering: .acquiring) == state.signalled.load(ordering: .acquiring)
+            }))
+            state.complete()
+            #expect(state.hasSweepWork(after: 0))
+            state.sweep(into: &union)
+            #expect(state.completed.load(ordering: .acquiring) == 1)
+            #expect(union[0] == [.panic, .allNotesOff])
+            #expect(state.timeouts.load(ordering: .acquiring) == 0)
+        }
+
+        @Test func contentionNotificationsBeforeWaitAreCoalescedAndRetained() throws {
+            let state = OwnershipContention(flags: try #require(safetyFlags(scopes: 8)), rounds: 1)
+            for _ in 0..<20 { state.signal() }
+            for worker in 0...state.requesters {
+                #expect(state.consumeWake(worker: worker, until: .now()))
+                #expect(!state.consumeWake(worker: worker, until: .now()))
+            }
+            state.complete()
+            #expect(state.consumeWake(worker: 0, until: .now()))
+            #expect(!state.consumeWake(worker: 0, until: .now()))
+        }
+
+        @Test func contentionExpiryRecordsOnlyTheFirstWait() throws {
+            let state = OwnershipContention(flags: try #require(safetyFlags(scopes: 8)), rounds: 1)
+            let expired = ContinuousClock.now - .seconds(1)
+            #expect(!state.wait(worker: 0, phase: "ack", current: 7, deadline: expired, { false }))
+            let first = state.diagnostic
+            #expect(first.contains("worker=0 phase=ack round=7"))
+            #expect(first.contains("controls=(round:0,signal:0,ack:0,completed:0)"))
+            #expect(first.contains("elapsed=") && first.contains("last=startup idle="))
+            #expect(!state.wait(worker: 4, phase: "signal", current: 8, deadline: expired, { false }))
+            #expect(state.diagnostic == first)
+            #expect(state.timeouts.load(ordering: .acquiring) == 2)
+        }
+
+        /// Four requester `Thread`s and one taker `Thread` run each round concurrently. Every
         /// (scope, flag) pair is requested exactly once per round by one requester, so a later request never
         /// repairs a lost one. Each requester also hands off mid-round, so overlap is guaranteed, not left to
         /// scheduling.
         @Test(.timeLimit(.minutes(1)))
         func stressConcurrentSafetyRequestsAreNeverLost() throws {
-            let state = Contention(flags: try #require(safetyFlags(scopes: 8)), rounds: 2_000)
+            let state = OwnershipContention(flags: try #require(safetyFlags(scopes: 8)), rounds: 2_000)
             let deadline = stressDeadline()
             let bodies: [@Sendable () -> Void] = (0..<state.requesters).map { index in
                 { state.requester(index, deadline: deadline) }
             } + [{ state.taker(deadline: deadline) }]
             // Read worker-owned results only after every thread has joined; a timed-out worker may still write them.
-            try #require(runOnThreads(deadline: deadline, bodies), "a thread timed out at the barrier or join")
-            #expect(state.timeouts.load(ordering: .acquiring) == 0, "a bounded wait timed out")
+            try #require(runOnThreads(deadline: deadline, bodies),
+                         "a thread timed out at the barrier or join; \(state.diagnostic)")
+            #expect(state.timeouts.load(ordering: .acquiring) == 0, "\(state.diagnostic)")
             #expect(state.lost == 0)
             #expect(state.overlapped == state.rounds)
         }
