@@ -623,6 +623,15 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(any(a[:3] == ["xcrun", "simctl", "create"] for a in fixture.calls), not prebuild)
                 self.assertFalse(fixture.device_root.exists())
                 self.assertEqual(summary["cleanup_failures"], [])
+                if prebuild:
+                    self.assertEqual(fixture.calls, [["git", "rev-parse", "HEAD"]])
+                    self.assertEqual(summary["phase"], "runtime prebuild")
+                    self.assertEqual(summary["guard"], "reviewed integrated source verified; build not yet verified")
+                    for key in ("xcode", "simulator_sdk", "macos", "device_udid", "xctestrun_sha256",
+                                "run_id", "result", "test_exit_code", "receipts_published"):
+                        self.assertEqual(summary[key], "not available")
+                    self.assertNotEqual(summary["end_utc"], "not available")
+                    self.assertIn('"prebuild": "refused"', fixture.markdown)
                 if fault == "ancestry":
                     self.assertEqual(host.commands, [])  # No extra probes after refusal.
 

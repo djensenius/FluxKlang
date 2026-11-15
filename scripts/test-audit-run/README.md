@@ -53,8 +53,14 @@ first run's value or authentication of library bytes. Both earlier artifacts rem
 untouched. **#708** tracks compatibility; **#709** supplied the separately reviewed
 runtime-backed profile, not proof of its acceptance on a hosted runner.
 
-Before device creation/build, `ios_runtime.verified_checker()` performs the actual
-fixed tool/runtime, signature, digest, no-follow ownership, alias and held-FD
+A pre-checkout fixed-path `/usr/bin/stat` step logs unauthenticated OS ownership/type/mode
+only, not runtime authority; failure skips observation and summary upload because no owned
+observation workspace was allocated. It neither changes permissions nor replaces the verifier.
+
+After summary/workspace allocation and pure source preflight, but before environment
+Xcode/SDK reporting, project generation or device creation/build (#710),
+`ios_runtime.verified_checker()` performs the actual fixed tool/runtime,
+signature, digest, no-follow ownership, alias and held-FD
 read-only mount checks documented below. `runtime_evidence.prebuild` becomes
 `accepted` **only after successful context exit**, including exit rechecks.
 Then the existing combined scheme is built and exactly one generated xctestrun

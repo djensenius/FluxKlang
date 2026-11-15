@@ -32,6 +32,18 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Unauthenticated fixed-path OS metadata (not authority)
+        id: tool_path_metadata
+        timeout-minutes: 1
+        shell: /bin/bash --noprofile --norc -euo pipefail {0}
+        run: |
+          printf '%s\n' 'UNAUTHENTICATED OS METADATA ONLY; NOT runtime authority'
+          /usr/bin/stat -f 'path=%N type=%HT uid=%u gid=%g mode=%Sp raw_mode=%Op dev=%d inode=%i' \
+            '/' '/Applications' '/Applications/Xcode_27.1.app' '/Applications/Xcode_27.1.app/Contents' \
+            '/Applications/Xcode_27.1.app/Contents/Developer' '/Applications/Xcode_27.1.app/Contents/Developer/usr' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin/xcodebuild' \
+            '/Applications/Xcode_27.1.app/Contents/Developer/usr/bin/simctl'
       - uses: actions/checkout@v6.0.3
         id: checkout
         timeout-minutes: 5
@@ -43,7 +55,7 @@ jobs:
           install_args: xcodegen
       - name: Build/preflight-only metadata diagnostic (no test launch)
         id: observation
-        if: always()
+        if: always() && steps.tool_path_metadata.outcome == 'success'
         timeout-minutes: 100
         env:
           SETUP_OUTCOME: ${{ steps.checkout.outcome }}/${{ steps.mise.outcome }}
@@ -52,7 +64,7 @@ jobs:
         # MetadataDiagnostic always stops before preparation and rejects test/boot/install commands.
         run: python3 scripts/test-audit-run/ios_simulator_observation.py
       - name: Upload sanitized summaries only
-        if: always()
+        if: always() && steps.tool_path_metadata.outcome == 'success'
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

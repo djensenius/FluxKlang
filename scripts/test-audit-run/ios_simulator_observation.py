@@ -295,6 +295,9 @@ class Observation:
         self.state["guard"] = "reviewed integrated source verified; build not yet verified"
         self.state["python"] = sys.version
         require(sys.version_info >= (3, 7), "Python 3.7+ required")
+        self.setup_tools()
+
+    def setup_tools(self):
         self.state["xcode"] = self.run([DEVELOPER + "/usr/bin/xcodebuild", "-version"]).stdout
         require(self.state["xcode"].startswith("Xcode 27.1\n"), "not Xcode 27.1")
         self.state["macos"] = self.run(["sw_vers", "-productVersion"]).stdout.strip()
@@ -652,11 +655,13 @@ class MetadataDiagnostic(Observation):
             # Only after the real verifier's context exit/rechecks have completed.
             evidence[stage] = "accepted"
 
-    def allocate_device(self):
+    def setup_tools(self):
+        # #710: after summary/source setup, before any environment Xcode/project commands.
         with self.runtime_check("prebuild"):
             with ios_runtime.verified_checker():
                 pass
-        super().allocate_device()
+        self.state["phase"] = "setup"
+        super().setup_tools()
 
     def run(self, argv, **kwargs):
         # Defense in depth if a later change accidentally reaches the inherited launch path.
