@@ -1,5 +1,107 @@
 # Mac and iOS audit-run preparation (partial regression only)
 
+## Dedicated hosted iOS observation (#694; part of #60, roadmap #48)
+
+`.github/workflows/ios-isolated-observation.yml` and
+`ios_simulator_observation.py` implement one bounded, summary-only observation.
+**Local implementation is not permission to publish or execute.** The coordinator
+must normal-merge `main` containing **both #699 and #703**, independently review
+the combined tree, and only then push/allow one hosted attempt. This branch's
+base includes #699's reviewed summary helper, **not #703's receipt guard**.
+There is no merge, dispatch, native execution, guard bypass, or profile change in
+this implementation.
+
+### Launch gates and receipt strategy
+
+- Pinned `xcode-27` / Xcode 27.1; the existing pinned checkout/mise/upload actions,
+  XcodeGen version/project-sync checks and committed-package drift checks are
+  reused. The combined `FluxKlangIsolatedTests` scheme alone is built, Debug,
+  `CODE_SIGNING_ALLOWED=NO`, `ARCHS=arm64`, in a fresh owned DerivedData directory.
+  This is **not** the Apple qualification scheme or a claim of an unsandboxed host.
+- Initial policy is exactly **iOS 27.0 / iPhone 17**, from
+  `docs/transformation/toolchain-inventory.md`, not a verified current runner.
+  Runtime and device-type identifiers come from `simctl list --json`, including
+  availability, build, supported device types and numeric min/max runtime range.
+  Absent, duplicate, unavailable, incompatible or unsupported JSON/layout data
+  refuses; there is no guessed identifier, latest fallback or download.
+- A uniquely named device is created; only its returned canonical UUID, absent
+  from the pre-create inventory, is adopted. Build and test destinations use this
+  UUID. No global booted device or physical device is used.
+- Exactly one generated xctestrun is selected and its SHA256 computed once as a
+  **run-local, not independently reviewed pin**. The unchanged `prepare.py`
+  prepares and validates `ios-simulator-isolated-unit-ui-v1`. Validation repeats
+  immediately before launch against that same pin, never a repaired/repinned
+  envelope. Both unit/UI identities, literal `1/0/0` flags and the three matching
+  audit UUID insertions remain the closed profile's responsibility.
+- Source digests require the exact #703 guard implementation reviewed at
+  `00c4d510` (implementation `edd9feb`), plus the existing UI prelaunch
+  `-ui-testing`/matching UUID/flags checks and lazy fake-service selection.
+  A fresh unit executable must contain its own defined guard/anchor/scope symbols
+  and marker string; built/installed unit bytes must still match at launch.
+  Source changes require independent review, not a runtime
+  override. The current pre-#703 tree **refuses before build/device creation**.
+- Only then is the exact empty regular `FluxKlangAuditRequireFileReceipts-v1`
+  created **directly in `FluxKlangTests.xctest`**, not the UI runner or host root.
+  The reviewed guard uses its own class anchor and executable-image check;
+  explicit mode requires a valid file directory before a unit scope body and
+  cannot silently use attachment publication.
+- The owned device is booted; `simctl install` installs the built unit-host app
+  **without launching it**. `get_app_container <owned UUID> <app ID> app/data`
+  must resolve its installed marker and own data container. Only the standard,
+  canonical nonsymlink
+  `$HOME/Library/Developer/CoreSimulator/Devices/<owned UUID>/data/Containers/{Bundle,Data}/Application/<returned container UUID>`
+  layout is supported. An unexpected API/path/ownership result refuses rather
+  than guessing. A fresh absolute **0700** receipt directory is exclusively
+  created inside that app's own data container. Container/directory identities,
+  owner, mode, marker and emptiness are rechecked immediately before launch.
+- `TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR` is supplied outside the validated
+  xctestrun, with no extra envelope environment keys. The single
+  `test-without-building` uses the owned device and `-parallel-testing-enabled NO`;
+  no `-test-iterations 1`, filters, retries or fallback. UI runner/app transport
+  stays separate: no new UI receipt-environment protocol.
+
+**Unproven runtime boundaries:** host filesystem checks do not establish iOS
+sandbox access or Xcode's `TEST_RUNNER_` forwarding. The #703 process guard is
+required, not simulated proof of either. Xcode reinstallation may invalidate a
+container: the process guard must refuse inaccessible file transport, and
+post-run identity checks reject changed containers. No directory is recreated,
+permissions widened, or host/global-temp fallback attempted. Guard/publication
+failure ends the attempt. This is not earliest-host isolation, descendant
+coverage, or #60 qualification. No current hosted inventory/API/build/runtime
+success is claimed.
+
+### Evidence and cleanup
+
+The runner retains sanitized JSON/Markdown outside its generated workspace,
+including checked-out SHA separately from PR/event SHA, pin, audit ID, runtime
+build/type, sanitized device UUID/argv, times, actual test exit (or unavailable),
+test/audit/file counts and separate refusal/cleanup outcomes. Missing evidence
+is not zero. A zero Xcode exit without positive test/file evidence is not success.
+Receipt contents and raw xcresults/logs are never uploaded; receipt filename/path
+forms and non-run UUIDs are redacted **before** truncation in both formats using
+the reviewed shared redaction primitives plus an iOS adapter. Mac formatting and
+semantics are unchanged.
+
+Command and overall deadlines reserve cleanup time. Normal errors, partial
+boot/install failures and handled cancellation always attempt shutdown/delete of
+only the returned owned UUID, then remove only the identity-checked generated
+workspace (DD, metadata and results). Simulator deletion removes its receipt
+outputs; failed deletion is reported, not replaced by recursive deletion of a
+simulator path. Foreign files/devices and broader runner temp/workspace survive.
+No safe cleanup can be promised after host loss/SIGKILL, or a create failure that
+never returns a usable UUID; those ownership gaps are not repaired by sweeping
+inventory. Initial sanitized summaries survive a later interrupted run.
+The artifact selects only the two files advertised from this run's exclusively
+created summary directory, has a run-attempt suffix, and missing files fail upload.
+
+Local checks require no Apple tools or dependencies:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/test-audit-run -p 'test_prepare*.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/test-audit-run -p 'test_ios*.py'
+actionlint -config-file .github/actionlint.yaml .github/workflows/ios-isolated-observation.yml
+```
+
 `prepare.py` is an external, Python-standard-library metadata preparer, **never a
 launcher**. It generates a fresh UUID4 before any hypothetical future launch.
 It imports no app/production modules and performs no subprocess, network,
