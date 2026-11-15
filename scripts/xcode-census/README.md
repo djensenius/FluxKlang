@@ -2,8 +2,11 @@
 
 Producer 43697825734 passed strict arm64 compilation, 15 fixtures and loader
 checks for reviewed `de143300`; the real census was skipped. Its sample fixture
-reported 50 unknown symlink ACLs, **not positive ACL completeness**. This diagnostic/
-positive-fixture revision still requires reviewed hosted validation. No result
+reported 50 unknown symlink ACLs, **not positive ACL completeness**. Producer
+43699992495 compiled `f9eb960c` but failed its regular empty-FD oracle before
+symlink creation: probe 0 decoded a valid empty ACL, then the getter returned
+NULL/ENOENT. Loader inspection/census were skipped. This fixture correction
+still requires reviewed hosted validation. No result
 authorizes provisioning, hardening, root delivery, bootstrap or iOS launches.
 Unauthenticated filesystem metadata is not runtime authority.
 
@@ -24,6 +27,58 @@ listed artifact files exclude the fixture executable and other workspace
 files; each evidence file is <=256 KiB, binary <=2 MiB, total <=4 MiB.
 **Do not consume PR-produced artifacts for bootstrap.** Custody, root delivery,
 whole-bundle provisioning and bootstrap order remain separate unapproved gates.
+
+Producer-only `producer_capture.py` collects command output through a nonblocking
+pipe with a monotonic deadline: 60 seconds for identity/inspection/mocked tests,
+90 for hosted process fixtures, 600 for make/fixtures, 660 for census.
+Output ceilings remain 128 KiB (256 KiB for make). It owns a new session and
+leaves the leader unreaped until pipe EOF
+or failure; inherited pipe holders cannot bypass the deadline. On timeout,
+overflow or read failure it SIGKILLs only that anchored process group and allows
+three seconds to reap, never an unbounded context-manager wait. This assumes a
+single child owner/no external reaper and requires default SIGCHLD disposition.
+Detached/escaped descendants are not containment-verified; unreaped children
+or cleanup errors fail and remain runner-teardown obligations. Spawn/kernel
+calls and evidence-file I/O are outside the collector's interruptible waits;
+the 40-minute job ceiling leaves room for sequential budgets and uploads.
+Partial output is saved before failure (`producer.log`, `census.txt`, or the
+last identity/inspection/test `capture.txt`), with the last capture's outcome,
+actual exit code, byte count and cleanup status in `capture.json`. A zero leader
+exit does not override a pipe timeout or a successful wait returning after the
+absolute deadline; an already-reaped leader is never signalled. Failed make exits
+stop before JSON validation; successful fixtures still must pass the same JSON escaping gate.
+
+The helper and both fixture sources are included in source identity hashes.
+`python3 -B -m unittest discover -s scripts/xcode-census -p test_producer_capture.py`
+(from the repository root) runs pure mocked clock/pipe/process tests, without
+launching or signalling children or writing evidence. The separate
+`hosted_capture_fixtures.py` is not unittest-discoverable and requires the explicit
+`--hosted-process-fixtures` argument plus GitHub-hosted macOS/nonroot guards;
+ordinary local test commands cannot enable it. These are accidental-execution
+guards, not authentication. The producer explicitly runs it under a 90-second
+capture ceiling. Its quiet, exited-leader/inherited-pipe and overflow cases use
+eight-second deadlines, 1 KiB output caps, real owned Python sessions, and finite
+30-second child fallback lifetimes. They verify failure classification, persisted
+partial output/status, pre-reap group signalling and actual leader reaping;
+owned-file locks check holder resource release without signalling descendant
+PIDs. Success removes only named owned temporary files; failure leaves them for
+runner teardown. Bounded numeric summaries go to the producer job log (and outer
+`capture.txt` on failure). Real process fixtures and native checks have NOT run
+locally and still require reviewed hosted execution.
+
+A harness-owned context encloses capture and all validation. On every exit it
+uses saved real primitives: only an unreaped leader anchors a group signal,
+and saved waits allow three seconds to reap, with one bounded retry after holder
+release. Closing a private control pipe requests holder exit even after its
+leader was reaped; a separate lifetime-pipe EOF and owned-file lock release must
+be observed within five seconds. No stale descendant/group IDs are signalled.
+Cleanup has at most eleven seconds of waits per case, independent of capture's
+status/cleanup and the child alarm. Capture evidence is never overwritten;
+cleanup failures are reported separately without replacing an initial exception
+(also attached as exception notes where supported). Failed cleanup cannot pass.
+Default mocks cover unexpected capture exceptions, failed termination/reaping,
+and cooperative release/timeout after leader reaping; all their process, signal,
+pipe, clock, lock and output primitives are mocked before owner construction.
 
 Hosted-only commands, from this directory:
 
@@ -80,7 +135,7 @@ paths. One shared scratch area avoids large recursive ACL buffers. Each FD
 reserves 64 KiB for stack/libSystem bookkeeping. This is an allocation model,
 not an OS RSS limit: dyld/runtime mappings are outside it. Time checks occur
 between calls, not inside a stalled kernel call or output write; the hosted
-20-minute job timeout is the outer bound. Read-only syscalls can still update
+40-minute job timeout is the outer bound. Read-only syscalls can still update
 OS-maintained access metadata. No claim of zero kernel/cache side effects.
 
 ## Focused Darwin obligations
@@ -90,7 +145,7 @@ Primary sources consulted (declarations are taken from the build's Darwin SDK):
 `bsd/sys/{attr,kauth}.h`, `bsd/vfs/vfs_{attrlist,cache,lookup,vnops,subr}.c`;
 [Libc 71bbe35](https://github.com/apple-oss-distributions/Libc/tree/71bbe350ab79eef58113991d817ccc6165061a64)
 `posix1e/{acl,acl_entry,acl_file,acl_translate,aclvar}.*`,
-`gen/FreeBSD/{opendir,readdir,telldir}.*`.
+`gen/FreeBSD/{opendir,readdir,telldir}.*`, `sys/statx_np.c`, `gen/filesec.c`.
 
 * Directory `acl_get_fd_np` NULL/error is unknown, never empty. Darwin ACL iteration uses
   0 for an entry and -1/EINVAL for end; the fixed ACE ceiling bounds iteration.
@@ -107,7 +162,18 @@ Primary sources consulted (declarations are taken from the build's Darwin SDK):
   `vfs_attrlist.c:3532–3573` resolves via LOOKUP/OP_GETATTR with no FOLLOW,
   queries attributes and releases the vnode reference; it does not open it.
 * Real positive fixtures require explicit regular empty/nonempty ACLs, successful
-  decoding and independent `acl_get_fd_np` entry counts; unknown is not a pass.
+  decoding and complete census results; unknown is not a pass. Nonempty FD/link
+  getter oracles still require an allocated ACL and matching entry count.
+  The generic `acl_get_fd(3)` manual documents NULL/errors, not guaranteed empty
+  ACL allocation. Pinned Libc `statx_np.c:197–214` drops records shorter than
+  `sizeof(kauth_filesec)` (68 bytes, including one ACE); the empty record is 44.
+  `filesec.c:148–151` returns ENOENT for that absent ACL property, propagated by
+  `acl_file.c:85–89`. On a valid held FD this need not mean a missing pathname.
+  Only the known empty regular fixture accepts this NULL/ENOENT getter outcome,
+  after positive zero-entry decoding, with held-FD and parent/name identity
+  checks before/after. Arbitrary errors, missing paths, omitted attributes and
+  the link oracle get no such exception. Empty-FD phases 0 (initial) and 4
+  (after link setter) log only NULL status/errno; target emptiness stays mandatory.
   Libc `acl_set_link_np` unconditionally refuses links (`acl_file.c:166–176`),
   but this does not prove kernel ACL queries unsupported. The fixture instead
   uses nofollow `setattrlist` with SDK `acl_copy_ext_native` serialization, then
@@ -118,7 +184,7 @@ Primary sources consulted (declarations are taken from the build's Darwin SDK):
   length, returned bits, reference position/offset/length, decoder status
   (0 OK, 1 omitted, 2 NOACL, 3 invalid) and count; never ACL bytes/UUIDs.
   Probe count 4294967295 means no count was decoded, not an observed ACL size.
-  All new positive/diagnostic expectations remain pending hosted execution.
+  Empty-FD reconciliation and subsequent link/fixture checks await a hosted rerun.
 * Libc `fdopendir` can allocate an entire union directory: refuse union mounts
   before calling it. Non-union `readdir` buffers in the cited implementation
   grow from 2 to 8 KiB; ACL objects have fixed slots. Hosted SDK/runtime behavior,

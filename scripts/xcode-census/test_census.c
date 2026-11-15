@@ -395,6 +395,31 @@ oracle_entries(acl_t acl)
 }
 
 static void
+empty_fd_oracle(int fd, unsigned phase)
+{
+    /* Fixture-only Libc statx/filesec empty-ACL limitation (see README).
+     * ENOENT is acceptable ONLY after positive zero-entry metadata on this
+     * held, known-created regular file; it is not a general ACL/error rule. */
+    struct stat held, named, after;
+    REQUIRE(fstat(fd, &held) == 0 && S_ISREG(held.st_mode) &&
+            held.st_uid == getuid() && held.st_nlink == 1);
+    REQUIRE(fstatat(rootfd, "empty", &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+            named.st_dev == held.st_dev && named.st_ino == held.st_ino);
+    uint32_t count;
+    REQUIRE(acl_probe("empty", phase, &count) == XC_ACL_OK && count == 0);
+    errno = 0;
+    acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+    int error = acl ? 0 : errno;
+    printf("ACL empty_fd phase=%u null=%d errno=%d\n", phase, acl == NULL, error);
+    if (acl) REQUIRE(oracle_entries(acl) == 0);
+    else REQUIRE(error == ENOENT);
+    REQUIRE(fstat(fd, &after) == 0 && after.st_dev == held.st_dev &&
+            after.st_ino == held.st_ino && after.st_nlink == 1);
+    REQUIRE(fstatat(rootfd, "empty", &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+            named.st_dev == after.st_dev && named.st_ino == after.st_ino);
+}
+
+static void
 real_acl_and_read_error(void)
 {
     file("empty");
@@ -408,9 +433,7 @@ real_acl_and_read_error(void)
     acl_t empty = acl_init(0);
     REQUIRE(empty != NULL && acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0);
     REQUIRE(acl_free(empty) == 0);
-    decoded = acl_probe("empty", 0, &count);
-    REQUIRE(oracle_entries(acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) == 0);
-    REQUIRE(decoded == XC_ACL_OK && count == 0); /* omission cannot pass */
+    empty_fd_oracle(fd, 0); /* explicit decoded zero remains mandatory */
     REQUIRE(scan(NULL, NULL, NULL) == 0 && report.acl_empty == 1 && !report.acl_unknown);
 
     REQUIRE(symlinkat("empty", rootfd, "acl-link") == 0);
@@ -434,7 +457,7 @@ real_acl_and_read_error(void)
     printf("ACL link_set syscall=%d errno=%d\n", status, error);
     REQUIRE(status == 0 || error == ENOTSUP);
     decoded = acl_probe("acl-link", 2, &count);
-    REQUIRE(oracle_entries(acl_get_fd_np(fd, ACL_TYPE_EXTENDED)) == 0); /* target unchanged */
+    empty_fd_oracle(fd, 4); /* setter must leave the regular target empty */
     if (status == 0) {
         REQUIRE(oracle_entries(acl_get_link_np(path, ACL_TYPE_EXTENDED)) == 1);
         REQUIRE(decoded == XC_ACL_OK && count == 1);

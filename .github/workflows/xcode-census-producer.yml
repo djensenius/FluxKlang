@@ -19,7 +19,8 @@ permissions:
 jobs:
   producer:
     runs-on: xcode-27
-    timeout-minutes: 20
+    # Leaves room for sequential capture ceilings, bounded cleanup and upload.
+    timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       LC_ALL: C
@@ -38,31 +39,34 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
-          python3 - <<'PY'
+          python3 -B - <<'PY'
           import hashlib
           import json
           import os
           from pathlib import Path
-          import subprocess
+          import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture
           assert os.getuid() != 0 and os.geteuid() != 0, "nonroot producer required"
-          assert subprocess.check_output(["uname", "-m"], text=True).strip() == "arm64"
-          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          assert sha == os.environ["GITHUB_SHA"], "checkout must match event SHA"
-          assert sha == os.environ["WORKFLOW_SHA"], "workflow must match event SHA"
           out = Path("scripts/xcode-census/build/evidence")
           out.mkdir(parents=True, exist_ok=False)
+          assert capture(["uname", "-m"]).decode().strip() == "arm64"
+          sha = capture(["git", "rev-parse", "HEAD"]).decode().strip()
+          assert sha == os.environ["GITHUB_SHA"], "checkout must match event SHA"
+          assert sha == os.environ["WORKFLOW_SHA"], "workflow must match event SHA"
           workflow = ".github/workflows/xcode-census-producer.yml"
           sources = [workflow] + [
               "scripts/xcode-census/" + name for name in
-              ("census.c", "census.h", "main.c", "test_census.c", "Makefile", "README.md")
+              ("census.c", "census.h", "main.c", "test_census.c", "Makefile", "README.md",
+               "producer_capture.py", "test_producer_capture.py", "hosted_capture_fixtures.py")
           ]
           identity = {
               "role": "producer-only; no bootstrap or iOS authority",
               "source_sha": sha,
               "workflow_sha": os.environ["WORKFLOW_SHA"],
               "workflow_ref": os.environ["WORKFLOW_REF"],
-              "workflow_blob": subprocess.check_output(
-                  ["git", "rev-parse", sha + ":" + workflow], text=True).strip(),
+              "workflow_blob": capture(
+                  ["git", "rev-parse", sha + ":" + workflow]).decode().strip(),
               "repository": os.environ["GITHUB_REPOSITORY"],
               "event": os.environ["GITHUB_EVENT_NAME"],
               "ref": os.environ["GITHUB_REF"],
@@ -82,56 +86,45 @@ jobs:
       - name: Strict native build and owned-temp fixtures ONLY
         working-directory: scripts/xcode-census
         run: |
-          # pipefail preserves make/test failure; consumer drains without
-          # storing more than 256 KiB even if a compiler/test is noisy.
-          make all check 2>&1 | python3 -c '
-          import json, pathlib, sys
-          limit = 262144
-          used = 0
-          overflow = False
+          python3 -B - <<'PY'
+          import json
+          import sys
+          from producer_capture import capture
+          capture([sys.executable, "-B", "-m", "unittest", "-v", "test_producer_capture"])
+          print(capture([sys.executable, "-B", "hosted_capture_fixtures.py",
+                         "--hosted-process-fixtures"], timeout=90).decode(), flush=True)
+          data = capture(["make", "all", "check"], timeout=600, limit=262144,
+                         output="producer.log")
+          sys.stdout.buffer.write(data)
           fixture_json = 0
-          with pathlib.Path("build/evidence/producer.log").open("wb") as out:
-              for line in iter(lambda: sys.stdin.buffer.readline(limit + 1), b""):
-                  if used + len(line) > limit:
-                      overflow = True
-                      continue
-                  used += len(line)
-                  out.write(line)
-                  sys.stdout.buffer.write(line)
-                  if line.startswith(b"{"):
-                      record = json.loads(line)
-                      assert record["scanned_all"] and not record["complete"]
-                      assert record["samples_omitted"] > 0
-                      assert any("\n" in s["path"] for s in record["samples"])
-                      fixture_json += 1
-          assert not overflow, "producer log budget exceeded"
+          for line in data.splitlines():
+              if line.startswith(b"{"):
+                  record = json.loads(line)
+                  assert record["scanned_all"] and not record["complete"]
+                  assert record["samples_omitted"] > 0
+                  assert any("\n" in s["path"] for s in record["samples"])
+                  fixture_json += 1
           assert fixture_json == 1, "missing fixture JSON escaping check"
-          '
+          PY
 
       - name: Inspect production architecture, symbols and direct load commands
         run: |
-          python3 - <<'PY'
+          python3 -B - <<'PY'
           import hashlib
           import json
           import os
           from pathlib import Path
           import re
-          import subprocess
+          import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture as capture_bytes
           assert os.getuid() != 0 and os.geteuid() != 0
           binary = Path("scripts/xcode-census/build/xcode-census")
           out = binary.parent / "evidence"
           assert 0 < binary.stat().st_size <= 2097152, "binary size budget"
 
           def capture(argv):
-              with subprocess.Popen(argv, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT) as process:
-                  data = process.stdout.read(131073)
-                  if len(data) > 131072:
-                      process.kill()
-                      process.wait()
-                      raise AssertionError("inspection output budget")
-                  assert process.wait(timeout=60) == 0, "inspection failed"
-              return data.decode("utf-8", errors="strict")
+              return capture_bytes(argv).decode("utf-8", errors="strict")
 
           developer = os.environ["DEVELOPER_DIR"]
           compiler = developer + "/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -176,27 +169,19 @@ jobs:
       - name: Optional fixed-path READ-ONLY census (never on PR)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_census }}
         run: |
-          python3 - <<'PY'
+          python3 -B - <<'PY'
           import json
           import os
-          from pathlib import Path
-          import subprocess
           import sys
+          sys.path.insert(0, "scripts/xcode-census")
+          from producer_capture import capture
           assert os.getuid() != 0 and os.geteuid() != 0
-          with subprocess.Popen(
+          data = capture(
               ["scripts/xcode-census/build/xcode-census"],
-              stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-          ) as process:
-              data = process.stdout.read(131073)
-              overflow = len(data) > 131072
-              if overflow:
-                  process.kill()
-              result = process.wait(timeout=660)
-          Path("scripts/xcode-census/build/evidence/census.txt").write_bytes(data[:131072])
-          assert not overflow, "census output budget"
+              timeout=660, output="census.txt")
           record = json.loads(data)
-          print("census exit:", result, "complete:", record["complete"])
-          sys.exit(0 if result == 0 and record["complete"] else 1)
+          print("census exit: 0 complete:", record["complete"])
+          sys.exit(0 if record["complete"] else 1)
           PY
 
       - name: Bound explicit artifact set even after failure
@@ -213,6 +198,7 @@ jobs:
           files.update({"evidence/" + name: 262144 for name in (
               "identity.json", "producer.log", "compiler.json",
               "macho.txt", "binary.sha256", "census.txt")})
+          files.update({"evidence/capture.txt": 131072, "evidence/capture.json": 4096})
           total = 0
           for name, limit in files.items():
               path = base / name
@@ -240,3 +226,5 @@ jobs:
             scripts/xcode-census/build/evidence/macho.txt
             scripts/xcode-census/build/evidence/binary.sha256
             scripts/xcode-census/build/evidence/census.txt
+            scripts/xcode-census/build/evidence/capture.txt
+            scripts/xcode-census/build/evidence/capture.json
