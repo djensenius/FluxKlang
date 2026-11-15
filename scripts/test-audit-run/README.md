@@ -221,6 +221,43 @@ All profiles deliberately fix unrelated diagnostic/language/logging
 values as well. Broader acceptance requires separate review; this implementation
 conservatively refuses that drift rather than inferring a wider supported shape.
 
+## Hosted CI observation (#693)
+
+`.github/workflows/mac-isolated-observation.yml` runs one sealed
+`FluxKlangMacIsolatedTests` observation on the hosted `xcode-27` image. Part of
+#693 and #60; #60 remains open. It runs `build-for-testing`, requires exactly one
+generated `.xctestrun`, and computes its SHA-256 once in CI. That hash is a
+CI-computed pin, not an independently reviewed one: it binds only build,
+`prepare` and `validate` within this one run, and is never recomputed or
+re-pinned after a refusal. It then runs `prepare` and `validate` with
+`--profile mac-isolated-unit` and one `test-without-building`. Its argv follows
+the candidate argv under "Single-attempt Mac process library" below, without
+`-derivedDataPath` or `-test-iterations 1`: it keeps `-parallel-testing-enabled
+NO`, adds no filters or retries, and is recorded exactly. `-test-iterations 1`
+is omitted because an actual local Xcode 27.2 invocation rejected it (exit 64;
+no tests ran); behavior on Xcode 27.1 is unverified.
+
+A `prepare`/`validate` refusal is an expected possible first result: the
+`OBSERVED` allowlist exactly matches an earlier specimen, and Xcode 27.1 output
+may differ. A refusal is recorded, not repaired or retried; it is a result about
+the profile and toolchain, not evidence about #60. Two deviations are recorded
+in the run summary:
+
+- The build uses `CODE_SIGNING_ALLOWED=NO`, as `make test-mac` does. The host is
+  ad-hoc signed by the linker without entitlements and runs unsandboxed.
+- The fresh 0700 receipt directory is passed as
+  `TEST_RUNNER_FLUXKLANG_AUDIT_RECEIPT_DIR`, not in the xctestrun
+  `EnvironmentVariables`, because the closed profile adds only
+  `FLUXKLANG_AUDIT_RUN_ID` and the prepared output must not change. Delivery
+  through the `TEST_RUNNER_` prefix is unverified; a missing key is a known trap path.
+
+Only a summary is kept: counts, redacted and trimmed failure text, and
+receipt-file counts. Receipt filenames (published or `.partial`, including path
+forms) and UUIDs other than the run ID are redacted from xcresult text before it
+is truncated or stored (`observation_summary.py`). Receipt contents, the result
+bundle and DerivedData are not uploaded. This is an
+observation, not qualification of #60; the limits above still apply.
+
 ## Pure fixture checks
 
 ```sh
@@ -602,6 +639,11 @@ process tests prove neither compatibility nor incompatibility. Resolve that
 separately before any real call; do not investigate by executing/retrying a
 consumed attempt, adapting flags, adding a scheme or moving Products. This is
 not a supported execution workflow or permission to run tests/apps.
+
+Note: an actual local Xcode 27.2 invocation rejected `-test-iterations 1`
+("Must specify -test-iterations with more than 1 iteration.", exit 64) before
+any test ran. Do not copy that flag from this candidate argv; `mac_launch.py`
+itself is unchanged here.
 
 After claim, every runner path (including the longer `process-outcome.json`)
 is checked for literal UTF-8/NUL grammar, the 4,096-byte ceiling and local
