@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -311,35 +312,144 @@ class HostedFixture:
         return status, summary
 
 
+class CommandProcess:
+    # Exercise real context exit semantics: old code's implicit wait must fail,
+    # not disappear behind MagicMock.__exit__. No OS process or pipe exists.
+    __enter__ = subprocess.Popen.__enter__
+    __exit__ = subprocess.Popen.__exit__
+
+    def __init__(self, outcomes, wait_error=None):
+        self.pid, self.returncode = 12345, None
+        self.stdin, self.stdout, self.stderr = (io.BytesIO() for _ in range(3))
+        for stream in (self.stdin, self.stdout, self.stderr):
+            stream.close = mock.Mock(wraps=stream.close)
+
+        def communicate(input=None, timeout=None):
+            assert timeout is not None and timeout > 0, "unbounded communicate"
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            self.returncode = outcome
+            return "fixture stdout", "fixture stderr"
+
+        def wait(timeout=None):
+            assert timeout is not None and timeout > 0, "unbounded wait"
+            if wait_error is not None:
+                raise wait_error
+            if self.returncode is None:
+                self.returncode = 0  # Leader exited; a descendant may still hold its pipes.
+            return self.returncode
+
+        self.communicate = mock.Mock(side_effect=communicate)
+        self.wait = mock.Mock(side_effect=wait)
+
+
 class ObservationTests(unittest.TestCase):
     def test_demangler_symbol_input_uses_pipe_not_argv(self):
         argv = ["xcrun", "swift-demangle", "--compact"]
         # Larger than a typical ARG_MAX; only the fixed command ever enters argv.
         symbols = ("\n".join(GUARD_SYMBOLS) + "\n") * 1000
-        process = mock.MagicMock()
-        process.communicate.return_value = ("\n".join(GUARD_SYMBOLS.values()), "")
-        process.returncode = 0
-        with mock.patch.object(ios.subprocess, "Popen") as popen:
-            popen.return_value.__enter__.return_value = process
+        process = CommandProcess([0])
+        with mock.patch.object(ios.subprocess, "Popen", return_value=process) as popen:
             result = ios.commands(argv, cwd="/unused-mocked-path", env={}, timeout=120, input_text=symbols)
             self.assertEqual(popen.call_args[0], (argv,))
             self.assertEqual(popen.call_args[1]["stdin"], subprocess.PIPE)
+            self.assertEqual(popen.call_args[1]["bufsize"], 0)
             process.communicate.assert_called_once_with(input=symbols, timeout=120)
             self.assertEqual(result.returncode, 0)
 
     def test_command_timeout_reaps_only_its_mocked_group_and_preserves_exit(self):
-        process = mock.MagicMock()
-        process.pid, process.returncode = 12345, -15
-        process.communicate.side_effect = [subprocess.TimeoutExpired(["fixture"], 1), ("", "")]
-        with mock.patch.object(ios.subprocess, "Popen") as popen, \
+        process = CommandProcess([subprocess.TimeoutExpired(["fixture"], 1), -15])
+        with mock.patch.object(ios.subprocess, "Popen", return_value=process) as popen, \
                 mock.patch.object(ios.os, "killpg") as kill:
-            popen.return_value.__enter__.return_value = process
             with self.assertRaises(subprocess.TimeoutExpired) as raised:
                 ios.commands(["fixture"], cwd="/unused-mocked-path", env={}, timeout=1)
             self.assertEqual(raised.exception.returncode, -15)
             kill.assert_called_once_with(12345, ios.signal.SIGTERM)
             self.assertTrue(popen.call_args[1]["start_new_session"])
             self.assertEqual(process.communicate.call_count, 2)
+            self.assertEqual(process.wait.call_args_list, [mock.call(timeout=10)])
+            self.assertTrue(all(s.closed for s in (process.stdin, process.stdout, process.stderr)))
+
+    def test_command_escalation_streams_and_cleanup_errors_are_bounded_and_visible(self):
+        def timeout():
+            return subprocess.TimeoutExpired(["fixture"], 10, output=b"PARTIAL NOT PUBLISHED")
+
+        for case in ("escalate", "descendant", "term-error", "kill-error", "drain-error", "term-drain-error",
+                     "wait-timeout", "wait-error", "close-error", "initial-error", "group-gone", "cancel"):
+            with self.subTest(case=case):
+                first = (OSError("initial wait failed") if case == "initial-error" else
+                         KeyboardInterrupt("fixture cancellation") if case == "cancel" else timeout())
+                final = (OSError("final drain failed") if case == "drain-error" else
+                         timeout() if case in ("descendant", "wait-timeout", "wait-error", "group-gone") else -9)
+                wait_error = (timeout() if case == "wait-timeout" else
+                              OSError("final wait failed") if case == "wait-error" else None)
+                grace = OSError("grace drain failed") if case == "term-drain-error" else timeout()
+                process = CommandProcess([first, grace, final], wait_error)
+                if case == "descendant":
+                    process.returncode = 0  # Still signal the owned group even after leader exit.
+                if case == "close-error":
+                    process.stdout.close.side_effect = OSError("stdout close failed")
+                    self.addCleanup(io.BytesIO.close, process.stdout)  # Reclaim the deliberately failed fake stream.
+
+                def terminate(pid, signum):
+                    self.assertEqual(pid, process.pid)
+                    if case == "group-gone":
+                        raise ProcessLookupError("group gone")
+                    if (case == "term-error" and signum == ios.signal.SIGTERM
+                            or case == "kill-error" and signum == ios.signal.SIGKILL):
+                        raise PermissionError(1, "group signal denied")
+
+                with mock.patch.object(ios.subprocess, "Popen", return_value=process) as popen, \
+                        mock.patch.object(ios.os, "killpg", side_effect=terminate) as kill:
+                    with self.assertRaises((subprocess.TimeoutExpired, OSError, ios.Refusal, KeyboardInterrupt)) as raised:
+                        ios.commands(["fixture"], cwd="/unused", env={}, timeout=1, input_text="fixture")
+                self.assertEqual(popen.call_count, 1)
+                self.assertEqual(kill.call_args_list, [
+                    mock.call(process.pid, ios.signal.SIGTERM), mock.call(process.pid, ios.signal.SIGKILL)])
+                self.assertEqual([c.kwargs["timeout"] for c in process.communicate.call_args_list], [1, 10, 10])
+                self.assertEqual(process.wait.call_args_list, [mock.call(timeout=10)])
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    stream.close.assert_called_once()
+                self.assertTrue(process.stdin.closed and process.stderr.closed)
+                self.assertNotIn("PARTIAL NOT PUBLISHED", str(raised.exception))
+                self.assertEqual(raised.exception.returncode, process.returncode)
+                if case in ("escalate", "initial-error", "cancel"):
+                    self.assertIs(raised.exception, first)
+                else:
+                    self.assertIn("command cleanup failed", str(raised.exception))
+                    detail = {"term-error": "SIGTERM", "kill-error": "SIGKILL",
+                              "wait-timeout": "wait", "wait-error": "wait", "close-error": "stdout close",
+                              "term-drain-error": "SIGTERM communicate"}
+                    self.assertIn(detail.get(case, "SIGKILL communicate"), str(raised.exception))
+                if wait_error is not None:
+                    self.assertIsNone(raised.exception.returncode)
+
+    def test_failed_command_reaping_still_publishes_summary_and_cleans_owned_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = HostedFixture(Path(temporary).resolve())
+            execute = fixture.execute
+            timeout = lambda: subprocess.TimeoutExpired(["fixture"], 10)
+            process = CommandProcess([timeout(), timeout(), timeout()], timeout())
+
+            def failed_build(argv, **kwargs):
+                if "build-for-testing" in argv:
+                    with mock.patch.object(ios.subprocess, "Popen", return_value=process), \
+                            mock.patch.object(ios.os, "killpg", side_effect=PermissionError(1, "denied")):
+                        return ios.commands(argv, **kwargs)
+                return execute(argv, **kwargs)
+
+            fixture.execute = failed_build
+            status, summary = fixture.observe(ios.MetadataDiagnostic)
+            self.assertEqual((status, summary["test_launch_calls"], fixture.test_calls), (1, 0, []))
+            for key in ("run_id", "result", "test_exit_code", "receipts_published"):
+                self.assertEqual(summary[key], "not available")
+            self.assertIn("command cleanup failed", summary["refusal"])
+            self.assertIn("wait: TimeoutExpired", fixture.markdown)
+            self.assertIn("SIGKILL: PermissionError (errno=1)", fixture.markdown)
+            self.assertEqual(summary["cleanup_failures"], [])
+            self.assertIn(["xcrun", "simctl", "delete", DEVICE], fixture.calls)
+            self.assertFalse(fixture.device_root.exists())
 
     def test_inventory_exact_selection_and_closed_refusals(self):
         self.assertEqual(ios.select_inventory(copy.deepcopy(INVENTORY))["runtime_identifier"], RUNTIME)

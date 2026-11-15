@@ -161,28 +161,59 @@ def verify_sources(repo):
 
 def commands(argv, *, cwd, env, timeout, input_text=None):
     """Never a shell. Reap the owned command group on timeout/cancellation; no command retries."""
-    with subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_text is not None else None,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          universal_newlines=True, start_new_session=True) as process:
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_text is not None else None,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+                               universal_newlines=True, start_new_session=True)
+    failure, cleanup_errors = None, []
+
+    def failed(stage, error):
+        # Bounded diagnostics, not partial output or repeated potentially large argv.
+        cleanup_errors.append("%s: %s (errno=%s)" % (stage, type(error).__name__, getattr(error, "errno", None)))
+
+    try:
         try:
             stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except BaseException as exc:
+            failure = exc
             # This process group was created above, never discovered by name.
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
+            # Leader exit alone does not mean descendants released stdout/stderr.
+            for signum in (signal.SIGTERM, signal.SIGKILL):
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, signum)
                 except ProcessLookupError:
                     pass
-                process.communicate()
-            exc.returncode = process.returncode  # Preserve a known killed-command exit, not a fabricated 124.
-            raise
-        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+                except BaseException as error:
+                    failed(signum.name, error)
+                try:
+                    process.communicate(timeout=10)  # Cleanup output is discarded, never parsed.
+                except BaseException as error:
+                    if signum == signal.SIGKILL or not isinstance(error, subprocess.TimeoutExpired):
+                        failed(signum.name + " communicate", error)
+                else:
+                    break
+    finally:
+        # No Popen.__exit__ (unbounded wait). Unbuffered pipes also prevent stdin
+        # close from flushing pending writes into a stalled child. Never drain here.
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(process, name)
+            if stream is not None:
+                try:
+                    stream.close()
+                except BaseException as error:
+                    failed(name + " close", error)
+        try:
+            process.wait(timeout=10)
+        except BaseException as error:
+            failed("wait", error)
+    if cleanup_errors:
+        error = Refusal("command cleanup failed: %s; original failure: %s" %
+                        ("; ".join(cleanup_errors), failure if failure is not None else "none"))
+        error.returncode = process.returncode
+        raise error from failure
+    if failure is not None:
+        failure.returncode = process.returncode  # Preserve known exit or None, never fabricate 124.
+        raise failure
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 class Observation:

@@ -158,7 +158,12 @@ forms and non-run UUIDs are redacted **before** truncation in both formats using
 the reviewed shared redaction primitives plus an iOS adapter. Mac formatting and
 semantics are unchanged.
 
-Command and overall deadlines reserve cleanup time. Normal errors, partial
+Command and overall deadlines reserve cleanup time. Command failures and
+cancellation signal only the newly created process group:
+SIGTERM then SIGKILL if needed, each with a 10-second drain bound. Unbuffered
+streams are explicitly closed and the final wait is bounded to 10 seconds.
+Cleanup failures remain refusals; partial output is never promoted to a result,
+and unsuccessful termination/reaping is not claimed as success. Normal errors, partial
 boot/install failures and handled cancellation always attempt shutdown/delete of
 only the returned owned UUID, then remove only the identity-checked generated
 workspace (DD, metadata and results). Simulator deletion removes its receipt
