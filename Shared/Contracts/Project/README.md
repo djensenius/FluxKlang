@@ -214,6 +214,36 @@ checks run before path uniqueness, so input that is both oversized and has a
 duplicate path (a repeated extra, or an extra sharing a document's path) may
 report a size error rather than `duplicatePath`; it is refused either way.
 
-Later slices own staged export on a real disk adapter, migration and adoption,
-including packaging legacy imports. Bookmark resolution, document lifecycle and
-activation also remain separate obligations.
+## Staging on a real disk
+
+`DiskStagingFileSystem` runs staged export, import and recovery on a real
+directory. It holds the volume root and its parent open by descriptor and
+re-checks the root's name and identity before every primitive. Paths are
+resolved from the root one `O_DIRECTORY|O_NOFOLLOW` component at a time; an
+empty, `.`, `..` or NUL-containing component is refused with `.denied` before
+any IO, and no link is followed. Directories the adapter creates have their
+device and inode recorded; a recorded directory that is replaced, moved,
+retyped or swapped for a link, a renamed or replaced root, or a link used as
+a path component fails with `StagingIOFault.changed`. Records are keyed by the
+path's UTF-8 bytes, so an alias spelling (case or Unicode normalisation) is
+treated as unrecorded. Every listing reads through a fresh descriptor. Files
+are created exclusively and `fsync`ed, directories are synced with `fsync` (not
+`F_FULLFSYNC`), and `rename` uses `renameatx_np(RENAME_EXCL)`, so it never
+replaces. `removeTree` never follows a link, never removes (or descends into)
+a recorded directory whose identity changed, never crosses onto another device
+(`.crossVolume`), and counts and checks the whole tree within the package
+limits before it removes anything.
+
+Non-goals:
+- It detects concurrent mutation; it does not prevent it. A change between a
+  check and the call it guards is not caught.
+- It is not a file coordinator. A replace is two renames, not an atomic
+  `RENAME_SWAP`; second-volume (`EXDEV`, `st_dev`) behaviour is not exercised
+  by tests.
+- The backup name lies inside the confined root but was never created by the
+  adapter, so it is not identity-checked before it is removed.
+- Nothing in the app uses the adapter yet.
+
+Later slices own migration and adoption, including packaging legacy imports,
+app wiring of staged export and import, and an atomic swap replace. Bookmark
+resolution, document lifecycle and activation also remain separate obligations.
