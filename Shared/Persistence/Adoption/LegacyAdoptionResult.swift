@@ -38,15 +38,18 @@ struct LegacyAdoptionResult: Equatable, Sendable {
 extension LegacyAdoption {
     /// Adopts legacy bytes, or refuses with nothing produced. Order: byte bounds, versioned/undecodable
     /// probe, adapter, role derivation, then assembly. The same input always yields identical bytes.
+    /// `retaining` adds further caller-owned extra files (e.g. a whole `environments.json` as `.opaqueState`),
+    /// carried byte-for-byte and checked by the assembler against `policy`: only `.opaqueState` (listed) and
+    /// `.unlisted` roles are accepted, and a path colliding with any other member is refused, never overwritten.
     static func adopt(
         graphData: Data, endpointsData: Data? = nil, projectID: ProjectID, graphID: GraphID, name: String,
-        policy: ProjectPackageManifestPolicy
+        policy: ProjectPackageManifestPolicy, retaining extraOriginals: [ProjectPackageFile] = []
     ) throws(LegacyAdoptionRefusal) -> LegacyAdoptionResult {
         try preflight(graphData: graphData, endpointsData: endpointsData, limits: policy.packageLimits)
         let imported = try adapt(graphData: graphData, endpointsData: endpointsData, graphID: graphID)
         let project = try project(id: projectID, name: name, graph: imported.graph)
         return try LegacyAdoptionResult.assemble(
-            project: project, graph: imported.graph, originals: originals(imported), policy: policy
+            project: project, graph: imported.graph, originals: originals(imported) + extraOriginals, policy: policy
         )
     }
 }
