@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "36615549ef9b15fd3c39f44b609155ba9508b18f5764488f68ae87fd37c39464",
+    "sha256": "8b4ffceb27b684760d686b7c45f2ae90ca27073e043b2f74b6a911e930e376db",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -150,6 +150,8 @@
         "FluxKlangTests/PerformRecallTests+Release.swift",
         "FluxKlangTests/ProjectStagingTests+Recovery.swift",
         "FluxKlangTests/ProjectStagingTests+Scenario.swift",
+        "FluxKlangTests/ProjectStagingTests+Disk.swift",
+        "FluxKlangTests/ProjectStagingTests+DiskPrimitives.swift",
         "FluxKlangTests/Fixtures/Persistence/InMemoryStagingFileSystem.swift",
         "FluxKlangTests/MIDIProtocolTests.swift",
         "FluxKlangTests/RealtimeHandoffTests.swift",
