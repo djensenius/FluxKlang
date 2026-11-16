@@ -1,0 +1,61 @@
+# Kernel mirror manifest (reviewed): `<kind> <repo-relative path>`; `#` starts a comment line.
+#   tree    every *.swift file under a directory -> Sources/FluxKlang/<path> (any other file fails)
+#   exclude a file inside a tree that is not mirrored (must still exist)
+#   source  one file -> Sources/FluxKlang/<path>
+#   test    one file -> Tests/FluxKlangTests/<basename>
+# Every FluxKlangTests/RealtimeHandoffTests*.swift and KernelRetirementCarryTests*.swift must be listed as a
+# test (new files fail generation). `.DS_Store` files in a tree are ignored.
+# Sources keep their repo-relative layout: the kernel source-scan tests look for
+# ../../Sources/FluxKlang/Shared/Audio/Kernel/Events next to the test file.
+
+tree Shared/Audio/Kernel
+# Needs the app's project/graph layer (ProjectDocument, AudioRoutingCompiler); no mirrored test uses it.
+exclude Shared/Audio/Kernel/Processors/OfflineAudioRoutingProcessor.swift
+
+# Dependency closure. Events/SysExChunk+UMP.swift bridges the UMP SysEx7 codec:
+source Shared/MIDI/Protocol/UMP/UMPPacket.swift
+source Shared/MIDI/Protocol/UMP/UMPSysEx7Packet.swift
+source Shared/MIDI/Protocol/UMP/UMPRefusal.swift
+source Shared/MIDI/Protocol/UMP/UMPMessageType.swift
+# Used by the tests' .productionAccessAudit suite trait:
+source Shared/Store/ProductionAccessAudit.swift
+
+# Test support: the suite trait, and KernelRetirementCarryTests (functionBody/arrayMutations for the source scans).
+test FluxKlangTests/ProductionAccessScope.swift
+test FluxKlangTests/KernelRetirementCarryTests.swift
+test FluxKlangTests/KernelRetirementCarryTests+Capacity.swift
+
+test FluxKlangTests/RealtimeHandoffTests.swift
+test FluxKlangTests/RealtimeHandoffTests+Capacity.swift
+test FluxKlangTests/RealtimeHandoffTests+Catalog.swift
+test FluxKlangTests/RealtimeHandoffTests+Deadline.swift
+test FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift
+test FluxKlangTests/RealtimeHandoffTests+FanInOut.swift
+test FluxKlangTests/RealtimeHandoffTests+FanInStress.swift
+test FluxKlangTests/RealtimeHandoffTests+Faults.swift
+test FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrdering.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingAcknowledge.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingStress.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleOrderingTakeover.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmission.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
+test FluxKlangTests/RealtimeHandoffTests+Ownership.swift
+test FluxKlangTests/RealtimeHandoffTests+OwnershipContention.swift
+test FluxKlangTests/RealtimeHandoffTests+Policy.swift
+test FluxKlangTests/RealtimeHandoffTests+Ramps.swift
+test FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
+test FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
+test FluxKlangTests/RealtimeHandoffTests+Retire.swift
+test FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
+test FluxKlangTests/RealtimeHandoffTests+Scratch.swift
+test FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
+test FluxKlangTests/RealtimeHandoffTests+Starvation.swift
+test FluxKlangTests/RealtimeHandoffTests+SysEx.swift
+test FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
+test FluxKlangTests/RealtimeHandoffTests+Telemetry.swift
+test FluxKlangTests/RealtimeHandoffTests+UMPSysEx.swift

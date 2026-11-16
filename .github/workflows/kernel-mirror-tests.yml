@@ -1,0 +1,128 @@
+name: Kernel mirror tests
+
+# Pure render-kernel Swift Testing suites (#364, #64) in a throwaway SwiftPM mirror package:
+# Debug, Release (allocation probe) and Thread Sanitizer. A reference-model check, not real-time
+# certification and not #60 qualification. It never builds or launches the app or an app-hosted
+# test bundle. See scripts/kernel-mirror/README.md.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Shared/Audio/Kernel/**'
+      - 'Shared/MIDI/Protocol/UMP/**'
+      - 'Shared/Store/ProductionAccessAudit.swift'
+      - 'FluxKlangTests/RealtimeHandoffTests*'
+      - 'FluxKlangTests/KernelRetirementCarryTests*'
+      - 'FluxKlangTests/ProductionAccessScope.swift'
+      - 'scripts/kernel-mirror/**'
+      - '.github/workflows/kernel-mirror-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Shared/Audio/Kernel/**'
+      - 'Shared/MIDI/Protocol/UMP/**'
+      - 'Shared/Store/ProductionAccessAudit.swift'
+      - 'FluxKlangTests/RealtimeHandoffTests*'
+      - 'FluxKlangTests/KernelRetirementCarryTests*'
+      - 'FluxKlangTests/ProductionAccessScope.swift'
+      - 'scripts/kernel-mirror/**'
+      - '.github/workflows/kernel-mirror-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  kernel-mirror:
+    # Same preview image and Xcode as apple-build.yml; never fall back to another image or Xcode.
+    runs-on: xcode-27
+    # Same as apple-build.yml. No per-run timeout: macOS has no coreutils `timeout` by default.
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      TSAN_RUNS: 3
+      # Stress, cycle and re-admission suites (Swift Testing IDs: Module.Root/Nested/test()).
+      TSAN_FILTER: 'RealtimeHandoffTests.*(Cycle|Stress)'
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3 (peeled commit)
+        with:
+          persist-credentials: false
+
+      - name: Require the pinned Xcode toolchain
+        run: |
+          [ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ] || { ls -d /Applications/Xcode*.app || true; echo "::error::$DEVELOPER_DIR missing on this image (no fallback)"; exit 1; }
+          xcodebuild -version
+          # The swift on PATH must be the pinned Xcode's Swift 6.4 toolchain.
+          want="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+          found=$(xcrun --find swift)
+          [ "$found" = "$want" ] || { echo "::error::xcrun --find swift is '$found', not '$want'"; exit 1; }
+          via_xcrun=$(xcrun swift --version 2>&1); via_path=$(swift --version 2>&1)
+          echo "$via_xcrun"
+          [ "$via_path" = "$via_xcrun" ] || { echo "::error::swift on PATH ($(command -v swift)) differs from xcrun swift: $via_path"; exit 1; }
+          case $via_xcrun in *'Swift version 6.4'*) ;; *) echo "::error::not Swift 6.4: $via_xcrun"; exit 1 ;; esac
+          v=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macosx SDK $v"
+          case $v in [0-9]*) ;; *) echo "::error::macosx SDK version '$v' unparseable"; exit 1 ;; esac
+          [ "${v%%.*}" -ge 27 ] || { echo "::error::macosx SDK $v < 27.0 (no deployment downgrade)"; exit 1; }
+
+      - name: Generate the mirror package
+        run: |
+          mirror="$RUNNER_TEMP/kernel-mirror"; logs="$RUNNER_TEMP/kernel-mirror-logs"
+          mkdir "$mirror" "$logs"
+          generated=$(bash scripts/kernel-mirror/generate.sh "$mirror")
+          echo "$generated"
+          (cd "$mirror" && swift package describe)
+          { echo "MIRROR=$mirror"; echo "LOGS=$logs"; } >> "$GITHUB_ENV"
+          { echo "## Kernel mirror tests"; echo
+            echo "Reference model only: not RT certification, not #60 qualification."; echo
+            echo "${generated%% -> *}."; echo
+            echo "| Run | Swift Testing tests passed | Checked |"; echo "| --- | --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Debug, all mirror suites
+        run: |
+          cd "$MIRROR"
+          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest 2>&1 | tee "$LOGS/debug.log"
+          n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/debug.log" \
+            'readmissionRenderSourcesHaveNoLockOrArrayToken()' \
+            'retirementCarryHandoffRetireSourceHasNoArrayOrLockToken()' \
+            'carryRecordSourceContainsNoArrayMutation()')
+          echo "| Debug | $n | source scans ran |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Release, allocation probe
+        # Optimized: readmissionRenderPathAllocatesNothing() expects zero render-path allocations.
+        run: |
+          cd "$MIRROR"
+          FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest -c release -Xswiftc -enable-testing 2>&1 \
+            | tee "$LOGS/release.log"
+          n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/release.log" \
+            'readmissionRenderPathAllocatesNothing()' 'readmissionRenderSourcesHaveNoLockOrArrayToken()')
+          echo "| Release | $n | allocation probe ran and passed |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Thread Sanitizer, stress/cycle/re-admission suites
+        run: |
+          cd "$MIRROR"
+          for run in $(seq 1 "$TSAN_RUNS"); do
+            echo "::group::TSan run $run/$TSAN_RUNS"
+            status=0
+            FLUXKLANG_AUDIT_RUN_ID=$(uuidgen) swift test --disable-xctest --sanitize=thread --filter "$TSAN_FILTER" 2>&1 \
+              | tee "$LOGS/tsan-$run.log" || status=$?
+            echo "::endgroup::"
+            [ "$status" -eq 0 ] || { echo "::error::TSan run $run/$TSAN_RUNS: swift test exited $status"; exit "$status"; }
+            # The probe skips only when __tsan_init is loaded, so its TSan skip proves the runtime is active.
+            n=$(bash "$GITHUB_WORKSPACE/scripts/kernel-mirror/check-log.sh" "$LOGS/tsan-$run.log" \
+              'renderReadmitsWhileControlPreparesAndPolls()' \
+              --expect-skipped 'readmissionRenderPathAllocatesNothing()' 'Thread Sanitizer') \
+              || { echo "::error::TSan run $run/$TSAN_RUNS failed its log check (TSan runtime not active, or a report)"; exit 1; }
+            echo "| TSan $run/$TSAN_RUNS | $n | TSan active (probe skipped); no ThreadSanitizer report |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Record failure in summary
+        if: failure()
+        run: echo "**Failed** (see the job log for the failing step)." >> "$GITHUB_STEP_SUMMARY"
