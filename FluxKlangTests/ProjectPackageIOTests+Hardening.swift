@@ -153,4 +153,17 @@ extension ProjectPackageIOTests {
             }
         }
     }
+
+    @Test func listingTheSameHeldDescriptorTwiceReturnsEveryName() throws {
+        let scratch = try Support.scratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        for name in ["b", "a"] {
+            try Data([1]).write(to: scratch.appendingPathComponent(name))
+        }
+        let directory = open(scratch.path, O_RDONLY | O_DIRECTORY)
+        try #require(directory >= 0)
+        defer { close(directory) }
+        #expect(try ProjectPackageFileSystem.names(in: directory, limit: 8) == ["a", "b"])
+        #expect(try ProjectPackageFileSystem.names(in: directory, limit: 8) == ["a", "b"])
+    }
 }
