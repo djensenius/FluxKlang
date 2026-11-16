@@ -165,11 +165,14 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// The gap delays: carried events wait out the gap and any silenced block (no lateness drops them and the flush
 /// watermark never gates them), then those still planned dispatch in the first
 /// unsilenced replacement block that reaches them, at its `blockStart` if already due (unless superseded, cut or
-/// refused; see `KernelCarryReadmissionReport`); takeover releases start, and `SafetyFlags` requests (a panic too)
-/// apply, at the replacement's first `blockStart`; nothing drains the fan-in, so a lane can fill and refuse pushes (a
-/// refused `noteOff` latches the critical scope). The gap stays: overlapping it needs a render-side hand-off
-/// compare-exchange with a staged-but-unclaimed claim state, an allocation-free carry plan on render, and the inherited
-/// loss and carry published after construction (a control API change); and no production render path exists yet.
+/// refused; see `KernelCarryReadmissionReport`); takeover releases start at the replacement's first `blockStart`, and
+/// so do gap-time `SafetyFlags` requests (a panic too), but only those raised on the instance the replacement is built
+/// with (`KernelCycleParts.safety`, normally the predecessor's, reused): preparation checks only its scope count, so a
+/// request on any other instance, even a same-sized one, never reaches the replacement; nothing drains the fan-in, so a
+/// lane can fill and refuse pushes (a refused `noteOff` latches the critical scope). The gap stays: overlapping it
+/// needs a render-side hand-off compare-exchange with a staged-but-unclaimed claim state, an allocation-free carry plan
+/// on render, and the inherited loss and carry published after construction (a control API change); and no production
+/// render path exists yet.
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier

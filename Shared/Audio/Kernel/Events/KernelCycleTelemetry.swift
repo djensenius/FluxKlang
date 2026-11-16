@@ -113,8 +113,10 @@ enum KernelCycleStart: Sendable, Equatable {
     /// It must also pass that cycle's `admissionRefusals` (see `admissionRefusals`), else `.admissionRefusalsRequired`.
     /// If it loses the claim to a preparation that has since retired, it is refused `.ownershipClaim(.claimRaced)`.
     /// So it is prepared only after that `retire()`, and render does no event work until the host installs it (the
-    /// takeover gap; `KernelCycle`'s Takeover gap gives its conditional bound): its takeover releases and the safety
-    /// requests raised in the gap wait for its first `run`, and the carry below for its first unsilenced one.
+    /// takeover gap; `KernelCycle`'s Takeover gap gives its conditional bound): its takeover releases wait for its
+    /// first `run`, and so do safety requests raised in the gap, but only on the `SafetyFlags` it is built with
+    /// (`KernelCycleParts.safety`, normally the predecessor's, reused; preparation checks only the scope count, so a
+    /// request on any other instance never reaches it); the carry below waits for its first unsilenced one.
     /// Pending stateful events are also recorded in a carry that `inheritedRetirementCarry` exposes and this cycle
     /// re-admits (#364 KCR1): those still planned dispatch in its first unsilenced block that reaches them, at
     /// `blockStart` if already due however long the gap (unless superseded, cut or refused; see
@@ -140,7 +142,9 @@ struct KernelCycleParts {
     /// Notes sounding and, in `ownership.tombstones`, the release history: shared by every cycle over it, one at a
     /// time (`KernelCycle.init` claims it, `retire()` hands it back).
     let ownership: NoteOwnership
-    /// Must have as many scopes as `ownership`.
+    /// Must have as many scopes as `ownership`. For a `.replacingCycle` cycle, pass the predecessor's instance: the
+    /// cycle reads only this instance, so with a new one a panic raised on the predecessor's during the gap never
+    /// reaches it.
     let safety: SafetyFlags
     /// The ramps and each parameter's last known value, which outlive a cycle: a `.replacingCycle` cycle continues
     /// from what its retired predecessor left. A new `RampSlots` starts every parameter at 0, so a `.freshFanIn`
