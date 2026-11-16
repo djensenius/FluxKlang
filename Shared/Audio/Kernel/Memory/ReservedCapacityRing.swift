@@ -110,19 +110,7 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     /// counters at `startingRefusals` so tests can reach saturation.
     init(policy: HandoffPolicy, faults: FaultLatch, scope: FaultScope, startingIndex: UInt64,
          startingRefusals: UInt64 = 0) throws(PreparationError) {
-        do {
-            try policy.validate()
-        } catch {
-            throw .policy(error)
-        }
-        guard policy.producers.maximum == 1 else { throw .policy(.violates(.r2Cardinality)) }
-        let reserved: Int
-        switch policy.overflow {
-        case .reservedCritical(let value): reserved = value
-        case .refuseProducer: throw .unsupportedPolicy(.refuseProducer)
-        case .overwriteLatest: throw .unsupportedPolicy(.overwriteLatest)
-        }
-        guard reserved >= KernelLimits.minimumCriticalReserve else { throw .reserveBelowMinimum(reserved) }
+        let reserved = try Self.validate(policy)
         let innerPolicy = HandoffPolicy(
             purpose: policy.purpose, producer: policy.producer, producers: policy.producers,
             consumer: policy.consumer, consumers: policy.consumers, capacity: policy.capacity,
@@ -152,6 +140,26 @@ final class ReservedCapacityRing<Element: BitwiseCopyable>: @unchecked Sendable 
     }
 
     deinit { popScratch.deallocate() }
+
+    /// Control-side, pure: the policy checks of `init`, in its order, with the same refusals; returns the reserve.
+    /// It allocates nothing and builds no inner ring, so `.innerRing` is reported only by `init`.
+    @discardableResult
+    static func validate(_ policy: HandoffPolicy) throws(PreparationError) -> Int {
+        do {
+            try policy.validate()
+        } catch {
+            throw .policy(error)
+        }
+        guard policy.producers.maximum == 1 else { throw .policy(.violates(.r2Cardinality)) }
+        let reserved: Int
+        switch policy.overflow {
+        case .reservedCritical(let value): reserved = value
+        case .refuseProducer: throw .unsupportedPolicy(.refuseProducer)
+        case .overwriteLatest: throw .unsupportedPolicy(.overwriteLatest)
+        }
+        guard reserved >= KernelLimits.minimumCriticalReserve else { throw .reserveBelowMinimum(reserved) }
+        return reserved
+    }
 
     /// Producer only; bounded source-level work (target progress unqualified; see Progress). Appends or refuses whole.
     /// Refuses general events with `.refused(.full)` at `generalLimit`, critical with `.refused(.criticalExhausted)`

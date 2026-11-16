@@ -257,5 +257,94 @@ extension RealtimeHandoffTests {
             #expect(chain.put(token) == .ok)
             #expect(authority.hasContendedFault)
         }
+
+        @Test func batchMintIsAllOrNothing() throws {
+            let authority = try Self.authority(budget: 5)
+            let first = try #require(authority.mintChains(count: 2))
+            #expect(first.map(\.id) == [1, 2] && authority.mintedChains == 2)
+            // More than the 3 units left: refused whole, nothing spent, however often it is asked.
+            for count in [4, 5, 6, Int.max] {
+                #expect(authority.mintChains(count: count) == nil)
+                #expect(authority.mintedChains == 2)
+            }
+            // The exact remainder still fits, and then the budget is spent.
+            let rest = try #require(authority.mintChains(count: 3))
+            #expect(rest.map(\.id) == [3, 4, 5] && authority.mintedChains == 5)
+            #expect(authority.mintChains(count: 1) == nil && authority.mintChain() == nil)
+            #expect(authority.mintedChains == authority.chainBudget)
+            // A whole budget in one batch, at the ceiling.
+            let maximum = FaultChainAuthority.maximumChainBudget
+            let full = try Self.authority(budget: maximum)
+            #expect(full.mintChains(count: maximum + 1) == nil && full.mintedChains == 0)
+            #expect(try #require(full.mintChains(count: maximum)).count == maximum)
+            #expect(full.mintedChains == maximum && full.mintChains(count: 1) == nil)
+        }
+
+        @Test func batchMintRejectsNonPositiveCount() throws {
+            let authority = try Self.authority(budget: 2)
+            for count in [0, -1, Int.min] {
+                #expect(authority.mintChains(count: count) == nil)
+                #expect(authority.mintedChains == 0)
+            }
+            // Nothing was spent: the whole budget is still there.
+            #expect(try #require(authority.mintChains(count: 2)).map(\.id) == [1, 2])
+        }
+
+        @Test func batchMintIdsAreConsecutiveAndOwned() throws {
+            let authority = try Self.authority(budget: 8)
+            let single = try #require(authority.mintChain())
+            let batch = try #require(authority.mintChains(count: 4))
+            let next = try #require(authority.mintChains(count: 3))
+            #expect(([single] + batch + next).map(\.id) == (1...8).map { UInt64($0) })
+            #expect(authority.mintedChains == 8)
+            // Every chain is this authority's: it is `issued`, and a raise through each one counts.
+            for (index, chain) in ([single] + batch + next).enumerated() {
+                #expect(authority.issued(chain))
+                var token = try Self.take(chain)
+                #expect(authority.raise(&token, Self.scope, .noPlan, frame: Int64(index)) == .ok)
+                #expect(chain.put(token) == .ok)
+            }
+            #expect(Self.records(authority) == [FaultRecord(scope: Self.scope, kind: .noPlan, count: 8, firstFrame: 0)])
+            #expect(!authority.hasContendedFault)
+        }
+
+        @Test func issuedRejectsForeignChain() throws {
+            let owner = try Self.authority()
+            let twin = try Self.authority()
+            let own = try #require(owner.mintChains(count: 2))
+            let foreign = try #require(twin.mintChains(count: 2))
+            // Same ids, same scope table, different authority.
+            #expect(own.map(\.id) == foreign.map(\.id))
+            #expect(own.allSatisfy { owner.issued($0) && !twin.issued($0) })
+            #expect(foreign.allSatisfy { twin.issued($0) && !owner.issued($0) })
+            // Asking changes nothing.
+            #expect(owner.mintedChains == 2 && twin.mintedChains == 2)
+            Self.expectUntouched(owner)
+            Self.expectUntouched(twin)
+        }
+
+        @Test func isObservationRejectsTwinAuthority() throws {
+            let owner = try Self.authority()
+            let twin = try Self.authority()
+            let plain = try FaultLatch(scopes: Self.scopes)
+            for authority in [owner, twin] {
+                let chain = try #require(authority.mintChain())
+                var token = try Self.take(chain)
+                #expect(authority.raise(&token, Self.scope, .staleClock, frame: 7) == .ok)
+                #expect(chain.put(token) == .ok)
+            }
+            #expect(plain.raise(Self.scope, .staleClock, frame: 7) == .ok)
+            let mine = try #require(owner.observe(Self.scope))
+            let theirs = try #require(twin.observe(Self.scope))
+            let unowned = try #require(plain.observe(Self.scope))
+            // Equal records, but each observation belongs only to the latch that made it.
+            #expect(mine.record == theirs.record && mine.record == unowned.record)
+            #expect(owner.isObservation(mine) && !owner.isObservation(theirs) && !owner.isObservation(unowned))
+            #expect(twin.isObservation(theirs) && !twin.isObservation(mine) && !twin.isObservation(unowned))
+            // Asking changes nothing: both scopes stay latched until acknowledged by their own authority.
+            #expect(owner.isLatched(Self.scope) && twin.isLatched(Self.scope))
+            #expect(owner.acknowledge(mine) == mine.record)
+            #expect(!owner.isLatched(Self.scope) && twin.isLatched(Self.scope))
+        }
     }
 }
