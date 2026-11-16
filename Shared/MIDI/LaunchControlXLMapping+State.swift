@@ -7,8 +7,8 @@
 /// buttons, so it uses the `.unpaired` profile: every CC 0...119 except Sustain (64) is applied as a plain
 /// `.controller` and maps exactly as `action(for: MIDIControlChange)` does.
 extension LaunchControlXLMapping {
-    /// `LaunchControlXLController` uses this profile's state policy; its SysEx bound and System Reset policy
-    /// apply once the adapter moves onto `MIDISourceRegistry`.
+    /// `LaunchControlXLStream` registers the surface with this profile, so its state policy, SysEx payload bound
+    /// and System Reset policy (`.ignore`) all apply to the incoming bytes.
     static let sourceProfile: MIDISourceProfile = .unpaired
 
     /// Only a channel `.controller` update maps; everything else (notes, bend, program, system, channel mode

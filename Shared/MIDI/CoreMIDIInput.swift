@@ -12,7 +12,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
     private var inputPort = MIDIPortRef()
     private var connectedSources: [MIDIEndpointRef: String] = [:]
     private var sourceNameContains: [String] = []
-    private var onMessages: (([MIDIControlChange]) -> Void)?
+    private var onPackets: (([[UInt8]]) -> Void)?
     private var onSourcesChanged: (([String]) -> Void)?
     private let auditMirror: ProductionAccessAudit?
 
@@ -23,7 +23,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
 
     func start(
         sourceNameContains: [String],
-        onMessages: @escaping ([MIDIControlChange]) -> Void,
+        onPackets: @escaping ([[UInt8]]) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {
         ProductionAccessAudit.shared.record(.attempted, for: .midiInput, mirroring: auditMirror)
@@ -33,7 +33,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
         }
         stop()
         self.sourceNameContains = sourceNameContains
-        self.onMessages = onMessages
+        self.onPackets = onPackets
         self.onSourcesChanged = onSourcesChanged
 
         ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
@@ -52,9 +52,9 @@ final class CoreMIDIInput: LaunchControlXLInput {
             "FluxKlang Launch Control XL Input" as CFString,
             &inputPort,
             { [weak self] packetList, _ in
-                let messages = Self.controlChanges(in: packetList)
-                guard !messages.isEmpty else { return }
-                Task { @MainActor [weak self] in self?.onMessages?(messages) }
+                let packets = Self.packetBytes(in: packetList)
+                guard !packets.isEmpty else { return }
+                Task { @MainActor [weak self] in self?.onPackets?(packets) }
             }
         ) == noErr else {
             ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
@@ -137,18 +137,12 @@ final class CoreMIDIInput: LaunchControlXLInput {
         return value?.takeRetainedValue() as String? ?? "Unknown MIDI source"
     }
 
-    nonisolated private static func controlChanges(
-        in packetList: UnsafePointer<MIDIPacketList>
-    ) -> [MIDIControlChange] {
-        var messages: [MIDIControlChange] = []
-        var packet = packetList.pointee.packet
-        for _ in 0..<packetList.pointee.numPackets {
-            let bytes = withUnsafeBytes(of: packet.data) {
-                Array($0.prefix(Int(packet.length)))
-            }
-            messages.append(contentsOf: MIDIControlChange.decode(bytes))
-            packet = MIDIPacketNext(&packet).pointee
+    /// The bytes of each non-empty packet, unchanged and in order. Each packet is read in place through CoreMIDI's
+    /// sequence API, so its full `length` is kept and the list is walked from the real packets, not a copy.
+    nonisolated private static func packetBytes(in packetList: UnsafePointer<MIDIPacketList>) -> [[UInt8]] {
+        packetList.unsafeSequence().compactMap { packet in
+            let bytes = Array(packet.bytes())
+            return bytes.isEmpty ? nil : bytes
         }
-        return messages
     }
 }

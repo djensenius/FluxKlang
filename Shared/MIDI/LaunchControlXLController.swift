@@ -34,11 +34,9 @@ final class LaunchControlXLController {
     /// Created on the first non-disabled restart, so construction opens no MIDI client.
     @ObservationIgnored private var midiInput: (any LaunchControlXLInput)?
     private var actionHandler: ((LaunchControlXLAction) async -> Void)?
-    /// The surface is one logical MIDI 1 source; its id only labels the outputs handed to the mapping.
-    private static let stateInput = MIDIInputID(0)
-    /// Fresh on every restart. Write-only today: no action reads it back, since every mapped CC is a plain
-    /// `.controller` under `.unpaired`.
-    @ObservationIgnored private var state = LaunchControlXLController.freshState()
+    /// Every matched endpoint feeds this one logical source. Fresh on every restart, so a half message, running
+    /// status or open SysEx never crosses one.
+    @ObservationIgnored private var stream = LaunchControlXLController.freshStream()
 
     init(
         fileStore: JSONFileStore = .shared,
@@ -94,13 +92,17 @@ final class LaunchControlXLController {
         bank * 8 + slot
     }
 
-    nonisolated private static func freshState() -> MIDI1PerformanceState {
-        MIDI1PerformanceState(policy: LaunchControlXLMapping.sourceProfile.statePolicy)
+    nonisolated private static func freshStream() -> LaunchControlXLStream {
+        do throws(MIDISourceRefusal) {
+            return try LaunchControlXLStream.make()
+        } catch {
+            preconditionFailure("Invalid built-in Launch Control XL source profile: \(error)")
+        }
     }
 
     private func restart() {
         midiInput?.stop()
-        state = Self.freshState()
+        stream = Self.freshStream()
         guard configuration.mode != .disabled else {
             status = .disabled
             return
@@ -110,9 +112,9 @@ final class LaunchControlXLController {
         self.midiInput = midiInput
         midiInput.start(
             sourceNameContains: configuration.mapping.sourceNameContains,
-            onMessages: { [weak self] messages in
+            onPackets: { [weak self] packets in
                 Task { @MainActor [weak self] in
-                    await self?.receive(messages)
+                    await self?.receive(packets: packets)
                 }
             },
             onSourcesChanged: { [weak self] names in
@@ -121,27 +123,21 @@ final class LaunchControlXLController {
         )
     }
 
-    /// Applies the whole batch to the MIDI 1 state before the first dispatch, then dispatches its actions in order.
+    /// Applies every packet of the batch, in order, before the first dispatch, then dispatches its actions in order.
+    func receive(packets: [[UInt8]]) async {
+        await dispatch(stream.feed(packets: packets))
+    }
+
+    /// Each valid message goes through the stream as a complete control change; invalid ones are dropped.
     func receive(_ messages: [MIDIControlChange]) async {
-        let outputs = messages.compactMap(stateOutput(for:))
+        await dispatch(stream.feed(messages))
+    }
+
+    private func dispatch(_ outputs: [MIDISourceOutput]) async {
         for action in configuration.mapping.actions(for: outputs) {
             lastAction = action
             guard configuration.mode == .control, let actionHandler else { continue }
             await actionHandler(action)
-        }
-    }
-
-    /// Nil for a channel outside 1...16, which no decoded message has; out-of-range data is a `.refused` output.
-    private func stateOutput(for message: MIDIControlChange) -> MIDISourceOutput? {
-        guard (1...MIDI1PerformanceState.channelCount).contains(message.channel) else { return nil }
-        let event = MIDI1Event.channel(
-            status: 0xB0 | UInt8(message.channel - 1), data1: message.controller, data2: message.value
-        )
-        do throws(MIDI1StateRefusal) {
-            let update = try state.apply(event)
-            return MIDISourceOutput(input: Self.stateInput, event: event, outcome: .applied(update))
-        } catch {
-            return MIDISourceOutput(input: Self.stateInput, event: event, outcome: .refused(error))
         }
     }
 

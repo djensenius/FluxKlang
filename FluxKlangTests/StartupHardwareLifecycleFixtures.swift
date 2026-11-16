@@ -127,16 +127,16 @@ final class WingFactorySpy: Sendable {
 final class RecordingLaunchControlXLInput: LaunchControlXLInput {
     private(set) var starts: [[String]] = []
     private(set) var stops = 0
-    private var onMessages: (([MIDIControlChange]) -> Void)?
+    private var onPackets: (([[UInt8]]) -> Void)?
     private var onSourcesChanged: (([String]) -> Void)?
 
     func start(
         sourceNameContains: [String],
-        onMessages: @escaping ([MIDIControlChange]) -> Void,
+        onPackets: @escaping ([[UInt8]]) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {
         starts.append(sourceNameContains)
-        self.onMessages = onMessages
+        self.onPackets = onPackets
         self.onSourcesChanged = onSourcesChanged
     }
 
@@ -149,8 +149,9 @@ final class RecordingLaunchControlXLInput: LaunchControlXLInput {
         onSourcesChanged?(names)
     }
 
+    /// One batch with one complete three-byte packet per valid message, as CoreMIDI would deliver them.
     func send(_ messages: [MIDIControlChange]) {
-        onMessages?(messages)
+        onPackets?(messages.compactMap(LaunchControlXLStream.bytes(of:)))
     }
 }
 
