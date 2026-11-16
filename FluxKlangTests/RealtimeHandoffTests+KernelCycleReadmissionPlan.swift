@@ -6,8 +6,9 @@ import Testing
 #endif
 
 // #364 E5c, slice KCR2: planning rules of the re-admission (`KernelCarryReadmission.init`) that no existing
-// re-admission test fully pinned (`readmissionSkipsInvalidRampsAndKeepsTheRest` covers part of the invalid-ramp
-// rule): supersede keys, invalid ramps, the overflow bound, the cut by kind and the recorded order on a frame tie.
+// re-admission test fully pinned (`readmissionKeepsNegativeDurationRampsAsJumpsAndSkipsNonFinite` covers part of the
+// invalid-ramp rule): supersede keys, invalid ramps, the overflow bound, the cut by kind and the recorded order on a
+// frame tie.
 
 private func control(_ controller: UInt8, _ value: UInt32 = 9) -> KernelEventPayload {
     .control(channel: 0, controller: controller, value: value)
@@ -91,12 +92,13 @@ extension RealtimeHandoffTests {
             #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
         }
 
-        /// Every invalid carried ramp (NaN, ±infinity, a negative duration down to `Int64.min`) is removed before
-        /// supersession and the overflow check: a later invalid ramp does not replace a valid one (parameters 0 and
-        /// 2), an earlier one adds no weight to the valid one after it (parameter 1, so it stays unresolved), and an
-        /// invalid ramp whose completion would overflow `Int64` does not refuse the plan. The largest finite values
-        /// and a zero duration are valid. Kills: only NaN or one negative duration treated as invalid; invalid ramps
-        /// superseding or superseded; the overflow checked before the removal.
+        /// Every invalid carried ramp (NaN, ±infinity) is removed before supersession and the overflow check: a later
+        /// invalid ramp does not replace a valid one (parameters 0 and 2), an earlier one adds no weight to the valid
+        /// one after it (parameter 1, so it stays unresolved), and an invalid ramp whose completion would overflow
+        /// `Int64` does not refuse the plan. The largest finite values and a zero duration are valid, and so is a
+        /// negative duration down to `Int64.min` (#718: a jump), so parameter 3's one at 122 is superseded by the one
+        /// at 124 and resolves with it. Kills: only NaN treated as invalid; a negative duration treated as invalid;
+        /// invalid ramps superseding or superseded; the overflow checked before the removal.
         @Test func readmissionRemovesEveryInvalidRampBeforePlanning() throws {
             let rig = try CycleRig(laneCapacity: 32)
             let token = try #require(rig.events.claimProducer())
@@ -109,11 +111,42 @@ extension RealtimeHandoffTests {
             retire(rig, token, pending: pending)
             let next = try replacement(of: rig)
             let report = next.carryReadmissionReport
-            #expect(report.planRefusal == nil && report.invalidRamps == 5)
-            #expect(report.planned == 4 && report.superseded == 0)
+            #expect(report.planRefusal == nil && report.invalidRamps == 4)
+            #expect(report.planned == 4 && report.superseded == 1)
             #expect(block(next, 64) == emissions(valid))
             #expect(next.carryReadmissionReport.refused == 0)
-            #expect(stateful(next.unresolvedRetirementLoss) == [0, 0, 5])
+            #expect(stateful(next.unresolvedRetirementLoss) == [0, 0, 4])
+        }
+
+        /// #718 one ramp rule across a replacement: carried ramps with a finite negative duration (-5 and
+        /// `Int64.min`) are planned, not invalid, keep their payload and frame, and jump to their targets in the first
+        /// block; once delivered nothing is unresolved, so the replacement asks for no receiver resync. Kills: a
+        /// negative duration dropped as invalid (unresolved loss, stale receiver); its duration rewritten.
+        @Test func readmissionCarriesNegativeDurationRampsAsJumpsWithoutResync() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            let pending = [cycleEvent(100, ramp(1, 0.75, -5)), cycleEvent(110, ramp(2, -0.5, Int64.min))]
+            retire(rig, token, pending: pending)
+            let next = try replacement(of: rig)
+            #expect(next.inheritedRetirementLoss.ramps == 2 && next.unresolvedRetirementLoss.receiverStateMayBeStale)
+            let report = next.carryReadmissionReport
+            #expect(report.planRefusal == nil && report.invalidRamps == 0 && report.planned == 2)
+            #expect(block(next, 64) == emissions(pending))
+            #expect(next.unresolvedRetirementLoss == KernelRetirementLoss())
+            #expect(!next.unresolvedRetirementLoss.receiverStateMayBeStale)
+            #expect(next.parameterValue(1) == 0.75 && next.parameterValue(2) == -0.5 && rig.ramps.activeCount == 0)
+        }
+
+        /// A negative duration counts as 0 in the overflow check (#718: a jump completes at its own frame): a carried
+        /// ramp at `Int64.min + 5` lasting -10 frames is planned, not refused `.frameOverflow`. Built directly from a
+        /// carry, since a cycle never leaves such a frame pending. Kills: the raw negative duration added.
+        @Test func readmissionOverflowCheckTreatsNegativeDurationAsAJump() {
+            var carry = KernelRetirementCarry()
+            let event = KernelEvent(frame: .min + 5, scope: 0, sequence: 0, payload: ramp(1, 1, -10))
+            #expect(carry.record(event) == .stored)
+            let report = KernelCarryReadmission(carry: carry, blockCapacity: 64).report
+            #expect(report.planRefusal == nil && report.planned == 1 && report.invalidRamps == 0)
+            #expect(report.cut == KernelRetirementLoss())
         }
 
         /// The overflow refusal is exact: a carried ramp at `Int64.max - 10` lasting 10 frames completes at

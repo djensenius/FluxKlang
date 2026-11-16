@@ -40,6 +40,16 @@ enum KernelEventPayload: Sendable, BitwiseCopyable, Equatable {
         case .noteOn, .noteOff, .clockPulse: false
         }
     }
+
+    /// The one `rampTo` rule (#64 RNF2, #718), shared by producer admission (`ProducerAdmission.push`), render
+    /// (`RampSlots.set`) and carry re-admission (`KernelCarryReadmission.init`) so the paths cannot drift: a NaN or
+    /// infinite target is refused (non-finite); a finite target is admissible whatever its duration, and a negative
+    /// duration is a jump, the same as zero (`rampFrames`). Render-safe: no allocation or lock.
+    @inline(__always) static func isAdmissibleRampTarget(_ value: Float) -> Bool { value.isFinite }
+
+    /// The frames a `rampTo` of `durationFrames` runs on every path: a negative duration is a jump, the same as zero
+    /// (#718). Render-safe: no allocation or lock.
+    @inline(__always) static func rampFrames(_ durationFrames: Int64) -> Int64 { max(durationFrames, 0) }
 }
 
 /// A scheduled kernel event. Reference model; not RT-certified.
