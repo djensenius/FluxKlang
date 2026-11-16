@@ -10,12 +10,15 @@ enum StagingIOFault: Error, Sendable, Equatable {
     case ioError
     /// The process or volume went away mid-operation; nothing after it ran.
     case interrupted
+    /// The volume root, or a directory the adapter created, was replaced, moved, retyped or swapped for a link, or a
+    /// path component became a link. Nothing is done through the changed node.
+    case changed
 
     var saveFaultCategory: SaveFaultCategory {
         switch self {
         case .noSpace: .diskFull
         case .denied: .permissionDenied
-        case .notFound, .exists, .crossVolume, .tooManyEntries, .ioError, .interrupted: .unknown
+        case .notFound, .exists, .crossVolume, .tooManyEntries, .ioError, .interrupted, .changed: .unknown
         }
     }
 }
