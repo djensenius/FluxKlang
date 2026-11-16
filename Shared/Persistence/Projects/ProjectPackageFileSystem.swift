@@ -10,7 +10,35 @@ enum ProjectPackageIOError: Error, Sendable, Equatable {
     case destinationExists
     /// The destination's parent is a link or not a directory; it is never followed.
     case destinationParentRefused
+    /// A destination directory the writer created was replaced, moved, retyped or swapped for a link
+    /// while the write ran. Output already written stays where it is.
+    case destinationChanged
     case system(code: Int32)
+}
+
+/// Device and inode of a directory, the identity the writer checks its destination against.
+struct ProjectPackageDirectoryIdentity: Sendable, Equatable {
+    let device: dev_t
+    let inode: ino_t
+
+    init(_ info: stat) {
+        device = info.st_dev
+        inode = info.st_ino
+    }
+}
+
+/// The new destination: its descriptor, the parent descriptor it was created in, and its recorded identity.
+/// Both descriptors stay open for the whole write; `close()` releases them.
+struct ProjectPackageWriteRoot {
+    let parent: Int32
+    let descriptor: Int32
+    let name: String
+    let identity: ProjectPackageDirectoryIdentity
+
+    func close() {
+        Darwin.close(descriptor)
+        Darwin.close(parent)
+    }
 }
 
 /// Descriptor-relative, no-follow primitives. Each component is opened from its already-open
@@ -29,7 +57,8 @@ enum ProjectPackageFileSystem {
     /// Creates a new directory beneath the no-follow-opened parent, then opens that name relative to
     /// the same parent descriptor; the destination is never re-resolved by path. An existing name,
     /// including a link, is refused rather than reused. Ancestors of the parent resolve normally.
-    static func createRoot(_ url: URL) throws -> Int32 {
+    /// The parent stays open so the destination's name can be re-checked against its recorded identity.
+    static func createRoot(_ url: URL) throws -> ProjectPackageWriteRoot {
         let name = url.lastPathComponent
         guard !name.isEmpty, name != ".", name != "..", name != "/" else { throw ProjectPackageError.invalidPath }
         let parent: Int32
@@ -38,14 +67,36 @@ enum ProjectPackageFileSystem {
         } catch ProjectPackageIOError.system(let code) where code == ELOOP || code == ENOTDIR {
             throw ProjectPackageIOError.destinationParentRefused
         }
-        defer { close(parent) }
-        guard mkdirat(parent, name, 0o755) == 0 else {
-            guard errno != EEXIST else { throw ProjectPackageIOError.destinationExists }
+        do {
+            guard mkdirat(parent, name, 0o755) == 0 else {
+                guard errno != EEXIST else { throw ProjectPackageIOError.destinationExists }
+                throw failure()
+            }
+            let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { throw failure() }
+            do {
+                let identity = try ProjectPackageDirectoryIdentity(status(of: descriptor))
+                return ProjectPackageWriteRoot(parent: parent, descriptor: descriptor, name: name, identity: identity)
+            } catch {
+                close(descriptor)
+                throw error
+            }
+        } catch {
+            close(parent)
+            throw error
+        }
+    }
+
+    /// Re-checks the destination's name in its held parent without following a link.
+    static func verifyRoot(_ root: ProjectPackageWriteRoot) throws {
+        var info = stat()
+        guard fstatat(root.parent, root.name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            guard errno != ENOENT else { throw ProjectPackageIOError.destinationChanged }
             throw failure()
         }
-        let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard descriptor >= 0 else { throw failure() }
-        return descriptor
+        guard kind(info) == .directory, ProjectPackageDirectoryIdentity(info) == root.identity else {
+            throw ProjectPackageIOError.destinationChanged
+        }
     }
 
     static func status(of descriptor: Int32) throws -> stat {
@@ -141,18 +192,31 @@ enum ProjectPackageFileSystem {
         }
     }
 
-    /// Opens `components` beneath `root` one no-follow directory at a time; the caller closes the result.
-    static func openDirectory(at root: Int32, _ components: [String]) throws -> Int32 {
-        var current = dup(root)
-        guard current >= 0 else { throw failure() }
-        for component in components {
-            let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    /// Opens one no-follow directory beneath `parent`; the caller closes the result. A missing name,
+    /// a link, a non-directory or an identity other than `expected` (when given) is `destinationChanged`.
+    static func openDestinationDirectory(
+        at parent: Int32, _ name: String, matching expected: ProjectPackageDirectoryIdentity?
+    ) throws -> (descriptor: Int32, identity: ProjectPackageDirectoryIdentity) {
+        let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
             let code = errno
-            close(current)
-            guard next >= 0 else { throw ProjectPackageIOError.system(code: code) }
-            current = next
+            guard code != ENOENT, code != ELOOP, code != ENOTDIR else {
+                throw ProjectPackageIOError.destinationChanged
+            }
+            throw ProjectPackageIOError.system(code: code)
         }
-        return current
+        var opened = stat()
+        guard fstat(descriptor, &opened) == 0 else {
+            let code = errno
+            close(descriptor)
+            throw ProjectPackageIOError.system(code: code)
+        }
+        let identity = ProjectPackageDirectoryIdentity(opened)
+        guard kind(opened) == .directory, expected.map({ $0 == identity }) ?? true else {
+            close(descriptor)
+            throw ProjectPackageIOError.destinationChanged
+        }
+        return (descriptor, identity)
     }
 
     static func createDirectory(at directory: Int32, _ name: String) throws {

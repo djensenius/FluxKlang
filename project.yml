@@ -237,6 +237,7 @@ targets:
       - path: FluxKlangTests/ProjectPackageManifestReferenceTests.swift
       - path: FluxKlangTests/ProjectPackageIOTests.swift
       - path: FluxKlangTests/ProjectPackageIOTests+Hardening.swift
+      - path: FluxKlangTests/ProjectPackageIOTests+ConcurrentMutation.swift
       - path: FluxKlangTests/ProjectStagingTests.swift
       - path: FluxKlangTests/ProjectStagingTests+Aliasing.swift
       - path: FluxKlangTests/ProjectStagingTests+CombiningMarks.swift
