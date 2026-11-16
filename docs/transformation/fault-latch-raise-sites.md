@@ -257,7 +257,7 @@ sequencing edge between a completed raise and that chain's next admission.
 | Stale-clock reporting | Reported in `KernelCycleResult.resync` and telemetry, not on the latch. `FaultKind.staleClock` exists, but is not raised | `KernelCycle.swift:178` to `:179`; `KernelCycleTelemetry.swift:8` to `:10` |
 | Invalid-token paths in `FanInHandoff` | Refused with `.refused(.notOwner)` and counted; "no fault is raised" | `FanInHandoff.swift:369` to `:371`, `:392`, `:197` to `:199` |
 | Invalid or unknown scope | `raise` itself returns `.refused(.slotOutOfRange)` and counts in `unknownScopeFaults`; this is a result of S1 to S4, not a separate caller | `FaultLatch.swift:235` to `:240` |
-| `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:84` to `:87`; `RetiringExchange.swift:75` to `:76`, `:188`, and the `beginCycle` doc at `:141` to `:150` (post-FLP5 lines) |
+| `PreparedPlanSlot` and `RetiringExchange` | They reach `raise` only through `DeferredReleaseQueue.retire` (S3) | `PreparedPlanSlot.swift:84` to `:90`; `RetiringExchange.swift:75` to `:76`, `:188`, and the `beginCycle` doc at `:141` to `:150` (post-FLP5 lines) |
 
 Notes:
 

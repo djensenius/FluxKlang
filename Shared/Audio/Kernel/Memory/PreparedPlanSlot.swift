@@ -83,8 +83,11 @@
 /// Caller invariants (documented; neither the compiler nor the slot enforces or checks them):
 /// - Fault context (#190). A refused retire in `beginCycle` raises `.retireBacklog` through the retire queue's
 ///   `FaultChainAuthority` chain token (FLP5, `DeferredReleaseQueue.retire`), so the chains that can raise on that
-///   authority's latch number at most its `chainBudget` by construction. A concurrent `beginCycle` on a shared
-///   queue is refused as contended (latched fault, stall and retry), not raced.
+///   authority's latch number at most its `chainBudget` by construction. The token guards only the retire itself:
+///   a retire that finds it taken pushes nothing and latches the contended fault, and the exchange stalls and
+///   retries that payload, even in a cycle that still adopts and returns `.ok`. It does not serialize
+///   `beginCycle`: the exchange state and the scratch reset are unguarded, so cycles on each slot must stay on
+///   its one render thread (below).
 /// - Threads. One control and one render thread per slot (below). Every slot or exchange sharing a retire queue
 ///   must use the same control/render thread pair: the queue is single-producer, single-consumer.
 /// - Strong lifetime. The caller keeps the slot strongly alive across each call, and render never holds the last
