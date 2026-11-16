@@ -235,9 +235,9 @@ struct HostAuthorityBook {
 }
 
 /// A single-use permit for one direct write that changes the running set (#62 AU1),
-/// fenced by the live host epoch and permission, the lease and the engine context
-/// generation at admission. Only `HostAuthorityBook.admitDirect` mints one;
-/// `redeemDirect` consumes it.
+/// fenced by the live host epoch and permission, the lease, the engine context
+/// generation and the project's running graph revision at admission. Only
+/// `HostAuthorityBook.admitDirect` mints one; `redeemDirect` consumes it.
 struct DirectWriteTicket: Hashable, Sendable {
     /// Unique per book: minted from a counter that never repeats.
     let serial: UInt64
@@ -251,9 +251,11 @@ struct DirectWriteTicket: Hashable, Sendable {
     let lease: EngineLeaseToken
     /// `EngineLeaseRegistry.contextKey`'s generation at admission.
     let context: Generation
+    /// The project's `transaction.running.revision` at admission.
+    let running: ContractRevision
 
     fileprivate init(serial: UInt64, project: ProjectID, window: WindowID, scope: CommandScope,
-                     live: HostLiveState, lease: EngineLeaseToken, context: Generation) {
+                     live: HostLiveState, lease: EngineLeaseToken, context: Generation, running: ContractRevision) {
         self.serial = serial
         self.project = project
         self.window = window
@@ -262,6 +264,7 @@ struct DirectWriteTicket: Hashable, Sendable {
         permission = live.permission
         self.lease = lease
         self.context = context
+        self.running = running
     }
 }
 
@@ -271,11 +274,17 @@ extension HostAuthorityBook {
     /// current lifecycle and role and the book's live state (gate first, then
     /// `staleLive` and `.renders` for running-set changes); capacity. Safety and
     /// draft scopes succeed with no ticket. Every refusal leaves the snapshot and
-    /// the outstanding count unchanged; only at capacity are tickets that could
-    /// no longer redeem dropped first (they would fail redemption anyway).
+    /// the outstanding count unchanged; only at capacity are tickets that cannot
+    /// redeem now dropped first, including `commitInFlight` ones that could redeem
+    /// again if the commit fails (fails closed: the write is re-admitted).
+    /// Admission is not refused while a commit is in flight or partial (the gate
+    /// sees the unchanged lifecycle); such a ticket records the pre-settlement
+    /// running revision, so it is refused `commitInFlight` until the commit settles
+    /// and `staleContext` once a success or kept partial moves the running graph.
     mutating func admitDirect(_ intent: CommandIntent, admission: AdmissionContext,
                               project: ProjectID, window: WindowID) -> Result<DirectWriteTicket?, DirectWriteRefusal> {
-        guard let lifecycle = lifecycle(of: project, window: window) else { return .failure(.unknownProject) }
+        guard let lifecycle = lifecycle(of: project, window: window),
+              let running = projects[project]?.transaction.running.revision else { return .failure(.unknownProject) }
         let lease: EngineLeaseToken
         switch HostCommandGate.admitDirect(intent, admission: admission, lifecycle: lifecycle,
                                            role: registry.role(of: window, project: project), live: live) {
@@ -294,7 +303,8 @@ extension HostAuthorityBook {
         }
         lastDirectWrite += 1
         let ticket = DirectWriteTicket(serial: lastDirectWrite, project: project, window: window,
-                                       scope: intent.operation.scope, live: live, lease: lease, context: context)
+                                       scope: intent.operation.scope, live: live, lease: lease, context: context,
+                                       running: running)
         directWrites.insert(ticket)
         return .success(ticket)
     }
@@ -305,7 +315,7 @@ extension HostAuthorityBook {
     /// order. Never changes the snapshot.
     ///
     /// The fence holds only while nothing else runs: the write must happen inside
-    /// the same serialization as lease, live and context changes (redeem under the
+    /// the same serialization as lease, live, context and running-graph changes (redeem under the
     /// send lock, as `WingMixerWriteAuthorization` does). Redeeming on the actor and
     /// writing after an `await` leaves a race that the wiring slice must close.
     mutating func redeemDirect(_ ticket: DirectWriteTicket) -> Result<Void, DirectWriteRefusal> {
@@ -317,12 +327,23 @@ extension HostAuthorityBook {
     /// Admitted, unredeemed tickets; diagnostics and tests only.
     var outstandingDirectWriteCount: Int { directWrites.count }
 
+    /// Delivered and unreported, reported `.partial` and not yet resolved, or a
+    /// restore of the running graph queued or delivered and not yet completed
+    /// (`restoring` holds both until `restoreCompleted`; a lease change clears it
+    /// and leaves the project `.recovering`).
+    private func commitInFlight(_ project: ProjectID) -> Bool {
+        if inFlight[project] != nil || restoring?.project == project { return true }
+        if case .partial? = projects[project]?.transaction.phase { return true }
+        return false
+    }
+
     private func directWriteRefusal(_ ticket: DirectWriteTicket) -> DirectWriteRefusal? {
         let now = DirectWriteFence(lifecycle: lifecycle(of: ticket.project, window: ticket.window), live: live,
                                    held: registry.snapshot?.token,
                                    role: registry.role(of: ticket.window, project: ticket.project),
-                                   commitInFlight: inFlight[ticket.project] != nil,
-                                   context: ledger.generation(EngineLeaseRegistry.contextKey))
+                                   commitInFlight: commitInFlight(ticket.project),
+                                   context: ledger.generation(EngineLeaseRegistry.contextKey),
+                                   running: projects[ticket.project]?.transaction.running.revision)
         return HostCommandGate.redeemRefusal(ticket, now: now)
     }
 }

@@ -43,9 +43,16 @@ enum DirectWriteRefusal: Error, Hashable, Sendable {
     case staleLive
     /// The lease the ticket was admitted under is no longer the held lease.
     case staleLease
-    /// A commit of the ticket's project was delivered to the engine and is not yet reported.
+    /// A commit of the ticket's project is in flight: delivered to the engine and not
+    /// yet reported, or reported `.partial` and not yet resolved (the engine runs a
+    /// mix of the old and new plans), or a restore of its running graph is queued
+    /// or delivered and not yet completed (the reinstall could overwrite the
+    /// write). A `.commitFailed` report applied nothing and refuses only while its
+    /// restore is pending.
     case commitInFlight
-    /// The engine context changed since admission.
+    /// The engine context changed since admission: its context generation, or the
+    /// project's running graph revision (which a same-lease keep-partial
+    /// settlement advances without a context bump).
     case staleContext
     /// Never minted by this book, already redeemed (refused or not), dropped by
     /// `detach` of its window, or dropped as unredeemable at capacity.
@@ -62,8 +69,11 @@ struct DirectWriteFence {
     let live: HostLiveState
     let held: EngineLeaseToken?
     let role: WindowRenderRole
+    /// See `DirectWriteRefusal.commitInFlight`.
     let commitInFlight: Bool
     let context: Generation?
+    /// The project's running graph revision; nil for an unknown project.
+    let running: ContractRevision?
 }
 
 extension HostCommandGate {
@@ -101,9 +111,12 @@ extension HostCommandGate {
     /// the held lease is not the ticket's (`staleLease`, also when no lease is
     /// held); the window no longer renders under it (`windowCannotWrite`;
     /// unreachable today, since `detach` drops the window's tickets); a commit of
-    /// the project is in flight (`commitInFlight`; once reported, a successful
-    /// commit's context bump makes it `staleContext`); the engine context moved
-    /// (`staleContext`). Outstanding-ness is the caller's check.
+    /// the project is in flight, delivered and unreported or reported partial and
+    /// unresolved, or a restore of its running graph is queued or delivered and not
+    /// completed (`commitInFlight`; once a successful commit is reported or a
+    /// partial one kept, it is `staleContext`); the engine context generation or
+    /// the project's running revision moved (`staleContext`). Outstanding-ness is
+    /// the caller's check.
     static func redeemRefusal(_ ticket: DirectWriteTicket, now: DirectWriteFence) -> DirectWriteRefusal? {
         // Unreachable today (projects never close while a ticket is outstanding); fails closed.
         guard let lifecycle = now.lifecycle else { return .unknownProject }
@@ -114,7 +127,7 @@ extension HostCommandGate {
         guard now.held == ticket.lease else { return .staleLease }
         guard now.role == .renders(ticket.lease) else { return .windowCannotWrite(now.role) }
         guard !now.commitInFlight else { return .commitInFlight }
-        guard now.context == ticket.context else { return .staleContext }
+        guard now.context == ticket.context, now.running == ticket.running else { return .staleContext }
         return nil
     }
 }

@@ -250,11 +250,85 @@ extension HostAuthorityTests {
             let delivered = await authority.snapshot()
             #expect(delivered.inFlight[projectA] != nil && AuthorityBench.context(delivered) == during.context)
             await expectRedeem(authority, during, .commitInFlight)
+            // Admission is not refused while delivered; the ticket is fenced the same way.
+            let probe = try await ticket(authority)
+            let late = try await ticket(authority)
+            await expectRedeem(authority, probe, .commitInFlight)
             _ = try #require(await engine.report(authority, .succeeded)).verdict.get()
             let reported = await authority.snapshot()
             #expect(reported.lease == lease && reported.inFlight.isEmpty)
             #expect(AuthorityBench.context(reported) != after.context)
             await expectRedeem(authority, after, .staleContext)
+            await expectRedeem(authority, late, .staleContext)
+        }
+
+        /// A reported partial commit is in flight until resolved; a same-lease kept
+        /// partial advances the running revision without a context bump.
+        @Test func aPartialCommitRefusesUntilSettledThenStalesItsTickets() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await AuthorityBench.makeAuthority(&engine)
+            let unused = try await ticket(authority)
+            let probe = try await ticket(authority)
+            let before = await authority.snapshot()
+            let previous = try #require(before.projects[projectA]).running
+            _ = try await AuthorityBench.commitDelivered(authority, &engine, withAux: true)
+            _ = try #require(await engine.report(authority, .partial)).verdict.get()
+            let reported = await authority.snapshot()
+            let partial = try #require(reported.projects[projectA])
+            guard case .partial = partial.phase else {
+                Issue.record("Expected an unresolved partial commit, got \(partial.phase)")
+                return
+            }
+            #expect(reported.inFlight.isEmpty && partial.running == previous)
+            #expect(AuthorityBench.context(reported) == unused.context)
+            await expectRedeem(authority, probe, .commitInFlight)
+            // Admission follows the gate's unchanged lifecycle while partial.
+            let during = try await ticket(authority)
+            #expect(during.running == previous.revision)
+
+            let revision = try previous.revision.next()
+            #expect(await authority.resolveRecovery(project: projectA) == .success(.keptPartial(revision)))
+            let settled = await authority.snapshot()
+            #expect(settled.lease == before.lease && AuthorityBench.context(settled) == unused.context)
+            #expect(try #require(settled.projects[projectA]).running.revision == revision)
+            await expectRedeem(authority, unused, .staleContext)
+            await expectRedeem(authority, during, .staleContext)
+            let fresh = try await ticket(authority)
+            #expect(fresh.running == revision)
+            await expectRedeem(authority, fresh)
+        }
+
+        /// A failed commit applied nothing: the old graph, revision and context are
+        /// intact, so pre-commit tickets redeem before and after its restore, but
+        /// not while that restore is queued or delivered (it reinstalls the graph).
+        @Test func aFailedCommitRefusesOnlyWhileItsRestoreIsPending() async throws {
+            var engine = try ScriptedActivationEngine()
+            let authority = try await AuthorityBench.makeAuthority(&engine)
+            let whileFailed = try await ticket(authority)
+            let whileQueued = try await ticket(authority)
+            let whileDelivered = try await ticket(authority)
+            let afterRestore = try await ticket(authority)
+            let before = await authority.snapshot()
+            let previous = try #require(before.projects[projectA]).running
+            _ = try await AuthorityBench.commitDelivered(authority, &engine)
+            _ = try #require(await engine.report(authority, .failed)).verdict.get()
+            let failed = try #require(await authority.snapshot().projects[projectA])
+            guard case .commitFailed = failed.phase else {
+                Issue.record("Expected a failed commit, got \(failed.phase)")
+                return
+            }
+            await expectRedeem(authority, whileFailed)
+            #expect(await authority.resolveRecovery(project: projectA) == .success(.restoring(previous.revision)))
+            #expect(await authority.snapshot().restoring?.delivered == false)
+            await expectRedeem(authority, whileQueued, .commitInFlight)
+            await engine.drain(authority)
+            #expect(await authority.snapshot().restoring?.delivered == true)
+            await expectRedeem(authority, whileDelivered, .commitInFlight)
+            _ = try #require(await engine.completeRestore(authority)).get()
+            let restored = await authority.snapshot()
+            #expect(try #require(restored.projects[projectA]).running.revision == previous.revision)
+            #expect(restored.lease == before.lease && AuthorityBench.context(restored) == afterRestore.context)
+            await expectRedeem(authority, afterRestore)
         }
 
         @Test func recoveryRefusesRedemption() async throws {
