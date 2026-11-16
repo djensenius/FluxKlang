@@ -6,7 +6,8 @@
 //  state and every project's activation transaction (#62 H5). Methods never
 //  await. Legacy authorities expose engine commands/reports; prepare-only
 //  authorities instead retain one real pending offline preparation privately.
-//  Refusals preserve state; irreversible faults are explicitly separate results.
+//  Refusals preserve state, except `redeemDirect`, which always consumes its
+//  ticket; irreversible faults are explicitly separate results.
 //
 
 actor HostAuthority {
@@ -14,6 +15,8 @@ actor HostAuthority {
     /// A control-contract bound, not a runtime sizing conclusion. Lost answers
     /// retain capacity indefinitely; no abandoned FIFO evicts ownership.
     static let planCapacity = 64
+    /// Outstanding direct-write tickets (#62 AU1).
+    static let directWriteCapacity = 64
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access
     // from outside the actor: module code may `await` a read of any internal
@@ -84,6 +87,23 @@ actor HostAuthority {
     /// `HostAuthorityBook.detach(_:)`.
     func detach(_ window: WindowID) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
         book.detach(window)
+    }
+
+    /// `HostAuthorityBook.admitDirect(_:admission:project:window:)`.
+    func admitDirect(_ intent: CommandIntent, admission: AdmissionContext,
+                     project: ProjectID, window: WindowID) -> Result<DirectWriteTicket?, DirectWriteRefusal> {
+        book.admitDirect(intent, admission: admission, project: project, window: window)
+    }
+
+    /// `HostAuthorityBook.redeemDirect(_:)`. Not yet a write fence on its own: a write
+    /// after this call's `await` returns races lease changes (see the book's doc).
+    func redeemDirect(_ ticket: DirectWriteTicket) -> Result<Void, DirectWriteRefusal> {
+        book.redeemDirect(ticket)
+    }
+
+    /// `HostAuthorityBook.outstandingDirectWriteCount`.
+    func outstandingDirectWriteCount() -> Int {
+        book.outstandingDirectWriteCount
     }
 
     func updateLive(_ state: HostLiveState) {

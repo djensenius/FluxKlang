@@ -11,7 +11,8 @@
 //  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`,
 //  `+Restore.swift`) can share them. A book a
 //  module caller builds itself is a separate value and never touches an actor's.
-//  Every refusal leaves the whole book unchanged.
+//  Every refusal leaves the whole book unchanged, except `redeemDirect`, which
+//  always consumes its ticket.
 //
 
 /// Deliberately NOT `Sendable` (see the extension below), like `HostProjectState`.
@@ -42,6 +43,10 @@ struct HostAuthorityBook {
     var restoring: RestoreRecord?
     /// Discards from an invalidated restore step; requeued only after its next restore.
     var deferredRestoreDiscards: [ProjectID: [PlanBinding]] = [:]
+    /// AU1: admitted, unredeemed direct-write tickets. Not in the snapshot.
+    var directWrites: Set<DirectWriteTicket> = []
+    /// The last minted ticket serial; never reused.
+    var lastDirectWrite: UInt64 = 0
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState,
@@ -169,12 +174,16 @@ struct HostAuthorityBook {
         return .success(held)
     }
 
+    /// Removes a window from the lease, under the current token, and drops its
+    /// outstanding direct-write tickets (they then redeem as `notOutstanding`).
     mutating func detach(_ window: WindowID) -> Result<EngineLeaseSnapshot, HostAuthorityRefusal> {
         guard let token = registry.snapshot?.token else { return .failure(.lease(.notHeld)) }
         var staged = registry
         let held: EngineLeaseSnapshot
         do { held = try staged.detach(window, expected: token) } catch { return .failure(.lease(error)) }
         registry = staged
+        // Fail closed: a re-attached window never redeems a ticket from before its detach.
+        directWrites = directWrites.filter { $0.window != window }
         return .success(held)
     }
 
@@ -223,6 +232,99 @@ struct HostAuthorityBook {
         return ActivationLiveContext(activation: activation, engine: engine)
     }
 
+}
+
+/// A single-use permit for one direct write that changes the running set (#62 AU1),
+/// fenced by the live host epoch and permission, the lease and the engine context
+/// generation at admission. Only `HostAuthorityBook.admitDirect` mints one;
+/// `redeemDirect` consumes it.
+struct DirectWriteTicket: Hashable, Sendable {
+    /// Unique per book: minted from a counter that never repeats.
+    let serial: UInt64
+    let project: ProjectID
+    let window: WindowID
+    let scope: CommandScope
+    /// `HostLiveState.hostEpoch` at admission, which the admission context and so the intent matched.
+    let hostEpoch: HostEpoch
+    /// `HostLiveState.permission` at admission, likewise matched by the context and the intent.
+    let permission: PermissionFingerprint?
+    let lease: EngineLeaseToken
+    /// `EngineLeaseRegistry.contextKey`'s generation at admission.
+    let context: Generation
+
+    fileprivate init(serial: UInt64, project: ProjectID, window: WindowID, scope: CommandScope,
+                     live: HostLiveState, lease: EngineLeaseToken, context: Generation) {
+        self.serial = serial
+        self.project = project
+        self.window = window
+        self.scope = scope
+        hostEpoch = live.hostEpoch
+        permission = live.permission
+        self.lease = lease
+        self.context = context
+    }
+}
+
+extension HostAuthorityBook {
+    /// Admits a direct write from `window` of `project`. Checks, in order: project
+    /// open (`unknownProject`); `HostCommandGate.admitDirect` with this window's
+    /// current lifecycle and role and the book's live state (gate first, then
+    /// `staleLive` and `.renders` for running-set changes); capacity. Safety and
+    /// draft scopes succeed with no ticket. Every refusal leaves the snapshot and
+    /// the outstanding count unchanged; only at capacity are tickets that could
+    /// no longer redeem dropped first (they would fail redemption anyway).
+    mutating func admitDirect(_ intent: CommandIntent, admission: AdmissionContext,
+                              project: ProjectID, window: WindowID) -> Result<DirectWriteTicket?, DirectWriteRefusal> {
+        guard let lifecycle = lifecycle(of: project, window: window) else { return .failure(.unknownProject) }
+        let lease: EngineLeaseToken
+        switch HostCommandGate.admitDirect(intent, admission: admission, lifecycle: lifecycle,
+                                           role: registry.role(of: window, project: project), live: live) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(nil): return .success(nil)
+        case .success(let required?): lease = required
+        }
+        // Unreachable today (`init` declares the counter); fails closed.
+        guard let context = ledger.generation(EngineLeaseRegistry.contextKey) else { return .failure(.staleContext) }
+        if directWrites.count >= HostAuthority.directWriteCapacity {
+            directWrites = directWrites.filter { directWriteRefusal($0) == nil }
+        }
+        // The serial bound is unreachable in practice; it fails closed as capacity.
+        guard directWrites.count < HostAuthority.directWriteCapacity, lastDirectWrite < .max else {
+            return .failure(.tooManyOutstanding)
+        }
+        lastDirectWrite += 1
+        let ticket = DirectWriteTicket(serial: lastDirectWrite, project: project, window: window,
+                                       scope: intent.operation.scope, live: live, lease: lease, context: context)
+        directWrites.insert(ticket)
+        return .success(ticket)
+    }
+
+    /// Redeems `ticket` once, synchronously, immediately before its write.
+    /// Any attempt consumes it, refused or not, so it can never be retried
+    /// (`notOutstanding`); then `HostCommandGate.redeemRefusal`'s checks, in its
+    /// order. Never changes the snapshot.
+    ///
+    /// The fence holds only while nothing else runs: the write must happen inside
+    /// the same serialization as lease, live and context changes (redeem under the
+    /// send lock, as `WingMixerWriteAuthorization` does). Redeeming on the actor and
+    /// writing after an `await` leaves a race that the wiring slice must close.
+    mutating func redeemDirect(_ ticket: DirectWriteTicket) -> Result<Void, DirectWriteRefusal> {
+        guard directWrites.remove(ticket) != nil else { return .failure(.notOutstanding) }
+        if let refusal = directWriteRefusal(ticket) { return .failure(refusal) }
+        return .success(())
+    }
+
+    /// Admitted, unredeemed tickets; diagnostics and tests only.
+    var outstandingDirectWriteCount: Int { directWrites.count }
+
+    private func directWriteRefusal(_ ticket: DirectWriteTicket) -> DirectWriteRefusal? {
+        let now = DirectWriteFence(lifecycle: lifecycle(of: ticket.project, window: ticket.window), live: live,
+                                   held: registry.snapshot?.token,
+                                   role: registry.role(of: ticket.window, project: ticket.project),
+                                   commitInFlight: inFlight[ticket.project] != nil,
+                                   context: ledger.generation(EngineLeaseRegistry.contextKey))
+        return HostCommandGate.redeemRefusal(ticket, now: now)
+    }
 }
 
 @available(*, unavailable, message: "the book never leaves HostAuthority")
