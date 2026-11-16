@@ -16,7 +16,8 @@ struct KernelCarryReadmissionReport: Sendable, Equatable {
     let planRefusal: KernelCarryRefusal?
     /// Carried events placed in the re-admission slots, in delivery order.
     let planned: Int
-    /// Carried ramps with a negative duration or a non-finite value, removed before planning.
+    /// Carried ramps with a non-finite (NaN or infinite) value, removed before planning. A finite negative duration is
+    /// not invalid: that ramp is planned and re-admitted as a jump (#718).
     let invalidRamps: Int
     /// Survivors cut by the replacement's capacity (the latest in delivery order), by kind.
     let cut: KernelRetirementLoss
@@ -47,7 +48,7 @@ struct KernelCarryResolution: Sendable, Equatable {
 
 /// The re-admission slots of one `KernelCycle`. Reference model; not RT-certified.
 ///
-/// Preparation (`init`, control): invalid ramps (negative duration, non-finite value) are removed; the rest are put
+/// Preparation (`init`, control): invalid ramps (a non-finite value) are removed; the rest are put
 /// in delivery order, (original frame, re-carried before own, recorded index). Among a retiring cycle's own events
 /// that is its block buffer's (frame, lane, producer lane, sequence) tie order. A replacement's `retire()` records its
 /// own pending events first (so a full carry keeps them) and the re-carried ones after them
@@ -58,10 +59,16 @@ struct KernelCarryResolution: Sendable, Equatable {
 /// ((scope, channel, controller) for a control, (scope, channel) for a program, (scope, parameter) for a ramp) the
 /// last event in delivery order survives, except that a data-entry control (6, 38, 96–101, and 121, which deselects
 /// the parameter: `KernelEventPayload.isCoalescible` is `false`) never coalesces, since its effect depends on order and
-/// count: each keeps its own slot, place and weight. A surviving ramp whose completion overflows `Int64` refuses the
-/// whole plan (`.frameOverflow`, checked before the cut); the earliest `capacity = min(KernelRetirementCarry.capacity,
-/// blockCapacity)` survivors fill preallocated slots (so a block never re-admits more events than its block buffer
-/// holds) and the rest are `cut`. Each slot keeps its weight: itself plus the carried events of its key it superseded.
+/// count: each keeps its own slot, place and weight. A surviving ramp whose completion (its frame plus
+/// `KernelEventPayload.rampFrames` of its duration) overflows `Int64` refuses the whole plan (`.frameOverflow`, checked
+/// before the cut); the earliest `capacity = min(KernelRetirementCarry.capacity, blockCapacity)` survivors fill
+/// preallocated slots (so a block never re-admits more events than its block buffer holds) and the rest are `cut`.
+/// Each slot keeps its weight: itself plus the carried events of its key it superseded.
+///
+/// Ramp rule (#718, the same as `ProducerAdmission` and `RampSlots.set`): a finite negative duration is a jump, the
+/// same as zero, on every path, so such a carried ramp is kept, planned and resolved like any other; it keeps its
+/// recorded payload and frame (frames are not re-timed, above), and render's `RampSlots.set` runs it as a jump to its
+/// target. Only a non-finite value (`KernelEventPayload.isAdmissibleRampTarget`) makes a carried ramp invalid.
 ///
 /// Render (`KernelBlockDecider.decide`): due slots are merged with the block buffer by original frame, a slot before
 /// a buffered event of the same frame; each is decided by the deadline policy (an already-due event dispatches at
@@ -136,7 +143,7 @@ final class KernelCarryReadmission: @unchecked Sendable {
         var valid: [(index: Int, event: KernelEvent)] = []
         var invalid = 0
         for (index, event) in carry.events.enumerated() {
-            if case let .rampTo(_, value, duration) = event.payload, duration < 0 || !value.isFinite {
+            if case let .rampTo(_, value, _) = event.payload, !KernelEventPayload.isAdmissibleRampTarget(value) {
                 invalid += 1
             } else {
                 valid.append((index, event))
@@ -183,7 +190,7 @@ final class KernelCarryReadmission: @unchecked Sendable {
                 continue
             }
             if case let .rampTo(_, _, duration) = event.payload,
-               event.frame.addingReportingOverflow(duration).overflow {
+               event.frame.addingReportingOverflow(KernelEventPayload.rampFrames(duration)).overflow {
                 return Plan(events: [], cut: KernelRetirementLoss(), superseded: 0, refusal: .frameOverflow)
             }
             survivors.append(event)

@@ -8,8 +8,10 @@
 /// - `push` first applies `DeadlinePolicy.admit` (`.beyondLookahead`, then `.nonMonotonic` against
 ///   `lastAdmittedFrame`), then refuses a `rampTo` whose target is NaN or infinite (`.nonFinite`, #64 RNF2), and
 ///   returns a refusal without pushing; otherwise it returns the push's status. Only an `.ok` push advances
-///   `lastAdmittedFrame`, so a refused or full push leaves it unchanged. A negative ramp duration is admitted (a
-///   jump). `RampSlots.set` still refuses a non-finite target at render as a backstop.
+///   `lastAdmittedFrame`, so a refused or full push leaves it unchanged. One ramp rule on every path
+///   (`KernelEventPayload.isAdmissibleRampTarget`, #718): a finite negative duration is admitted and is a jump (the
+///   same as zero) at render and across carry re-admission; a non-finite target is refused. `RampSlots.set` still
+///   refuses a non-finite target at render as a backstop.
 /// - `resetForDiscontinuity` forgets `lastAdmittedFrame` on a relocation or restart, so the producer may stamp
 ///   earlier frames again. Render orders by original frame, so such events are decided late (or dropped, for a
 ///   `noteOn` beyond tolerance), never re-queued.
@@ -40,7 +42,7 @@ struct ProducerAdmission: Sendable {
             refusals.record(admitted, token: token)
             return admitted
         }
-        if case let .rampTo(_, value, _) = event.payload, !value.isFinite {
+        if case let .rampTo(_, value, _) = event.payload, !KernelEventPayload.isAdmissibleRampTarget(value) {
             refusals.record(.refused(.nonFinite), token: token)
             return .refused(.nonFinite)
         }

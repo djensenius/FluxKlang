@@ -297,17 +297,18 @@ extension RealtimeHandoffTests {
             #expect(block(third, 4_992).1 == [at(5_000, programFive)])
         }
 
-        /// Invalid ramps (a NaN value, a negative duration) are removed before planning, so the carried
-        /// `program` is still re-admitted; the two ramps stay unresolved. Kills: one invalid ramp refusing the plan.
-        @Test func readmissionSkipsInvalidRampsAndKeepsTheRest() throws {
+        /// #718 one ramp rule: a NaN-valued ramp is invalid and removed before planning, while a negative-duration
+        /// ramp is kept and re-admitted as a jump (the same as zero), beside the carried `program`; only the NaN one
+        /// stays unresolved. Kills: one invalid ramp refusing the plan; a negative duration dropped as invalid.
+        @Test func readmissionKeepsNegativeDurationRampsAsJumpsAndSkipsNonFinite() throws {
             let rig = try CycleRig()
             let token = try #require(rig.events.claimProducer())
             retire(rig, token, pending: [(100, ramp(1, .nan)), (110, programFive), (120, ramp(3, 1, -5))])
             let next = try replacement(of: rig)
-            #expect(block(next, 64).1 == [at(110, programFive)])
+            #expect(block(next, 64).1 == [at(110, programFive), at(120, ramp(3, 1, -5))])
             let report = next.carryReadmissionReport
-            #expect(report.invalidRamps == 2 && report.planned == 1 && report.planRefusal == nil)
-            #expect(stateful(next.unresolvedRetirementLoss) == [0, 0, 2])
+            #expect(report.invalidRamps == 1 && report.planned == 2 && report.planRefusal == nil)
+            #expect(stateful(next.unresolvedRetirementLoss) == [0, 0, 1] && next.parameterValue(3) == 1)
         }
 
         /// The takeover releases the retired cycle's sounding note at the first block start, before the carried

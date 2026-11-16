@@ -61,15 +61,18 @@ final class RampSlots: @unchecked Sendable {
     }
 
     /// Starts a ramp from `current` to `target` over `durationFrames`, replacing any active ramp on `parameter`.
-    /// A `durationFrames <= 0` ramp jumps: the next `advance` returns `target` and the slot goes idle.
+    /// A `durationFrames <= 0` ramp jumps: the next `advance` returns `target` and the slot goes idle. This is the
+    /// one ramp rule (`KernelEventPayload.rampFrames`, #718): a finite negative duration is a jump, the same as zero,
+    /// on every path (admission, render, carry re-admission); a non-finite target is refused.
     /// Returns `.refused(.slotOutOfRange)` for an out-of-range parameter, or `.refused(.nonFinite)` when
     /// `target` or `current` is NaN or infinite. A refusal leaves the slot and `activeCount` unchanged.
     func set(parameter: UInt32, target: Float, durationFrames: Int64, current: Float) -> KernelStatus {
         guard let index = index(parameter) else { return .refused(.slotOutOfRange) }
-        guard target.isFinite, current.isFinite else { return .refused(.nonFinite) }
+        // `current` is the slot's live value, not a ramp target, so it keeps a plain finiteness check.
+        guard KernelEventPayload.isAdmissibleRampTarget(target), current.isFinite else { return .refused(.nonFinite) }
         if !slots[index].active { activeCount &+= 1 }
-        slots[index] = Ramp(start: current, target: target, duration: max(durationFrames, 0), elapsed: 0,
-                            active: true)
+        slots[index] = Ramp(start: current, target: target, duration: KernelEventPayload.rampFrames(durationFrames),
+                            elapsed: 0, active: true)
         return .ok
     }
 
