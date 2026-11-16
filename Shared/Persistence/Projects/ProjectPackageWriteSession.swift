@@ -3,10 +3,11 @@ import Foundation
 /// Identity bookkeeping for one package write. Each directory the writer creates is opened once, its
 /// `(st_dev, st_ino)` recorded and the descriptor closed, so no descriptor is held per directory and the
 /// table never exceeds the admitted entries. Before an entry is created, the destination's name and its
-/// parent chain are re-opened from the root and compared with the table; afterwards the held parent is
-/// checked again by name; after the last entry every recorded directory is re-walked. A mismatch, a
-/// missing name, a link or a non-directory refuses with `destinationChanged`. This detects concurrent
-/// mutation; it does not prevent it, and output already written is never removed.
+/// parent chain are re-opened from the root and compared with the table; afterwards, or when the create
+/// fails, the held parent is checked again by name (a failed create whose parent still matches keeps its
+/// own error); after the last entry every recorded directory is re-walked. A mismatch, a missing name, a
+/// link or a non-directory refuses with `destinationChanged`. This detects concurrent mutation; it does
+/// not prevent it, and output already written is never removed.
 struct ProjectPackageWriteSession {
     private typealias FileSystem = ProjectPackageFileSystem
 
@@ -28,14 +29,20 @@ struct ProjectPackageWriteSession {
         let parent = try openVerifiedChain(components)
         defer { close(parent) }
         hook?(.beforeCreate, path)
-        if let bytes {
-            try FileSystem.createFile(at: parent, name, bytes: bytes)
-        } else {
-            try FileSystem.createDirectory(at: parent, name)
-            let opened = try FileSystem.openDestinationDirectory(at: parent, name, matching: nil)
-            close(opened.descriptor)
-            identities[path] = opened.identity
-            recorded.append(path)
+        do {
+            if let bytes {
+                try FileSystem.createFile(at: parent, name, bytes: bytes)
+            } else {
+                try FileSystem.createDirectory(at: parent, name)
+                let opened = try FileSystem.openDestinationDirectory(at: parent, name, matching: nil)
+                close(opened.descriptor)
+                identities[path] = opened.identity
+                recorded.append(path)
+            }
+        } catch {
+            // A parent removed or replaced under the create reports the change, not the create's errno.
+            try verifyHeld(parent, components)
+            throw error
         }
         hook?(.afterCreate, path)
         try verifyHeld(parent, components)

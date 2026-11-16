@@ -78,6 +78,36 @@ extension ProjectPackageIOTests {
         #expect(stray == Support.files["notes/readme.txt"])
     }
 
+    @Test func parentRemovedBeforeFileCreateIsRefused() throws {
+        let scratch = try Support.scratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let contents = try Support.read(Support.makePackage(in: Support.scratchChild(scratch, "source")))
+        let destination = scratch.appendingPathComponent("dest.fluxklang")
+        let notes = destination.appendingPathComponent("notes")
+        let writer = Self.writer(at: .beforeCreate, of: "notes/readme.txt") {
+            #expect(rmdir(notes.path) == 0)
+        }
+        // The create fails with ENOENT in the removed directory; the re-check reports the change instead.
+        #expect(throws: ProjectPackageIOError.destinationChanged) { try writer.write(contents, to: destination) }
+        #expect(!FileManager.default.fileExists(atPath: notes.path))
+        #expect(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("references").path))
+    }
+
+    @Test func parentRemovedBeforeDirectoryCreateIsRefused() throws {
+        let scratch = try Support.scratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let contents = try Support.read(Support.makePackage(in: Support.scratchChild(scratch, "source")))
+        let destination = scratch.appendingPathComponent("dest.fluxklang")
+        let empty = destination.appendingPathComponent("empty")
+        // `empty` has no children yet: `empty/nested` is its first entry.
+        let writer = Self.writer(at: .beforeCreate, of: "empty/nested") {
+            #expect(rmdir(empty.path) == 0)
+        }
+        #expect(throws: ProjectPackageIOError.destinationChanged) { try writer.write(contents, to: destination) }
+        #expect(!FileManager.default.fileExists(atPath: empty.path))
+        #expect(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("graphs").path))
+    }
+
     @Test func subdirectorySwappedForSymlinkIsRefused() throws {
         let scratch = try Support.scratch()
         defer { try? FileManager.default.removeItem(at: scratch) }
