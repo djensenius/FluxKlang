@@ -112,11 +112,17 @@ enum KernelCycleStart: Sendable, Equatable {
     /// before this one is prepared; `KernelCycle.init` refuses otherwise (`.ownershipClaim(.predecessorNotRetired)`).
     /// It must also pass that cycle's `admissionRefusals` (see `admissionRefusals`), else `.admissionRefusalsRequired`.
     /// If it loses the claim to a preparation that has since retired, it is refused `.ownershipClaim(.claimRaced)`.
+    /// So it is prepared only after that `retire()`, and render does no event work until the host installs it (the
+    /// takeover gap, bounded in `KernelCycle`'s Takeover gap): its takeover releases and the safety requests raised in
+    /// the gap wait for its first `run`, and the carry below for its first unsilenced one.
     /// Pending stateful events are also recorded in a carry that `inheritedRetirementCarry` exposes and this cycle
-    /// re-admits (#364 KCR1). `inheritedRetirementLoss` still counts what its immediate predecessor dropped (that one
-    /// retirement only, never cumulative); `unresolvedRetirementLoss` counts what this cycle has not yet delivered or
-    /// superseded, so control checks it on every replacement (per hop) and reconciles receiver state first whenever it
-    /// `receiverStateMayBeStale`.
+    /// re-admits (#364 KCR1): those still planned dispatch in its first unsilenced block that reaches them, at
+    /// `blockStart` if already due however long the gap (unless superseded, cut or refused; see
+    /// `KernelCarryReadmissionReport`). The flush watermark never gates the carry (it discards only `noteOn`s, which a
+    /// carry never holds), so carried events apply while this cycle's lanes still flush. `inheritedRetirementLoss`
+    /// still counts what its immediate predecessor dropped (that one retirement only, never cumulative);
+    /// `unresolvedRetirementLoss` counts what this cycle has not yet delivered or superseded, so control checks it on
+    /// every replacement (per hop) and reconciles receiver state first whenever it `receiverStateMayBeStale`.
     /// Ramp values (round 2l): given the retired cycle's `RampSlots`, it reports and ramps from the last known values
     /// the slots keep (`RampSlots.lastValue`), not from 0. Happens-before: the retired cycle's last slot writes are
     /// sequenced before its `retire()`'s releasing claim CAS, which this cycle's acquiring claim CAS in `init` reads,

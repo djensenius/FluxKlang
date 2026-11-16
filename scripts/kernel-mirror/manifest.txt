@@ -44,6 +44,7 @@ test FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionBounds.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycleReadmissionPlan.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycleRetirement.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycleStress.swift
+test FluxKlangTests/RealtimeHandoffTests+KernelCycleTakeoverGap.swift
 test FluxKlangTests/RealtimeHandoffTests+Ownership.swift
 test FluxKlangTests/RealtimeHandoffTests+OwnershipContention.swift
 test FluxKlangTests/RealtimeHandoffTests+Policy.swift
