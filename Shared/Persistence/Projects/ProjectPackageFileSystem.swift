@@ -152,8 +152,9 @@ enum ProjectPackageFileSystem {
     }
 
     /// Lists at most `limit` names (excluding dot entries), sorted by UTF-8 bytes.
+    /// Lists through a fresh descriptor, so the caller's offset is untouched and repeated listings are complete.
     static func names(in directory: Int32, limit: Int) throws -> [String] {
-        let copy = dup(directory)
+        let copy = openat(directory, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard copy >= 0 else { throw failure() }
         guard let stream = fdopendir(copy) else {
             let code = errno
