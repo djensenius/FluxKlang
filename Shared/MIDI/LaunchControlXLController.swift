@@ -37,6 +37,12 @@ final class LaunchControlXLController {
     /// Every matched endpoint feeds this one logical source. Fresh on every restart, so a half message, running
     /// status or open SysEx never crosses one.
     @ObservationIgnored private var stream = LaunchControlXLController.freshStream()
+    /// Bumped by every restart; a delivery from an earlier start is dropped before it reaches `stream`.
+    @ObservationIgnored private var generation = 0
+    /// Mapped actions not yet dispatched, in feed order, each with the start and mode it was fed under. One drain at
+    /// a time empties it; every restart clears it.
+    @ObservationIgnored private var pendingActions: [PendingAction] = []
+    @ObservationIgnored private var isDispatching = false
 
     init(
         fileStore: JSONFileStore = .shared,
@@ -103,6 +109,9 @@ final class LaunchControlXLController {
     private func restart() {
         midiInput?.stop()
         stream = Self.freshStream()
+        pendingActions = []
+        generation += 1
+        let generation = generation
         guard configuration.mode != .disabled else {
             status = .disabled
             return
@@ -113,9 +122,7 @@ final class LaunchControlXLController {
         midiInput.start(
             sourceNameContains: configuration.mapping.sourceNameContains,
             onPackets: { [weak self] packets in
-                Task { @MainActor [weak self] in
-                    await self?.receive(packets: packets)
-                }
+                self?.deliver(packets, generation: generation)
             },
             onSourcesChanged: { [weak self] names in
                 self?.status = names.isEmpty ? .waiting : .connected(names)
@@ -123,25 +130,58 @@ final class LaunchControlXLController {
         )
     }
 
+    /// The input path: the batch is fed synchronously, in delivery order, unless it belongs to an earlier start.
+    private func deliver(_ packets: [[UInt8]], generation: Int) {
+        guard generation == self.generation else { return }
+        enqueue(configuration.mapping.actions(for: stream.feed(packets: packets)))
+        Task { [weak self] in await self?.dispatchPendingActions() }
+    }
+
     /// Applies every packet of the batch, in order, before the first dispatch, then dispatches its actions in order.
+    /// Called while any drain is running, it only queues its actions behind the current ones and returns.
     func receive(packets: [[UInt8]]) async {
-        await dispatch(stream.feed(packets: packets))
+        enqueue(configuration.mapping.actions(for: stream.feed(packets: packets)))
+        await dispatchPendingActions()
     }
 
     /// Each valid message goes through the stream as a complete control change; invalid ones are dropped.
     func receive(_ messages: [MIDIControlChange]) async {
-        await dispatch(stream.feed(messages))
+        enqueue(configuration.mapping.actions(for: stream.feed(messages)))
+        await dispatchPendingActions()
     }
 
-    private func dispatch(_ outputs: [MIDISourceOutput]) async {
-        for action in configuration.mapping.actions(for: outputs) {
-            lastAction = action
-            guard configuration.mode == .control, let actionHandler else { continue }
-            await actionHandler(action)
+    /// Eligibility is fixed here, at feed time: an action fed in Monitor is never dispatched, even if the mode
+    /// changes to Control before the drain reaches it.
+    private func enqueue(_ actions: [LaunchControlXLAction]) {
+        let shouldDispatch = configuration.mode == .control
+        pendingActions += actions.map {
+            PendingAction(action: $0, generation: generation, shouldDispatch: shouldDispatch)
+        }
+    }
+
+    /// Dispatches queued actions one at a time, in queue order, awaiting each handler. A second caller returns at
+    /// once while a drain runs; the running drain dispatches what it queued. Every drained action becomes
+    /// `lastAction`; only one fed in Control, in the current start, while still in Control, reaches the handler.
+    func dispatchPendingActions() async {
+        guard !isDispatching else { return }
+        isDispatching = true
+        defer { isDispatching = false }
+        while !pendingActions.isEmpty {
+            let pending = pendingActions.removeFirst()
+            lastAction = pending.action
+            guard pending.shouldDispatch, pending.generation == generation, configuration.mode == .control,
+                  let actionHandler else { continue }
+            await actionHandler(pending.action)
         }
     }
 
     private func persist() async {
         await fileStore.save(configuration, to: fileName)
+    }
+
+    private struct PendingAction {
+        let action: LaunchControlXLAction
+        let generation: Int
+        let shouldDispatch: Bool
     }
 }

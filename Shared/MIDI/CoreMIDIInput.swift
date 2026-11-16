@@ -12,7 +12,8 @@ final class CoreMIDIInput: LaunchControlXLInput {
     private var inputPort = MIDIPortRef()
     private var connectedSources: [MIDIEndpointRef: String] = [:]
     private var sourceNameContains: [String] = []
-    private var onPackets: (([[UInt8]]) -> Void)?
+    /// The current start's ordered path to the main actor; cancelled by `stop()`.
+    private var delivery: MIDIPacketDelivery?
     private var onSourcesChanged: (([String]) -> Void)?
     private let auditMirror: ProductionAccessAudit?
 
@@ -23,7 +24,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
 
     func start(
         sourceNameContains: [String],
-        onPackets: @escaping ([[UInt8]]) -> Void,
+        onPackets: @escaping @MainActor ([[UInt8]]) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {
         ProductionAccessAudit.shared.record(.attempted, for: .midiInput, mirroring: auditMirror)
@@ -33,7 +34,6 @@ final class CoreMIDIInput: LaunchControlXLInput {
         }
         stop()
         self.sourceNameContains = sourceNameContains
-        self.onPackets = onPackets
         self.onSourcesChanged = onSourcesChanged
 
         ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
@@ -47,25 +47,31 @@ final class CoreMIDIInput: LaunchControlXLInput {
             return
         }
         ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
+        let delivery = MIDIPacketDelivery(handler: onPackets)
         guard MIDIInputPortCreateWithBlock(
             client,
             "FluxKlang Launch Control XL Input" as CFString,
             &inputPort,
-            { [weak self] packetList, _ in
+            // Runs on CoreMIDI's read thread: copies the bytes out of the packet list, then only yields.
+            { @Sendable packetList, _ in
                 let packets = Self.packetBytes(in: packetList)
                 guard !packets.isEmpty else { return }
-                Task { @MainActor [weak self] in self?.onPackets?(packets) }
+                delivery.yield(packets)
             }
         ) == noErr else {
+            delivery.cancel()
             ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
             MIDIClientDispose(client)
             client = MIDIClientRef()
             return
         }
+        self.delivery = delivery
         reconnectSources()
     }
 
     func stop() {
+        delivery?.cancel()
+        delivery = nil
         if inputPort != 0 || client != 0 {
             ProductionAccessAudit.shared.record(.attempted, for: .midiInput, mirroring: auditMirror)
             guard !AppPersistence.isTesting else {

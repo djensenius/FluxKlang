@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Synchronization
 import Testing
 @testable import FluxKlang
 
@@ -217,5 +218,188 @@ extension LaunchControlXLTests {
         #expect(dispatched == [.toggleMute(slot: 0), .fader(slot: 0, value: 0), .moveBank(1)])
         controller.setActionHandler { _ in }
         await controller.setMode(.disabled)
+    }
+}
+
+/// Delivery tests: one ordered path per input start, and nothing from an earlier start reaches the stream.
+extension LaunchControlXLTests {
+    /// T9: a delivery held from the first start and invoked after a restart never reaches the new stream.
+    @MainActor
+    @Test func staleDeliveryIsDroppedAfterRestart() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let input = RecordingLaunchControlXLInput()
+        let controller = fixture.controller(makeMIDIInput: { input })
+        var dispatched: [LaunchControlXLAction] = []
+        controller.setActionHandler { dispatched.append($0) }
+        await controller.load()
+        let old = try #require(input.onPackets)
+        await controller.setMode(.control)
+        let new = try #require(input.onPackets)
+        #expect(input.starts.count == 2)
+
+        old([[0xBF, 5]])
+        new([[0x7F]])
+        old([[0xBF, 6, 0x7F]])
+        new([[5, 0x7F]])
+        await controller.dispatchPendingActions()
+        #expect(dispatched.isEmpty)
+        #expect(controller.lastAction == nil)
+
+        new([[0xBF, 5], [0x7F]])
+        await controller.dispatchPendingActions()
+        #expect(dispatched == [.fader(slot: 0, value: 1)])
+        await controller.setMode(.disabled)
+    }
+
+    /// T10: split CCs yielded from other threads, all buffered while the main actor is busy, are handled in yield
+    /// order; past the bound the newest batch is dropped. Each yield is awaited before the next, so the varying
+    /// priorities cannot reorder them: this pins the stream's FIFO buffer and its single consumer.
+    @MainActor
+    @Test func packetDeliveryKeepsYieldOrder() async throws {
+        let mapping = try Self.bundledMapping()
+        let packets: [[UInt8]] = (0..<200).flatMap { index in [[0xBF, 5], [UInt8(index % 128)]] }
+        var handled: [[UInt8]] = []
+        var stream = try LaunchControlXLStream.make()
+        var outputs: [MIDISourceOutput] = []
+        let delivery = MIDIPacketDelivery { batch in
+            handled += batch
+            outputs += stream.feed(packets: batch)
+        }
+        let yielded = YieldCount()
+        let producer = Task.detached {
+            for (index, packet) in packets.enumerated() {
+                let priority: TaskPriority = index.isMultiple(of: 2) ? .low : .high
+                _ = await Task.detached(priority: priority) { delivery.yield([packet]) }.value
+                yielded.increment()
+            }
+        }
+        let deadline = ContinuousClock.now + .seconds(30)
+        while yielded.value < packets.count {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("Only \(yielded.value) of \(packets.count) batches were yielded before the deadline")
+                break
+            }
+        }
+        await producer.value
+        await delivery.finish()
+        #expect(handled == packets)
+        let expected = (0..<200).map { LaunchControlXLAction.fader(slot: 0, value: Float($0 % 128) / 127) }
+        #expect(mapping.actions(for: outputs) == expected)
+
+        var bounded: [[UInt8]] = []
+        let small = MIDIPacketDelivery(maximumPendingBatches: 2) { bounded += $0 }
+        #expect(small.yield([[0xBF, 5]]))
+        #expect(small.yield([[0x7F]]))
+        #expect(!small.yield([[0xBF, 6, 0x7F]]))
+        await small.finish()
+        #expect(bounded == [[0xBF, 5], [0x7F]])
+    }
+
+    /// T11: once `cancel()` returns, nothing is handled, including batches accepted before it.
+    @MainActor
+    @Test func cancelledPacketDeliveryHandlesNothing() async {
+        var handled: [[UInt8]] = []
+        let delivery = MIDIPacketDelivery { handled += $0 }
+        #expect(delivery.yield([[0xBF, 5]]))
+        #expect(delivery.yield([[0x7F]]))
+        delivery.cancel()
+        #expect(!delivery.yield([[0xBF, 6, 0x7F]]))
+        await delivery.finish()
+        #expect(handled.isEmpty)
+    }
+
+    /// T12: an action fed in Monitor is never dispatched, even when Control is set before the drain reaches it; a
+    /// restart also discards actions queued behind a suspended handler.
+    @MainActor
+    @Test func actionsQueuedBeforeControlOrRestartAreNeverDispatched() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .monitor)
+        defer { fixture.cleanUp() }
+        let input = RecordingLaunchControlXLInput()
+        let controller = fixture.controller(makeMIDIInput: { input })
+        var dispatched: [LaunchControlXLAction] = []
+        var gate: CheckedContinuation<Void, Never>?
+        var holdNext = false
+        controller.setActionHandler { action in
+            dispatched.append(action)
+            guard holdNext else { return }
+            holdNext = false
+            await withCheckedContinuation { gate = $0 }
+        }
+        await controller.load()
+        let monitor = try #require(input.onPackets)
+        monitor([[0xBF, 5, 127]])
+        await controller.setMode(.control)
+        await controller.dispatchPendingActions()
+        #expect(dispatched.isEmpty)
+
+        holdNext = true
+        let held = Task { await controller.receive(packets: [[0xBF, 5, 127]]) }
+        guard await Self.waitUntil({ gate != nil }) else { return }
+        await controller.receive(packets: [[0xBF, 6, 127]])
+        await controller.setMode(.control)
+        gate?.resume()
+        await held.value
+        #expect(dispatched == [.fader(slot: 0, value: 1)])
+        #expect(controller.lastAction == .fader(slot: 0, value: 1))
+        await controller.setMode(.disabled)
+    }
+
+    /// T13: a receive while a handler is suspended only queues; the running drain dispatches it after the first
+    /// handler returns, so handlers never overlap.
+    @MainActor
+    @Test func receiveDuringSuspendedHandlerOnlyQueues() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let controller = fixture.controller(makeMIDIInput: { InertLaunchControlXLInput() })
+        await controller.load()
+        var log: [String] = []
+        var gate: CheckedContinuation<Void, Never>?
+        var holdNext = true
+        controller.setActionHandler { action in
+            log.append("start \(action)")
+            if holdNext {
+                holdNext = false
+                await withCheckedContinuation { gate = $0 }
+            }
+            log.append("end \(action)")
+        }
+
+        let held = Task { await controller.receive(packets: [[0xBF, 5, 127]]) }
+        guard await Self.waitUntil({ gate != nil }) else { return }
+        await controller.receive(packets: [[0xBF, 6, 127]])
+        #expect(log.count == 1)
+        gate?.resume()
+        await held.value
+        let first = LaunchControlXLAction.fader(slot: 0, value: 1)
+        let second = LaunchControlXLAction.fader(slot: 1, value: 1)
+        #expect(log == ["start \(first)", "end \(first)", "start \(second)", "end \(second)"])
+        controller.setActionHandler { _ in }
+        await controller.setMode(.disabled)
+    }
+
+    /// Lets other main-actor work run until `condition` holds; records an issue and returns false after `limit`.
+    @MainActor
+    static func waitUntil(_ condition: () -> Bool, limit: Duration = .seconds(10)) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("Timed out after \(limit)")
+                return false
+            }
+            await Task.yield()
+        }
+        return true
+    }
+}
+
+/// How many batches T10's producer has yielded, read by the busy main actor.
+private final class YieldCount: Sendable {
+    private let count = Atomic<Int>(0)
+
+    var value: Int { count.load(ordering: .acquiring) }
+
+    func increment() {
+        count.add(1, ordering: .releasing)
     }
 }

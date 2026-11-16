@@ -10,12 +10,13 @@
 import Foundation
 
 /// A Launch Control XL MIDI 1 byte source. `CoreMIDIInput` is production. Each element of `onPackets` is the raw
-/// bytes of one non-empty packet, in arrival order, from any matched endpoint.
+/// bytes of one non-empty packet from any matched endpoint. Batches arrive on the main actor, one at a time, in
+/// arrival order, and none from a start arrives after `stop()` returns.
 @MainActor
 protocol LaunchControlXLInput: AnyObject {
     func start(
         sourceNameContains: [String],
-        onPackets: @escaping ([[UInt8]]) -> Void,
+        onPackets: @escaping @MainActor ([[UInt8]]) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     )
     func stop()
@@ -26,7 +27,7 @@ protocol LaunchControlXLInput: AnyObject {
 final class InertLaunchControlXLInput: LaunchControlXLInput {
     func start(
         sourceNameContains: [String],
-        onPackets: @escaping ([[UInt8]]) -> Void,
+        onPackets: @escaping @MainActor ([[UInt8]]) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {}
 
