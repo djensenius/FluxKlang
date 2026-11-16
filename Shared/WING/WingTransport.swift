@@ -234,8 +234,10 @@ actor WingTransport: WingTransporting {
         try socket.send(.message(OSCMessage(address, values: values)), to: host, port: port)
     }
 
+    /// `async` to match the requirement exactly: a synchronous witness loses overload
+    /// resolution in async code, so a concrete call would reach the refusing default.
     func sendMixerValue(_ node: WingNodeRef, value: WingValue, muted: Bool, sessionID: UUID,
-                        authorization: WingMixerWriteAuthorization) throws {
+                        authorization: WingMixerWriteAuthorization) async throws {
         try authorization.consume(node: node, value: value, muted: muted) {
             // No suspension between authorization/session checks and the socket write.
             guard self.sessionID == sessionID,
@@ -244,6 +246,18 @@ actor WingTransport: WingTransporting {
             }
             let address = muted ? WingAddress.mute(node.kind, node.index) : WingAddress.fader(node.kind, node.index)
             try send(address, value.encodedForWing(address: address))
+        }
+    }
+
+    /// The whole check-and-send runs inside `consume`, under the grant's lock, so no
+    /// suspension separates the grant, the session check and the socket write. `async`
+    /// for the same reason as `sendMixerValue`.
+    func sendDirect(_ setting: WingSetting, sessionID: UUID,
+                    authorization: DirectWriteAuthorization) async throws {
+        try authorization.consume {
+            // Never await or call into the authority here: it may be blocked on this lock.
+            guard self.sessionID == sessionID, !Task.isCancelled else { throw WingTransportError.notAuthorized }
+            try send(setting.address, setting.value.encodedForWing(address: setting.address))
         }
     }
 
