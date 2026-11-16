@@ -56,11 +56,13 @@
 /// past the call breaks that contract. `R` and `body` are the caller's, and so is any ARC, allocation, lock or
 /// metadata request they cost.
 ///
-/// Progress (source level only). `beginCycle` is M6's `beginCycle` (at most two retires and one exchange; a
-/// refused retire adds `FaultLatch`'s bounded scope lookup and raise) plus one borrowed M6 `withCurrent` whose
-/// body is one store (`resetCycle`). `withCurrent` is M6's `withCurrent` plus `body`. This file adds no loop,
-/// lock or allocation on render. Atomic lowering and target progress are unqualified, as in M6. Generated code
-/// was inspected only in scratch configurations, with no claim for arbitrary bodies or runtime callees:
+/// Progress (source level only). `beginCycle` is M6's `beginCycle` (at most two retires and one exchange; each
+/// retire takes and puts the queue's `FaultChainAuthority` chain token, or makes one store and one counter add when
+/// contended, and a refused retire adds the bounded scope lookup and raise through that token) plus one borrowed
+/// M6 `withCurrent` whose body is one store (`resetCycle`). `withCurrent` is M6's `withCurrent` plus `body`. This
+/// file adds no loop, lock or allocation on render. Atomic lowering and target progress are unqualified, as in M6.
+/// Generated code was inspected only in scratch configurations, with no claim for arbitrary bodies or runtime
+/// callees:
 /// - Assembly (arm64 macOS): at `-O`, specialised code with a known `Plan` and `R` showed no retain, release,
 ///   allocation, lock, metadata request or trap from this file. At `-Onone`, unspecialised code showed no
 ///   retain, release, allocation or lock from this file, only what the last two items list.
@@ -79,10 +81,10 @@
 /// releases up to `retire.capacity` entries. Plan and arena `deinit` time is outside render's source bound.
 ///
 /// Caller invariants (documented; neither the compiler nor the slot enforces or checks them):
-/// - Fault context (#190). A refused retire in `beginCycle` raises `.retireBacklog` on the retire queue's
-///   `FaultLatch` (M6 `DeferredReleaseQueue.retire`, then `FaultLatch.raise`), so the thread calling `beginCycle`
-///   is a raise chain under `FaultLatch`'s raise-context contract. A latch shared with other components must
-///   count every chain that can raise on it. That proof is open in #190.
+/// - Fault context (#190). A refused retire in `beginCycle` raises `.retireBacklog` through the retire queue's
+///   `FaultChainAuthority` chain token (FLP5, `DeferredReleaseQueue.retire`), so the chains that can raise on that
+///   authority's latch number at most its `chainBudget` by construction. A concurrent `beginCycle` on a shared
+///   queue is refused as contended (latched fault, stall and retry), not raced.
 /// - Threads. One control and one render thread per slot (below). Every slot or exchange sharing a retire queue
 ///   must use the same control/render thread pair: the queue is single-producer, single-consumer.
 /// - Strong lifetime. The caller keeps the slot strongly alive across each call, and render never holds the last

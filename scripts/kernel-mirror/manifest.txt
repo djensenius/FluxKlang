@@ -54,6 +54,7 @@ test FluxKlangTests/RealtimeHandoffTests+ReleaseTombstones.swift
 test FluxKlangTests/RealtimeHandoffTests+ReservedRing.swift
 test FluxKlangTests/RealtimeHandoffTests+Retire.swift
 test FluxKlangTests/RealtimeHandoffTests+RetireStress.swift
+test FluxKlangTests/RealtimeHandoffTests+RetireChains.swift
 test FluxKlangTests/RealtimeHandoffTests+Scratch.swift
 test FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
 test FluxKlangTests/RealtimeHandoffTests+Starvation.swift
