@@ -32,6 +32,7 @@ struct MIDI1ChannelState: Equatable, Sendable {
     var sustainDown: Bool { controllers[64] >= 64 }
 
     /// Combined value of MSB `controller` 0...31 and its LSB `controller + 32`.
+    /// Meaningful only under `.standard` controller pairing.
     func value14(controller: UInt8) -> UInt16? {
         guard controller < 32 else { return nil }
         return UInt16(controllers[Int(controller)]) << 7 | UInt16(controllers[Int(controller) + 32])
@@ -107,6 +108,17 @@ extension MIDI1ChannelState {
         if controller >= 120 {
             return try applyChannelMode(controller, value: value, channel: channel)
         }
+        if policy.controllerPairing == .unpaired, controller != 64 {
+            controllers[Int(controller)] = value
+            return .controller(controller, value: value)
+        }
+        return try applyPairedController(controller, value: value, channel: channel, policy: policy)
+    }
+
+    /// CC 0...119 under `MIDI1ControllerPairing.standard`, and Sustain (64) under both pairings.
+    private mutating func applyPairedController(
+        _ controller: UInt8, value: UInt8, channel: UInt8, policy: MIDI1StatePolicy
+    ) throws(MIDI1StateRefusal) -> MIDI1StateEffect {
         if (98...101).contains(controller) {
             controllers[Int(controller)] = value
             activeParameterKind = controller >= 100 ? .registered : .nonRegistered
@@ -246,10 +258,16 @@ extension MIDI1ChannelState {
         let program = snapshot.program.map { [$0.bankMSB, $0.bankLSB, $0.program] } ?? []
         try require(program.allSatisfy { $0 < 0x80 }, .program)
         try require(Self.validParameters(snapshot.parameters, policy: policy), .parameters)
-        // Only power-up and Reset All Controllers leave no kind, and both leave every selector byte at 127.
-        // With a kind, any selector bytes are reachable and the selected number is derived from them.
-        if snapshot.activeParameterKind == nil {
-            try require(controllers[98...101].allSatisfy { $0 == 0x7F }, .parameters)
+        switch policy.controllerPairing {
+        case .standard:
+            // Only power-up and Reset All Controllers leave no kind, and both leave every selector byte at 127.
+            // With a kind, any selector bytes are reachable and the selected number is derived from them.
+            if snapshot.activeParameterKind == nil {
+                try require(controllers[98...101].allSatisfy { $0 == 0x7F }, .parameters)
+            }
+        case .unpaired:
+            // CC 98...101 are plain controllers here: any bytes are reachable, but nothing is selected or stored.
+            try require(snapshot.activeParameterKind == nil && snapshot.parameters.isEmpty, .parameters)
         }
         if let null = snapshot.parameters.first(where: { $0.number.isNullFunction(policy: policy) }) {
             throw .invalidSnapshot(.nullParameter(channel: channel, number: null.number))

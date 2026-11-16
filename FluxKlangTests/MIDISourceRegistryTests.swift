@@ -20,12 +20,13 @@ struct MIDISourceRegistryTests {
     }
 
     static func policy(
-        heldNotes: Int = 128, parameters: Int = 256, retainLSB: Bool = false
+        heldNotes: Int = 128, parameters: Int = 256, retainLSB: Bool = false, unpaired: Bool = false
     ) throws -> MIDI1StatePolicy {
         try #require(MIDI1StatePolicy(
             lsbReset: retainLSB ? .retainLSB : .resetOnMSB,
             maximumHeldNotes: heldNotes,
-            maximumParameterValues: parameters
+            maximumParameterValues: parameters,
+            controllerPairing: unpaired ? .unpaired : .standard
         ))
     }
 

@@ -10,7 +10,7 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
     case shortPolyPressure, polyPressureValue, pitchBend, channelPressure, program
     case parameterValue, parameterNumber, unsortedParameters, duplicateParameter, parametersOverBound, nilKindSelected
     case noteNumber, duplicateNote, unsortedNotes, zeroVelocity, notesOverBound, sustainedWithoutPedal, monoChannels
-    case storedRPNNull, storedNRPNNull
+    case storedRPNNull, storedNRPNNull, unpairedKindSelected, unpairedParameterStored
 
     static let rpnNull = MIDI1ParameterNumber(kind: .registered, msb: 127, lsb: 127)
     static let nrpnNull = MIDI1ParameterNumber(kind: .nonRegistered, msb: 127, lsb: 127)
@@ -24,7 +24,7 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         case .channelPressure: .channelPressure
         case .program: .program
         case .parameterValue, .parameterNumber, .unsortedParameters, .duplicateParameter, .parametersOverBound,
-             .nilKindSelected:
+             .nilKindSelected, .unpairedKindSelected, .unpairedParameterStored:
             .parameters
         case .monoChannels: .mode
         default: nullField ?? .heldNotes
@@ -46,6 +46,14 @@ enum MIDI1SnapshotCorruption: CaseIterable, Sendable {
         case .notesOverBound: snapshot.policy = MIDI1StatePolicy(maximumHeldNotes: 2) ?? .standard
         case .storedNRPNNull: snapshot.channels[15].parameters = [MIDI1ParameterValue(number: Self.nrpnNull, value: 1)]
         case .parametersOverBound: snapshot.policy = MIDI1StatePolicy(maximumParameterValues: 2) ?? .standard
+        case .unpairedKindSelected, .unpairedParameterStored:
+            // The rich (standard) state's channel 1 has both a kind and three values; keep exactly one of them.
+            snapshot.policy = MIDI1StatePolicy(controllerPairing: .unpaired) ?? .standard
+            if self == .unpairedKindSelected {
+                snapshot.channels[0].parameters = []
+            } else {
+                snapshot.channels[0].activeParameterKind = nil
+            }
         default: corrupt(&snapshot.channels[0])
         }
     }
@@ -108,7 +116,10 @@ struct MIDI1PerformanceSnapshotTests {
         ], policy: policy)
     }
 
-    @Test(arguments: [MIDI1StatePolicy.standard, MIDI1StatePolicy(lsbReset: .retainLSB, nrpnNullDeselects: false)])
+    @Test(arguments: [
+        MIDI1StatePolicy.standard, MIDI1StatePolicy(lsbReset: .retainLSB, nrpnNullDeselects: false),
+        MIDI1StatePolicy(controllerPairing: .unpaired)
+    ])
     func richStateRoundTrips(policy: MIDI1StatePolicy?) throws {
         let policy = try #require(policy)
         let state = try Self.richState(policy: policy)
@@ -118,11 +129,14 @@ struct MIDI1PerformanceSnapshotTests {
         #expect(restored.snapshot == snapshot)
         #expect(restored.policy == policy)
         let first = try #require(snapshot.channels.first)
-        #expect(first.parameters.map(\.number) == [
+        let stored = [
             MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 0),
             MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 1),
             MIDI1ParameterNumber(kind: .nonRegistered, msb: 1, lsb: 2)
-        ])
+        ]
+        let unpaired = policy.controllerPairing == .unpaired
+        #expect(first.parameters.map(\.number) == (unpaired ? [] : stored))
+        #expect((first.activeParameterKind == nil) == unpaired)
         #expect(first.heldNotes.map(\.note) == [30, 60, 90])
         #expect(first.heldNotes.map(\.phase) == [.sustained, .keyDown, .keyDown])
         #expect(snapshot.channels[15].mode == MIDI1ChannelMode(omni: false, voices: .mono(channels: 4)))
@@ -242,6 +256,25 @@ struct MIDI1PerformanceSnapshotTests {
                     #expect(Self.outcome(message, in: restored) == Self.outcome(message, in: live))
                 }
             }
+        }
+    }
+
+    /// Unpaired senders write CC 98...101 as plain controllers, so any selector bytes restore without a kind.
+    @Test
+    func unpairedSelectorBytesRestoreOnlyUnderUnpaired() throws {
+        let unpaired = try #require(MIDI1StatePolicy(controllerPairing: .unpaired))
+        let live = try Fixture.state([(101, 0), (100, 1), (99, 3), (98, 4), (6, 5)].map {
+            Fixture.control($0.0, $0.1)
+        }, policy: unpaired)
+        let snapshot = live.snapshot
+        #expect(snapshot.channels[0].controllers[98...101].elementsEqual([4, 3, 1, 0]))
+        let restored = try MIDI1PerformanceState(snapshot: snapshot)
+        #expect(restored == live)
+        #expect(Self.outcome(Fixture.control(38, 2), in: restored) == Self.outcome(Fixture.control(38, 2), in: live))
+        var standard = snapshot
+        standard.policy = .standard
+        #expect(throws: MIDI1StateRefusal.invalidSnapshot(.parameters)) {
+            try MIDI1PerformanceState(snapshot: standard)
         }
     }
 

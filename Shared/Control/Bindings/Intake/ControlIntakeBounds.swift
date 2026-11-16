@@ -12,8 +12,9 @@ enum ControlIntakeBounds: Sendable {
     static let pairedControllerRange: ClosedRange<UInt8> = 1...31
     /// Every CC number a `ControlSourceKey` of kind `controller` can hold.
     static let plainControllerRange: ClosedRange<UInt8> = 0...127
-    /// The CC numbers `MIDI1ChannelState` reports as plain `.controller` (all others are paired, selection, mode or
-    /// sustain), so only these are control intake.
+    /// The CC numbers `MIDI1ChannelState` reports as plain `.controller` under `MIDI1ControllerPairing.standard` only
+    /// (all others are paired, selection, mode or sustain), so only these are control intake. `.unpaired` also
+    /// reports 0...63 and 96...101 as plain controllers; intake does not accept those yet.
     static let reachableControllerRanges: [ClosedRange<UInt8>] = [65...95, 102...119]
     /// Largest MSB or LSB byte of a parameter number.
     static let parameterByteMaximum = 127

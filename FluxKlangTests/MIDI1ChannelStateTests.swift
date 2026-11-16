@@ -85,6 +85,75 @@ struct MIDI1ChannelStateTests {
         #expect(try Fixture.first(state).value14(controller: 31) == 9)
     }
 
+    static let unpaired = MIDI1StatePolicy(controllerPairing: .unpaired)
+
+    @Test
+    func controllerPairingIsPartOfThePolicy() throws {
+        let unpaired = try #require(Self.unpaired)
+        #expect(MIDI1StatePolicy() == .standard && MIDI1StatePolicy.standard.controllerPairing == .standard)
+        #expect(unpaired != .standard && unpaired.controllerPairing == .unpaired)
+        #expect(Set([MIDI1StatePolicy.standard, unpaired, try #require(MIDI1StatePolicy())]).count == 2)
+    }
+
+    @Test(arguments: [UInt8(0), 1, 5, 6, 31, 32, 37, 38, 52, 63, 96, 97, 98, 99, 100, 101])
+    func unpairedControllersArePlain(controller: UInt8) throws {
+        let policy = try #require(Self.unpaired)
+        var state = MIDI1PerformanceState(policy: policy)
+        for value: UInt8 in [64, 0, 127] {
+            let effect = try state.apply(Fixture.control(controller, value)).effect
+            #expect(effect == .controller(controller, value: value))
+        }
+        let channel = try Fixture.first(state)
+        var expected = MIDI1ChannelState.initialControllers
+        expected[Int(controller)] = 127
+        #expect(channel.controllers == expected)
+        #expect(channel.activeParameterKind == nil && channel.parameters.isEmpty)
+        #expect(channel.selectedParameter(policy: policy) == nil)
+    }
+
+    @Test
+    func unpairedNeverPairsSelectsOrEntersData() throws {
+        let policy = try #require(Self.unpaired)
+        var state = MIDI1PerformanceState(policy: policy)
+        for controller in (UInt8(0)...119) where controller != 64 {
+            #expect(try state.apply(Fixture.control(controller, 9)).effect == .controller(controller, value: 9))
+        }
+        let selectThenEnter: [(UInt8, UInt8)] = [(101, 0), (100, 0), (6, 5), (38, 1), (96, 0), (97, 0), (1, 3)]
+        for (controller, value) in selectThenEnter {
+            #expect(try state.apply(Fixture.control(controller, value)).effect == .controller(controller, value: value))
+        }
+        let channel = try Fixture.first(state)
+        #expect(channel.parameters.isEmpty && channel.activeParameterKind == nil)
+        #expect(channel.controllers[33] == 9 && channel.controllers[1] == 3)
+        // Program Change still reads controllers 0 and 32 as its bank.
+        let selection = MIDI1ProgramSelection(bankMSB: 9, bankLSB: 9, program: 4)
+        #expect(try state.apply(.programChange(channel: 1, program: 4)).effect == .program(selection))
+        _ = try state.apply(Fixture.control(121, 0))
+        let reset = try Fixture.first(state)
+        #expect(reset.controllers[98...101].allSatisfy { $0 == 127 } && reset.controllers[1] == 0)
+        #expect(reset.controllers[0] == 9 && reset.program == selection)
+    }
+
+    @Test
+    func unpairedKeepsSustainAndChannelMode() throws {
+        let unpaired = try #require(Self.unpaired)
+        let messages: [MIDI1Semantic] = [
+            Fixture.noteOn(60), Fixture.control(64, 127), Fixture.noteOff(60), Fixture.noteOn(62),
+            Fixture.control(123, 0), Fixture.control(64, 0), Fixture.noteOn(63), Fixture.control(122, 0),
+            Fixture.control(124, 0), Fixture.control(126, 3), Fixture.control(127, 0), Fixture.control(125, 0),
+            Fixture.control(64, 127), Fixture.noteOn(70), Fixture.noteOff(70), Fixture.control(121, 0),
+            Fixture.noteOn(71), Fixture.control(120, 0)
+        ]
+        var standard = MIDI1PerformanceState()
+        var plain = MIDI1PerformanceState(policy: unpaired)
+        for message in messages {
+            #expect(try plain.apply(message) == standard.apply(message))
+        }
+        #expect(try Fixture.first(plain) == Fixture.first(standard))
+        let refusal = MIDI1StateRefusal.invalidModeValue(channel: 1, controller: 122, value: 1)
+        Fixture.expectRefused(Fixture.control(122, 1), refusal, in: plain)
+    }
+
     @Test
     func bankLatchCommitsOnProgramChangeOnly() throws {
         var state = MIDI1PerformanceState()
