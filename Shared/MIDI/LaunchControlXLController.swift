@@ -34,6 +34,11 @@ final class LaunchControlXLController {
     /// Created on the first non-disabled restart, so construction opens no MIDI client.
     @ObservationIgnored private var midiInput: (any LaunchControlXLInput)?
     private var actionHandler: ((LaunchControlXLAction) async -> Void)?
+    /// The surface is one logical MIDI 1 source; its id only labels the outputs handed to the mapping.
+    private static let stateInput = MIDIInputID(0)
+    /// Fresh on every restart. Write-only today: no action reads it back, since every mapped CC is a plain
+    /// `.controller` under `.unpaired`.
+    @ObservationIgnored private var state = LaunchControlXLController.freshState()
 
     init(
         fileStore: JSONFileStore = .shared,
@@ -89,8 +94,13 @@ final class LaunchControlXLController {
         bank * 8 + slot
     }
 
+    nonisolated private static func freshState() -> MIDI1PerformanceState {
+        MIDI1PerformanceState(policy: LaunchControlXLMapping.sourceProfile.statePolicy)
+    }
+
     private func restart() {
         midiInput?.stop()
+        state = Self.freshState()
         guard configuration.mode != .disabled else {
             status = .disabled
             return
@@ -111,12 +121,27 @@ final class LaunchControlXLController {
         )
     }
 
+    /// Applies the whole batch to the MIDI 1 state before the first dispatch, then dispatches its actions in order.
     func receive(_ messages: [MIDIControlChange]) async {
-        for message in messages {
-            guard let action = configuration.mapping.action(for: message) else { continue }
+        let outputs = messages.compactMap(stateOutput(for:))
+        for action in configuration.mapping.actions(for: outputs) {
             lastAction = action
             guard configuration.mode == .control, let actionHandler else { continue }
             await actionHandler(action)
+        }
+    }
+
+    /// Nil for a channel outside 1...16, which no decoded message has; out-of-range data is a `.refused` output.
+    private func stateOutput(for message: MIDIControlChange) -> MIDISourceOutput? {
+        guard (1...MIDI1PerformanceState.channelCount).contains(message.channel) else { return nil }
+        let event = MIDI1Event.channel(
+            status: 0xB0 | UInt8(message.channel - 1), data1: message.controller, data2: message.value
+        )
+        do throws(MIDI1StateRefusal) {
+            let update = try state.apply(event)
+            return MIDISourceOutput(input: Self.stateInput, event: event, outcome: .applied(update))
+        } catch {
+            return MIDISourceOutput(input: Self.stateInput, event: event, outcome: .refused(error))
         }
     }
 
