@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "7f5c12f8e6a81c04fa504c997a5850c54b1e3e51c854da39af113b8320b7d48d",
+    "sha256": "b7eae4dc9c4db6e9f3e973cee1adb1ce40c71efc77abae1d6902bbfedf573270",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -135,6 +135,7 @@
         "FluxKlangTests/ProjectPackageManifestReferenceTests.swift",
         "FluxKlangTests/ProjectPackageIOTests.swift",
         "FluxKlangTests/ProjectPackageIOTests+Hardening.swift",
+        "FluxKlangTests/ProjectPackageIOTests+ConcurrentMutation.swift",
         "FluxKlangTests/ProjectStagingTests.swift",
         "FluxKlangTests/ProjectStagingTests+Aliasing.swift",
         "FluxKlangTests/ProjectStagingTests+CombiningMarks.swift",
