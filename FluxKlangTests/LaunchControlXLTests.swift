@@ -3,6 +3,7 @@
 //  FluxKlangTests
 //
 
+import Foundation
 import Testing
 @testable import FluxKlang
 
@@ -267,5 +268,120 @@ extension LaunchControlXLTests {
         ]
         #expect(mapping.actions(for: outputs) == [.toggleMute(slot: 0), .moveBank(1), .fader(slot: 0, value: 0)])
         #expect(mapping.actions(for: []).isEmpty)
+    }
+}
+
+/// Overlapping producers on one `MIDIPacketDelivery` (#80, slice MU3).
+extension LaunchControlXLTests {
+    /// T16: after `[BF 2D]` is accepted and two batches are dropped, producer A's post-gap batch is parked inside
+    /// `yield` by the seam while producer B yields `[7F]` on another thread. B must not get in until A is released,
+    /// so A is handled first and marked, B after it unmarked, and `[7F]` never completes the pre-gap mute press.
+    @MainActor
+    @Test func overlappingYieldCannotOvertakeThePostGapBatch() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let input = RecordingLaunchControlXLInput()
+        let controller = fixture.controller(makeMIDIInput: { input })
+        var dispatched: [LaunchControlXLAction] = []
+        controller.setActionHandler { dispatched.append($0) }
+        await controller.load()
+        let onPackets = try #require(input.onPackets)
+        let gate = YieldOverlapGate(parked: [[0xBF, 6, 0x7F]], overlapping: [[0x7F]])
+        var handled: [MIDIPacketBatch] = []
+        let delivery = MIDIPacketDelivery(maximumPendingBatches: 2, willYield: gate.willYield) { batch in
+            handled.append(batch)
+            onPackets(batch)
+        }
+
+        #expect(delivery.yield([[0xBF, 5, 0x7F]]))
+        #expect(delivery.yield([[0xBF, 0x2D]]))
+        #expect(!delivery.yield([[0x00]]))
+        #expect(!delivery.yield([[0x05]]))
+        guard await Self.waitUntil({ handled.count == 2 }) else { return }
+        let outcome = await gate.run(delivery)
+        await delivery.finish()
+        await controller.dispatchPendingActions()
+        guard await Self.waitUntil({ dispatched.last == .fader(slot: 1, value: 1) }) else { return }
+
+        #expect(outcome == .serialized)
+        #expect(handled == [
+            MIDIPacketBatch(packets: [[0xBF, 5, 0x7F]]), MIDIPacketBatch(packets: [[0xBF, 0x2D]]),
+            MIDIPacketBatch(packets: [[0xBF, 6, 0x7F]], afterGap: true), MIDIPacketBatch(packets: [[0x7F]])
+        ])
+        #expect(dispatched == [.fader(slot: 0, value: 1), .fader(slot: 1, value: 1)])
+        await controller.setMode(.disabled)
+    }
+}
+
+/// T16's producers, each on its own `Thread`. Through the seam, A's batch is parked inside `yield`'s lock until `run`
+/// releases it; B's batch only signals that it got in. Every wait is bounded, and a stalled run releases A.
+private final class YieldOverlapGate: Sendable {
+    enum Outcome: Equatable, Sendable {
+        /// B got in only after A was released.
+        case serialized
+        /// B got in while A was parked.
+        case overtaken
+        case stalled(String)
+    }
+
+    /// The bound on every wait that must succeed.
+    static let limit: DispatchTimeInterval = .seconds(10)
+    /// How long B gets to wrongly get in while A is parked. With the lock B never does, so this decides nothing
+    /// for correct code; without it, B gets in within microseconds of starting.
+    static let window: DispatchTimeInterval = .milliseconds(500)
+
+    private let parked: [[UInt8]]
+    private let overlapping: [[UInt8]]
+    private let parkedA = DispatchSemaphore(value: 0)
+    private let releaseA = DispatchSemaphore(value: 0)
+    private let startedB = DispatchSemaphore(value: 0)
+    private let enteredB = DispatchSemaphore(value: 0)
+    private let returned = DispatchSemaphore(value: 0)
+
+    init(parked: [[UInt8]], overlapping: [[UInt8]]) {
+        self.parked = parked
+        self.overlapping = overlapping
+    }
+
+    /// The seam: runs inside `yield`'s lock, after the batch is marked and before it is offered.
+    func willYield(_ batch: MIDIPacketBatch) {
+        if batch.packets == parked {
+            parkedA.signal()
+            _ = releaseA.wait(timeout: .now() + .seconds(30))
+        } else if batch.packets == overlapping {
+            enteredB.signal()
+        }
+    }
+
+    func run(_ delivery: MIDIPacketDelivery) async -> Outcome {
+        await withCheckedContinuation { continuation in
+            Thread { continuation.resume(returning: self.drive(delivery)) }.start()
+        }
+    }
+
+    private func drive(_ delivery: MIDIPacketDelivery) -> Outcome {
+        Thread {
+            delivery.yield(self.parked)
+            self.returned.signal()
+        }.start()
+        guard parkedA.wait(timeout: .now() + Self.limit) == .success else {
+            releaseA.signal()
+            return .stalled("A never parked")
+        }
+        Thread {
+            self.startedB.signal()
+            delivery.yield(self.overlapping)
+            self.returned.signal()
+        }.start()
+        guard startedB.wait(timeout: .now() + Self.limit) == .success else {
+            releaseA.signal()
+            return .stalled("B never started")
+        }
+        let overtaken = enteredB.wait(timeout: .now() + Self.window) == .success
+        releaseA.signal()
+        for _ in 0..<2 where returned.wait(timeout: .now() + Self.limit) == .timedOut {
+            return .stalled("a producer never returned")
+        }
+        return overtaken ? .overtaken : .serialized
     }
 }
