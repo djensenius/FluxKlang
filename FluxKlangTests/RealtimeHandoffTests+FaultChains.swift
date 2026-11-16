@@ -80,6 +80,36 @@ extension RealtimeHandoffTests {
             #expect(Self.preparationError([], budget: 0) == .chainBudgetOutOfRange(0))
         }
 
+        @Test func identitiesStopAtTheBoundAndNeverWrap() throws {
+            // A refused preparation consumes no identity.
+            let fresh = FanInIdentityAllocator(lastIssued: .max - 1)
+            #expect(throws: FaultChainAuthority.PreparationError.chainBudgetOutOfRange(0)) {
+                _ = try FaultChainAuthority(scopes: Self.scopes, chainBudget: 0, identities: fresh)
+            }
+            #expect(throws: FaultChainAuthority.PreparationError.latch(.emptyScopeTable)) {
+                _ = try FaultChainAuthority(scopes: [], chainBudget: 1, identities: fresh)
+            }
+            #expect(fresh.lastIssued == UInt64.max - 1)
+            // The last identity is issued once; then preparation is refused for good, never wrapping to 1.
+            let identities = FanInIdentityAllocator(lastIssued: .max - 1)
+            let last = try FaultChainAuthority(scopes: Self.scopes, chainBudget: 1, identities: identities)
+            #expect(identities.lastIssued == UInt64.max)
+            for _ in 0..<2 {
+                #expect(throws: FaultChainAuthority.PreparationError.identitiesExhausted) {
+                    _ = try FaultChainAuthority(scopes: Self.scopes, chainBudget: 1, identities: identities)
+                }
+                #expect(identities.lastIssued == UInt64.max)
+            }
+            // The exhausted authority still works, and its token is refused elsewhere.
+            let chain = try #require(last.mintChain())
+            var token = try Self.take(chain)
+            let other = try Self.authority()
+            #expect(other.raise(&token, Self.scope, .noPlan, frame: 0) == .refused(.notOwner))
+            #expect(last.raise(&token, Self.scope, .noPlan, frame: 0) == .ok)
+            #expect(chain.put(token) == .ok)
+            Self.expectUntouched(other)
+        }
+
         @Test func mintingStopsAtTheBudgetAndNeverRecycles() throws {
             for budget in [1, 3] {
                 let authority = try Self.authority(budget: budget)

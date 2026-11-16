@@ -55,8 +55,15 @@ would still leave `raise` callable without a token.
 Bounded minting. `mintChain()` takes a control-side `Mutex`, checks
 `minted < chainBudget`, increments and allocates a `FaultChain`. Nothing ever
 decrements `minted`. Dropping a chain or a token returns no unit, and a refusal
-is final. Authority identities come from a process-wide atomic counter read
-only in `init`, so a token cannot match a later authority at a reused address.
+is final. Authority identities come from one process-wide
+`FanInIdentityAllocator` (reused from `FanInHandoff.swift`), read only in
+`init`, after the budget check and latch build, so a refused preparation
+consumes none. It issues 1 through `UInt64.max` and then refuses preparation for
+good (`.identitiesExhausted`); it never wraps, so no identity is reissued and a
+retained token cannot match a later authority, at a reused address or not. An
+internal initializer takes another allocator so tests can reach the bound;
+production uses only the process allocator, and identities are unique per
+allocator.
 
 ## 3. Why the Raise-context contract holds
 
@@ -116,7 +123,8 @@ budget must fail closed (section 5), never recycle.
   store. `raise`: one comparison, then `FaultLatch.raise` (one load, at most one
   add and one 128-bit store). `raiseContended`: one atomic store. No locks, no
   allocation, no retry loop, no blocking at the source level.
-- `isLatched`: one acquiring load of the flag, then `FaultLatch.isLatched`.
+- `isLatched`: `FaultLatch.isLatched` (one acquiring load), then one acquiring
+  load of the flag (section 5 gives the order).
 - Minting, `pending`, `observe` and `acknowledge` take a `Mutex` and stay on
   control. Minting also allocates.
 - Not checked here: `@_noAllocation`/`@_noLocks` on these paths, ARC
@@ -137,6 +145,19 @@ signal kept is "some fault happened on this latch while its chain was held".
 | `authority.pending`, `authority.observe` | Counted records only; they never show the flag. Control must check `hasContendedFault` too |
 | `authority.acknowledge` | Re-arms counted records only and never clears the flag; `isLatched` stays `true` |
 | `authority.unknownScopeFaults` | Unaffected |
+
+Read order in `isLatched`: the counted latch first, the flag last. With the flag
+first, a reader could see the flag clear, then another context sets it and
+acknowledges the counted record, then the reader sees the re-armed count and
+reports a scope faulted throughout as clear. Counted first fixes that: the
+counted load is acquiring and the acknowledge compare-exchange is
+acquire-release, so a counted read that sees the re-arm (or a later raise's
+read-modify-write in its release sequence) synchronizes with it. A flag store
+sequenced before that acknowledge then happens before the flag load, which is
+acquiring and cannot move above the counted load, so it reads `true`. This
+covers a flag set by the acknowledging context, or by one that happens before
+it; a flag set concurrently with the acknowledge by an unrelated context is a
+fault the reader may linearize after its call.
 
 Only replacing the authority (and its latch) while quiescent clears the flag, as
 for a saturated scope. That keeps every existing fail-closed rule: nothing that
@@ -198,7 +219,9 @@ Nested suites `FaultChaining` and `FaultChainingStress` under the existing root
 `RealtimeHandoffTests` (no new root suite). They cover: budget range at
 preparation; mint refusal at the budget, final even after tokens and chains are
 dropped; one budget per authority; foreign tokens refused by `raise` and `put`
-with no side effect; take/put round trip and an empty slot while held; raise
+with no side effect; authority identities stop at `UInt64.max` and refuse
+preparation for good without wrapping, and a refused preparation consumes no
+identity (seeded allocators); take/put round trip and an empty slot while held; raise
 parity with a plain `FaultLatch` (status, records, `unknownScopeFaults`,
 observe and acknowledge); the contended flag's semantics (section 5); and a
 bounded `Thread` stress where every attempt is either one counted raise or one

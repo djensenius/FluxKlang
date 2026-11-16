@@ -4,9 +4,10 @@
 // RT-certified.
 import Synchronization
 
-/// Source of authority identities; read only by `FaultChainAuthority.init` (control). Identities are never reused,
-/// so a token from a deallocated authority cannot match a later one at the same address.
-private let faultChainAuthorityIdentities = Atomic<UInt64>(0)
+/// The only source of production authority identities; read only by `FaultChainAuthority.init` (control). Reuses
+/// `FanInIdentityAllocator`: identities 1 through `UInt64.max`, then preparation is refused for good. It never
+/// wraps, so no identity is reissued and a token of an old authority cannot match a later one.
+private let faultChainAuthorityIdentities = FanInIdentityAllocator()
 
 /// Owns one `FaultLatch` and its only chain budget. Reference model; not RT-certified.
 ///
@@ -29,6 +30,8 @@ final class FaultChainAuthority: Sendable {
         case latch(FaultLatch.PreparationError)
         /// The budget was below 1 or above `maximumChainBudget`.
         case chainBudgetOutOfRange(Int)
+        /// The identity allocator has issued `UInt64.max`; no authority can ever be prepared from it again.
+        case identitiesExhausted
     }
 
     /// Hard ceiling for `chainBudget` (inclusive): 2^16 chains, far below the 2^39 the latch's overshoot headroom
@@ -37,15 +40,26 @@ final class FaultChainAuthority: Sendable {
 
     /// Chains this authority may ever mint.
     let chainBudget: Int
-    /// Distinct for every authority made in this process; carried by its chains and tokens.
+    /// Distinct for every authority whose identity came from the same allocator (in production, the process one);
+    /// carried by its chains and tokens.
     fileprivate let identity: UInt64
     private let latch: FaultLatch
     /// Chains minted so far; never decreases. Control-side.
     private let minted = Mutex<Int>(0)
     private let contended = Atomic<Bool>(false)
 
-    /// Control-side preparation: builds the latch (see `FaultLatch.init`) with a fixed chain budget.
-    init(scopes: [FaultScope], epochLimit: UInt64 = .max, chainBudget: Int) throws(PreparationError) {
+    /// Control-side preparation: builds the latch (see `FaultLatch.init`) with a fixed chain budget, and takes the
+    /// next process-wide identity.
+    convenience init(scopes: [FaultScope], epochLimit: UInt64 = .max, chainBudget: Int) throws(PreparationError) {
+        try self.init(scopes: scopes, epochLimit: epochLimit, chainBudget: chainBudget,
+                      identities: faultChainAuthorityIdentities)
+    }
+
+    /// Test seam: as above with identities from `identities`. Production uses only the process allocator.
+    /// Identities are unique per allocator only, so tests use separate seeded allocators to reach the bound. The
+    /// identity is taken last, so a refused preparation consumes none.
+    init(scopes: [FaultScope], epochLimit: UInt64 = .max, chainBudget: Int,
+         identities: FanInIdentityAllocator) throws(PreparationError) {
         guard chainBudget >= 1, chainBudget <= Self.maximumChainBudget else {
             throw .chainBudgetOutOfRange(chainBudget)
         }
@@ -54,8 +68,9 @@ final class FaultChainAuthority: Sendable {
         } catch {
             throw .latch(error)
         }
+        guard let identity = identities.reserve() else { throw .identitiesExhausted }
         self.chainBudget = chainBudget
-        identity = faultChainAuthorityIdentities.wrappingAdd(1, ordering: .relaxed).newValue
+        self.identity = identity
     }
 
     /// Control-side only: takes a lock and allocates. A new chain whose slot holds its token, or `nil` once
@@ -90,8 +105,13 @@ final class FaultChainAuthority: Sendable {
     var hasContendedFault: Bool { contended.load(ordering: .acquiring) }
 
     /// Render: `true` while `scope` holds a counted fault or the contended fault is latched (for every scope).
+    ///
+    /// Order matters: the counted latch first, the never-cleared flag last. A counted read that sees an
+    /// acknowledge's re-arm (acquiring load, acquire-release compare-exchange) also sees a flag set before that
+    /// acknowledge, and the acquiring flag load cannot move above it; flag-first could miss both and report a
+    /// scope that was faulted throughout as clear.
     func isLatched(_ scope: FaultScope) -> Bool {
-        hasContendedFault || latch.isLatched(scope)
+        latch.isLatched(scope) || hasContendedFault
     }
 
     /// Control: `FaultLatch.pending`. Counted records only; check `hasContendedFault` as well.
