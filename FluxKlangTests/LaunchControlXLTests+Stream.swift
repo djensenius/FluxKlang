@@ -219,6 +219,28 @@ extension LaunchControlXLTests {
         controller.setActionHandler { _ in }
         await controller.setMode(.disabled)
     }
+
+    /// T14: the longest packet CoreMIDI can deliver, all running status, dispatches every mapped action in order.
+    @MainActor
+    @Test func maximalRunningStatusPacketDispatchesEveryActionInOrder() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let (controller, dispatched) = Self.streamController(fixture)
+        await controller.load()
+        let values = (0..<32_767).map { UInt8($0 % 128) }
+        let packet: [UInt8] = [0xBF] + values.flatMap { [5, $0] }
+        #expect(packet.count == LaunchControlXLStream.maximumPacketBytes)
+
+        await controller.receive(packets: [packet])
+        let actions = dispatched()
+        #expect(actions.count == 32_767)
+        #expect(actions.first == .fader(slot: 0, value: 0))
+        #expect(actions.last == .fader(slot: 0, value: 126 / 127))
+        // Compared outside `#expect`, so a failure does not diff 32,767 elements.
+        let inOrder = actions == values.map { LaunchControlXLAction.fader(slot: 0, value: Float($0) / 127) }
+        #expect(inOrder)
+        await controller.setMode(.disabled)
+    }
 }
 
 /// Delivery tests: one ordered path per input start, and nothing from an earlier start reaches the stream.
@@ -238,15 +260,15 @@ extension LaunchControlXLTests {
         let new = try #require(input.onPackets)
         #expect(input.starts.count == 2)
 
-        old([[0xBF, 5]])
-        new([[0x7F]])
-        old([[0xBF, 6, 0x7F]])
-        new([[5, 0x7F]])
+        old(MIDIPacketBatch(packets: [[0xBF, 5]]))
+        new(MIDIPacketBatch(packets: [[0x7F]]))
+        old(MIDIPacketBatch(packets: [[0xBF, 6, 0x7F]]))
+        new(MIDIPacketBatch(packets: [[5, 0x7F]]))
         await controller.dispatchPendingActions()
         #expect(dispatched.isEmpty)
         #expect(controller.lastAction == nil)
 
-        new([[0xBF, 5], [0x7F]])
+        new(MIDIPacketBatch(packets: [[0xBF, 5], [0x7F]]))
         await controller.dispatchPendingActions()
         #expect(dispatched == [.fader(slot: 0, value: 1)])
         await controller.setMode(.disabled)
@@ -263,8 +285,8 @@ extension LaunchControlXLTests {
         var stream = try LaunchControlXLStream.make()
         var outputs: [MIDISourceOutput] = []
         let delivery = MIDIPacketDelivery { batch in
-            handled += batch
-            outputs += stream.feed(packets: batch)
+            handled += batch.packets
+            outputs += stream.feed(packets: batch.packets)
         }
         let yielded = YieldCount()
         let producer = Task.detached {
@@ -288,7 +310,7 @@ extension LaunchControlXLTests {
         #expect(mapping.actions(for: outputs) == expected)
 
         var bounded: [[UInt8]] = []
-        let small = MIDIPacketDelivery(maximumPendingBatches: 2) { bounded += $0 }
+        let small = MIDIPacketDelivery(maximumPendingBatches: 2) { bounded += $0.packets }
         #expect(small.yield([[0xBF, 5]]))
         #expect(small.yield([[0x7F]]))
         #expect(!small.yield([[0xBF, 6, 0x7F]]))
@@ -300,7 +322,7 @@ extension LaunchControlXLTests {
     @MainActor
     @Test func cancelledPacketDeliveryHandlesNothing() async {
         var handled: [[UInt8]] = []
-        let delivery = MIDIPacketDelivery { handled += $0 }
+        let delivery = MIDIPacketDelivery { handled += $0.packets }
         #expect(delivery.yield([[0xBF, 5]]))
         #expect(delivery.yield([[0x7F]]))
         delivery.cancel()
@@ -328,7 +350,7 @@ extension LaunchControlXLTests {
         }
         await controller.load()
         let monitor = try #require(input.onPackets)
-        monitor([[0xBF, 5, 127]])
+        monitor(MIDIPacketBatch(packets: [[0xBF, 5, 127]]))
         await controller.setMode(.control)
         await controller.dispatchPendingActions()
         #expect(dispatched.isEmpty)
@@ -375,6 +397,42 @@ extension LaunchControlXLTests {
         let second = LaunchControlXLAction.fader(slot: 1, value: 1)
         #expect(log == ["start \(first)", "end \(first)", "start \(second)", "end \(second)"])
         controller.setActionHandler { _ in }
+        await controller.setMode(.disabled)
+    }
+
+    /// T15: after `[BF 2D]` is accepted and `[00 05]` dropped, the next batch is marked `afterGap` and framing is
+    /// cleared before it is fed, so its `[7F]` cannot complete a mute press. Without a gap a half message still joins
+    /// across batches, and so does one started after the gap.
+    @MainActor
+    @Test func droppedBatchClearsFramingBeforeTheNextBatch() async throws {
+        let fixture = try LaunchControlXLFixture(mode: .control)
+        defer { fixture.cleanUp() }
+        let input = RecordingLaunchControlXLInput()
+        let controller = fixture.controller(makeMIDIInput: { input })
+        var dispatched: [LaunchControlXLAction] = []
+        controller.setActionHandler { dispatched.append($0) }
+        await controller.load()
+        let onPackets = try #require(input.onPackets)
+        var handled: [MIDIPacketBatch] = []
+        let delivery = MIDIPacketDelivery(maximumPendingBatches: 3) { batch in
+            handled.append(batch)
+            onPackets(batch)
+        }
+
+        #expect(delivery.yield([[0xBF, 5]]))
+        #expect(delivery.yield([[0x7F]]))
+        #expect(delivery.yield([[0xBF, 0x2D]]))
+        #expect(!delivery.yield([[0x00, 0x05]]))
+        guard await Self.waitUntil({ handled.count == 3 }) else { return }
+        #expect(delivery.yield([[0x7F], [0xBF, 6]]))
+        #expect(delivery.yield([[0x7F]]))
+        #expect(delivery.yield([[0xBF, 102, 0x7F]]))
+        await delivery.finish()
+        await controller.dispatchPendingActions()
+        guard await Self.waitUntil({ dispatched.last == .moveBank(1) }) else { return }
+
+        #expect(handled.map(\.afterGap) == [false, false, false, true, false, false])
+        #expect(dispatched == [.fader(slot: 0, value: 1), .fader(slot: 1, value: 1), .moveBank(1)])
         await controller.setMode(.disabled)
     }
 

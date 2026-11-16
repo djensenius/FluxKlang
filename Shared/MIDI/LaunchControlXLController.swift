@@ -45,7 +45,7 @@ final class LaunchControlXLController {
     @ObservationIgnored private var sourceNames: [String] = []
     /// Mapped actions not yet dispatched, in feed order, each with the start and mode it was fed under. One drain at
     /// a time empties it; every restart clears it.
-    @ObservationIgnored private var pendingActions: [PendingAction] = []
+    @ObservationIgnored private var pendingActions: ArraySlice<PendingAction> = []
     @ObservationIgnored private var isDispatching = false
 
     init(
@@ -129,8 +129,8 @@ final class LaunchControlXLController {
         self.midiInput = midiInput
         midiInput.start(
             sourceNameContains: configuration.mapping.sourceNameContains,
-            onPackets: { [weak self] packets in
-                self?.deliver(packets, generation: generation)
+            onPackets: { [weak self] batch in
+                self?.deliver(batch, generation: generation)
             },
             onSourcesChanged: { [weak self] names in
                 self?.sourcesChanged(names, generation: generation)
@@ -152,9 +152,11 @@ final class LaunchControlXLController {
     }
 
     /// The input path: the batch is fed synchronously, in delivery order, unless it belongs to an earlier start.
-    private func deliver(_ packets: [[UInt8]], generation: Int) {
+    /// After a gap, framing is cleared before the batch is fed, so bytes on either side of the gap never join.
+    private func deliver(_ batch: MIDIPacketBatch, generation: Int) {
         guard generation == self.generation else { return }
-        enqueue(configuration.mapping.actions(for: stream.feed(packets: packets)))
+        if batch.afterGap { stream.reset() }
+        enqueue(configuration.mapping.actions(for: stream.feed(packets: batch.packets)))
         Task { [weak self] in await self?.dispatchPendingActions() }
     }
 
@@ -183,12 +185,12 @@ final class LaunchControlXLController {
     /// Dispatches queued actions one at a time, in queue order, awaiting each handler. A second caller returns at
     /// once while a drain runs; the running drain dispatches what it queued. Every drained action becomes
     /// `lastAction`; only one fed in Control, in the current start, while still in Control, reaches the handler.
+    /// Each action is taken from the front of the slice in O(1), so a long queue drains in linear time.
     func dispatchPendingActions() async {
         guard !isDispatching else { return }
         isDispatching = true
         defer { isDispatching = false }
-        while !pendingActions.isEmpty {
-            let pending = pendingActions.removeFirst()
+        while let pending = pendingActions.popFirst() {
             lastAction = pending.action
             guard pending.shouldDispatch, pending.generation == generation, configuration.mode == .control,
                   let actionHandler else { continue }
