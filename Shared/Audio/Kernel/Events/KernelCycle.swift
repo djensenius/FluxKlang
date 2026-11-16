@@ -446,6 +446,7 @@ final class KernelCycle: @unchecked Sendable {
                                                                             result.discardedDuringTakeover)
         totals.refusedNonMonotonic = admissionRefusals.total(.nonMonotonic)
         totals.refusedBeyondLookahead = admissionRefusals.total(.beyondLookahead)
+        totals.refusedNonFinite = admissionRefusals.total(.nonFinite)
         totals.blockAppendRefused = watermark.appendRefused
         counters.pointee = totals
         guard let output = telemetryOutput else { return }

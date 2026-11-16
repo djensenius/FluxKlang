@@ -49,6 +49,9 @@ struct KernelCycleTelemetry: Sendable, BitwiseCopyable, Equatable {
     var refusedNonMonotonic: UInt64 = 0
     /// `KernelAdmissionRefusals.total(.beyondLookahead)` at publication.
     var refusedBeyondLookahead: UInt64 = 0
+    /// `KernelAdmissionRefusals.total(.nonFinite)` at publication: `rampTo`s with a NaN or infinite target refused
+    /// at admission (#64 RNF2). Render-side `RampSlots` refusals count in `KernelCycleResult.refused` instead.
+    var refusedNonFinite: UInt64 = 0
     /// Drained events the block buffer refused: a tripwire, 0 unless the fan-in delivers more than the drain's
     /// room-clamped total. Never trapped.
     var blockAppendRefused: UInt64 = 0
