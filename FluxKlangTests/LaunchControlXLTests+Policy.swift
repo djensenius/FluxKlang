@@ -205,7 +205,7 @@ private final class SourcesRecordingInput: LaunchControlXLInput {
 
     func start(
         sourceNameContains: [String],
-        onPackets: @escaping @MainActor ([[UInt8]]) -> Void,
+        onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {
         self.onSourcesChanged.append(onSourcesChanged)
