@@ -9,12 +9,18 @@ enum MIDISystemResetPolicy: Equatable, Hashable, Sendable {
 }
 
 /// The validated receiver profile of one source: its MIDI 1 state policy, its SysEx payload bound and its System
-/// Reset policy. Only `make` builds one (apart from `standard`), so the SysEx bound is always in range.
+/// Reset policy. Only `make` builds one (apart from `standard` and `unpaired`), so the SysEx bound is always in range.
 struct MIDISourceProfile: Equatable, Hashable, Sendable {
     static let sysExPayloadBounds = 1...65_536
     static let defaultSysExPayloadBytes = 4_096
     static let standard = MIDISourceProfile(
         statePolicy: .standard, maximumSysExPayloadBytes: defaultSysExPayloadBytes, systemReset: .ignore
+    )
+    /// `standard` with the `.unpaired` state policy: every CC 0...119 except 64 (Sustain) is a plain 7-bit
+    /// controller: no 14-bit MSB/LSB pairing (0...31/32...63), no RPN/NRPN selection (98...101) and no Data
+    /// Entry/Increment/Decrement (6/38/96/97).
+    static let unpaired = MIDISourceProfile(
+        statePolicy: .unpaired, maximumSysExPayloadBytes: defaultSysExPayloadBytes, systemReset: .ignore
     )
 
     let statePolicy: MIDI1StatePolicy

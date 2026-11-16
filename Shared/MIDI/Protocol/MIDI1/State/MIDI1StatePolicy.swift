@@ -25,6 +25,13 @@ struct MIDI1StatePolicy: Equatable, Hashable, Sendable {
         validatedLSBReset: .resetOnMSB, maximumHeldNotes: 128, maximumParameterValues: 256, nrpnNullDeselects: true,
         controllerPairing: .standard
     )
+    /// `standard` with `.unpaired` controllers (e.g. Novation Launch Control XL): every CC 0...119 except 64
+    /// (Sustain) is a plain 7-bit controller: no 14-bit MSB/LSB pairing (0...31/32...63), no RPN/NRPN selection
+    /// (98...101) and no Data Entry/Increment/Decrement (6/38/96/97).
+    static let unpaired = MIDI1StatePolicy(
+        validatedLSBReset: .resetOnMSB, maximumHeldNotes: 128, maximumParameterValues: 256, nrpnNullDeselects: true,
+        controllerPairing: .unpaired
+    )
 
     let lsbReset: MIDI1LSBResetPolicy
     /// Distinct held notes per channel, sounding or sustained.

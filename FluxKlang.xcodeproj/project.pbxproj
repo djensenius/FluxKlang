@@ -1824,6 +1824,7 @@
 		7542FAF53E394DDF0F157AB3 /* InterruptedTakeSalvage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85E81D6F78103F82E3DDCA91 /* InterruptedTakeSalvage.swift */; };
 		754DFB5D5BCD13CDD83712B4 /* ControlContractTests+ActionsV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA23CC5E1678B622A097E7D6 /* ControlContractTests+ActionsV1.swift */; };
 		756095198ECD624863562907 /* WiringSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABF451EB8758E88885048D3F /* WiringSelection.swift */; };
+		756134C45844A4F192D12B2F /* LaunchControlXLMapping+State.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E093EDE7D23DF7E3230CE8 /* LaunchControlXLMapping+State.swift */; };
 		756256266532346A5BA7EFD1 /* KernelCycleFollowUpTests+AdmissionTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A1489A0F91BAF28256AC08 /* KernelCycleFollowUpTests+AdmissionTable.swift */; };
 		757760794A386F07A26CE0FA /* CalibrationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C040E13B1D10D0FA70D9BB9 /* CalibrationRecord.swift */; };
 		759A754578CFC8C3F3F0AF1B /* SpatialPlacementEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04513BD2D633C621AD40E440 /* SpatialPlacementEditor.swift */; };
@@ -2953,6 +2954,7 @@
 		BBDC7AB4EFEA6E7DC5515E8A /* OSCTransportTests+Equality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56F44DDF75D679F9001D7F93 /* OSCTransportTests+Equality.swift */; };
 		BBE47F09CA6B01E6EDBBF6F6 /* GraphNode+WiringTitle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBE4DE59A901D359B4E7E32 /* GraphNode+WiringTitle.swift */; };
 		BBE4820302462CB8E166E31C /* MIDI1Semantic.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57EA2BA49D1B20E5078D1C9F /* MIDI1Semantic.swift */; };
+		BBEFA3F3DF227669D9518D7E /* LaunchControlXLMapping+State.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E093EDE7D23DF7E3230CE8 /* LaunchControlXLMapping+State.swift */; };
 		BBF5FE474DDE45C5D43312A9 /* OpenSoundControl+Route.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F193832A0D515DD77BC96EB /* OpenSoundControl+Route.swift */; };
 		BBF6185A57F0DC756E672D9C /* ContractFixtureTests+EventSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504C63C3CCF8DBBFBD583B37 /* ContractFixtureTests+EventSources.swift */; };
 		BBFA7C7E640589F8BE7E222D /* ActionReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70FF45ED2F68BD8C2C5633B /* ActionReadiness.swift */; };
@@ -4325,6 +4327,7 @@
 		20263BDC08FF6D024B55237F /* RampSlots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RampSlots.swift; sourceTree = "<group>"; };
 		202990A17F37E6D70C27B7F6 /* ControlFeedbackMIDI1Refusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlFeedbackMIDI1Refusal.swift; sourceTree = "<group>"; };
 		20688312E9346C779815907C /* AutomationBlockRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationBlockRenderer.swift; sourceTree = "<group>"; };
+		20E093EDE7D23DF7E3230CE8 /* LaunchControlXLMapping+State.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LaunchControlXLMapping+State.swift"; sourceTree = "<group>"; };
 		211F8106BFB2FC6ED3CABA23 /* PerformPanelSurfaceCells.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformPanelSurfaceCells.swift; sourceTree = "<group>"; };
 		2154800C69C13ABE758B2E82 /* ProjectIDs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIDs.swift; sourceTree = "<group>"; };
 		215D151777DE1AA6D30BCBF1 /* MIDI1StateRefusal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDI1StateRefusal.swift; sourceTree = "<group>"; };
@@ -8497,6 +8500,7 @@
 				A1BF0847FDBE7B2CFB66F529 /* CoreMIDIInput.swift */,
 				C22EF50295E4CDE232D1A10A /* HardwareServiceFactories.swift */,
 				D82696E400821E5D50BA7A11 /* LaunchControlXLController.swift */,
+				20E093EDE7D23DF7E3230CE8 /* LaunchControlXLMapping+State.swift */,
 				0F5D5961D56628706AE6FEB8 /* Capability */,
 				0E6593613ABACA6CA9E6D4B0 /* Clock */,
 				8D90F1E7A321D7D75844A1C2 /* IO */,
@@ -10810,6 +10814,7 @@
 				C8375F83E2E8CF076902F78E /* LaunchControlXLAppModel.swift in Sources */,
 				FE24CE37EE10B5ACA82DE0CE /* LaunchControlXLConfiguration.swift in Sources */,
 				15DE98840886060879644B61 /* LaunchControlXLController.swift in Sources */,
+				BBEFA3F3DF227669D9518D7E /* LaunchControlXLMapping+State.swift in Sources */,
 				9AA4F045A3D96609B66F5BFB /* LearnConflict.swift in Sources */,
 				AC6AF56E514C3ECCE1D64FA0 /* LearnEligibility.swift in Sources */,
 				A1CD2152183E7DD0A9E819AA /* LearnProposal.swift in Sources */,
@@ -11981,6 +11986,7 @@
 				47220E65AC62ACA10FEFD370 /* LaunchControlXLAppModel.swift in Sources */,
 				BAAF85DEB4763BC23B0607BF /* LaunchControlXLConfiguration.swift in Sources */,
 				133E0F7BBB9BE7386E3006D5 /* LaunchControlXLController.swift in Sources */,
+				756134C45844A4F192D12B2F /* LaunchControlXLMapping+State.swift in Sources */,
 				FD55A0851B0F44E7C0961FC8 /* LearnConflict.swift in Sources */,
 				D7E130F7A434CD3000E25B5C /* LearnEligibility.swift in Sources */,
 				29966F5D214EF715F596AF5F /* LearnProposal.swift in Sources */,
