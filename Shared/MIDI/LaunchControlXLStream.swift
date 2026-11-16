@@ -42,6 +42,13 @@ struct LaunchControlXLStream: Sendable {
         return outputs
     }
 
+    /// Starts the source fresh through `MIDISourceRegistry.resetSource`: the half message, running status, open
+    /// SysEx and state are dropped. The released notes are discarded; the surface maps only control changes.
+    mutating func reset() {
+        // `input` is registered by `make` and never detached, so this cannot be refused.
+        _ = try? registry.resetSource(Self.input)
+    }
+
     /// Each valid message is fed as its own complete packet (status byte included), so a pending half message or
     /// open SysEx cannot absorb it; invalid messages are dropped.
     mutating func feed(_ messages: [MIDIControlChange]) -> [MIDISourceOutput] {
