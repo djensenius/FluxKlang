@@ -9,10 +9,10 @@
 //  an `await` nor a function taking `isolated HostAuthority` can reach it: the
 //  members here are internal only so the book's own extensions
 //  (`HostAuthorityBook+Prepare.swift`, `+Commit.swift`, `+LeaseLoss.swift`,
-//  `+Restore.swift`) can share them. A book a
+//  `+Restore.swift`, `DirectWriteAuthorization.swift`) can share them. A book a
 //  module caller builds itself is a separate value and never touches an actor's.
-//  Every refusal leaves the whole book unchanged, except `redeemDirect`, which
-//  always consumes its ticket.
+//  Every refusal leaves the whole book unchanged, except `redeemDirect` and
+//  `authorizeDirectSend`, which always consume their ticket.
 //
 
 /// Deliberately NOT `Sendable` (see the extension below), like `HostProjectState`.
@@ -47,6 +47,8 @@ struct HostAuthorityBook {
     var directWrites: Set<DirectWriteTicket> = []
     /// The last minted ticket serial; never reused.
     var lastDirectWrite: UInt64 = 0
+    /// AU2: send grants minted by `authorizeDirectSend`, armed or not yet pruned. Not in the snapshot.
+    var sendGrants: [DirectWriteAuthorization] = []
 
     /// Declares `EngineLeaseRegistry.contextKey` in `ledger` unless it already is.
     init(host ledger: GenerationLedger, live: HostLiveState,
@@ -314,10 +316,10 @@ extension HostAuthorityBook {
     /// (`notOutstanding`); then `HostCommandGate.redeemRefusal`'s checks, in its
     /// order. Never changes the snapshot.
     ///
-    /// The fence holds only while nothing else runs: the write must happen inside
-    /// the same serialization as lease, live, context and running-graph changes (redeem under the
-    /// send lock, as `WingMixerWriteAuthorization` does). Redeeming on the actor and
-    /// writing after an `await` leaves a race that the wiring slice must close.
+    /// The fence holds only while nothing else runs: a write after this returns
+    /// races lease, live, context and running-graph changes. Writers use
+    /// `authorizeDirectSend` instead, whose grant runs the send under a lock that
+    /// the authority's revocation takes (see `DirectWriteAuthorization`).
     mutating func redeemDirect(_ ticket: DirectWriteTicket) -> Result<Void, DirectWriteRefusal> {
         guard directWrites.remove(ticket) != nil else { return .failure(.notOutstanding) }
         if let refusal = directWriteRefusal(ticket) { return .failure(refusal) }
@@ -337,7 +339,9 @@ extension HostAuthorityBook {
         return false
     }
 
-    private func directWriteRefusal(_ ticket: DirectWriteTicket) -> DirectWriteRefusal? {
+    /// The fence check alone (not outstanding-ness); internal for the send-grant
+    /// revocation in `DirectWriteAuthorization.swift`.
+    func directWriteRefusal(_ ticket: DirectWriteTicket) -> DirectWriteRefusal? {
         let now = DirectWriteFence(lifecycle: lifecycle(of: ticket.project, window: ticket.window), live: live,
                                    held: registry.snapshot?.token,
                                    role: registry.role(of: ticket.window, project: ticket.project),
