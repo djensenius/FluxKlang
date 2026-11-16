@@ -6,13 +6,16 @@
 /// lane, never shared, mutated only by that producer. Every call is bounded and non-throwing.
 ///
 /// - `push` first applies `DeadlinePolicy.admit` (`.beyondLookahead`, then `.nonMonotonic` against
-///   `lastAdmittedFrame`) and returns a refusal without pushing; otherwise it returns the push's status. Only an
-///   `.ok` push advances `lastAdmittedFrame`, so a refused or full push leaves it unchanged.
+///   `lastAdmittedFrame`), then refuses a `rampTo` whose target is NaN or infinite (`.nonFinite`, #64 RNF2), and
+///   returns a refusal without pushing; otherwise it returns the push's status. Only an `.ok` push advances
+///   `lastAdmittedFrame`, so a refused or full push leaves it unchanged. A negative ramp duration is admitted (a
+///   jump). `RampSlots.set` still refuses a non-finite target at render as a backstop.
 /// - `resetForDiscontinuity` forgets `lastAdmittedFrame` on a relocation or restart, so the producer may stamp
 ///   earlier frames again. Render orders by original frame, so such events are decided late (or dropped, for a
 ///   `noteOn` beyond tolerance), never re-queued.
 /// - A refused event, a `noteOff` included, is returned to the producer, never dropped silently: the producer still
-///   owns it and re-stamps it at or after `lastAdmittedFrame` (and within the lookahead) or resets first. An
+///   owns it and re-stamps it at or after `lastAdmittedFrame` (and within the lookahead) or resets first; a
+///   `.nonFinite` refusal is never cured by re-stamping, so the producer fixes or drops the value. An
 ///   admission refusal never raises a fault; it is counted on the token's lane in `refusals`
 ///   (`KernelCycle.admissionRefusals`), which render publishes as telemetry totals.
 ///
@@ -37,6 +40,10 @@ struct ProducerAdmission: Sendable {
             refusals.record(admitted, token: token)
             return admitted
         }
+        if case let .rampTo(_, value, _) = event.payload, !value.isFinite {
+            refusals.record(.refused(.nonFinite), token: token)
+            return .refused(.nonFinite)
+        }
         let status = events.tryPush(event, class: event.eventClass, frame: event.frame, token: token)
         if status == .ok { lastAdmittedFrame = event.frame }
         return status
@@ -48,23 +55,23 @@ struct ProducerAdmission: Sendable {
     }
 }
 
-/// Saturating per-lane counts of admission refusals (`.nonMonotonic`, `.beyondLookahead`) for one render fan-in,
-/// in `FanInRefusalCounter`s allocated in `init`. Producers count through `ProducerAdmission`; render reads the
-/// totals into `KernelCycleTelemetry`; anyone may read a lane. A refusal on a token of another handoff, or a lane
-/// out of range, is counted in `unattributed`. Each counter keeps `FanInRefusalCounter`'s caller contract (a stale
-/// token may count on a lane its old producer released). Reference model; not RT-certified.
+/// Saturating per-lane counts of admission refusals (`.nonMonotonic`, `.beyondLookahead`, `.nonFinite`) for one
+/// render fan-in, in `FanInRefusalCounter`s allocated in `init`. Producers count through `ProducerAdmission`;
+/// render reads the totals into `KernelCycleTelemetry`; anyone may read a lane. A refusal on a token of another
+/// handoff, or a lane out of range, is counted in `unattributed`. Each counter keeps `FanInRefusalCounter`'s caller
+/// contract (a stale token may count on a lane its old producer released). Reference model; not RT-certified.
 final class KernelAdmissionRefusals: @unchecked Sendable {
     enum Kind: Int, Sendable {
-        case nonMonotonic = 0, beyondLookahead = 1
+        case nonMonotonic = 0, beyondLookahead = 1, nonFinite = 2
     }
 
     /// Counters per lane, one per `Kind`.
-    private static let kindCount = 2
+    private static let kindCount = 3
 
     let laneCount: Int
     /// The identity of the fan-in whose tokens are counted per lane.
     let handoff: UInt64
-    /// `laneCount * 2` counters: lane `l`'s kind `k` at `l * 2 + k`.
+    /// `laneCount * kindCount` counters: lane `l`'s kind `k` at `l * kindCount + k`.
     private let counters: UnsafeMutablePointer<FanInRefusalCounter>
     private let foreign = FanInRefusalCounter()
 
@@ -87,6 +94,7 @@ final class KernelAdmissionRefusals: @unchecked Sendable {
         switch status {
         case .refused(.nonMonotonic): kind = .nonMonotonic
         case .refused(.beyondLookahead): kind = .beyondLookahead
+        case .refused(.nonFinite): kind = .nonFinite
         default: return
         }
         let lane = Int(token.lane)

@@ -7,6 +7,9 @@ import Testing
 
 private func noteOn(_ note: UInt8) -> KernelEventPayload { .noteOn(channel: 0, note: note, velocity: 100) }
 private func control(_ value: UInt32) -> KernelEventPayload { .control(channel: 0, controller: 7, value: value) }
+private func ramp(_ parameter: UInt32, _ value: Float, _ duration: Int64 = 8) -> KernelEventPayload {
+    .rampTo(parameter: parameter, value: value, durationFrames: duration)
+}
 
 /// `acknowledgeCritical` as a value, so a refusal can be compared and the ticket is consumed outside `#expect`.
 private func acknowledging(_ cycle: KernelCycle, _ observation: FaultObservation,
@@ -338,6 +341,67 @@ extension RealtimeHandoffTests {
                     == .refused(.nonMonotonic))
             #expect(replacement.run(blockStart: 64, frames: 64) { _, _ in }.status == .ok)
             #expect(try #require(replacement.latestTelemetry()).value.refusedNonMonotonic == 2)
+        }
+
+        /// #64 RNF2: a `rampTo` with a NaN or infinite target is refused at admission, never pushed, leaves
+        /// `lastAdmittedFrame` unchanged, and is counted on its lane and published; finite ramps (a negative
+        /// duration included, a jump) are still admitted. Kills: the finiteness check removed; it pushing anyway or
+        /// advancing `lastAdmittedFrame`; the refusal uncounted, counted on the wrong lane or kind; the total not
+        /// published.
+        @Test func nonFiniteRampTargetsRefusedAtAdmissionAndCountedPerLane() throws {
+            let slots = try kernelCycleTelemetrySlots()
+            let rig = try CycleRig(telemetry: KernelCycleTelemetryOutput(slots: slots, slot: 1, clockGeneration: 0))
+            let first = try #require(rig.events.claimProducer())
+            let second = try #require(rig.events.claimProducer())
+            let refusals = rig.cycle.admissionRefusals
+            var one = ProducerAdmission(deadline: rig.cycle.deadline, refusals: refusals)
+            var two = ProducerAdmission(deadline: rig.cycle.deadline, refusals: refusals)
+            #expect(one.push(cycleEvent(100, control(0)), now: 0, into: rig.events, token: first) == .ok)
+            for value: Float in [.nan, .signalingNaN, .infinity, -.infinity] {
+                #expect(one.push(cycleEvent(120, ramp(0, value)), now: 0, into: rig.events, token: first)
+                        == .refused(.nonFinite))
+                #expect(one.lastAdmittedFrame == 100)
+            }
+            #expect(two.push(cycleEvent(110, ramp(3, .infinity)), now: 0, into: rig.events, token: second)
+                    == .refused(.nonFinite))
+            #expect(two.lastAdmittedFrame == nil)
+            #expect(one.push(cycleEvent(150, ramp(1, 0.25, -5)), now: 0, into: rig.events, token: first) == .ok)
+            #expect(two.push(cycleEvent(160, ramp(2, 1)), now: 0, into: rig.events, token: second) == .ok)
+            #expect(one.lastAdmittedFrame == 150 && two.lastAdmittedFrame == 160)
+            #expect(refusals.count(lane: 0, .nonFinite) == 4 && refusals.count(lane: 1, .nonFinite) == 1)
+            #expect(refusals.count(lane: 0, .nonMonotonic) == 0 && refusals.count(lane: 0, .beyondLookahead) == 0)
+            #expect(refusals.unattributed == 0 && !rig.faults.isLatched(CycleRig.criticalScope))
+            let (result, emitted) = rig.run(0, 200)
+            #expect(result.status == .ok && result.drained == 3 && result.refused == 0 && result.pending == 0)
+            #expect(emitted.map(\.event.payload) == [control(0), ramp(1, 0.25, -5), ramp(2, 1)])
+            #expect(rig.cycle.parameterValue(1) == 0.25 && rig.cycle.parameterValue(2) == 1)
+            #expect(rig.cycle.parameterValue(0) == 0 && rig.cycle.parameterValue(3) == 0)
+            let published = try #require(rig.cycle.latestTelemetry()).value
+            #expect(published.refusedNonFinite == 5 && rig.cycle.telemetry.refusedNonFinite == 5)
+            #expect(published.refusedNonMonotonic == 0 && published.refusedBeyondLookahead == 0)
+        }
+
+        /// #64 RNF2: the deadline checks come first, so a non-finite ramp that is also beyond the lookahead or
+        /// non-monotonic keeps that refusal and kind; and `RampSlots` still refuses a non-finite ramp that bypassed
+        /// admission (a direct push) at render, counted in the result, not in admission telemetry. Kills: the
+        /// finiteness check run before `DeadlinePolicy.admit`; the render backstop removed.
+        @Test func deadlineRefusalsPrecedeNonFiniteAndRenderStillRefusesBypass() throws {
+            let rig = try CycleRig()
+            let token = try #require(rig.events.claimProducer())
+            let refusals = rig.cycle.admissionRefusals
+            var admission = ProducerAdmission(deadline: rig.cycle.deadline, refusals: refusals)
+            #expect(admission.push(cycleEvent(100, control(0)), now: 0, into: rig.events, token: token) == .ok)
+            #expect(admission.push(cycleEvent(96_001, ramp(0, .nan)), now: 0, into: rig.events, token: token)
+                    == .refused(.beyondLookahead))
+            #expect(admission.push(cycleEvent(99, ramp(0, -.infinity)), now: 0, into: rig.events, token: token)
+                    == .refused(.nonMonotonic))
+            #expect(refusals.count(lane: 0, .beyondLookahead) == 1 && refusals.count(lane: 0, .nonMonotonic) == 1)
+            #expect(refusals.count(lane: 0, .nonFinite) == 0 && admission.lastAdmittedFrame == 100)
+            #expect(rig.push(cycleEvent(120, ramp(1, .nan)), token) == .ok)
+            let (result, emitted) = rig.run(0, 200)
+            #expect(result.refused == 1 && emitted.map(\.event.payload) == [control(0)])
+            #expect(rig.ramps.activeCount == 0 && rig.cycle.parameterValue(1) == 0)
+            #expect(rig.cycle.telemetry.refusedNonFinite == 0 && rig.cycle.telemetry.refusedBeyondLookahead == 1)
         }
     }
 }
