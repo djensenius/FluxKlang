@@ -314,8 +314,8 @@ extension RealtimeHandoffTests {
             #expect(resumed.status == .ok && resumed.dispatched == 1 && emitted.map(\.frame) == [192])
         }
 
-        /// E4 interaction. SysEx never drains on render (R5), so its faults latch only its own scope. Kills: a
-        /// cycle silenced by a neighbouring scope on the same latch.
+        /// E4 interaction. SysEx never drains on render (R5), and its faults live on their own authority (FLP4: an
+        /// authority never shares its latch), so they never reach the cycle's latch. Kills: a silenced cycle.
         @Test func sysexFaultsOnTheirScopeDoNotSilenceTheCycle() throws {
             #expect(Root.violation(Root.policy(purpose: .sysex, producer: .midiReceive,
                                                producers: .init(maximum: 1, evidence: .verified),
@@ -325,11 +325,15 @@ extension RealtimeHandoffTests {
             let ring = try SPSCRing<SysExMessageRef>(policy: Root.policy(
                 purpose: .sysex, producer: .midiReceive, producers: .init(maximum: 1, evidence: .verified),
                 consumer: .control, capacity: 4, ordering: .completeMessagesFIFO, deadline: .none))
+            let faults = try FaultChainAuthority(scopes: [CycleRig.sysexScope], chainBudget: 1)
             let sysex = try SysExAssembler(sources: 1, maximumMessageBytes: 4, poolBytes: 8, output: ring,
-                                           faults: rig.faults, scopeBase: CycleRig.sysexScope.handoff)
+                                           faults: faults, scopeBase: CycleRig.sysexScope.handoff)
             #expect(sysex.accept(source: 0, status: .complete, bytes: (1, 2, 3, 4, 5, 6), count: 6)
                     == .refused(.invalidLength))
-            #expect(rig.faults.isLatched(CycleRig.sysexScope) && !rig.faults.isLatched(CycleRig.criticalScope))
+            #expect(faults.isLatched(CycleRig.sysexScope) && !faults.hasContendedFault)
+            #expect([CycleRig.criticalScope, CycleRig.slotsScope, CycleRig.sysexScope].allSatisfy {
+                !rig.faults.isLatched($0)
+            })
             let token = try #require(rig.events.claimProducer())
             #expect(rig.push(cycleEvent(0, noteOn(60)), token) == .ok)
             let (result, emitted) = rig.run(0, 64)

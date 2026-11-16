@@ -275,6 +275,7 @@ targets:
       - path: FluxKlangTests/RealtimeHandoffTests+ScratchStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+Deadline.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysEx.swift
+      - path: FluxKlangTests/RealtimeHandoffTests+SysExChains.swift
       - path: FluxKlangTests/RealtimeHandoffTests+SysExStress.swift
       - path: FluxKlangTests/RealtimeHandoffTests+UMPSysEx.swift
       - path: FluxKlangTests/NeutralSnapshotTests.swift
