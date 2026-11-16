@@ -113,8 +113,8 @@ enum KernelCycleStart: Sendable, Equatable {
     /// It must also pass that cycle's `admissionRefusals` (see `admissionRefusals`), else `.admissionRefusalsRequired`.
     /// If it loses the claim to a preparation that has since retired, it is refused `.ownershipClaim(.claimRaced)`.
     /// So it is prepared only after that `retire()`, and render does no event work until the host installs it (the
-    /// takeover gap, bounded in `KernelCycle`'s Takeover gap): its takeover releases and the safety requests raised in
-    /// the gap wait for its first `run`, and the carry below for its first unsilenced one.
+    /// takeover gap; `KernelCycle`'s Takeover gap gives its conditional bound): its takeover releases and the safety
+    /// requests raised in the gap wait for its first `run`, and the carry below for its first unsilenced one.
     /// Pending stateful events are also recorded in a carry that `inheritedRetirementCarry` exposes and this cycle
     /// re-admits (#364 KCR1): those still planned dispatch in its first unsilenced block that reaches them, at
     /// `blockStart` if already due however long the gap (unless superseded, cut or refused; see

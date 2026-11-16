@@ -155,11 +155,15 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// `retire()` too (it returns no loss).
 ///
 /// Takeover gap (#715). A replacement is prepared only after the retire, so render does no event work from the retire
-/// until the host installs it. The event-free callbacks are those that start in between: at most
-/// ceil((t_retire→prepare + t_prepare + t_install) / t_block), and 0 when render retires after its last `run` and
-/// control installs before the next callback. In this model only control's latency bounds it (`init` allocates; each
-/// `.claimRaced` retry prepares again). The gap delays: carried events wait out the gap and any silenced block (no
-/// lateness drops them and the flush watermark never gates them), then those still planned dispatch in the first
+/// until the host installs it. The event-free callbacks are those that start in between, and `KernelCycle` bounds
+/// neither their spacing (it requires only distinct, advancing `blockStart`s, never a wall-clock interval) nor the
+/// gap's length `t_gap`: the full time from the retire to the host's install of a successful preparation, including
+/// failed preparations (`.predecessorNotRetired`, `.claimRaced`; `init` allocates) and the waits before retrying. If
+/// the host guarantees a minimum interval `t_block` between callback starts and a bound on `t_gap` (bounded
+/// installation latency), the count is at most ceil(t_gap / t_block); without both, `KernelCycle` supplies no finite
+/// bound on it. It is 0 when render retires after its last `run` and control installs before the next callback.
+/// The gap delays: carried events wait out the gap and any silenced block (no lateness drops them and the flush
+/// watermark never gates them), then those still planned dispatch in the first
 /// unsilenced replacement block that reaches them, at its `blockStart` if already due (unless superseded, cut or
 /// refused; see `KernelCarryReadmissionReport`); takeover releases start, and `SafetyFlags` requests (a panic too)
 /// apply, at the replacement's first `blockStart`; nothing drains the fan-in, so a lane can fill and refuse pushes (a
