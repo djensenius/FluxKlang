@@ -24,7 +24,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
 
     func start(
         sourceNameContains: [String],
-        onPackets: @escaping @MainActor ([[UInt8]]) -> Void,
+        onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
         onSourcesChanged: @escaping ([String]) -> Void
     ) {
         ProductionAccessAudit.shared.record(.attempted, for: .midiInput, mirroring: auditMirror)
