@@ -73,7 +73,7 @@ each through `faultsRef._withUnsafeGuaranteedRef`, and one doc-comment mention a
 | # | Call | Component |
 |---|---|---|
 | S1 | `Shared/Audio/Kernel/Events/SysExAssembler.swift:339` | `SysExAssembler.raise`, reached from `discard` and `extend`. Since FLP4 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.1) |
-| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:365` | `FanInHandoff.claimProducer` |
+| S2 | `Shared/Audio/Kernel/Memory/FanInHandoff.swift:365` | `FanInHandoff.claimProducer`. Since FLP6 it raises through a chain token of its own claim `FaultChainAuthority`, not `FaultLatch.raise` (section 3.2) |
 | S3 | `Shared/Audio/Kernel/Memory/DeferredRelease.swift:122` | `DeferredReleaseQueue.retire`. Since FLP5 it raises through a `FaultChainAuthority` chain token, not `FaultLatch.raise` (section 3.3) |
 | S4 | `Shared/Audio/Kernel/Memory/ReservedCapacityRing.swift:238` | `ReservedCapacityRing.refuse` |
 
@@ -143,6 +143,30 @@ faults no longer share a latch with the kernel cycle. Still **UNPROVEN**: a real
 | Verdict | **UNPROVEN** |
 | Evidence a proof needs | Every real caller of `claimProducer`, with a finite count of chains over the latch's life (including threads that come and go, if any), and the ordering between a refused claim and that chain's next claim |
 
+**Since FLP6** (#190; model in [fault-latch-chain-tokens.md](fault-latch-chain-tokens.md)
+section 7). The citations above are against this document's baseline; after FLP6
+`claimProducer` (`FanInHandoff.swift:367`) counts the refusal (`:380`) and calls
+`FanInClaimChain.refuse` (`:381`, `FanInHandoff+Chains.swift:37`), which holds the
+only raise (`FanInHandoff+Chains.swift:47`). `FanInHandoff.init` (`:303`) now takes a
+separate `claimFaults: FaultChainAuthority` for `producerSlotsScope` and mints one
+chain from it after every other check that can throw, before the identity is
+reserved (`:335`; a refusal is `.chainBudgetExhausted`). The lanes keep raising
+`.criticalExhausted` on `faults` (S4). The claim authority is separate because its
+contended fault is sticky and latches every scope, so on `faults` it would also
+latch `criticalScope`. Only a refused claim takes the token: it raises once and puts
+the token back. A refusal that finds the token held (another refused claim at the same
+moment, which is legal because any thread may claim) latches the authority's
+contended fault and counts in `contendedClaimCount` instead. It still returns `nil` and
+still counts in `refusedClaimCount`. A successful claim never touches the token. That
+discharges two rows for the reference model, by construction:
+- chains that raise on the claim authority over its lifetime are at most its
+  `chainBudget` (one per handoff);
+- the slot's acquire/release orders one refused claim's completed raise before the
+  next refused claim's raise.
+
+Still **UNPROVEN**: the real callers of `claimProducer` and whether the slots
+scope is prepared. The refusal counter's own bound (section 4) does not change.
+
 ### 3.3 S3: `DeferredReleaseQueue.retire` (`DeferredRelease.swift:122`)
 
 | Item | Finding |
@@ -209,7 +233,7 @@ not rely on it" (`FanInHandoff.swift:197` to `:199`).
 
 | Counter | Bumped at | Triggered by |
 |---|---|---|
-| `refusedClaims` (`:284`) | `:363` | `claimProducer` finding no lane. The same path then raises S2, so one chain is the same sequence of calls, but the counter's bound is its own argument |
+| `refusedClaims` (`:284`) | `:363` | `claimProducer` finding no lane. The same path then raises S2, so one chain is the same sequence of calls, but the counter's bound is its own argument. Since FLP6 that raise goes through the handoff's one claim chain (section 3.2), which bounds the raises, not this counter's callers |
 | `refusedNotOwner` (`:283`) | `:382`, `:397` | `releaseProducer` and `tryPush` refusals for a token that does not own its lane. No fault is raised on these paths (`:369` to `:371`, `:392`). Any thread holding any token, stale or foreign, can reach them (`:196`) |
 
 Both are **UNPROVEN** for the same reasons as section 3: the chain bound for real
@@ -284,7 +308,10 @@ Which constructors take a scope "that should be prepared":
 - `SysExAssembler.init(... faults:scopeBase:)` (`SysExAssembler.swift:136`); the
   scopes are `(scopeBase, source)` for each source (`:39` to `:41`).
 - `FanInHandoff.init(... faults:criticalScope:producerSlotsScope:)`
-  (`FanInHandoff.swift:291`; doc `:288` to `:290`).
+  (`FanInHandoff.swift:291`; doc `:288` to `:290`). Since FLP6:
+  `init(... faults:claimFaults:criticalScope:producerSlotsScope:)`
+  (`FanInHandoff.swift:303`; doc `:299` to `:302`), with `producerSlotsScope`
+  prepared in `claimFaults`.
 - `DeferredReleaseQueue.init(policy:faults:scope:)` (`DeferredRelease.swift:79`;
   doc `:76` to `:78`: not checked against `faults`).
 - `ReservedCapacityRing.init(policy:faults:scope:)` (`ReservedCapacityRing.swift:105`
@@ -311,7 +338,9 @@ call; the constructor calls are in tests (for example
 shares a latch in production code today; the question is open for any later
 wiring. What the types allow: `FanInHandoff` hands one latch to every lane's
 `ReservedCapacityRing` (`FanInHandoff.swift:314`), so S2 and S4 share it inside
-one handoff; `DeferredReleaseQueue` may be shared by several exchanges
+one handoff (since FLP6 they do not: S2 raises on the handoff's separate claim
+authority, `FanInHandoff.swift:335`, and only the lanes' S4 raises share `faults`,
+`:327`); `DeferredReleaseQueue` may be shared by several exchanges
 (`DeferredRelease.swift:45`); and `KernelCycleParts.faults` is one latch
 (`KernelCycleTelemetry.swift:130`).
 
@@ -371,7 +400,10 @@ section 4):
   chain per assembler on its own `FaultChainAuthority`; section 3.1); open until a
   real caller exists (#81).
 - [ ] S2: a finite bound on contexts that call `claimProducer`, and ordering
-  from a refused claim's raise to that chain's next claim.
+  from a refused claim's raise to that chain's next claim. FLP6 provides both by
+  construction for the reference model (one claim chain per handoff on its own
+  `FaultChainAuthority`, taken only by refused claims; section 3.2); open until
+  real callers exist.
 - [ ] S3: the render caller of `DeferredReleaseQueue.retire` (via
   `RetiringExchange` and `PreparedPlanSlot.beginCycle`) shown to be one chain or
   a bounded set, and its ordering. FLP5 provides both by construction for the

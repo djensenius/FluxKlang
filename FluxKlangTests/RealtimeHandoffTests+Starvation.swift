@@ -365,7 +365,8 @@ extension RealtimeHandoffTests {
         func seededTrafficMatchesModel(seed: UInt64) throws {
             let lanes = 3
             let faults = try Root.fanInLatch()
-            let handoff = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 18)
+            let claims = try Root.fanInClaims()
+            let handoff = try Root.makeFanIn(faults, claims: claims, lanes: lanes, laneCapacity: 18)
             let elsewhere = try Root.makeFanIn(faults, lanes: lanes, laneCapacity: 18)
             let wider = try Root.makeFanIn(faults, lanes: lanes + 2, laneCapacity: 18)
             var run = ModelRun(handoff: handoff, foreign: try claimAll(elsewhere), wide: try claimAll(wider),
@@ -386,7 +387,8 @@ extension RealtimeHandoffTests {
                 #expect(handoff.refusedCount(lane: lane, class: .critical) == model.refusedCritical[lane])
             }
             #expect(Root.fanInRecord(faults, Root.fanInCriticalScope) == model.criticalFault)
-            #expect(Root.fanInRecord(faults, Root.fanInSlotsScope) == model.slotsFault)
+            #expect(Root.fanInRecord(claims, Root.fanInSlotsScope) == model.slotsFault)
+            #expect(!faults.isLatched(Root.fanInSlotsScope) && handoff.contendedClaimCount == 0)
             #expect(model.refusedClaims > 0 && model.refusedNotOwner > 0 && model.refusedGeneral.reduce(0, +) > 0)
             #expect(Root.drained(handoff, quota: 64, total: 256) == run.model.drain(quota: 64, total: 256))
         }

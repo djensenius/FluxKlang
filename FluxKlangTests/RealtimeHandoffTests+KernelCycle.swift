@@ -22,6 +22,7 @@ struct CycleRig {
     static let sysexScope = FaultScope(handoff: 65, target: 0)
 
     let faults: FaultLatch
+    let claims: FaultChainAuthority
     let events: FanInHandoff<KernelEvent>
     let ownership: NoteOwnership
     let safety: SafetyFlags
@@ -31,8 +32,9 @@ struct CycleRig {
     init(lanes: Int = 2, laneCapacity: Int = 20, blockCapacity: Int = 64, pulsesPerBlock: Int = 4,
          staleTolerance: Int64 = 48, perLaneQuota: Int = 64, telemetry: KernelCycleTelemetryOutput? = nil) throws {
         faults = try FaultLatch(scopes: [Self.criticalScope, Self.slotsScope, Self.sysexScope])
+        claims = try FaultChainAuthority(scopes: [Self.slotsScope], chainBudget: 1)
         events = try FanInHandoff(policy: Self.policy(lanes: lanes, laneCapacity: laneCapacity),
-                                  laneCapacity: laneCapacity, reserved: 16, faults: faults,
+                                  laneCapacity: laneCapacity, reserved: 16, faults: faults, claimFaults: claims,
                                   criticalScope: Self.criticalScope, producerSlotsScope: Self.slotsScope)
         ownership = try NoteOwnership(scopes: 2)
         safety = try SafetyFlags(scopes: 2)
@@ -108,6 +110,7 @@ extension RealtimeHandoffTests {
             } == .scopeCountMismatch(ownership: 2, safety: 3))
             let control = try FanInHandoff<KernelEvent>(
                 policy: CycleRig.policy(consumer: .control), laneCapacity: 20, reserved: 16, faults: rig.faults,
+                claimFaults: FaultChainAuthority(scopes: [CycleRig.slotsScope], chainBudget: 1),
                 criticalScope: CycleRig.criticalScope, producerSlotsScope: CycleRig.slotsScope)
             let off = KernelCycleParts(events: control, faults: rig.faults, ownership: rig.ownership,
                                        safety: rig.safety, ramps: rig.ramps)
