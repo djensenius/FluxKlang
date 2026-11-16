@@ -151,9 +151,28 @@ struct KernelCycleResult: Sendable, BitwiseCopyable, Equatable {
 /// `admissionRefusals` (`.admissionRefusalsRequired`, nothing claimed). The check and the claim are one
 /// compare-exchange on the ownership's claim word, so a racing preparation cannot pass the check, wait out another
 /// cycle's claim and retire, then claim fresh; a replacement that loses it to a cycle that has since retired is refused
-/// `.ownershipClaim(.claimRaced)`. So a replacement is prepared after the retire, and render runs no cycle in between
-/// (at least one block without event work). A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a
-/// second `retire()` too (it returns no loss).
+/// `.ownershipClaim(.claimRaced)`. A `run` after `retire()` does nothing (`KernelCycleResult.retired`), and a second
+/// `retire()` too (it returns no loss).
+///
+/// Takeover gap (#715). A replacement is prepared only after the retire, so render does no event work from the retire
+/// until the host installs it. The event-free callbacks are those that start in between, and `KernelCycle` bounds
+/// neither their spacing (it requires only distinct, advancing `blockStart`s, never a wall-clock interval) nor the
+/// gap's length `t_gap`: the full time from the retire to the host's install of a successful preparation, including
+/// failed preparations (`.predecessorNotRetired`, `.claimRaced`; `init` allocates) and the waits before retrying. If
+/// the host guarantees a minimum interval `t_block` between callback starts and a bound on `t_gap` (bounded
+/// installation latency), the count is at most ceil(t_gap / t_block); without both, `KernelCycle` supplies no finite
+/// bound on it. It is 0 when render retires after its last `run` and control installs before the next callback.
+/// The gap delays: carried events wait out the gap and any silenced block (no lateness drops them and the flush
+/// watermark never gates them), then those still planned dispatch in the first
+/// unsilenced replacement block that reaches them, at its `blockStart` if already due (unless superseded, cut or
+/// refused; see `KernelCarryReadmissionReport`); takeover releases start at the replacement's first `blockStart`, and
+/// so do gap-time `SafetyFlags` requests (a panic too), but only those raised on the instance the replacement is built
+/// with (`KernelCycleParts.safety`, normally the predecessor's, reused): preparation checks only its scope count, so a
+/// request on any other instance, even a same-sized one, never reaches the replacement; nothing drains the fan-in, so a
+/// lane can fill and refuse pushes (a refused `noteOff` latches the critical scope). The gap stays: overlapping it
+/// needs a render-side hand-off compare-exchange with a staged-but-unclaimed claim state, an allocation-free carry plan
+/// on render, and the inherited loss and carry published after construction (a control API change); and no production
+/// render path exists yet.
 ///
 /// Acknowledgement contract. Control acknowledges a critical fault only after render has reported a silenced
 /// (`.scopeFaulted`) cycle that began after control's `observe`; that cycle armed the watermark. An earlier
