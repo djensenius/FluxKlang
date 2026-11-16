@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "7fb432bef19f19a06695273b5fed7816e5b7c60b49fb22d453dc0ffb98b49833",
+    "sha256": "7f5c12f8e6a81c04fa504c997a5850c54b1e3e51c854da39af113b8320b7d48d",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -155,6 +155,8 @@
         "FluxKlangTests/RealtimeHandoffTests+Policy.swift",
         "FluxKlangTests/RealtimeHandoffTests+Faults.swift",
         "FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift",
+        "FluxKlangTests/RealtimeHandoffTests+FaultChains.swift",
+        "FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift",
         "FluxKlangTests/RealtimeHandoffTests+Ownership.swift",
         "FluxKlangTests/RealtimeHandoffTests+OwnershipContention.swift",
         "FluxKlangTests/RealtimeHandoffTests+Telemetry.swift",
