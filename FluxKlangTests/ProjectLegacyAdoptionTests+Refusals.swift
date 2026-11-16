@@ -228,3 +228,245 @@ struct ProjectLegacyAdoptionRoleTests {
         }
     }
 }
+
+/// `environments.json` bytes encoded the way `EnvironmentStore` saves them: two environments, the second with a
+/// wired studio graph, an endpoint, a legacy local plug mapping (`studioSetup`) and WING-era data.
+enum LegacyEnvironmentFixture {
+    static let first = UUID(uuidString: "E0000000-0000-0000-0000-000000000001")!
+    static let second = UUID(uuidString: "E0000000-0000-0000-0000-000000000002")!
+    static let synth = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+    static let instrument = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+    static let mains = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+    static let endpoint = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000001")!
+    static let profile = UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000001")!
+    static let patch = UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000002")!
+    static let effect = UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")!
+
+    /// `EnvironmentStore.Persisted`'s shape; that type is private.
+    private struct Persisted: Encodable {
+        var environments: [RoutingEnvironment]
+        var activeID: UUID?
+        var migratedChain: Bool?
+        var migratedEffectEquipmentLinks: Bool?
+    }
+
+    static var secondEnvironment: RoutingEnvironment {
+        let edge = StudioEdge(
+            id: UUID(uuidString: "66666666-6666-6666-6666-666666666661")!,
+            from: StudioPortRef(nodeID: synth, side: .output, port: 0),
+            to: StudioPortRef(nodeID: mains, side: .input, port: 0)
+        )
+        let setup = StudioSetup(devices: [StudioDeviceProfile(
+            id: profile, device: .equipment(instrument), name: "USB Plug Map", role: .instrument,
+            patches: [StudioPortPatch(
+                id: patch, device: .equipment(instrument), side: .output, port: 0,
+                connector: .wingInput(WingSource(group: .local, index: 5))
+            )]
+        )])
+        return RoutingEnvironment(
+            id: second, name: "Gig", effects: [Effect(id: effect, name: "Wing Delay")],
+            placements: ["voice": VoicePlacement(width: 0.25)],
+            studioGraph: StudioGraph(nodes: [
+                StudioNode(id: synth, kind: .instrument(instrument), title: "Synth", position: CGPoint(x: 1, y: 2)),
+                StudioNode(id: mains, kind: .endpoint(endpoint), title: "Mains")
+            ], edges: [edge]),
+            studioEndpoints: [StudioEndpoint(id: endpoint, name: "Mains", destination: .finalMix, controls: [.mute])],
+            studioSetup: setup
+        )
+    }
+
+    static func data(_ environments: [RoutingEnvironment]? = nil) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let all = environments ?? [RoutingEnvironment(id: first, name: "Home"), secondEnvironment]
+        return try encoder.encode(Persisted(environments: all, activeID: first, migratedChain: true))
+    }
+
+    static func adopt(
+        _ data: Data, id: UUID = second, policy: ProjectPackageManifestPolicy? = nil
+    ) throws -> LegacyAdoptionResult {
+        try LegacyEnvironmentAdoption.adopt(
+            environmentsData: data, environmentID: id, projectID: LegacyAdoptionP5Fixture.projectID,
+            graphID: LegacyAdoptionP5Fixture.graphID, name: "Gig", policy: policy ?? LegacyAdoptionP5Fixture.policy()
+        )
+    }
+
+    static func refusal(
+        _ data: Data, id: UUID = second, policy: ProjectPackageManifestPolicy? = nil
+    ) throws -> LegacyEnvironmentAdoptionRefusal? {
+        let policy = try policy ?? LegacyAdoptionP5Fixture.policy()
+        do {
+            _ = try LegacyEnvironmentAdoption.adopt(
+                environmentsData: data, environmentID: id, projectID: LegacyAdoptionP5Fixture.projectID,
+                graphID: LegacyAdoptionP5Fixture.graphID, name: "Gig", policy: policy
+            )
+            return nil
+        } catch {
+            return error
+        }
+    }
+}
+
+@Suite("Legacy environment adoption", .productionAccessAudit)
+struct LegacyEnvironmentAdoptionTests {
+    private typealias Fixture = LegacyEnvironmentFixture
+
+    @Test func secondEnvironmentRoundTripsWithItsOwnGraphAndTheWholeOriginal() throws {
+        let data = try Fixture.data()
+        let result = try Fixture.adopt(data)
+        let documents = try ProjectPackageDocuments(contents: result.contents)
+        #expect(documents == result.documents)
+        let graph = try #require(documents.graphs.first)
+        #expect(graph.nodes.map(\.id) == [NodeID(uuid: Fixture.synth), NodeID(uuid: Fixture.mains)])
+        #expect(graph.edges.count == 1 && graph.requiresReview)
+        #expect(documents.project.roles.map(\.id) == [
+            LegacyAdoptionP5Fixture.role("endpoint", Fixture.endpoint.uuidString),
+            LegacyAdoptionP5Fixture.role("instrument", Fixture.instrument.uuidString)
+        ])
+        #expect(documents.project.validationErrors(graphs: documents.graphs)
+            .contains(.graph(LegacyAdoptionP5Fixture.graphID, .reviewRequired)))
+        let files = result.contents.files
+        #expect(files.first { $0.path == LegacyEnvironmentAdoption.originalEnvironmentsPath }?.bytes == data)
+        #expect(files.first { $0.path == LegacyEnvironmentAdoption.originalEnvironmentsPath }?.role == .opaqueState)
+        let graphBytes = try #require(files.first { $0.path == LegacyAdoption.originalGraphPath }?.bytes)
+        #expect(try JSONDecoder().decode(StudioGraph.self, from: graphBytes) == Fixture.secondEnvironment.studioGraph)
+        let endpointBytes = try #require(files.first { $0.path == LegacyAdoption.originalEndpointsPath }?.bytes)
+        #expect(try JSONDecoder().decode([StudioEndpoint].self, from: endpointBytes)
+            == Fixture.secondEnvironment.studioEndpoints)
+        #expect(files.map(\.path) == [
+            "graphs/legacy-studio.json", "legacy/Environments.json", "legacy/StudioEndpoints.json",
+            "legacy/StudioGraph.json", "project.json"
+        ])
+    }
+
+    @Test func unknownTopLevelAndEnvironmentMembersSurviveByteForByte() throws {
+        var text = try #require(String(data: try Fixture.data(), encoding: .utf8))
+        text = "{\n  \"aFuture\" : { \"x\" : [1.50e0, null] }," + text.dropFirst()
+        let idMember = "\"id\" : \"\(Fixture.second.uuidString)\""
+        #expect(text.contains(idMember))
+        text = text.replacingOccurrences(of: idMember, with: idMember + ", \"zFuture\" : \"kept \\u00e9\"")
+        let data = Data(text.utf8)
+        let result = try Fixture.adopt(data)
+        #expect(result.contents.files.first { $0.path == LegacyEnvironmentAdoption.originalEnvironmentsPath }?.bytes
+            == data)
+        #expect(result.documents.graphs.first?.nodes.count == 2)
+    }
+
+    @Test func legacyPlugMappingsAndWingDataGainNoBindingOrAuthority() throws {
+        let result = try Fixture.adopt(try Fixture.data())
+        let project = result.documents.project
+        #expect(project.patches.isEmpty && project.assets.isEmpty && project.actions.isEmpty)
+        #expect(project.extensions == ["provenance": LegacyAdoption.provenance])
+        #expect(result.documents.graphs.map(\.requiresReview) == [true])
+        // Setup, WING effect and placement identities appear only inside the retained original.
+        let markers = [Fixture.profile.uuidString, Fixture.patch.uuidString, Fixture.effect.uuidString,
+                       "USB Plug Map", "wingInput", "studioSetup", "Wing Delay", "placements"]
+        for file in result.contents.files {
+            let text = try #require(String(data: file.bytes, encoding: .utf8))
+            let isOriginal = file.path == LegacyEnvironmentAdoption.originalEnvironmentsPath
+            for marker in markers {
+                #expect(text.contains(marker) == isOriginal, "\(file.path) \(marker)")
+            }
+        }
+    }
+
+    @Test func missingOrNullStudioGraphAdoptsAnEmptyGraphWithoutEndpoints() throws {
+        let id = Fixture.second.uuidString
+        for members in ["", #","studioGraph":null,"studioEndpoints":null"#] {
+            let data = Data(#"{"environments":[{"id":"\#(id)","name":"Old"\#(members)}]}"#.utf8)
+            let result = try Fixture.adopt(data)
+            #expect(result.documents.graphs.first?.nodes.isEmpty == true)
+            #expect(result.documents.project.roles.isEmpty)
+            #expect(result.contents.files.map(\.path) == [
+                "graphs/legacy-studio.json", "legacy/Environments.json", "legacy/StudioGraph.json", "project.json"
+            ])
+            let graphBytes = result.contents.files.first { $0.path == LegacyAdoption.originalGraphPath }?.bytes
+            #expect(graphBytes == LegacyEnvironmentAdoption.emptyStudioGraph)
+        }
+    }
+
+    @Test func unknownStudioGraphMembersReachTheEvidenceAndTheDerivedGraphFile() throws {
+        let graph = #"{"zFuture":{"n":1.5},"nodes":[],"edges":[]}"#
+        let id = Fixture.second.uuidString
+        let data = Data(#"{"environments":[{"id":"\#(id)","name":"A","studioGraph":\#(graph)}]}"#.utf8)
+        let result = try Fixture.adopt(data)
+        let document = try #require(result.documents.graphs.first)
+        guard case .object(let evidence)? = document.extensions?["legacyStudio"],
+              case .object(let original)? = evidence["originalGraph"] else {
+            Issue.record("missing legacyStudio evidence")
+            return
+        }
+        #expect(original["zFuture"] == .object(["n": .double(1.5)]))
+        let derived = try #require(result.contents.files.first { $0.path == LegacyAdoption.originalGraphPath }?.bytes)
+        #expect(String(data: derived, encoding: .utf8) == #"{"edges":[],"nodes":[],"zFuture":{"n":1.5}}"#)
+    }
+
+    @Test func aRetainedFileCollidingWithAnAdoptionMemberIsRefusedNotOverwritten() throws {
+        let path = LegacyAdoption.originalGraphPath
+        let clash = ProjectPackageFile(path: path, role: .opaqueState, bytes: Data("{}".utf8))
+        #expect(throws: LegacyAdoptionRefusal.assembly(.package(.duplicatePath))) {
+            try LegacyAdoption.adopt(
+                graphData: LegacyAdoptionP5Fixture.standardGraph, projectID: LegacyAdoptionP5Fixture.projectID,
+                graphID: LegacyAdoptionP5Fixture.graphID, name: "Gig", policy: LegacyAdoptionP5Fixture.policy(),
+                retaining: [clash]
+            )
+        }
+    }
+
+    @Test func twoRunsGiveIdenticalBytesAndLowercaseIDsMatch() throws {
+        let data = try Fixture.data()
+        let first = try Fixture.adopt(data).contents
+        #expect(first == (try Fixture.adopt(data).contents))
+        #expect(first.manifestBytes == (try Fixture.adopt(data).contents.manifestBytes))
+        let text = try #require(String(data: data, encoding: .utf8))
+        let lowered = Data(text.replacingOccurrences(
+            of: Fixture.second.uuidString, with: Fixture.second.uuidString.lowercased()
+        ).utf8)
+        let lower = try Fixture.adopt(lowered).documents, upper = try Fixture.adopt(data).documents
+        #expect(lower.project == upper.project && lower.graphs == upper.graphs)
+    }
+
+    @Test func unknownAndDuplicateEnvironmentsRefuse() throws {
+        let data = try Fixture.data()
+        #expect(try Fixture.refusal(data, id: UUID(uuidString: "E0000000-0000-0000-0000-000000000009")!)
+            == .environmentNotFound)
+        var copy = Fixture.secondEnvironment
+        copy.name = "Copy"
+        let duplicated = try Fixture.data([RoutingEnvironment(id: Fixture.first, name: "Home"),
+                                           Fixture.secondEnvironment, copy])
+        #expect(try Fixture.refusal(duplicated) == .duplicateEnvironmentID)
+        // A duplicate elsewhere does not block a unique selection.
+        #expect(try Fixture.refusal(duplicated, id: Fixture.first) == nil)
+        #expect(try Fixture.refusal(Data(#"{"environments":[]}"#.utf8)) == .environmentNotFound)
+    }
+
+    @Test func oversizedInputIsRefusedBeforeDecodingAtNPlusOne() throws {
+        let data = try Fixture.data()
+        let policy = try LegacyAdoptionP5Fixture.policy(entryBytes: data.count + 1)
+        let text = try #require(String(data: data, encoding: .utf8))
+        _ = try Fixture.adopt(LegacyAdoptionP5Fixture.padded(text, to: data.count + 1), policy: policy)
+        #expect(try Fixture.refusal(LegacyAdoptionP5Fixture.padded(text, to: data.count + 2), policy: policy)
+            == .oversizedInput)
+        #expect(try Fixture.refusal(Data(repeating: 0x7B, count: data.count + 2), policy: policy) == .oversizedInput)
+        // The 4 MiB document ceiling applies when the entry cap is above it.
+        let ceiling = ProjectGraphLimits.documentBytes
+        let wide = try LegacyAdoptionP5Fixture.policy(entryBytes: 2 * ceiling, totalBytes: 4 * ceiling)
+        #expect(try Fixture.refusal(LegacyAdoptionP5Fixture.padded(text, to: ceiling + 1), policy: wide)
+            == .oversizedInput)
+    }
+
+    @Test func garbageAndUnsupportedShapesRefuse() throws {
+        let id = Fixture.second.uuidString
+        let undecodable = [Data("not json".utf8), Data([0xEF, 0xBB, 0xBF] + Array("{}".utf8)),
+                           Data(#"{"environments":[],"environments":[]}"#.utf8), Data()]
+        for data in undecodable { #expect(try Fixture.refusal(data) == .undecodableInput) }
+        let shapes = [#"[]"#, #"{}"#, #"{"environments":{}}"#, #"{"environments":[1]}"#,
+                      #"{"environments":[{"name":"A"}]}"#, #"{"environments":[{"id":"nope","name":"A"}]}"#,
+                      #"{"environments":[{"id":"\#(id)"}]}"#]
+        for shape in shapes { #expect(try Fixture.refusal(Data(shape.utf8)) == .unsupportedShape, "\(shape)") }
+        let versioned = #"{"environments":[{"id":"\#(id)","name":"A","studioGraph":{"version":1}}]}"#
+        #expect(try Fixture.refusal(Data(versioned.utf8)) == .adoption(.versionedInput))
+        let broken = #"{"environments":[{"id":"\#(id)","name":"A","studioGraph":[]}]}"#
+        #expect(try Fixture.refusal(Data(broken.utf8)) == .adoption(.undecodableInput))
+    }
+}

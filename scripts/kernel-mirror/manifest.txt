@@ -32,6 +32,8 @@ test FluxKlangTests/RealtimeHandoffTests+Deadline.swift
 test FluxKlangTests/RealtimeHandoffTests+FanInIdentity.swift
 test FluxKlangTests/RealtimeHandoffTests+FanInOut.swift
 test FluxKlangTests/RealtimeHandoffTests+FanInStress.swift
+test FluxKlangTests/RealtimeHandoffTests+FaultChains.swift
+test FluxKlangTests/RealtimeHandoffTests+FaultChainsStress.swift
 test FluxKlangTests/RealtimeHandoffTests+Faults.swift
 test FluxKlangTests/RealtimeHandoffTests+FaultsStress.swift
 test FluxKlangTests/RealtimeHandoffTests+KernelCycle.swift

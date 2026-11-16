@@ -54,6 +54,30 @@ become non-routable shortcuts with no ports. Equipment/endpoint role IDs use dis
 legacy namespaces. No USB mapping, authority, current device evidence or compatibility
 with a future contract version is inferred. Versioned input is not accepted as legacy.
 
+### Environment adoption
+
+`LegacyEnvironmentAdoption.adopt(environmentsData:environmentID:...)` adopts one
+environment from `EnvironmentStore`'s `environments.json` bytes. The bytes are bounded
+by the package entry limit and the 4 MiB ceiling before decoding, then decoded
+strictly; the top level must hold an `environments` array of objects with a UUID `id`
+and a string `name`. Exactly one environment must match the requested ID (missing or
+repeated IDs refuse). Its `studioGraph` and `studioEndpoints` are re-encoded canonically
+and passed to `LegacyAdoption.adopt`; a missing graph adopts as empty. The whole
+original file is kept unchanged at `legacy/Environments.json` as opaque state, so other
+environments and unknown members survive. `studioSetup` (local plug mappings) and the
+WING `graph`, `effects` and `placements` are never interpreted: they gain no role,
+patch or authority, and the graph still requires review.
+
+Unlike direct adoption, `legacy/StudioGraph.json` and `legacy/StudioEndpoints.json`
+hold canonical re-encodings of the selected environment's members, not original
+bytes; the true original is `legacy/Environments.json`. The whole file must fit one
+package entry and is charged against the package total alongside the re-encoded graph
+and endpoints, so a large `environments.json` is refused (`oversizedInput`, or an
+assembly refusal) even when the chosen environment is small.
+
+Still open: running migration over real on-disk stores, adopting sidecars from the
+global stores, app wiring, and splitting or per-environment retention of large files.
+
 ## Package manifest v1
 
 `ProjectPackageManifest` describes the reserved root member `manifest.json`, with
