@@ -100,6 +100,37 @@ extension MIDISourceRegistryTests {
         #expect(registry.snapshot.sources.map(\.state.policy) == [.standard, try Self.policy(retainLSB: true)])
     }
 
+    /// Launch Control XL on channel 16: fader 2 (CC 6), select 2 (CC 38) and select 1 (CC 37).
+    @Test func anUnpairedSourceKeepsLaunchControlBytesPlainBesideAStandardSource() throws {
+        var registry = try Self.registry([])
+        let unpaired = try Self.policy(unpaired: true)
+        try registry.register(Self.id(1), key: Self.key(1))
+        try registry.register(Self.id(2), key: Self.key(2), profile: Self.profile(policy: unpaired))
+        let launchControl: [UInt8] = [0xBF, 6, 64, 38, 127, 37, 127]
+        let standard = try registry.feed(launchControl, from: Self.id(1))
+        let plain = try registry.feed(launchControl, from: Self.id(2))
+        #expect(standard.map(\.outcome) == [
+            .refused(.noParameterSelected(channel: 16, controller: 6)),
+            .refused(.noParameterSelected(channel: 16, controller: 38)),
+            .applied(MIDI1StateUpdate(channel: 16, effect: .controller14(5, value: 127)))
+        ])
+        #expect(plain.map(\.outcome) == [(6, 64), (38, 127), (37, 127)].map { controller, value in
+            .applied(MIDI1StateUpdate(channel: 16, effect: .controller(controller, value: value)))
+        })
+        let channel = try #require(Self.state(registry, 2)?.channels.last)
+        #expect(channel.controllers[6] == 64 && channel.controllers[38] == 127 && channel.controllers[37] == 127)
+        #expect(channel.parameters.isEmpty && channel.activeParameterKind == nil)
+
+        _ = try registry.feed(Self.selectRPN(16, msb: 0, lsb: 0), from: Self.id(1))
+        _ = try registry.feed(launchControl + Self.selectRPN(16, msb: 0, lsb: 2), from: Self.id(2))
+        let landed = try registry.feed(Self.control(16, 6, 12), from: Self.id(1))
+        let bend = MIDI1ParameterNumber(kind: .registered, msb: 0, lsb: 0)
+        let update = MIDI1StateUpdate(channel: 16, effect: .parameter(bend, value: 12 << 7))
+        #expect(landed.map(\.outcome) == [.applied(update)])
+        #expect(Self.state(registry, 2)?.channels.last?.parameters.isEmpty == true)
+        #expect(registry.snapshot.sources.map(\.state.policy) == [.standard, unpaired])
+    }
+
     @Test func aMessageSplitAtEveryByteBoundaryEqualsOnePacket() throws {
         let messages: [[UInt8]] = [
             Self.noteOn(1, 60), [0xC0, 5], [0xF0, 1, 2, 3, 0xF7], [0xF2, 1, 2],
