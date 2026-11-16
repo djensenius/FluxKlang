@@ -168,9 +168,11 @@ extension ProjectStagingTests {
             #expect(mkdir(graphs.path, 0o755) == 0)
         }
         let result = Self.diskExport(try Fixture.plan(.createNew), try Fixture.big("new"), &disk)
-        #expect(Fixture.refusal(result) == .ioFailed(step: .writeEntry, fault: .changed, cleanup: .removed))
+        // Cleanup refuses the replaced recorded directory too, so the impostor (and the tree) is left behind.
+        #expect(Fixture.refusal(result) == .ioFailed(step: .writeEntry, fault: .changed, cleanup: .leftBehind))
         #expect(try Self.diskNames(aside).isEmpty)
-        #expect(try Self.diskNames(volume).isEmpty)
+        #expect(try Self.diskNames(volume) == [Fixture.staging])
+        #expect(try Self.diskNames(graphs).isEmpty)
     }
 
     @Test func stagingSubdirectorySwappedForSymlinkIsRefused() throws {
@@ -187,11 +189,12 @@ extension ProjectStagingTests {
             #expect(symlink(outside.path, graphs.path) == 0)
         }
         let result = Self.diskExport(try Fixture.plan(.createNew), try Fixture.big("new"), &disk)
-        #expect(Fixture.refusal(result) == .ioFailed(step: .writeEntry, fault: .changed, cleanup: .removed))
-        // The link was unlinked by cleanup, never followed: its target survives, still empty.
+        #expect(Fixture.refusal(result) == .ioFailed(step: .writeEntry, fault: .changed, cleanup: .leftBehind))
+        // Cleanup refuses the link in place of a recorded directory: it is neither followed nor removed.
         #expect(try Self.diskNames(outside).isEmpty)
         #expect(try Self.diskNames(aside).isEmpty)
-        #expect(try Self.diskNames(volume).isEmpty)
+        #expect(try Self.diskNames(volume) == [Fixture.staging])
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: graphs.path) == outside.path)
     }
 
     @Test func replacedVolumeRootIsRefused() throws {

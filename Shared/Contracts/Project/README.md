@@ -229,9 +229,10 @@ path's UTF-8 bytes, so an alias spelling (case or Unicode normalisation) is
 treated as unrecorded. Every listing reads through a fresh descriptor. Files
 are created exclusively and `fsync`ed, directories are synced with `fsync` (not
 `F_FULLFSYNC`), and `rename` uses `renameatx_np(RENAME_EXCL)`, so it never
-replaces. `removeTree` never follows a link, never removes a recorded directory
-whose identity changed, and counts the whole tree within the package limits
-before it removes anything.
+replaces. `removeTree` never follows a link, never removes (or descends into)
+a recorded directory whose identity changed, never crosses onto another device
+(`.crossVolume`), and counts and checks the whole tree within the package
+limits before it removes anything.
 
 Non-goals:
 - It detects concurrent mutation; it does not prevent it. A change between a

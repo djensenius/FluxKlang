@@ -132,4 +132,172 @@ extension ProjectStagingTests {
         #expect(alias == nil || alias?.kind == .directory)
         #expect(try Self.diskNames(volume).count == 1)
     }
+
+    // MARK: removeTree descendant checks
+
+    /// `staging` and `staging/graphs`, both recorded by `makeDirectory`, holding `manifest` and `graphs/main.json`.
+    private static func diskTree(_ disk: DiskStagingFileSystem, _ volume: URL) throws {
+        try disk.makeDirectory(at: "staging")
+        try disk.makeDirectory(at: "staging/graphs")
+        try Data([1]).write(to: volume.appendingPathComponent("staging/manifest"))
+        try Data([2]).write(to: volume.appendingPathComponent("staging/graphs/main.json"))
+    }
+
+    /// Moves the recorded `staging/graphs` to `away` and makes a new `staging/graphs` holding `sentinel`.
+    private static func replaceGraphs(_ volume: URL) throws {
+        let graphs = volume.appendingPathComponent("staging/graphs", isDirectory: true)
+        try FileManager.default.moveItem(at: graphs, to: volume.appendingPathComponent("away", isDirectory: true))
+        try FileManager.default.createDirectory(at: graphs, withIntermediateDirectories: false)
+        try Data([3]).write(to: graphs.appendingPathComponent("sentinel"))
+    }
+
+    /// Every file of `diskTree` after `replaceGraphs` is still present.
+    private static func expectReplacedTreeIntact(_ volume: URL) throws {
+        #expect(try Self.diskNames(volume) == ["away", "staging"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging")) == ["graphs", "manifest"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging/graphs")) == ["sentinel"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("away")) == ["main.json"])
+    }
+
+    @Test func removeTreeRefusesReplacedRecordedDescendantBeforeRemoving() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let disk = try Self.disk(volume)
+        try Self.diskTree(disk, volume)
+        try Self.replaceGraphs(volume)
+        var phases: [DiskStagingTreePhase] = []
+        disk.treeVisitHookForTesting = { phase, _ in
+            phases.append(phase)
+            return nil
+        }
+
+        #expect(throws: StagingIOFault.changed) { try disk.removeTree(at: "staging") }
+        #expect(phases.contains(.count))
+        #expect(!phases.contains(.remove))
+        try Self.expectReplacedTreeIntact(volume)
+    }
+
+    @Test func removeTreeRechecksRecordedDescendantWhileRemoving() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let disk = try Self.disk(volume)
+        try Self.diskTree(disk, volume)
+        var replaced = false
+        disk.treeVisitHookForTesting = { phase, path in
+            if phase == .remove, path == "staging/graphs", !replaced {
+                replaced = true
+                #expect(throws: Never.self) { try Self.replaceGraphs(volume) }
+            }
+            return nil
+        }
+
+        #expect(throws: StagingIOFault.changed) { try disk.removeTree(at: "staging") }
+        #expect(replaced)
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging/graphs")) == ["sentinel"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("away")) == ["main.json"])
+    }
+
+    @Test func diskDeviceAndRecordAdmission() {
+        var info = stat()
+        info.st_dev = 7
+        info.st_ino = 9
+        info.st_mode = S_IFDIR | 0o755
+        #expect(throws: Never.self) { try DiskStagingFileSystem.admitDevice(info, root: 7) }
+        #expect(throws: StagingIOFault.crossVolume) { try DiskStagingFileSystem.admitDevice(info, root: 8) }
+
+        let recorded = [Array("s/g".utf8): ProjectPackageDirectoryIdentity(info)]
+        var other = info
+        other.st_ino = 10
+        var file = info
+        file.st_mode = S_IFREG | 0o644
+        #expect(throws: Never.self) { try DiskStagingFileSystem.admitRecorded(info, path: "s/g", recorded: recorded) }
+        #expect(throws: Never.self) { try DiskStagingFileSystem.admitRecorded(other, path: "s/h", recorded: recorded) }
+        #expect(throws: StagingIOFault.changed) {
+            try DiskStagingFileSystem.admitRecorded(other, path: "s/g", recorded: recorded)
+        }
+        #expect(throws: StagingIOFault.changed) {
+            try DiskStagingFileSystem.admitRecorded(file, path: "s/g", recorded: recorded)
+        }
+    }
+
+    /// Runs `removeTree("staging")` with `staging/graphs/main.json` reported on another device in `foreignIn`.
+    private static func removeWithForeignFile(
+        _ volume: URL, foreignIn: [DiskStagingTreePhase]
+    ) throws -> [DiskStagingTreePhase] {
+        let disk = try Self.disk(volume)
+        try Self.diskTree(disk, volume)
+        let device = try #require(try disk.status(at: "")).volume
+        let foreign = dev_t(truncatingIfNeeded: device &+ 1)
+        var phases: [DiskStagingTreePhase] = []
+        disk.treeVisitHookForTesting = { phase, path in
+            phases.append(phase)
+            return foreignIn.contains(phase) && path == "staging/graphs/main.json" ? foreign : nil
+        }
+        #expect(throws: StagingIOFault.crossVolume) { try disk.removeTree(at: "staging") }
+        return phases
+    }
+
+    @Test func removeTreeRefusesForeignDeviceBeforeRemoving() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let phases = try Self.removeWithForeignFile(volume, foreignIn: [.count, .remove])
+        #expect(phases.contains(.count))
+        #expect(!phases.contains(.remove))
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging")) == ["graphs", "manifest"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging/graphs")) == ["main.json"])
+    }
+
+    @Test func removeTreeRechecksDeviceWhileRemoving() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let phases = try Self.removeWithForeignFile(volume, foreignIn: [.remove])
+        #expect(phases.contains(.remove))
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging/graphs")) == ["main.json"])
+    }
+
+    @Test func removeTreeRefusesRemovalRootOffStagingVolume() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let disk = try Self.disk(volume)
+        try Self.diskTree(disk, volume)
+        let device = try #require(try disk.status(at: "")).volume
+        var phases: [DiskStagingTreePhase] = []
+        // `staging` stands in for a mount point: its own status reports a foreign device. (Its descendants keep their
+        // real device, so without the root check the walk would pass and remove everything.)
+        disk.treeVisitHookForTesting = { phase, _ in
+            phases.append(phase)
+            return phase == .root ? dev_t(truncatingIfNeeded: device &+ 1) : nil
+        }
+
+        #expect(throws: StagingIOFault.crossVolume) { try disk.removeTree(at: "staging") }
+        #expect(phases == [.root])
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging")) == ["graphs", "manifest"])
+        #expect(try Self.diskNames(volume.appendingPathComponent("staging/graphs")) == ["main.json"])
+    }
+
+    @Test func removeTreeRefusesDirectorySwappedBeforeOpening() throws {
+        let scratch = try Self.diskScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let volume = Self.diskVolume(scratch)
+        let disk = try Self.disk(volume)
+        try Self.diskTree(disk, volume)
+        var phases: [DiskStagingTreePhase] = []
+        disk.treeVisitHookForTesting = { phase, path in
+            if phase == .countOpen, path == "staging/graphs", !phases.contains(.countOpen) {
+                #expect(throws: Never.self) { try Self.replaceGraphs(volume) }
+            }
+            phases.append(phase)
+            return nil
+        }
+
+        #expect(throws: StagingIOFault.changed) { try disk.removeTree(at: "staging") }
+        #expect(phases.contains(.countOpen))
+        #expect(!phases.contains(.remove))
+        try Self.expectReplacedTreeIntact(volume)
+    }
 }

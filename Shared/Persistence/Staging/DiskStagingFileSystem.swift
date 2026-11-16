@@ -34,7 +34,11 @@ enum DiskStagingOperation: Sendable, Equatable {
 ///   `F_FULLFSYNC`. `rename` is `renameatx_np(RENAME_EXCL)`, so it never replaces; `EXDEV` is `.crossVolume`.
 /// - `removeTree` never follows a link and never removes a recorded directory whose identity changed. A directory is
 ///   first counted (at most `maxEntries + 1` nodes, the manifest included, and `maxDepth` levels beneath it, otherwise
-///   `.tooManyEntries` with nothing removed), then removed bottom-up under the same bound.
+///   `.tooManyEntries` with nothing removed), then removed bottom-up under the same bound. The removal root must be on
+///   the staging volume's device and every descendant on the removal root's device (else `.crossVolume`); every
+///   recorded descendant must still be the directory it was and every opened directory the one just stat'ed (else
+///   `.changed`). So a mount point or a replaced directory is refused by the count before anything is deleted, and
+///   again before each removal.
 /// - Errors: `ENOSPC`/`EDQUOT` are `.noSpace`; `EACCES`/`EPERM`/`EROFS` `.denied`; `EEXIST`/`ENOTEMPTY` `.exists`;
 ///   `ENOENT` `.notFound`; `EXDEV` `.crossVolume`; anything else `.ioError`. Nothing reports `.interrupted`: only the
 ///   `pread` loop retries `EINTR`; any other call that sees it surfaces `.ioError` (rare on Darwin for local files).
@@ -51,6 +55,10 @@ final class DiskStagingFileSystem: StagingFileSystem {
     /// Test-only interleaving point: fires with the primitive and its (source) path after the lexical path check and
     /// before any IO or identity check. Nil in production.
     var operationHookForTesting: ((DiskStagingOperation, String) -> Void)?
+    /// Test-only `removeTree` interleaving point: fires with the walk point (`DiskStagingTreePhase`) and a path; at
+    /// `.root`, `.count` and `.remove` a non-nil result stands in for that node's observed device (`st_dev`), at the
+    /// open points it is ignored. Nil in production.
+    var treeVisitHookForTesting: ((DiskStagingTreePhase, String) -> dev_t?)?
     let limits: ProjectPackageLimits
     private let root: ProjectPackageWriteRoot
     /// Keyed by the path's UTF-8 bytes, like `StagingPlan.isWithin`, so lookups and `forget` agree on spelling.
@@ -177,7 +185,11 @@ final class DiskStagingFileSystem: StagingFileSystem {
         guard let parent = try openChain(leaf.parent) else { throw .notFound }
         defer { Darwin.close(parent) }
         guard let info = try leafStatus(parent, leaf.name, path: path) else { throw .notFound }
-        try Self.removeNode(leaf.name, info, in: parent, limits: limits)
+        // The removal root must be on the staging volume, so a mount point is refused before anything is removed.
+        var observed = info
+        if let device = treeVisitHookForTesting?(.root, path) { observed.st_dev = device }
+        try Self.admitDevice(observed, root: root.identity.device)
+        try removeNode(leaf.name, info, in: parent, path: path, recorded: identities)
         forget(path)
     }
 
