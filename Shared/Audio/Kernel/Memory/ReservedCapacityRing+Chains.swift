@@ -81,4 +81,8 @@ extension ReservedCapacityRing {
 
     /// The id of the lane chain this ring raises through (see `FaultChain.id`).
     var laneChainID: UInt64 { laneChain.chain.id }
+
+    /// Control-side: whether this ring's lane chain was minted from `authority` itself (identity, not capacity or
+    /// scopes). `KernelCycle` preparation uses it to check that `KernelCycleParts.faults` is the lanes' authority.
+    func raisesOn(_ authority: FaultChainAuthority) -> Bool { laneChain.authority === authority }
 }

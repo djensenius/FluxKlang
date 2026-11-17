@@ -192,12 +192,18 @@ mint left, or its chain's token was lost) has no counted path and must fall back
   per lane of every handoff built on it. R3: a lane refusal that finds its
   token held latches the sticky contended fault, which latches every scope of
   `faults`, `criticalScope` and so the cycle included; it never clears. D9
-  (wiring check that every raiser goes through the authority) is FLP7c.
+  (wiring check that the cycle's authority is the one the lanes raise on) is
+  FLP7c: `KernelCycle` preparation refuses `.faultsNotLaneAuthority` unless
+  every lane's chain was minted from `parts.faults` itself (identity, not
+  capacity or scopes). It checks the lanes only; it cannot see any other
+  raiser.
 - The cycle's `FaultChainAuthority` (`KernelCycleParts.faults`) must be the one
   the fan-in's lanes were minted from, used only by those lanes: the cycle only
   reads it (`isLatched`, `isObservation`, `acknowledge`) and must never mint
-  chains from it or raise through it, and nothing else may share it (FLP7c
-  checks the wiring; until then it is a caller contract).
+  chains from it or raise through it, and nothing else may share it. FLP7c
+  checks the first part (preparation throws `.faultsNotLaneAuthority`, nothing
+  claimed or issued); the rest (no other minting, raising or sharing) is still a
+  caller contract.
 - Recovery: a contended lane fault never clears, so the cycle stays silenced;
   continuing needs a rebuilt `FanInHandoff`, a fresh `faults` authority and a
   fresh `NoteOwnership`. A refused lane mint (`.laneChainBudgetExhausted`)
