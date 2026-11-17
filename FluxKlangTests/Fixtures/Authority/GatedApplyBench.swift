@@ -31,6 +31,7 @@ actor GatedApplyMinter: WingDirectGrantMinting {
 
     let authority: HostAuthority
     private let parameter: ParameterID
+    private let route: RouteID?
     private(set) var mints: [Mint] = []
     private var refusing: [WingDirectApplyPhase: (refusal: DirectWriteRefusal, mints: Range<Int>)] = [:]
     private var bumpingLive: Set<WingDirectApplyPhase> = []
@@ -39,6 +40,14 @@ actor GatedApplyMinter: WingDirectGrantMinting {
     init(_ authority: HostAuthority, parameter: ParameterID = DirectSendBench.liveParameter) {
         self.authority = authority
         self.parameter = parameter
+        route = nil
+    }
+
+    /// Admits a `.bind(route)` ticket for each phase instead (#62 AU7a).
+    init(_ authority: HostAuthority, route: RouteID) {
+        self.authority = authority
+        parameter = DirectSendBench.liveParameter
+        self.route = route
     }
 
     var phases: [WingDirectApplyPhase] { mints.map(\.phase) }
@@ -70,7 +79,11 @@ actor GatedApplyMinter: WingDirectGrantMinting {
                       targets: [DirectSendTarget]) async -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
         if let refusal = refusing[phase], refusal.mints.contains(index) { return .failure(refusal.refusal) }
         do {
-            let ticket = try await DirectSendBench.ticket(authority, parameter: parameter)
+            let ticket = if let route {
+                try await DirectSendBench.ticket(authority, route: route)
+            } else {
+                try await DirectSendBench.ticket(authority, parameter: parameter)
+            }
             if bumpingLive.contains(phase) {
                 await authority.updateLive(try AuthorityBench.liveState(epoch: try DirectSendBench.nextEpoch()))
             }
