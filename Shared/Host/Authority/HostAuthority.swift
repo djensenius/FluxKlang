@@ -17,8 +17,10 @@ actor HostAuthority {
     static let planCapacity = 64
     /// Outstanding direct-write tickets (#62 AU1).
     static let directWriteCapacity = 64
-    /// Armed direct-send grants (#62 AU2).
+    /// Armed direct-send grants (#62 AU2); a batch grant holds one.
     static let directSendCapacity = 64
+    /// Targets bound to one direct-send grant (#62 AU4).
+    static let directSendBatchLimit = 256
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access
     // from outside the actor: module code may `await` a read of any internal
@@ -112,9 +114,10 @@ actor HostAuthority {
         book.outstandingDirectWriteCount
     }
 
-    /// `HostAuthorityBook.authorizeDirectSend(_:)`: the send runs in the grant's `consume`.
-    func authorizeDirectSend(_ ticket: DirectWriteTicket) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
-        book.authorizeDirectSend(ticket)
+    /// `HostAuthorityBook.authorizeDirectSend(_:targets:)`: each send runs in the grant's `consume`.
+    func authorizeDirectSend(_ ticket: DirectWriteTicket,
+                             targets: [DirectSendTarget]) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
+        book.authorizeDirectSend(ticket, targets: targets)
     }
 
     /// `HostAuthorityBook.outstandingDirectSendCount`: armed send grants.
