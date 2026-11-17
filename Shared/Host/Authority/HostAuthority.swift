@@ -6,8 +6,8 @@
 //  state and every project's activation transaction (#62 H5). Methods never
 //  await. Legacy authorities expose engine commands/reports; prepare-only
 //  authorities instead retain one real pending offline preparation privately.
-//  Refusals preserve state, except `redeemDirect`, which always consumes its
-//  ticket; irreversible faults are explicitly separate results.
+//  Refusals preserve state, except `redeemDirect` and `authorizeDirectSend`, which
+//  always consume their ticket; irreversible faults are explicitly separate results.
 //
 
 actor HostAuthority {
@@ -17,6 +17,8 @@ actor HostAuthority {
     static let planCapacity = 64
     /// Outstanding direct-write tickets (#62 AU1).
     static let directWriteCapacity = 64
+    /// Armed direct-send grants (#62 AU2).
+    static let directSendCapacity = 64
 
     // Access audit (B1, #176 review). Isolation only forbids *synchronous* access
     // from outside the actor: module code may `await` a read of any internal
@@ -28,7 +30,11 @@ actor HostAuthority {
     // `HostProjectState` are not `Sendable` either. The methods below are the
     // whole API; module code reads state only through the inert `snapshot()` and
     // `lifecycle(of:window:)`.
-    private var book: HostAuthorityBook
+    /// Every fence input lives here, and every mutation goes through this setter,
+    /// so a stale send grant is revoked before the method that staled it returns.
+    private var book: HostAuthorityBook {
+        didSet { book.revokeUnredeemableSendGrants() }
+    }
     private let preparationLimits: AudioRoutingLimits?
     private var preparation: PendingPreparation?
     private var preparationLifetime: OwnedPreparationLifetime = .vacant
@@ -95,8 +101,8 @@ actor HostAuthority {
         book.admitDirect(intent, admission: admission, project: project, window: window)
     }
 
-    /// `HostAuthorityBook.redeemDirect(_:)`. Not yet a write fence on its own: a write
-    /// after this call's `await` returns races lease changes (see the book's doc).
+    /// `HostAuthorityBook.redeemDirect(_:)`. Not a write fence on its own: a write
+    /// after this call's `await` returns races lease changes; use `authorizeDirectSend`.
     func redeemDirect(_ ticket: DirectWriteTicket) -> Result<Void, DirectWriteRefusal> {
         book.redeemDirect(ticket)
     }
@@ -104,6 +110,16 @@ actor HostAuthority {
     /// `HostAuthorityBook.outstandingDirectWriteCount`.
     func outstandingDirectWriteCount() -> Int {
         book.outstandingDirectWriteCount
+    }
+
+    /// `HostAuthorityBook.authorizeDirectSend(_:)`: the send runs in the grant's `consume`.
+    func authorizeDirectSend(_ ticket: DirectWriteTicket) -> Result<DirectWriteAuthorization, DirectWriteRefusal> {
+        book.authorizeDirectSend(ticket)
+    }
+
+    /// `HostAuthorityBook.outstandingDirectSendCount`: armed send grants.
+    func outstandingDirectSendCount() -> Int {
+        book.outstandingDirectSendCount
     }
 
     func updateLive(_ state: HostLiveState) {

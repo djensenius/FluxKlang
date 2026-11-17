@@ -152,13 +152,28 @@ Non-goals:
   because creating a mount or a device node requires root.
 - The writer is not an atomic replace, staged export, file-coordination or
   iCloud step, and it does not clean up partial output.
-- The writer does not defend against concurrent mutation of the new
-  destination. It reopens subdirectories by name, and it keeps writing through
-  directory descriptors it already holds, so a subdirectory renamed while the
-  write runs, including one moved outside the destination on the same volume,
-  receives the remaining members wherever it now lives. Discarding the
-  destination does not remove that output. Callers must give the writer a
-  destination no other process mutates until the write returns.
+- The writer detects concurrent mutation of the new destination but does not
+  prevent it. It keeps the destination's parent open and records the device
+  and inode of the destination and of every directory it creates. Before each
+  entry it re-checks the destination's name and re-opens the entry's parent
+  chain from the root with `O_NOFOLLOW|O_DIRECTORY`, comparing each component
+  with its recorded identity. After each entry, and when creating an entry
+  fails, it checks the held parent again by name; a failed create whose
+  parent still matches keeps its own error. After the last entry it re-walks
+  every recorded directory. A replaced, moved, missing or non-directory
+  component, or a link, refuses with `destinationChanged`. Output already
+  written stays where it is: a directory moved outside the destination while
+  the writer held it keeps the member written into it, and discarding the
+  destination does not remove that output. Not covered: a swap between
+  `mkdirat` and the `openat` that records the new directory (Darwin has
+  neither a descriptor-returning `mkdirat` nor `O_BENEATH`), a rename away and
+  back between two checks, files renamed after they are closed, and any
+  emptiness or link-count check for an impostor directory (APFS link counts
+  are not a reliable signal). The device (`st_dev`) half of the identity
+  comparison is verified by code reading only, because the tests run on a
+  single volume.
+  Callers should still give the writer a destination no other process
+  mutates until the write returns.
 
 The reader and writer do not decode project or graph documents; that is the
 next layer.
@@ -199,6 +214,36 @@ checks run before path uniqueness, so input that is both oversized and has a
 duplicate path (a repeated extra, or an extra sharing a document's path) may
 report a size error rather than `duplicatePath`; it is refused either way.
 
-Later slices own writer concurrent-mutation limits, staged export, migration
-and adoption, including packaging legacy imports. Bookmark resolution, document
-lifecycle and activation also remain separate obligations.
+## Staging on a real disk
+
+`DiskStagingFileSystem` runs staged export, import and recovery on a real
+directory. It holds the volume root and its parent open by descriptor and
+re-checks the root's name and identity before every primitive. Paths are
+resolved from the root one `O_DIRECTORY|O_NOFOLLOW` component at a time; an
+empty, `.`, `..` or NUL-containing component is refused with `.denied` before
+any IO, and no link is followed. Directories the adapter creates have their
+device and inode recorded; a recorded directory that is replaced, moved,
+retyped or swapped for a link, a renamed or replaced root, or a link used as
+a path component fails with `StagingIOFault.changed`. Records are keyed by the
+path's UTF-8 bytes, so an alias spelling (case or Unicode normalisation) is
+treated as unrecorded. Every listing reads through a fresh descriptor. Files
+are created exclusively and `fsync`ed, directories are synced with `fsync` (not
+`F_FULLFSYNC`), and `rename` uses `renameatx_np(RENAME_EXCL)`, so it never
+replaces. `removeTree` never follows a link, never removes (or descends into)
+a recorded directory whose identity changed, never crosses onto another device
+(`.crossVolume`), and counts and checks the whole tree within the package
+limits before it removes anything.
+
+Non-goals:
+- It detects concurrent mutation; it does not prevent it. A change between a
+  check and the call it guards is not caught.
+- It is not a file coordinator. A replace is two renames, not an atomic
+  `RENAME_SWAP`; second-volume (`EXDEV`, `st_dev`) behaviour is not exercised
+  by tests.
+- The backup name lies inside the confined root but was never created by the
+  adapter, so it is not identity-checked before it is removed.
+- Nothing in the app uses the adapter yet.
+
+Later slices own migration and adoption, including packaging legacy imports,
+app wiring of staged export and import, and an atomic swap replace. Bookmark
+resolution, document lifecycle and activation also remain separate obligations.
