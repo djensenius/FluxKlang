@@ -2,10 +2,11 @@
 //  JSONFileStore.swift
 //  FluxKlang
 //
-//  Tiny actor that persists Codable values as JSON. Values are mirrored to
-//  iCloud via a `CloudKeyValueStore` so every store syncs across the user's
-//  devices, while a copy in the app's Application Support directory provides an
-//  offline cache and first-run migration. Keeps file I/O off the main actor.
+//  Tiny actor that persists Codable values as JSON. Files on the shipped
+//  `KeyValueAllowlist` are mirrored to iCloud via a `CloudKeyValueStore` so they
+//  sync across the user's devices; other files stay local. A copy in the app's
+//  Application Support directory provides an offline cache and first-run
+//  migration. Keeps file I/O off the main actor.
 //
 
 import Foundation
@@ -88,6 +89,7 @@ actor JSONFileStore {
     }
 
     func load<T: Decodable>(_ type: T.Type, from name: String) -> T? {
+        let cloud = syncedCloud(for: name)
         let cloudData = cloud?.data(forKey: cloudKey(for: name))
         let localData = localData(for: name)
         // Prefer the synced value; on first sync (cloud empty) seed it from any
@@ -118,7 +120,14 @@ actor JSONFileStore {
         // deliberately avoid calling `synchronize()` per write: stores persist on
         // high-frequency interactions (e.g. dragging a spatial source), and the
         // app already synchronises on launch / iCloud change notifications.
-        cloud?.setData(data, forKey: cloudKey(for: name))
+        syncedCloud(for: name)?.setData(data, forKey: cloudKey(for: name))
+    }
+
+    /// The cloud store, only for a file whose key is on the shipped key-value allowlist (#124). Any other file,
+    /// such as the host-local Launch Control XL map, stays a plain local file: never written, read or seeded.
+    private func syncedCloud(for name: String) -> (any CloudKeyValueStore)? {
+        guard let cloud, KeyValueAllowlist.shipped.contains(rawKey: cloudKey(for: name)) else { return nil }
+        return cloud
     }
 
     private func localData(for name: String) -> Data? {

@@ -20,7 +20,7 @@ enum StorageInventory {
         row(.userDefaultsKey, "fluxklang.lastHost", .hostLocalRoute),  // AppModel.lastHostKey, a WING address
         row(.userDefaultsKey, "fluxklang.reconnectAtLaunch", .preference),  // AppModel.reconnectAtLaunchKey
         row(.userDefaultsKey, "org.davidjensenius.FluxKlang.spotlightProtectionClass", .cache),  // FluxKlangEntities
-        // Files that `JSONFileStore` writes and mirrors to key-value storage under `store.<name>`.
+        // Files that `JSONFileStore` writes; only `KeyValueAllowlist` names mirror to `store.<name>`.
         row(.storeFile, "chain.json", .environment),  // EnvironmentStore legacy migration source
         row(.storeFile, "effects.json", .environment),  // EnvironmentStore legacy migration source
         row(.storeFile, "environments.json", .environment),  // EnvironmentStore
