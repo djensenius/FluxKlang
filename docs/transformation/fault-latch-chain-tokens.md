@@ -248,7 +248,10 @@ mint left, or its chain's token was lost) has no counted path and must fall back
 - The contended fallback loses scope, kind, frame and count, and the flag is not
   acknowledgeable. An acknowledgeable variant would need its own epoch protocol.
 - C (`FanInRefusalCounter` users) are not `raise` calls and get nothing here.
-  The same pattern could own a counter's chains, but that is not built.
+  [K-RC1 refusal caller ownership](refusal-caller-ownership.md) adds a separate
+  tested capability prerequisite, not yet required by any counter-writing API.
+  K-RC2 must migrate those APIs and callers; existing conditional contracts
+  remain unenforced. This does not establish counter coverage or app integration.
 - Restart counting per site (how many chains each callback generation mints) is
   the site's job; this slice only bounds the total.
 - The tests exercise the reference model on the test host. They are not
