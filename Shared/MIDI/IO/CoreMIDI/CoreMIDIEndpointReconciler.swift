@@ -9,7 +9,7 @@ struct CoreMIDIEndpointReconciliation: Sendable, Equatable {
         let refs: [UInt32]
     }
 
-    /// The sources that pass the name filter, in enumeration order.
+    /// The sources that pass the name filter and are not explicitly offline, in enumeration order.
     let matched: [CoreMIDIEndpointRecord]
     /// Connected refs that are no longer matched, ascending.
     let toDisconnect: [UInt32]
@@ -34,7 +34,7 @@ struct CoreMIDIEndpointReconciler: Sendable {
     }
 
     func reconcile(_ records: [CoreMIDIEndpointRecord], connected: Set<UInt32>) -> CoreMIDIEndpointReconciliation {
-        let matched = records.filter { matches($0.displayName) }
+        let matched = records.filter { $0.isOffline != true && matches($0.displayName) }
         let matchedRefs = Set(matched.map(\.ref))
         var groups: [(fingerprint: UInt64, refs: [UInt32])] = []
         var groupIndex: [UInt64: Int] = [:]
