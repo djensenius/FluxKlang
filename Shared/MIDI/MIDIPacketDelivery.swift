@@ -15,7 +15,8 @@ struct MIDIPacketBatch: Equatable, Sendable {
     var source: MIDIConnectionToken?
 }
 
-/// One input start's ordered path from the MIDI read thread to the main actor: a bounded `AsyncStream` with a
+/// Legacy copied-packet delivery API (including its waiting contention contract), not the native callback path.
+/// A bounded `AsyncStream` with a
 /// single consumer task that calls `handler` for each batch, in the order `yield` accepted them. Ordering does not
 /// depend on how the main actor schedules separate jobs, because there is only one job. Each `yield` runs under one
 /// lock, so accepted and dropped batches have a single order even when yields overlap, and the first batch accepted
@@ -61,7 +62,7 @@ final class MIDIPacketDelivery {
     /// Safe from any thread, also concurrently; the caller passes copied bytes. False when the batch was dropped
     /// (buffer full) or the delivery has ended. A gap is cleared only by a batch that is enqueued, so it is never lost.
     /// Reading the flag, offering the batch and updating the flag share one lock, so an overlapping yield cannot
-    /// overtake a post-gap batch unmarked. CoreMIDI's one read thread, not the render thread, keeps it uncontended.
+    /// overtake a post-gap batch unmarked. This API may wait; native input instead uses `MIDICallbackIngress`.
     /// No lock-order inversion: `continuation.yield` takes only the stream's internal lock, and nothing takes this
     /// lock while holding that one.
     @discardableResult
