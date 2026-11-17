@@ -387,9 +387,10 @@ final class WingController {
     /// Grant-gated SET (#62 AU3; no app callers yet): `applyDirect` with a batch of
     /// one. The grant must bind `setting.address`, and every call spends the whole
     /// grant, refusals here included, so a refused call never keeps one of the 64
-    /// (`HostAuthority.directSendCapacity`) armed grants.
+    /// (`HostAuthority.directSendCapacity`) armed grants. Success is the one entry
+    /// being sent, not payload equality, which a NaN `.float` would fail.
     func setDirect(_ setting: WingSetting, session: UUID, authorization: DirectWriteAuthorization) async -> Bool {
-        await applyDirect([setting], session: session, authorization: authorization).sent == [setting]
+        await applyDirect([setting], session: session, authorization: authorization).sent.count == 1
     }
 
     /// One entry of a grant-gated batch: the controller checks, then the transport

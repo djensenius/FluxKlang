@@ -51,6 +51,29 @@ extension HostAuthorityTests {
             await controller.disconnect()
         }
 
+        /// Success comes from the outcome, not payload equality: NaN never equals itself.
+        @Test func aNaNSettingThatSendsReportsSuccess() async throws {
+            let authority = try await AuthorityBench.makeAuthority()
+            let transport = DirectSendRecordingTransport()
+            let (controller, session) = try await connected(transport)
+            let fader = WingSetting(address: WingAddress.fader(.channel, 3), value: .float(.nan))
+            let issued = try await grant(authority, settings: [fader])
+
+            #expect(await controller.setDirect(fader, session: session, authorization: issued))
+            let writes = await transport.directWrites
+            try #require(writes.count == 1)
+            #expect(writes[0].address == fader.address)
+            guard case .float(let sent) = writes[0].value else {
+                Issue.record("Expected a float write, got \(writes[0].value)")
+                return
+            }
+            #expect(sent.isNaN)
+            #expect(await transport.directCalls == 1)
+            #expect(!issued.isArmed)
+            #expect(await authority.outstandingDirectSendCount() == 0)
+            await controller.disconnect()
+        }
+
         @Test func aLiveChangeRevokesTheGrantBeforeTheSend() async throws {
             let authority = try await AuthorityBench.makeAuthority()
             let transport = DirectSendRecordingTransport()
