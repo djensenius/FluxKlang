@@ -3,7 +3,7 @@
   "purpose": "source-registration-only",
   "specification": {
     "path": "project.yml",
-    "sha256": "54efecc3bf44b6a6a2b5252b9053a7b06f28d2e3c11076e2db4524826ef723c9",
+    "sha256": "4b65363726f04056d7ccc27e21549e773cea46f09cc278d1d4960286f9f15cf3",
     "review": "REVIEWED"
   },
   "pbxPath": "FluxKlang.xcodeproj/project.pbxproj",
@@ -543,6 +543,8 @@
         "FluxKlangTests/UMPTranslationStreamTests.swift",
         "FluxKlangTests/UMPTranslationStreamTests+Property.swift",
         "FluxKlangTests/UMPTranslationStreamTests+System.swift",
+        "FluxKlangTests/UMPTranslationStreamTests+Driver.swift",
+        "FluxKlangTests/UMPTranslationStreamTests+DriverRemoval.swift",
         "FluxKlangTests/UMPFlexDataTests.swift",
         "FluxKlangTests/UMPFlexDataTests+Text.swift",
         "FluxKlangTests/ProjectLegacyAdoptionTests.swift",
@@ -555,6 +557,7 @@
         "FluxKlangTests/ProjectMigrationTests+Retire.swift",
         "FluxKlangTests/ProjectMigrationTests+RetireCrash.swift",
         "FluxKlangTests/ProjectMigrationTests+RetireRace.swift",
+        "FluxKlangTests/ProjectMigrationTests+Review.swift",
         "FluxKlangTests/PeerReconnectTests.swift",
         "FluxKlangTests/PeerReconnectTests+Epochs.swift",
         "FluxKlangTests/ParameterAutomationTests.swift",
@@ -713,6 +716,7 @@
         "FluxKlangTests/MIDI1UMPInputDecoderTests+SysEx.swift",
         "FluxKlangTests/CoreMIDIAdapterTests.swift",
         "FluxKlangTests/CoreMIDIAdapterTests+Identity.swift",
+        "FluxKlangTests/CoreMIDIAdapterTests+Binding.swift",
         "FluxKlangTests/PatchVariationTests.swift",
         "FluxKlangTests/PatchVariationTests+Recall.swift",
         "FluxKlangTests/PatchVariationTests+Editing.swift",

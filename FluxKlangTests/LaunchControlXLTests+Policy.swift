@@ -31,7 +31,7 @@ extension LaunchControlXLTests {
     }
 
     /// P1: the default is today's profile (`.unpaired`, 4,096-byte SysEx bound, System Reset ignored), on a stream
-    /// of one source bounded at 65,535 bytes, and it keeps the stream when the sources change.
+    /// bounded at 32 sources and 65,535 bytes, and it keeps the shared source when the sources change.
     @Test func defaultPolicyIsTodaysProfile() throws {
         let policy = LaunchControlXLSourcePolicy.default
         #expect(policy.sourceChange == .keep)
@@ -41,7 +41,7 @@ extension LaunchControlXLTests {
         #expect(policy.profile.maximumSysExPayloadBytes == 4_096)
         #expect(policy.profile.systemReset == .ignore)
         let stream = try LaunchControlXLStream.make(profile: policy.profile)
-        #expect(stream.snapshot.maximumSources == 1)
+        #expect(stream.snapshot.maximumSources == 32)
         #expect(stream.snapshot.maximumFeedBytes == 65_535)
         let source = try #require(stream.snapshot.sources.first)
         #expect(source.profile == policy.profile)
@@ -228,18 +228,23 @@ extension LaunchControlXLTests {
     }
 }
 
-/// Keeps every start's sources callback, so a test can invoke one from an earlier start. Like CoreMIDI, `stop()`
-/// reports no sources through the latest callback.
+/// Keeps every start's sources callback, so a test can invoke one from an earlier start. Each callback takes names and
+/// reports them as unresolved sources, one stable token per name. Like CoreMIDI, `stop()` reports no sources through
+/// the latest callback.
 @MainActor
 private final class SourcesRecordingInput: LaunchControlXLInput {
     private(set) var onSourcesChanged: [([String]) -> Void] = []
+    private var tokens = FakeSourceTokens()
 
     func start(
         sourceNameContains: [String],
         onPackets: @escaping @MainActor (MIDIPacketBatch) -> Void,
-        onSourcesChanged: @escaping ([String]) -> Void
+        onSourcesChanged: @escaping ([MIDIConnectedSource]) -> Void
     ) {
-        self.onSourcesChanged.append(onSourcesChanged)
+        self.onSourcesChanged.append { [weak self] names in
+            guard let self else { return }
+            onSourcesChanged(tokens.unresolved(names))
+        }
     }
 
     func stop() {

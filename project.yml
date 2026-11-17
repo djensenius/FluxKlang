@@ -645,6 +645,8 @@ targets:
       - path: FluxKlangTests/UMPTranslationStreamTests.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+Property.swift
       - path: FluxKlangTests/UMPTranslationStreamTests+System.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+Driver.swift
+      - path: FluxKlangTests/UMPTranslationStreamTests+DriverRemoval.swift
       - path: FluxKlangTests/UMPFlexDataTests.swift
       - path: FluxKlangTests/UMPFlexDataTests+Text.swift
       - path: FluxKlangTests/ProjectLegacyAdoptionTests.swift
@@ -657,6 +659,7 @@ targets:
       - path: FluxKlangTests/ProjectMigrationTests+Retire.swift
       - path: FluxKlangTests/ProjectMigrationTests+RetireCrash.swift
       - path: FluxKlangTests/ProjectMigrationTests+RetireRace.swift
+      - path: FluxKlangTests/ProjectMigrationTests+Review.swift
       - path: FluxKlangTests/PeerReconnectTests.swift
       - path: FluxKlangTests/PeerReconnectTests+Epochs.swift
       - path: FluxKlangTests/ParameterAutomationTests.swift
@@ -815,6 +818,7 @@ targets:
       - path: FluxKlangTests/MIDI1UMPInputDecoderTests+SysEx.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests.swift
       - path: FluxKlangTests/CoreMIDIAdapterTests+Identity.swift
+      - path: FluxKlangTests/CoreMIDIAdapterTests+Binding.swift
       - path: FluxKlangTests/PatchVariationTests.swift
       - path: FluxKlangTests/PatchVariationTests+Recall.swift
       - path: FluxKlangTests/PatchVariationTests+Editing.swift
