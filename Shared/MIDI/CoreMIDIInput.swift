@@ -16,6 +16,9 @@ final class CoreMIDIInput: LaunchControlXLInput {
     private var delivery: MIDIPacketDelivery?
     private var onSourcesChanged: (([String]) -> Void)?
     private let auditMirror: ProductionAccessAudit?
+    /// What the last enumeration decided, before CoreMIDI accepted or refused each connection; nil until the first
+    /// one and after `stop()` (#81).
+    private(set) var lastReconciliation: CoreMIDIEndpointReconciliation?
 
     init(mirroring audit: ProductionAccessAudit? = nil) {
         auditMirror = audit
@@ -84,6 +87,7 @@ final class CoreMIDIInput: LaunchControlXLInput {
             MIDIPortDisconnectSource(inputPort, source)
         }
         connectedSources = [:]
+        lastReconciliation = nil
         if inputPort != 0 {
             ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
             MIDIPortDispose(inputPort)
@@ -104,43 +108,21 @@ final class CoreMIDIInput: LaunchControlXLInput {
             ProductionAccessAudit.shared.record(.denied, for: .midiInput, mirroring: auditMirror)
             return
         }
-        ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
-        let available = (0..<MIDIGetNumberOfSources()).compactMap { index -> (MIDIEndpointRef, String)? in
-            ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
-            let source = MIDIGetSource(index)
-            let name = Self.displayName(of: source, mirroring: auditMirror)
-            guard !name.localizedCaseInsensitiveContains("DAW"),
-                  !name.localizedCaseInsensitiveContains("HUI"),
-                  sourceNameContains.contains(where: {
-                name.localizedCaseInsensitiveContains($0)
-            }) else {
-                return nil
-            }
-            return (source, name)
-        }
-        let availableIDs = Set(available.map(\.0))
-        for source in connectedSources.keys where !availableIDs.contains(source) {
+        let records = LiveCoreMIDIEndpointDirectory(auditMirror: auditMirror).sources()
+        let reconciliation = CoreMIDIEndpointReconciler(sourceNameContains: sourceNameContains)
+            .reconcile(records, connected: Set(connectedSources.keys))
+        lastReconciliation = reconciliation
+        for source in reconciliation.toDisconnect {
             ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
             MIDIPortDisconnectSource(inputPort, source)
             connectedSources[source] = nil
         }
-        for (source, name) in available where connectedSources[source] == nil {
+        for record in reconciliation.toConnect where connectedSources[record.ref] == nil {
             ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: auditMirror)
-            guard MIDIPortConnectSource(inputPort, source, nil) == noErr else { continue }
-            connectedSources[source] = name
+            guard MIDIPortConnectSource(inputPort, record.ref, nil) == noErr else { continue }
+            connectedSources[record.ref] = record.displayName
         }
         onSourcesChanged?(connectedSources.values.sorted())
-    }
-
-    nonisolated private static func displayName(
-        of object: MIDIObjectRef, mirroring audit: ProductionAccessAudit?
-    ) -> String {
-        var value: Unmanaged<CFString>?
-        ProductionAccessAudit.shared.record(.apiEntered, for: .midiInput, mirroring: audit)
-        guard MIDIObjectGetStringProperty(object, kMIDIPropertyDisplayName, &value) == noErr else {
-            return "Unknown MIDI source"
-        }
-        return value?.takeRetainedValue() as String? ?? "Unknown MIDI source"
     }
 
     /// The bytes of each non-empty packet, unchanged and in order. Each packet is read in place through CoreMIDI's
