@@ -92,8 +92,10 @@ enum LegacyMigrationArchive {
         return archive(in: &store, projectID: projectID, policy: policy)
     }
 
-    /// The core over a volume whose root is the app directory: recover our own staging name and check the destination.
-    /// Without an archive it reads the sources, builds, stages and re-reads a new one, then reads the sources again.
+    /// The core over a volume whose root is the app directory: it checks the destination first. An existing archive is
+    /// only read, so a leftover staging tree is neither recovered nor hidden behind a recovery fault. Without an
+    /// archive it recovers our own staging name, reads the sources, builds, stages and re-reads a new one, then reads
+    /// the sources again.
     ///
     /// An existing archive is the commit record (rule A): it is validated on its own plus the two draft names, and
     /// the live Home wiring, the USB map and `projectID` are never read or compared; they are evidence only and may
@@ -110,14 +112,14 @@ enum LegacyMigrationArchive {
             return .refused(.staging(error))
         }
         do {
-            _ = try StagingRecovery.recover(plan: plan, in: &store)
-        } catch {
-            return .refused(.recovery(error))
-        }
-        do {
             if try store.status(at: plan.destination) != nil { return existing(plan, policy, &store) }
         } catch {
             return .refused(.staging(.ioFailed(step: .preflight, fault: error, cleanup: .notNeeded)))
+        }
+        do {
+            _ = try StagingRecovery.recover(plan: plan, in: &store)
+        } catch {
+            return .refused(.recovery(error))
         }
         let first = LegacySourceReader.read(in: &store, limits: limits)
         guard let created = create(plan, first, projectID, policy, &store) else { return .nothingToArchive(first) }

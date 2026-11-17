@@ -53,6 +53,9 @@ enum LegacyDraftRetirement {
         case .success(let looked): found = looked
         case .failure(let refusal): return .refused(refusal)
         }
+        if let member = found.member, case .adopted(let draft) = receipt.report.draft, member != draft.original {
+            return .refused(.receiptMismatch)
+        }
         switch launchState(
             member: found.member, original: node(found.names.original), retired: node(found.names.retired)
         ) {
@@ -129,7 +132,8 @@ enum LegacyDraftRetirement {
         let limit = ProjectMigration.entryLimit(policy.packageLimits)
         let original = check(originalName, rootVolume, limit, &store)
         let retired = check(retiredName, rootVolume, limit, &store)
-        if let fault = fault(original) ?? fault(retired) {
+        // The retired name decides: a fault at the original name matters only while nothing is at the retired name.
+        if let fault = fault(retired) ?? (retired == nil ? fault(original) : nil) {
             return .failure(.ioFailed(step: .readSource, fault: fault, cleanup: .notNeeded))
         }
         return .success(Names(rootVolume: rootVolume, limit: limit, original: original, retired: retired))

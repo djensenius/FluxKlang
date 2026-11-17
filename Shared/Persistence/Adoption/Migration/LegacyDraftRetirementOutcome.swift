@@ -32,6 +32,8 @@ enum LegacyDraftRetirementRefusal: Error, Sendable, Equatable {
     case draftChanged
     /// The retired name is taken by another node; both are left as they are.
     case retiredNameOccupied
+    /// The receipt's draft is not the draft the archive holds; nothing was changed.
+    case receiptMismatch
     /// The archive cannot be read as a package.
     case archiveUnreadable
     /// A status, read, rename or sync failed, or the retired file did not read back as the draft.

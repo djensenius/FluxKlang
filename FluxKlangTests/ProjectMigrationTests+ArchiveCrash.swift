@@ -224,6 +224,24 @@ extension ProjectMigrationTests {
         #expect(Archive.untouched(store) == Archive.untouched(start))
     }
 
+    /// An existing archive is only read: a leftover staging tree is neither removed nor reported as a recovery fault.
+    /// The recovery of a leftover without an archive is covered by `archiveNeverMutatesALegacyName` and
+    /// `recoveryFaultIsRefusedWithOriginalsKept`.
+    @Test
+    func existingArchiveLeavesAStagingTreeAlone() throws {
+        let (archived, receipt) = try Retire.archived()
+        var store = archived
+        store.seedDirectory(Archive.staging)
+        store.seedFile(Archive.staging + "/leftover", Data([1]))
+        let before = store.nodes
+        store.arm()
+        let mark = store.log.count
+        #expect(Retire.alreadyArchived(try Archive.run(&store)) == receipt)
+        #expect(Retire.writes(store, since: mark).isEmpty)
+        #expect(store.nodes == before)
+        #expect(store.shapes(at: Archive.staging).count == 2)
+    }
+
     /// Limits the reader accepts (every file is small) but the package refuses (too few entries): nothing is written.
     @Test
     func assemblyRefusalWritesNothing() throws {
@@ -242,15 +260,15 @@ extension ProjectMigrationTests {
         #expect(store.nodes == start.nodes)
     }
 
-    /// The archive's own status of its destination (after recovery's) faults: refused before any write.
+    /// The archive's own status of its destination (now the first operation, before recovery) faults: refused before
+    /// any write.
     @Test
     func destinationStatusFaultIsRefusedBeforeAnyWrite() throws {
         let start = Legacy.volume()
         let (log, _) = try cleanRun(start)
-        let statuses = log.indices.filter { log[$0].operation == .status(Archive.destination) }
-        #expect(statuses.count >= 2)
+        let status = try #require(log.firstIndex { $0.operation == .status(Archive.destination) })
         var store = start
-        store.arm(.fault(.ioError, at: try #require(statuses.dropFirst().first)))
+        store.arm(.fault(.ioError, at: status))
         let refusal = StagingRefusal.ioFailed(step: .preflight, fault: .ioError, cleanup: .notNeeded)
         #expect(try Archive.run(&store) == .refused(.staging(refusal)))
         #expect(store.mutations.isEmpty)

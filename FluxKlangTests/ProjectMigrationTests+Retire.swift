@@ -293,6 +293,92 @@ extension ProjectMigrationTests {
         #expect(store.log.dropFirst(mark).allSatisfy { !$0.operation.isMutating })
     }
 
+    // MARK: Receipt and faults
+
+    /// A receipt minted for draft A must not retire draft B, even when the archive and the live draft were both
+    /// replaced by B's. The matching receipt still retires.
+    @Test
+    func staleReceiptDoesNotRetireAnotherDraft() throws {
+        let (_, stale) = try Retire.archived()
+        let other = try Retire.archived([
+            Legacy.connections: Fixture.connectionsBytes, Legacy.usbMap: Fixture.usbMapBytes,
+            Legacy.draft: Retire.otherDraft
+        ])
+        var store = other.store
+        let before = store.nodes
+        let mark = store.log.count
+        #expect(stale != other.receipt)
+        #expect(try Retire.run(stale, &store) == .refused(.receiptMismatch))
+        #expect(Retire.writes(store, since: mark).isEmpty)
+        #expect(store.nodes == before)
+        #expect(store.nodes[Retire.retired] == nil)
+        #expect(store.nodes[Legacy.draft] != nil)
+        #expect(try Retire.run(other.receipt, &store) == .retired)
+    }
+
+    /// The first operation on the original draft name while running `run` over `start`: the one to fault.
+    private func originalNameIndex(
+        _ start: InMemoryStagingFileSystem, _ run: (inout InMemoryStagingFileSystem) throws -> Void
+    ) throws -> Int {
+        var probe = start
+        probe.arm()
+        let mark = probe.log.count
+        try run(&probe)
+        return try #require(probe.log.dropFirst(mark).firstIndex {
+            switch $0.operation {
+            case .status(let path), .read(let path, _, _): path == Legacy.draft
+            default: false
+            }
+        }.map { $0 - mark })
+    }
+
+    /// The retired name decides: a read fault at the original name does not defeat a retired file that holds the
+    /// archived draft, but it is still a fault while the retired name is free, and another occupant stays occupied.
+    @Test
+    func originalNameFaultYieldsToTheRetiredName() throws {
+        let archived = try Retire.archived()
+        let receipt = archived.receipt
+        var retired = archived.store
+        #expect(try Retire.run(receipt, &retired) == .retired)
+        retired.seedFile(Legacy.draft, Retire.otherDraft)
+        let policy = try Archive.policy()
+        let refusal = LegacyDraftRetirementRefusal.staging(
+            .ioFailed(step: .readSource, fault: .denied, cleanup: .notNeeded)
+        )
+
+        // (a) The archived draft is at the retired name: done, whatever the original name does.
+        let retire = try originalNameIndex(retired) { _ = try Retire.run(receipt, &$0) }
+        var store = retired
+        store.arm(.fault(.denied, at: retire))
+        #expect(try Retire.run(receipt, &store) == .alreadyRetired)
+        let state = try originalNameIndex(retired) { _ = LegacyDraftRetirement.state(
+            member: Fixture.draftBytes, in: &$0, policy: policy
+        ) }
+        store = retired
+        store.arm(.fault(.denied, at: state))
+        let launch = LegacyDraftRetirement.state(member: Fixture.draftBytes, in: &store, policy: policy)
+        #expect(try launch.get() == .retired)
+        let archive = try originalNameIndex(retired) { _ = try Archive.run(&$0) }
+        store = retired
+        store.arm(.fault(.denied, at: archive))
+        #expect(Retire.alreadyArchived(try Archive.run(&store)) == receipt)
+
+        // (b) The retired name is free: the fault is not swallowed.
+        var free = archived.store
+        let freeIndex = try originalNameIndex(free) { _ = try Retire.run(receipt, &$0) }
+        free.arm(.fault(.denied, at: freeIndex))
+        let freeBefore = free.nodes
+        #expect(try Retire.run(receipt, &free) == .refused(refusal))
+        #expect(free.nodes == freeBefore)
+
+        // (c) The retired name holds other bytes: occupied, not a fault.
+        var occupied = archived.store
+        occupied.seedFile(Retire.retired, Retire.otherDraft)
+        let occupiedIndex = try originalNameIndex(occupied) { _ = try Retire.run(receipt, &$0) }
+        occupied.arm(.fault(.denied, at: occupiedIndex))
+        #expect(try Retire.run(receipt, &occupied) == .refused(.retiredNameOccupied))
+    }
+
     /// Every combination of the original and the retired name, with and without an archived draft.
     @Test
     func launchStateTable() {
