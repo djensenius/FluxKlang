@@ -99,7 +99,9 @@ project regeneration.
 The single instance follows the pattern `AppModel` already uses: a lazily initialized `private static let`
 construction read through a computed `static var shared` (`Shared/Views/App/AppModel+StoreLifecycle.swift:24-38`).
 The initializer stays internal so tests can build isolated owners with an injected `HostID`; only `shared` is used
-in production, and AU7c is its only production caller.
+in production. AU8b may lazily access it for permission gestures only; AU7c owns lifecycle, window and session
+composition. Production permission producers use the process-wide `HostUserPermissionOwner` facade. Its report
+is historical outcome/last-checked presence only, never authority; canonical APIs remain callable internally.
 
 ## 5. Lifecycle sequences
 
