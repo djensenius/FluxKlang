@@ -65,6 +65,17 @@ internal initializer takes another allocator so tests can reach the bound;
 production uses only the process allocator, and identities are unique per
 allocator.
 
+Batch minting and ownership checks (FLP7a, groundwork for FLP7b's per-lane S4
+chains). `mintChains(count:)` is all or nothing: under one lock it checks
+`1 <= count <= chainBudget - minted`, then adds `count`, and allocates the
+chains (consecutive ids) after the lock; a refusal returns `nil` and spends
+nothing. `mintChain()` is `mintChains(count: 1)?.first`. Both are control-side
+only (`Mutex`, allocation). `issued(_:)` is `true` only for a chain this
+authority minted (exact within one identity allocator; production uses only
+the process allocator), and `isObservation(_:)` only for an observation of its latch
+(`FaultObservation.isObservation(of:)`), so callers can check ownership without
+the latch being exposed.
+
 ## 3. Why the Raise-context contract holds
 
 Scope of the argument: every `FaultLatch.raise` on an authority's latch, which
@@ -125,8 +136,9 @@ budget must fail closed (section 5), never recycle.
   allocation, no retry loop, no blocking at the source level.
 - `isLatched`: `FaultLatch.isLatched` (one acquiring load), then one acquiring
   load of the flag (section 5 gives the order).
-- Minting, `pending`, `observe` and `acknowledge` take a `Mutex` and stay on
-  control. Minting also allocates.
+- `issued`, `isObservation`: one identity comparison; no locks, no allocation.
+- Minting (`mintChain`, `mintChains`), `pending`, `observe` and `acknowledge`
+  take a `Mutex` and stay on control. Minting also allocates.
 - Not checked here: `@_noAllocation`/`@_noLocks` on these paths, ARC
   retain/release on the class references at `-Onone`, and target lowering of
   the atomics. As for `FaultLatch` (Progress), they stay unqualified for #64.
@@ -243,3 +255,12 @@ FLP6 adds `FanInClaimChaining` and `FanInClaimChainingStress`
   scope;
 - a `Thread` stress of overlapping refused claims where counted plus contended equals
   refused.
+
+FLP7a adds, in `FaultChaining` and `FaultChainingStress`: `batchMintIsAllOrNothing`,
+`batchMintRejectsNonPositiveCount`, `batchMintIdsAreConsecutiveAndOwned`,
+`issuedRejectsForeignChain`, `isObservationRejectsTwinAuthority`, and the stress
+test `concurrentBatchMintsNeverOvershootBudget` (racing batch mints never
+overshoot the budget, and the grants are exactly ids `1...mintedChains`).
+`ReservedRingValidation.validateRefusesExactlyWhatInitRefuses` pins
+`ReservedCapacityRing.validate(_:)`, the ring init's pure policy checks that
+FLP7b can run before minting, to the init's refusals.

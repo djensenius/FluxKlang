@@ -16,10 +16,11 @@ private let faultChainAuthorityIdentities = FanInIdentityAllocator()
 /// authority can exist for that latch, and every raise on it goes through a minted chain's token
 /// (`raise(_:_:_:frame:)`) or the contended fallback (`raiseContended()`), never through `FaultLatch.raise` directly.
 ///
-/// Bounded minting. `mintChain()` is control-side (lock, allocation). Each success permanently consumes one unit of
-/// `chainBudget`, fixed at creation and at most `maximumChainBudget` (2^16). Nothing returns a unit: dropping a chain
-/// or its token does not, and a dropped token leaves its chain empty for good. So over the latch's lifetime at most
-/// `chainBudget` chains can ever raise on it, including raises on unprepared scopes (`unknownScopeFaults`).
+/// Bounded minting. `mintChain()` and `mintChains(count:)` are control-side (lock, allocation). Each minted chain
+/// permanently consumes one unit of `chainBudget`, fixed at creation and at most `maximumChainBudget` (2^16). Nothing
+/// returns a unit: dropping a chain or its token does not, and a dropped token leaves its chain empty for good. So
+/// over the latch's lifetime at most `chainBudget` chains can ever raise on it, including raises on unprepared scopes
+/// (`unknownScopeFaults`).
 ///
 /// Contended fallback. A context whose `take()` finds its chain's slot empty must not raise on the counted path. It
 /// calls `raiseContended()`, one idempotent releasing store of a sticky flag that has no scope: observers treat it as
@@ -77,16 +78,31 @@ final class FaultChainAuthority: Sendable {
     /// Control-side only: takes a lock and allocates. A new chain whose slot holds its token, or `nil` once
     /// `chainBudget` chains have been minted. A refusal is final: units are never recycled.
     func mintChain() -> FaultChain? {
-        let chain: UInt64? = minted.withLock { count in
-            guard count < chainBudget else { return nil }
-            count &+= 1
-            return UInt64(count)
+        mintChains(count: 1)?.first
+    }
+
+    /// Control-side only: takes a lock and allocates. All or nothing: `count` new chains with consecutive ids, each
+    /// slot holding its token, or `nil` (spending nothing) when `count < 1` or fewer than `count` units remain.
+    func mintChains(count: Int) -> [FaultChain]? {
+        let first: Int? = minted.withLock { minted in
+            // `minted <= chainBudget <= maximumChainBudget`, so the subtraction cannot overflow.
+            guard count >= 1, count <= chainBudget - minted else { return nil }
+            defer { minted += count }
+            return minted + 1
         }
-        return chain.map { FaultChain(authority: identity, id: $0) }
+        guard let first else { return nil }
+        return (first..<first + count).map { FaultChain(authority: identity, id: UInt64($0)) }
     }
 
     /// Chains minted so far (control-side).
     var mintedChains: Int { minted.withLock { $0 } }
+
+    /// Any context: `true` only for a chain this authority minted (identities are unique per allocator).
+    func issued(_ chain: FaultChain) -> Bool { chain.authority == identity }
+
+    /// Any context: `true` only for an observation of this authority's latch (`FaultObservation.isObservation(of:)`).
+    /// The latch itself stays private.
+    func isObservation(_ observation: FaultObservation) -> Bool { observation.isObservation(of: latch) }
 
     /// Hot path: `FaultLatch.raise` on behalf of `token`'s chain, with the same status and effects. Exclusive
     /// (`inout`) access to the only token of a chain makes the chain's raises non-reentrant. A token from another
@@ -129,7 +145,7 @@ final class FaultChainAuthority: Sendable {
 }
 
 /// One logical raise chain of a `FaultChainAuthority`: a slot holding the chain's only token while no context holds
-/// it. Allocated only by `mintChain()`. Reference model; not RT-certified.
+/// it. Allocated only by `mintChains(count:)`. Reference model; not RT-certified.
 ///
 /// Invariant: the slot holds `id` only when no token of this chain exists, and at most one token exists, because
 /// only `take()` makes one, only from a full slot, and tokens cannot be copied. The converse does not hold: a dropped
