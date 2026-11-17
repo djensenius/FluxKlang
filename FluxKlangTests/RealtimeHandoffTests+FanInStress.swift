@@ -289,7 +289,8 @@ extension RealtimeHandoffTests {
             let faults = try Root.fanInLatch()
             let handoff = try FanInHandoff<FanStamp>(
                 policy: Root.fanInPolicy(lanes: producers, laneCapacity: 32), laneCapacity: 32, reserved: 16,
-                faults: faults, criticalScope: Root.fanInCriticalScope, producerSlotsScope: Root.fanInSlotsScope)
+                faults: faults, claimFaults: Root.fanInClaims(), criticalScope: Root.fanInCriticalScope,
+                producerSlotsScope: Root.fanInSlotsScope)
             let produced = Slots<ProducerReport>(producers)
             let consumed = Slots<ConsumerReport>(1)
             var workers: [@Sendable (StressRun) -> Void] = (0..<producers).map { producer in
@@ -360,9 +361,11 @@ extension RealtimeHandoffTests {
             let claimers = 6
             let blocksEach = 400
             let faults = try Root.fanInLatch()
+            let claims = try Root.fanInClaims()
             let handoff = try FanInHandoff<FanStamp>(
                 policy: Root.fanInPolicy(lanes: lanes, laneCapacity: 20), laneCapacity: 20, reserved: 16,
-                faults: faults, criticalScope: Root.fanInCriticalScope, producerSlotsScope: Root.fanInSlotsScope)
+                faults: faults, claimFaults: claims, criticalScope: Root.fanInCriticalScope,
+                producerSlotsScope: Root.fanInSlotsScope)
             let flags = OwnerFlags(lanes)
             let notes = LaneNotes(lanes)
             let churned = Slots<ChurnReport>(claimers)
@@ -420,15 +423,18 @@ extension RealtimeHandoffTests {
             #expect(consumer.finished && consumer.torn == 0 && consumer.interleaved == 0 && consumer.duplicates == 0)
             #expect(consumer.blocks == reports.map(\.blocks) && consumer.blocks.allSatisfy { $0 == blocksEach })
             let refused = reports.reduce(0) { $0 + $1.refusedClaims }
-            print("FanInStress churn blocks \(reports.map(\.blocks)), refused claims \(refused)")
+            let contended = handoff.contendedClaimCount
+            print("FanInStress churn blocks \(reports.map(\.blocks)), refused \(refused), contended \(contended)")
             #expect(handoff.refusedClaimCount == refused && handoff.refusedNotOwnerCount == 0)
-            if refused > 0 {
-                #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)?.kind == .producerSlotsExhausted)
-                #expect(Root.fanInRecord(faults, Root.fanInSlotsScope)?.count == refused)
-            } else {
-                #expect(!faults.isLatched(Root.fanInSlotsScope))
+            // Each refused claim raised once through the claim chain or, finding its token held by another refused
+            // claim, latched the claim authority's contended fault instead.
+            let counted = Root.fanInRecord(claims, Root.fanInSlotsScope)?.count ?? 0
+            #expect(counted + contended == refused && claims.hasContendedFault == (contended > 0))
+            if counted > 0 {
+                #expect(Root.fanInRecord(claims, Root.fanInSlotsScope)?.kind == .producerSlotsExhausted)
             }
-            #expect(!faults.isLatched(Root.fanInCriticalScope))
+            #expect(claims.isLatched(Root.fanInSlotsScope) == (refused > 0))
+            #expect(!faults.isLatched(Root.fanInSlotsScope) && !faults.isLatched(Root.fanInCriticalScope))
             #expect((0..<lanes).compactMap { _ in handoff.claimProducer() }.count == lanes)
         }
 
