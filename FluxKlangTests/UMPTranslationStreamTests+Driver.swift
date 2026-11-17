@@ -47,10 +47,15 @@ private final class FakeTimer: UMPTranslationStreamTimer, @unchecked Sendable {
 
 private final class FakeSink: @unchecked Sendable {
     private let lock = NSLock()
-    private var batches: [[UMPMIDI2ChannelVoice]] = []
+    private var batches: [(stream: UMPTranslationStreamID, messages: [UMPMIDI2ChannelVoice])] = []
 
-    var received: [[UMPMIDI2ChannelVoice]] { lock.withLock { batches } }
-    func append(_ batch: [UMPMIDI2ChannelVoice]) { lock.withLock { batches.append(batch) } }
+    /// The messages of each flush, in the order sent.
+    var received: [[UMPMIDI2ChannelVoice]] { lock.withLock { batches.map(\.messages) } }
+    /// The stream ID of each flush, in the order sent.
+    var streams: [UMPTranslationStreamID] { lock.withLock { batches.map(\.stream) } }
+    func append(_ stream: UMPTranslationStreamID, _ batch: [UMPMIDI2ChannelVoice]) {
+        lock.withLock { batches.append((stream, batch)) }
+    }
 }
 
 private struct Fixture {
@@ -61,7 +66,7 @@ private struct Fixture {
 
     init() {
         let sink = self.sink
-        driver = UMPTranslationStreamDriver(clock: clock, timer: timer) { sink.append($0) }
+        driver = UMPTranslationStreamDriver(clock: clock, timer: timer) { sink.append($0, $1) }
     }
 
     /// The test's timer firing: the clock moves to `time`, the timer goes idle, the driver's `fire()` runs.
@@ -99,6 +104,7 @@ extension UMPTranslationStreamTests {
         #expect(fixture.sink.received.isEmpty)
         await fixture.fire(at: 15 * Self.msec)
         #expect(fixture.sink.received == [[try Self.mpe(15)]])
+        #expect(fixture.sink.streams == [Self.one])
         #expect(await fixture.driver.stream(Self.one)?.idleFlushes == 1)
         await fixture.fire(at: 40 * Self.msec)
         #expect(fixture.sink.received.count == 1)
@@ -178,13 +184,16 @@ extension UMPTranslationStreamTests {
         #expect(await fixture.driver.stream(Self.two)?.translator.heldDataEntry != nil)
         await fixture.fire(at: 17 * Self.msec)
         #expect(fixture.sink.received == [[try Self.mpe(15)], [try Self.mpe(20, channel: 1)]])
+        #expect(fixture.sink.streams == [Self.one, Self.two])
         #expect(fixture.timer.armedAt == nil)
     }
 
     @Test func stopCancelsTheTimerReturnsTheHeldMessagesAndLaterFiresSendNothing() async throws {
         let fixture = Fixture()
         try await Self.hold(fixture, Self.one, at: 0)
-        #expect(await fixture.driver.stop() == [try Self.mpe(15)])
+        let stopped = await fixture.driver.stop()
+        #expect(stopped.map(\.stream) == [Self.one])
+        #expect(stopped.map(\.messages) == [[try Self.mpe(15)]])
         #expect(fixture.timer.armedAt == nil)
         #expect(fixture.timer.cancelCount == 1)
         await fixture.fire(at: 50 * Self.msec)
@@ -252,6 +261,8 @@ extension UMPTranslationStreamTests {
         #expect(fixture.timer.armCount == 1)
     }
 
+    /// After `reset` or `endOfStream`, a fire for another stream neither polls this one nor gives it a baseline again,
+    /// so its next event is admitted at its own stamp.
     @Test(arguments: [true, false])
     func resetAndEndOfStreamForgetTheLateFiresBaseline(isReset: Bool) async throws {
         let fixture = Fixture()
@@ -260,7 +271,12 @@ extension UMPTranslationStreamTests {
         #expect(fixture.sink.received == [[try Self.mpe(15)]])
         let flushed = isReset ? await fixture.driver.reset(Self.one) : await fixture.driver.endOfStream(Self.one)
         #expect(flushed.isEmpty)
+        try await Self.hold(fixture, Self.two, at: 25 * Self.msec, value: 20, channel: 1)
+        await fixture.fire(at: 30 * Self.msec)
+        #expect(fixture.sink.streams == [Self.one, Self.two])
+        #expect(await fixture.driver.stream(Self.one)?.lastAcceptedTime == nil)
         try await Self.hold(fixture, Self.one, at: 10 * Self.msec)
+        #expect(await fixture.driver.stream(Self.one)?.lastAcceptedTime == 10 * Self.msec)
         #expect(await fixture.driver.stream(Self.one)?.deadline == 15 * Self.msec)
         #expect(fixture.timer.armedAt == 15 * Self.msec)
     }
@@ -293,6 +309,70 @@ extension UMPTranslationStreamTests {
         let fixture = Fixture()
         try await Self.hold(fixture, Self.two, at: 0, value: 20, channel: 1)
         try await Self.hold(fixture, Self.one, at: 0)
-        #expect(await fixture.driver.stop() == [try Self.mpe(15), try Self.mpe(20, channel: 1)])
+        let stopped = await fixture.driver.stop()
+        #expect(stopped.map(\.stream) == [Self.one, Self.two])
+        #expect(stopped.map(\.messages) == [[try Self.mpe(15)], [try Self.mpe(20, channel: 1)]])
+    }
+
+    /// Two inputs on the same group and channel: the sink and `stop()` keep their flushes apart by stream ID, and
+    /// `stop()` leaves out a stream that held nothing.
+    @Test func flushesOfTwoStreamsOnOneGroupAndChannelCarryTheirStreamIDs() async throws {
+        let fixture = Fixture()
+        let three = UMPTranslationStreamID(3)
+        try await Self.hold(fixture, Self.two, at: 10 * Self.msec, value: 20)
+        try await Self.hold(fixture, Self.one, at: 12 * Self.msec)
+        await fixture.fire(at: 15 * Self.msec)
+        await fixture.fire(at: 17 * Self.msec)
+        #expect(fixture.sink.streams == [Self.two, Self.one])
+        #expect(fixture.sink.received == [[try Self.mpe(20)], [try Self.mpe(15)]])
+        try await Self.hold(fixture, Self.two, at: 20 * Self.msec, value: 21)
+        try await Self.hold(fixture, Self.one, at: 20 * Self.msec, value: 22)
+        _ = try await fixture.driver.receive(.realTime(status: 0xF8), group: UMPGroup(0), stream: three,
+                                             atNanoseconds: 20 * Self.msec)
+        let stopped = await fixture.driver.stop()
+        #expect(stopped.map(\.stream) == [Self.one, Self.two])
+        #expect(stopped.map(\.messages) == [[try Self.mpe(22)], [try Self.mpe(21)]])
+    }
+
+    /// The poll baseline only admits a late event; its stamp still sets the deadline. A CC 6 stamped 18 ms and
+    /// delivered after a poll at 20 ms is held until 23 ms, so a CC 38 stamped 24 ms finds it expired and is late.
+    @Test func aDataEntryStampedBeforeALateFireTimesOutFromItsStamp() async throws {
+        let fixture = Fixture()
+        try await Self.hold(fixture, Self.one, at: 14 * Self.msec)
+        await fixture.fire(at: 20 * Self.msec)
+        #expect(fixture.sink.received == [[try Self.mpe(15)]])
+        try await Self.hold(fixture, Self.one, at: 18 * Self.msec, value: 16)
+        #expect(await fixture.driver.stream(Self.one)?.lastAcceptedTime == 20 * Self.msec)
+        #expect(await fixture.driver.stream(Self.one)?.deadline == 23 * Self.msec)
+        #expect(fixture.timer.armedAt == 23 * Self.msec)
+        let late = try await fixture.driver.receive(Self.control(0, 38, 3), group: UMPGroup(0), stream: Self.one,
+                                                    atNanoseconds: 24 * Self.msec)
+        #expect(late == [.voice(try Self.mpe(16)), .voice(try Self.mpe(16, lsb: 3))])
+        #expect(await fixture.driver.stream(Self.one)?.idleFlushes == 2)
+        #expect(fixture.timer.armedAt == nil)
+    }
+
+    /// A CC 6 and its CC 38 stamped 10 ms and 12 ms still pair when both arrive after a poll at 20 ms. A CC 6 whose
+    /// deadline is already past when it is admitted is armed for at once and sent by the next fire.
+    @Test func aPairStampedBeforeALateFireStillPairsAndAPassedDeadlineIsSentByTheNextFire() async throws {
+        let fixture = Fixture()
+        try await Self.hold(fixture, Self.one, at: 4 * Self.msec)
+        await fixture.fire(at: 20 * Self.msec)
+        #expect(fixture.sink.received == [[try Self.mpe(15)]])
+        try await Self.hold(fixture, Self.one, at: 10 * Self.msec, value: 16)
+        #expect(await fixture.driver.stream(Self.one)?.deadline == 15 * Self.msec)
+        #expect(fixture.timer.armedAt == 15 * Self.msec)
+        let paired = try await fixture.driver.receive(Self.control(0, 38, 3), group: UMPGroup(0), stream: Self.one,
+                                                      atNanoseconds: 12 * Self.msec)
+        #expect(paired == [.voice(try Self.mpe(16, lsb: 3))])
+        #expect(fixture.timer.armedAt == nil)
+        let held = try await fixture.driver.receive(Self.control(0, 6, 17), group: UMPGroup(0), stream: Self.one,
+                                                    atNanoseconds: 13 * Self.msec)
+        #expect(held.isEmpty)
+        #expect(fixture.timer.armedAt == 18 * Self.msec)
+        await fixture.fire(at: 20 * Self.msec)
+        #expect(fixture.sink.received == [[try Self.mpe(15)], [try Self.mpe(17)]])
+        #expect(fixture.sink.streams == [Self.one, Self.one])
+        #expect(await fixture.driver.stream(Self.one)?.idleFlushes == 2)
     }
 }

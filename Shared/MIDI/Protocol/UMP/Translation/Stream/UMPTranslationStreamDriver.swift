@@ -11,8 +11,9 @@ struct UMPTranslationStreamID: Hashable, Sendable {
 ///
 /// The streams read no clock; this driver supplies the time. After every change it arms the timer for the earliest
 /// deadline over all streams, or cancels it when no stream holds a CC 6. When the timer fires, `fire()` polls every
-/// stream at the clock's time and hands what it flushes to `sink`: a timer-driven flush has no caller to return to.
-/// Every other call returns its output to its caller.
+/// stream that holds a CC 6 at the clock's time and hands each non-empty flush to `sink` with its stream's ID, so
+/// streams that share a group and channel stay apart: a timer-driven flush has no caller to return to. Every other
+/// call returns its output to its caller.
 ///
 /// Control or I/O isolation only: the driver allocates and is an actor, so calling it from the audio render thread
 /// is not allowed, and a synchronous call from a render closure does not compile.
@@ -27,11 +28,12 @@ actor UMPTranslationStreamDriver {
     private let clock: any UMPTranslationStreamClock
     private let timer: any UMPTranslationStreamTimer
     private let timeout: UMPTranslationStreamTimeout
-    private let sink: @Sendable ([UMPMIDI2ChannelVoice]) -> Void
+    private let sink: @Sendable (UMPTranslationStreamID, [UMPMIDI2ChannelVoice]) -> Void
     private var streams: [UMPTranslationStreamID: UMPTranslationStream] = [:]
     private var armedAt: UInt64?
     /// Per stream, the time of a timer poll that moved the stream's time baseline forward. An event stamped before
-    /// it is clamped to it, because the timer's poll may run late.
+    /// it is admitted at it, because the timer's poll may run late; the event's stamp still decides its timing. Set
+    /// only by a poll of a stream that holds a CC 6 and has a baseline.
     private var pollBaselines: [UMPTranslationStreamID: UInt64] = [:]
     /// Per stream, the raw time of the last event the stream accepted. The poll baseline never excuses an event
     /// stamped before it.
@@ -44,7 +46,7 @@ actor UMPTranslationStreamDriver {
         clock: any UMPTranslationStreamClock,
         timer: any UMPTranslationStreamTimer,
         timeout: UMPTranslationStreamTimeout = .standard,
-        sink: @escaping @Sendable ([UMPMIDI2ChannelVoice]) -> Void
+        sink: @escaping @Sendable (UMPTranslationStreamID, [UMPMIDI2ChannelVoice]) -> Void
     ) {
         self.clock = clock
         self.timer = timer
@@ -57,20 +59,27 @@ actor UMPTranslationStreamDriver {
         streams[id]
     }
 
-    /// Translates one MIDI 1 event received at `time` (monotonic nanoseconds) on stream `id`. A held CC 6 whose
-    /// deadline `time` has reached is returned before the event's own output.
+    /// Translates one MIDI 1 event stamped `rawTime` (monotonic nanoseconds) on stream `id`. A held CC 6 whose
+    /// deadline the stamp has reached is returned before the event's own output.
     ///
     /// A time earlier than the stream's last accepted time is refused (`timeWentBackward`), not clamped, with one
-    /// exception: the timer's poll may run late and move the baseline past an event's stamp, so a time before the
-    /// baseline that such a poll set is raised to it, provided it is not earlier than the last event this stream
-    /// accepted. An event earlier than that one is passed through unchanged and refused. Every other refusal
-    /// propagates unchanged.
+    /// exception: the timer's poll may run late and move the baseline past an event's stamp, so an event stamped
+    /// before the baseline that such a poll set is admitted at that baseline, provided its stamp is not earlier than
+    /// the last event this stream accepted. An event earlier than that one is passed through unchanged and refused.
+    /// Every other refusal propagates unchanged.
+    ///
+    /// The admission time only orders the stream's calls. The stamp alone decides timing: a held CC 6 is sent first
+    /// when the stamp is at or after its deadline, and a CC 6 the event holds gets the deadline stamp + timeout. So a
+    /// CC 6 and a CC 38 stamped within the timeout of it still pair when both arrive after a late poll, and a CC 6
+    /// whose deadline the CC 38's stamp has reached is sent alone first. Such a deadline may already be at or before
+    /// the admission time: the timer is then armed for that past deadline, and its poll sends the CC 6 unless an
+    /// event stamped before the deadline arrives first.
     func receive(
         _ event: MIDI1Event, group: UMPGroup, stream id: UMPTranslationStreamID, atNanoseconds rawTime: UInt64
     ) throws(UMPTranslationStreamRefusal) -> [UMPTranslationStreamItem] {
         guard !stopped else { return [] }
-        var time = rawTime
-        if let baseline = pollBaselines[id], rawTime >= lastReceived[id] ?? 0 { time = max(rawTime, baseline) }
+        var admission = rawTime
+        if let baseline = pollBaselines[id], rawTime >= lastReceived[id] ?? 0 { admission = max(rawTime, baseline) }
         var stream = streams[id] ?? UMPTranslationStream(timeout: timeout)
         let items: [UMPTranslationStreamItem]
         switch event {
@@ -81,7 +90,8 @@ actor UMPTranslationStreamDriver {
             } catch {
                 throw .translation(error)
             }
-            items = try stream.receive(voice, at: time).messages.map(UMPTranslationStreamItem.voice)
+            items = try stream.receive(voice, at: rawTime, admittedAt: admission).messages
+                .map(UMPTranslationStreamItem.voice)
         case .systemCommon, .realTime:
             let system: UMPSystemCommonRealTime
             do throws(UMPRefusal) {
@@ -89,7 +99,7 @@ actor UMPTranslationStreamDriver {
             } catch {
                 throw .translation(error)
             }
-            items = try stream.receive(system: system, at: time)
+            items = try stream.receive(system: system, at: rawTime, admittedAt: admission)
         case .sysEx:
             throw .translation(.notChannelVoice)
         }
@@ -121,15 +131,16 @@ actor UMPTranslationStreamDriver {
         return flushed
     }
 
-    /// Teardown: cancels the timer, resets every stream (in `UMPTranslationStreamID` order) and returns what they
-    /// held. The driver sends nothing after this.
-    func stop() -> [UMPMIDI2ChannelVoice] {
+    /// Teardown: cancels the timer, resets every stream and returns what they held, one entry per stream that held
+    /// something, with its ID, in `UMPTranslationStreamID` order. The driver sends nothing after this.
+    func stop() -> [(stream: UMPTranslationStreamID, messages: [UMPMIDI2ChannelVoice])] {
         stopped = true
         timer.cancel()
         armedAt = nil
-        var flushed: [UMPMIDI2ChannelVoice] = []
+        var flushed: [(stream: UMPTranslationStreamID, messages: [UMPMIDI2ChannelVoice])] = []
         for id in streams.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-            flushed += streams[id]?.reset() ?? []
+            guard let messages = streams[id]?.reset(), !messages.isEmpty else { continue }
+            flushed.append((id, messages))
         }
         streams = [:]
         pollBaselines = [:]
@@ -137,21 +148,24 @@ actor UMPTranslationStreamDriver {
         return flushed
     }
 
-    /// What the timer calls. Polls every stream at the clock's time, never earlier than the stream's last accepted
-    /// time (backward clock jitter), sends non-empty flushes to `sink`, and re-arms for the next deadline.
+    /// What the timer calls. Polls every stream that holds a CC 6 at the clock's time, never earlier than the
+    /// stream's last accepted time (backward clock jitter), sends each non-empty flush to `sink` with its stream's
+    /// ID, and re-arms for the next deadline. A stream that holds nothing is not polled, and no baseline is recorded
+    /// for a stream without a last accepted time, so a fire for another stream cannot restore a baseline that
+    /// `endOfStream` or `reset` cleared.
     func fire() {
         guard !stopped else { return }
         armedAt = nil
         let now = clock.nowNanoseconds()
         for id in streams.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
-            guard var stream = streams[id] else { continue }
+            guard var stream = streams[id], stream.deadline != nil else { continue }
             do throws(UMPTranslationStreamRefusal) {
                 let before = stream.lastAcceptedTime
                 let polledAt = max(now, before ?? now)
                 let flushed = try stream.poll(at: polledAt)
                 streams[id] = stream
-                if before.map({ polledAt > $0 }) ?? true { pollBaselines[id] = polledAt }
-                if !flushed.isEmpty { sink(flushed) }
+                if let before, polledAt > before { pollBaselines[id] = polledAt }
+                if !flushed.isEmpty { sink(id, flushed) }
             } catch {
                 pollRefusals += 1
             }
@@ -160,7 +174,8 @@ actor UMPTranslationStreamDriver {
     }
 
     /// Arms the timer for the earliest deadline, or cancels it when none is held. Does nothing when the timer is
-    /// already armed for that deadline.
+    /// already armed for that deadline. A deadline the clock has already passed (a CC 6 admitted after its stamp's
+    /// deadline) is armed as any other, so the timer fires at once.
     private func rearm() {
         guard !stopped else { return }
         guard let target = streams.values.compactMap(\.deadline).min() else {
